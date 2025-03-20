@@ -1,0 +1,40 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/3374.
+
+mode cockroach
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
+----
+COMPLETE 0
+
+statement ok
+create cluster c replicas (r1 (STORAGECTL ADDRESSES ['s:1'], STORAGE ADDRESSES ['st:1'], COMPUTECTL ADDRESSES ['c:1'], COMPUTE ADDRESSES ['ct:1']))
+
+statement ok
+set cluster = c
+
+statement ok
+create table t1 (f1 integer, f2 integer)
+
+statement ok
+create index i1 on t1 (f2)
+
+statement ok
+set cluster = quickstart
+
+statement ok
+begin;
+
+# The original github issue would panic here.
+query II
+select * from t1
+----

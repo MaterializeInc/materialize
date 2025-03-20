@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 # Test reporting of controller frontiers through `mz_internal.mz_frontiers` and
-# `mz_internal.mz_cluster_replica_frontiers`.
+# `mz_cluster_replica_frontiers`.
 #
 # These tests rely on testdrive's retry feature, as they query introspection
 # sources whose data might not be immediately available.
@@ -36,7 +36,7 @@
 > SELECT
     mvs.name,
     replicas.name
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_cluster_replica_frontiers frontiers
   JOIN mz_materialized_views mvs
     ON frontiers.object_id = mvs.id
   LEFT JOIN mz_cluster_replicas replicas
@@ -66,7 +66,7 @@ mv1
 > SELECT
     indexes.name,
     replicas.name
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_cluster_replica_frontiers frontiers
   JOIN mz_indexes indexes
     ON frontiers.object_id = indexes.id
   LEFT JOIN mz_cluster_replicas replicas
@@ -88,17 +88,47 @@ idx1 r2
     frontiers.write_frontier > 0
 idx1
 
+# Test that frontiers of continual tasks are reported.
+
+> CREATE CONTINUAL TASK ct1 (a int) ON INPUT t1 AS (
+    INSERT INTO ct1 SELECT * FROM t1
+  )
+
+> SELECT
+    cts.name,
+    replicas.name
+  FROM mz_cluster_replica_frontiers frontiers
+  JOIN mz_internal.mz_continual_tasks cts
+    ON frontiers.object_id = cts.id
+  LEFT JOIN mz_cluster_replicas replicas
+    ON frontiers.replica_id = replicas.id
+  WHERE
+    frontiers.object_id LIKE 'u%' AND
+    frontiers.write_frontier > 0
+ct1 r1
+ct1 r2
+
+> SELECT
+    cts.name
+  FROM mz_internal.mz_frontiers frontiers
+  JOIN mz_internal.mz_continual_tasks cts
+    ON frontiers.object_id = cts.id
+  WHERE
+    frontiers.object_id LIKE 'u%' AND
+    frontiers.read_frontier > 0 AND
+    frontiers.write_frontier > 0
+ct1
 
 # Test that frontiers of sources are reported.
 
 > CREATE SOURCE source1
   IN CLUSTER test_source
-  FROM LOAD GENERATOR COUNTER
+  FROM LOAD GENERATOR COUNTER (UP TO 100)
 
 > SELECT
     sources.name,
     replicas.name
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_cluster_replica_frontiers frontiers
   JOIN mz_sources sources
     ON frontiers.object_id = sources.id
   LEFT JOIN mz_cluster_replicas replicas
@@ -139,7 +169,7 @@ source1_progress
 > SELECT
     sinks.name,
     replicas.name
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_cluster_replica_frontiers frontiers
   JOIN mz_sinks sinks
     ON frontiers.object_id = sinks.id
   LEFT JOIN mz_cluster_replicas replicas
@@ -156,7 +186,7 @@ sink1 s1
     ON frontiers.object_id = sinks.id
   WHERE
     frontiers.object_id LIKE 'u%' AND
-    frontiers.read_frontier IS NULL AND
+    (frontiers.read_frontier > 0 OR frontiers.read_frontier IS NULL) AND
     frontiers.write_frontier > 0
 sink1
 
@@ -164,7 +194,7 @@ sink1
 
 > SELECT
     replicas.name
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_cluster_replica_frontiers frontiers
   JOIN mz_indexes indexes
     ON frontiers.object_id = indexes.id
   JOIN mz_clusters clusters
@@ -223,7 +253,7 @@ mz_frontiers
 > SELECT
     objects.name,
     replicas.name
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_cluster_replica_frontiers frontiers
   JOIN mz_objects objects
     ON frontiers.object_id = objects.id
   JOIN mz_cluster_replicas replicas
@@ -234,6 +264,8 @@ mz_frontiers
     objects.id LIKE 'u%' AND
     frontiers.write_frontier > 0 AND
     clusters.name = 'test'
+ct1  r1
+ct1  r2
 idx1 r1
 idx1 r2
 mv1  r1
@@ -244,7 +276,7 @@ mv1  r2
 > SELECT
     objects.name,
     replicas.name
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_cluster_replica_frontiers frontiers
   JOIN mz_objects objects
     ON frontiers.object_id = objects.id
   JOIN mz_cluster_replicas replicas
@@ -255,6 +287,9 @@ mv1  r2
     objects.id LIKE 'u%' AND
     frontiers.write_frontier > 0 AND
     clusters.name = 'test'
+ct1  r1
+ct1  r2
+ct1  r3
 idx1 r1
 idx1 r2
 idx1 r3
@@ -269,7 +304,7 @@ mv1  r3
 > SELECT
     objects.name,
     replicas.name
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_cluster_replica_frontiers frontiers
   JOIN mz_objects objects
     ON frontiers.object_id = objects.id
   JOIN mz_cluster_replicas replicas
@@ -280,6 +315,8 @@ mv1  r3
     objects.id LIKE 'u%' AND
     frontiers.write_frontier > 0 AND
     clusters.name = 'test'
+ct1  r2
+ct1  r3
 idx1 r2
 idx1 r3
 mv1  r2
@@ -292,7 +329,7 @@ mv1  r3
 > SELECT
     replicas.name,
     frontiers.write_frontier
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_cluster_replica_frontiers frontiers
   JOIN mz_materialized_views mvs
     ON frontiers.object_id = mvs.id
   JOIN mz_cluster_replicas replicas
@@ -317,19 +354,20 @@ r3 <null>
 > DROP MATERIALIZED VIEW mv1
 > DROP MATERIALIZED VIEW mv2
 > DROP INDEX idx1
+> DROP CONTINUAL TASK ct1
 > DROP SOURCE source1 CASCADE
 > DROP SINK sink1
 > DROP TABLE t1
 
 > SELECT *
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_cluster_replica_frontiers frontiers
   WHERE object_id LIKE 'u%'
 
 > SELECT *
   FROM mz_internal.mz_frontiers frontiers
   WHERE object_id LIKE 'u%'
 
-# Test that frontiers are correctly initialized on for collections on clusters
+# Test that frontiers are correctly initialized for collections on clusters
 # with zero replicas.
 
 > CREATE CLUSTER empty SIZE '1', REPLICATION FACTOR 0

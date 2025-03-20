@@ -11,21 +11,23 @@
 
 //! Aggregate statistics about data stored in persist.
 
-use std::any::Any;
 use std::fmt::Debug;
 
-use arrow::array::Array;
-use mz_ore::metric;
+use anyhow::Context;
+use arrow::array::{
+    BinaryArray, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
+    Int8Array, StringArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+};
+use mz_ore::cast::CastFrom;
 use mz_ore::metrics::{IntCounter, MetricsRegistry};
+use mz_ore::{assert_none, metric};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::*;
 use proptest::strategy::{Strategy, Union};
 use proptest_derive::Arbitrary;
 use prost::Message;
 
-use crate::columnar::Data;
-use crate::dyn_col::DynColumnRef;
-use crate::dyn_struct::ValidityRef;
+use crate::columnar::{ColumnDecoder, Schema};
 use crate::part::Part;
 use crate::stats::bytes::any_bytes_stats;
 use crate::stats::primitive::any_primitive_stats;
@@ -35,14 +37,245 @@ pub mod json;
 pub mod primitive;
 pub mod structured;
 
-pub use bytes::{AtomicBytesStats, BytesStats};
+pub use bytes::{AtomicBytesStats, BytesStats, FixedSizeBytesStats, FixedSizeBytesStatsKind};
 pub use json::{JsonMapElementStats, JsonStats};
 pub use primitive::{
-    truncate_bytes, PrimitiveStats, PrimitiveStatsVariants, TruncateBound, TRUNCATE_LEN,
+    truncate_bytes, truncate_string, PrimitiveStats, PrimitiveStatsVariants, TruncateBound,
+    TRUNCATE_LEN,
 };
 pub use structured::StructStats;
 
 include!(concat!(env!("OUT_DIR"), "/mz_persist_types.stats.rs"));
+
+/// Statistics for a single column of data.
+#[derive(Debug, Clone)]
+pub struct ColumnarStats {
+    /// Expected to be `None` if the associated column is non-nullable.
+    pub nulls: Option<ColumnNullStats>,
+    /// Statistics on the values of the column.
+    pub values: ColumnStatKinds,
+}
+
+impl ColumnarStats {
+    /// Returns a `[StructStats]` with a single non-nullable column.
+    pub fn one_column_struct(len: usize, col: ColumnStatKinds) -> StructStats {
+        let col = ColumnarStats {
+            nulls: None,
+            values: col,
+        };
+        StructStats {
+            len,
+            cols: [("".to_owned(), col)].into_iter().collect(),
+        }
+    }
+
+    /// Returns the inner [`ColumnStatKinds`] if `nulls` is [`None`].
+    pub fn as_non_null_values(&self) -> Option<&ColumnStatKinds> {
+        match self.nulls {
+            None => Some(&self.values),
+            Some(_) => None,
+        }
+    }
+
+    /// Returns the inner [`ColumnStatKinds`] if `nulls` is [`None`].
+    pub fn into_non_null_values(self) -> Option<ColumnStatKinds> {
+        match self.nulls {
+            None => Some(self.values),
+            Some(_) => None,
+        }
+    }
+
+    /// Returns the inner [`StructStats`] if `nulls` is [`None`] and `values`
+    /// is [`ColumnStatKinds::Struct`].
+    pub fn into_struct_stats(self) -> Option<StructStats> {
+        match self.into_non_null_values()? {
+            ColumnStatKinds::Struct(stats) => Some(stats),
+            _ => None,
+        }
+    }
+
+    /// Helper method to "downcast" to stats of type `T`.
+    fn try_as_stats<'a, T, F>(&'a self, map: F) -> Result<T, anyhow::Error>
+    where
+        F: FnOnce(&'a ColumnStatKinds) -> Result<T, anyhow::Error>,
+    {
+        let inner = map(&self.values)?;
+        match self.nulls {
+            Some(nulls) => Err(anyhow::anyhow!(
+                "expected non-nullable stats, found nullable {nulls:?}"
+            )),
+            None => Ok(inner),
+        }
+    }
+
+    /// Helper method to "downcast" [`OptionStats<T>`].
+    fn try_as_option_stats<'a, T, F>(&'a self, map: F) -> Result<OptionStats<T>, anyhow::Error>
+    where
+        F: FnOnce(&'a ColumnStatKinds) -> Result<T, anyhow::Error>,
+    {
+        let inner = map(&self.values)?;
+        match self.nulls {
+            Some(nulls) => Ok(OptionStats {
+                none: nulls.count,
+                some: inner,
+            }),
+            None => Err(anyhow::anyhow!(
+                "expected nullable stats, found non-nullable"
+            )),
+        }
+    }
+
+    /// Tries to "downcast" this instance of [`ColumnarStats`] to an [`OptionStats<StructStats>`]
+    /// if the inner statistics are nullable and for a structured column.
+    pub fn try_as_optional_struct(&self) -> Result<OptionStats<&StructStats>, anyhow::Error> {
+        self.try_as_option_stats(|values| match values {
+            ColumnStatKinds::Struct(inner) => Ok(inner),
+            other => anyhow::bail!("expected StructStats found {other:?}"),
+        })
+    }
+
+    /// Tries to "downcast" this instance of [`ColumnarStats`] to an [`OptionStats<BytesStats>`]
+    /// if the inner statistics are nullable and for a column of bytes.
+    pub fn try_as_optional_bytes(&self) -> Result<OptionStats<&BytesStats>, anyhow::Error> {
+        self.try_as_option_stats(|values| match values {
+            ColumnStatKinds::Bytes(inner) => Ok(inner),
+            other => anyhow::bail!("expected BytesStats found {other:?}"),
+        })
+    }
+
+    /// Tries to "downcast" this instance of [`ColumnarStats`] to a [`PrimitiveStats<String>`]
+    /// if the inner statistics are nullable and for a structured column.
+    pub fn try_as_string(&self) -> Result<&PrimitiveStats<String>, anyhow::Error> {
+        self.try_as_stats(|values| match values {
+            ColumnStatKinds::Primitive(PrimitiveStatsVariants::String(inner)) => Ok(inner),
+            other => anyhow::bail!("expected PrimitiveStats<String> found {other:?}"),
+        })
+    }
+}
+
+impl DynStats for ColumnarStats {
+    fn debug_json(&self) -> serde_json::Value {
+        let value_json = self.values.debug_json();
+
+        match (&self.nulls, value_json) {
+            (Some(nulls), serde_json::Value::Object(mut x)) => {
+                if nulls.count > 0 {
+                    x.insert("nulls".to_owned(), nulls.count.into());
+                }
+                serde_json::Value::Object(x)
+            }
+            (Some(nulls), x) => {
+                serde_json::json!({"nulls": nulls.count, "not nulls": x})
+            }
+            (None, x) => x,
+        }
+    }
+
+    fn into_columnar_stats(self) -> ColumnarStats {
+        self
+    }
+}
+
+/// Statistics about the null values in a column.
+#[derive(Debug, Copy, Clone)]
+pub struct ColumnNullStats {
+    /// Number of nulls in the column.
+    pub count: usize,
+}
+
+impl RustType<ProtoOptionStats> for ColumnNullStats {
+    fn into_proto(&self) -> ProtoOptionStats {
+        ProtoOptionStats {
+            none: u64::cast_from(self.count),
+        }
+    }
+
+    fn from_proto(proto: ProtoOptionStats) -> Result<Self, TryFromProtoError> {
+        Ok(ColumnNullStats {
+            count: usize::cast_from(proto.none),
+        })
+    }
+}
+
+/// All of the kinds of statistics that we support.
+#[derive(Debug, Clone)]
+pub enum ColumnStatKinds {
+    /// Primitive stats that maintin just an upper and lower bound.
+    Primitive(PrimitiveStatsVariants),
+    /// Statistics for objects with multiple fields.
+    Struct(StructStats),
+    /// Statistics about a column of binary data.
+    Bytes(BytesStats),
+    /// Maintain no statistics for a given column.
+    None,
+}
+
+impl DynStats for ColumnStatKinds {
+    fn debug_json(&self) -> serde_json::Value {
+        match self {
+            ColumnStatKinds::Primitive(prim) => prim.debug_json(),
+            ColumnStatKinds::Struct(x) => x.debug_json(),
+            ColumnStatKinds::Bytes(bytes) => bytes.debug_json(),
+            ColumnStatKinds::None => NoneStats.debug_json(),
+        }
+    }
+
+    fn into_columnar_stats(self) -> ColumnarStats {
+        ColumnarStats {
+            nulls: None,
+            values: self,
+        }
+    }
+}
+
+impl RustType<proto_dyn_stats::Kind> for ColumnStatKinds {
+    fn into_proto(&self) -> proto_dyn_stats::Kind {
+        match self {
+            ColumnStatKinds::Primitive(prim) => {
+                proto_dyn_stats::Kind::Primitive(RustType::into_proto(prim))
+            }
+            ColumnStatKinds::Struct(x) => proto_dyn_stats::Kind::Struct(RustType::into_proto(x)),
+            ColumnStatKinds::Bytes(bytes) => {
+                proto_dyn_stats::Kind::Bytes(RustType::into_proto(bytes))
+            }
+            ColumnStatKinds::None => proto_dyn_stats::Kind::None(()),
+        }
+    }
+
+    fn from_proto(proto: proto_dyn_stats::Kind) -> Result<Self, TryFromProtoError> {
+        let stats = match proto {
+            proto_dyn_stats::Kind::Primitive(prim) => ColumnStatKinds::Primitive(prim.into_rust()?),
+            proto_dyn_stats::Kind::Struct(x) => ColumnStatKinds::Struct(x.into_rust()?),
+            proto_dyn_stats::Kind::Bytes(bytes) => ColumnStatKinds::Bytes(bytes.into_rust()?),
+            proto_dyn_stats::Kind::None(_) => ColumnStatKinds::None,
+        };
+        Ok(stats)
+    }
+}
+
+impl<T: Into<PrimitiveStatsVariants>> From<T> for ColumnStatKinds {
+    fn from(value: T) -> Self {
+        ColumnStatKinds::Primitive(value.into())
+    }
+}
+
+impl From<PrimitiveStats<Vec<u8>>> for ColumnStatKinds {
+    fn from(value: PrimitiveStats<Vec<u8>>) -> Self {
+        ColumnStatKinds::Bytes(BytesStats::Primitive(value))
+    }
+}
+
+impl From<StructStats> for ColumnStatKinds {
+    fn from(value: StructStats) -> Self {
+        ColumnStatKinds::Struct(value)
+    }
+}
+
+impl From<BytesStats> for ColumnStatKinds {
+    fn from(value: BytesStats) -> Self {
+        ColumnStatKinds::Bytes(value)
+    }
+}
 
 /// Metrics for [PartStats].
 #[derive(Debug)]
@@ -61,47 +294,13 @@ impl PartStatsMetrics {
     }
 }
 
-/// The logic to use when computing stats for a column of `T: Data`.
-///
-/// If Custom is used, the DynStats returned must be a`<T as Data>::Stats`.
-pub enum StatsFn {
-    Default,
-    Custom(fn(&DynColumnRef, ValidityRef) -> Result<Box<dyn DynStats>, String>),
-}
-
-#[cfg(debug_assertions)]
-impl PartialEq for StatsFn {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (StatsFn::Default, StatsFn::Default) => true,
-            (StatsFn::Custom(s), StatsFn::Custom(o)) => {
-                let s: fn(&'static DynColumnRef, ValidityRef) -> Result<Box<dyn DynStats>, String> =
-                    *s;
-                let o: fn(&'static DynColumnRef, ValidityRef) -> Result<Box<dyn DynStats>, String> =
-                    *o;
-                // I think this is not always correct, but it's only used in
-                // debug_assertions so as long as CI is happy with it, probably
-                // good enough.
-                s == o
-            }
-            (StatsFn::Default, StatsFn::Custom(_)) | (StatsFn::Custom(_), StatsFn::Default) => {
-                false
-            }
-        }
-    }
-}
-
-impl std::fmt::Debug for StatsFn {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Default => write!(f, "Default"),
-            Self::Custom(_) => f.debug_struct("Custom").finish_non_exhaustive(),
-        }
-    }
-}
-
 /// Aggregate statistics about a column of type `T`.
-pub trait ColumnStats<T: Data>: DynStats {
+pub trait ColumnStats: DynStats {
+    /// Type returned as the stat bounds.
+    type Ref<'a>
+    where
+        Self: 'a;
+
     /// An inclusive lower bound on the data contained in the column, if known.
     ///
     /// This will often be a tight bound, but it's not guaranteed. Persist
@@ -112,37 +311,40 @@ pub trait ColumnStats<T: Data>: DynStats {
     /// Similarly, if the column is empty, this will contain `T: Default`.
     /// Emptiness will be indicated in statistics higher up (i.e.
     /// [StructStats]).
-    fn lower<'a>(&'a self) -> Option<T::Ref<'a>>;
+    fn lower<'a>(&'a self) -> Option<Self::Ref<'a>>;
     /// Same as [Self::lower] but an (also inclusive) upper bound.
-    fn upper<'a>(&'a self) -> Option<T::Ref<'a>>;
+    fn upper<'a>(&'a self) -> Option<Self::Ref<'a>>;
     /// The number of `None`s if this column is optional or 0 if it isn't.
     fn none_count(&self) -> usize;
 }
 
-/// A source of aggregate statistics about a column of data.
-pub trait StatsFrom<T> {
-    /// Computes statistics from a column of data.
-    ///
-    /// The validity, if given, indicates which values in the columns are and
-    /// are not used for stats. This allows us to model non-nullable columns in
-    /// a nullable struct. For optional columns (i.e. ones with their own
-    /// validity) it _must be a subset_ of the column's validity, otherwise this
-    /// panics.
-    fn stats_from(col: &T, validity: ValidityRef) -> Self;
+/// A type that can incrementally collect stats from a sequence of values.
+pub trait ColumnarStatsBuilder<T>: Debug + DynStats {
+    /// Type of [`arrow`] column these statistics can be derived from.
+    type ArrowColumn: arrow::array::Array + 'static;
+
+    /// Derive statistics from a column of data.
+    fn from_column(col: &Self::ArrowColumn) -> Self
+    where
+        Self: Sized;
 }
 
-/// Type-erased aggregate statistics about a column of data.
+/// Type that can be used to represent some [`ColumnStats`].
+///
+/// This is a separate trait than [`ColumnStats`] because its implementations
+/// generally don't care about what kind of stats they contain, whereas
+/// [`ColumnStats`] is generic over the inner type of statistics.
 pub trait DynStats: Debug + Send + Sync + 'static {
-    /// Returns self as a `dyn Any` for downcasting.
-    fn as_any(&self) -> &dyn Any;
     /// Returns the name of the erased type for use in error messages.
     fn type_name(&self) -> &'static str {
         std::any::type_name::<Self>()
     }
-    /// See [mz_proto::RustType::into_proto].
-    fn into_proto(&self) -> ProtoDynStats;
+
     /// Formats these statistics for use in `INSPECT SHARD` and debugging.
     fn debug_json(&self) -> serde_json::Value;
+
+    /// Return `self` as [`ColumnarStats`].
+    fn into_columnar_stats(self) -> ColumnarStats;
 }
 
 /// Trim, possibly in a lossy way, statistics to reduce the serialization costs.
@@ -170,10 +372,14 @@ impl serde::Serialize for PartStats {
 }
 
 impl PartStats {
-    /// Calculates and returns stats for the given [Part].
-    pub fn new(part: &Part) -> Result<Self, String> {
-        let key = part.key_stats()?;
-        Ok(PartStats { key })
+    /// Calculates and returns stats for the given [`Part`].
+    pub fn new<T, K>(part: &Part, desc: &K) -> Result<Self, anyhow::Error>
+    where
+        K: Schema<T, Statistics = StructStats>,
+    {
+        let decoder = K::decoder_any(desc, &part.key).context("decoder_any")?;
+        let stats = decoder.stats();
+        Ok(PartStats { key: stats })
     }
 }
 
@@ -192,19 +398,6 @@ impl<T: DynStats> Debug for OptionStats<T> {
 }
 
 impl<T: DynStats> DynStats for OptionStats<T> {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn into_proto(&self) -> ProtoDynStats {
-        let mut ret = self.some.into_proto();
-        // This prevents us from serializing `OptionStats<OptionStats<T>>`, but
-        // that's intentionally out of scope. See the comment on ProtoDynStats.
-        assert!(ret.option.is_none());
-        ret.option = Some(ProtoOptionStats {
-            none: self.none.into_proto(),
-        });
-        ret
-    }
     fn debug_json(&self) -> serde_json::Value {
         match self.some.debug_json() {
             serde_json::Value::Object(mut x) => {
@@ -218,6 +411,16 @@ impl<T: DynStats> DynStats for OptionStats<T> {
             }
         }
     }
+
+    fn into_columnar_stats(self) -> ColumnarStats {
+        let inner = self.some.into_columnar_stats();
+        assert_none!(inner.nulls, "we don't support nested OptionStats");
+
+        ColumnarStats {
+            nulls: Some(ColumnNullStats { count: self.none }),
+            values: inner.values,
+        }
+    }
 }
 
 /// Empty set of statistics.
@@ -226,28 +429,26 @@ impl<T: DynStats> DynStats for OptionStats<T> {
 pub struct NoneStats;
 
 impl DynStats for NoneStats {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn into_proto(&self) -> ProtoDynStats {
-        ProtoDynStats {
-            option: None,
-            kind: Some(proto_dyn_stats::Kind::None(RustType::into_proto(self))),
-        }
-    }
-
     fn debug_json(&self) -> serde_json::Value {
         serde_json::Value::String(format!("{self:?}"))
     }
+
+    fn into_columnar_stats(self) -> ColumnarStats {
+        ColumnarStats {
+            nulls: None,
+            values: ColumnStatKinds::None,
+        }
+    }
 }
 
-impl<T: Data> ColumnStats<T> for NoneStats {
-    fn lower<'a>(&'a self) -> Option<<T as Data>::Ref<'a>> {
+impl ColumnStats for NoneStats {
+    type Ref<'a> = ();
+
+    fn lower<'a>(&'a self) -> Option<Self::Ref<'a>> {
         None
     }
 
-    fn upper<'a>(&'a self) -> Option<<T as Data>::Ref<'a>> {
+    fn upper<'a>(&'a self) -> Option<Self::Ref<'a>> {
         None
     }
 
@@ -256,42 +457,19 @@ impl<T: Data> ColumnStats<T> for NoneStats {
     }
 }
 
-impl<T> ColumnStats<Option<T>> for OptionStats<NoneStats>
-where
-    Option<T>: Data,
-{
-    fn lower<'a>(&'a self) -> Option<<Option<T> as Data>::Ref<'a>> {
+impl ColumnStats for OptionStats<NoneStats> {
+    type Ref<'a> = Option<()>;
+
+    fn lower<'a>(&'a self) -> Option<Self::Ref<'a>> {
         None
     }
 
-    fn upper<'a>(&'a self) -> Option<<Option<T> as Data>::Ref<'a>> {
+    fn upper<'a>(&'a self) -> Option<Self::Ref<'a>> {
         None
     }
 
     fn none_count(&self) -> usize {
         self.none
-    }
-}
-
-impl<T: Array> StatsFrom<T> for NoneStats {
-    fn stats_from(col: &T, _validity: ValidityRef) -> Self {
-        assert!(col.logical_nulls().is_none());
-        NoneStats
-    }
-}
-
-impl<T: Array> StatsFrom<T> for OptionStats<NoneStats> {
-    fn stats_from(col: &T, validity: ValidityRef) -> Self {
-        debug_assert!(validity.is_superset(col.logical_nulls().as_ref()));
-        let none = col
-            .logical_nulls()
-            .as_ref()
-            .map_or(0, |nulls| nulls.null_count());
-
-        OptionStats {
-            none,
-            some: NoneStats,
-        }
     }
 }
 
@@ -302,6 +480,86 @@ impl RustType<()> for NoneStats {
 
     fn from_proto(_proto: ()) -> Result<Self, TryFromProtoError> {
         Ok(NoneStats)
+    }
+}
+
+/// We collect stats for all primitive types in exactly the same way. This
+/// macro de-duplicates some of that logic.
+///
+/// Note: If at any point someone finds this macro too complex, they should
+/// feel free to refactor it away!
+macro_rules! primitive_stats {
+    ($native:ty, $arrow_col:ty, $min_fn:path, $max_fn:path) => {
+        impl ColumnarStatsBuilder<$native> for PrimitiveStats<$native> {
+            type ArrowColumn = $arrow_col;
+
+            fn from_column(col: &Self::ArrowColumn) -> Self
+            where
+                Self: Sized,
+            {
+                let lower = $min_fn(col).unwrap_or_default();
+                let upper = $max_fn(col).unwrap_or_default();
+
+                PrimitiveStats { lower, upper }
+            }
+        }
+    };
+}
+
+primitive_stats!(
+    bool,
+    BooleanArray,
+    arrow::compute::min_boolean,
+    arrow::compute::max_boolean
+);
+primitive_stats!(u8, UInt8Array, arrow::compute::min, arrow::compute::max);
+primitive_stats!(u16, UInt16Array, arrow::compute::min, arrow::compute::max);
+primitive_stats!(u32, UInt32Array, arrow::compute::min, arrow::compute::max);
+primitive_stats!(u64, UInt64Array, arrow::compute::min, arrow::compute::max);
+primitive_stats!(i8, Int8Array, arrow::compute::min, arrow::compute::max);
+primitive_stats!(i16, Int16Array, arrow::compute::min, arrow::compute::max);
+primitive_stats!(i32, Int32Array, arrow::compute::min, arrow::compute::max);
+primitive_stats!(i64, Int64Array, arrow::compute::min, arrow::compute::max);
+primitive_stats!(f32, Float32Array, arrow::compute::min, arrow::compute::max);
+primitive_stats!(f64, Float64Array, arrow::compute::min, arrow::compute::max);
+
+impl ColumnarStatsBuilder<&str> for PrimitiveStats<String> {
+    type ArrowColumn = StringArray;
+    fn from_column(col: &Self::ArrowColumn) -> Self
+    where
+        Self: Sized,
+    {
+        let lower = arrow::compute::min_string(col).unwrap_or_default();
+        let lower = truncate_string(lower, TRUNCATE_LEN, TruncateBound::Lower)
+            .expect("lower bound should always truncate");
+        let upper = arrow::compute::max_string(col).unwrap_or_default();
+        let upper = truncate_string(upper, TRUNCATE_LEN, TruncateBound::Upper)
+            // NB: The cost+trim stuff will remove the column entirely if
+            // it's still too big (also this should be extremely rare in
+            // practice).
+            .unwrap_or_else(|| upper.to_owned());
+
+        PrimitiveStats { lower, upper }
+    }
+}
+
+impl ColumnarStatsBuilder<&[u8]> for PrimitiveStats<Vec<u8>> {
+    type ArrowColumn = BinaryArray;
+    fn from_column(col: &Self::ArrowColumn) -> Self
+    where
+        Self: Sized,
+    {
+        let lower = arrow::compute::min_binary(col).unwrap_or_default();
+        let lower = truncate_bytes(lower, TRUNCATE_LEN, TruncateBound::Lower)
+            .expect("lower bound should always truncate");
+        let upper = arrow::compute::max_binary(col).unwrap_or_default();
+        let upper = truncate_bytes(upper, TRUNCATE_LEN, TruncateBound::Upper)
+            // NB: The cost+trim stuff will remove the column entirely if
+            // it's still too big (also this should be extremely rare in
+            // practice).
+            .unwrap_or_else(|| upper.to_owned());
+
+        PrimitiveStats { lower, upper }
     }
 }
 
@@ -487,121 +745,59 @@ fn trim_to_budget_jsonb(
     stats.elements.extend(stats_to_keep);
 }
 
-impl RustType<ProtoDynStats> for Box<dyn DynStats> {
+impl RustType<ProtoDynStats> for ColumnarStats {
     fn into_proto(&self) -> ProtoDynStats {
-        DynStats::into_proto(self.as_ref())
+        let option = self.nulls.as_ref().map(|n| n.into_proto());
+        let kind = RustType::into_proto(&self.values);
+
+        ProtoDynStats {
+            option,
+            kind: Some(kind),
+        }
     }
 
-    fn from_proto(mut proto: ProtoDynStats) -> Result<Self, TryFromProtoError> {
-        struct BoxFn;
-        impl DynStatsFn<Box<dyn DynStats>> for BoxFn {
-            fn call<T: DynStats>(self, t: T) -> Result<Box<dyn DynStats>, TryFromProtoError> {
-                Ok(Box::new(t))
-            }
-        }
-        struct OptionStatsFn<F>(usize, F);
-        impl<R, F: DynStatsFn<R>> DynStatsFn<R> for OptionStatsFn<F> {
-            fn call<T: DynStats>(self, some: T) -> Result<R, TryFromProtoError> {
-                let OptionStatsFn(none, f) = self;
-                f.call(OptionStats { none, some })
-            }
-        }
+    fn from_proto(proto: ProtoDynStats) -> Result<Self, TryFromProtoError> {
+        let kind = proto
+            .kind
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoDynStats::kind"))?;
 
-        match proto.option.take() {
-            Some(option) => {
-                let none = option.none.into_rust()?;
-                dyn_from_proto(proto, OptionStatsFn(none, BoxFn))
-            }
-            None => dyn_from_proto(proto, BoxFn),
-        }
+        Ok(ColumnarStats {
+            nulls: proto.option.into_rust()?,
+            values: kind.into_rust()?,
+        })
     }
 }
 
-/// Basically `FnOnce<T: DynStats>(self, t: T) -> R`, if rust would let us
-/// type that.
-///
-/// We use this in `dyn_from_proto` so that OptionStats can hold a `some: T`
-/// instead of a `Box<dyn DynStats>`.
-trait DynStatsFn<R> {
-    fn call<T: DynStats>(self, t: T) -> Result<R, TryFromProtoError>;
-}
-
-fn dyn_from_proto<R, F: DynStatsFn<R>>(proto: ProtoDynStats, f: F) -> Result<R, TryFromProtoError> {
-    assert!(proto.option.is_none());
-    let kind = proto
-        .kind
-        .ok_or_else(|| TryFromProtoError::missing_field("ProtoDynStats::kind"))?;
-    match kind {
-        // Sniff the type of x.lower and use that to determine which type of
-        // PrimitiveStats to decode it as.
-        proto_dyn_stats::Kind::Primitive(x) => match x.lower {
-            Some(proto_primitive_stats::Lower::LowerBool(_)) => {
-                f.call(PrimitiveStats::<bool>::from_proto(x)?)
-            }
-            Some(proto_primitive_stats::Lower::LowerU8(_)) => {
-                f.call(PrimitiveStats::<u8>::from_proto(x)?)
-            }
-            Some(proto_primitive_stats::Lower::LowerU16(_)) => {
-                f.call(PrimitiveStats::<u16>::from_proto(x)?)
-            }
-            Some(proto_primitive_stats::Lower::LowerU32(_)) => {
-                f.call(PrimitiveStats::<u32>::from_proto(x)?)
-            }
-            Some(proto_primitive_stats::Lower::LowerU64(_)) => {
-                f.call(PrimitiveStats::<u64>::from_proto(x)?)
-            }
-            Some(proto_primitive_stats::Lower::LowerI8(_)) => {
-                f.call(PrimitiveStats::<i8>::from_proto(x)?)
-            }
-            Some(proto_primitive_stats::Lower::LowerI16(_)) => {
-                f.call(PrimitiveStats::<i16>::from_proto(x)?)
-            }
-            Some(proto_primitive_stats::Lower::LowerI32(_)) => {
-                f.call(PrimitiveStats::<i32>::from_proto(x)?)
-            }
-            Some(proto_primitive_stats::Lower::LowerI64(_)) => {
-                f.call(PrimitiveStats::<i64>::from_proto(x)?)
-            }
-            Some(proto_primitive_stats::Lower::LowerF32(_)) => {
-                f.call(PrimitiveStats::<f32>::from_proto(x)?)
-            }
-            Some(proto_primitive_stats::Lower::LowerF64(_)) => {
-                f.call(PrimitiveStats::<f64>::from_proto(x)?)
-            }
-            Some(proto_primitive_stats::Lower::LowerString(_)) => {
-                f.call(PrimitiveStats::<String>::from_proto(x)?)
-            }
-            None => Err(TryFromProtoError::missing_field("ProtoPrimitiveStats::min")),
-        },
-        proto_dyn_stats::Kind::Struct(x) => f.call(StructStats::from_proto(x)?),
-        proto_dyn_stats::Kind::Bytes(x) => f.call(BytesStats::from_proto(x)?),
-        proto_dyn_stats::Kind::None(x) => f.call(NoneStats::from_proto(x)?),
-    }
-}
-
-/// Returns a [`Strategy`] that generates arbitrary `Box<dyn DynStats>`.
-pub(crate) fn any_box_dyn_stats() -> impl Strategy<Value = Box<dyn DynStats>> {
-    fn into_box_dyn_stats<T: DynStats>(x: T) -> Box<dyn DynStats> {
-        let x: Box<dyn DynStats> = Box::new(x);
-        x
-    }
+/// Returns a [`Strategy`] that generates arbitrary [`ColumnarStats`].
+pub(crate) fn any_columnar_stats() -> impl Strategy<Value = ColumnarStats> {
     let leaf = Union::new(vec![
         any_primitive_stats::<bool>()
-            .prop_map(into_box_dyn_stats)
+            .prop_map(|s| ColumnStatKinds::Primitive(s.into()))
             .boxed(),
         any_primitive_stats::<i64>()
-            .prop_map(into_box_dyn_stats)
+            .prop_map(|s| ColumnStatKinds::Primitive(s.into()))
             .boxed(),
         any_primitive_stats::<String>()
-            .prop_map(into_box_dyn_stats)
+            .prop_map(|s| ColumnStatKinds::Primitive(s.into()))
             .boxed(),
-        any_bytes_stats().prop_map(into_box_dyn_stats).boxed(),
-    ]);
+        any_bytes_stats().prop_map(ColumnStatKinds::Bytes).boxed(),
+    ])
+    .prop_map(|values| ColumnarStats {
+        nulls: None,
+        values,
+    });
+
     leaf.prop_recursive(2, 10, 3, |inner| {
         (
             any::<usize>(),
             proptest::collection::btree_map(any::<String>(), inner, 0..3),
         )
-            .prop_map(|(len, cols)| into_box_dyn_stats(StructStats { len, cols }))
+            .prop_map(|(len, cols)| {
+                let values = ColumnStatKinds::Struct(StructStats { len, cols });
+                ColumnarStats {
+                    nulls: None,
+                    values,
+                }
+            })
     })
 }

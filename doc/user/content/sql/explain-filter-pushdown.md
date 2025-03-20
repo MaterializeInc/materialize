@@ -54,7 +54,7 @@ in your environment.
 
 Suppose you're interested in checking the number of recent bids.
 
-```sql
+```mzsql
 SELECT count(*) FROM bids WHERE bid_time + '5 minutes' > mz_now();
 ```
 
@@ -67,7 +67,7 @@ performance.
 Explaining this query includes a `pushdown=` field under `Source materialize.public.bids`,
 which indicates that this filter can be pushed down.
 
-```sql
+```mzsql
 EXPLAIN
 SELECT count(*) FROM bids WHERE bid_time + '5 minutes' > mz_now();
 ```
@@ -89,7 +89,7 @@ Suppose it's been \~1 hour since you set up the auction house load generator
 source, and you'd like to get a sense of how much data your query would need to
 fetch.
 
-```sql
+```mzsql
 EXPLAIN FILTER PUSHDOWN FOR
 SELECT count(*) FROM bids WHERE bid_time + '5 minutes' > mz_now();
 ```
@@ -110,7 +110,7 @@ If you instead query for the last hour of data, you can see that since you only
 created the auction house source \~1 hour ago, Materialize needs to fetch
 almost everything.
 
-```sql
+```mzsql
 EXPLAIN FILTER PUSHDOWN FOR
 SELECT count(*) FROM bids WHERE bid_time + '1 hour' > mz_now();
 ```

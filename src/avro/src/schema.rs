@@ -30,10 +30,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::rc::Rc;
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use digest::Digest;
 use itertools::Itertools;
-use once_cell::sync::Lazy;
+use mz_ore::assert_none;
 use regex::Regex;
 use serde::ser::{SerializeMap, SerializeSeq};
 use serde::{Serialize, Serializer};
@@ -599,8 +600,8 @@ impl Name {
     ///
     /// See: <https://avro.apache.org/docs/1.11.1/specification/#names>
     pub fn is_valid(name: &str) -> bool {
-        static MATCHER: Lazy<Regex> =
-            Lazy::new(|| Regex::new(r"(^[A-Za-z_][A-Za-z0-9_]*)$").unwrap());
+        static MATCHER: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"(^[A-Za-z_][A-Za-z0-9_]*)$").unwrap());
         MATCHER.is_match(name)
     }
 
@@ -911,7 +912,7 @@ impl SchemaParser {
     }
 
     fn insert(&mut self, index: usize, schema: NamedSchemaPiece) {
-        assert!(self.named[index].is_none());
+        assert_none!(self.named[index]);
         self.named[index] = Some(schema);
     }
 
@@ -1076,7 +1077,7 @@ impl SchemaParser {
 
     /// Parse a `serde_json::Value` representing a Avro enum type into a
     /// `Schema`.
-    fn parse_enum(&mut self, complex: &Map<String, Value>) -> Result<SchemaPiece, AvroError> {
+    fn parse_enum(&self, complex: &Map<String, Value>) -> Result<SchemaPiece, AvroError> {
         let symbols: Vec<String> = complex
             .get("symbols")
             .and_then(|v| v.as_array())
@@ -1315,7 +1316,7 @@ impl SchemaParser {
     /// Parse a `serde_json::Value` representing a Avro fixed type into a
     /// `Schema`.
     fn parse_fixed(
-        &mut self,
+        &self,
         _default_namespace: &str,
         complex: &Map<String, Value>,
     ) -> Result<SchemaPiece, AvroError> {
@@ -2282,6 +2283,8 @@ fn field_ordering_position(field: &str) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::{assert_err, assert_ok};
+
     use crate::types::{Record, ToAvro};
 
     use super::*;
@@ -2336,7 +2339,7 @@ mod tests {
     #[mz_ore::test]
     fn test_multi_union_schema() {
         let schema = Schema::from_str(r#"["null", "int", "float", "string", "bytes"]"#);
-        assert!(schema.is_ok());
+        assert_ok!(schema);
         let schema = schema.unwrap();
         let node = schema.top_node();
         assert_eq!(SchemaKind::from(&schema), SchemaKind::Union);
@@ -2435,7 +2438,7 @@ mod tests {
             r#"{"type": "enum", "name": "Suit", "symbols": ["diamonds", "spades", "jokers", "clubs", "hearts"], "default": "blah"}"#,
         );
 
-        assert!(bad_schema.is_err());
+        assert_err!(bad_schema);
     }
 
     #[mz_ore::test]
@@ -2711,7 +2714,7 @@ mod tests {
             _ => panic!(),
         };
 
-        assert!(doc.is_none());
+        assert_none!(doc);
     }
 
     #[mz_ore::test]

@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import json
 import operator
 import urllib.parse
 from collections.abc import Callable
@@ -37,7 +38,11 @@ from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_service import K8sService
 from materialize.cloudtest.k8s.api.k8s_stateful_set import K8sStatefulSet
 from materialize.mz_version import MzVersion
-from materialize.mzcompose import DEFAULT_SYSTEM_PARAMETERS
+from materialize.mzcompose import (
+    bootstrap_cluster_replica_size,
+    cluster_replica_size_map,
+    get_default_system_parameters,
+)
 
 
 class EnvironmentdService(K8sService):
@@ -184,8 +189,6 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             "--availability-zone=3",
             "--aws-account-id=123456789000",
             "--aws-external-id-prefix=eb5cb59b-e2fe-41f3-87ca-d2176a495345",
-            "--announce-egress-ip=1.2.3.4",
-            "--announce-egress-ip=88.77.66.55",
             "--environment-id=cloudtest-test-00000000-0000-0000-0000-000000000000-0",
             f"--persist-blob-url=s3://minio:minio123@persist/persist?endpoint={s3_endpoint}&region=minio",
             "--orchestrator=kubernetes",
@@ -250,17 +253,29 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             args += [
                 f"--storage-stash-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=storage"
             ]
+        if self._meets_minimum_version("0.118.0-dev"):
+            args += [
+                "--announce-egress-address=1.2.3.4/32",
+                "--announce-egress-address=88.77.66.0/28",
+                "--announce-egress-address=2001:db8::/60",
+            ]
+        else:
+            args += [
+                "--announce-egress-ip=1.2.3.4",
+                "--announce-egress-ip=88.77.66.55",
+            ]
 
         return args + self.extra_args
 
     def env_vars(self) -> list[V1EnvVar]:
-
-        system_parameter_defaults = DEFAULT_SYSTEM_PARAMETERS
+        system_parameter_defaults = get_default_system_parameters()
 
         if self.log_filter:
             system_parameter_defaults["log_filter"] = self.log_filter
         if self._meets_maximum_version("0.63.99"):
             system_parameter_defaults["enable_managed_clusters"] = "true"
+
+        system_parameter_defaults["upsert_rocksdb_auto_spill_to_disk"] = "false"
 
         value_from = V1EnvVarSource(
             field_ref=V1ObjectFieldSelector(field_path="metadata.name")
@@ -272,7 +287,6 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             V1EnvVar(name="AWS_REGION", value="minio"),
             V1EnvVar(name="AWS_ACCESS_KEY_ID", value="minio"),
             V1EnvVar(name="AWS_SECRET_ACCESS_KEY", value="minio123"),
-            V1EnvVar(name="MZ_ANNOUNCE_EGRESS_IP", value="1.2.3.4,88.77.66.55"),
             V1EnvVar(name="MZ_AWS_ACCOUNT_ID", value="123456789000"),
             V1EnvVar(
                 name="MZ_AWS_EXTERNAL_ID_PREFIX",
@@ -300,7 +314,45 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                 name="MZ_ADAPTER_STASH_URL",
                 value=f"postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=adapter",
             ),
+            V1EnvVar(
+                name="MZ_CLUSTER_REPLICA_SIZES",
+                value=f"{json.dumps(cluster_replica_size_map())}",
+            ),
+            V1EnvVar(
+                name="MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE",
+                value=bootstrap_cluster_replica_size(),
+            ),
+            V1EnvVar(
+                name="MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICA_SIZE",
+                value=bootstrap_cluster_replica_size(),
+            ),
+            V1EnvVar(
+                name="MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICA_SIZE",
+                value=bootstrap_cluster_replica_size(),
+            ),
+            V1EnvVar(
+                name="MZ_BOOTSTRAP_BUILTIN_SUPPORT_CLUSTER_REPLICA_SIZE",
+                value=bootstrap_cluster_replica_size(),
+            ),
+            V1EnvVar(
+                name="MZ_BOOTSTRAP_BUILTIN_CATALOG_SERVER_CLUSTER_REPLICA_SIZE",
+                value=bootstrap_cluster_replica_size(),
+            ),
+            V1EnvVar(
+                name="MZ_BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICA_SIZE",
+                value=bootstrap_cluster_replica_size(),
+            ),
         ]
+
+        if self._meets_minimum_version("0.118.0-dev"):
+            env += [
+                V1EnvVar(
+                    name="MZ_ANNOUNCE_EGRESS_ADDRESS",
+                    value="1.2.3.4/32,88.77.66.0/28,2001:db8::/60",
+                )
+            ]
+        else:
+            env += [V1EnvVar(name="MZ_ANNOUNCE_EGRESS_IP", value="1.2.3.4,88.77.66.55")]
 
         if self.coverage_mode:
             env.extend(

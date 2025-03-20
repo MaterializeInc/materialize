@@ -15,7 +15,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
-use mz_ore::codegen::CodegenBuf;
+use mz_ore_build::codegen::CodegenBuf;
 
 use crate::ir::{Ir, Item, Type};
 
@@ -113,6 +113,7 @@ pub fn gen_fold_root(ir: &Ir) -> String {
             },
         );
 
+        buf.writeln("#[allow(clippy::needless_pass_by_ref_mut)]");
         buf.writeln(format!(
             "pub fn {fn_name}<F, {trait_generics_and_bounds}>(folder: &mut F, node: {name}{generics}) -> {name}{generics2}"
         ));
@@ -253,6 +254,7 @@ fn gen_visit_root(c: &VisitConfig, ir: &Ir) -> String {
                 ), |buf| buf.writeln(format!("visitor.{fn_name}(self)")));
             });
         }
+        buf.writeln("#[allow(clippy::needless_pass_by_ref_mut)]");
         buf.writeln(format!(
             "pub fn {fn_name}<'ast, V, {trait_generics_and_bounds}>(visitor: &mut V, node: &'ast {muta}{name}{generics})"
         ));

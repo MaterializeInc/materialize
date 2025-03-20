@@ -33,7 +33,7 @@ banana
     SASL PASSWORD SECRET password,
     SSL CERTIFICATE AUTHORITY = '${ca-crt}'
   )
-contains:sslv3 alert bad certificate
+contains:ssl/tls alert bad certificate
 
 ! CREATE CONNECTION kafka_invalid TO KAFKA (
     BROKER 'kafka:9097',
@@ -44,7 +44,7 @@ contains:sslv3 alert bad certificate
     SSL KEY SECRET kafka1_key,
     SSL CERTIFICATE AUTHORITY '${ca-crt}'
   )
-contains:sslv3 alert certificate unknown
+contains:ssl/tls alert certificate unknown
 
 ! CREATE CONNECTION kafka_invalid TO KAFKA (
     BROKER 'kafka:9097',
@@ -71,9 +71,11 @@ contains:Invalid username or password
 
 > CREATE SOURCE text_data FROM KAFKA CONNECTION kafka (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
-  ) FORMAT TEXT
+  )
 
-> SELECT * FROM text_data
+> CREATE TABLE text_data_tbl FROM SOURCE text_data (REFERENCE "testdrive-text-data-${testdrive.seed}") FORMAT TEXT
+
+> SELECT * FROM text_data_tbl
 banana
 
 # ==> Test with an SSH tunnel. <==
@@ -90,7 +92,9 @@ banana
 
 > CREATE SOURCE text_data_ssh FROM KAFKA CONNECTION kafka_ssh (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
-  ) FORMAT TEXT
+  )
 
-> SELECT * FROM text_data_ssh
+> CREATE TABLE text_data_ssh_tbl FROM SOURCE text_data_ssh (REFERENCE "testdrive-text-data-${testdrive.seed}") FORMAT TEXT
+
+> SELECT * FROM text_data_ssh_tbl
 banana

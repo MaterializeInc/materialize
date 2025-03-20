@@ -35,11 +35,11 @@ Isolation level is a configuration parameter that can be set by the user on a se
 
 ## Examples
 
-```sql
+```mzsql
 SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
 ```
 
-```sql
+```mzsql
 SET TRANSACTION_ISOLATION TO 'STRICT SERIALIZABLE';
 ```
 
@@ -108,7 +108,7 @@ of the rows that were seen by T1.
 It’s important to note that the linearizable guarantee only applies to transactions (including single statement SQL
 queries which are implicitly single statement transactions), not to data written while ingesting from upstream sources.
 So if some piece of data has been fully ingested from an upstream source, then it is not guaranteed to appear in the
-next read transaction. See [real-time recency](#real-time-recency) and [strengthening correctness](https://github.com/MaterializeInc/materialize/issues/13107) for more details. If some
+next read transaction. See [real-time recency](#real-time-recency) for more details. If some
 piece of data has been fully ingested from an upstream source AND is included in the results of some read transaction
 THEN all subsequent read transactions are guaranteed to see that piece of data.
 

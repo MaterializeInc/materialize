@@ -14,21 +14,24 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, bail, Context};
 use itertools::Itertools;
 use mz_ccsr::tls::{Certificate, Identity};
 use mz_cloud_resources::{vpc_endpoint_host, AwsExternalIdPrefix, CloudResourceReader};
 use mz_dyncfg::ConfigSet;
 use mz_kafka_util::client::{
-    BrokerRewrite, MzClientContext, MzKafkaError, TunnelConfig, TunnelingClientContext,
+    BrokerAddr, BrokerRewrite, MzClientContext, MzKafkaError, TunnelConfig, TunnelingClientContext,
 };
+use mz_ore::assert_none;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::{InTask, OreFutureExt};
 use mz_ore::netio::resolve_address;
+use mz_ore::num::NonNeg;
+use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_proto::tokio_postgres::any_ssl_mode;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
-use mz_repr::GlobalId;
+use mz_repr::{CatalogItemId, GlobalId};
 use mz_secrets::SecretsReader;
 use mz_ssh_util::keys::SshKeyPair;
 use mz_ssh_util::tunnel::SshTunnelConfig;
@@ -37,7 +40,6 @@ use mz_tls_util::Pkcs12Archive;
 use mz_tracing::CloneableEnvFilter;
 use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
-use rdkafka::client::BrokerAddr;
 use rdkafka::config::FromClientConfigAndContext;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::ClientContext;
@@ -50,14 +52,21 @@ use tracing::{debug, warn};
 use url::Url;
 
 use crate::configuration::StorageConfiguration;
-use crate::connections::aws::{AwsConnection, AwsConnectionValidationError};
+use crate::connections::aws::{
+    AwsConnection, AwsConnectionReference, AwsConnectionValidationError,
+};
+use crate::connections::string_or_secret::StringOrSecret;
 use crate::controller::AlterError;
-use crate::dyncfgs::{ENFORCE_EXTERNAL_ADDRESSES, KAFKA_CLIENT_ID_ENRICHMENT_RULES};
+use crate::dyncfgs::{
+    ENFORCE_EXTERNAL_ADDRESSES, KAFKA_CLIENT_ID_ENRICHMENT_RULES,
+    KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM,
+};
 use crate::errors::{ContextCreationError, CsrConnectError};
 use crate::AlterCompatible;
 
 pub mod aws;
 pub mod inline;
+pub mod string_or_secret;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.connections.rs"));
 
@@ -68,14 +77,14 @@ trait SecretsReaderExt {
     async fn read_in_task_if(
         &self,
         in_task: InTask,
-        id: GlobalId,
+        id: CatalogItemId,
     ) -> Result<Vec<u8>, anyhow::Error>;
 
     /// `SecretsReader::read_string`, but optionally run in a task.
     async fn read_string_in_task_if(
         &self,
         in_task: InTask,
-        id: GlobalId,
+        id: CatalogItemId,
     ) -> Result<String, anyhow::Error>;
 }
 
@@ -84,7 +93,7 @@ impl SecretsReaderExt for Arc<dyn SecretsReader> {
     async fn read_in_task_if(
         &self,
         in_task: InTask,
-        id: GlobalId,
+        id: CatalogItemId,
     ) -> Result<Vec<u8>, anyhow::Error> {
         let sr = Arc::clone(self);
         async move { sr.read(id).await }
@@ -94,78 +103,12 @@ impl SecretsReaderExt for Arc<dyn SecretsReader> {
     async fn read_string_in_task_if(
         &self,
         in_task: InTask,
-        id: GlobalId,
+        id: CatalogItemId,
     ) -> Result<String, anyhow::Error> {
         let sr = Arc::clone(self);
         async move { sr.read_string(id).await }
             .run_in_task_if(in_task, || "secrets_reader_read".to_string())
             .await
-    }
-}
-
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub enum StringOrSecret {
-    String(String),
-    Secret(GlobalId),
-}
-
-impl StringOrSecret {
-    /// Gets the value as a string, reading the secret if necessary.
-    pub async fn get_string(
-        &self,
-        in_task: InTask,
-        secrets_reader: &Arc<dyn SecretsReader>,
-    ) -> anyhow::Result<String> {
-        match self {
-            StringOrSecret::String(s) => Ok(s.clone()),
-            StringOrSecret::Secret(id) => secrets_reader.read_string_in_task_if(in_task, *id).await,
-        }
-    }
-
-    /// Asserts that this string or secret is a string and returns its contents.
-    pub fn unwrap_string(&self) -> &str {
-        match self {
-            StringOrSecret::String(s) => s,
-            StringOrSecret::Secret(_) => panic!("StringOrSecret::unwrap_string called on a secret"),
-        }
-    }
-
-    /// Asserts that this string or secret is a secret and returns its global
-    /// ID.
-    pub fn unwrap_secret(&self) -> GlobalId {
-        match self {
-            StringOrSecret::String(_) => panic!("StringOrSecret::unwrap_secret called on a string"),
-            StringOrSecret::Secret(id) => *id,
-        }
-    }
-}
-
-impl RustType<ProtoStringOrSecret> for StringOrSecret {
-    fn into_proto(&self) -> ProtoStringOrSecret {
-        use proto_string_or_secret::Kind;
-        ProtoStringOrSecret {
-            kind: Some(match self {
-                StringOrSecret::String(s) => Kind::String(s.clone()),
-                StringOrSecret::Secret(id) => Kind::Secret(id.into_proto()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoStringOrSecret) -> Result<Self, TryFromProtoError> {
-        use proto_string_or_secret::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoStringOrSecret::kind"))?;
-        Ok(match kind {
-            Kind::String(s) => StringOrSecret::String(s),
-            Kind::Secret(id) => StringOrSecret::Secret(GlobalId::from_proto(id)?),
-        })
-    }
-}
-
-impl<V: std::fmt::Display> From<V> for StringOrSecret {
-    fn from(v: V) -> StringOrSecret {
-        StringOrSecret::String(format!("{}", v))
     }
 }
 
@@ -232,8 +175,15 @@ impl ConnectionContext {
         ConnectionContext {
             environment_id: "test-environment-id".into(),
             librdkafka_log_level: tracing::Level::INFO,
-            aws_external_id_prefix: None,
-            aws_connection_role_arn: None,
+            aws_external_id_prefix: Some(
+                AwsExternalIdPrefix::new_from_cli_argument_or_environment_variable(
+                    "test-aws-external-id-prefix",
+                )
+                .expect("infallible"),
+            ),
+            aws_connection_role_arn: Some(
+                "arn:aws:iam::123456789000:role/MaterializeConnection".into(),
+            ),
             secrets_reader,
             cloud_resource_reader: None,
             ssh_tunnel_manager: SshTunnelManager::default(),
@@ -287,7 +237,7 @@ impl Connection<InlinedConnection> {
     /// Validates this connection by attempting to connect to the upstream system.
     pub async fn validate(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), ConnectionValidationError> {
         match self {
@@ -320,6 +270,13 @@ impl Connection<InlinedConnection> {
         match self {
             Self::MySql(conn) => conn,
             o => unreachable!("{o:?} is not a MySQL connection"),
+        }
+    }
+
+    pub fn unwrap_aws(self) -> <InlinedConnection as ConnectionAccess>::Aws {
+        match self {
+            Self::Aws(conn) => conn,
+            o => unreachable!("{o:?} is not an AWS connection"),
         }
     }
 
@@ -366,7 +323,7 @@ impl ConnectionValidationError {
 }
 
 impl<C: ConnectionAccess> AlterCompatible for Connection<C> {
-    fn alter_compatible(&self, id: mz_repr::GlobalId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         match (self, other) {
             (Self::Aws(s), Self::Aws(o)) => s.alter_compatible(id, o),
             (Self::AwsPrivatelink(s), Self::AwsPrivatelink(o)) => s.alter_compatible(id, o),
@@ -407,10 +364,24 @@ pub struct KafkaTlsConfig {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Arbitrary)]
-pub struct KafkaSaslConfig {
+pub struct KafkaSaslConfig<C: ConnectionAccess = InlinedConnection> {
     pub mechanism: String,
     pub username: StringOrSecret,
-    pub password: GlobalId,
+    pub password: Option<CatalogItemId>,
+    pub aws: Option<AwsConnectionReference<C>>,
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<KafkaSaslConfig, R>
+    for KafkaSaslConfig<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> KafkaSaslConfig {
+        KafkaSaslConfig {
+            mechanism: self.mechanism,
+            username: self.username,
+            password: self.password,
+            aws: self.aws.map(|aws| aws.into_inline_connection(&r)),
+        }
+    }
 }
 
 /// Specifies a Kafka broker in a [`KafkaConnection`].
@@ -452,6 +423,36 @@ impl RustType<ProtoKafkaBroker> for KafkaBroker {
     }
 }
 
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Default)]
+pub struct KafkaTopicOptions {
+    /// The replication factor for the topic.
+    /// If `None`, the broker default will be used.
+    pub replication_factor: Option<NonNeg<i32>>,
+    /// The number of partitions to create.
+    /// If `None`, the broker default will be used.
+    pub partition_count: Option<NonNeg<i32>>,
+    /// The initial configuration parameters for the topic.
+    pub topic_config: BTreeMap<String, String>,
+}
+
+impl RustType<ProtoKafkaTopicOptions> for KafkaTopicOptions {
+    fn into_proto(&self) -> ProtoKafkaTopicOptions {
+        ProtoKafkaTopicOptions {
+            replication_factor: self.replication_factor.map(|f| *f),
+            partition_count: self.partition_count.map(|f| *f),
+            topic_config: self.topic_config.clone(),
+        }
+    }
+
+    fn from_proto(proto: ProtoKafkaTopicOptions) -> Result<Self, TryFromProtoError> {
+        Ok(KafkaTopicOptions {
+            replication_factor: proto.replication_factor.map(NonNeg::try_from).transpose()?,
+            partition_count: proto.partition_count.map(NonNeg::try_from).transpose()?,
+            topic_config: proto.topic_config,
+        })
+    }
+}
+
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct KafkaConnection<C: ConnectionAccess = InlinedConnection> {
     pub brokers: Vec<KafkaBroker<C>>,
@@ -460,9 +461,10 @@ pub struct KafkaConnection<C: ConnectionAccess = InlinedConnection> {
     /// in `brokers`.
     pub default_tunnel: Tunnel<C>,
     pub progress_topic: Option<String>,
+    pub progress_topic_options: KafkaTopicOptions,
     pub options: BTreeMap<String, StringOrSecret>,
     pub tls: Option<KafkaTlsConfig>,
-    pub sasl: Option<KafkaSaslConfig>,
+    pub sasl: Option<KafkaSaslConfig<C>>,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<KafkaConnection, R>
@@ -472,6 +474,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaConnection, R>
         let KafkaConnection {
             brokers,
             progress_topic,
+            progress_topic_options,
             default_tunnel,
             options,
             tls,
@@ -486,10 +489,11 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaConnection, R>
         KafkaConnection {
             brokers,
             progress_topic,
+            progress_topic_options,
             default_tunnel: default_tunnel.into_inline_connection(&r),
             options,
             tls,
-            sasl,
+            sasl: sasl.map(|sasl| sasl.into_inline_connection(&r)),
         }
     }
 }
@@ -502,7 +506,7 @@ impl<C: ConnectionAccess> KafkaConnection<C> {
     pub fn progress_topic(
         &self,
         connection_context: &ConnectionContext,
-        connection_id: GlobalId,
+        connection_id: CatalogItemId,
     ) -> Cow<str> {
         if let Some(progress_topic) = &self.progress_topic {
             Cow::Borrowed(progress_topic)
@@ -525,7 +529,7 @@ impl KafkaConnection {
     /// or sink.
     pub fn id_base(
         connection_context: &ConnectionContext,
-        connection_id: GlobalId,
+        connection_id: CatalogItemId,
         object_id: GlobalId,
     ) -> String {
         format!(
@@ -602,6 +606,11 @@ impl KafkaConnection {
         let brokers = match &self.default_tunnel {
             Tunnel::AwsPrivatelink(t) => {
                 assert!(&self.brokers.is_empty());
+
+                let algo = KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM
+                    .get(storage_configuration.config_set());
+                options.insert("ssl.endpoint.identification.algorithm".into(), algo.into());
+
                 // When using a default privatelink tunnel broker/brokers cannot be specified
                 // instead the tunnel connection_id and port are used for the initial connection.
                 format!(
@@ -635,10 +644,9 @@ impl KafkaConnection {
         if let Some(sasl) = &self.sasl {
             options.insert("sasl.mechanisms".into(), (&sasl.mechanism).into());
             options.insert("sasl.username".into(), sasl.username.clone());
-            options.insert(
-                "sasl.password".into(),
-                StringOrSecret::Secret(sasl.password),
-            );
+            if let Some(password) = sasl.password {
+                options.insert("sasl.password".into(), StringOrSecret::Secret(password));
+            }
         }
 
         let mut config = mz_kafka_util::client::create_new_client_config(
@@ -662,6 +670,19 @@ impl KafkaConnection {
             config.set(*k, v);
         }
 
+        let aws_config = match self.sasl.as_ref().and_then(|sasl| sasl.aws.as_ref()) {
+            None => None,
+            Some(aws) => Some(
+                aws.connection
+                    .load_sdk_config(
+                        &storage_configuration.connection_context,
+                        aws.connection_id,
+                        in_task,
+                    )
+                    .await?,
+            ),
+        };
+
         // TODO(roshan): Implement enforcement of external address validation once
         // rdkafka client has been updated to support providing multiple resolved
         // addresses for brokers
@@ -673,6 +694,7 @@ impl KafkaConnection {
                 .ssh_tunnel_manager
                 .clone(),
             storage_configuration.parameters.ssh_timeout_config,
+            aws_config,
             in_task,
         );
 
@@ -719,7 +741,11 @@ impl KafkaConnection {
                     .next()
                     .context("BROKER is not address:port")?
                     .into(),
-                port: addr_parts.next().unwrap_or("9092").into(),
+                port: addr_parts
+                    .next()
+                    .unwrap_or("9092")
+                    .parse()
+                    .context("parsing BROKER port")?,
             };
             match &broker.tunnel {
                 Tunnel::Direct => {
@@ -784,7 +810,7 @@ impl KafkaConnection {
 
     async fn validate(
         &self,
-        _id: GlobalId,
+        _id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
         let (context, error_rx) = MzClientContext::with_errors();
@@ -836,7 +862,7 @@ impl KafkaConnection {
 
                 // Don't drop the consumer until after we've drained the errors
                 // channel. Dropping the consumer can introduce spurious errors.
-                // See #24901.
+                // See database-issues#7432.
                 drop(consumer);
 
                 match main_err {
@@ -854,12 +880,19 @@ impl<C: ConnectionAccess> AlterCompatible for KafkaConnection<C> {
             brokers: _,
             default_tunnel: _,
             progress_topic,
+            progress_topic_options,
             options: _,
             tls: _,
             sasl: _,
         } = self;
 
-        let compatibility_checks = [(progress_topic == &other.progress_topic, "progress_topic")];
+        let compatibility_checks = [
+            (progress_topic == &other.progress_topic, "progress_topic"),
+            (
+                progress_topic_options == &other.progress_topic_options,
+                "progress_topic_options",
+            ),
+        ];
 
         for (compatible, field) in compatibility_checks {
             if !compatible {
@@ -898,7 +931,8 @@ impl RustType<ProtoKafkaConnectionSaslConfig> for KafkaSaslConfig {
         ProtoKafkaConnectionSaslConfig {
             mechanism: self.mechanism.into_proto(),
             username: Some(self.username.into_proto()),
-            password: Some(self.password.into_proto()),
+            password: self.password.into_proto(),
+            aws: self.aws.into_proto(),
         }
     }
 
@@ -908,9 +942,8 @@ impl RustType<ProtoKafkaConnectionSaslConfig> for KafkaSaslConfig {
             username: proto
                 .username
                 .into_rust_if_some("ProtoKafkaConnectionSaslConfig::username")?,
-            password: proto
-                .password
-                .into_rust_if_some("ProtoKafkaConnectionSaslConfig::password")?,
+            password: proto.password.into_rust()?,
+            aws: proto.aws.into_rust()?,
         })
     }
 }
@@ -921,6 +954,7 @@ impl RustType<ProtoKafkaConnection> for KafkaConnection {
             brokers: self.brokers.into_proto(),
             default_tunnel: Some(self.default_tunnel.into_proto()),
             progress_topic: self.progress_topic.into_proto(),
+            progress_topic_options: Some(self.progress_topic_options.into_proto()),
             options: self
                 .options
                 .iter()
@@ -938,6 +972,10 @@ impl RustType<ProtoKafkaConnection> for KafkaConnection {
                 .default_tunnel
                 .into_rust_if_some("ProtoKafkaConnection::default_tunnel")?,
             progress_topic: proto.progress_topic,
+            progress_topic_options: match proto.progress_topic_options {
+                Some(progress_topic_options) => progress_topic_options.into_rust()?,
+                None => Default::default(),
+            },
             options: proto
                 .options
                 .into_iter()
@@ -1126,7 +1164,7 @@ impl CsrConnection {
                     });
             }
             Tunnel::AwsPrivatelink(connection) => {
-                assert!(connection.port.is_none());
+                assert_none!(connection.port);
 
                 let privatelink_host = mz_cloud_resources::vpc_endpoint_host(
                     connection.connection_id,
@@ -1145,7 +1183,7 @@ impl CsrConnection {
 
     async fn validate(
         &self,
-        _id: GlobalId,
+        _id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
         let client = self
@@ -1219,7 +1257,7 @@ pub struct TlsIdentity {
     pub cert: StringOrSecret,
     /// The ID of the secret containing the client's TLS private key in PEM
     /// format.
-    pub key: GlobalId,
+    pub key: CatalogItemId,
 }
 
 impl RustType<ProtoTlsIdentity> for TlsIdentity {
@@ -1244,7 +1282,7 @@ pub struct CsrConnectionHttpAuth {
     /// The username.
     pub username: StringOrSecret,
     /// The ID of the secret containing the password, if any.
-    pub password: Option<GlobalId>,
+    pub password: Option<CatalogItemId>,
 }
 
 impl RustType<ProtoCsrConnectionHttpAuth> for CsrConnectionHttpAuth {
@@ -1277,7 +1315,7 @@ pub struct PostgresConnection<C: ConnectionAccess = InlinedConnection> {
     /// The username to authenticate as.
     pub user: StringOrSecret,
     /// An optional password for authentication.
-    pub password: Option<GlobalId>,
+    pub password: Option<CatalogItemId>,
     /// A tunnel through which to route traffic.
     pub tunnel: Tunnel<C>,
     /// Whether to use TLS for encryption, authentication, or both.
@@ -1288,6 +1326,9 @@ pub struct PostgresConnection<C: ConnectionAccess = InlinedConnection> {
     pub tls_root_cert: Option<StringOrSecret>,
     /// An optional TLS client certificate for authentication.
     pub tls_identity: Option<TlsIdentity>,
+    /// The kind of postgres server we are connecting to. This can be vanilla, for a normal
+    /// postgres server or some other system that is pg compatible, like Yugabyte, Aurora, etc.
+    pub flavor: PostgresFlavor,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<PostgresConnection, R>
@@ -1304,6 +1345,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<PostgresConnection, R>
             tls_mode,
             tls_root_cert,
             tls_identity,
+            flavor,
         } = self;
 
         PostgresConnection {
@@ -1316,6 +1358,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<PostgresConnection, R>
             tls_mode,
             tls_root_cert,
             tls_identity,
+            flavor,
         }
     }
 }
@@ -1450,7 +1493,7 @@ impl PostgresConnection<InlinedConnection> {
                 }
             }
             Tunnel::AwsPrivatelink(connection) => {
-                assert!(connection.port.is_none());
+                assert_none!(connection.port);
                 mz_postgres_util::TunnelConfig::AwsPrivatelink {
                     connection_id: connection.connection_id,
                 }
@@ -1467,7 +1510,7 @@ impl PostgresConnection<InlinedConnection> {
 
     async fn validate(
         &self,
-        _id: GlobalId,
+        _id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
         let config = self
@@ -1478,12 +1521,18 @@ impl PostgresConnection<InlinedConnection> {
                 InTask::No,
             )
             .await?;
-        config
+        let client = config
             .connect(
                 "connection validation",
                 &storage_configuration.connection_context.ssh_tunnel_manager,
             )
             .await?;
+        use PostgresFlavor::*;
+        match (client.server_flavor(), &self.flavor) {
+            (Vanilla, Yugabyte) => bail!("Expected to find PostgreSQL server, found Yugabyte."),
+            (Yugabyte, Vanilla) => bail!("Expected to find Yugabyte server, found PostgreSQL."),
+            (Vanilla, Vanilla) | (Yugabyte, Yugabyte) => {}
+        }
         Ok(())
     }
 }
@@ -1492,6 +1541,7 @@ impl<C: ConnectionAccess> AlterCompatible for PostgresConnection<C> {
     fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         let PostgresConnection {
             tunnel,
+            flavor,
             // All non-tunnel options may change arbitrarily
             host: _,
             port: _,
@@ -1503,7 +1553,10 @@ impl<C: ConnectionAccess> AlterCompatible for PostgresConnection<C> {
             tls_identity: _,
         } = self;
 
-        let compatibility_checks = [(tunnel.alter_compatible(id, &other.tunnel).is_ok(), "tunnel")];
+        let compatibility_checks = [
+            (tunnel.alter_compatible(id, &other.tunnel).is_ok(), "tunnel"),
+            (flavor == &other.flavor, "flavor"),
+        ];
 
         for (compatible, field) in compatibility_checks {
             if !compatible {
@@ -1532,6 +1585,7 @@ impl RustType<ProtoPostgresConnection> for PostgresConnection {
             tls_root_cert: self.tls_root_cert.into_proto(),
             tls_identity: self.tls_identity.into_proto(),
             tunnel: Some(self.tunnel.into_proto()),
+            flavor: Some(self.flavor.into_proto()),
         }
     }
 
@@ -1552,6 +1606,9 @@ impl RustType<ProtoPostgresConnection> for PostgresConnection {
                 .into_rust_if_some("ProtoPostgresConnection::tls_mode")?,
             tls_root_cert: proto.tls_root_cert.into_rust()?,
             tls_identity: proto.tls_identity.into_rust()?,
+            flavor: proto
+                .flavor
+                .into_rust_if_some("ProtoPostgresConnection::flavor")?,
         })
     }
 }
@@ -1643,12 +1700,12 @@ impl RustType<i32> for MySqlSslMode {
     }
 
     fn from_proto(proto: i32) -> Result<Self, TryFromProtoError> {
-        Ok(match ProtoMySqlSslMode::from_i32(proto) {
-            Some(ProtoMySqlSslMode::Disabled) => MySqlSslMode::Disabled,
-            Some(ProtoMySqlSslMode::Required) => MySqlSslMode::Required,
-            Some(ProtoMySqlSslMode::VerifyCa) => MySqlSslMode::VerifyCa,
-            Some(ProtoMySqlSslMode::VerifyIdentity) => MySqlSslMode::VerifyIdentity,
-            None => {
+        Ok(match ProtoMySqlSslMode::try_from(proto) {
+            Ok(ProtoMySqlSslMode::Disabled) => MySqlSslMode::Disabled,
+            Ok(ProtoMySqlSslMode::Required) => MySqlSslMode::Required,
+            Ok(ProtoMySqlSslMode::VerifyCa) => MySqlSslMode::VerifyCa,
+            Ok(ProtoMySqlSslMode::VerifyIdentity) => MySqlSslMode::VerifyIdentity,
+            Err(_) => {
                 return Err(TryFromProtoError::UnknownEnumVariant(
                     "tls_mode".to_string(),
                 ))
@@ -1676,7 +1733,7 @@ pub struct MySqlConnection<C: ConnectionAccess = InlinedConnection> {
     /// The username to authenticate as.
     pub user: StringOrSecret,
     /// An optional password for authentication.
-    pub password: Option<GlobalId>,
+    pub password: Option<CatalogItemId>,
     /// A tunnel through which to route traffic.
     pub tunnel: Tunnel<C>,
     /// Whether to use TLS for encryption, verify the server's certificate, and identity.
@@ -1687,6 +1744,9 @@ pub struct MySqlConnection<C: ConnectionAccess = InlinedConnection> {
     pub tls_root_cert: Option<StringOrSecret>,
     /// An optional TLS client certificate for authentication.
     pub tls_identity: Option<TlsIdentity>,
+    /// Reference to the AWS connection information to be used for IAM authenitcation and
+    /// assuming AWS roles.
+    pub aws_connection: Option<AwsConnectionReference<C>>,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<MySqlConnection, R>
@@ -1702,6 +1762,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<MySqlConnection, R>
             tls_mode,
             tls_root_cert,
             tls_identity,
+            aws_connection,
         } = self;
 
         MySqlConnection {
@@ -1709,10 +1770,11 @@ impl<R: ConnectionResolver> IntoInlineConnection<MySqlConnection, R>
             port,
             user,
             password,
-            tunnel: tunnel.into_inline_connection(r),
+            tunnel: tunnel.into_inline_connection(&r),
             tls_mode,
             tls_root_cert,
             tls_identity,
+            aws_connection: aws_connection.map(|aws| aws.into_inline_connection(&r)),
         }
     }
 }
@@ -1829,29 +1891,43 @@ impl MySqlConnection<InlinedConnection> {
                 }
             }
             Tunnel::AwsPrivatelink(connection) => {
-                assert!(connection.port.is_none());
+                assert_none!(connection.port);
                 mz_mysql_util::TunnelConfig::AwsPrivatelink {
                     connection_id: connection.connection_id,
                 }
             }
         };
 
-        opts = storage_configuration
-            .parameters
-            .mysql_source_timeouts
-            .apply_to_opts(opts)?;
+        let aws_config = match self.aws_connection.as_ref() {
+            None => None,
+            Some(aws_ref) => Some(
+                aws_ref
+                    .connection
+                    .load_sdk_config(
+                        &storage_configuration.connection_context,
+                        aws_ref.connection_id,
+                        in_task,
+                    )
+                    .await?,
+            ),
+        };
 
         Ok(mz_mysql_util::Config::new(
-            opts.into(),
+            opts,
             tunnel,
             storage_configuration.parameters.ssh_timeout_config,
             in_task,
-        ))
+            storage_configuration
+                .parameters
+                .mysql_source_timeouts
+                .clone(),
+            aws_config,
+        )?)
     }
 
     async fn validate(
         &self,
-        _id: GlobalId,
+        _id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
         let config = self
@@ -1884,6 +1960,7 @@ impl RustType<ProtoMySqlConnection> for MySqlConnection {
             tls_root_cert: self.tls_root_cert.into_proto(),
             tls_identity: self.tls_identity.into_proto(),
             tunnel: Some(self.tunnel.into_proto()),
+            aws_connection: self.aws_connection.into_proto(),
         }
     }
 
@@ -1899,6 +1976,7 @@ impl RustType<ProtoMySqlConnection> for MySqlConnection {
             tls_mode: proto.tls_mode.into_rust()?,
             tls_root_cert: proto.tls_root_cert.into_rust()?,
             tls_identity: proto.tls_identity.into_rust()?,
+            aws_connection: proto.aws_connection.into_rust()?,
         })
     }
 }
@@ -1915,6 +1993,7 @@ impl<C: ConnectionAccess> AlterCompatible for MySqlConnection<C> {
             tls_mode: _,
             tls_root_cert: _,
             tls_identity: _,
+            aws_connection: _,
         } = self;
 
         let compatibility_checks = [(tunnel.alter_compatible(id, &other.tunnel).is_ok(), "tunnel")];
@@ -1976,7 +2055,7 @@ impl AlterCompatible for SshConnection {
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct AwsPrivatelink {
     /// The ID of the connection to the AWS PrivateLink service.
-    pub connection_id: GlobalId,
+    pub connection_id: CatalogItemId,
     // The availability zone to use when connecting to the AWS PrivateLink service.
     pub availability_zone: Option<String>,
     /// The port to use when connecting to the AWS PrivateLink service, if
@@ -2030,11 +2109,11 @@ impl AlterCompatible for AwsPrivatelink {
     }
 }
 
-/// Specifies an AWS PrivateLink service for a [`Tunnel`].
+/// Specifies an SSH tunnel connection.
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct SshTunnel<C: ConnectionAccess = InlinedConnection> {
     /// id of the ssh connection
-    pub connection_id: GlobalId,
+    pub connection_id: CatalogItemId,
     /// ssh connection object
     pub connection: C::Ssh,
 }
@@ -2152,7 +2231,7 @@ impl SshConnection {
     #[allow(clippy::unused_async)]
     async fn validate(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
         let secret = storage_configuration
@@ -2198,7 +2277,7 @@ impl AwsPrivatelinkConnection {
     #[allow(clippy::unused_async)]
     async fn validate(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
         let Some(ref cloud_resource_reader) = storage_configuration

@@ -49,11 +49,13 @@ $ kafka-ingest format=avro topic=upsert-avro key-format=avro key-schema=${upsert
 > CREATE SOURCE upsert_input
   IN CLUSTER upsert_input_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-avro-${testdrive.seed}')
+
+> CREATE TABLE upsert_input_tbl FROM SOURCE upsert_input (REFERENCE "testdrive-upsert-avro-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
 # we split avro unions into separate columns
-> SELECT * FROM upsert_input;
+> SELECT * FROM upsert_input_tbl;
 fisch  42  <null>   1000  <null>  hello
 fish    2  fish     1000  1       <null>
 
@@ -62,7 +64,7 @@ fish    2  fish     1000  1       <null>
 > CREATE CLUSTER upsert_input_sink1_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK upsert_input_sink1
   IN CLUSTER upsert_input_sink1_cluster
-  FROM upsert_input
+  FROM upsert_input_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-input-sink1-${testdrive.seed}')
   KEY (key1, key2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -77,7 +79,7 @@ $ schema-registry-verify schema-type=avro subject=testdrive-upsert-input-sink1-$
 > CREATE CLUSTER upsert_input_sink2_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK upsert_input_sink2
   IN CLUSTER upsert_input_sink2_cluster
-  FROM upsert_input
+  FROM upsert_input_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-input-sink2-${testdrive.seed}')
   KEY (key1, key2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -92,7 +94,7 @@ $ schema-registry-verify schema-type=avro subject=testdrive-upsert-input-sink2-$
 > CREATE CLUSTER upsert_input_sink3_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK upsert_input_sink3
   IN CLUSTER upsert_input_sink3_cluster
-  FROM upsert_input
+  FROM upsert_input_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-input-sink3-${testdrive.seed}')
   KEY (key1, key2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -107,7 +109,7 @@ $ schema-registry-verify schema-type=avro subject=testdrive-upsert-input-sink3-$
 > CREATE CLUSTER upsert_input_sink4_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK upsert_input_sink4
   IN CLUSTER upsert_input_sink4_cluster
-  FROM upsert_input
+  FROM upsert_input_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-input-sink4-${testdrive.seed}')
   KEY (key1, key2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

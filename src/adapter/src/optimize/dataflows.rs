@@ -18,11 +18,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use maplit::{btreemap, btreeset};
+use tracing::warn;
 
-use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, MaterializedView, Source, View};
+use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Index, Source, View};
 use mz_compute_client::controller::error::InstanceMissing;
 use mz_compute_types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
-
 use mz_compute_types::ComputeInstanceId;
 use mz_controller::Controller;
 use mz_expr::visit::Visit;
@@ -34,16 +34,18 @@ use mz_ore::cast::ReinterpretCast;
 use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::explain::trace_plan;
+use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, GlobalId, Row};
 use mz_sql::catalog::CatalogRole;
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
-use tracing::warn;
+use mz_transform::analysis::monotonic::Monotonic;
+use mz_transform::analysis::DerivedBuilder;
 
 use crate::catalog::CatalogState;
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::optimize::{view, Optimize, OptimizerConfig, OptimizerError};
+use crate::optimize::{view, Optimize, OptimizerCatalog, OptimizerConfig, OptimizerError};
 use crate::session::{SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
 use crate::util::viewable_variables;
 
@@ -59,10 +61,10 @@ impl ComputeInstanceSnapshot {
     pub fn new(controller: &Controller, id: ComputeInstanceId) -> Result<Self, InstanceMissing> {
         controller
             .compute
-            .instance_ref(id)
-            .map(|instance| ComputeInstanceSnapshot {
+            .collection_ids(id)
+            .map(|collection_ids| Self {
                 instance_id: id,
-                collections: BTreeSet::from_iter(instance.collections().map(|(id, _state)| *id)),
+                collections: collection_ids.collect(),
             })
     }
 
@@ -85,7 +87,7 @@ impl ComputeInstanceSnapshot {
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
 #[derive(Debug)]
 pub struct DataflowBuilder<'a> {
-    pub catalog: &'a CatalogState,
+    pub catalog: &'a dyn OptimizerCatalog,
     /// A handle to the compute abstraction, which describes indexes by identifier.
     ///
     /// This can also be used to grab a handle to the storage abstraction, through
@@ -148,7 +150,7 @@ pub fn dataflow_import_id_bundle<P>(
 }
 
 impl<'a> DataflowBuilder<'a> {
-    pub fn new(catalog: &'a CatalogState, compute: ComputeInstanceSnapshot) -> Self {
+    pub fn new(catalog: &'a dyn OptimizerCatalog, compute: ComputeInstanceSnapshot) -> Self {
         Self {
             catalog,
             compute,
@@ -167,17 +169,21 @@ impl<'a> DataflowBuilder<'a> {
     }
 
     /// Imports the view, source, or table with `id` into the provided
-    /// dataflow description.
+    /// dataflow description. [`OptimizerFeatures`] is used while running
+    /// the [`Monotonic`] analysis.
     pub fn import_into_dataflow(
         &mut self,
         id: &GlobalId,
         dataflow: &mut DataflowDesc,
+        features: &OptimizerFeatures,
     ) -> Result<(), OptimizerError> {
         maybe_grow(|| {
             // Avoid importing the item redundantly.
             if dataflow.is_imported(id) {
                 return Ok(());
             }
+
+            let monotonic = self.monotonic_object(*id, features);
 
             // A valid index is any index on `id` that is known to index oracle.
             // Here, we import all indexes that belong to all imported collections. Later,
@@ -198,7 +204,6 @@ impl<'a> DataflowBuilder<'a> {
                                 .resolve_full_name(entry.name(), entry.conn_id()),
                         )
                         .expect("indexes can only be built on items with descs");
-                    let monotonic = self.monotonic_view(*id);
                     dataflow.import_index(index_id, index_desc, desc.typ().clone(), monotonic);
                 }
             } else {
@@ -206,25 +211,23 @@ impl<'a> DataflowBuilder<'a> {
                 let entry = self.catalog.get_entry(id);
                 match entry.item() {
                     CatalogItem::Table(table) => {
-                        dataflow.import_source(*id, table.desc.typ().clone(), false);
+                        dataflow.import_source(*id, table.desc_for(id).typ().clone(), monotonic);
                     }
                     CatalogItem::Source(source) => {
-                        dataflow.import_source(
-                            *id,
-                            source.desc.typ().clone(),
-                            self.monotonic_source(source),
-                        );
+                        dataflow.import_source(*id, source.desc.typ().clone(), monotonic);
                     }
                     CatalogItem::View(view) => {
-                        let expr = view.optimized_expr.clone();
-                        self.import_view_into_dataflow(id, &expr, dataflow)?;
+                        let expr = view.optimized_expr.as_ref();
+                        self.import_view_into_dataflow(id, expr, dataflow, features)?;
                     }
                     CatalogItem::MaterializedView(mview) => {
-                        let monotonic = self.monotonic_view(*id);
                         dataflow.import_source(*id, mview.desc.typ().clone(), monotonic);
                     }
                     CatalogItem::Log(log) => {
-                        dataflow.import_source(*id, log.variant.desc().typ().clone(), false);
+                        dataflow.import_source(*id, log.variant.desc().typ().clone(), monotonic);
+                    }
+                    CatalogItem::ContinualTask(ct) => {
+                        dataflow.import_source(*id, ct.desc.typ().clone(), monotonic);
                     }
                     _ => unreachable!(),
                 }
@@ -234,7 +237,8 @@ impl<'a> DataflowBuilder<'a> {
     }
 
     /// Imports the view with the specified ID and expression into the provided
-    /// dataflow description.
+    /// dataflow description. [`OptimizerFeatures`] is used while running
+    /// expression [`mz_transform::analysis::Analysis`].
     ///
     /// You should generally prefer calling
     /// [`DataflowBuilder::import_into_dataflow`], which can handle objects of
@@ -246,9 +250,10 @@ impl<'a> DataflowBuilder<'a> {
         view_id: &GlobalId,
         view: &OptimizedMirRelationExpr,
         dataflow: &mut DataflowDesc,
+        features: &OptimizerFeatures,
     ) -> Result<(), OptimizerError> {
         for get_id in view.depends_on() {
-            self.import_into_dataflow(&get_id, dataflow)?;
+            self.import_into_dataflow(&get_id, dataflow, features)?;
         }
         dataflow.insert_plan(*view_id, view.clone());
         Ok(())
@@ -280,7 +285,7 @@ impl<'a> DataflowBuilder<'a> {
                 .entered();
 
                 // Reoptimize the view and update the resulting `desc.plan`.
-                desc.plan = view_optimizer.optimize(view.raw_expr.clone())?;
+                desc.plan = view_optimizer.optimize(view.raw_expr.as_ref().clone())?;
 
                 // Report the optimized plan under this span.
                 trace_plan(desc.plan.as_inner());
@@ -292,44 +297,69 @@ impl<'a> DataflowBuilder<'a> {
 
     /// Determine the given source's monotonicity.
     fn monotonic_source(&self, source: &Source) -> bool {
-        // TODO(petrosagg): store an inverse mapping of subsource -> source in the catalog so that
-        // we can retrieve monotonicity information from the parent source.
         match &source.data_source {
-            DataSourceDesc::Ingestion { ingestion_desc, .. } => ingestion_desc.desc.monotonic(),
-            DataSourceDesc::IngestionExport { .. }
-            | DataSourceDesc::Introspection(_)
-            | DataSourceDesc::Progress
-            | DataSourceDesc::Webhook { .. } => false,
+            DataSourceDesc::Ingestion { ingestion_desc, .. } => {
+                // Check if the primary export of this source is monotonic
+                ingestion_desc
+                    .desc
+                    .primary_export
+                    .monotonic(&ingestion_desc.desc.connection)
+            }
+            DataSourceDesc::Webhook { .. } => true,
+            DataSourceDesc::IngestionExport {
+                ingestion_id,
+                data_config,
+                ..
+            } => {
+                let source_desc = self
+                    .catalog
+                    .get_entry_by_item_id(ingestion_id)
+                    .source_desc()
+                    .expect("ingestion export must reference a source")
+                    .expect("ingestion export must reference a source");
+                data_config.monotonic(&source_desc.connection)
+            }
+            DataSourceDesc::Introspection(_) | DataSourceDesc::Progress => false,
         }
     }
 
-    /// Determine the given view's monotonicity.
+    /// Determine the given objects's monotonicity.
     ///
-    /// This recursively traverses the expressions of all (materialized) views involved in the
-    /// given view's query expression. If this becomes a performance problem, we could add the
-    /// monotonicity information of views into the catalog instead.
-    fn monotonic_view(&self, id: GlobalId) -> bool {
-        self.monotonic_view_inner(id, &mut BTreeMap::new())
+    /// This recursively traverses the expressions of all views depended on by the given object.
+    /// If this becomes a performance problem, we could add the monotonicity information of views
+    /// into the catalog instead.
+    ///
+    /// Note that materialized views are never monotonic, no matter their definition, because the
+    /// self-correcting persist_sink may insert retractions to correct the contents of its output
+    /// collection.
+    fn monotonic_object(&self, id: GlobalId, features: &OptimizerFeatures) -> bool {
+        self.monotonic_object_inner(id, &mut BTreeMap::new(), features)
             .unwrap_or_else(|e| {
-                warn!("Error inspecting view {id} for monotonicity: {e}");
+                warn!(%id, "error inspecting object for monotonicity: {e}");
                 false
             })
     }
 
-    fn monotonic_view_inner(
+    fn monotonic_object_inner(
         &self,
         id: GlobalId,
         memo: &mut BTreeMap<GlobalId, bool>,
+        features: &OptimizerFeatures,
     ) -> Result<bool, RecursionLimitError> {
-        self.checked_recur(|_| {
+        // An object might be reached multiple times. If we already computed the monotonicity of
+        // the given ID, use that. If not, then compute it and remember the result.
+        if let Some(monotonic) = memo.get(&id) {
+            return Ok(*monotonic);
+        }
+
+        let monotonic = self.checked_recur(|_| {
             match self.catalog.get_entry(&id).item() {
                 CatalogItem::Source(source) => Ok(self.monotonic_source(source)),
-                CatalogItem::View(View { optimized_expr, .. })
-                | CatalogItem::MaterializedView(MaterializedView { optimized_expr, .. }) => {
-                    let mut view_expr = optimized_expr.clone().into_inner();
+                CatalogItem::View(View { optimized_expr, .. }) => {
+                    let view_expr = optimized_expr.as_ref().clone().into_inner();
 
                     // Inspect global ids that occur in the Gets in view_expr, and collect the ids
-                    // of monotonic (materialized) views and sources (but not indexes).
+                    // of monotonic dependees.
                     let mut monotonic_ids = BTreeSet::new();
                     let recursion_result: Result<(), RecursionLimitError> = view_expr
                         .try_visit_post(&mut |e| {
@@ -338,21 +368,8 @@ impl<'a> DataflowBuilder<'a> {
                                 ..
                             } = e
                             {
-                                let got_id = *got_id;
-
-                                // A view might be reached multiple times. If we already computed
-                                // the monotonicity of the gid, then use that. If not, then compute
-                                // it now.
-                                let monotonic = match memo.get(&got_id) {
-                                    Some(monotonic) => *monotonic,
-                                    None => {
-                                        let monotonic = self.monotonic_view_inner(got_id, memo)?;
-                                        memo.insert(got_id, monotonic);
-                                        monotonic
-                                    }
-                                };
-                                if monotonic {
-                                    monotonic_ids.insert(got_id);
+                                if self.monotonic_object_inner(*got_id, memo, features)? {
+                                    monotonic_ids.insert(*got_id);
                                 }
                             }
                             Ok(())
@@ -360,26 +377,36 @@ impl<'a> DataflowBuilder<'a> {
                     if let Err(error) = recursion_result {
                         // We still might have got some of the IDs, so just log and continue. Now
                         // the subsequent monotonicity analysis can have false negatives.
-                        warn!("Error inspecting view {id} for monotonicity: {error}");
+                        warn!(%id, "error inspecting view for monotonicity: {error}");
                     }
 
-                    // Use `monotonic_ids` as a starting point for propagating monotonicity info.
-                    mz_transform::monotonic::MonotonicFlag::default().apply(
-                        &mut view_expr,
-                        &monotonic_ids,
-                        &mut BTreeSet::new(),
-                    )
+                    let mut builder = DerivedBuilder::new(features);
+                    builder.require(Monotonic::new(monotonic_ids.clone()));
+                    let derived = builder.visit(&view_expr);
+
+                    Ok(*derived
+                        .as_view()
+                        .value::<Monotonic>()
+                        .expect("Expected monotonic result from non empty tree"))
+                }
+                CatalogItem::Index(Index { on, .. }) => {
+                    self.monotonic_object_inner(*on, memo, features)
                 }
                 CatalogItem::Secret(_)
                 | CatalogItem::Type(_)
                 | CatalogItem::Connection(_)
                 | CatalogItem::Table(_)
                 | CatalogItem::Log(_)
-                | CatalogItem::Index(_)
+                | CatalogItem::MaterializedView(_)
                 | CatalogItem::Sink(_)
-                | CatalogItem::Func(_) => Ok(false),
+                | CatalogItem::Func(_)
+                | CatalogItem::ContinualTask(_) => Ok(false),
             }
-        })
+        })?;
+
+        memo.insert(id, monotonic);
+
+        Ok(monotonic)
     }
 }
 
@@ -503,7 +530,7 @@ fn eval_unmaterializable_func(
     let pack_1d_array = |datums: Vec<Datum>| {
         let mut row = Row::default();
         row.packer()
-            .push_array(
+            .try_push_array(
                 &[ArrayDimension {
                     lower_bound: 1,
                     length: datums.len(),
@@ -613,7 +640,7 @@ fn eval_unmaterializable_func(
             row.packer().push_dict_with(|row| {
                 for (role_id, role_membership) in &role_memberships {
                     row.push(Datum::from(role_id.as_str()));
-                    row.push_array(
+                    row.try_push_array(
                         &[ArrayDimension {
                             lower_bound: 1,
                             length: role_membership.len(),
@@ -630,9 +657,12 @@ fn eval_unmaterializable_func(
             let uptime = chrono::Duration::from_std(uptime).map_or(Datum::Null, Datum::from);
             pack(uptime)
         }
-        UnmaterializableFunc::MzVersion => {
-            pack(Datum::from(&*state.config().build_info.human_version()))
-        }
+        UnmaterializableFunc::MzVersion => pack(Datum::from(
+            &*state
+                .config()
+                .build_info
+                .human_version(state.config().helm_chart_version.clone()),
+        )),
         UnmaterializableFunc::MzVersionNum => {
             pack(Datum::Int32(state.config().build_info.version_num()))
         }

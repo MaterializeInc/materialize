@@ -10,6 +10,7 @@
 //! Transformation based on pushing demand information about columns toward sources.
 
 use itertools::Itertools;
+use mz_ore::assert_none;
 use std::collections::{BTreeMap, BTreeSet};
 
 use mz_expr::{
@@ -36,19 +37,22 @@ use crate::TransformCtx;
 ///
 /// Nowadays, this transform is mostly obsoleted by `ProjectionPushdown`.
 /// However, I know of one thing that it still does that `ProjectionPushdown`
-/// doesn't do (might possibly be more such things):
+/// doesn't do (there might be more such things):
 /// if you have something like
-// ```
-//     Project (#0, #1)
-//       Join on=(#0 = #1)
-// ```
-// then this is turned into
-// ```
-//     Project (#0, #0)
-//       Join on=(#0 = #1)
-// ```
-// This can be beneficial for projecting out some columns earlier inside a complex join (by the LIR
-// planning), and then recovering them after the join (if needed) by duplicating existing columns.
+/// ```code
+///     Project (#0, #1)
+///       Join on=(#0 = #1)
+/// ```
+/// then this is turned into
+/// ```code
+///     Project (#0, #0)
+///       Join on=(#0 = #1)
+/// ```
+/// This can be beneficial for projecting out some columns earlier inside a complex join (by the LIR
+/// planning), and then recovering them after the join (if needed) by duplicating existing columns.
+///
+/// After the last run of `Demand`, there should always be a `ProjectionPushdown`, so that dummies
+/// are eliminated from plans.
 #[derive(Debug)]
 pub struct Demand {
     recursion_guard: RecursionGuard,
@@ -69,12 +73,16 @@ impl CheckedRecursion for Demand {
 }
 
 impl crate::Transform for Demand {
+    fn name(&self) -> &'static str {
+        "Demand"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "demand")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
@@ -122,7 +130,7 @@ impl Demand {
                     // and pushes the union of the requirements at its value.
                     let id = Id::Local(*id);
                     let prior = gets.insert(id, BTreeSet::new());
-                    assert!(prior.is_none()); // no shadowing
+                    assert_none!(prior); // no shadowing
                     self.action(body, columns, gets)?;
                     let needs = gets.remove(&id).expect("existing gets entry");
                     if let Some(prior) = prior {
@@ -144,7 +152,7 @@ impl Demand {
                     let ids = ids.iter().map(|id| Id::Local(*id)).collect_vec();
                     for id in ids.iter() {
                         let prior = gets.insert(id.clone(), BTreeSet::new());
-                        assert!(prior.is_none()); // no shadowing
+                        assert_none!(prior); // no shadowing
                     }
                     self.action(body, columns, gets)?;
                     for (id, value) in ids.iter().rev().zip_eq(values.iter_mut().rev()) {
@@ -168,7 +176,7 @@ impl Demand {
                 ),
                 MirRelationExpr::Map { input, scalars } => {
                     let relation_type = relation_type.as_ref().unwrap();
-                    let arity = input.arity();
+                    let arity = relation_type.arity() - scalars.len();
                     // contains columns whose supports have yet to be explored
                     let mut new_columns = columns.clone();
                     new_columns.retain(|c| *c >= arity);
@@ -211,7 +219,8 @@ impl Demand {
                     for expr in exprs {
                         expr.support_into(&mut columns);
                     }
-                    columns.retain(|c| *c < input.arity());
+                    let arity = input.arity();
+                    columns.retain(|c| *c < arity);
                     self.action(input, columns, gets)
                 }
                 MirRelationExpr::Filter { input, predicates } => {

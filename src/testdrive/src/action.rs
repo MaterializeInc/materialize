@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use std::time::Duration;
 use std::{env, fs};
 
@@ -23,23 +24,27 @@ use itertools::Itertools;
 use mz_adapter::catalog::{Catalog, ConnCatalog};
 use mz_adapter::session::Session;
 use mz_build_info::BuildInfo;
+use mz_catalog::config::ClusterReplicaSizeMap;
+use mz_catalog::durable::BootstrapArgs;
 use mz_kafka_util::client::{create_new_client_config_simple, MzClientContext};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
 use mz_ore::task;
+use mz_ore::url::SensitiveUrl;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{PersistClient, PersistLocation};
 use mz_sql::catalog::EnvironmentId;
 use mz_tls_util::make_tls;
-use once_cell::sync::Lazy;
 use rand::Rng;
 use rdkafka::producer::Producer;
 use rdkafka::ClientConfig;
 use regex::{Captures, Regex};
+use semver::Version;
+use tokio_postgres::error::{DbError, SqlState};
 use tracing::info;
 use url::Url;
 
@@ -132,12 +137,14 @@ pub struct Config {
     pub materialize_catalog_config: Option<CatalogConfig>,
     /// Build information
     pub build_info: &'static BuildInfo,
+    /// Configured cluster replica sizes
+    pub materialize_cluster_replica_sizes: ClusterReplicaSizeMap,
 
     // === Persist options. ===
     /// Handle to the persist consensus system.
-    pub persist_consensus_url: Option<String>,
+    pub persist_consensus_url: Option<SensitiveUrl>,
     /// Handle to the persist blob storage.
-    pub persist_blob_url: Option<String>,
+    pub persist_blob_url: Option<SensitiveUrl>,
 
     // === Confluent options. ===
     /// The address of the Kafka broker that testdrive will interact with.
@@ -187,6 +194,7 @@ pub struct MaterializeState {
     user: String,
     pgclient: tokio_postgres::Client,
     environment_id: EnvironmentId,
+    bootstrap_args: BootstrapArgs,
 }
 
 pub struct State {
@@ -210,8 +218,8 @@ pub struct State {
     materialize: MaterializeState,
 
     // === Persist state. ===
-    persist_consensus_url: Option<String>,
-    persist_blob_url: Option<String>,
+    persist_consensus_url: Option<SensitiveUrl>,
+    persist_blob_url: Option<SensitiveUrl>,
     build_info: &'static BuildInfo,
     persist_clients: PersistClientCache,
 
@@ -233,8 +241,7 @@ pub struct State {
     // === Database driver state. ===
     mysql_clients: BTreeMap<String, mysql_async::Conn>,
     postgres_clients: BTreeMap<String, tokio_postgres::Client>,
-    sql_server_clients:
-        BTreeMap<String, tiberius::Client<tokio_util::compat::Compat<tokio::net::TcpStream>>>,
+    sql_server_clients: BTreeMap<String, mz_sql_server_util::Client>,
 
     // === Fivetran state. ===
     fivetran_destination_url: String,
@@ -351,14 +358,17 @@ impl State {
     pub async fn with_catalog_copy<F, T>(
         &self,
         system_parameter_defaults: BTreeMap<String, String>,
+        build_info: &'static BuildInfo,
+        bootstrap_args: &BootstrapArgs,
+        enable_expression_cache_override: Option<bool>,
         f: F,
     ) -> Result<Option<T>, anyhow::Error>
     where
         F: FnOnce(ConnCatalog) -> T,
     {
         async fn persist_client(
-            persist_consensus_url: String,
-            persist_blob_url: String,
+            persist_consensus_url: SensitiveUrl,
+            persist_blob_url: SensitiveUrl,
             persist_clients: &PersistClientCache,
         ) -> Result<PersistClient, anyhow::Error> {
             let persist_location = PersistLocation {
@@ -384,6 +394,9 @@ impl State {
                 SYSTEM_TIME.clone(),
                 self.materialize.environment_id.clone(),
                 system_parameter_defaults,
+                build_info,
+                bootstrap_args,
+                enable_expression_cache_override,
             )
             .await?;
             let res = f(catalog.for_session(&Session::dummy()));
@@ -408,7 +421,7 @@ impl State {
         std::mem::replace(&mut self.consistency_checks_adhoc_skip, false)
     }
 
-    pub async fn reset_materialize(&mut self) -> Result<(), anyhow::Error> {
+    pub async fn reset_materialize(&self) -> Result<(), anyhow::Error> {
         let (inner_client, _) = postgres_client(
             &format!(
                 "postgres://mz_system:materialize@{}",
@@ -424,16 +437,43 @@ impl State {
             .context("getting version of materialize")
             .map(|row| row.get::<_, i32>(0))?;
 
+        let semver = inner_client
+            .query_one("SELECT right(split_part(mz_version(), ' ', 1), -1)", &[])
+            .await
+            .context("getting semver of materialize")
+            .map(|row| row.get::<_, String>(0))?
+            .parse::<semver::Version>()
+            .context("parsing semver of materialize")?;
+
         inner_client
             .batch_execute("ALTER SYSTEM RESET ALL")
             .await
             .context("resetting materialize state: ALTER SYSTEM RESET ALL")?;
 
         // Dangerous functions are useful for tests so we enable it for all tests.
-        inner_client
-            .batch_execute("ALTER SYSTEM SET enable_unsafe_functions = on")
-            .await
-            .context("enabling dangerous functions")?;
+        {
+            let rename_version = Version::parse("0.128.0-dev.1").expect("known to be valid");
+            let enable_unsafe_functions = if semver >= rename_version {
+                "unsafe_enable_unsafe_functions"
+            } else {
+                "enable_unsafe_functions"
+            };
+            let res = inner_client
+                .batch_execute(&format!("ALTER SYSTEM SET {enable_unsafe_functions} = on"))
+                .await
+                .context("enabling dangerous functions");
+            if let Err(e) = res {
+                match e.root_cause().downcast_ref::<DbError>() {
+                    Some(e) if *e.code() == SqlState::CANT_CHANGE_RUNTIME_PARAM => {
+                        info!(
+                            "can't enable unsafe functions because the server is safe mode; \
+                             testdrive scripts will fail if they use unsafe functions",
+                        );
+                    }
+                    _ => return Err(e),
+                }
+            }
+        }
 
         for row in inner_client
             .query("SHOW DATABASES", &[])
@@ -578,7 +618,7 @@ impl State {
     }
 
     /// Delete Kafka topics + CCSR subjects that were created in this run
-    pub async fn reset_kafka(&mut self) -> Result<(), anyhow::Error> {
+    pub async fn reset_kafka(&self) -> Result<(), anyhow::Error> {
         let mut errors: Vec<anyhow::Error> = Vec::new();
 
         let metadata = self.kafka_producer.client().fetch_metadata(
@@ -673,9 +713,9 @@ impl State {
 #[derive(Debug, Clone)]
 pub struct CatalogConfig {
     /// Handle to the persist consensus system.
-    pub persist_consensus_url: String,
+    pub persist_consensus_url: SensitiveUrl,
     /// Handle to the persist blob storage.
-    pub persist_blob_url: String,
+    pub persist_blob_url: SensitiveUrl,
 }
 
 pub enum ControlFlow {
@@ -747,6 +787,7 @@ impl Run for PosCommand {
                     "kafka-add-partitions" => kafka::run_add_partitions(builtin, state).await,
                     "kafka-create-topic" => kafka::run_create_topic(builtin, state).await,
                     "kafka-wait-topic" => kafka::run_wait_topic(builtin, state).await,
+                    "kafka-delete-records" => kafka::run_delete_records(builtin, state).await,
                     "kafka-delete-topic-flaky" => kafka::run_delete_topic(builtin, state).await,
                     "kafka-ingest" => kafka::run_ingest(builtin, state).await,
                     "kafka-verify-data" => kafka::run_verify_data(builtin, state).await,
@@ -837,7 +878,7 @@ fn substitute_vars(
     ignore_prefix: &Option<String>,
     regex_escape: bool,
 ) -> Result<String, anyhow::Error> {
-    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\$\{([^}]+)\}").unwrap());
+    static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\$\{([^}]+)\}").unwrap());
     let mut err = None;
     let out = RE.replace_all(msg, |caps: &Captures| {
         let name = &caps[1];
@@ -1089,6 +1130,12 @@ async fn create_materialize_state(
         .parse()
         .context("parsing environment ID")?;
 
+    let bootstrap_args = BootstrapArgs {
+        cluster_replica_size_map: config.materialize_cluster_replica_sizes.clone(),
+        default_cluster_replica_size: "ABC".to_string(),
+        bootstrap_role: None,
+    };
+
     let materialize_state = MaterializeState {
         catalog_config: materialize_catalog_config,
         sql_addr: materialize_sql_addr,
@@ -1099,6 +1146,7 @@ async fn create_materialize_state(
         user: materialize_user,
         pgclient,
         environment_id,
+        bootstrap_args,
     };
 
     Ok(materialize_state)

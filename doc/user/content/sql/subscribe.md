@@ -29,21 +29,36 @@ You can use `SUBSCRIBE` to:
 
 ## Syntax
 
-{{< diagram "subscribe-stmt.svg" >}}
+```mzsql
+SUBSCRIBE [TO] <object_name | (SELECT ...)>
+[ENVELOPE UPSERT (KEY (<key1>, ...)) | ENVELOPE DEBEZIUM (KEY (<key1>, ...))]
+[WITHIN TIMESTAMP ORDER BY <column1> [ASC | DESC] [NULLS LAST | NULLS FIRST], ...]
+[AS OF [AT LEAST] <timestamp_expression>]
+[UP TO <timestamp_expression>]
+[WITH (<option_name> [= <option_value>], ...)]
+```
 
-| Field                           | Use                                                                                                                                      |
-| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| _object_name_                   | The name of the source, table, or view that you want to subscribe to.                                                                    |
-| _select_stmt_                   | The [`SELECT` statement](../select) whose output you want to subscribe to.
-| **ENVELOPE UPSERT**             | Use the upsert envelope, which takes a list of `KEY` columns and supports inserts, updates and deletes in the subscription output. For more information, see [Modifying the output format](#modifying-the-output-format). |
-| **ENVELOPE DEBEZIUM**           | Use a [Debezium-style diff envelope](https://materialize.com/docs/sql/create-sink/#debezium-envelope), which takes a list of `KEY` columns and supports inserts, updates and deletes in the subscription output along with the previous state of the key. For more information, see [Modifying the output format](#modifying-the-output-format). |
-| **WITHIN TIMESTAMP...ORDER BY** | Use an `ORDER BY` clause to sort the subscription output within a timestamp. For more information, see [Modifying the output format](#modifying-the-output-format). |
+where:
+
+- `<object_name>` is the name of the source, table, view, or materialized view
+  that you want to subscribe to.
+- `<select_stmt>` is the [`SELECT` statement](/sql/select) whose output you want
+  to subscribe to.
+
+The generated schemas have a Debezium-style diff envelope to capture changes in
+the input view or source.
+
+| Option                            | Description                                                                                                                                      |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| **ENVELOPE UPSERT (KEY (**\<key1\>, ...**))**                | If specified, use the upsert envelope, which takes a list of `KEY` columns. The upsert envelope supports inserts, updates and deletes in the subscription output. For more information, see [Modifying the output format](#modifying-the-output-format). |
+| **ENVELOPE DEBEZIUM (KEY (**\<key1\>, ...**))**           | If specified, use a [Debezium-style diff envelope](/sql/create-sink/kafka/#debezium-envelope), which takes a list of `KEY` columns. The Debezium envelope supports inserts, updates and deletes in the subscription output along with the previous state of the key. For more information, see [Modifying the output format](#modifying-the-output-format). |
+| **WITHIN TIMESTAMP ORDER BY** \<column1\>, ... | If specified, use an `ORDER BY` clause to sort the subscription output within a timestamp. For each `ORDER BY` column, you can optionally specify: <ul><li> `ASC` or `DESC`</li><li> `NULLS FIRST` or `NULLS LAST`</li></ul> For more information, see [Modifying the output format](#modifying-the-output-format). |
+| **AS OF** \<timestamp_expression\> | If specified, no rows whose timestamp is earlier than the specified timestamp will be returned. For more information, see [`AS OF`](#as-of). |
+| **UP TO** \<timestamp_expression\> | If specified, no rows whose timestamp is greater than or equal to the specified timestamp will be returned. For more information, see [`UP TO`](#up-to). |
+| **WITH** \<option_name\> [= \<option_value\>] | If specified, use the specified option. For more information, see [`WITH` options](#with-options). |
 
 
-
-The generated schemas have a Debezium-style diff envelope to capture changes in the input view or source.
-
-### `WITH` options
+#### `WITH` options
 
 The following options are valid within the `WITH` clause.
 
@@ -122,7 +137,8 @@ with several additional columns that describe the nature of the update:
 
 ### `AS OF`
 
-When a [history rentention period](/transform-data/patterns/time-travel-queries/#history-retention-period)
+When a [history rentention
+period](/transform-data/patterns/durable-subscriptions/#history-retention-period)
 is configured for the object(s) powering the subscription, the `AS OF` clause
 allows specifying a timestamp at which the `SUBSCRIBE` command should begin
 returning results. If `AS OF` is specified, no rows whose timestamp is earlier
@@ -131,8 +147,10 @@ earlier than the earliest historical state retained by the underlying objects,
 an error is thrown.
 
 To configure the history retention period for objects used in a subscription,
-see [Time travel queries](/transform-data/patterns/time-travel-queries)). If
-`AS OF` is unspecified, the system automatically chooses an `AS OF` timestamp.
+see [Durable
+subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period).
+If `AS OF` is unspecified, the system automatically chooses an `AS OF`
+timestamp.
 
 ### `UP TO`
 
@@ -220,9 +238,9 @@ Below are the recommended ways to work around this.
 
 ### Creating a counter load generator
 
-As an example, we'll create a [counter load generator](https://materialize.com/docs/sql/create-source/load-generator/#creating-a-counter-load-generator) that emits a row every second:
+As an example, we'll create a [counter load generator](/sql/create-source/load-generator/#creating-a-counter-load-generator) that emits a row every second:
 
-```sql
+```mzsql
 CREATE SOURCE counter FROM LOAD GENERATOR COUNTER;
 ```
 
@@ -235,14 +253,14 @@ Next, let's subscribe to the `counter` load generator source that we've created 
 
 First, declare a `SUBSCRIBE` cursor:
 
-```sql
+```mzsql
 BEGIN;
 DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM counter);
 ```
 
 Then, use [`FETCH`](/sql/fetch) in a loop to retrieve each batch of results as soon as it's ready:
 
-```sql
+```mzsql
 FETCH ALL c;
 ```
 
@@ -250,19 +268,19 @@ That will retrieve all of the rows that are currently available.
 If there are no rows available, it will wait until there are some ready and return those.
 A `timeout` can be used to specify a window in which to wait for rows. This will return up to the specified count (or `ALL`) of rows that are ready within the timeout. To retrieve up to 100 rows that are available in at most the next `1s`:
 
-```sql
+```mzsql
 FETCH 100 c WITH (timeout='1s');
 ```
 
 To retrieve all available rows available over the next `1s`:
 
-```sql
+```mzsql
 FETCH ALL c WITH (timeout='1s');
 ```
 
 A `0s` timeout can be used to return rows that are available now without waiting:
 
-```sql
+```mzsql
 FETCH ALL c WITH (timeout='0s');
 ```
 
@@ -270,7 +288,7 @@ FETCH ALL c WITH (timeout='0s');
 
 If you want to use `SUBSCRIBE` from an interactive SQL session (e.g.`psql`), wrap the query in `COPY`:
 
-```sql
+```mzsql
 COPY (SUBSCRIBE (SELECT * FROM counter)) TO STDOUT;
 ```
 
@@ -302,7 +320,7 @@ In the example above, `Column 1` acts as the column key that uniquely identifies
 
 [//]: # "TODO(morsapaes) This page is now complex enough that we should
 restructure it using the same feature-oriented approach as CREATE SOURCE/SINK.
-See #18829 for the design doc."
+See materialize#18829 for the design doc."
 
 ### Modifying the output format
 
@@ -319,11 +337,11 @@ value columns.
 * Using this modifier, the output rows will have the following
 structure:
 
-   ```sql
+   ```mzsql
    SUBSCRIBE mview ENVELOPE UPSERT (KEY (key));
    ```
 
-   ```sql
+   ```mzsql
    mz_timestamp | mz_state | key  | value
    -------------|----------|------|--------
    100          | upsert   | 1    | 2
@@ -336,7 +354,7 @@ structure:
 
   _Insert_
 
-  ```sql
+  ```mzsql
    -- at time 200, add a new row with key=3, value=6
    mz_timestamp | mz_state | key  | value
    -------------|----------|------|--------
@@ -347,7 +365,7 @@ structure:
 
   _Update_
 
-  ```sql
+  ```mzsql
    -- at time 300, update key=1's value to 10
    mz_timestamp | mz_state | key  | value
    -------------|----------|------|--------
@@ -361,7 +379,7 @@ structure:
 
   _Delete_
 
-  ```sql
+  ```mzsql
    -- at time 400, delete all rows
    mz_timestamp | mz_state | key  | value
    -------------|----------|------|--------
@@ -380,7 +398,7 @@ structure:
 
   _Key violation_
 
-  ```sql
+  ```mzsql
    -- at time 500, introduce a key_violation
    mz_timestamp | mz_state        | key  | value
    -------------|-----------------|------|--------
@@ -412,11 +430,11 @@ value of the columns.
 * Using this modifier, the output rows will have the following
 structure:
 
-   ```sql
+   ```mzsql
    SUBSCRIBE mview ENVELOPE DEBEZIUM (KEY (key));
    ```
 
-   ```sql
+   ```mzsql
    mz_timestamp | mz_state | key  | before_value | after_value
    -------------|----------|------|--------------|-------
    100          | upsert   | 1    | NULL         | 2
@@ -428,7 +446,7 @@ structure:
 
   _Insert_
 
-  ```sql
+  ```mzsql
    -- at time 200, add a new row with key=3, value=6
    mz_timestamp | mz_state | key  | before_value | after_value
    -------------|----------|------|--------------|-------
@@ -442,7 +460,7 @@ structure:
 
   _Update_
 
-  ```sql
+  ```mzsql
    -- at time 300, update key=1's value to 10
    mz_timestamp | mz_state | key  | before_value | after_value
    -------------|----------|------|--------------|-------
@@ -456,7 +474,7 @@ structure:
 
   _Delete_
 
-  ```sql
+  ```mzsql
    -- at time 400, delete all rows
    mz_timestamp | mz_state | key  | before_value | after_value
    -------------|----------|------|--------------|-------
@@ -475,7 +493,7 @@ structure:
 
   _Key violation_
 
-  ```sql
+  ```mzsql
    -- at time 500, introduce a key_violation
    mz_timestamp | mz_state        | key  | before_value | after_value
    -------------|-----------------|------|--------------|-------
@@ -499,7 +517,7 @@ to sort the rows within each distinct timestamp.
 * The `ORDER BY` expression can take any column in the underlying object or
   query, including `mz_diff`.
 
-   ```sql
+   ```mzsql
    SUBSCRIBE mview WITHIN TIMESTAMP ORDER BY c1, c2 DESC NULLS LAST, mz_diff;
 
    mz_timestamp | mz_diff | c1            | c2   | c3
@@ -518,7 +536,7 @@ to sort the rows within each distinct timestamp.
 
 When you're done, you can drop the `counter` load generator source:
 
-```sql
+```mzsql
 DROP SOURCE counter;
 ```
 
@@ -526,12 +544,14 @@ DROP SOURCE counter;
 
 Because `SUBSCRIBE` requests happen over the network, these connections might
 get disrupted for both expected and unexpected reasons. You can adjust the
-[history retention period](/transform-data/patterns/time-travel-queries/#history-retention-period) for
-the objects a subscription depends on, and then use [`AS OF`](#as-of) to pick
-up where you left off on connection drops—this ensures that no data is lost
+[history retention
+period](/transform-data/patterns/durable-subscriptions/#history-retention-period)
+for the objects a subscription depends on, and then use [`AS OF`](#as-of) to
+pick up where you left off on connection drops—this ensures that no data is lost
 in the subscription process, and avoids the need for re-snapshotting the data.
 
-To learn more about durable subscriptions, see [Time travel queries](/transform-data/patterns/time-travel-queries/#durable-subscriptions).
+For more information, see [durable
+subscriptions](/transform-data/patterns/durable-subscriptions/).
 
 ## Privileges
 

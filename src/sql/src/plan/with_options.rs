@@ -14,20 +14,24 @@ use std::time::Duration;
 
 use mz_repr::adt::interval::Interval;
 use mz_repr::bytes::ByteSize;
-use mz_repr::{strconv, GlobalId};
+use mz_repr::{strconv, CatalogItemId, RelationVersionSelector};
 use mz_sql_parser::ast::{
-    ClusterScheduleOptionValue, ConnectionDefaultAwsPrivatelink, Ident, KafkaBroker,
-    RefreshOptionValue, ReplicaDefinition,
+    ClusterAlterOptionValue, ClusterScheduleOptionValue, ConnectionDefaultAwsPrivatelink, Expr,
+    Ident, KafkaBroker, NetworkPolicyRuleDefinition, RefreshOptionValue, ReplicaDefinition,
 };
-use mz_storage_types::connections::StringOrSecret;
+use mz_storage_types::connections::string_or_secret::StringOrSecret;
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{AstInfo, UnresolvedItemName, Value, WithOptionValue};
+use crate::catalog::SessionCatalog;
 use crate::names::{ResolvedDataType, ResolvedItemName};
 use crate::plan::{literal, Aug, PlanError};
 
 pub trait TryFromValue<T>: Sized {
     fn try_from_value(v: T) -> Result<Self, PlanError>;
+
+    fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<T>;
+
     fn name() -> String;
 }
 
@@ -36,9 +40,9 @@ pub trait ImpliedValue: Sized {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct Secret(GlobalId);
+pub struct Secret(CatalogItemId);
 
-impl From<Secret> for GlobalId {
+impl From<Secret> for CatalogItemId {
     fn from(secret: Secret) -> Self {
         secret.0
     }
@@ -51,6 +55,19 @@ impl TryFromValue<WithOptionValue<Aug>> for Secret {
             _ => sql_bail!("must provide a secret value"),
         }
     }
+
+    fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        let secret = catalog.get_item(&self.0);
+        let name = ResolvedItemName::Item {
+            id: self.0,
+            qualifiers: secret.name().qualifiers.clone(),
+            full_name: catalog.resolve_full_name(secret.name()),
+            print_id: false,
+            version: RelationVersionSelector::Latest,
+        };
+        Some(WithOptionValue::Secret(name))
+    }
+
     fn name() -> String {
         "secret".to_string()
     }
@@ -63,15 +80,15 @@ impl ImpliedValue for Secret {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct Object(GlobalId);
+pub struct Object(CatalogItemId);
 
-impl From<Object> for GlobalId {
+impl From<Object> for CatalogItemId {
     fn from(obj: Object) -> Self {
         obj.0
     }
 }
 
-impl From<&Object> for GlobalId {
+impl From<&Object> for CatalogItemId {
     fn from(obj: &Object) -> Self {
         obj.0
     }
@@ -84,6 +101,20 @@ impl TryFromValue<WithOptionValue<Aug>> for Object {
             _ => sql_bail!("must provide an object"),
         })
     }
+
+    fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        let item = catalog.get_item(&self.0);
+        let name = ResolvedItemName::Item {
+            id: self.0,
+            qualifiers: item.name().qualifiers.clone(),
+            full_name: catalog.resolve_full_name(item.name()),
+            print_id: false,
+            // TODO(alter_table): Evaluate if this is correct.
+            version: RelationVersionSelector::Latest,
+        };
+        Some(WithOptionValue::Item(name))
+    }
+
     fn name() -> String {
         "object reference".to_string()
     }
@@ -103,9 +134,15 @@ impl TryFromValue<WithOptionValue<Aug>> for Ident {
             {
                 inner.remove(0)
             }
-            _ => sql_bail!("must provide an unqalified identifier"),
+            WithOptionValue::Ident(inner) => inner,
+            _ => sql_bail!("must provide an unqualified identifier"),
         })
     }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::Ident(self))
+    }
+
     fn name() -> String {
         "identifier".to_string()
     }
@@ -117,13 +154,42 @@ impl ImpliedValue for Ident {
     }
 }
 
+impl TryFromValue<WithOptionValue<Aug>> for Expr<Aug> {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        Ok(match v {
+            WithOptionValue::Expr(e) => e,
+            _ => sql_bail!("must provide an expr"),
+        })
+    }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::Expr(self))
+    }
+
+    fn name() -> String {
+        "expression".to_string()
+    }
+}
+
+impl ImpliedValue for Expr<Aug> {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide an expression")
+    }
+}
+
 impl TryFromValue<WithOptionValue<Aug>> for UnresolvedItemName {
     fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
         Ok(match v {
             WithOptionValue::UnresolvedItemName(name) => name,
+            WithOptionValue::Ident(inner) => UnresolvedItemName(vec![inner]),
             _ => sql_bail!("must provide an object name"),
         })
     }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::UnresolvedItemName(self))
+    }
+
     fn name() -> String {
         "object name".to_string()
     }
@@ -142,6 +208,11 @@ impl TryFromValue<WithOptionValue<Aug>> for ResolvedDataType {
             _ => sql_bail!("must provide a data type"),
         })
     }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::DataType(self))
+    }
+
     fn name() -> String {
         "data type".to_string()
     }
@@ -162,6 +233,14 @@ impl TryFromValue<WithOptionValue<Aug>> for StringOrSecret {
             v => StringOrSecret::String(String::try_from_value(v)?),
         })
     }
+
+    fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(match self {
+            StringOrSecret::Secret(secret) => Secret(secret).try_into_value(catalog)?,
+            StringOrSecret::String(s) => s.try_into_value(catalog)?,
+        })
+    }
+
     fn name() -> String {
         "string or secret".to_string()
     }
@@ -178,6 +257,13 @@ impl TryFromValue<Value> for Duration {
         let interval = Interval::try_from_value(v)?;
         Ok(interval.duration()?)
     }
+
+    fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<Value> {
+        let interval = Interval::from_duration(&self)
+            .expect("planning ensured that this is convertible back to Interval");
+        interval.try_into_value(catalog)
+    }
+
     fn name() -> String {
         "interval".to_string()
     }
@@ -198,6 +284,11 @@ impl TryFromValue<Value> for ByteSize {
             _ => sql_bail!("cannot use value as bytes"),
         }
     }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
+        Some(Value::String(self.to_string()))
+    }
+
     fn name() -> String {
         "bytes".to_string()
     }
@@ -217,6 +308,12 @@ impl TryFromValue<Value> for Interval {
             _ => sql_bail!("cannot use value as interval"),
         }
     }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
+        let interval_value = literal::unplan_interval(&self);
+        Some(Value::Interval(interval_value))
+    }
+
     fn name() -> String {
         "interval".to_string()
     }
@@ -225,6 +322,35 @@ impl TryFromValue<Value> for Interval {
 impl ImpliedValue for Interval {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide an interval value")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct OptionalString(pub Option<String>);
+
+impl TryFromValue<Value> for OptionalString {
+    fn try_from_value(v: Value) -> Result<Self, PlanError> {
+        Ok(match v {
+            Value::Null => Self(None),
+            v => Self(Some(String::try_from_value(v)?)),
+        })
+    }
+
+    fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<Value> {
+        Some(match self.0 {
+            None => Value::Null,
+            Some(s) => s.try_into_value(catalog)?,
+        })
+    }
+
+    fn name() -> String {
+        "optional string".to_string()
+    }
+}
+
+impl ImpliedValue for OptionalString {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a string value")
     }
 }
 
@@ -246,6 +372,14 @@ impl TryFromValue<Value> for OptionalDuration {
             v => Duration::try_from_value(v)?.into(),
         })
     }
+
+    fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<Value> {
+        Some(match self.0 {
+            None => Value::Null,
+            Some(duration) => duration.try_into_value(catalog)?,
+        })
+    }
+
     fn name() -> String {
         "optional interval".to_string()
     }
@@ -264,6 +398,11 @@ impl TryFromValue<Value> for String {
             _ => sql_bail!("cannot use value as string"),
         }
     }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
+        Some(Value::String(self))
+    }
+
     fn name() -> String {
         "text".to_string()
     }
@@ -282,6 +421,11 @@ impl TryFromValue<Value> for bool {
             _ => sql_bail!("cannot use value as boolean"),
         }
     }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
+        Some(Value::Boolean(self))
+    }
+
     fn name() -> String {
         "bool".to_string()
     }
@@ -301,6 +445,10 @@ impl TryFromValue<Value> for f64 {
                 .map_err(|e| sql_err!("invalid numeric value: {e}")),
             _ => sql_bail!("cannot use value as number"),
         }
+    }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
+        Some(Value::Number(self.to_string()))
     }
 
     fn name() -> String {
@@ -323,6 +471,11 @@ impl TryFromValue<Value> for i32 {
             _ => sql_bail!("cannot use value as number"),
         }
     }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
+        Some(Value::Number(self.to_string()))
+    }
+
     fn name() -> String {
         "int".to_string()
     }
@@ -342,6 +495,9 @@ impl TryFromValue<Value> for i64 {
                 .map_err(|e| sql_err!("invalid numeric value: {e}")),
             _ => sql_bail!("cannot use value as number"),
         }
+    }
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
+        Some(Value::Number(self.to_string()))
     }
     fn name() -> String {
         "int8".to_string()
@@ -363,6 +519,9 @@ impl TryFromValue<Value> for u16 {
             _ => sql_bail!("cannot use value as number"),
         }
     }
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
+        Some(Value::Number(self.to_string()))
+    }
     fn name() -> String {
         "uint2".to_string()
     }
@@ -383,6 +542,9 @@ impl TryFromValue<Value> for u32 {
             _ => sql_bail!("cannot use value as number"),
         }
     }
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
+        Some(Value::Number(self.to_string()))
+    }
     fn name() -> String {
         "uint4".to_string()
     }
@@ -402,6 +564,9 @@ impl TryFromValue<Value> for u64 {
                 .map_err(|e| sql_err!("invalid unsigned numeric value: {e}")),
             _ => sql_bail!("cannot use value as number"),
         }
+    }
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
+        Some(Value::Number(self.to_string()))
     }
     fn name() -> String {
         "uint8".to_string()
@@ -430,6 +595,15 @@ impl<V: TryFromValue<WithOptionValue<Aug>>> TryFromValue<WithOptionValue<Aug>> f
             _ => sql_bail!("cannot use value as array"),
         }
     }
+
+    fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::Sequence(
+            self.into_iter()
+                .map(|v| v.try_into_value(catalog))
+                .collect::<Option<_>>()?,
+        ))
+    }
+
     fn name() -> String {
         format!("array of {}", V::name())
     }
@@ -446,6 +620,13 @@ impl<T: AstInfo, V: TryFromValue<WithOptionValue<T>>> TryFromValue<WithOptionVal
 {
     fn try_from_value(v: WithOptionValue<T>) -> Result<Self, PlanError> {
         Ok(Some(V::try_from_value(v)?))
+    }
+
+    fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<WithOptionValue<T>> {
+        match self {
+            Some(v) => v.try_into_value(catalog),
+            None => None,
+        }
     }
 
     fn name() -> String {
@@ -468,6 +649,7 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
             {
                 V::try_from_value(Value::String(inner.remove(0).into_string()))
             }
+            WithOptionValue::Ident(v) => V::try_from_value(Value::String(v.into_string())),
             WithOptionValue::RetainHistoryFor(v) => V::try_from_value(v),
             WithOptionValue::Sequence(_)
             | WithOptionValue::Map(_)
@@ -475,32 +657,44 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
             | WithOptionValue::UnresolvedItemName(_)
             | WithOptionValue::Secret(_)
             | WithOptionValue::DataType(_)
+            | WithOptionValue::Expr(_)
             | WithOptionValue::ClusterReplicas(_)
             | WithOptionValue::ConnectionKafkaBroker(_)
             | WithOptionValue::ConnectionAwsPrivatelink(_)
+            | WithOptionValue::ClusterAlterStrategy(_)
             | WithOptionValue::Refresh(_)
-            | WithOptionValue::ClusterScheduleOptionValue(_) => sql_bail!(
+            | WithOptionValue::ClusterScheduleOptionValue(_)
+            | WithOptionValue::NetworkPolicyRules(_) => sql_bail!(
                 "incompatible value types: cannot convert {} to {}",
                 match v {
                     // The first few are unreachable because they are handled at the top of the outer match.
                     WithOptionValue::Value(_) => unreachable!(),
                     WithOptionValue::RetainHistoryFor(_) => unreachable!(),
+                    WithOptionValue::ClusterAlterStrategy(_) => "cluster alter strategy",
                     WithOptionValue::Sequence(_) => "sequences",
                     WithOptionValue::Map(_) => "maps",
                     WithOptionValue::Item(_) => "object references",
                     WithOptionValue::UnresolvedItemName(_) => "object names",
+                    WithOptionValue::Ident(_) => "identifiers",
                     WithOptionValue::Secret(_) => "secrets",
                     WithOptionValue::DataType(_) => "data types",
+                    WithOptionValue::Expr(_) => "exprs",
                     WithOptionValue::ClusterReplicas(_) => "cluster replicas",
                     WithOptionValue::ConnectionKafkaBroker(_) => "connection kafka brokers",
                     WithOptionValue::ConnectionAwsPrivatelink(_) => "connection kafka brokers",
                     WithOptionValue::Refresh(_) => "refresh option values",
                     WithOptionValue::ClusterScheduleOptionValue(_) => "cluster schedule",
+                    WithOptionValue::NetworkPolicyRules(_) => "network policy rules",
                 },
                 V::name()
             ),
         }
     }
+
+    fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<WithOptionValue<T>> {
+        Some(WithOptionValue::Value(self.try_into_value(catalog)?))
+    }
+
     fn name() -> String {
         V::name()
     }
@@ -513,6 +707,11 @@ impl<T, V: TryFromValue<T> + ImpliedValue> TryFromValue<Option<T>> for V {
             None => V::implied_value(),
         }
     }
+
+    fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<Option<T>> {
+        Some(Some(self.try_into_value(catalog)?))
+    }
+
     fn name() -> String {
         V::name()
     }
@@ -525,6 +724,11 @@ impl TryFromValue<WithOptionValue<Aug>> for Vec<ReplicaDefinition<Aug>> {
             _ => sql_bail!("cannot use value as cluster replicas"),
         }
     }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::ClusterReplicas(self))
+    }
+
     fn name() -> String {
         "cluster replicas".to_string()
     }
@@ -552,6 +756,15 @@ impl TryFromValue<WithOptionValue<Aug>> for Vec<KafkaBroker<Aug>> {
         }
         Ok(out)
     }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::Sequence(
+            self.into_iter()
+                .map(WithOptionValue::ConnectionKafkaBroker)
+                .collect(),
+        ))
+    }
+
     fn name() -> String {
         "kafka broker".to_string()
     }
@@ -570,6 +783,10 @@ impl TryFromValue<WithOptionValue<Aug>> for RefreshOptionValue<Aug> {
         } else {
             sql_bail!("cannot use value `{}` for a refresh option", v)
         }
+    }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::Refresh(self))
     }
 
     fn name() -> String {
@@ -592,6 +809,10 @@ impl TryFromValue<WithOptionValue<Aug>> for ConnectionDefaultAwsPrivatelink<Aug>
         }
     }
 
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::ConnectionAwsPrivatelink(self))
+    }
+
     fn name() -> String {
         "privatelink option value".to_string()
     }
@@ -609,6 +830,12 @@ impl ImpliedValue for ClusterScheduleOptionValue {
     }
 }
 
+impl ImpliedValue for ClusterAlterOptionValue<Aug> {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a value")
+    }
+}
+
 impl TryFromValue<WithOptionValue<Aug>> for ClusterScheduleOptionValue {
     fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
         if let WithOptionValue::ClusterScheduleOptionValue(r) = v {
@@ -616,6 +843,10 @@ impl TryFromValue<WithOptionValue<Aug>> for ClusterScheduleOptionValue {
         } else {
             sql_bail!("cannot use value `{}` for a cluster schedule", v)
         }
+    }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::ClusterScheduleOptionValue(self))
     }
 
     fn name() -> String {
@@ -641,7 +872,60 @@ impl<V: TryFromValue<WithOptionValue<Aug>>> TryFromValue<WithOptionValue<Aug>>
             _ => sql_bail!("cannot use value as map"),
         }
     }
+
+    fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::Map(
+            self.into_iter()
+                .map(|(k, v)| {
+                    let v = v.try_into_value(catalog);
+                    v.map(|v| (k, v))
+                })
+                .collect::<Option<_>>()?,
+        ))
+    }
+
     fn name() -> String {
         format!("map of string to {}", V::name())
+    }
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for ClusterAlterOptionValue<Aug> {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        if let WithOptionValue::ClusterAlterStrategy(r) = v {
+            Ok(r)
+        } else {
+            sql_bail!("cannot use value `{}` for a cluster alter strategy", v)
+        }
+    }
+
+    fn name() -> String {
+        "cluster alter strategyoption value".to_string()
+    }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::ClusterAlterStrategy(self))
+    }
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for Vec<NetworkPolicyRuleDefinition<Aug>> {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        match v {
+            WithOptionValue::NetworkPolicyRules(rules) => Ok(rules),
+            _ => sql_bail!("cannot use value as cluster replicas"),
+        }
+    }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::NetworkPolicyRules(self))
+    }
+
+    fn name() -> String {
+        "network policy rules".to_string()
+    }
+}
+
+impl ImpliedValue for Vec<NetworkPolicyRuleDefinition<Aug>> {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a set of network policy rules")
     }
 }

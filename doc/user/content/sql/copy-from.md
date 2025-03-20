@@ -46,10 +46,9 @@ As described in the **CSV Format** section of [PostgreSQL's documentation][pg-co
 except that:
 
 - More than one layer of escaped quote characters returns the wrong result.
-  {{% gh 9074 %}}
 
 - Quote characters must immediately follow a delimiter to be treated as
-  expected. {{% gh 9075 %}}
+  expected.
 
 - Single-column rows containing quoted end-of-data markers (e.g. `"\."`) will be
   treated as end-of-data markers despite being quoted. In PostgreSQL, this data
@@ -67,15 +66,15 @@ except that:
 
 ## Example
 
-```sql
+```mzsql
 COPY t FROM STDIN WITH (DELIMITER '|');
 ```
 
-```sql
+```mzsql
 COPY t FROM STDIN (FORMAT CSV);
 ```
 
-```sql
+```mzsql
 COPY t FROM STDIN (DELIMITER '|');
 ```
 

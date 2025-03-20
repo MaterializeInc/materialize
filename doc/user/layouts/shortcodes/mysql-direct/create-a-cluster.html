@@ -1,4 +1,4 @@
-In Materialize, a [cluster](/get-started/key-concepts/#clusters) is an isolated
+In Materialize, a [cluster](/concepts/clusters/) is an isolated
 environment, similar to a virtual warehouse in Snowflake. When you create a
 cluster, you choose the size of its compute resource allocation based on the
 work you need the cluster to do, whether ingesting data from a source,
@@ -12,7 +12,7 @@ your MySQL database.
    client connected to Materialize, use the [`CREATE CLUSTER`](/sql/create-cluster/)
    command to create the new cluster:
 
-    ```sql
+    ```mzsql
     CREATE CLUSTER ingest_mysql (SIZE = '200cc');
 
     SET CLUSTER = ingest_mysql;

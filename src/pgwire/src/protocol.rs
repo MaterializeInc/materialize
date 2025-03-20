@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 use std::{iter, mem};
 
@@ -28,13 +28,15 @@ use mz_adapter::{
 };
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_ore::cast::CastFrom;
-use mz_ore::instrument;
 use mz_ore::netio::AsyncReady;
 use mz_ore::str::StrExt;
+use mz_ore::{assert_none, assert_ok, instrument};
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
-use mz_pgwire_common::{ErrorResponse, Format, FrontendMessage, Severity, VERSIONS, VERSION_3};
+use mz_pgwire_common::{
+    ConnectionCounter, ErrorResponse, Format, FrontendMessage, Severity, VERSIONS, VERSION_3,
+};
 use mz_repr::{
-    Datum, GlobalId, RelationDesc, RelationType, RowArena, RowIterator, RowRef, ScalarType,
+    CatalogItemId, Datum, RelationDesc, RelationType, RowArena, RowIterator, RowRef, ScalarType,
 };
 use mz_server_core::TlsMode;
 use mz_sql::ast::display::AstDisplay;
@@ -43,7 +45,7 @@ use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::INTERNAL_USER_NAMES;
-use mz_sql::session::vars::{ConnectionCounter, DropConnection, Var, VarInput, MAX_COPY_FROM_SIZE};
+use mz_sql::session::vars::{Var, VarInput, MAX_COPY_FROM_SIZE};
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
@@ -51,6 +53,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{self};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, debug_span, warn, Instrument};
+use uuid::Uuid;
 
 use crate::codec::FramedConn;
 use crate::message::{self, BackendMessage};
@@ -83,6 +86,8 @@ pub struct RunParams<'a, A> {
     pub adapter_client: mz_adapter::Client,
     /// The connection to the client.
     pub conn: &'a mut FramedConn<A>,
+    /// The universally unique identifier for the connection.
+    pub conn_uuid: Uuid,
     /// The protocol version that the client provided in the startup message.
     pub version: i32,
     /// The parameters that the client provided in the startup message.
@@ -93,7 +98,9 @@ pub struct RunParams<'a, A> {
     /// system resources.
     pub internal: bool,
     /// Global connection limit and count
-    pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    pub active_connection_counter: ConnectionCounter,
+    /// Helm chart version
+    pub helm_chart_version: Option<String>,
 }
 
 /// Runs a pgwire connection to completion.
@@ -111,11 +118,13 @@ pub async fn run<'a, A>(
         tls_mode,
         adapter_client,
         conn,
+        conn_uuid,
         version,
         mut params,
         frontegg,
         internal,
-        active_connection_count,
+        active_connection_counter,
+        helm_chart_version,
     }: RunParams<'a, A>,
 ) -> Result<(), io::Error>
 where
@@ -182,8 +191,11 @@ where
                 // canonical.
                 let session = adapter_client.new_session(SessionConfig {
                     conn_id: conn.conn_id().clone(),
+                    uuid: conn_uuid,
                     user: auth_session.user().into(),
+                    client_ip: conn.peer_addr().clone(),
                     external_metadata_rx: Some(auth_session.external_metadata_rx()),
+                    helm_chart_version,
                 });
                 let expired = async move { auth_session.expired().await };
                 (session, expired.left_future())
@@ -201,14 +213,18 @@ where
     } else {
         let session = adapter_client.new_session(SessionConfig {
             conn_id: conn.conn_id().clone(),
+            uuid: conn_uuid,
             user,
+            client_ip: conn.peer_addr().clone(),
             external_metadata_rx: None,
+            helm_chart_version,
         });
         // No frontegg check, so auth session lasts indefinitely.
         let auth_session = pending().right_future();
         (session, auth_session)
     };
 
+    let system_vars = adapter_client.get_system_vars().await;
     for (name, value) in params {
         let settings = match name.as_str() {
             "options" => match parse_options(&value) {
@@ -229,9 +245,10 @@ where
             // (silently ignore errors on set), but erroring the connection
             // might be the better behavior. We maybe need to support more
             // options sent by psql and drivers before we can safely do this.
-            if let Err(err) = session
-                .vars_mut()
-                .set(None, &key, VarInput::Flat(&val), LOCAL)
+            if let Err(err) =
+                session
+                    .vars_mut()
+                    .set(&system_vars, &key, VarInput::Flat(&val), LOCAL)
             {
                 session.add_notice(AdapterNotice::BadStartupSetting {
                     name: key,
@@ -244,7 +261,7 @@ where
         .vars_mut()
         .end_transaction(EndTransactionAction::Commit);
 
-    let _guard = match DropConnection::new_connection(session.user(), active_connection_count) {
+    let _guard = match active_connection_counter.allocate_connection(session.user()) {
         Ok(drop_connection) => drop_connection,
         Err(e) => {
             let e: AdapterError = e.into();
@@ -349,7 +366,7 @@ fn parse_option(option: &str) -> Result<(&str, &str), ()> {
     Err(())
 }
 
-/// Splits value by any number of spaces except those preceeded by `\`.
+/// Splits value by any number of spaces except those preceded by `\`.
 fn split_options(value: &str) -> Vec<String> {
     let mut strs = Vec::new();
     // Need to build a string because of the escaping, so we can't simply
@@ -406,8 +423,13 @@ struct StateMachine<'a, A> {
 }
 
 enum SendRowsEndedReason {
-    Success { rows_returned: u64 },
-    Errored { error: String },
+    Success {
+        result_size: u64,
+        rows_returned: u64,
+    },
+    Errored {
+        error: String,
+    },
     Canceled,
 }
 
@@ -654,7 +676,7 @@ where
         // start_transaction can't error (but assert that just in case it changes in
         // the future.
         let res = self.adapter_client.start_transaction(Some(num_stmts));
-        assert!(res.is_ok());
+        assert_ok!(res);
         Ok(())
     }
 
@@ -1068,21 +1090,28 @@ where
                         Ok((ok, SendRowsEndedReason::Canceled)) => {
                             (Ok(ok), StatementEndedExecutionReason::Canceled)
                         }
-                        // NOTE: For now the `rows_returned` in
-                        // fetches is a bit confusing.  We record
-                        // `Some(n)` for the first fetch, where `n` is
-                        // the number of rows returned by the inner
+                        // NOTE: For now the values for `result_size` and
+                        // `rows_returned` in fetches are a bit confusing.
+                        // We record `Some(n)` for the first fetch, where `n` is
+                        // the number of bytes/rows returned by the inner
                         // execute (regardless of how many rows the
-                        // fetch fetched) , and `None` for subsequent fetches.
+                        // fetch fetched), and `None` for subsequent fetches.
                         //
-                        // This arguably makes sense since the rows
+                        // This arguably makes sense since the size/rows
                         // returned measures how much work the compute
                         // layer had to do to satisfy the query, but
                         // we should revisit it if/when we start
                         // logging the inner execute separately.
-                        Ok((ok, SendRowsEndedReason::Success { rows_returned: _ })) => (
+                        Ok((
+                            ok,
+                            SendRowsEndedReason::Success {
+                                result_size: _,
+                                rows_returned: _,
+                            },
+                        )) => (
                             Ok(ok),
                             StatementEndedExecutionReason::Success {
+                                result_size: None,
                                 rows_returned: None,
                                 execution_strategy: None,
                             },
@@ -1109,6 +1138,7 @@ where
                         self.adapter_client.retire_execute(
                             outer_ctx_extra,
                             StatementEndedExecutionReason::Success {
+                                result_size: None,
                                 rows_returned: None,
                                 execution_strategy: None,
                             },
@@ -1303,7 +1333,22 @@ where
         M: Into<BackendMessage>,
     {
         let message: BackendMessage = message.into();
-        self.conn.send(message).await
+        let is_error =
+            matches!(&message, BackendMessage::ErrorResponse(e) if e.severity.is_error());
+
+        self.conn.send(message).await?;
+
+        // Flush immediately after sending an error response, as some clients
+        // expect to be able to read the error response before sending a Sync
+        // message. This is arguably in violation of the protocol specification,
+        // but the specification is somewhat ambiguous, and easier to match
+        // PostgreSQL here than to fix all the clients that have this
+        // expectation.
+        if is_error {
+            self.conn.flush().await?;
+        }
+
+        Ok(())
     }
 
     #[instrument(level = "debug")]
@@ -1547,9 +1592,16 @@ where
                     Ok((ok, SendRowsEndedReason::Canceled)) => {
                         (Ok(ok), StatementEndedExecutionReason::Canceled)
                     }
-                    Ok((ok, SendRowsEndedReason::Success { rows_returned })) => (
+                    Ok((
+                        ok,
+                        SendRowsEndedReason::Success {
+                            result_size,
+                            rows_returned,
+                        },
+                    )) => (
                         Ok(ok),
                         StatementEndedExecutionReason::Success {
+                            result_size: Some(result_size),
                             rows_returned: Some(rows_returned),
                             execution_strategy: None,
                         },
@@ -1590,9 +1642,16 @@ where
                                 // We consider that to be a cancelation, rather than a query error.
                                 (Err(e), StatementEndedExecutionReason::Canceled)
                             }
-                            Ok((state, SendRowsEndedReason::Success { rows_returned })) => (
+                            Ok((
+                                state,
+                                SendRowsEndedReason::Success {
+                                    result_size,
+                                    rows_returned,
+                                },
+                            )) => (
                                 Ok(state),
                                 StatementEndedExecutionReason::Success {
+                                    result_size: Some(result_size),
                                     rows_returned: Some(rows_returned),
                                     execution_strategy: None,
                                 },
@@ -1711,7 +1770,9 @@ where
             | ExecuteResponse::CreatedConnection { .. }
             | ExecuteResponse::CreatedDatabase { .. }
             | ExecuteResponse::CreatedIndex { .. }
+            | ExecuteResponse::CreatedIntrospectionSubscribe
             | ExecuteResponse::CreatedMaterializedView { .. }
+            | ExecuteResponse::CreatedContinualTask { .. }
             | ExecuteResponse::CreatedRole
             | ExecuteResponse::CreatedSchema { .. }
             | ExecuteResponse::CreatedSecret { .. }
@@ -1721,6 +1782,7 @@ where
             | ExecuteResponse::CreatedType
             | ExecuteResponse::CreatedView { .. }
             | ExecuteResponse::CreatedViews { .. }
+            | ExecuteResponse::CreatedNetworkPolicy
             | ExecuteResponse::Comment
             | ExecuteResponse::Deallocate { .. }
             | ExecuteResponse::Deleted(..)
@@ -1744,7 +1806,7 @@ where
             }
         };
 
-        assert!(tag.is_none(), "tag created but not consumed: {:?}", tag);
+        assert_none!(tag, "tag created but not consumed: {:?}", tag);
         r
     }
 
@@ -1796,6 +1858,7 @@ where
         );
 
         let mut total_sent_rows = 0;
+        let mut total_sent_bytes = 0;
         // want_rows is the maximum number of rows the client wants.
         let mut want_rows = match max_rows {
             ExecuteCount::All => usize::MAX,
@@ -1848,16 +1911,27 @@ where
 
                     // Send a portion of the rows.
                     let mut sent_rows = 0;
+                    let mut sent_bytes = 0;
                     let messages = (&mut batch_rows)
+                        // TODO(parkmycar): This is a fair bit of juggling between iterator types
+                        // to count the total number of bytes. Alternatively we could track the
+                        // total sent bytes in this .map(...) call, but having side effects in map
+                        // is a code smell.
                         .map(|row| {
+                            let row_len = row.byte_len();
                             let values = mz_pgrepr::values_from_row(row, row_desc.typ());
-                            BackendMessage::DataRow(values)
+                            (row_len, BackendMessage::DataRow(values))
                         })
-                        .inspect(|_| sent_rows += 1)
+                        .inspect(|(row_len, _)| {
+                            sent_bytes += row_len;
+                            sent_rows += 1
+                        })
+                        .map(|(_row_len, row)| row)
                         .take(want_rows);
                     self.send_all(messages).await?;
 
                     total_sent_rows += sent_rows;
+                    total_sent_bytes += sent_bytes;
                     want_rows -= sent_rows;
 
                     // If we have sent the number of requested rows, put the remainder of the batch
@@ -1914,6 +1988,7 @@ where
         Ok((
             State::Ready,
             SendRowsEndedReason::Success {
+                result_size: u64::cast_from(total_sent_bytes),
                 rows_returned: u64::cast_from(total_sent_rows),
             },
         ))
@@ -1975,6 +2050,7 @@ where
         }
 
         let mut count = 0;
+        let mut total_sent_bytes = 0;
         loop {
             tokio::select! {
                 e = self.conn.wait_closed() => return Err(e),
@@ -1996,6 +2072,7 @@ where
                     Some(PeekResponseUnary::Rows(mut rows)) => {
                         count += rows.count();
                         while let Some(row) = rows.next() {
+                            total_sent_bytes += row.byte_len();
                             encode_fn(row, typ, &mut out)?;
                             self.send(BackendMessage::CopyData(mem::take(&mut out)))
                                 .await?;
@@ -2025,6 +2102,7 @@ where
         Ok((
             State::Ready,
             SendRowsEndedReason::Success {
+                result_size: u64::cast_from(total_sent_bytes),
                 rows_returned: u64::cast_from(count),
             },
         ))
@@ -2035,7 +2113,7 @@ where
     #[instrument(level = "debug")]
     async fn copy_from(
         &mut self,
-        id: GlobalId,
+        id: CatalogItemId,
         columns: Vec<usize>,
         params: CopyFormatParams<'_>,
         row_desc: RelationDesc,
@@ -2071,7 +2149,7 @@ where
 
     async fn copy_from_inner(
         &mut self,
-        id: GlobalId,
+        id: CatalogItemId,
         columns: Vec<usize>,
         params: CopyFormatParams<'_>,
         row_desc: RelationDesc,
@@ -2086,13 +2164,11 @@ where
         .await?;
         self.conn.flush().await?;
 
-        let system_vars = self.adapter_client.get_system_vars().await.ok();
+        let system_vars = self.adapter_client.get_system_vars().await;
         let max_size = system_vars
-            .as_ref()
-            .map(|resp| resp.get(MAX_COPY_FROM_SIZE.name()))
-            .flatten()
-            .map(|max_size| max_size.parse().ok())
-            .flatten()
+            .get(MAX_COPY_FROM_SIZE.name())
+            .ok()
+            .and_then(|max_size| max_size.value().parse().ok())
             .unwrap_or(usize::MAX);
         tracing::debug!("COPY FROM max buffer size: {max_size} bytes");
 
@@ -2213,6 +2289,7 @@ where
         );
         let is_fatal = err.severity.is_fatal();
         self.send(BackendMessage::ErrorResponse(err)).await?;
+
         let txn = self.adapter_client.session().transaction();
         match txn {
             // Error can be called from describe and parse and so might not be in an active

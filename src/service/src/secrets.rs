@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use clap::ArgEnum;
+use clap::ValueEnum;
 use mz_aws_secrets_controller::AwsSecretsClient;
 use mz_orchestrator_kubernetes::secrets::KubernetesSecretsReader;
 use mz_orchestrator_process::secrets::ProcessSecretsReader;
@@ -19,13 +19,13 @@ use mz_secrets::SecretsReader;
 #[derive(clap::Parser, Clone, Debug)]
 pub struct SecretsReaderCliArgs {
     /// The secrets reader implementation to use.
-    #[structopt(long, arg_enum, env = "SECRETS_READER")]
+    #[structopt(long, value_enum, env = "SECRETS_READER")]
     pub secrets_reader: SecretsControllerKind,
     /// When using the process secrets reader, the directory on the filesystem
     /// where secrets are stored.
     #[structopt(
         long,
-        required_if_eq("secrets-reader", "local-file"),
+        required_if_eq("secrets_reader", "local-file"),
         env = "SECRETS_READER_LOCAL_FILE_DIR"
     )]
     pub secrets_reader_local_file_dir: Option<PathBuf>,
@@ -33,20 +33,24 @@ pub struct SecretsReaderCliArgs {
     /// load.
     #[structopt(
         long,
-        required_if_eq("secrets-reader", "kubernetes"),
+        required_if_eq("secrets_reader", "kubernetes"),
         env = "SECRETS_READER_KUBERNETES_CONTEXT"
     )]
     pub secrets_reader_kubernetes_context: Option<String>,
     /// When using the AWS secrets reader, we need both of the following.
     #[structopt(
         long,
-        required_if_eq("secrets-reader", "aws-secrets-manager"),
+        required_if_eq("secrets_reader", "aws-secrets-manager"),
         env = "SECRETS_READER_AWS_PREFIX"
     )]
     pub secrets_reader_aws_prefix: Option<String>,
+    /// When using the Kubernetes secrets reader, the prefix to use for secret
+    /// names.
+    #[structopt(long, env = "SECRETS_READER_NAME_PREFIX")]
+    pub secrets_reader_name_prefix: Option<String>,
 }
 
-#[derive(ArgEnum, Debug, Clone, Copy)]
+#[derive(ValueEnum, Debug, Clone, Copy)]
 pub enum SecretsControllerKind {
     LocalFile,
     Kubernetes,
@@ -65,7 +69,9 @@ impl SecretsReaderCliArgs {
                 let context = self
                     .secrets_reader_kubernetes_context
                     .expect("clap enforced");
-                Ok(Arc::new(KubernetesSecretsReader::new(context).await?))
+                Ok(Arc::new(
+                    KubernetesSecretsReader::new(context, self.secrets_reader_name_prefix).await?,
+                ))
             }
             SecretsControllerKind::AwsSecretsManager => {
                 let prefix = self.secrets_reader_aws_prefix.expect("clap enforced");

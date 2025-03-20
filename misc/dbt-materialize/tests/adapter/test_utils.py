@@ -104,7 +104,7 @@ class TestCast(BaseCast):
 
 # The `cast_bool_to_text` macro works as expected, but we must alter the test case
 # because set operation type conversions do not work properly.
-# See https://github.com/MaterializeInc/materialize/issues/3331
+# See https://github.com/MaterializeInc/database-issues/issues/1065
 class TestCastBoolToText(BaseCastBoolToText):
     @pytest.fixture(scope="class")
     def models(self):

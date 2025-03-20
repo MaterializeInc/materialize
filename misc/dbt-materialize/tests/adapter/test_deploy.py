@@ -271,6 +271,19 @@ class TestPermissionValidation:
 
 class TestRunWithDeploy:
     @pytest.fixture(scope="class")
+    def dbt_profile_target(self):
+        return {
+            "type": "materialize",
+            "threads": 1,
+            "host": "{{ env_var('DBT_HOST', 'localhost') }}",
+            "user": "materialize",
+            "pass": "password",
+            "database": "materialize",
+            "port": "{{ env_var('DBT_PORT', 6875) }}",
+            "cluster": "quickstart",
+        }
+
+    @pytest.fixture(scope="class")
     def project_config_update(self):
         return {
             "vars": {
@@ -376,7 +389,7 @@ class TestTargetDeploy:
                 "deployment": {
                     "default": {
                         "clusters": ["prod"],
-                        "schemas": ["prod"],
+                        "schemas": ["prod", "staging"],
                     }
                 },
             }
@@ -388,12 +401,16 @@ class TestTargetDeploy:
         project.run_sql("DROP CLUSTER IF EXISTS prod_dbt_deploy CASCADE")
         project.run_sql("DROP SCHEMA IF EXISTS prod CASCADE")
         project.run_sql("DROP SCHEMA IF EXISTS prod_dbt_deploy CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS staging CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS staging_dbt_deploy CASCADE")
 
     def test_dbt_deploy(self, project):
         project.run_sql("CREATE CLUSTER prod SIZE = '1'")
         project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
         project.run_sql("CREATE SCHEMA prod")
         project.run_sql("CREATE SCHEMA prod_dbt_deploy")
+        project.run_sql("CREATE SCHEMA staging")
+        project.run_sql("CREATE SCHEMA staging_dbt_deploy")
 
         before_clusters = dict(
             project.run_sql(
@@ -404,6 +421,12 @@ class TestTargetDeploy:
         before_schemas = dict(
             project.run_sql(
                 "SELECT name, id FROM mz_schemas WHERE name IN ('prod', 'prod_dbt_deploy')",
+                fetch="all",
+            )
+        )
+        before_staging_schemas = dict(
+            project.run_sql(
+                "SELECT name, id FROM mz_schemas WHERE name IN ('staging', 'staging_dbt_deploy')",
                 fetch="all",
             )
         )
@@ -422,11 +445,25 @@ class TestTargetDeploy:
                 fetch="all",
             )
         )
+        after_staging_schemas = dict(
+            project.run_sql(
+                "SELECT name, id FROM mz_schemas WHERE name IN ('staging', 'staging_dbt_deploy')",
+                fetch="all",
+            )
+        )
 
         assert before_clusters["prod"] != after_clusters["prod_dbt_deploy"]
         assert before_clusters["prod_dbt_deploy"] != after_clusters["prod"]
         assert before_schemas["prod"] != after_schemas["prod_dbt_deploy"]
-        assert before_schemas["prod"] != after_schemas["prod_dbt_deploy"]
+        assert before_schemas["prod_dbt_deploy"] != after_schemas["prod"]
+        assert (
+            before_staging_schemas["staging"]
+            != after_staging_schemas["staging_dbt_deploy"]
+        )
+        assert (
+            before_staging_schemas["staging_dbt_deploy"]
+            != after_staging_schemas["staging"]
+        )
 
         run_dbt(["run-operation", "deploy_promote"])
 
@@ -442,17 +479,55 @@ class TestTargetDeploy:
                 fetch="all",
             )
         )
+        after_staging_schemas = dict(
+            project.run_sql(
+                "SELECT name, id FROM mz_schemas WHERE name IN ('staging', 'staging_dbt_deploy')",
+                fetch="all",
+            )
+        )
 
         assert before_clusters["prod"] == after_clusters["prod_dbt_deploy"]
         assert before_clusters["prod_dbt_deploy"] == after_clusters["prod"]
         assert before_schemas["prod"] == after_schemas["prod_dbt_deploy"]
-        assert before_schemas["prod"] == after_schemas["prod_dbt_deploy"]
+        assert before_schemas["prod_dbt_deploy"] == after_schemas["prod"]
+        assert (
+            before_staging_schemas["staging"]
+            == after_staging_schemas["staging_dbt_deploy"]
+        )
+        assert (
+            before_staging_schemas["staging_dbt_deploy"]
+            == after_staging_schemas["staging"]
+        )
+
+        # Verify that both schemas are tagged correctly
+        for schema_name in ["prod", "staging"]:
+            tagged_schema_comment = project.run_sql(
+                f"""
+                SELECT c.comment
+                FROM mz_internal.mz_comments c
+                JOIN mz_schemas s USING (id)
+                WHERE s.name = '{schema_name}';
+                """,
+                fetch="one",
+            )
+
+            assert (
+                tagged_schema_comment is not None
+            ), f"No comment found for schema {schema_name}"
+            assert (
+                "Deployment by" in tagged_schema_comment[0]
+            ), f"Missing deployment info in {schema_name} comment"
+            assert (
+                "on" in tagged_schema_comment[0]
+            ), f"Missing timestamp in {schema_name} comment"
 
     def test_dbt_deploy_with_force(self, project):
         project.run_sql("CREATE CLUSTER prod SIZE = '1'")
         project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
         project.run_sql("CREATE SCHEMA prod")
         project.run_sql("CREATE SCHEMA prod_dbt_deploy")
+        project.run_sql("CREATE SCHEMA staging")
+        project.run_sql("CREATE SCHEMA staging_dbt_deploy")
 
         before_clusters = dict(
             project.run_sql(
@@ -491,6 +566,8 @@ class TestTargetDeploy:
         project.run_sql("CREATE CLUSTER prod SIZE = '1'")
         project.run_sql("CREATE SCHEMA prod")
         project.run_sql("CREATE SCHEMA prod_dbt_deploy")
+        project.run_sql("CREATE SCHEMA staging")
+        project.run_sql("CREATE SCHEMA staging_dbt_deploy")
 
         run_dbt(["run-operation", "deploy_promote"], expect_pass=False)
 
@@ -504,14 +581,17 @@ class TestTargetDeploy:
     def test_fails_on_unmanaged_cluster(self, project):
         project.run_sql("CREATE CLUSTER prod REPLICAS ()")
         project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
+        project.run_sql("CREATE SCHEMA staging_dbt_deploy")
 
         run_dbt(["run-operation", "deploy_init"], expect_pass=False)
 
-    def test_dbt_deploy_init_with_refresh_rehydration_time(self, project):
+    def test_dbt_deploy_init_with_refresh_hydration_time(self, project):
         project.run_sql(
-            "CREATE CLUSTER prod (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1 hour'))"
+            "CREATE CLUSTER prod (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour'))"
         )
         project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
 
         run_dbt(["run-operation", "deploy_init"])
 
@@ -531,6 +611,7 @@ class TestTargetDeploy:
     def test_dbt_deploy_init_and_cleanup(self, project):
         project.run_sql("CREATE CLUSTER prod SIZE = '1'")
         project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
 
         run_dbt(["run-operation", "deploy_init"])
 
@@ -567,6 +648,8 @@ class TestTargetDeploy:
         project.run_sql("CREATE SCHEMA prod")
         project.run_sql("CREATE SCHEMA prod_dbt_deploy")
         project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
+        project.run_sql("CREATE SCHEMA staging")
+        project.run_sql("CREATE SCHEMA staging_dbt_deploy")
 
         project.run_sql(
             "CREATE MATERIALIZED VIEW mv IN CLUSTER prod_dbt_deploy AS SELECT 1"
@@ -587,6 +670,8 @@ class TestTargetDeploy:
         project.run_sql("CREATE SCHEMA prod")
         project.run_sql("CREATE SCHEMA prod_dbt_deploy")
         project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
+        project.run_sql("CREATE SCHEMA staging")
+        project.run_sql("CREATE SCHEMA staging_dbt_deploy")
 
         project.run_sql("CREATE VIEW prod_dbt_deploy.view AS SELECT 1")
 
@@ -601,7 +686,78 @@ class TestTargetDeploy:
         )
 
 
+class TestLagTolerance:
+    @pytest.fixture(scope="class")
+    def project_config_update(self):
+        return {
+            "vars": {
+                "deployment": {
+                    "default": {"clusters": ["quickstart"], "schemas": ["public"]}
+                }
+            }
+        }
+
+    @pytest.fixture(autouse=True)
+    def cleanup(self, project):
+        project.run_sql("DROP CLUSTER IF EXISTS quickstart_dbt_deploy CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS public_dbt_deploy CASCADE")
+
+    def test_deploy_await_custom_lag_threshold(self, project):
+        run_dbt(["run-operation", "deploy_init"])
+        result = run_dbt(
+            [
+                "run-operation",
+                "deploy_await",
+                "--args",
+                "{poll_interval: 5, lag_threshold: '5s'}",
+            ]
+        )
+        assert len(result) > 0 and result[0].status == "success"
+
+    def test_deploy_promote_custom_lag_threshold(self, project):
+        run_dbt(["run-operation", "deploy_init"])
+        result = run_dbt(
+            [
+                "run-operation",
+                "deploy_promote",
+                "--args",
+                "{wait: true, poll_interval: 5, lag_threshold: '5s'}",
+            ]
+        )
+        assert len(result) > 0 and result[0].status == "success"
+
+    def test_default_lag_threshold(self, project):
+        run_dbt(["run-operation", "deploy_init"])
+        result = run_dbt(["run-operation", "deploy_await"])
+        assert len(result) > 0 and result[0].status == "success"
+
+    def test_large_lag_threshold(self, project):
+        run_dbt(["run-operation", "deploy_init"])
+        result = run_dbt(
+            [
+                "run-operation",
+                "deploy_await",
+                "--args",
+                "{poll_interval: 5, lag_threshold: '1h'}",
+            ]
+        )
+        assert len(result) > 0 and result[0].status == "success"
+
+
 class TestEndToEndDeployment:
+    @pytest.fixture(scope="class")
+    def dbt_profile_target(self):
+        return {
+            "type": "materialize",
+            "threads": 1,
+            "host": "{{ env_var('DBT_HOST', 'localhost') }}",
+            "user": "materialize",
+            "pass": "password",
+            "database": "materialize",
+            "port": "{{ env_var('DBT_PORT', 6875) }}",
+            "cluster": "quickstart",
+        }
+
     @pytest.fixture(scope="class")
     def models(self):
         return {
@@ -611,6 +767,7 @@ class TestEndToEndDeployment:
 
     @pytest.fixture(autouse=True)
     def cleanup(self, project):
+        project.run_sql("DROP ROLE IF EXISTS test_role")
         project.run_sql("DROP CLUSTER IF EXISTS quickstart_dbt_deploy CASCADE")
         project.run_sql("DROP SCHEMA IF EXISTS public_dbt_deploy CASCADE")
         project.run_sql("DROP CLUSTER IF EXISTS sinks_cluster CASCADE")
@@ -619,6 +776,10 @@ class TestEndToEndDeployment:
         project.run_sql("DROP SOURCE IF EXISTS sink_validation_source")
 
     def test_full_deploy_process(self, project):
+        # Create test role and grant it to materialize
+        project.run_sql("CREATE ROLE test_role")
+        project.run_sql("GRANT test_role TO materialize")
+
         # Prepare the source table, the sink cluster and schema
         project.run_sql("CREATE TABLE source_table (val INTEGER)")
         project.run_sql("CREATE CLUSTER sinks_cluster SIZE = '1'")
@@ -629,6 +790,62 @@ class TestEndToEndDeployment:
 
         created_schema = project.created_schemas[0]
 
+        # Set up initial grants on the production schema and cluster
+        project.run_sql(f"GRANT USAGE ON SCHEMA {created_schema} TO test_role")
+        project.run_sql(f"GRANT CREATE ON SCHEMA {created_schema} TO test_role")
+        project.run_sql(
+            f"ALTER DEFAULT PRIVILEGES FOR ROLE test_role IN SCHEMA {created_schema} GRANT SELECT ON TABLES TO test_role"
+        )
+        project.run_sql("GRANT USAGE ON CLUSTER quickstart TO test_role")
+        project.run_sql("GRANT CREATE ON CLUSTER quickstart TO test_role")
+
+        # Store initial grants for later comparison
+        initial_schema_grants = project.run_sql(
+            f"""
+            WITH schema_privilege AS (
+                SELECT mz_internal.mz_aclexplode(s.privileges).*
+                FROM mz_schemas s
+                JOIN mz_databases d ON s.database_id = d.id
+                WHERE d.name = current_database()
+                    AND s.name = '{created_schema}'
+            )
+            SELECT privilege_type, grantee.name as grantee
+            FROM schema_privilege
+            JOIN mz_roles grantee ON grantee = grantee.id
+            WHERE grantee.name = 'test_role'
+            ORDER BY privilege_type, grantee
+        """,
+            fetch="all",
+        )
+
+        initial_cluster_grants = project.run_sql(
+            """
+            WITH cluster_privilege AS (
+                SELECT mz_internal.mz_aclexplode(privileges).*
+                FROM mz_clusters
+                WHERE name = 'quickstart'
+            )
+            SELECT privilege_type, grantee.name as grantee
+            FROM cluster_privilege
+            JOIN mz_roles grantee ON grantee = grantee.id
+            WHERE grantee.name = 'test_role'
+            ORDER BY privilege_type, grantee
+        """,
+            fetch="all",
+        )
+
+        initial_default_privs = project.run_sql(
+            f"""
+            SELECT privilege_type, grantee, object_type
+            FROM mz_internal.mz_show_default_privileges
+            WHERE database = current_database()
+                AND schema = '{created_schema}'
+                AND grantee = 'test_role'
+            ORDER BY privilege_type, grantee, object_type
+        """,
+            fetch="all",
+        )
+
         project_config = f"{{deployment: {{default: {{clusters: ['quickstart'], schemas: ['{created_schema}']}}}}}}"
         project_config_deploy = f"{{deployment: {{default: {{clusters: ['quickstart'], schemas: ['{created_schema}']}}}}, deploy: True}}"
 
@@ -636,22 +853,77 @@ class TestEndToEndDeployment:
         project.run_sql(
             "CREATE SOURCE sink_validation_source FROM KAFKA CONNECTION kafka_connection (TOPIC 'testdrive-test-sink-1') FORMAT JSON"
         )
-        time.sleep(3)
-        result = project.run_sql(
-            "SELECT count(*) FROM sink_validation_source", fetch="one"
+        run_with_retry(
+            project, "SELECT count(*) FROM sink_validation_source", expected_count=1
         )
-        assert result[0] == 1, f"Expected count to be 1, but got {result[0]}"
 
         # Insert another row and validate the sink
         project.run_sql("INSERT INTO source_table VALUES (2)")
-        time.sleep(3)
-        result = project.run_sql(
-            "SELECT count(*) FROM sink_validation_source", fetch="one"
+        run_with_retry(
+            project, "SELECT count(*) FROM sink_validation_source", expected_count=2
         )
-        assert result[0] == 2, f"Expected count to be 2, but got {result[0]}"
 
         # Initialize the deployment environment
         run_dbt(["run-operation", "deploy_init", "--vars", project_config])
+
+        # Verify grants were copied to deployment schema
+        deploy_schema_grants = project.run_sql(
+            f"""
+            WITH schema_privilege AS (
+                SELECT mz_internal.mz_aclexplode(s.privileges).*
+                FROM mz_schemas s
+                JOIN mz_databases d ON s.database_id = d.id
+                WHERE d.name = current_database()
+                    AND s.name = '{created_schema}_dbt_deploy'
+            )
+            SELECT privilege_type, grantee.name as grantee
+            FROM schema_privilege
+            JOIN mz_roles grantee ON grantee = grantee.id
+            WHERE grantee.name = 'test_role'
+            ORDER BY privilege_type, grantee
+        """,
+            fetch="all",
+        )
+
+        # Verify grants were copied to deployment cluster
+        deploy_cluster_grants = project.run_sql(
+            """
+            WITH cluster_privilege AS (
+                SELECT mz_internal.mz_aclexplode(privileges).*
+                FROM mz_clusters
+                WHERE name = 'quickstart_dbt_deploy'
+            )
+            SELECT privilege_type, grantee.name as grantee
+            FROM cluster_privilege
+            JOIN mz_roles grantee ON grantee = grantee.id
+            WHERE grantee.name = 'test_role'
+            ORDER BY privilege_type, grantee
+        """,
+            fetch="all",
+        )
+
+        deploy_default_privs = project.run_sql(
+            f"""
+            SELECT privilege_type, grantee, object_type
+            FROM mz_internal.mz_show_default_privileges
+            WHERE database = current_database()
+                AND schema = '{created_schema}_dbt_deploy'
+                AND grantee = 'test_role'
+            ORDER BY privilege_type, grantee, object_type
+        """,
+            fetch="all",
+        )
+
+        # Assert grants match between production and deployment environments
+        assert (
+            initial_schema_grants == deploy_schema_grants
+        ), "Schema grants do not match between production and deployment"
+        assert (
+            initial_cluster_grants == deploy_cluster_grants
+        ), "Cluster grants do not match between production and deployment"
+        assert (
+            initial_default_privs == deploy_default_privs
+        ), "Default privileges do not match between production and deployment"
 
         # Run the deploy with the deploy flag set to True and exclude the sink creation
         run_dbt(
@@ -665,19 +937,15 @@ class TestEndToEndDeployment:
         )
 
         # Ensure the validation source has not changed
-        result = project.run_sql(
-            "SELECT count(*) FROM sink_validation_source", fetch="one"
+        run_with_retry(
+            project, "SELECT count(*) FROM sink_validation_source", expected_count=2
         )
-        time.sleep(3)
-        assert result[0] == 2, f"Expected count to be 2, but got {result[0]}"
 
         # Insert a new row and validate the new sink result after the deploy
         project.run_sql("INSERT INTO source_table VALUES (3)")
-        time.sleep(3)
-        result = project.run_sql(
-            "SELECT count(*) FROM sink_validation_source", fetch="one"
+        run_with_retry(
+            project, "SELECT count(*) FROM sink_validation_source", expected_count=3
         )
-        assert result[0] == 3, f"Expected count to be 3, but got {result[0]}"
 
         # Get the IDs of the materialized views
         before_view_id = project.run_sql(
@@ -742,3 +1010,14 @@ class TestEndToEndDeployment:
         ), "Sink's view ID should be different after deployment"
 
         run_dbt(["run-operation", "deploy_cleanup", "--vars", project_config])
+
+
+def run_with_retry(project, sql, expected_count, retries=5, delay=3, fetch="one"):
+    for i in range(retries):
+        result = project.run_sql(sql, fetch=fetch)
+        if result[0] == expected_count:
+            return result
+        time.sleep(delay)
+    raise AssertionError(
+        f"Expected count to be {expected_count}, but got {result[0]} after {retries} retries"
+    )

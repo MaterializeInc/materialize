@@ -25,11 +25,11 @@ You may not set up circular membership loops.
 
 ## Examples
 
-```sql
+```mzsql
 REVOKE data_scientist FROM joe;
 ```
 
-```sql
+```mzsql
 REVOKE data_scientist FROM joe, mike;
 ```
 

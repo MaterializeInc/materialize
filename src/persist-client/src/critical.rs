@@ -99,14 +99,7 @@ impl CriticalReaderId {
 /// means that callers can add a timeout using [tokio::time::timeout] or
 /// [tokio::time::timeout_at].
 #[derive(Debug)]
-pub struct SinceHandle<K, V, T, D, O>
-where
-    K: Debug + Codec,
-    V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
-    O: Opaque + Codec64,
-{
+pub struct SinceHandle<K: Codec, V: Codec, T, D, O> {
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) gc: GarbageCollector<K, V, T, D>,
     pub(crate) reader_id: CriticalReaderId,
@@ -120,7 +113,7 @@ impl<K, V, T, D, O> SinceHandle<K, V, T, D, O>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64 + Send + Sync,
     O: Opaque + Codec64,
 {
@@ -317,7 +310,7 @@ where
         &self,
         as_of: Option<Antichain<T>>,
     ) -> impl Future<Output = Result<SnapshotStats, Since<T>>> + Send + 'static {
-        let mut machine = self.machine.clone();
+        let machine = self.machine.clone();
         async move {
             let batches = match as_of {
                 Some(as_of) => machine.snapshot(&as_of).await?,

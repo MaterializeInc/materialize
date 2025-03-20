@@ -37,5 +37,7 @@ INSERT INTO t1 VALUES (2);
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-! CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR ALL TABLES;
+> CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+
+! CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
 contains:referenced tables use unsupported types

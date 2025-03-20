@@ -25,7 +25,12 @@ from materialize import MZ_ROOT, buildkite, ci_util
 # - Negative values indicate that the line has only been covered in unit tests.
 Coverage = dict[str, OrderedDict[int, int | None]]
 SOURCE_RE = re.compile(
-    "^/var/lib/buildkite-agent/builds/buildkite-.*/materialize/coverage/(.*$)"
+    r"""
+    ( src/(.*$)"
+    | bazel-out/.*/bin/(.*$)
+    | external/(.*$)
+    )""",
+    re.VERBOSE,
 )
 # * Deriving generates more code, but we don't expect to cover this in most
 # cases, so ignore such lines.
@@ -44,7 +49,7 @@ IGNORE_SRC_LINE_RE = re.compile(
 
 IGNORE_FILE_PATH_RE = re.compile(
     r"""
-    (  /maelstrom/
+    ( /maelstrom/
     )
     """,
     re.VERBOSE,

@@ -137,6 +137,7 @@ pub fn safe_len(len: usize) -> Result<usize, AvroError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mz_ore::assert_err;
 
     #[mz_ore::test]
     fn test_zigzag() {
@@ -204,12 +205,12 @@ mod tests {
     #[mz_ore::test]
     fn test_overflow() {
         let causes_left_shift_overflow: &[u8] = &[0xe1, 0xe1, 0xe1, 0xe1, 0xe1];
-        assert!(decode_variable(&mut &causes_left_shift_overflow[..]).is_err());
+        assert_err!(decode_variable(&mut &causes_left_shift_overflow[..]));
     }
 
     #[mz_ore::test]
     fn test_safe_len() {
         assert_eq!(42usize, safe_len(42usize).unwrap());
-        assert!(safe_len(1024 * 1024 * 1024).is_err());
+        assert_err!(safe_len(1024 * 1024 * 1024));
     }
 }

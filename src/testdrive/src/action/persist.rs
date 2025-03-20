@@ -40,10 +40,11 @@ pub async fn run_force_compaction(
         anyhow::bail!("Missing persist blob URL");
     };
 
-    let relation_desc = RelationDesc::empty()
+    let relation_desc = RelationDesc::builder()
         .with_column("key", ScalarType::String.nullable(true))
         .with_column("f1", ScalarType::String.nullable(true))
-        .with_column("f2", ScalarType::Int64.nullable(true));
+        .with_column("f2", ScalarType::Int64.nullable(true))
+        .finish();
 
     mz_persist_client::cli::admin::force_compaction::<SourceData, (), Timestamp, Diff>(
         cfg,

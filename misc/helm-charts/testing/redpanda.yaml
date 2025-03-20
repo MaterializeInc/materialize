@@ -1,0 +1,76 @@
+---
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redpanda
+  namespace: materialize
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redpanda
+  template:
+    metadata:
+      labels:
+        app: redpanda
+    spec:
+      containers:
+        - name: redpanda
+          image: docker.vectorized.io/vectorized/redpanda:v23.3.5
+          command: ["/usr/bin/rpk"]
+          args: [
+            "redpanda",
+            "start",
+            "--overprovisioned",
+            "--smp", "1",
+            "--memory", "1G",
+            "--reserve-memory", "0M",
+            "--node-id", "0",
+            "--check=false",
+            "--kafka-addr", "0.0.0.0:9092",
+            "--advertise-kafka-addr", "redpanda.materialize.svc.cluster.local:9092",
+            "--pandaproxy-addr", "0.0.0.0:8082",
+            "--advertise-pandaproxy-addr", "redpanda.materialize.svc.cluster.local:8082",
+            "--set", "redpanda.enable_transactions=true",
+            "--set", "redpanda.enable_idempotence=true",
+            "--set", "redpanda.auto_create_topics_enabled=true",
+            "--set", "redpanda.default_topic_partitions=1"
+          ]
+          ports:
+            - containerPort: 9092
+            - containerPort: 8081
+            - containerPort: 8082
+          livenessProbe:
+            httpGet:
+              path: /v1/status/ready
+              port: 9644
+            initialDelaySeconds: 30
+            periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redpanda
+  namespace: materialize
+spec:
+  selector:
+    app: redpanda
+  ports:
+    - name: kafka
+      protocol: TCP
+      port: 9092
+      targetPort: 9092
+    - name: pandaproxy
+      protocol: TCP
+      port: 8082
+      targetPort: 8082

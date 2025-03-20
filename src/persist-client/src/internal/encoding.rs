@@ -17,11 +17,12 @@ use std::sync::Arc;
 use bytes::{Buf, Bytes};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use mz_ore::halt;
-use mz_persist::indexed::columnar::ColumnarRecords;
-use mz_persist::indexed::encoding::{BlobTraceBatchPart, BlobTraceUpdates};
+use mz_ore::cast::CastInto;
+use mz_ore::{assert_none, halt};
+use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::{SeqNo, VersionedData};
 use mz_persist::metrics::ColumnarMetrics;
+use mz_persist_types::schema::SchemaId;
 use mz_persist_types::stats::{PartStats, ProtoStructStats};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
@@ -39,14 +40,16 @@ use crate::error::{CodecMismatch, CodecMismatchT};
 use crate::internal::metrics::Metrics;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::state::{
-    proto_hollow_batch_part, BatchPart, CriticalReaderState, HandleDebugState, HollowBatch,
-    HollowBatchPart, HollowRollup, IdempotencyToken, LeasedReaderState, OpaqueState,
-    ProtoCompaction, ProtoCriticalReaderState, ProtoHandleDebugState, ProtoHollowBatch,
-    ProtoHollowBatchPart, ProtoHollowRollup, ProtoIdHollowBatch, ProtoIdMerge, ProtoIdSpineBatch,
+    proto_hollow_batch_part, BatchPart, CriticalReaderState, EncodedSchemas, HandleDebugState,
+    HollowBatch, HollowBatchPart, HollowRollup, HollowRun, HollowRunRef, IdempotencyToken,
+    LeasedReaderState, OpaqueState, ProtoCompaction, ProtoCriticalReaderState, ProtoEncodedSchemas,
+    ProtoHandleDebugState, ProtoHollowBatch, ProtoHollowBatchPart, ProtoHollowRollup,
+    ProtoHollowRun, ProtoHollowRunRef, ProtoIdHollowBatch, ProtoIdMerge, ProtoIdSpineBatch,
     ProtoInlineBatchPart, ProtoInlinedDiffs, ProtoLeasedReaderState, ProtoMerge, ProtoRollup,
-    ProtoSpineBatch, ProtoSpineId, ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType,
-    ProtoStateFieldDiffs, ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoVersionedData,
-    ProtoWriterState, State, StateCollections, TypedState, WriterState,
+    ProtoRunMeta, ProtoRunOrder, ProtoSpineBatch, ProtoSpineId, ProtoStateDiff, ProtoStateField,
+    ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoTrace, ProtoU64Antichain,
+    ProtoU64Description, ProtoVersionedData, ProtoWriterState, RunMeta, RunOrder, RunPart, State,
+    StateCollections, TypedState, WriterState,
 };
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, ProtoStateFieldDiffsWriter, StateDiff, StateFieldDiff, StateFieldValDiff,
@@ -59,6 +62,9 @@ use crate::{cfg, PersistConfig, ShardId, WriterId};
 
 #[derive(Debug)]
 pub struct Schemas<K: Codec, V: Codec> {
+    // TODO: Remove the Option once this finishes rolling out and all shards
+    // have a registered schema.
+    pub id: Option<SchemaId>,
     pub key: Arc<K::Schema>,
     pub val: Arc<V::Schema>,
 }
@@ -66,6 +72,7 @@ pub struct Schemas<K: Codec, V: Codec> {
 impl<K: Codec, V: Codec> Clone for Schemas<K, V> {
     fn clone(&self) -> Self {
         Self {
+            id: self.id,
             key: Arc::clone(&self.key),
             val: Arc::clone(&self.val),
         }
@@ -237,6 +244,26 @@ impl RustType<String> for WriterId {
     }
 }
 
+impl RustType<ProtoEncodedSchemas> for EncodedSchemas {
+    fn into_proto(&self) -> ProtoEncodedSchemas {
+        ProtoEncodedSchemas {
+            key: self.key.clone(),
+            key_data_type: self.key_data_type.clone(),
+            val: self.val.clone(),
+            val_data_type: self.val_data_type.clone(),
+        }
+    }
+
+    fn from_proto(proto: ProtoEncodedSchemas) -> Result<Self, TryFromProtoError> {
+        Ok(EncodedSchemas {
+            key: proto.key,
+            key_data_type: proto.key_data_type,
+            val: proto.val,
+            val_data_type: proto.val_data_type,
+        })
+    }
+}
+
 impl RustType<String> for IdempotencyToken {
     fn into_proto(&self) -> String {
         self.to_string()
@@ -308,6 +335,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
             leased_readers,
             critical_readers,
             writers,
+            schemas,
             since,
             legacy_batches,
             hollow_batches,
@@ -330,6 +358,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
             &mut writer,
         );
         field_diffs_into_proto(ProtoStateField::Writers, writers, &mut writer);
+        field_diffs_into_proto(ProtoStateField::Schemas, schemas, &mut writer);
         field_diffs_into_proto(ProtoStateField::Since, since, &mut writer);
         field_diffs_into_proto(ProtoStateField::LegacyBatches, legacy_batches, &mut writer);
         field_diffs_into_proto(ProtoStateField::HollowBatches, hollow_batches, &mut writer);
@@ -432,6 +461,14 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
                         field_diff_into_rust::<String, ProtoWriterState, _, _, _, _>(
                             diff,
                             &mut state_diff.writers,
+                            |k| k.into_rust(),
+                            |v| v.into_rust(),
+                        )?
+                    }
+                    ProtoStateField::Schemas => {
+                        field_diff_into_rust::<u64, ProtoEncodedSchemas, _, _, _, _>(
+                            diff,
+                            &mut state_diff.schemas,
                             |k| k.into_rust(),
                             |v| v.into_rust(),
                         )?
@@ -841,6 +878,14 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
                 .iter()
                 .map(|(id, state)| (id.into_proto(), state.into_proto()))
                 .collect(),
+            schemas: self
+                .state
+                .state
+                .collections
+                .schemas
+                .iter()
+                .map(|(id, schema)| (id.into_proto(), schema.into_proto()))
+                .collect(),
             trace: Some(self.state.state.collections.trace.into_proto()),
             diffs: self.diffs.as_ref().map(|x| x.into_proto()),
         }
@@ -886,12 +931,17 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
         for (id, state) in x.writers {
             writers.insert(id.into_rust()?, state.into_rust()?);
         }
+        let mut schemas = BTreeMap::new();
+        for (id, x) in x.schemas {
+            schemas.insert(id.into_rust()?, x.into_rust()?);
+        }
         let collections = StateCollections {
             rollups,
             last_gc_req: x.last_gc_req.into_rust()?,
             leased_readers,
             critical_readers,
             writers,
+            schemas,
             trace: x.trace.into_rust_if_some("trace")?,
         };
         let state = State {
@@ -1235,36 +1285,157 @@ impl RustType<ProtoHandleDebugState> for HandleDebugState {
     }
 }
 
+impl<T: Timestamp + Codec64> RustType<ProtoHollowRun> for HollowRun<T> {
+    fn into_proto(&self) -> ProtoHollowRun {
+        ProtoHollowRun {
+            parts: self.parts.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoHollowRun) -> Result<Self, TryFromProtoError> {
+        Ok(HollowRun {
+            parts: proto.parts.into_rust()?,
+        })
+    }
+}
+
 impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
     fn into_proto(&self) -> ProtoHollowBatch {
+        let mut run_meta = self.run_meta.into_proto();
+        // For backwards compatibility reasons, don't keep default metadata in the proto.
+        let run_meta_default = RunMeta::default().into_proto();
+        while run_meta.last() == Some(&run_meta_default) {
+            run_meta.pop();
+        }
         ProtoHollowBatch {
             desc: Some(self.desc.into_proto()),
             parts: self.parts.into_proto(),
             len: self.len.into_proto(),
-            runs: self.runs.into_proto(),
+            runs: self.run_splits.into_proto(),
+            run_meta,
             deprecated_keys: vec![],
         }
     }
 
     fn from_proto(proto: ProtoHollowBatch) -> Result<Self, TryFromProtoError> {
-        let mut parts: Vec<BatchPart<T>> = proto.parts.into_rust()?;
+        let mut parts: Vec<RunPart<T>> = proto.parts.into_rust()?;
         // MIGRATION: We used to just have the keys instead of a more structured
         // part.
         parts.extend(proto.deprecated_keys.into_iter().map(|key| {
-            BatchPart::Hollow(HollowBatchPart {
+            RunPart::Single(BatchPart::Hollow(HollowBatchPart {
                 key: PartialBatchKey(key),
                 encoded_size_bytes: 0,
                 key_lower: vec![],
+                structured_key_lower: None,
                 stats: None,
                 ts_rewrite: None,
                 diffs_sum: None,
-            })
+                format: None,
+                schema_id: None,
+                deprecated_schema_id: None,
+            }))
         }));
+        // We discard default metadatas from the proto above; re-add them here.
+        let run_splits: Vec<usize> = proto.runs.into_rust()?;
+        let num_runs = if parts.is_empty() {
+            0
+        } else {
+            run_splits.len() + 1
+        };
+        let mut run_meta: Vec<RunMeta> = proto.run_meta.into_rust()?;
+        run_meta.resize(num_runs, RunMeta::default());
         Ok(HollowBatch {
             desc: proto.desc.into_rust_if_some("desc")?,
             parts,
             len: proto.len.into_rust()?,
-            runs: proto.runs.into_rust()?,
+            run_splits,
+            run_meta,
+        })
+    }
+}
+
+impl RustType<ProtoRunMeta> for RunMeta {
+    fn into_proto(&self) -> ProtoRunMeta {
+        let order = match self.order {
+            None => ProtoRunOrder::Unknown,
+            Some(RunOrder::Unordered) => ProtoRunOrder::Unordered,
+            Some(RunOrder::Codec) => ProtoRunOrder::Codec,
+            Some(RunOrder::Structured) => ProtoRunOrder::Structured,
+        };
+        ProtoRunMeta {
+            order: order.into(),
+            schema_id: self.schema.into_proto(),
+            deprecated_schema_id: self.deprecated_schema.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoRunMeta) -> Result<Self, TryFromProtoError> {
+        let order = match ProtoRunOrder::try_from(proto.order)? {
+            ProtoRunOrder::Unknown => None,
+            ProtoRunOrder::Unordered => Some(RunOrder::Unordered),
+            ProtoRunOrder::Codec => Some(RunOrder::Codec),
+            ProtoRunOrder::Structured => Some(RunOrder::Structured),
+        };
+        Ok(Self {
+            order,
+            schema: proto.schema_id.into_rust()?,
+            deprecated_schema: proto.deprecated_schema_id.into_rust()?,
+        })
+    }
+}
+
+impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for RunPart<T> {
+    fn into_proto(&self) -> ProtoHollowBatchPart {
+        match self {
+            RunPart::Single(part) => part.into_proto(),
+            RunPart::Many(runs) => runs.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoHollowBatchPart) -> Result<Self, TryFromProtoError> {
+        let run_part = if let Some(proto_hollow_batch_part::Kind::RunRef(_)) = proto.kind {
+            RunPart::Many(proto.into_rust()?)
+        } else {
+            RunPart::Single(proto.into_rust()?)
+        };
+        Ok(run_part)
+    }
+}
+
+impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for HollowRunRef<T> {
+    fn into_proto(&self) -> ProtoHollowBatchPart {
+        let part = ProtoHollowBatchPart {
+            kind: Some(proto_hollow_batch_part::Kind::RunRef(ProtoHollowRunRef {
+                key: self.key.into_proto(),
+                max_part_bytes: self.max_part_bytes.into_proto(),
+            })),
+            encoded_size_bytes: self.hollow_bytes.into_proto(),
+            key_lower: Bytes::copy_from_slice(&self.key_lower),
+            diffs_sum: None,
+            key_stats: None,
+            ts_rewrite: None,
+            format: None,
+            schema_id: None,
+            structured_key_lower: self.structured_key_lower.into_proto(),
+            deprecated_schema_id: None,
+        };
+        part
+    }
+
+    fn from_proto(proto: ProtoHollowBatchPart) -> Result<Self, TryFromProtoError> {
+        let run_proto = match proto.kind {
+            Some(proto_hollow_batch_part::Kind::RunRef(proto_ref)) => proto_ref,
+            _ => Err(TryFromProtoError::UnknownEnumVariant(
+                "ProtoHollowBatchPart::kind".to_string(),
+            ))?,
+        };
+        Ok(Self {
+            key: run_proto.key.into_rust()?,
+            hollow_bytes: proto.encoded_size_bytes.into_rust()?,
+            max_part_bytes: run_proto.max_part_bytes.into_rust()?,
+            key_lower: proto.key_lower.to_vec(),
+            structured_key_lower: proto.structured_key_lower.into_rust()?,
+            _phantom_data: Default::default(),
         })
     }
 }
@@ -1276,20 +1447,30 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                 kind: Some(proto_hollow_batch_part::Kind::Key(x.key.into_proto())),
                 encoded_size_bytes: x.encoded_size_bytes.into_proto(),
                 key_lower: Bytes::copy_from_slice(&x.key_lower),
+                structured_key_lower: x.structured_key_lower.as_ref().map(|lazy| lazy.buf.clone()),
                 key_stats: x.stats.into_proto(),
                 ts_rewrite: x.ts_rewrite.as_ref().map(|x| x.into_proto()),
                 diffs_sum: x.diffs_sum.as_ref().map(|x| i64::from_le_bytes(*x)),
+                format: x.format.map(|f| f.into_proto()),
+                schema_id: x.schema_id.into_proto(),
+                deprecated_schema_id: x.deprecated_schema_id.into_proto(),
             },
             BatchPart::Inline {
                 updates,
                 ts_rewrite,
+                schema_id,
+                deprecated_schema_id,
             } => ProtoHollowBatchPart {
                 kind: Some(proto_hollow_batch_part::Kind::Inline(updates.into_proto())),
                 encoded_size_bytes: 0,
                 key_lower: Bytes::new(),
+                structured_key_lower: None,
                 key_stats: None,
                 ts_rewrite: ts_rewrite.as_ref().map(|x| x.into_proto()),
                 diffs_sum: None,
+                format: None,
+                schema_id: schema_id.into_proto(),
+                deprecated_schema_id: deprecated_schema_id.into_proto(),
             },
         }
     }
@@ -1299,32 +1480,63 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
             Some(ts_rewrite) => Some(ts_rewrite.into_rust()?),
             None => None,
         };
+        let schema_id = proto.schema_id.into_rust()?;
+        let deprecated_schema_id = proto.deprecated_schema_id.into_rust()?;
         match proto.kind {
             Some(proto_hollow_batch_part::Kind::Key(key)) => {
                 Ok(BatchPart::Hollow(HollowBatchPart {
                     key: key.into_rust()?,
                     encoded_size_bytes: proto.encoded_size_bytes.into_rust()?,
                     key_lower: proto.key_lower.into(),
+                    structured_key_lower: proto.structured_key_lower.into_rust()?,
                     stats: proto.key_stats.into_rust()?,
                     ts_rewrite,
                     diffs_sum: proto.diffs_sum.map(i64::to_le_bytes),
+                    format: proto.format.map(|f| f.into_rust()).transpose()?,
+                    schema_id,
+                    deprecated_schema_id,
                 }))
             }
             Some(proto_hollow_batch_part::Kind::Inline(x)) => {
                 assert_eq!(proto.encoded_size_bytes, 0);
                 assert_eq!(proto.key_lower.len(), 0);
-                assert!(proto.key_stats.is_none());
-                assert!(proto.diffs_sum.is_none());
+                assert_none!(proto.key_stats);
+                assert_none!(proto.diffs_sum);
                 let updates = LazyInlineBatchPart(x.into_rust()?);
                 Ok(BatchPart::Inline {
                     updates,
                     ts_rewrite,
+                    schema_id,
+                    deprecated_schema_id,
                 })
             }
-            None => Err(TryFromProtoError::unknown_enum_variant(
+            _ => Err(TryFromProtoError::unknown_enum_variant(
                 "ProtoHollowBatchPart::kind",
             )),
         }
+    }
+}
+
+impl RustType<proto_hollow_batch_part::Format> for BatchColumnarFormat {
+    fn into_proto(&self) -> proto_hollow_batch_part::Format {
+        match self {
+            BatchColumnarFormat::Row => proto_hollow_batch_part::Format::Row(()),
+            BatchColumnarFormat::Both(version) => {
+                proto_hollow_batch_part::Format::RowAndColumnar((*version).cast_into())
+            }
+            BatchColumnarFormat::Structured => proto_hollow_batch_part::Format::Structured(()),
+        }
+    }
+
+    fn from_proto(proto: proto_hollow_batch_part::Format) -> Result<Self, TryFromProtoError> {
+        let format = match proto {
+            proto_hollow_batch_part::Format::Row(_) => BatchColumnarFormat::Row,
+            proto_hollow_batch_part::Format::RowAndColumnar(version) => {
+                BatchColumnarFormat::Both(version.cast_into())
+            }
+            proto_hollow_batch_part::Format::Structured(_) => BatchColumnarFormat::Structured,
+        };
+        Ok(format)
     }
 }
 
@@ -1394,23 +1606,15 @@ impl ProtoInlineBatchPart {
         lgbytes: &ColumnarMetrics,
         proto: Self,
     ) -> Result<BlobTraceBatchPart<T>, TryFromProtoError> {
-        // BlobTraceBatchPart has a Vec<ColumnarRecords>. Inline writes only
-        // needs one and it's nice to only have to model one at the
-        // ProtoInlineBatchPart level. I'm _pretty_ sure that the actual
-        // BlobTraceBatchPart we've serialized into parquet always have exactly
-        // one (_maaaaaybe_ zero or one), but that's a scary thing to start
-        // enforcing, so separate it out (so we can e.g. use sentry errors! to
-        // confirm before rolling anything out). In the meantime, just construct
-        // the ProtoInlineBatchPart directly in BatchParts where it still knows
-        // that it has exactly one ColumnarRecords.
         let updates = proto
             .updates
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoInlineBatchPart::updates"))?;
-        let updates = ColumnarRecords::from_proto(lgbytes, updates)?;
+        let updates = BlobTraceUpdates::from_proto(lgbytes, updates)?;
+
         Ok(BlobTraceBatchPart {
             desc: proto.desc.into_rust_if_some("ProtoInlineBatchPart::desc")?,
             index: proto.index.into_rust()?,
-            updates: BlobTraceUpdates::Row(vec![updates]),
+            updates,
         })
     }
 }
@@ -1527,6 +1731,7 @@ mod tests {
     use bytes::Bytes;
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_dyncfg::ConfigUpdates;
+    use mz_ore::assert_err;
     use mz_persist::location::SeqNo;
     use proptest::prelude::*;
 
@@ -1573,7 +1778,7 @@ mod tests {
         // of code.
         let v1_res =
             mz_ore::panic::catch_unwind(|| UntypedState::<u64>::decode(&v1, bytes.clone()));
-        assert!(v1_res.is_err());
+        assert_err!(v1_res);
     }
 
     #[mz_ore::test]
@@ -1602,27 +1807,30 @@ mod tests {
         // losing or misinterpreting something written out by a future version
         // of code.
         let v1_res = mz_ore::panic::catch_unwind(|| StateDiff::<u64>::decode(&v1, bytes));
-        assert!(v1_res.is_err());
+        assert_err!(v1_res);
     }
 
     #[mz_ore::test]
     fn hollow_batch_migration_keys() {
-        let x = HollowBatch::new(
+        let x = HollowBatch::new_run(
             Description::new(
                 Antichain::from_elem(1u64),
                 Antichain::from_elem(2u64),
                 Antichain::from_elem(3u64),
             ),
-            vec![BatchPart::Hollow(HollowBatchPart {
+            vec![RunPart::Single(BatchPart::Hollow(HollowBatchPart {
                 key: PartialBatchKey("a".into()),
                 encoded_size_bytes: 5,
                 key_lower: vec![],
+                structured_key_lower: None,
                 stats: None,
                 ts_rewrite: None,
                 diffs_sum: None,
-            })],
+                format: None,
+                schema_id: None,
+                deprecated_schema_id: None,
+            }))],
             4,
-            vec![],
         );
         let mut old = x.into_proto();
         // Old ProtoHollowBatch had keys instead of parts.
@@ -1635,14 +1843,20 @@ mod tests {
         // will violate bounded memory usage compaction during the transition
         // (short-term issue), but that's better than creating unnecessary runs
         // (longer-term issue).
-        expected.parts.push(BatchPart::Hollow(HollowBatchPart {
-            key: PartialBatchKey("b".into()),
-            encoded_size_bytes: 0,
-            key_lower: vec![],
-            stats: None,
-            ts_rewrite: None,
-            diffs_sum: None,
-        }));
+        expected
+            .parts
+            .push(RunPart::Single(BatchPart::Hollow(HollowBatchPart {
+                key: PartialBatchKey("b".into()),
+                encoded_size_bytes: 0,
+                key_lower: vec![],
+                structured_key_lower: None,
+                stats: None,
+                ts_rewrite: None,
+                diffs_sum: None,
+                format: None,
+                schema_id: None,
+                deprecated_schema_id: None,
+            })));
         assert_eq!(<HollowBatch<u64>>::from_proto(old).unwrap(), expected);
     }
 
@@ -1784,7 +1998,7 @@ mod tests {
             &mut field_diffs_writer,
         );
 
-        assert!(diff_proto.field_diffs.is_none());
+        assert_none!(diff_proto.field_diffs);
         diff_proto.field_diffs = Some(field_diffs_writer.into_proto());
 
         let diff = StateDiff::<u64>::from_proto(diff_proto.clone()).unwrap();
@@ -1845,6 +2059,152 @@ mod tests {
         }
 
         proptest!(|(state in any_state::<u64>(0..3))| testcase(state));
+    }
+
+    #[mz_ore::test]
+    fn check_data_versions_with_lts_versions() {
+        #[track_caller]
+        fn testcase(code: &str, data: &str, lts_versions: &[Version], expected: Result<(), ()>) {
+            let code = Version::parse(code).unwrap();
+            let data = Version::parse(data).unwrap();
+            let actual = cfg::check_data_version_with_lts_versions(&code, &data, lts_versions)
+                .map_err(|_| ());
+            assert_eq!(actual, expected);
+        }
+
+        let none = [];
+        let one = [Version::new(0, 130, 0)];
+        let two = [Version::new(0, 130, 0), Version::new(0, 140, 0)];
+        let three = [
+            Version::new(0, 130, 0),
+            Version::new(0, 140, 0),
+            Version::new(0, 150, 0),
+        ];
+
+        testcase("0.130.0", "0.128.0", &none, Ok(()));
+        testcase("0.130.0", "0.129.0", &none, Ok(()));
+        testcase("0.130.0", "0.130.0", &none, Ok(()));
+        testcase("0.130.0", "0.130.1", &none, Ok(()));
+        testcase("0.130.1", "0.130.0", &none, Ok(()));
+        testcase("0.130.0", "0.131.0", &none, Ok(()));
+        testcase("0.130.0", "0.132.0", &none, Err(()));
+
+        testcase("0.129.0", "0.127.0", &none, Ok(()));
+        testcase("0.129.0", "0.128.0", &none, Ok(()));
+        testcase("0.129.0", "0.129.0", &none, Ok(()));
+        testcase("0.129.0", "0.129.1", &none, Ok(()));
+        testcase("0.129.1", "0.129.0", &none, Ok(()));
+        testcase("0.129.0", "0.130.0", &none, Ok(()));
+        testcase("0.129.0", "0.131.0", &none, Err(()));
+
+        testcase("0.130.0", "0.128.0", &one, Ok(()));
+        testcase("0.130.0", "0.129.0", &one, Ok(()));
+        testcase("0.130.0", "0.130.0", &one, Ok(()));
+        testcase("0.130.0", "0.130.1", &one, Ok(()));
+        testcase("0.130.1", "0.130.0", &one, Ok(()));
+        testcase("0.130.0", "0.131.0", &one, Ok(()));
+        testcase("0.130.0", "0.132.0", &one, Ok(()));
+
+        testcase("0.129.0", "0.127.0", &one, Ok(()));
+        testcase("0.129.0", "0.128.0", &one, Ok(()));
+        testcase("0.129.0", "0.129.0", &one, Ok(()));
+        testcase("0.129.0", "0.129.1", &one, Ok(()));
+        testcase("0.129.1", "0.129.0", &one, Ok(()));
+        testcase("0.129.0", "0.130.0", &one, Ok(()));
+        testcase("0.129.0", "0.131.0", &one, Err(()));
+
+        testcase("0.131.0", "0.129.0", &one, Ok(()));
+        testcase("0.131.0", "0.130.0", &one, Ok(()));
+        testcase("0.131.0", "0.131.0", &one, Ok(()));
+        testcase("0.131.0", "0.131.1", &one, Ok(()));
+        testcase("0.131.1", "0.131.0", &one, Ok(()));
+        testcase("0.131.0", "0.132.0", &one, Ok(()));
+        testcase("0.131.0", "0.133.0", &one, Err(()));
+
+        testcase("0.130.0", "0.128.0", &two, Ok(()));
+        testcase("0.130.0", "0.129.0", &two, Ok(()));
+        testcase("0.130.0", "0.130.0", &two, Ok(()));
+        testcase("0.130.0", "0.130.1", &two, Ok(()));
+        testcase("0.130.1", "0.130.0", &two, Ok(()));
+        testcase("0.130.0", "0.131.0", &two, Ok(()));
+        testcase("0.130.0", "0.132.0", &two, Ok(()));
+        testcase("0.130.0", "0.135.0", &two, Ok(()));
+        testcase("0.130.0", "0.138.0", &two, Ok(()));
+        testcase("0.130.0", "0.139.0", &two, Ok(()));
+        testcase("0.130.0", "0.140.0", &two, Ok(()));
+        testcase("0.130.9", "0.140.0", &two, Ok(()));
+        testcase("0.130.0", "0.140.1", &two, Ok(()));
+        testcase("0.130.3", "0.140.1", &two, Ok(()));
+        testcase("0.130.3", "0.140.9", &two, Ok(()));
+        testcase("0.130.0", "0.141.0", &two, Err(()));
+        testcase("0.129.0", "0.133.0", &two, Err(()));
+        testcase("0.129.0", "0.140.0", &two, Err(()));
+        testcase("0.131.0", "0.133.0", &two, Err(()));
+        testcase("0.131.0", "0.140.0", &two, Err(()));
+
+        testcase("0.130.0", "0.128.0", &three, Ok(()));
+        testcase("0.130.0", "0.129.0", &three, Ok(()));
+        testcase("0.130.0", "0.130.0", &three, Ok(()));
+        testcase("0.130.0", "0.130.1", &three, Ok(()));
+        testcase("0.130.1", "0.130.0", &three, Ok(()));
+        testcase("0.130.0", "0.131.0", &three, Ok(()));
+        testcase("0.130.0", "0.132.0", &three, Ok(()));
+        testcase("0.130.0", "0.135.0", &three, Ok(()));
+        testcase("0.130.0", "0.138.0", &three, Ok(()));
+        testcase("0.130.0", "0.139.0", &three, Ok(()));
+        testcase("0.130.0", "0.140.0", &three, Ok(()));
+        testcase("0.130.9", "0.140.0", &three, Ok(()));
+        testcase("0.130.0", "0.140.1", &three, Ok(()));
+        testcase("0.130.3", "0.140.1", &three, Ok(()));
+        testcase("0.130.3", "0.140.9", &three, Ok(()));
+        testcase("0.130.0", "0.141.0", &three, Err(()));
+        testcase("0.129.0", "0.133.0", &three, Err(()));
+        testcase("0.129.0", "0.140.0", &three, Err(()));
+        testcase("0.131.0", "0.133.0", &three, Err(()));
+        testcase("0.131.0", "0.140.0", &three, Err(()));
+        testcase("0.130.0", "0.150.0", &three, Err(()));
+
+        testcase("0.140.0", "0.138.0", &three, Ok(()));
+        testcase("0.140.0", "0.139.0", &three, Ok(()));
+        testcase("0.140.0", "0.140.0", &three, Ok(()));
+        testcase("0.140.0", "0.140.1", &three, Ok(()));
+        testcase("0.140.1", "0.140.0", &three, Ok(()));
+        testcase("0.140.0", "0.141.0", &three, Ok(()));
+        testcase("0.140.0", "0.142.0", &three, Ok(()));
+        testcase("0.140.0", "0.145.0", &three, Ok(()));
+        testcase("0.140.0", "0.148.0", &three, Ok(()));
+        testcase("0.140.0", "0.149.0", &three, Ok(()));
+        testcase("0.140.0", "0.150.0", &three, Ok(()));
+        testcase("0.140.9", "0.150.0", &three, Ok(()));
+        testcase("0.140.0", "0.150.1", &three, Ok(()));
+        testcase("0.140.3", "0.150.1", &three, Ok(()));
+        testcase("0.140.3", "0.150.9", &three, Ok(()));
+        testcase("0.140.0", "0.151.0", &three, Err(()));
+        testcase("0.139.0", "0.143.0", &three, Err(()));
+        testcase("0.139.0", "0.150.0", &three, Err(()));
+        testcase("0.141.0", "0.143.0", &three, Err(()));
+        testcase("0.141.0", "0.150.0", &three, Err(()));
+
+        testcase("0.150.0", "0.148.0", &three, Ok(()));
+        testcase("0.150.0", "0.149.0", &three, Ok(()));
+        testcase("0.150.0", "0.150.0", &three, Ok(()));
+        testcase("0.150.0", "0.150.1", &three, Ok(()));
+        testcase("0.150.1", "0.150.0", &three, Ok(()));
+        testcase("0.150.0", "0.151.0", &three, Ok(()));
+        testcase("0.150.0", "0.152.0", &three, Ok(()));
+        testcase("0.150.0", "0.155.0", &three, Ok(()));
+        testcase("0.150.0", "0.158.0", &three, Ok(()));
+        testcase("0.150.0", "0.159.0", &three, Ok(()));
+        testcase("0.150.0", "0.160.0", &three, Ok(()));
+        testcase("0.150.9", "0.160.0", &three, Ok(()));
+        testcase("0.150.0", "0.160.1", &three, Ok(()));
+        testcase("0.150.3", "0.160.1", &three, Ok(()));
+        testcase("0.150.3", "0.160.9", &three, Ok(()));
+        testcase("0.150.0", "0.161.0", &three, Ok(()));
+        testcase("0.149.0", "0.153.0", &three, Err(()));
+        testcase("0.149.0", "0.160.0", &three, Err(()));
+        testcase("0.151.0", "0.153.0", &three, Err(()));
+        testcase("0.151.0", "0.160.0", &three, Err(()));
     }
 
     #[mz_ore::test]

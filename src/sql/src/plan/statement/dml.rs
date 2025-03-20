@@ -26,7 +26,7 @@ use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::bytes::ByteSize;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::optimize::OptimizerFeatureOverrides;
-use mz_repr::{Datum, GlobalId, RelationDesc, ScalarType};
+use mz_repr::{CatalogItemId, Datum, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
     CteBlock, ExplainPlanOption, ExplainPlanOptionName, ExplainPushdownStatement,
     ExplainSinkSchemaFor, ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr,
@@ -34,7 +34,7 @@ use mz_sql_parser::ast::{
 };
 use mz_sql_parser::ident;
 use mz_storage_types::sinks::{
-    KafkaSinkConnection, KafkaSinkFormat, S3SinkFormat, StorageSinkConnection,
+    KafkaSinkConnection, KafkaSinkFormat, KafkaSinkFormatType, S3SinkFormat, StorageSinkConnection,
     MAX_S3_SINK_FILE_SIZE, MIN_S3_SINK_FILE_SIZE,
 };
 
@@ -51,16 +51,16 @@ use crate::normalize;
 use crate::plan::query::{plan_expr, plan_up_to, ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::statement::{ddl, StatementContext, StatementDesc};
-use crate::plan::with_options::{self, TryFromValue};
 use crate::plan::{
-    self, side_effecting_func, transform_ast, CopyToPlan, CreateSinkPlan, ExplainPushdownPlan,
-    ExplainSinkSchemaPlan, ExplainTimestampPlan,
+    self, side_effecting_func, transform_ast, CopyFromFilter, CopyToPlan, CreateSinkPlan,
+    ExplainPushdownPlan, ExplainSinkSchemaPlan, ExplainTimestampPlan,
 };
 use crate::plan::{
     query, CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan,
     PlanError, QueryContext, ReadThenWritePlan, SelectPlan, SubscribeFrom, SubscribePlan,
 };
-use crate::session::vars;
+use crate::plan::{with_options, CopyFromSource};
+use crate::session::vars::{self, ENABLE_COPY_FROM_REMOTE};
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
 // plans the whole query to determine its shape and parameter types,
@@ -207,13 +207,13 @@ fn plan_select_inner(
     params: &Params,
     copy_to: Option<CopyFormat>,
 ) -> Result<(SelectPlan, RelationDesc), PlanError> {
-    let when = query::plan_as_of(scx, select.as_of)?;
+    let when = query::plan_as_of(scx, select.as_of.clone())?;
     let query::PlannedRootQuery {
         mut expr,
         desc,
         finishing,
         scope: _,
-    } = query::plan_root_query(scx, select.query, QueryLifetime::OneShot)?;
+    } = query::plan_root_query(scx, select.query.clone(), QueryLifetime::OneShot)?;
     expr.bind_parameters(params)?;
 
     // A top-level limit cannot be data dependent so eagerly evaluate it.
@@ -245,6 +245,7 @@ fn plan_select_inner(
             order_by: finishing.order_by,
         },
         copy_to,
+        select: Some(Box::new(select)),
     };
 
     Ok((plan, desc))
@@ -254,7 +255,7 @@ pub fn describe_explain_plan(
     scx: &StatementContext,
     explain: ExplainPlanStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
-    let mut relation_desc = RelationDesc::empty();
+    let mut relation_desc = RelationDesc::builder();
 
     match explain.stage() {
         ExplainStage::RawPlan => {
@@ -288,6 +289,7 @@ pub fn describe_explain_plan(
             relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
         }
     };
+    let relation_desc = relation_desc.finish();
 
     Ok(
         StatementDesc::new(Some(relation_desc)).with_params(match explain.explainee {
@@ -301,12 +303,13 @@ pub fn describe_explain_pushdown(
     scx: &StatementContext,
     statement: ExplainPushdownStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
-    let relation_desc = RelationDesc::empty()
+    let relation_desc = RelationDesc::builder()
         .with_column("Source", ScalarType::String.nullable(false))
         .with_column("Total Bytes", ScalarType::UInt64.nullable(false))
         .with_column("Selected Bytes", ScalarType::UInt64.nullable(false))
         .with_column("Total Parts", ScalarType::UInt64.nullable(false))
-        .with_column("Selected Parts", ScalarType::UInt64.nullable(false));
+        .with_column("Selected Parts", ScalarType::UInt64.nullable(false))
+        .finish();
 
     Ok(
         StatementDesc::new(Some(relation_desc)).with_params(match statement.explainee {
@@ -320,8 +323,9 @@ pub fn describe_explain_timestamp(
     scx: &StatementContext,
     ExplainTimestampStatement { select, .. }: ExplainTimestampStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
-    let mut relation_desc = RelationDesc::empty();
-    relation_desc = relation_desc.with_column("Timestamp", ScalarType::String.nullable(false));
+    let relation_desc = RelationDesc::builder()
+        .with_column("Timestamp", ScalarType::String.nullable(false))
+        .finish();
 
     Ok(StatementDesc::new(Some(relation_desc))
         .with_params(describe_select(scx, select)?.param_types))
@@ -331,18 +335,27 @@ pub fn describe_explain_schema(
     _: &StatementContext,
     ExplainSinkSchemaStatement { .. }: ExplainSinkSchemaStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
-    let mut relation_desc = RelationDesc::empty();
-    relation_desc = relation_desc.with_column("Schema", ScalarType::String.nullable(false));
+    let relation_desc = RelationDesc::builder()
+        .with_column("Schema", ScalarType::String.nullable(false))
+        .finish();
     Ok(StatementDesc::new(Some(relation_desc)))
 }
 
+// Currently, there are two reasons for why a flag should be `Option<bool>` instead of simply
+// `bool`:
+// - When it's an override of a global feature flag, for example optimizer feature flags. In this
+//   case, we need not just false and true, but also None to say "take the value of the global
+//   flag".
+// - When it's an override of whether SOFT_ASSERTIONS are enabled. For example, when `Arity` is not
+//   explicitly given in the EXPLAIN command, then we'd like staging and prod to default to true,
+//   but otherwise we'd like to default to false.
 generate_extracted_config!(
     ExplainPlanOption,
-    (Arity, bool, Default(false)),
+    (Arity, Option<bool>, Default(None)),
     (Cardinality, bool, Default(false)),
     (ColumnNames, bool, Default(false)),
-    (FilterPushdown, bool, Default(false)),
-    (HumanizedExpressions, bool, Default(false)),
+    (FilterPushdown, Option<bool>, Default(None)),
+    (HumanizedExpressions, Option<bool>, Default(None)),
     (JoinImplementations, bool, Default(false)),
     (Keys, bool, Default(false)),
     (LinearChains, bool, Default(false)),
@@ -357,20 +370,24 @@ generate_extracted_config!(
     (SubtreeSize, bool, Default(false)),
     (Timing, bool, Default(false)),
     (Types, bool, Default(false)),
+    (Equivalences, bool, Default(false)),
     (ReoptimizeImportedViews, Option<bool>, Default(None)),
     (EnableNewOuterJoinLowering, Option<bool>, Default(None)),
     (EnableEagerDeltaJoins, Option<bool>, Default(None)),
     (EnableVariadicLeftJoinLowering, Option<bool>, Default(None)),
-    (EnableLetrecFixpointAnalysis, Option<bool>, Default(None))
+    (EnableLetrecFixpointAnalysis, Option<bool>, Default(None)),
+    (EnableJoinPrioritizeArranged, Option<bool>, Default(None)),
+    (
+        EnableProjectionPushdownAfterRelationCse,
+        Option<bool>,
+        Default(None)
+    )
 );
 
 impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
     type Error = PlanError;
 
     fn try_from(mut v: ExplainPlanOptionExtracted) -> Result<Self, Self::Error> {
-        use mz_ore::assert::SOFT_ASSERTIONS;
-        use std::sync::atomic::Ordering;
-
         // If `WITH(raw)` is specified, ensure that the config will be as
         // representative for the original plan as possible.
         if v.raw {
@@ -378,16 +395,16 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
             v.raw_syntax = true;
         }
 
-        // Certain config should always be enabled in release builds running on
+        // Certain config should default to be enabled in release builds running on
         // staging or prod (where SOFT_ASSERTIONS are turned off).
-        let enable_on_prod = !SOFT_ASSERTIONS.load(Ordering::Relaxed);
+        let enable_on_prod = !mz_ore::assert::soft_assertions_enabled();
 
         Ok(ExplainConfig {
-            arity: v.arity || enable_on_prod,
+            arity: v.arity.unwrap_or(enable_on_prod),
             cardinality: v.cardinality,
             column_names: v.column_names,
-            filter_pushdown: v.filter_pushdown || enable_on_prod,
-            humanized_exprs: !v.raw_plans && (v.humanized_expressions || enable_on_prod),
+            filter_pushdown: v.filter_pushdown.unwrap_or(enable_on_prod),
+            humanized_exprs: !v.raw_plans && (v.humanized_expressions.unwrap_or(enable_on_prod)),
             join_impls: v.join_implementations,
             keys: v.keys,
             linear_chains: !v.raw_plans && v.linear_chains,
@@ -399,15 +416,25 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
             raw_syntax: v.raw_syntax,
             redacted: v.redacted,
             subtree_size: v.subtree_size,
+            equivalences: v.equivalences,
             timing: v.timing,
             types: v.types,
+            // The ones that are initialized with `Default::default()` are not wired up to EXPLAIN.
             features: OptimizerFeatureOverrides {
                 enable_eager_delta_joins: v.enable_eager_delta_joins,
                 enable_new_outer_join_lowering: v.enable_new_outer_join_lowering,
                 enable_variadic_left_join_lowering: v.enable_variadic_left_join_lowering,
                 enable_letrec_fixpoint_analysis: v.enable_letrec_fixpoint_analysis,
+                enable_consolidate_after_union_negate: Default::default(),
+                enable_reduce_mfp_fusion: Default::default(),
+                enable_cardinality_estimates: Default::default(),
+                persist_fast_path_limit: Default::default(),
                 reoptimize_imported_views: v.reoptimize_imported_views,
-                ..Default::default()
+                enable_reduce_reduction: Default::default(),
+                enable_join_prioritize_arranged: v.enable_join_prioritize_arranged,
+                extract_common_mfp_expressions: Default::default(),
+                enable_projection_pushdown_after_relation_cse: v
+                    .enable_projection_pushdown_after_relation_cse,
             },
         })
     }
@@ -538,6 +565,7 @@ pub fn plan_explain_plan(
 ) -> Result<Plan, PlanError> {
     let format = match explain.format() {
         mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
+        mz_sql_parser::ast::ExplainFormat::VerboseText => ExplainFormat::VerboseText,
         mz_sql_parser::ast::ExplainFormat::Json => ExplainFormat::Json,
         mz_sql_parser::ast::ExplainFormat::Dot => ExplainFormat::Dot,
     };
@@ -547,9 +575,9 @@ pub fn plan_explain_plan(
     let config = {
         let mut with_options = ExplainPlanOptionExtracted::try_from(explain.with_options)?;
 
-        if with_options.filter_pushdown {
+        if !scx.catalog.system_vars().persist_stats_filter_enabled() {
             // If filtering is disabled, explain plans should not include pushdown info.
-            with_options.filter_pushdown = scx.catalog.system_vars().persist_stats_filter_enabled();
+            with_options.filter_pushdown = Some(false);
         }
 
         ExplainConfig::try_from(with_options)?
@@ -584,23 +612,34 @@ pub fn plan_explain_schema(
         ident!("mz_explain_schema"),
     ]));
 
-    crate::pure::add_materialize_comments(scx.catalog, &mut statement)?;
+    crate::pure::purify_create_sink_avro_doc_on_options(
+        scx.catalog,
+        *statement.from.item_id(),
+        &mut statement.format,
+    )?;
 
     match ddl::plan_create_sink(scx, statement)? {
         Plan::CreateSink(CreateSinkPlan { sink, .. }) => match sink.connection {
             StorageSinkConnection::Kafka(KafkaSinkConnection {
                 format:
-                    KafkaSinkFormat::Avro {
-                        key_schema,
-                        value_schema,
+                    KafkaSinkFormat {
+                        key_format,
+                        value_format:
+                            KafkaSinkFormatType::Avro {
+                                schema: value_schema,
+                                ..
+                            },
                         ..
                     },
                 ..
             }) => {
                 let schema = match schema_for {
-                    ExplainSinkSchemaFor::Key => {
-                        key_schema.ok_or_else(|| sql_err!("CREATE SINK does not have a key"))?
-                    }
+                    ExplainSinkSchemaFor::Key => key_format
+                        .and_then(|f| match f {
+                            KafkaSinkFormatType::Avro { schema, .. } => Some(schema),
+                            _ => None,
+                        })
+                        .ok_or_else(|| sql_err!("CREATE SINK does not have a key"))?,
                     ExplainSinkSchemaFor::Value => value_schema,
                 };
 
@@ -634,6 +673,7 @@ pub fn plan_explain_timestamp(
 ) -> Result<Plan, PlanError> {
     let format = match explain.format() {
         mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
+        mz_sql_parser::ast::ExplainFormat::VerboseText => ExplainFormat::VerboseText,
         mz_sql_parser::ast::ExplainFormat::Json => ExplainFormat::Json,
         mz_sql_parser::ast::ExplainFormat::Dot => ExplainFormat::Dot,
     };
@@ -676,7 +716,8 @@ pub fn plan_query(
     expr.bind_parameters(params)?;
 
     Ok(query::PlannedRootQuery {
-        expr: expr.lower(scx.catalog.system_vars())?,
+        // No metrics passed! One more reason not to use this deprecated function.
+        expr: expr.lower(scx.catalog.system_vars(), None)?,
         desc,
         finishing,
         scope,
@@ -703,7 +744,7 @@ pub fn describe_subscribe(
     };
     let SubscribeOptionExtracted { progress, .. } = stmt.options.try_into()?;
     let progress = progress.unwrap_or(false);
-    let mut desc = RelationDesc::empty().with_column(
+    let mut desc = RelationDesc::builder().with_column(
         "mz_timestamp",
         ScalarType::Numeric {
             max_scale: Some(NumericMaxScale::ZERO),
@@ -732,8 +773,8 @@ pub fn describe_subscribe(
                 .into_iter()
                 .map(normalize::column_name)
                 .collect_vec();
-            let mut before_values_desc = RelationDesc::empty();
-            let mut after_values_desc = RelationDesc::empty();
+            let mut before_values_desc = RelationDesc::builder();
+            let mut after_values_desc = RelationDesc::builder();
 
             // Add the key columns in the order that they're specified.
             for column_name in &key_columns {
@@ -772,7 +813,7 @@ pub fn describe_subscribe(
             desc = desc.concat(after_values_desc);
         }
     }
-    Ok(StatementDesc::new(Some(desc)))
+    Ok(StatementDesc::new(Some(desc.finish())))
 }
 
 pub fn plan_subscribe(
@@ -803,7 +844,11 @@ pub fn plan_subscribe(
                 _ => None,
             };
             let scope = Scope::from_source(item_name, desc.iter().map(|(name, _type)| name));
-            (SubscribeFrom::Id(entry.id()), desc.into_owned(), scope)
+            (
+                SubscribeFrom::Id(entry.global_id()),
+                desc.into_owned(),
+                scope,
+            )
         }
         SubscribeRelation::Query(query) => {
             #[allow(deprecated)] // TODO(aalexandrov): Use HirRelationExpr in Subscribe
@@ -988,7 +1033,7 @@ fn plan_copy_to_expr(
     options: CopyOptionExtracted,
 ) -> Result<Plan, PlanError> {
     let conn_id = match options.aws_connection {
-        Some(conn_id) => GlobalId::from(conn_id),
+        Some(conn_id) => CatalogItemId::from(conn_id),
         None => sql_bail!("AWS CONNECTION is required for COPY ... TO <expr>"),
     };
     let connection = scx.get_item(&conn_id).connection()?;
@@ -1066,6 +1111,7 @@ fn plan_copy_to_expr(
 
 fn plan_copy_from(
     scx: &StatementContext,
+    target: &CopyTarget<Aug>,
     table_name: ResolvedItemName,
     columns: Vec<Ident>,
     format: CopyFormat,
@@ -1077,6 +1123,49 @@ fn plan_copy_from(
             None => Ok(()),
         }
     }
+
+    let source = match target {
+        CopyTarget::Stdin => CopyFromSource::Stdin,
+        CopyTarget::Expr(from) => {
+            scx.require_feature_flag(&ENABLE_COPY_FROM_REMOTE)?;
+
+            // Converting the expr to an HirScalarExpr
+            let mut from_expr = from.clone();
+            transform_ast::transform(scx, &mut from_expr)?;
+            let relation_type = RelationDesc::empty();
+            let ecx = &ExprContext {
+                qcx: &QueryContext::root(scx, QueryLifetime::OneShot),
+                name: "COPY FROM target",
+                scope: &Scope::empty(),
+                relation_type: relation_type.typ(),
+                allow_aggregates: false,
+                allow_subqueries: false,
+                allow_parameters: false,
+                allow_windows: false,
+            };
+            let from = plan_expr(ecx, &from_expr)?.type_as(ecx, &ScalarType::String)?;
+
+            match options.aws_connection {
+                Some(conn_id) => {
+                    let conn_id = CatalogItemId::from(conn_id);
+
+                    // Validate the connection type is one we expect.
+                    let connection = match scx.get_item(&conn_id).connection()? {
+                        mz_storage_types::connections::Connection::Aws(conn) => conn,
+                        _ => sql_bail!("only AWS CONNECTION is supported in COPY ... FROM"),
+                    };
+
+                    CopyFromSource::AwsS3 {
+                        uri: from,
+                        connection,
+                        connection_id: conn_id,
+                    }
+                }
+                None => CopyFromSource::Url(from),
+            }
+        }
+        CopyTarget::Stdout => bail_never_supported!("COPY FROM {} not supported", target),
+    };
 
     let params = match format {
         CopyFormat::Text => {
@@ -1107,14 +1196,27 @@ fn plan_copy_from(
             )
         }
         CopyFormat::Binary => bail_unsupported!("FORMAT BINARY"),
-        CopyFormat::Parquet => bail_unsupported!("FORMAT PARQUET"),
+        CopyFormat::Parquet => CopyFormatParams::Parquet,
     };
+
+    let filter = match (options.files, options.pattern) {
+        (Some(_), Some(_)) => bail_unsupported!("must specify one of FILES or PATTERN"),
+        (Some(files), None) => Some(CopyFromFilter::Files(files)),
+        (None, Some(pattern)) => Some(CopyFromFilter::Pattern(pattern)),
+        (None, None) => None,
+    };
+
+    if filter.is_some() && matches!(source, CopyFromSource::Stdin) {
+        bail_unsupported!("COPY FROM ... WITH (FILES ...) only supported from a URL")
+    }
 
     let (id, _, columns) = query::plan_copy_from(scx, table_name, columns)?;
     Ok(Plan::CopyFrom(CopyFromPlan {
         id,
+        source,
         columns,
         params,
+        filter,
     }))
 }
 
@@ -1135,7 +1237,9 @@ generate_extracted_config!(
     (Quote, String),
     (Header, bool),
     (AwsConnection, with_options::Object),
-    (MaxFileSize, ByteSize, Default(ByteSize::mb(256)))
+    (MaxFileSize, ByteSize, Default(ByteSize::mb(256))),
+    (Files, Vec<String>),
+    (Pattern, String)
 );
 
 pub fn plan_copy(
@@ -1189,9 +1293,10 @@ pub fn plan_copy(
                 )?),
             }
         }
-        (CopyDirection::From, CopyTarget::Stdin) => match relation {
+        (CopyDirection::From, target) => match relation {
             CopyRelation::Named { name, columns } => plan_copy_from(
                 scx,
+                target,
                 name,
                 columns,
                 format.unwrap_or(CopyFormat::Text),
@@ -1200,7 +1305,13 @@ pub fn plan_copy(
             _ => sql_bail!("COPY FROM {} not supported", target),
         },
         (CopyDirection::To, CopyTarget::Expr(to_expr)) => {
-            scx.require_feature_flag(&vars::ENABLE_COPY_TO_EXPR)?;
+            // System users are always allowed to use this feature, even when
+            // the flag is disabled, so that we can dogfood for analytics in
+            // production environments. The feature is stable enough that we're
+            // not worried about it crashing.
+            if !scx.catalog.active_role_id().is_system() {
+                scx.require_feature_flag(&vars::ENABLE_COPY_TO_EXPR)?;
+            }
 
             let format = match format {
                 Some(inner) => inner,

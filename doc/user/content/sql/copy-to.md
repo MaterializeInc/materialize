@@ -35,13 +35,13 @@ Name     | Values                 | Default value | Description
 
 #### Subscribing to a view with binary output
 
-```sql
+```mzsql
 COPY (SUBSCRIBE some_view) TO STDOUT WITH (FORMAT binary);
 ```
 
 ## Copy to Amazon S3 {#copy-to-s3}
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 Copying results to Amazon S3 (or S3-compatible services) is useful to perform
 tasks like periodic backups for auditing, or downstream processing in
@@ -86,7 +86,7 @@ Setting     | Value
 delimiter   | `,`
 quote       | `"`
 escape      | `"`
-header      | `true`
+header      | `false`
 
 #### Parquet {#copy-to-s3-parquet}
 
@@ -106,8 +106,8 @@ Dictionary page encoding      | Plain
 Dictionary data page encoding | `RLE_DICTIONARY`
 
 If you run into a snag trying to ingest Parquet files produced by Materialize
-into your downstream systems, please [contact our team](https://materialize.com/docs/support/)
-or [open an issue](https://github.com/MaterializeInc/materialize/issues/new)!
+into your downstream systems, please [contact our team](/support/)
+or [open a bug report](https://github.com/MaterializeInc/materialize/discussions/new?category=bug-reports)!
 
 ##### Data types {#copy-to-s3-parquet-data-types}
 
@@ -156,7 +156,7 @@ Materialize type | Arrow extension name | [Arrow type](https://github.com/apache
 {{< tabs >}}
 {{< tab "Parquet">}}
 
-```sql
+```mzsql
 COPY some_view TO 's3://mz-to-snow/parquet/'
 WITH (
     AWS CONNECTION = aws_role_assumption,
@@ -168,7 +168,7 @@ WITH (
 
 {{< tab "CSV">}}
 
-```sql
+```mzsql
 COPY some_view TO 's3://mz-to-snow/csv/'
 WITH (
     AWS CONNECTION = aws_role_assumption,

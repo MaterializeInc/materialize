@@ -9,9 +9,13 @@
 
 //! Helpers for working with Kafka's client API.
 
+use anyhow::bail;
+use aws_config::SdkConfig;
 use fancy_regex::Regex;
 use std::collections::{btree_map, BTreeMap};
 use std::error::Error;
+use std::io;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -25,7 +29,7 @@ use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig, SshTunnelStatus};
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
-use rdkafka::client::{BrokerAddr, Client, NativeClient, OAuthToken};
+use rdkafka::client::{Client, NativeClient, OAuthToken};
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
 use rdkafka::consumer::{ConsumerContext, Rebalance};
 use rdkafka::error::{KafkaError, KafkaResult, RDKafkaErrorCode};
@@ -35,7 +39,9 @@ use rdkafka::util::Timeout;
 use rdkafka::{ClientContext, Statistics, TopicPartitionList};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Handle;
-use tracing::{debug, error, info, warn, Level};
+use tracing::{debug, error, info, trace, warn, Level};
+
+use crate::aws;
 
 /// A reasonable default timeout when refreshing topic metadata. This is configured
 /// at a source level.
@@ -200,6 +206,7 @@ impl FromStr for MzKafkaError {
             Ok(Self::UnsupportedBrokerVersion)
         } else if s.contains("Disconnected while requesting ApiVersion")
             || s.contains("Broker transport failure")
+            || s.contains("Connection refused")
         {
             Ok(Self::BrokerTransportFailure)
         } else if Regex::new(r"(\d+)/\1 brokers are down")
@@ -272,6 +279,15 @@ impl ProducerContext for MzClientContext {
     }
 }
 
+/// The address of a Kafka broker.
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
+pub struct BrokerAddr {
+    /// The broker's hostname.
+    pub host: String,
+    /// The broker's port.
+    pub port: u16,
+}
+
 /// Rewrites a broker address.
 ///
 /// For use with [`TunnelingClientContext`].
@@ -318,6 +334,7 @@ pub struct TunnelingClientContext<C> {
     in_task: InTask,
     ssh_tunnel_manager: SshTunnelManager,
     ssh_timeout_config: SshTimeoutConfig,
+    aws_config: Option<SdkConfig>,
     runtime: Handle,
 }
 
@@ -328,6 +345,7 @@ impl<C> TunnelingClientContext<C> {
         runtime: Handle,
         ssh_tunnel_manager: SshTunnelManager,
         ssh_timeout_config: SshTimeoutConfig,
+        aws_config: Option<SdkConfig>,
         in_task: InTask,
     ) -> TunnelingClientContext<C> {
         TunnelingClientContext {
@@ -337,6 +355,7 @@ impl<C> TunnelingClientContext<C> {
             in_task,
             ssh_tunnel_manager,
             ssh_timeout_config,
+            aws_config,
             runtime,
         }
     }
@@ -365,7 +384,7 @@ impl<C> TunnelingClientContext<C> {
             .connect(
                 tunnel,
                 &broker.host,
-                broker.port.parse().context("parsing broker port")?,
+                broker.port,
                 self.ssh_timeout_config,
                 self.in_task,
             )
@@ -427,10 +446,51 @@ impl<C> ClientContext for TunnelingClientContext<C>
 where
     C: ClientContext,
 {
-    const ENABLE_REFRESH_OAUTH_TOKEN: bool = C::ENABLE_REFRESH_OAUTH_TOKEN;
+    const ENABLE_REFRESH_OAUTH_TOKEN: bool = true;
 
-    fn rewrite_broker_addr(&self, addr: BrokerAddr) -> BrokerAddr {
-        let return_rewrite = |rewrite: &BrokerRewriteHandle| -> BrokerAddr {
+    fn generate_oauth_token(
+        &self,
+        _oauthbearer_config: Option<&str>,
+    ) -> Result<OAuthToken, Box<dyn Error>> {
+        // NOTE(benesch): We abuse the `TunnelingClientContext` to handle AWS
+        // IAM authentication because it's used in exactly the right places and
+        // already has a handle to the Tokio runtime. It might be slightly
+        // cleaner to have a separate `AwsIamAuthenticatingClientContext`, but
+        // that would be quite a bit of additional plumbing.
+
+        // NOTE(benesch): at the moment, the only OAUTHBEARER authentication we
+        // support is AWS IAM, so we can assume that if this method is invoked
+        // AWS IAM is desired. We may need to generalize this in the future.
+
+        info!(target: "librdkafka", "generating OAuth token");
+
+        let generate = || {
+            let Some(sdk_config) = &self.aws_config else {
+                bail!("internal error: AWS configuration missing");
+            };
+
+            self.runtime.block_on(aws::generate_auth_token(sdk_config))
+        };
+
+        match generate() {
+            Ok((token, lifetime_ms)) => {
+                info!(target: "librdkafka", %lifetime_ms, "successfully generated OAuth token");
+                trace!(target: "librdkafka", %token);
+                Ok(OAuthToken {
+                    token,
+                    lifetime_ms,
+                    principal_name: "".to_string(),
+                })
+            }
+            Err(e) => {
+                warn!(target: "librdkafka", "failed to generate OAuth token: {e:#}");
+                Err(e.into())
+            }
+        }
+    }
+
+    fn resolve_broker_addr(&self, host: &str, port: u16) -> Result<Vec<SocketAddr>, io::Error> {
+        let return_rewrite = |rewrite: &BrokerRewriteHandle| -> Result<Vec<SocketAddr>, io::Error> {
             let rewrite = match rewrite {
                 BrokerRewriteHandle::Simple(rewrite) => rewrite.clone(),
                 BrokerRewriteHandle::SshTunnel(ssh_tunnel) => {
@@ -446,21 +506,22 @@ where
                     unreachable!()
                 }
             };
+            let rewrite_port = rewrite.port.unwrap_or(port);
 
-            let new_addr = BrokerAddr {
-                host: rewrite.host,
-                port: match rewrite.port {
-                    None => addr.port.clone(),
-                    Some(port) => port.to_string(),
-                },
-            };
             info!(
                 "rewriting broker {}:{} to {}:{}",
-                addr.host, addr.port, new_addr.host, new_addr.port
+                host, port, rewrite.host, rewrite_port
             );
-            new_addr
+
+            (rewrite.host, rewrite_port)
+                .to_socket_addrs()
+                .map(|addrs| addrs.collect())
         };
 
+        let addr = BrokerAddr {
+            host: host.into(),
+            port,
+        };
         let rewrite = self.rewrites.lock().expect("poisoned").get(&addr).cloned();
 
         match rewrite {
@@ -474,8 +535,8 @@ where
                             self.ssh_tunnel_manager
                                 .connect(
                                     default_tunnel.clone(),
-                                    &addr.host,
-                                    addr.port.parse().unwrap(),
+                                    host,
+                                    port,
                                     self.ssh_timeout_config,
                                     self.in_task,
                                 )
@@ -519,20 +580,19 @@ where
                                     )
                                 });
 
-                                // We have to give rdkafka an address, as this callback can't fail,
-                                // we just give it a random one that will never resolve.
-                                BrokerAddr {
-                                    host: "failed-ssh-tunnel.dev.materialize.com".to_string(),
-                                    port: 1337.to_string(),
-                                }
+                                Err(io::Error::new(
+                                    io::ErrorKind::Other,
+                                    "creating SSH tunnel failed",
+                                ))
                             }
                         }
                     }
-                    TunnelConfig::StaticHost(host) => BrokerAddr {
-                        host: host.to_owned(),
-                        port: addr.port,
-                    },
-                    TunnelConfig::None => addr,
+                    TunnelConfig::StaticHost(host) => (host.as_str(), port)
+                        .to_socket_addrs()
+                        .map(|addrs| addrs.collect()),
+                    TunnelConfig::None => {
+                        (host, port).to_socket_addrs().map(|addrs| addrs.collect())
+                    }
                 }
             }
             Some(rewrite) => return_rewrite(&rewrite),
@@ -553,13 +613,6 @@ where
 
     fn stats_raw(&self, statistics: &[u8]) {
         self.inner.stats_raw(statistics)
-    }
-
-    fn generate_oauth_token(
-        &self,
-        oauthbearer_config: Option<&str>,
-    ) -> Result<OAuthToken, Box<dyn Error>> {
-        self.inner.generate_oauth_token(oauthbearer_config)
     }
 }
 
@@ -680,9 +733,9 @@ pub const DEFAULT_KEEPALIVE: bool = true;
 /// The `rdkafka` default.
 /// - <https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md>
 pub const DEFAULT_SOCKET_TIMEOUT: Duration = Duration::from_secs(60);
-/// The `rdkafka` default.
+/// Increased from the rdkafka default
 /// - <https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md>
-pub const DEFAULT_TRANSACTION_TIMEOUT: Duration = Duration::from_secs(60);
+pub const DEFAULT_TRANSACTION_TIMEOUT: Duration = Duration::from_secs(600);
 /// The `rdkafka` default.
 /// - <https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md>
 pub const DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -691,8 +744,6 @@ pub const DEFAULT_FETCH_METADATA_TIMEOUT: Duration = Duration::from_secs(10);
 /// The timeout for reading records from the progress topic. Set to something slightly longer than
 /// the idle transaction timeout (60s) to wait out any stuck producers.
 pub const DEFAULT_PROGRESS_RECORD_FETCH_TIMEOUT: Duration = Duration::from_secs(90);
-/// The interval we will fetch metadata from, unless overridden by the source.
-pub const DEFAULT_METADATA_FETCH_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Configurable timeouts for Kafka connections.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -710,8 +761,6 @@ pub struct TimeoutConfig {
     pub fetch_metadata_timeout: Duration,
     /// The timeout for reading records from the progress topic.
     pub progress_record_fetch_timeout: Duration,
-    /// The interval we will fetch metadata from, unless overridden by the source.
-    pub default_metadata_fetch_interval: Duration,
 }
 
 impl Default for TimeoutConfig {
@@ -723,7 +772,6 @@ impl Default for TimeoutConfig {
             socket_connection_setup_timeout: DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT,
             fetch_metadata_timeout: DEFAULT_FETCH_METADATA_TIMEOUT,
             progress_record_fetch_timeout: DEFAULT_PROGRESS_RECORD_FETCH_TIMEOUT,
-            default_metadata_fetch_interval: DEFAULT_METADATA_FETCH_INTERVAL,
         }
     }
 }
@@ -733,12 +781,11 @@ impl TimeoutConfig {
     /// range are defaulted and cause an error log.
     pub fn build(
         keepalive: bool,
-        socket_timeout: Duration,
+        socket_timeout: Option<Duration>,
         transaction_timeout: Duration,
         socket_connection_setup_timeout: Duration,
         fetch_metadata_timeout: Duration,
-        progress_record_fetch_timeout: Duration,
-        default_metadata_fetch_interval: Duration,
+        progress_record_fetch_timeout: Option<Duration>,
     ) -> TimeoutConfig {
         // Constrain values based on ranges here:
         // <https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md>
@@ -764,6 +811,10 @@ impl TimeoutConfig {
             transaction_timeout
         };
 
+        let progress_record_fetch_timeout_derived_default =
+            std::cmp::max(transaction_timeout, DEFAULT_PROGRESS_RECORD_FETCH_TIMEOUT);
+        let progress_record_fetch_timeout =
+            progress_record_fetch_timeout.unwrap_or(progress_record_fetch_timeout_derived_default);
         let progress_record_fetch_timeout = if progress_record_fetch_timeout < transaction_timeout {
             error!(
                 "progress record fetch ({progress_record_fetch_timeout:?}) less than transaction \
@@ -780,10 +831,9 @@ impl TimeoutConfig {
             transaction_timeout + Duration::from_millis(100),
             Duration::from_secs(300),
         );
-        let derived_default = std::cmp::min(
-            transaction_timeout + Duration::from_millis(100),
-            DEFAULT_SOCKET_TIMEOUT,
-        );
+        let socket_timeout_derived_default =
+            std::cmp::min(max_socket_timeout, DEFAULT_SOCKET_TIMEOUT);
+        let socket_timeout = socket_timeout.unwrap_or(socket_timeout_derived_default);
         let socket_timeout = if socket_timeout > max_socket_timeout {
             error!(
                 "socket_timeout ({socket_timeout:?}) greater than max \
@@ -795,9 +845,9 @@ impl TimeoutConfig {
         } else if socket_timeout.as_millis() < 10 {
             error!(
                 "socket_timeout ({socket_timeout:?}) less than min \
-                of 10ms, defaulting to the default of {derived_default:?}"
+                of 10ms, defaulting to the default of {socket_timeout_derived_default:?}"
             );
-            derived_default
+            socket_timeout_derived_default
         } else {
             socket_timeout
         };
@@ -829,7 +879,6 @@ impl TimeoutConfig {
             socket_connection_setup_timeout,
             fetch_metadata_timeout,
             progress_record_fetch_timeout,
-            default_metadata_fetch_interval,
         }
     }
 }

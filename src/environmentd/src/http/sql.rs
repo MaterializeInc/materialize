@@ -9,18 +9,21 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::net::{IpAddr, SocketAddr};
 use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use axum::extract::connect_info::ConnectInfo;
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::{Extension, Json};
 use futures::future::BoxFuture;
 use futures::Future;
+
 use http::StatusCode;
 use itertools::izip;
 use mz_adapter::client::RecordFirstRowStream;
@@ -30,9 +33,11 @@ use mz_adapter::{
     verify_datum_desc, AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse,
     ExecuteResponseKind, PeekResponseUnary, SessionClient,
 };
+use mz_catalog::memory::objects::{Cluster, ClusterReplica};
 use mz_interchange::encode::TypedDatum;
 use mz_interchange::json::{JsonNumberPolicy, ToJson};
 use mz_ore::cast::CastFrom;
+use mz_ore::metrics::{MakeCollectorOpts, MetricsRegistry};
 use mz_ore::result::ResultExt;
 use mz_repr::{Datum, RelationDesc, RowArena, RowIterator};
 use mz_sql::ast::display::AstDisplay;
@@ -40,13 +45,16 @@ use mz_sql::ast::{CopyDirection, CopyStatement, CopyTarget, Raw, Statement, Stat
 use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::Plan;
 use mz_sql::session::metadata::SessionMetadata;
+use prometheus::core::{AtomicF64, GenericGaugeVec};
+use prometheus::Opts;
 use serde::{Deserialize, Serialize};
 use tokio::{select, time};
 use tokio_postgres::error::SqlState;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::debug;
+use tracing::{debug, error, info};
 use tungstenite::protocol::frame::coding::CloseCode;
 
+use crate::http::prometheus::PrometheusSqlQuery;
 use crate::http::{init_ws, AuthedClient, AuthedUser, WsState, MAX_REQUEST_SIZE};
 
 #[derive(Debug, thiserror::Error)]
@@ -98,6 +106,153 @@ impl Error {
     }
 }
 
+static PER_REPLICA_LABELS: &[&str] = &["replica_full_name", "instance_id", "replica_id"];
+
+async fn execute_promsql_query(
+    client: &mut AuthedClient,
+    query: &PrometheusSqlQuery<'_>,
+    metrics_registry: &MetricsRegistry,
+    metrics_by_name: &mut BTreeMap<String, GenericGaugeVec<AtomicF64>>,
+    cluster: Option<(&Cluster, &ClusterReplica)>,
+) {
+    assert_eq!(query.per_replica, cluster.is_some());
+
+    let mut res = SqlResponse {
+        results: Vec::new(),
+    };
+
+    execute_request(client, query.to_sql_request(cluster), &mut res)
+        .await
+        .expect("valid SQL query");
+
+    let result = match res.results.as_slice() {
+        // Each query issued is preceded by several SET commands
+        // to make sure it is routed to the right cluster replica.
+        [SqlResult::Ok { .. }, SqlResult::Ok { .. }, SqlResult::Ok { .. }, result] => result,
+        // Transient errors are fine, like if the cluster or replica
+        // was dropped before the promsql query was executed. We
+        // should not see errors in the steady state.
+        _ => {
+            info!(
+                "error executing prometheus query {}: {:?}",
+                query.metric_name, res
+            );
+            return;
+        }
+    };
+
+    let SqlResult::Rows { desc, rows, .. } = result else {
+        info!(
+            "did not receive rows for SQL query for prometheus metric {}: {:?}, {:?}",
+            query.metric_name, result, cluster
+        );
+        return;
+    };
+
+    let gauge_vec = metrics_by_name
+        .entry(query.metric_name.to_string())
+        .or_insert_with(|| {
+            let mut label_names: Vec<String> = desc
+                .columns
+                .iter()
+                .filter(|col| col.name != query.value_column_name)
+                .map(|col| col.name.clone())
+                .collect();
+
+            if query.per_replica {
+                label_names.extend(PER_REPLICA_LABELS.iter().map(|label| label.to_string()));
+            }
+
+            metrics_registry.register::<GenericGaugeVec<AtomicF64>>(MakeCollectorOpts {
+                opts: Opts::new(query.metric_name, query.help).variable_labels(label_names),
+                buckets: None,
+            })
+        });
+
+    for row in rows {
+        let mut label_values = desc
+            .columns
+            .iter()
+            .zip(row)
+            .filter(|(col, _)| col.name != query.value_column_name)
+            .map(|(_, val)| val.as_str().expect("must be string"))
+            .collect::<Vec<_>>();
+
+        let value = desc
+            .columns
+            .iter()
+            .zip(row)
+            .find(|(col, _)| col.name == query.value_column_name)
+            .map(|(_, val)| val.as_str().unwrap_or("0").parse::<f64>().unwrap_or(0.0))
+            .unwrap_or(0.0);
+
+        match cluster {
+            Some((cluster, replica)) => {
+                let replica_full_name = format!("{}.{}", cluster.name, replica.name);
+                let cluster_id = cluster.id.to_string();
+                let replica_id = replica.replica_id.to_string();
+
+                label_values.push(&replica_full_name);
+                label_values.push(&cluster_id);
+                label_values.push(&replica_id);
+
+                gauge_vec
+                    .get_metric_with_label_values(&label_values)
+                    .expect("valid labels")
+                    .set(value);
+            }
+            None => {
+                gauge_vec
+                    .get_metric_with_label_values(&label_values)
+                    .expect("valid labels")
+                    .set(value);
+            }
+        }
+    }
+}
+
+async fn handle_promsql_query(
+    client: &mut AuthedClient,
+    query: &PrometheusSqlQuery<'_>,
+    metrics_registry: &MetricsRegistry,
+    metrics_by_name: &mut BTreeMap<String, GenericGaugeVec<AtomicF64>>,
+) {
+    if !query.per_replica {
+        execute_promsql_query(client, query, metrics_registry, metrics_by_name, None).await;
+        return;
+    }
+
+    let catalog = client.client.catalog_snapshot().await;
+    let clusters: Vec<&Cluster> = catalog.clusters().collect();
+
+    for cluster in clusters {
+        for replica in cluster.replicas() {
+            execute_promsql_query(
+                client,
+                query,
+                metrics_registry,
+                metrics_by_name,
+                Some((cluster, replica)),
+            )
+            .await;
+        }
+    }
+}
+
+pub async fn handle_promsql(
+    mut client: AuthedClient,
+    queries: &[PrometheusSqlQuery<'_>],
+) -> MetricsRegistry {
+    let metrics_registry = MetricsRegistry::new();
+    let mut metrics_by_name = BTreeMap::new();
+
+    for query in queries {
+        handle_promsql_query(&mut client, query, &metrics_registry, &mut metrics_by_name).await;
+    }
+
+    metrics_registry
+}
+
 pub async fn handle_sql(
     mut client: AuthedClient,
     Json(request): Json<SqlRequest>,
@@ -117,11 +272,13 @@ pub async fn handle_sql_ws(
     State(state): State<WsState>,
     existing_user: Option<Extension<AuthedUser>>,
     ws: WebSocketUpgrade,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> impl IntoResponse {
     // An upstream middleware may have already provided the user for us
     let user = existing_user.and_then(|Extension(user)| Some(user));
+    let addr = Box::new(addr.ip());
     ws.max_message_size(MAX_REQUEST_SIZE)
-        .on_upgrade(|ws| async move { run_ws(&state, user, ws).await })
+        .on_upgrade(|ws| async move { run_ws(&state, user, *addr, ws).await })
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -144,8 +301,8 @@ pub enum WebSocketAuth {
     },
 }
 
-async fn run_ws(state: &WsState, user: Option<AuthedUser>, mut ws: WebSocket) {
-    let mut client = match init_ws(state, user, &mut ws).await {
+async fn run_ws(state: &WsState, user: Option<AuthedUser>, peer_addr: IpAddr, mut ws: WebSocket) {
+    let mut client = match init_ws(state, user, peer_addr, &mut ws).await {
         Ok(client) => client,
         Err(e) => {
             // We omit most detail from the error message we send to the client, to
@@ -743,6 +900,7 @@ impl ResultSender for WebSocket {
                 }
 
                 let mut datum_vec = mz_repr::DatumVec::new();
+                let mut result_size: usize = 0;
                 let mut rows_returned = 0;
                 loop {
                     let res = match await_rows(self, client, rx.recv()).await {
@@ -772,6 +930,7 @@ impl ResultSender for WebSocket {
 
                             rows_returned += rows.count();
                             while let Some(row) = rows.next() {
+                                result_size += row.byte_len();
                                 let datums = datum_vec.borrow_with(row);
                                 let types = &desc.typ().column_types;
                                 if let Err(e) = send_ws_response(
@@ -820,6 +979,7 @@ impl ResultSender for WebSocket {
                                 vec![WebSocketResponse::CommandComplete(tag)],
                                 Some((
                                     StatementEndedExecutionReason::Success {
+                                        result_size: Some(u64::cast_from(result_size)),
                                         rows_returned: Some(u64::cast_from(rows_returned)),
                                         execution_strategy: Some(
                                             StatementExecutionStrategy::Standard,
@@ -981,16 +1141,20 @@ async fn execute_request<S: ResultSender>(
         // Special-case `COPY TO` statements that are not `COPY ... TO STDOUT`, since
         // StatementKind::Copy links to several `ExecuteResponseKind`s that are not supported,
         // but this specific statement should be allowed.
-        let is_valid_copy_to = matches!(
+        let is_valid_copy = matches!(
             stmt,
             Statement::Copy(CopyStatement {
                 direction: CopyDirection::To,
                 target: CopyTarget::Expr(_),
                 ..
+            }) | Statement::Copy(CopyStatement {
+                direction: CopyDirection::From,
+                target: CopyTarget::Expr(_),
+                ..
             })
         );
 
-        if !is_valid_copy_to
+        if !is_valid_copy
             && execute_responses.iter().any(|execute_response| {
                 // Returns true if a statement or execute response are unsupported.
                 match execute_response {
@@ -1027,36 +1191,54 @@ async fn execute_request<S: ResultSender>(
     let mut stmt_groups = vec![];
 
     match request {
-        SqlRequest::Simple { query } => {
-            let stmts = parse(client, &query)?;
-            let mut stmt_group = Vec::with_capacity(stmts.len());
-            for StatementParseResult { ast: stmt, sql } in stmts {
-                check_prohibited_stmts(sender, &stmt)?;
-                stmt_group.push((stmt, sql.to_string(), vec![]));
+        SqlRequest::Simple { query } => match parse(client, &query) {
+            Ok(stmts) => {
+                let mut stmt_group = Vec::with_capacity(stmts.len());
+                let mut stmt_err = None;
+                for StatementParseResult { ast: stmt, sql } in stmts {
+                    if let Err(err) = check_prohibited_stmts(sender, &stmt) {
+                        stmt_err = Some(err);
+                        break;
+                    }
+                    stmt_group.push((stmt, sql.to_string(), vec![]));
+                }
+                stmt_groups.push(stmt_err.map(Err).unwrap_or_else(|| Ok(stmt_group)));
             }
-            stmt_groups.push(stmt_group);
-        }
+            Err(e) => stmt_groups.push(Err(e)),
+        },
         SqlRequest::Extended { queries } => {
             for ExtendedRequest { query, params } in queries {
-                let mut stmts = parse(client, &query)?;
-                if stmts.len() != 1 {
-                    return Err(Error::Unstructured(anyhow!(
-                        "each query must contain exactly 1 statement, but \"{}\" contains {}",
-                        query,
-                        stmts.len()
-                    )));
-                }
+                match parse(client, &query) {
+                    Ok(mut stmts) => {
+                        if stmts.len() != 1 {
+                            return Err(Error::Unstructured(anyhow!(
+                                "each query must contain exactly 1 statement, but \"{}\" contains {}",
+                                query,
+                                stmts.len()
+                            )));
+                        }
 
-                let StatementParseResult { ast: stmt, sql } = stmts.pop().unwrap();
-                check_prohibited_stmts(sender, &stmt)?;
-
-                stmt_groups.push(vec![(stmt, sql.to_string(), params)]);
+                        let StatementParseResult { ast: stmt, sql } = stmts.pop().unwrap();
+                        stmt_groups.push(
+                            check_prohibited_stmts(sender, &stmt)
+                                .map(|_| vec![(stmt, sql.to_string(), params)]),
+                        );
+                    }
+                    Err(e) => stmt_groups.push(Err(e)),
+                };
             }
         }
     }
 
-    for stmt_group in stmt_groups {
-        let executed = execute_stmt_group(client, sender, stmt_group).await;
+    for stmt_group_res in stmt_groups {
+        let executed = match stmt_group_res {
+            Ok(stmt_group) => execute_stmt_group(client, sender, stmt_group).await,
+            Err(e) => {
+                let err = SqlResult::err(client, e);
+                let _ = send_and_retire(err.into(), client, sender).await?;
+                Ok(Err(()))
+            }
+        };
         // At the end of each group, commit implicit transactions. Do that here so that any `?`
         // early return can still be handled here.
         if client.session().transaction().is_implicit() {
@@ -1192,13 +1374,16 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::CreatedClusterReplica { .. }
         | ExecuteResponse::CreatedTable { .. }
         | ExecuteResponse::CreatedIndex { .. }
+        | ExecuteResponse::CreatedIntrospectionSubscribe
         | ExecuteResponse::CreatedSecret { .. }
         | ExecuteResponse::CreatedSource { .. }
         | ExecuteResponse::CreatedSink { .. }
         | ExecuteResponse::CreatedView { .. }
         | ExecuteResponse::CreatedViews { .. }
         | ExecuteResponse::CreatedMaterializedView { .. }
+        | ExecuteResponse::CreatedContinualTask { .. }
         | ExecuteResponse::CreatedType
+        | ExecuteResponse::CreatedNetworkPolicy
         | ExecuteResponse::Comment
         | ExecuteResponse::Deleted(_)
         | ExecuteResponse::DiscardedTemp
@@ -1230,7 +1415,7 @@ async fn execute_stmt<S: ResultSender>(
         .into(),
         ExecuteResponse::TransactionCommitted { params }
         | ExecuteResponse::TransactionRolledBack { params } => {
-            let notify_set: mz_ore::collections::HashSet<String> = client
+            let notify_set: mz_ore::collections::HashSet<_> = client
                 .session()
                 .vars()
                 .notify_set()
@@ -1271,27 +1456,46 @@ async fn execute_stmt<S: ResultSender>(
             )
             .into()
         }
-        ExecuteResponse::SendingRows { future: mut rows, instance_id, strategy } => {
+        ExecuteResponse::SendingRows {
+            future: mut rows,
+            instance_id,
+            strategy,
+        } => {
             let rows = match await_rows(sender, client, &mut rows).await? {
                 PeekResponseUnary::Rows(rows) => {
-                    RecordFirstRowStream::record(execute_started, client, Some(instance_id), Some(strategy));
+                    RecordFirstRowStream::record(
+                        execute_started,
+                        client,
+                        Some(instance_id),
+                        Some(strategy),
+                    );
                     rows
                 }
                 PeekResponseUnary::Error(e) => {
-                    return Ok(
-                        SqlResult::err(client, Error::Unstructured(anyhow!(e))).into(),
-                    );
+                    return Ok(SqlResult::err(client, Error::Unstructured(anyhow!(e))).into());
                 }
                 PeekResponseUnary::Canceled => {
                     return Ok(SqlResult::err(client, AdapterError::Canceled).into());
                 }
             };
-            SqlResult::rows(client, rows, &desc.relation_desc.expect("RelationDesc must exist")).into()
+            SqlResult::rows(
+                client,
+                rows,
+                &desc.relation_desc.expect("RelationDesc must exist"),
+            )
+            .into()
         }
-        ExecuteResponse::SendingRowsImmediate { rows } => {
-            SqlResult::rows(client, rows, &desc.relation_desc.expect("RelationDesc must exist")).into()
-        }
-        ExecuteResponse::Subscribing { rx, ctx_extra, instance_id } => StatementResult::Subscribe {
+        ExecuteResponse::SendingRowsImmediate { rows } => SqlResult::rows(
+            client,
+            rows,
+            &desc.relation_desc.expect("RelationDesc must exist"),
+        )
+        .into(),
+        ExecuteResponse::Subscribing {
+            rx,
+            ctx_extra,
+            instance_id,
+        } => StatementResult::Subscribe {
             tag: "SUBSCRIBE".into(),
             desc: desc.relation_desc.unwrap(),
             rx: RecordFirstRowStream::new(
@@ -1309,9 +1513,12 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::DeclaredCursor
         | ExecuteResponse::ClosedCursor) => SqlResult::err(
             client,
-            Error::Unstructured(anyhow!("internal error: encountered prohibited ExecuteResponse {:?}.\n\n
-            This is a bug. Can you please file an issue letting us know?\n
-            https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=C-bug%2CC-triage&template=01-bug.yml", ExecuteResponseKind::from(res))),
+            Error::Unstructured(anyhow!(
+                "internal error: encountered prohibited ExecuteResponse {:?}.\n\n
+            This is a bug. Can you please file an bug report letting us know?\n
+            https://github.com/MaterializeInc/materialize/discussions/new?category=bug-reports",
+                ExecuteResponseKind::from(res)
+            )),
         )
         .into(),
     })

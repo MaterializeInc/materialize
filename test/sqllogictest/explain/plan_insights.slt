@@ -15,6 +15,7 @@ mode cockroach
 statement ok
 CREATE TABLE t (a int)
 
+# Assert fast_path_limit is true. This must be done before adding the index.
 query T multiline
 EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
 ----
@@ -97,8 +98,16 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
       }
     },
     "fast_path_clusters": {},
+    "fast_path_limit": 1000,
     "persist_count": []
-  }
+  },
+  "cluster": {
+    "name": "quickstart",
+    "id": {
+      "User": 1
+    }
+  },
+  "redacted_sql": "SELECT * FROM [u1 AS materialize.public.t]"
 }
 EOF
 
@@ -166,7 +175,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
     },
     "optimized": {
       "global": {
-        "text": "Explained Query:\n  Return\n    CrossJoin type=differential\n      Get l0\n      Get l0\n  With\n    cte l0 =\n      ArrangeBy keys=[[]]\n        ReadStorage materialize.public.t\n\nSource materialize.public.t\n\nTarget cluster: quickstart\n",
+        "text": "Explained Query:\n  With\n    cte l0 =\n      ArrangeBy keys=[[]]\n        ReadStorage materialize.public.t\n  Return\n    CrossJoin type=differential\n      Get l0\n      Get l0\n\nSource materialize.public.t\n\nTarget cluster: quickstart\n",
         "json": {
           "plans": [
             {
@@ -245,28 +254,11 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
                             0,
                             [],
                             {
-                              "unique_key": false,
-                              "key_length": 0,
-                              "arranged": false,
-                              "cardinality": null,
-                              "filters": {
-                                "literal_equality": false,
-                                "like": false,
-                                "is_null": false,
-                                "literal_inequality": 0,
-                                "any_filter": false
-                              },
-                              "input": 0
-                            }
-                          ],
-                          [
-                            [
-                              1,
-                              [],
-                              {
+                              "V2": {
                                 "unique_key": false,
-                                "key_length": 0,
+                                "not_cross": false,
                                 "arranged": false,
+                                "key_length": 0,
                                 "cardinality": null,
                                 "filters": {
                                   "literal_equality": false,
@@ -275,7 +267,30 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
                                   "literal_inequality": 0,
                                   "any_filter": false
                                 },
-                                "input": 1
+                                "input": 0
+                              }
+                            }
+                          ],
+                          [
+                            [
+                              1,
+                              [],
+                              {
+                                "V2": {
+                                  "unique_key": false,
+                                  "not_cross": false,
+                                  "arranged": false,
+                                  "key_length": 0,
+                                  "cardinality": null,
+                                  "filters": {
+                                    "literal_equality": false,
+                                    "like": false,
+                                    "is_null": false,
+                                    "literal_inequality": 0,
+                                    "any_filter": false
+                                  },
+                                  "input": 1
+                                }
                               }
                             ]
                           ]
@@ -315,8 +330,16 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
       }
     },
     "fast_path_clusters": {},
+    "fast_path_limit": null,
     "persist_count": []
-  }
+  },
+  "cluster": {
+    "name": "quickstart",
+    "id": {
+      "User": 1
+    }
+  },
+  "redacted_sql": "SELECT * FROM [u1 AS materialize.public.t] AS t1, [u1 AS materialize.public.t] AS t2"
 }
 EOF
 
@@ -435,8 +458,16 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
       }
     },
     "fast_path_clusters": {},
+    "fast_path_limit": null,
     "persist_count": []
-  }
+  },
+  "cluster": {
+    "name": "quickstart",
+    "id": {
+      "User": 1
+    }
+  },
+  "redacted_sql": "SELECT * FROM [u1 AS materialize.public.t]"
 }
 EOF
 
@@ -504,7 +535,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
     },
     "optimized": {
       "global": {
-        "text": "Explained Query:\n  Return\n    CrossJoin type=differential\n      Get l0\n      Get l0\n  With\n    cte l0 =\n      ArrangeBy keys=[[]]\n        ReadIndex on=t t_primary_idx=[*** full scan ***]\n\nUsed Indexes:\n  - materialize.public.t_primary_idx (*** full scan ***)\n\nTarget cluster: quickstart\n",
+        "text": "Explained Query:\n  With\n    cte l0 =\n      ArrangeBy keys=[[]]\n        ReadIndex on=t t_primary_idx=[*** full scan ***]\n  Return\n    CrossJoin type=differential\n      Get l0\n      Get l0\n\nUsed Indexes:\n  - materialize.public.t_primary_idx (*** full scan ***)\n\nTarget cluster: quickstart\n",
         "json": {
           "plans": [
             {
@@ -592,28 +623,11 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
                             0,
                             [],
                             {
-                              "unique_key": false,
-                              "key_length": 0,
-                              "arranged": false,
-                              "cardinality": null,
-                              "filters": {
-                                "literal_equality": false,
-                                "like": false,
-                                "is_null": false,
-                                "literal_inequality": 0,
-                                "any_filter": false
-                              },
-                              "input": 0
-                            }
-                          ],
-                          [
-                            [
-                              1,
-                              [],
-                              {
+                              "V2": {
                                 "unique_key": false,
-                                "key_length": 0,
+                                "not_cross": false,
                                 "arranged": false,
+                                "key_length": 0,
                                 "cardinality": null,
                                 "filters": {
                                   "literal_equality": false,
@@ -622,7 +636,30 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
                                   "literal_inequality": 0,
                                   "any_filter": false
                                 },
-                                "input": 1
+                                "input": 0
+                              }
+                            }
+                          ],
+                          [
+                            [
+                              1,
+                              [],
+                              {
+                                "V2": {
+                                  "unique_key": false,
+                                  "not_cross": false,
+                                  "arranged": false,
+                                  "key_length": 0,
+                                  "cardinality": null,
+                                  "filters": {
+                                    "literal_equality": false,
+                                    "like": false,
+                                    "is_null": false,
+                                    "literal_inequality": 0,
+                                    "any_filter": false
+                                  },
+                                  "input": 1
+                                }
                               }
                             ]
                           ]
@@ -655,8 +692,16 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
       }
     },
     "fast_path_clusters": {},
+    "fast_path_limit": null,
     "persist_count": []
-  }
+  },
+  "cluster": {
+    "name": "quickstart",
+    "id": {
+      "User": 1
+    }
+  },
+  "redacted_sql": "SELECT * FROM [u1 AS materialize.public.t] AS t1, [u1 AS materialize.public.t] AS t2"
 }
 EOF
 
@@ -750,15 +795,30 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
     },
     "fast_path_clusters": {
       "quickstart": {
-        "index": "materialize.public.t_primary_idx",
-        "on": "materialize.public.t"
+        "index": {
+          "database": "materialize",
+          "schema": "public",
+          "item": "t_primary_idx"
+        },
+        "on": {
+          "database": "materialize",
+          "schema": "public",
+          "item": "t"
+        }
       }
     },
+    "fast_path_limit": 1000,
     "persist_count": []
-  }
+  },
+  "cluster": {
+    "name": "other",
+    "id": {
+      "User": 2
+    }
+  },
+  "redacted_sql": "SELECT * FROM [u1 AS materialize.public.t]"
 }
 EOF
-
 
 # Ensure persist_count is set here.
 query T multiline
@@ -814,7 +874,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT count(*) FROM t
     },
     "optimized": {
       "global": {
-        "text": "Explained Query:\n  Return\n    Union\n      Get l0\n      Map (0)\n        Union\n          Negate\n            Project ()\n              Get l0\n          Constant\n            - ()\n  With\n    cte l0 =\n      Reduce aggregates=[count(*)]\n        Project ()\n          ReadStorage materialize.public.t\n\nSource materialize.public.t\n\nTarget cluster: other\n",
+        "text": "Explained Query:\n  With\n    cte l0 =\n      Reduce aggregates=[count(*)]\n        Project ()\n          ReadStorage materialize.public.t\n  Return\n    Union\n      Get l0\n      Map (0)\n        Union\n          Negate\n            Project ()\n              Get l0\n          Constant\n            - ()\n\nSource materialize.public.t\n\nTarget cluster: other\n",
         "json": {
           "plans": [
             {
@@ -956,7 +1016,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT count(*) FROM t
                                   {
                                     "Ok": {
                                       "data": [
-                                        46
+                                        49
                                       ]
                                     }
                                   },
@@ -1004,6 +1064,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT count(*) FROM t
       }
     },
     "fast_path_clusters": {},
+    "fast_path_limit": null,
     "persist_count": [
       {
         "database": "materialize",
@@ -1011,6 +1072,217 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT count(*) FROM t
         "item": "t"
       }
     ]
-  }
+  },
+  "cluster": {
+    "name": "other",
+    "id": {
+      "User": 2
+    }
+  },
+  "redacted_sql": "SELECT pg_catalog.count(*) FROM [u1 AS materialize.public.t]"
+}
+EOF
+
+# Ensure cluster is null for views.
+query T multiline
+EXPLAIN PLAN INSIGHTS AS JSON FOR CREATE VIEW V AS SELECT 1
+----
+{
+  "plans": {
+    "raw": {
+      "text": "Map (1)\n  Constant\n    - ()\n",
+      "json": {
+        "Map": {
+          "input": {
+            "Constant": {
+              "rows": [
+                {
+                  "data": []
+                }
+              ],
+              "typ": {
+                "column_types": [],
+                "keys": []
+              }
+            }
+          },
+          "scalars": [
+            {
+              "Literal": [
+                {
+                  "data": [
+                    45,
+                    1
+                  ]
+                },
+                {
+                  "scalar_type": "Int32",
+                  "nullable": false
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "optimized": {
+      "global": {
+        "text": "<unknown>",
+        "json": null
+      },
+      "fast_path": {
+        "text": "<unknown>",
+        "json": null
+      }
+    }
+  },
+  "insights": null,
+  "cluster": null,
+  "redacted_sql": null
+}
+EOF
+
+
+# Ensure redacted sql.
+query T multiline
+EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT 'abc'
+----
+{
+  "plans": {
+    "raw": {
+      "text": "Map (\"abc\")\n  Constant\n    - ()\n\nTarget cluster: mz_catalog_server\n",
+      "json": {
+        "Map": {
+          "input": {
+            "Constant": {
+              "rows": [
+                {
+                  "data": []
+                }
+              ],
+              "typ": {
+                "column_types": [],
+                "keys": []
+              }
+            }
+          },
+          "scalars": [
+            {
+              "Literal": [
+                {
+                  "data": [
+                    19,
+                    3,
+                    97,
+                    98,
+                    99
+                  ]
+                },
+                {
+                  "scalar_type": "String",
+                  "nullable": false
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "optimized": {
+      "global": {
+        "text": "Explained Query:\n  Constant\n    - (\"abc\")\n\nTarget cluster: mz_catalog_server\n",
+        "json": {
+          "plans": [
+            {
+              "id": "Explained Query",
+              "plan": {
+                "Constant": {
+                  "rows": {
+                    "Ok": [
+                      [
+                        {
+                          "data": [
+                            19,
+                            3,
+                            97,
+                            98,
+                            99
+                          ]
+                        },
+                        1
+                      ]
+                    ]
+                  },
+                  "typ": {
+                    "column_types": [
+                      {
+                        "scalar_type": "String",
+                        "nullable": false
+                      }
+                    ],
+                    "keys": []
+                  }
+                }
+              }
+            }
+          ],
+          "sources": []
+        }
+      },
+      "fast_path": {
+        "text": "Explained Query (fast path):\n  Constant\n    - (\"abc\")\n\nTarget cluster: mz_catalog_server\n",
+        "json": {
+          "plans": [
+            {
+              "id": "Explained Query (fast path)",
+              "plan": {
+                "Constant": [
+                  {
+                    "Ok": [
+                      [
+                        {
+                          "data": [
+                            19,
+                            3,
+                            97,
+                            98,
+                            99
+                          ]
+                        },
+                        1
+                      ]
+                    ]
+                  },
+                  {
+                    "column_types": [
+                      {
+                        "scalar_type": "String",
+                        "nullable": false
+                      }
+                    ],
+                    "keys": []
+                  }
+                ]
+              }
+            }
+          ],
+          "sources": []
+        }
+      }
+    }
+  },
+  "insights": {
+    "imports": {},
+    "fast_path_clusters": {},
+    "fast_path_limit": null,
+    "persist_count": []
+  },
+  "cluster": {
+    "name": "mz_catalog_server",
+    "id": {
+      "System": 2
+    }
+  },
+  "redacted_sql": "SELECT '<REDACTED>'"
 }
 EOF

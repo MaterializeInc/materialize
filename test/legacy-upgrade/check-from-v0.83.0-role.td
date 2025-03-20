@@ -13,6 +13,7 @@ SELECT mz_version_num() < 8300;
 > SELECT name FROM mz_roles;
 group
 joe
+mz_analytics
 mz_monitor
 mz_monitor_redacted
 mz_system

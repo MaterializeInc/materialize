@@ -15,7 +15,6 @@ from pg8000.converters import literal  # type: ignore
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
-from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
 from materialize.util import naughty_strings
 
@@ -44,10 +43,6 @@ def cluster() -> str:
 
 
 class Identifiers(Check):
-    def _can_run(self, e: Executor) -> bool:
-        # CREATE ROLE not compatible with older releases
-        return self.base_version >= MzVersion.parse_mz("v0.47.0-dev")
-
     IDENT_KEYS = [
         "db",
         "schema",
@@ -78,12 +73,12 @@ class Identifiers(Check):
         strings = naughty_strings()
         values = (rng or Random(0)).sample(strings, len(self.IDENT_KEYS))
         self.ident = {
-            key: value.encode("utf-8")[:255].decode("utf-8", "ignore")
+            key: value.encode()[:255].decode("utf-8", "ignore")
             for key, value in zip(self.IDENT_KEYS, values)
         }
         # ERROR: invalid input syntax for type bytea: invalid escape sequence
         self.ident["secret_value"] = "secret_value"
-        # https://github.com/MaterializeInc/materialize/issues/22535
+        # https://github.com/MaterializeInc/database-issues/issues/6813
         self.ident["source"] = "source"
         super().__init__(base_version, rng)
 
@@ -107,11 +102,14 @@ class Identifiers(Check):
 
             > CREATE CONNECTION IF NOT EXISTS {dq(self.ident["kafka_conn"])} FOR KAFKA {self._kafka_broker()};
             > CREATE CONNECTION IF NOT EXISTS {dq(self.ident["csr_conn"])} FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
-            > CREATE SOURCE {dq(self.ident["source"])}
+
+            > CREATE SOURCE {dq(self.ident["source"] + "_src")}
               IN CLUSTER identifiers
-              FROM KAFKA CONNECTION {dq(self.ident["kafka_conn"])} (TOPIC 'testdrive-sink-source-ident-${{testdrive.seed}}')
+              FROM KAFKA CONNECTION {dq(self.ident["kafka_conn"])} (TOPIC 'testdrive-sink-source-ident-${{testdrive.seed}}');
+            > CREATE TABLE {dq(self.ident["source"])} FROM SOURCE {dq(self.ident["source"] + "_src")} (REFERENCE "testdrive-sink-source-ident-${{testdrive.seed}}")
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {dq(self.ident["csr_conn"])}
               ENVELOPE UPSERT;
+
             > CREATE MATERIALIZED VIEW {dq(self.ident["source_view"])} IN CLUSTER {self._default_cluster()} AS
               SELECT LEFT(key1, 2) as l_k, LEFT(f1, 1) AS l_v, COUNT(*) AS c FROM {dq(self.ident["source"])} GROUP BY LEFT(key1, 2), LEFT(f1, 1);
             > CREATE SINK {dq(self.ident["schema"])}.{dq(self.ident["sink0"])}
@@ -120,13 +118,9 @@ class Identifiers(Check):
               INTO KAFKA CONNECTION {dq(self.ident["kafka_conn"])} (TOPIC 'sink-sink-ident0')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {dq(self.ident["csr_conn"])}
               ENVELOPE DEBEZIUM;
-            """
-        if self.base_version >= MzVersion(0, 44, 0):
-            cmds += f"""
+
             > CREATE SECRET {dq(self.ident["secret"])} as {sq(self.ident["secret_value"])};
-            """
-        if self.base_version >= MzVersion(0, 72, 0):
-            cmds += f"""
+
             > COMMENT ON TABLE {dq(self.ident["schema"])}.{dq(self.ident["table"])} IS {sq(self.ident["comment_table"])};
 
             > COMMENT ON COLUMN {dq(self.ident["schema"])}.{dq(self.ident["table"])}.{dq(self.ident["column"])} IS {sq(self.ident["comment_column"])};
@@ -156,8 +150,8 @@ class Identifiers(Check):
     def validate(self) -> Testdrive:
         cmds = f"""
         > SHOW DATABASES WHERE name NOT LIKE 'to_be_created%' AND name NOT LIKE 'owner_db%' AND name NOT LIKE 'privilege_db%' AND name <> 'defpriv_db';
-        materialize
-        {dq_print(self.ident["db"])}
+        materialize ""
+        {dq_print(self.ident["db"])} ""
 
         > SET DATABASE={dq(self.ident["db"])};
 
@@ -165,21 +159,23 @@ class Identifiers(Check):
         {dq_print(self.ident["role"])}
 
         > SHOW TYPES;
-        {dq_print(self.ident["type"])}
+        {dq_print(self.ident["type"])} ""
 
         > SHOW SCHEMAS FROM {dq(self.ident["db"])};
-        public
-        information_schema
-        mz_catalog
-        mz_unsafe
-        mz_internal
-        pg_catalog
-        {dq_print(self.ident["schema"])}
+        public ""
+        information_schema ""
+        mz_catalog ""
+        mz_catalog_unstable ""
+        mz_unsafe ""
+        mz_internal ""
+        mz_introspection ""
+        pg_catalog ""
+        {dq_print(self.ident["schema"])} ""
 
         > SHOW SINKS FROM {dq(self.ident["schema"])};
-        {dq_print(self.ident["sink0"])} kafka 4 identifiers
-        {dq_print(self.ident["sink1"])} kafka 4 identifiers
-        {dq_print(self.ident["sink2"])} kafka 4 identifiers
+        {dq_print(self.ident["sink0"])} kafka identifiers ""
+        {dq_print(self.ident["sink1"])} kafka identifiers ""
+        {dq_print(self.ident["sink2"])} kafka identifiers ""
 
         > SELECT * FROM {dq(self.ident["schema"])}.{dq(self.ident["mv0"])};
         3
@@ -196,16 +192,12 @@ class Identifiers(Check):
 
         > SELECT * FROM {dq(self.ident["source_view"])};
         U2 A 1000
-        """
-        if self.base_version >= MzVersion(0, 72, 0):
-            cmds += f"""
+
         > SELECT object_sub_id, comment FROM mz_internal.mz_comments JOIN mz_tables ON mz_internal.mz_comments.id = mz_tables.id WHERE name = {sq(self.ident["table"])};
         <null> {dq_print(self.ident["comment_table"])}
         1 {dq_print(self.ident["comment_column"])}
-        """
-        if self.base_version >= MzVersion(0, 44, 0):
-            cmds += f"""
+
         > SHOW SECRETS;
-        {dq_print(self.ident["secret"])}
+        {dq_print(self.ident["secret"])} ""
         """
         return Testdrive(dedent(cmds))

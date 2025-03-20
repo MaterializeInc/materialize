@@ -13,45 +13,59 @@ menu:
 This page shows you how to stream data from a self-hosted PostgreSQL database to
 Materialize using the [PostgreSQL source](/sql/create-source/postgres/).
 
+{{< tip >}}
+{{< guided-tour-blurb-for-ingest-data >}}
+{{< /tip >}}
+
 ## Before you begin
 
 {{% postgres-direct/before-you-begin %}}
 
-## Step 1. Enable logical replication
+## A. Configure PostgreSQL
 
-Materialize uses PostgreSQL's [logical replication](https://www.postgresql.org/docs/current/logical-replication.html)
+### 1. Enable logical replication
+
+Materialize uses PostgreSQL's [logical
+replication](https://www.postgresql.org/docs/current/logical-replication.html)
 protocol to track changes in your database and propagate them to Materialize.
+Enable your PostgreSQL's logical replication.
 
-As a first step, you need to make sure logical replication is enabled.
+1. As a _superuser_, use `psql` (or your preferred SQL client) to connect to
+   your PostgreSQL database.
 
-1. As a _superuser_, use `psql` (or your preferred SQL client) to connect to your
-   PostgreSQL database.
+1. Check if logical replication is enabled; that is, check if the `wal_level` is
+   set to `logical`:
 
-1. Check if logical replication is enabled:
-
-    ```sql
+    ```postgres
     SHOW wal_level;
     ```
 
-    The `wal_level` setting must be set to `logical`. If it's set to any other
-    value, change it to `logical` in the database configuration file
-    (`postgresql.conf`).
+1. If `wal_level` setting is **not** set to `logical`:
 
-1. Restart the database in order for the new `wal_level` to take effect. Keep in
-   mind that restarting can affect database performance.
+    1. In the  database configuration file (`postgresql.conf`), set `wal_level`
+       value to `logical`.
 
-1. Back in the SQL client connected to PostgreSQL, verify that replication is
-   now enabled:
+    1. Restart the database in order for the new `wal_level` to take effect.
+       Restarting can affect database performance.
 
-    ```sql
-    SHOW wal_level;
-    ```
+    1. In the SQL client connected to PostgreSQL, verify that replication is now
+  enabled (i.e., verify `wal_level` setting is set to `logical`).
 
-## Step 2. Create a publication
+        ```postgres
+        SHOW wal_level;
+        ```
+
+### 2. Create a publication and a replication user
 
 {{% postgres-direct/create-a-publication-other %}}
 
-## Step 3. Configure network security
+## B. (Optional) Configure network security
+
+{{< note >}}
+If you are prototyping and your PostgreSQL instance is publicly
+accessible, **you can skip this step**. For production scenarios, we recommend
+configuring one of the network security options below.
+{{</ note >}}
 
 There are various ways to configure your database's network to allow Materialize
 to connect:
@@ -69,11 +83,11 @@ Select the option that works best for you.
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
-   client connected to Materialize, find the static egress IP addresses for the
-   Materialize region you are running in:
+1. In the [Materialize console's SQL Shell](https://console.materialize.com/),
+   or your preferred SQL client connected to Materialize, find the static egress
+   IP addresses for the Materialize region you are running in:
 
-    ```sql
+    ```mzsql
     SELECT * FROM mz_egress_ips;
     ```
 
@@ -156,7 +170,7 @@ option.
      In Materialize, create a [`AWS PRIVATELINK`](/sql/create-connection/#aws-privatelink) connection that references the
      endpoint service that you created in the previous step.
 
-     ```sql
+     ```mzsql
     CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
         SERVICE NAME 'com.amazonaws.vpce.<region_id>.vpce-svc-<endpoint_service_id>',
         AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az3')
@@ -171,7 +185,7 @@ option.
     Retrieve the AWS principal for the AWS PrivateLink connection you just
     created:
 
-    ```sql
+    ```mzsql
     SELECT principal
     FROM mz_aws_privatelink_connections plc
     JOIN mz_connections c ON plc.id = c.id
@@ -179,9 +193,9 @@ option.
     ```
 
     ```
-       id   |                                 principal
-    --------+---------------------------------------------------------------------------
-     u1     | arn:aws:iam::664411391173:role/mz_20273b7c-2bbe-42b8-8c36-8cc179e9bbc3_u1
+                                     principal
+    ---------------------------------------------------------------------------
+     arn:aws:iam::664411391173:role/mz_20273b7c-2bbe-42b8-8c36-8cc179e9bbc3_u1
     ```
 
     Follow the instructions in the [AWS PrivateLink documentation](https://docs.aws.amazon.com/vpc/latest/privatelink/add-endpoint-service-permissions.html)
@@ -217,11 +231,12 @@ traffic from the bastion host.
 
 1. Configure the SSH bastion host to allow traffic only from Materialize.
 
-    1. In the [SQL Shell](https://console.materialize.com/), or your preferred
-       SQL client connected to Materialize, get the static egress IP addresses for
-       the Materialize region you are running in:
+    1. In the [Materialize console's SQL
+       Shell](https://console.materialize.com/), or your preferred SQL client
+       connected to Materialize, get the static egress IP addresses for the
+       Materialize region you are running in:
 
-       ```sql
+       ```mzsql
        SELECT * FROM mz_egress_ips;
        ```
 
@@ -235,18 +250,20 @@ traffic from the bastion host.
 
 {{< /tabs >}}
 
-## Step 4. (Optional) Create a cluster
+## C. Ingest data in Materialize
+
+### 1. (Optional) Create a cluster
 
 {{< note >}}
 If you are prototyping and already have a cluster to host your PostgreSQL
 source (e.g. `quickstart`), **you can skip this step**. For production
 scenarios, we recommend separating your workloads into multiple clusters for
-[resource isolation](https://materialize.com/docs/sql/create-cluster/#resource-isolation).
+[resource isolation](/sql/create-cluster/#resource-isolation).
 {{< /note >}}
 
 {{% postgres-direct/create-a-cluster %}}
 
-## Step 5. Start ingesting data
+### 2. Start ingesting data
 
 Now that you've configured your database network and created an ingestion
 cluster, you can connect Materialize to your PostgreSQL database and start
@@ -257,11 +274,12 @@ start by selecting the relevant option.
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the SQL client connected to Materialize, use the [`CREATE SECRET`](/sql/create-secret/)
-   command to securely store the password for the `materialize` PostgreSQL user you
-   created [earlier](#step-2-create-a-publication):
+1. In the SQL client connected to Materialize, use the [`CREATE
+   SECRET`](/sql/create-secret/) command to securely store the password for the
+   `materialize` PostgreSQL user you created
+   [earlier](#2-create-a-publication-and-a-replication-user):
 
-    ```sql
+    ```mzsql
     CREATE SECRET pgpass AS '<PASSWORD>';
     ```
 
@@ -269,7 +287,7 @@ start by selecting the relevant option.
    connection object with access and authentication details for Materialize to
    use:
 
-    ```sql
+    ```mzsql
     CREATE CONNECTION pg_connection TO POSTGRES (
       HOST '<host>',
       PORT 5432,
@@ -287,9 +305,9 @@ start by selecting the relevant option.
 
 1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
    to your database and start ingesting data from the publication you created
-   [earlier](#step-2-create-a-publication):
+   [earlier](#2-create-a-publication-and-a-replication-user):
 
-    ```sql
+    ```mzsql
     CREATE SOURCE mz_source
       IN CLUSTER ingest_postgres
       FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
@@ -306,11 +324,12 @@ start by selecting the relevant option.
 
 {{< tab "Use an SSH tunnel">}}
 
-1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
-   client connected to Materialize, use the [`CREATE CONNECTION`](/sql/create-connection/#ssh-tunnel)
-   command to create an SSH tunnel connection:
+1. In the [Materialize console's SQL Shell](https://console.materialize.com/),
+   or your preferred SQL client connected to Materialize, use the [`CREATE
+   CONNECTION`](/sql/create-connection/#ssh-tunnel) command to create an SSH
+   tunnel connection:
 
-    ```sql
+    ```mzsql
     CREATE CONNECTION ssh_connection TO SSH TUNNEL (
         HOST '<SSH_BASTION_HOST>',
         PORT <SSH_BASTION_PORT>,
@@ -319,7 +338,7 @@ start by selecting the relevant option.
     ```
 
     - Replace `<SSH_BASTION_HOST>` and `<SSH_BASTION_PORT`> with the public IP
-      address and port of the SSH bastion host you created [earlier](#step-3-configure-network-security).
+      address and port of the SSH bastion host you created [earlier](#b-optional-configure-network-security).
 
     - Replace `<SSH_BASTION_USER>` with the username for the key pair you
       created for your SSH bastion host.
@@ -327,7 +346,7 @@ start by selecting the relevant option.
 1. Get Materialize's public keys for the SSH tunnel connection you just
    created:
 
-    ```sql
+    ```mzsql
     SELECT
         mz_connections.name,
         mz_ssh_tunnel_connections.*
@@ -351,16 +370,16 @@ start by selecting the relevant option.
    connection you created using the [`VALIDATE CONNECTION`](/sql/validate-connection)
    command:
 
-    ```sql
+    ```mzsql
     VALIDATE CONNECTION ssh_connection;
     ```
 
     If no validation error is returned, move to the next step.
 
 1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the
-   password for the `materialize` PostgreSQL user you created [earlier](#step-2-create-a-publication):
+   password for the `materialize` PostgreSQL user you created [earlier](#2-create-a-publication-and-a-replication-user):
 
-    ```sql
+    ```mzsql
     CREATE SECRET pgpass AS '<PASSWORD>';
     ```
 
@@ -368,7 +387,7 @@ start by selecting the relevant option.
    another connection object, this time with database access and authentication
    details for Materialize to use:
 
-    ```sql
+    ```mzsql
     CREATE CONNECTION pg_connection TO POSTGRES (
       HOST '<host>',
       PORT 5432,
@@ -386,9 +405,9 @@ start by selecting the relevant option.
 
 1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
    to your Azure instance and start ingesting data from the publication you
-   created [earlier](#step-2-create-a-publication):
+   created [earlier](#2-create-a-publication-and-a-replication-user):
 
-    ```sql
+    ```mzsql
     CREATE SOURCE mz_source
       IN CLUSTER ingest_postgres
       FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
@@ -411,9 +430,9 @@ start by selecting the relevant option.
 
 1. Back in the SQL client connected to Materialize, use the [`CREATE SECRET`](/sql/create-secret/)
    command to securely store the password for the `materialize` PostgreSQL user you
-   created [earlier](#step-2-create-a-publication):
+   created [earlier](#2-create-a-publication-and-a-replication-user):
 
-    ```sql
+    ```mzsql
     CREATE SECRET pgpass AS '<PASSWORD>';
     ```
 
@@ -421,7 +440,7 @@ start by selecting the relevant option.
    another connection object, this time with database access and authentication
    details for Materialize to use:
 
-    ```sql
+    ```mzsql
     CREATE CONNECTION pg_connection TO POSTGRES (
         HOST '<host>',
         PORT 5432,
@@ -439,9 +458,9 @@ start by selecting the relevant option.
 
 1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
    to your database and start ingesting data from the publication you created
-   [earlier](#step-2-create-a-publication):
+   [earlier](#2-create-a-publication-and-a-replication-user):
 
-    ```sql
+    ```mzsql
     CREATE SOURCE mz_source
       IN CLUSTER ingest_postgres
       FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
@@ -458,11 +477,11 @@ start by selecting the relevant option.
 
 {{< /tabs >}}
 
-## Step 6. Check the ingestion status
+### 3. Monitor the ingestion status
 
 {{% postgres-direct/check-the-ingestion-status %}}
 
-## Step 7. Right-size the cluster
+### 4. Right-size the cluster
 
 {{% postgres-direct/right-size-the-cluster %}}
 

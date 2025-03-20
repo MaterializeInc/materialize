@@ -9,9 +9,9 @@
 
 
 from materialize.mzcompose.composition import Composition
+from materialize.zippy.blob_store_capabilities import BlobStoreIsRunning
 from materialize.zippy.crdb_capabilities import CockroachIsRunning
-from materialize.zippy.framework import Action, Capability
-from materialize.zippy.minio_capabilities import MinioIsRunning
+from materialize.zippy.framework import Action, Capability, State
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.storaged_capabilities import StoragedRunning
 
@@ -21,13 +21,13 @@ class StoragedStart(Action):
 
     @classmethod
     def requires(cls) -> set[type[Capability]]:
-        return {CockroachIsRunning, MinioIsRunning}
+        return {CockroachIsRunning, BlobStoreIsRunning}
 
     @classmethod
     def incompatible_with(cls) -> set[type[Capability]]:
         return {StoragedRunning}
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         c.up("storaged")
 
     def provides(self) -> list[Capability]:
@@ -41,7 +41,7 @@ class StoragedRestart(Action):
     def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning, StoragedRunning}
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         c.kill("storaged")
         c.up("storaged")
 
@@ -51,7 +51,7 @@ class StoragedKill(Action):
     def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning, StoragedRunning}
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         c.kill("storaged")
 
     def withholds(self) -> set[type[Capability]]:

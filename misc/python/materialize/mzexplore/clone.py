@@ -18,7 +18,7 @@ from contextlib import closing
 from itertools import chain
 from typing import TextIO
 
-from pg8000.dbapi import DatabaseError
+from psycopg.errors import DatabaseError
 
 from materialize.mzexplore import sql
 from materialize.mzexplore.common import ClonedItem, ItemType, info, warn

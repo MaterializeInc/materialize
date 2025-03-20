@@ -22,6 +22,7 @@ use differential_dataflow::lattice::Lattice;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle};
+use mz_ore::url::SensitiveUrl;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{
     Blob, Consensus, ExternalError, Tasked, VersionedData, BLOB_GET_LIVENESS_KEY,
@@ -40,6 +41,7 @@ use crate::internal::metrics::{LockMetrics, Metrics, MetricsBlob, MetricsConsens
 use crate::internal::state::TypedState;
 use crate::internal::watch::StateWatchNotifier;
 use crate::rpc::{PubSubClientConnection, PubSubSender, ShardSubscriptionToken};
+use crate::schema::SchemaCacheMaps;
 use crate::{Diagnostics, PersistClient, PersistConfig, PersistLocation, ShardId};
 
 /// A cache of [PersistClient]s indexed by [PersistLocation]s.
@@ -55,8 +57,8 @@ pub struct PersistClientCache {
     /// The tunable knobs for persist.
     pub cfg: PersistConfig,
     pub(crate) metrics: Arc<Metrics>,
-    blob_by_uri: Mutex<BTreeMap<String, (RttLatencyTask, Arc<dyn Blob>)>>,
-    consensus_by_uri: Mutex<BTreeMap<String, (RttLatencyTask, Arc<dyn Consensus>)>>,
+    blob_by_uri: Mutex<BTreeMap<SensitiveUrl, (RttLatencyTask, Arc<dyn Blob>)>>,
+    consensus_by_uri: Mutex<BTreeMap<SensitiveUrl, (RttLatencyTask, Arc<dyn Consensus>)>>,
     isolated_runtime: Arc<IsolatedRuntime>,
     pub(crate) state_cache: Arc<StateCache>,
     pubsub_sender: Arc<dyn PubSubSender>,
@@ -84,7 +86,8 @@ impl PersistClientCache {
             Arc::clone(&state_cache),
             pubsub_client.receiver,
         );
-        let isolated_runtime = IsolatedRuntime::new(cfg.isolated_runtime_worker_threads);
+        let isolated_runtime =
+            IsolatedRuntime::new(registry, Some(cfg.isolated_runtime_worker_threads));
 
         PersistClientCache {
             cfg,
@@ -158,7 +161,7 @@ impl PersistClientCache {
 
     async fn open_consensus(
         &self,
-        consensus_uri: String,
+        consensus_uri: SensitiveUrl,
     ) -> Result<Arc<dyn Consensus>, ExternalError> {
         let mut consensus_by_uri = self.consensus_by_uri.lock().await;
         let consensus = match consensus_by_uri.entry(consensus_uri) {
@@ -194,7 +197,7 @@ impl PersistClientCache {
         Ok(consensus)
     }
 
-    async fn open_blob(&self, blob_uri: String) -> Result<Arc<dyn Blob>, ExternalError> {
+    async fn open_blob(&self, blob_uri: SensitiveUrl) -> Result<Arc<dyn Blob>, ExternalError> {
         let mut blob_by_uri = self.blob_by_uri.lock().await;
         let blob = match blob_by_uri.entry(blob_uri) {
             Entry::Occupied(x) => Arc::clone(&x.get().1),
@@ -205,7 +208,7 @@ impl PersistClientCache {
                     x.key(),
                     Box::new(self.cfg.clone()),
                     self.metrics.s3_blob.clone(),
-                    self.cfg.configs.clone(),
+                    Arc::clone(&self.cfg.configs),
                 )
                 .await?;
                 let blob = retry_external(&self.metrics.retries.external.blob_open, || {
@@ -325,7 +328,7 @@ impl<K, V, T, D> DynState for LockingTypedState<K, V, T, D>
 where
     K: Codec,
     V: Codec,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Codec64,
 {
     fn codecs(&self) -> (String, String, String, String, Option<CodecConcreteType>) {
@@ -432,7 +435,7 @@ impl StateCache {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Codec64,
         F: Future<Output = Result<TypedState<K, V, T, D>, Box<CodecMismatch>>>,
         InitFn: FnMut() -> F,
@@ -567,6 +570,9 @@ pub(crate) struct LockingTypedState<K, V, T, D> {
     cfg: Arc<PersistConfig>,
     metrics: Arc<Metrics>,
     shard_metrics: Arc<ShardMetrics>,
+    /// A [SchemaCacheMaps<K, V>], but stored as an Any so the `: Codec` bounds
+    /// don't propagate to basically every struct in persist.
+    schema_cache: Arc<dyn Any + Send + Sync>,
     _subscription_token: Arc<ShardSubscriptionToken>,
 }
 
@@ -579,6 +585,7 @@ impl<K, V, T: Debug, D> Debug for LockingTypedState<K, V, T, D> {
             cfg: _cfg,
             metrics: _metrics,
             shard_metrics: _shard_metrics,
+            schema_cache: _schema_cache,
             _subscription_token,
         } = self;
         f.debug_struct("LockingTypedState")
@@ -589,7 +596,7 @@ impl<K, V, T: Debug, D> Debug for LockingTypedState<K, V, T, D> {
     }
 }
 
-impl<K, V, T, D> LockingTypedState<K, V, T, D> {
+impl<K: Codec, V: Codec, T, D> LockingTypedState<K, V, T, D> {
     fn new(
         shard_id: ShardId,
         initial_state: TypedState<K, V, T, D>,
@@ -604,11 +611,20 @@ impl<K, V, T, D> LockingTypedState<K, V, T, D> {
             state: RwLock::new(initial_state),
             cfg: Arc::clone(&cfg),
             shard_metrics: metrics.shards.shard(&shard_id, &diagnostics.shard_name),
+            schema_cache: Arc::new(SchemaCacheMaps::<K, V>::new(&metrics.schema)),
             metrics,
             _subscription_token: subscription_token,
         }
     }
 
+    pub(crate) fn schema_cache(&self) -> Arc<SchemaCacheMaps<K, V>> {
+        Arc::clone(&self.schema_cache)
+            .downcast::<SchemaCacheMaps<K, V>>()
+            .expect("K and V match")
+    }
+}
+
+impl<K, V, T, D> LockingTypedState<K, V, T, D> {
     pub(crate) fn shard_id(&self) -> &ShardId {
         &self.shard_id
     }
@@ -675,11 +691,13 @@ impl<K, V, T, D> LockingTypedState<K, V, T, D> {
 #[cfg(test)]
 mod tests {
     use std::ops::Deref;
+    use std::str::FromStr;
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use futures::stream::{FuturesUnordered, StreamExt};
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::task::spawn;
+    use mz_ore::{assert_err, assert_none};
 
     use super::*;
 
@@ -697,8 +715,8 @@ mod tests {
         // Opening a location on an empty cache saves the results.
         let _ = cache
             .open(PersistLocation {
-                blob_uri: "mem://blob_zero".to_owned(),
-                consensus_uri: "mem://consensus_zero".to_owned(),
+                blob_uri: SensitiveUrl::from_str("mem://blob_zero").expect("invalid URL"),
+                consensus_uri: SensitiveUrl::from_str("mem://consensus_zero").expect("invalid URL"),
             })
             .await
             .expect("failed to open location");
@@ -709,8 +727,8 @@ mod tests {
         // if the blob is different.
         let _ = cache
             .open(PersistLocation {
-                blob_uri: "mem://blob_one".to_owned(),
-                consensus_uri: "mem://consensus_zero".to_owned(),
+                blob_uri: SensitiveUrl::from_str("mem://blob_one").expect("invalid URL"),
+                consensus_uri: SensitiveUrl::from_str("mem://consensus_zero").expect("invalid URL"),
             })
             .await
             .expect("failed to open location");
@@ -720,8 +738,8 @@ mod tests {
         // Ditto the other way.
         let _ = cache
             .open(PersistLocation {
-                blob_uri: "mem://blob_one".to_owned(),
-                consensus_uri: "mem://consensus_one".to_owned(),
+                blob_uri: SensitiveUrl::from_str("mem://blob_one").expect("invalid URL"),
+                consensus_uri: SensitiveUrl::from_str("mem://consensus_one").expect("invalid URL"),
             })
             .await
             .expect("failed to open location");
@@ -731,8 +749,9 @@ mod tests {
         // Query params and path matter, so we get new instances.
         let _ = cache
             .open(PersistLocation {
-                blob_uri: "mem://blob_one?foo".to_owned(),
-                consensus_uri: "mem://consensus_one/bar".to_owned(),
+                blob_uri: SensitiveUrl::from_str("mem://blob_one?foo").expect("invalid URL"),
+                consensus_uri: SensitiveUrl::from_str("mem://consensus_one/bar")
+                    .expect("invalid URL"),
             })
             .await
             .expect("failed to open location");
@@ -742,8 +761,9 @@ mod tests {
         // User info and port also matter, so we get new instances.
         let _ = cache
             .open(PersistLocation {
-                blob_uri: "mem://user@blob_one".to_owned(),
-                consensus_uri: "mem://@consensus_one:123".to_owned(),
+                blob_uri: SensitiveUrl::from_str("mem://user@blob_one").expect("invalid URL"),
+                consensus_uri: SensitiveUrl::from_str("mem://@consensus_one:123")
+                    .expect("invalid URL"),
             })
             .await
             .expect("failed to open location");
@@ -795,7 +815,7 @@ mod tests {
             .await
         })
         .await;
-        assert!(res.is_err());
+        assert_err!(res);
         assert_eq!(states.initialized_count(), 0);
 
         // Returning an error from init_fn doesn't initialize an entry in the cache.
@@ -811,7 +831,7 @@ mod tests {
                 &Diagnostics::for_tests(),
             )
             .await;
-        assert!(res.is_err());
+        assert_err!(res);
         assert_eq!(states.initialized_count(), 0);
 
         // Initialize one shard.
@@ -908,7 +928,7 @@ mod tests {
         drop(s1_state2);
         assert_eq!(states.strong_count(), 1);
         assert_eq!(states.initialized_count(), 2);
-        assert!(states.get_cached(&s1).is_none());
+        assert_none!(states.get_cached(&s1));
 
         // But we can re-init that shard if necessary.
         let s1_state1 = states

@@ -17,6 +17,7 @@
 //! to generate an internal hostname that is resolved to an IP address, which is similarly proxied.
 
 mod codec;
+mod dyncfgs;
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -26,6 +27,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use anyhow::Context;
 use axum::response::IntoResponse;
 use axum::{routing, Router};
 use bytes::BytesMut;
@@ -35,24 +37,29 @@ use domain::resolv::StubResolver;
 use futures::stream::BoxStream;
 use futures::TryFutureExt;
 use hyper::StatusCode;
+use hyper_util::rt::TokioIo;
+use launchdarkly_server_sdk as ld;
 use mz_build_info::{build_info, BuildInfo};
+use mz_dyncfg::ConfigSet;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_ore::cast::CastFrom;
 use mz_ore::id_gen::conn_id_org_uuid;
 use mz_ore::metrics::{ComputedGauge, IntCounter, IntGauge, MetricsRegistry};
 use mz_ore::netio::AsyncReady;
 use mz_ore::task::{spawn, JoinSetExt};
+use mz_ore::tracing::TracingHandle;
 use mz_ore::{metric, netio};
 use mz_pgwire_common::{
     decode_startup, Conn, ErrorResponse, FrontendMessage, FrontendStartupMessage,
-    ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION, VERSION_3,
+    ACCEPT_SSL_ENCRYPTION, CONN_UUID_KEY, MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION, VERSION_3,
 };
 use mz_server_core::{
-    listen, ConnectionStream, ListenerHandle, ReloadTrigger, ReloadingSslContext,
-    ReloadingTlsConfig, TlsCertConfig, TlsMode,
+    listen, Connection, ConnectionStream, ListenerHandle, ReloadTrigger, ReloadingSslContext,
+    ReloadingTlsConfig, ServeConfig, ServeDyncfg, TlsCertConfig, TlsMode,
 };
-use openssl::ssl::{NameType, Ssl};
+use openssl::ssl::{NameType, Ssl, SslConnector, SslMethod, SslVerifyMode};
 use prometheus::{IntCounterVec, IntGaugeVec};
+use proxy_header::{ProxiedAddress, ProxyHeader};
 use semver::Version;
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -60,16 +67,19 @@ use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 use tokio_openssl::SslStream;
 use tokio_postgres::error::SqlState;
+use tower::Service;
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use crate::codec::{BackendMessage, FramedConn};
+use crate::dyncfgs::{
+    has_tracing_config_update, tracing_config, INJECT_PROXY_PROTOCOL_HEADER_HTTP, SIGTERM_WAIT,
+};
 
 /// Balancer build information.
 pub const BUILD_INFO: BuildInfo = build_info!();
 
 pub struct BalancerConfig {
-    sigterm_wait: Option<Duration>,
     /// Info about which version of the code is running.
     build_version: Version,
     /// Listen address for internal HTTP health and metrics server.
@@ -78,42 +88,64 @@ pub struct BalancerConfig {
     pgwire_listen_addr: SocketAddr,
     /// Listen address for HTTPS connections.
     https_listen_addr: SocketAddr,
-    /// Cancellation resolver configmap directory.
-    cancellation_resolver_dir: Option<PathBuf>,
+    /// DNS resolver for pgwire cancellation requests
+    cancellation_resolver: CancellationResolver,
     /// DNS resolver.
     resolver: Resolver,
     https_addr_template: String,
     tls: Option<TlsCertConfig>,
+    internal_tls: bool,
     metrics_registry: MetricsRegistry,
     reload_certs: BoxStream<'static, Option<oneshot::Sender<Result<(), anyhow::Error>>>>,
+    launchdarkly_sdk_key: Option<String>,
+    config_sync_timeout: Duration,
+    config_sync_loop_interval: Option<Duration>,
+    cloud_provider: Option<String>,
+    cloud_provider_region: Option<String>,
+    tracing_handle: TracingHandle,
+    default_configs: Vec<(String, String)>,
 }
 
 impl BalancerConfig {
     pub fn new(
         build_info: &BuildInfo,
-        sigterm_wait: Option<Duration>,
         internal_http_listen_addr: SocketAddr,
         pgwire_listen_addr: SocketAddr,
         https_listen_addr: SocketAddr,
-        cancellation_resolver_dir: Option<PathBuf>,
+        cancellation_resolver: CancellationResolver,
         resolver: Resolver,
         https_addr_template: String,
         tls: Option<TlsCertConfig>,
+        internal_tls: bool,
         metrics_registry: MetricsRegistry,
         reload_certs: ReloadTrigger,
+        launchdarkly_sdk_key: Option<String>,
+        config_sync_timeout: Duration,
+        config_sync_loop_interval: Option<Duration>,
+        cloud_provider: Option<String>,
+        cloud_provider_region: Option<String>,
+        tracing_handle: TracingHandle,
+        default_configs: Vec<(String, String)>,
     ) -> Self {
         Self {
             build_version: build_info.semver_version(),
-            sigterm_wait,
             internal_http_listen_addr,
             pgwire_listen_addr,
             https_listen_addr,
-            cancellation_resolver_dir,
+            cancellation_resolver,
             resolver,
             https_addr_template,
             tls,
+            internal_tls,
             metrics_registry,
             reload_certs,
+            launchdarkly_sdk_key,
+            config_sync_timeout,
+            config_sync_loop_interval,
+            cloud_provider,
+            cloud_provider_region,
+            tracing_handle,
+            default_configs,
         }
     }
 }
@@ -149,6 +181,7 @@ pub struct BalancerService {
     pub https: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
     pub internal_http: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
     _metrics: BalancerMetrics,
+    configs: ConfigSet,
 }
 
 impl BalancerService {
@@ -157,12 +190,74 @@ impl BalancerService {
         let https = listen(&cfg.https_listen_addr).await?;
         let internal_http = listen(&cfg.internal_http_listen_addr).await?;
         let metrics = BalancerMetrics::new(&cfg);
+        let mut configs = ConfigSet::default();
+        configs = dyncfgs::all_dyncfgs(configs);
+        dyncfgs::set_defaults(&configs, cfg.default_configs.clone())?;
+        let tracing_handle = cfg.tracing_handle.clone();
+        if let Err(err) = mz_dyncfg_launchdarkly::sync_launchdarkly_to_configset(
+            configs.clone(),
+            &BUILD_INFO,
+            |builder| {
+                let region = cfg
+                    .cloud_provider_region
+                    .clone()
+                    .unwrap_or_else(|| String::from("unknown"));
+                if let Some(provider) = cfg.cloud_provider.clone() {
+                    builder.add_context(
+                        ld::ContextBuilder::new(format!(
+                            "{}/{}/{}",
+                            provider, region, cfg.build_version
+                        ))
+                        .kind("balancer")
+                        .set_string("provider", provider)
+                        .set_string("region", region)
+                        .set_string("version", cfg.build_version.to_string())
+                        .build()
+                        .map_err(|e| anyhow::anyhow!(e))?,
+                    );
+                } else {
+                    builder.add_context(
+                        ld::ContextBuilder::new(format!(
+                            "{}/{}/{}",
+                            "unknown", region, cfg.build_version
+                        ))
+                        .anonymous(true) // exclude this user from the dashboard
+                        .kind("balancer")
+                        .set_string("provider", "unknown")
+                        .set_string("region", region)
+                        .set_string("version", cfg.build_version.to_string())
+                        .build()
+                        .map_err(|e| anyhow::anyhow!(e))?,
+                    );
+                }
+                Ok(())
+            },
+            cfg.launchdarkly_sdk_key.as_deref(),
+            cfg.config_sync_timeout,
+            cfg.config_sync_loop_interval,
+            move |updates, configs| {
+                if has_tracing_config_update(updates) {
+                    match tracing_config(configs) {
+                        Ok(parameters) => parameters.apply(&tracing_handle),
+                        Err(err) => warn!("unable to update tracing: {err}"),
+                    }
+                }
+            },
+        )
+        .await
+        {
+            // Log but continue anyway. If LD is down we have no way of fetching the previous value
+            // of the flag (unlike the adapter, but it has a durable catalog). The ConfigSet
+            // defaults have been chosen to be good enough if this is the case.
+            warn!("LaunchDarkly sync error: {err}");
+        }
         Ok(Self {
             cfg,
             pgwire,
             https,
             internal_http,
             _metrics: metrics,
+            configs,
         })
     }
 
@@ -188,24 +283,31 @@ impl BalancerService {
         let pgwire_addr = self.pgwire.0.local_addr();
         let https_addr = self.https.0.local_addr();
         let internal_http_addr = self.internal_http.0.local_addr();
+
         {
-            if let Some(dir) = &self.cfg.cancellation_resolver_dir {
-                if !dir.is_dir() {
-                    anyhow::bail!("{dir:?} is not a directory");
-                }
-            }
-            let cancellation_resolver = self.cfg.cancellation_resolver_dir.map(Arc::new);
             let pgwire = PgwireBalancer {
                 resolver: Arc::new(self.cfg.resolver),
-                cancellation_resolver,
+                cancellation_resolver: Arc::new(self.cfg.cancellation_resolver),
                 tls: pgwire_tls,
+                internal_tls: self.cfg.internal_tls,
                 metrics: ServerMetrics::new(metrics.clone(), "pgwire"),
             };
             let (handle, stream) = self.pgwire;
             server_handles.push(handle);
-            set.spawn_named(|| "pgwire_stream", async move {
-                mz_server_core::serve(stream, pgwire, self.cfg.sigterm_wait).await;
-                warn!("pgwire server exited");
+            set.spawn_named(|| "pgwire_stream", {
+                let config_set = self.configs.clone();
+                async move {
+                    mz_server_core::serve(ServeConfig {
+                        server: pgwire,
+                        conns: stream,
+                        dyncfg: Some(ServeDyncfg {
+                            config_set,
+                            sigterm_wait_config: &SIGTERM_WAIT,
+                        }),
+                    })
+                    .await;
+                    warn!("pgwire server exited");
+                }
             });
         }
         {
@@ -220,12 +322,25 @@ impl BalancerService {
                 resolve_template: Arc::from(addr),
                 port,
                 metrics: Arc::from(ServerMetrics::new(metrics, "https")),
+                configs: self.configs.clone(),
+                internal_tls: self.cfg.internal_tls,
             };
             let (handle, stream) = self.https;
             server_handles.push(handle);
-            set.spawn_named(|| "https_stream", async move {
-                mz_server_core::serve(stream, https, self.cfg.sigterm_wait).await;
-                warn!("https server exited");
+            set.spawn_named(|| "https_stream", {
+                let config_set = self.configs.clone();
+                async move {
+                    mz_server_core::serve(ServeConfig {
+                        server: https,
+                        conns: stream,
+                        dyncfg: Some(ServeDyncfg {
+                            config_set,
+                            sigterm_wait_config: &SIGTERM_WAIT,
+                        }),
+                    })
+                    .await;
+                    warn!("https server exited");
+                }
             });
         }
         {
@@ -245,9 +360,14 @@ impl BalancerService {
             let (handle, stream) = self.internal_http;
             server_handles.push(handle);
             set.spawn_named(|| "internal_http_stream", async move {
-                // Prevent internal monitoring from allowing a graceful shutdown. In our testing
-                // *something* kept this open for at least 10 minutes.
-                mz_server_core::serve(stream, internal_http, None).await;
+                mz_server_core::serve(ServeConfig {
+                    server: internal_http,
+                    conns: stream,
+                    // Disable graceful termination because our internal
+                    // monitoring keeps persistent HTTP connections open.
+                    dyncfg: None,
+                })
+                .await;
                 warn!("internal_http server exited");
             });
         }
@@ -262,7 +382,7 @@ impl BalancerService {
             });
         }
 
-        println!("balancerd {} listening...", BUILD_INFO.human_version());
+        println!("balancerd {} listening...", BUILD_INFO.human_version(None));
         println!(" TLS enabled: {}", self.cfg.tls.is_some());
         println!(" pgwire address: {}", pgwire_addr);
         println!(" HTTPS address: {}", https_addr);
@@ -290,11 +410,15 @@ struct InternalHttpServer {
 impl mz_server_core::Server for InternalHttpServer {
     const NAME: &'static str = "internal_http";
 
-    fn handle_connection(&self, conn: TcpStream) -> mz_server_core::ConnectionHandler {
+    // TODO(jkosh44) consider forwarding the connection UUID to the adapter.
+    fn handle_connection(&self, conn: Connection) -> mz_server_core::ConnectionHandler {
         let router = self.router.clone();
+        let service = hyper::service::service_fn(move |req| router.clone().call(req));
+        let conn = TokioIo::new(conn);
+
         Box::pin(async {
-            let http = hyper::server::conn::Http::new();
-            http.serve_connection(conn, router).err_into().await
+            let http = hyper::server::conn::http1::Builder::new();
+            http.serve_connection(conn, service).err_into().await
         })
     }
 }
@@ -438,9 +562,15 @@ impl ServerMetrics {
     }
 }
 
+pub enum CancellationResolver {
+    Directory(PathBuf),
+    Static(String),
+}
+
 struct PgwireBalancer {
     tls: Option<ReloadingTlsConfig>,
-    cancellation_resolver: Option<Arc<PathBuf>>,
+    internal_tls: bool,
+    cancellation_resolver: Arc<CancellationResolver>,
     resolver: Arc<Resolver>,
     metrics: ServerMetrics,
 }
@@ -453,6 +583,7 @@ impl PgwireBalancer {
         params: BTreeMap<String, String>,
         resolver: &Resolver,
         tls_mode: Option<TlsMode>,
+        internal_tls: bool,
         metrics: &ServerMetrics,
     ) -> Result<(), io::Error>
     where
@@ -495,7 +626,7 @@ impl PgwireBalancer {
         // Count the # of pgwire connections that have SNI available / unavailable
         // per tenant. In the future we may want to remove non-SNI connections.
         if let Conn::Ssl(ssl_stream) = conn.inner() {
-            let tenant = resolved.tenant.as_deref().unwrap_or_else(|| "unknown");
+            let tenant = resolved.tenant.as_deref().unwrap_or("unknown");
             let has_sni = ssl_stream.ssl().servername(NameType::HOST_NAME).is_some();
             metrics.tenant_pgwire_sni_count(tenant, has_sni).inc();
         }
@@ -505,7 +636,7 @@ impl PgwireBalancer {
             .as_ref()
             .map(|tenant| metrics.tenant_connections(tenant));
         let Ok(mut mz_stream) =
-            Self::init_stream(conn, resolved.addr, resolved.password, params).await
+            Self::init_stream(conn, resolved.addr, resolved.password, params, internal_tls).await
         else {
             return Ok(());
         };
@@ -514,11 +645,7 @@ impl PgwireBalancer {
 
         // Now blindly shuffle bytes back and forth until closed.
         // TODO: Limit total memory use.
-        // Ignore error returns because they are not actionable, and not even useful to record
-        // metrics of. For example, running psql in a shell then exiting with ctrl+D produces an
-        // error, even though it was an intended exit by the user. Those connections should not get
-        // recorded as errors, as that's probably a misleading metric.
-        let _ = tokio::io::copy_bidirectional(&mut client_counter, &mut mz_stream).await;
+        let res = tokio::io::copy_bidirectional(&mut client_counter, &mut mz_stream).await;
         if let Some(tenant) = &resolved.tenant {
             metrics
                 .tenant_connections_tx(tenant)
@@ -527,6 +654,7 @@ impl PgwireBalancer {
                 .tenant_connections_rx(tenant)
                 .inc_by(u64::cast_from(client_counter.read));
         }
+        res?;
 
         Ok(())
     }
@@ -537,12 +665,39 @@ impl PgwireBalancer {
         envd_addr: SocketAddr,
         password: Option<String>,
         params: BTreeMap<String, String>,
-    ) -> Result<TcpStream, anyhow::Error>
+        internal_tls: bool,
+    ) -> Result<Conn<TcpStream>, anyhow::Error>
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
     {
         let mut mz_stream = TcpStream::connect(envd_addr).await?;
         let mut buf = BytesMut::new();
+
+        let mut mz_stream = if internal_tls {
+            FrontendStartupMessage::SslRequest.encode(&mut buf)?;
+            mz_stream.write_all(&buf).await?;
+            buf.clear();
+            let mut maybe_ssl_request_response = [0u8; 1];
+            let nread =
+                netio::read_exact_or_eof(&mut mz_stream, &mut maybe_ssl_request_response).await?;
+            if nread == 1 && maybe_ssl_request_response == [ACCEPT_SSL_ENCRYPTION] {
+                // do a TLS handshake
+                let mut builder =
+                    SslConnector::builder(SslMethod::tls()).expect("Error creating builder.");
+                // environmentd doesn't yet have a cert we trust, so for now disable verification.
+                builder.set_verify(SslVerifyMode::NONE);
+                let mut ssl = builder
+                    .build()
+                    .configure()?
+                    .into_ssl(&envd_addr.to_string())?;
+                ssl.set_connect_state();
+                Conn::Ssl(SslStream::new(ssl, mz_stream)?)
+            } else {
+                Conn::Unencrypted(mz_stream)
+            }
+        } else {
+            Conn::Unencrypted(mz_stream)
+        };
 
         // Send initial startup and password messages.
         let startup = FrontendStartupMessage::Startup {
@@ -587,12 +742,16 @@ impl PgwireBalancer {
 impl mz_server_core::Server for PgwireBalancer {
     const NAME: &'static str = "pgwire_balancer";
 
-    fn handle_connection(&self, conn: TcpStream) -> mz_server_core::ConnectionHandler {
+    fn handle_connection(&self, conn: Connection) -> mz_server_core::ConnectionHandler {
         let tls = self.tls.clone();
+        let internal_tls = self.internal_tls;
         let resolver = Arc::clone(&self.resolver);
         let inner_metrics = self.metrics.clone();
         let outer_metrics = self.metrics.clone();
-        let cancellation_resolver = self.cancellation_resolver.clone();
+        let cancellation_resolver = Arc::clone(&self.cancellation_resolver);
+        let conn_uuid = Uuid::new_v4();
+        let peer_addr = conn.peer_addr();
+        conn.uuid_handle().set(conn_uuid);
         Box::pin(async move {
             // TODO: Try to merge this with pgwire/server.rs to avoid the duplication. May not be
             // worth it.
@@ -607,14 +766,51 @@ impl mz_server_core::Server for PgwireBalancer {
                         // `SslRequest`. This is considered a graceful termination.
                         None => return Ok(()),
 
-                        Some(FrontendStartupMessage::Startup { version, params }) => {
+                        Some(FrontendStartupMessage::Startup {
+                            version,
+                            mut params,
+                        }) => {
                             let mut conn = FramedConn::new(conn);
+                            let peer_addr = match peer_addr {
+                                Ok(addr) => addr.ip(),
+                                Err(e) => {
+                                    error!("Invalid peer_addr {:?}", e);
+                                    return Ok(conn
+                                        .send(ErrorResponse::fatal(
+                                            SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
+                                            "invalid peer address",
+                                        ))
+                                        .await?);
+                                }
+                            };
+                            debug!(%conn_uuid, %peer_addr,  "starting new pgwire connection in balancer");
+                            let prev =
+                                params.insert(CONN_UUID_KEY.to_string(), conn_uuid.to_string());
+                            if prev.is_some() {
+                                return Ok(conn
+                                    .send(ErrorResponse::fatal(
+                                        SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
+                                        format!("invalid parameter '{CONN_UUID_KEY}'"),
+                                    ))
+                                    .await?);
+                            }
+
+                            if let Some(_) = params.insert(MZ_FORWARDED_FOR_KEY.to_string(), peer_addr.to_string().clone()) {
+                                return Ok(conn
+                                    .send(ErrorResponse::fatal(
+                                        SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
+                                        format!("invalid parameter '{MZ_FORWARDED_FOR_KEY}'"),
+                                    ))
+                                    .await?);
+                            };
+
                             Self::run(
                                 &mut conn,
                                 version,
                                 params,
                                 &resolver,
                                 tls.map(|tls| tls.mode),
+                                internal_tls,
                                 &inner_metrics,
                             )
                             .await?;
@@ -626,11 +822,9 @@ impl mz_server_core::Server for PgwireBalancer {
                             conn_id,
                             secret_key,
                         }) => {
-                            if let Some(resolver) = cancellation_resolver {
-                                spawn(|| "cancel request", async move {
-                                    cancel_request(conn_id, secret_key, &resolver).await;
-                                });
-                            }
+                            spawn(|| "cancel request", async move {
+                                cancel_request(conn_id, secret_key, &cancellation_resolver).await;
+                            });
                             // Do not wait on cancel requests to return because cancellation is best
                             // effort.
                             return Ok(());
@@ -759,15 +953,24 @@ where
 /// bits of randomness, and the secret key the full 32, for a total of 51 bits. That is more than
 /// 2e15 combinations, enough to nearly certainly prevent two different envds generating identical
 /// combinations.
-async fn cancel_request(conn_id: u32, secret_key: u32, cancellation_resolver: &PathBuf) {
+async fn cancel_request(
+    conn_id: u32,
+    secret_key: u32,
+    cancellation_resolver: &CancellationResolver,
+) {
     let suffix = conn_id_org_uuid(conn_id);
-    let path = cancellation_resolver.join(&suffix);
-    let contents = match std::fs::read_to_string(&path) {
-        Ok(contents) => contents,
-        Err(err) => {
-            error!("could not read cancel file {path:?}: {err}");
-            return;
+    let contents = match cancellation_resolver {
+        CancellationResolver::Directory(dir) => {
+            let path = dir.join(&suffix);
+            match std::fs::read_to_string(&path) {
+                Ok(contents) => contents,
+                Err(err) => {
+                    error!("could not read cancel file {path:?}: {err}");
+                    return;
+                }
+            }
         }
+        CancellationResolver::Static(addr) => addr.to_owned(),
     };
     let mut all_ips = Vec::new();
     for addr in contents.lines() {
@@ -812,6 +1015,8 @@ struct HttpsBalancer {
     resolve_template: Arc<str>,
     port: u16,
     metrics: Arc<ServerMetrics>,
+    configs: ConfigSet,
+    internal_tls: bool,
 }
 
 impl HttpsBalancer {
@@ -907,16 +1112,21 @@ impl HttpsBalancer {
 impl mz_server_core::Server for HttpsBalancer {
     const NAME: &'static str = "https_balancer";
 
-    fn handle_connection(&self, conn: TcpStream) -> mz_server_core::ConnectionHandler {
+    // TODO(jkosh44) consider forwarding the connection UUID to the adapter.
+    fn handle_connection(&self, conn: Connection) -> mz_server_core::ConnectionHandler {
         let tls_context = self.tls.clone();
+        let internal_tls = self.internal_tls.clone();
         let resolver = Arc::clone(&self.resolver);
         let resolve_template = Arc::clone(&self.resolve_template);
         let port = self.port;
         let inner_metrics = Arc::clone(&self.metrics);
         let outer_metrics = Arc::clone(&self.metrics);
+        let peer_addr = conn.peer_addr();
+        let inject_proxy_headers = INJECT_PROXY_PROTOCOL_HEADER_HTTP.get(&self.configs);
         Box::pin(async move {
             let active_guard = inner_metrics.active_connections();
             let result: Result<_, anyhow::Error> = Box::pin(async move {
+                let peer_addr = peer_addr.context("fetching peer addr")?;
                 let (client_stream, servername): (Box<dyn ClientStream>, Option<String>) =
                     match tls_context {
                         Some(tls_context) => {
@@ -939,7 +1149,6 @@ impl mz_server_core::Server for HttpsBalancer {
                         }
                         _ => (Box::new(conn), None),
                     };
-
                 let resolved =
                     Self::resolve(&resolver, &resolve_template, port, servername.as_deref())
                         .await?;
@@ -949,6 +1158,32 @@ impl mz_server_core::Server for HttpsBalancer {
                     .map(|tenant| inner_metrics.tenant_connections(tenant));
 
                 let mut mz_stream = TcpStream::connect(resolved.addr).await?;
+
+                if inject_proxy_headers {
+                    // Write the tcp proxy header
+                    let addrs = ProxiedAddress::stream(peer_addr, resolved.addr);
+                    let header = ProxyHeader::with_address(addrs);
+                    let mut buf = [0u8; 1024];
+                    let len = header.encode_to_slice_v2(&mut buf)?;
+                    mz_stream.write_all(&buf[..len]).await?;
+                }
+
+                let mut mz_stream = if internal_tls {
+                    // do a TLS handshake
+                    let mut builder =
+                        SslConnector::builder(SslMethod::tls()).expect("Error creating builder.");
+                    // environmentd doesn't yet have a cert we trust, so for now disable verification.
+                    builder.set_verify(SslVerifyMode::NONE);
+                    let mut ssl = builder
+                        .build()
+                        .configure()?
+                        .into_ssl(&resolved.addr.to_string())?;
+                    ssl.set_connect_state();
+                    Conn::Ssl(SslStream::new(ssl, mz_stream)?)
+                } else {
+                    Conn::Unencrypted(mz_stream)
+                };
+
                 let mut client_counter = CountingConn::new(client_stream);
 
                 // Now blindly shuffle bytes back and forth until closed.
@@ -1008,7 +1243,7 @@ impl Resolver {
                     _ => anyhow::bail!("expected Password message"),
                 };
 
-                let auth_response = auth.authenticate(user.into(), &password).await;
+                let auth_response = auth.authenticate(user, &password).await;
                 let auth_session = match auth_response {
                     Ok(auth_session) => auth_session,
                     Err(e) => {

@@ -25,10 +25,10 @@ $ set schema={
         ]
     }
 
-> SELECT COUNT(*), COUNT(DISTINCT f2), COUNT(DISTINCT f4) FROM multipart_key WHERE f1 = 'KEY1';
+> SELECT COUNT(*), COUNT(DISTINCT f2), COUNT(DISTINCT f4) FROM multipart_key_tbl WHERE f1 = 'KEY1';
 10000 10000 10000
 
-> SELECT COUNT(*), COUNT(DISTINCT f1), COUNT(DISTINCT f3) FROM multipart_key WHERE f2 = 'KEY2';
+> SELECT COUNT(*), COUNT(DISTINCT f1), COUNT(DISTINCT f3) FROM multipart_key_tbl WHERE f2 = 'KEY2';
 10000 10000 10000
 
 # Delete all rows
@@ -36,5 +36,5 @@ $ kafka-ingest format=avro topic=multipart-key key-format=avro key-schema=${keys
 {"f1": "KEY1", "f2": "${kafka-ingest.iteration}"}
 {"f1": "${kafka-ingest.iteration}", "f2": "KEY2"}
 
-> SELECT COUNT(*) FROM multipart_key;
+> SELECT COUNT(*) FROM multipart_key_tbl;
 0

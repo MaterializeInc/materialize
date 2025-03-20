@@ -17,17 +17,17 @@
 //! The proto conversions for this types are in the `client` module, for now.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc, Row, ScalarType};
-use once_cell::sync::Lazy;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.statistics.rs"));
 
-pub static MZ_SOURCE_STATISTICS_RAW_DESC: Lazy<RelationDesc> = Lazy::new(|| {
-    RelationDesc::empty()
+pub static MZ_SOURCE_STATISTICS_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
+    RelationDesc::builder()
         // Id of the source (or subsource).
         .with_column("id", ScalarType::String.nullable(false))
         //
@@ -90,10 +90,11 @@ pub static MZ_SOURCE_STATISTICS_RAW_DESC: Lazy<RelationDesc> = Lazy::new(|| {
         // A gauge of the number of _values_ (source defined unit) we have committed.
         // Never resets. Not to be confused with any of the counters above.
         .with_column("offset_committed", ScalarType::UInt64.nullable(true))
+        .finish()
 });
 
-pub static MZ_SINK_STATISTICS_RAW_DESC: Lazy<RelationDesc> = Lazy::new(|| {
-    RelationDesc::empty()
+pub static MZ_SINK_STATISTICS_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
+    RelationDesc::builder()
         // Id of the sink.
         .with_column("id", ScalarType::String.nullable(false))
         //
@@ -111,6 +112,7 @@ pub static MZ_SINK_STATISTICS_RAW_DESC: Lazy<RelationDesc> = Lazy::new(|| {
         // A counter of the bytes we have committed.
         // Never resets.
         .with_column("bytes_committed", ScalarType::UInt64.nullable(false))
+        .finish()
 });
 
 // Types of statistics (counter and various types of gauges), that have different semantics
@@ -130,7 +132,7 @@ pub trait StorageMetric {
 }
 
 /// A counter that never resets.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct Counter(u64);
 
 impl StorageMetric for Counter {
@@ -156,7 +158,7 @@ impl From<u64> for Counter {
 }
 
 /// A latency gauge that is reset on every restart.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct ResettingLatency(Option<i64>);
 
 impl From<Option<i64>> for ResettingLatency {
@@ -187,6 +189,12 @@ impl StorageMetric for ResettingLatency {
     fn incorporate(&mut self, other: Self, _field_name: &'static str) {
         // Reset to the new value.
         self.0 = other.0;
+    }
+}
+
+impl ResettingLatency {
+    fn reset(&mut self) {
+        self.0 = None;
     }
 }
 
@@ -232,6 +240,13 @@ impl From<Option<u64>> for ResettingNullableTotal {
         ResettingNullableTotal(f)
     }
 }
+
+impl ResettingNullableTotal {
+    fn reset(&mut self) {
+        self.0 = None;
+    }
+}
+
 /// A numerical gauge that is always resets.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct ResettingTotal(u64);
@@ -258,8 +273,14 @@ impl From<u64> for ResettingTotal {
     }
 }
 
+impl ResettingTotal {
+    fn reset(&mut self) {
+        self.0 = 0;
+    }
+}
+
 /// A boolean gauge that is never reset.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct Boolean(bool);
 
 impl StorageMetric for Boolean {
@@ -301,9 +322,8 @@ pub struct Total {
     /// If provided, it is bumped on regressions, as opposed to `error!`
     /// logs.
     #[serde(skip)]
-    regressions: Option<
-        mz_ore::metrics::DeleteOnDropCounter<'static, prometheus::core::AtomicU64, Vec<String>>,
-    >,
+    regressions:
+        Option<mz_ore::metrics::DeleteOnDropCounter<prometheus::core::AtomicU64, Vec<String>>>,
 }
 
 impl From<Option<u64>> for Total {
@@ -387,7 +407,7 @@ impl StorageMetric for Total {
 }
 
 /// A gauge that has semantics based on the `StorageMetric` implementation of its inner.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct Gauge<T>(T);
 
 impl<T> Gauge<T> {
@@ -465,6 +485,24 @@ pub struct SourceStatisticsUpdate {
 }
 
 impl SourceStatisticsUpdate {
+    pub fn new(id: GlobalId) -> Self {
+        Self {
+            id,
+            messages_received: Default::default(),
+            bytes_received: Default::default(),
+            updates_staged: Default::default(),
+            updates_committed: Default::default(),
+            records_indexed: Default::default(),
+            bytes_indexed: Default::default(),
+            rehydration_latency_ms: Default::default(),
+            snapshot_records_known: Default::default(),
+            snapshot_records_staged: Default::default(),
+            snapshot_committed: Default::default(),
+            offset_known: Default::default(),
+            offset_committed: Default::default(),
+        }
+    }
+
     pub fn summarize<'a, I, F>(values: F) -> Self
     where
         I: IntoIterator<Item = &'a Self>,
@@ -508,6 +546,15 @@ impl SourceStatisticsUpdate {
         self.updates_committed.0 = 0;
     }
 
+    /// Reset all _resetable_ gauges to their default values.
+    pub fn reset_gauges(&mut self) {
+        self.records_indexed.0.reset();
+        self.bytes_indexed.0.reset();
+        self.rehydration_latency_ms.0.reset();
+        self.snapshot_records_known.0.reset();
+        self.snapshot_records_staged.0.reset();
+    }
+
     pub fn incorporate(&mut self, other: SourceStatisticsUpdate) {
         let SourceStatisticsUpdate {
             messages_received,
@@ -538,6 +585,22 @@ impl SourceStatisticsUpdate {
         snapshot_committed.incorporate(other.snapshot_committed, "snapshot_committed");
         offset_known.incorporate(other.offset_known, "offset_known");
         offset_committed.incorporate(other.offset_committed, "offset_committed");
+    }
+
+    /// Incorporate only the counters of the given update, ignoring gauge values.
+    pub fn incorporate_counters(&mut self, other: SourceStatisticsUpdate) {
+        let SourceStatisticsUpdate {
+            messages_received,
+            bytes_received,
+            updates_staged,
+            updates_committed,
+            ..
+        } = self;
+
+        messages_received.incorporate(other.messages_received, "messages_received");
+        bytes_received.incorporate(other.bytes_received, "bytes_received");
+        updates_staged.incorporate(other.updates_staged, "updates_staged");
+        updates_committed.incorporate(other.updates_committed, "updates_committed");
     }
 
     /// Enrich statistics that use prometheus metrics.
@@ -668,7 +731,33 @@ pub struct SinkStatisticsUpdate {
 }
 
 impl SinkStatisticsUpdate {
+    pub fn new(id: GlobalId) -> Self {
+        Self {
+            id,
+            messages_staged: Default::default(),
+            messages_committed: Default::default(),
+            bytes_staged: Default::default(),
+            bytes_committed: Default::default(),
+        }
+    }
+
     pub fn incorporate(&mut self, other: SinkStatisticsUpdate) {
+        let SinkStatisticsUpdate {
+            messages_staged,
+            messages_committed,
+            bytes_staged,
+            bytes_committed,
+            ..
+        } = self;
+
+        messages_staged.incorporate(other.messages_staged, "messages_staged");
+        messages_committed.incorporate(other.messages_committed, "messages_committed");
+        bytes_staged.incorporate(other.bytes_staged, "bytes_staged");
+        bytes_committed.incorporate(other.bytes_committed, "bytes_committed");
+    }
+
+    /// Incorporate only the counters of the given update, ignoring gauge values.
+    pub fn incorporate_counters(&mut self, other: SinkStatisticsUpdate) {
         let SinkStatisticsUpdate {
             messages_staged,
             messages_committed,
@@ -707,6 +796,9 @@ impl SinkStatisticsUpdate {
         self.bytes_staged.0 = 0;
         self.bytes_committed.0 = 0;
     }
+
+    /// Reset all _resetable_ gauges to their default values.
+    pub fn reset_gauges(&self) {}
 }
 
 impl PackableStats for SinkStatisticsUpdate {

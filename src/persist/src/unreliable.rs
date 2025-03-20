@@ -234,6 +234,8 @@ impl Consensus for UnreliableConsensus {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::{assert_err, assert_ok};
+
     use crate::mem::{MemBlob, MemBlobConfig, MemConsensus};
 
     use super::*;
@@ -263,11 +265,11 @@ mod tests {
 
         // Reliable doesn't error.
         handle.totally_available();
-        assert!(blob.get("a").await.is_ok());
+        assert_ok!(blob.get("a").await);
 
         // Unreliable does error.
         handle.totally_unavailable();
-        assert!(blob.get("a").await.is_err());
+        assert_err!(blob.get("a").await);
     }
 
     #[mz_ore::test(tokio::test)]
@@ -295,10 +297,10 @@ mod tests {
 
         // Reliable doesn't error.
         handle.totally_available();
-        assert!(consensus.head("key").await.is_ok());
+        assert_ok!(consensus.head("key").await);
 
         // Unreliable does error.
         handle.totally_unavailable();
-        assert!(consensus.head("key").await.is_err());
+        assert_err!(consensus.head("key").await);
     }
 }

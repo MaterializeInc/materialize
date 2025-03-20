@@ -9,7 +9,10 @@
 
 //! Renders the statistics collection of the [`MySqlSourceConnection`] ingestion dataflow.
 
+use std::cell::{Cell, RefCell};
+
 use futures::StreamExt;
+use mz_storage_types::dyncfgs::MYSQL_OFFSET_KNOWN_INTERVAL;
 use timely::dataflow::operators::Map;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
@@ -20,8 +23,8 @@ use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition, GtidSta
 use mz_storage_types::sources::MySqlSourceConnection;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 
-use crate::source::types::ProgressStatisticsUpdate;
-use crate::source::RawSourceCreationConfig;
+use crate::source::types::{Probe, ProgressStatisticsUpdate};
+use crate::source::{probe, RawSourceCreationConfig};
 
 use super::{ReplicationError, TransientError};
 
@@ -36,32 +39,32 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 ) -> (
     Stream<G, ProgressStatisticsUpdate>,
     Stream<G, ReplicationError>,
+    Stream<G, Probe<GtidPartition>>,
     PressOnDropButton,
 ) {
     let op_name = format!("MySqlStatistics({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(op_name, scope);
 
-    let (mut stats_output, stats_stream) = builder.new_output();
+    let (stats_output, stats_stream) = builder.new_output();
+    let (probe_output, probe_stream) = builder.new_output();
 
     // TODO: Add additional metrics
 
     let (button, transient_errors) = builder.build_fallible::<TransientError, _>(move |caps| {
         Box::pin(async move {
             let worker_id = config.worker_id;
-            let [stats_cap]: &mut [_; 1] = caps.try_into().unwrap();
+            let [stats_cap, probe_cap]: &mut [_; 2] = caps.try_into().unwrap();
 
             // Only run the replication reader on the worker responsible for it.
             if !config.responsible_for(STATISTICS) {
                 // Emit 0, to mark this worker as having started up correctly.
-                stats_output
-                    .give(
-                        &stats_cap[0],
-                        ProgressStatisticsUpdate::SteadyState {
-                            offset_known: 0,
-                            offset_committed: 0,
-                        },
-                    )
-                    .await;
+                stats_output.give(
+                    &stats_cap[0],
+                    ProgressStatisticsUpdate::SteadyState {
+                        offset_known: 0,
+                        offset_committed: 0,
+                    },
+                );
                 return Ok(());
             }
 
@@ -83,72 +86,77 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
             tokio::pin!(resume_uppers);
 
-            let mut offset_known = None;
-            let mut offset_committed = None;
+            let prev_offset_known = Cell::new(None);
+            let prev_offset_committed = Cell::new(None);
+            let stats_output = RefCell::new(stats_output);
 
-            let upstream_stream = async_stream::stream!({
-                let mut interval = tokio::time::interval(
-                    mz_storage_types::dyncfgs::MYSQL_OFFSET_KNOWN_INTERVAL
-                        .get(config.config.config_set()),
-                );
+            let mut probe_ticker = probe::Ticker::new(
+                || MYSQL_OFFSET_KNOWN_INTERVAL.get(config.config.config_set()),
+                config.now_fn,
+            );
+            let probe_loop = async {
                 loop {
-                    interval.tick().await;
+                    let probe_ts = probe_ticker.tick().await;
 
                     let gtid_executed =
                         query_sys_var(&mut stats_conn, "global.gtid_executed").await?;
-                    match gtid_set_frontier(&gtid_executed) {
-                        Ok(frontier) => yield Ok(frontier),
-                        Err(err) => {
-                            // We don't translate this into a definite error like in snapshotting, but we will
-                            // restart the source.
-                            yield Err::<_, TransientError>(err.into())
-                        }
-                    }
-                }
-            });
-            tokio::pin!(upstream_stream);
+                    // We don't translate this into a definite error like in snapshotting, but we
+                    // will restart the source.
+                    let upstream_frontier =
+                        gtid_set_frontier(&gtid_executed).map_err(TransientError::from)?;
 
-            loop {
-                tokio::select! {
-                    Some(upstream_frontier) = upstream_stream.next() => {
-                        offset_known = Some(aggregate_mysql_frontier(upstream_frontier?));
-
-                    },
-                    Some(committed_frontier) = resume_uppers.next() => {
-                        offset_committed = Some(aggregate_mysql_frontier(committed_frontier));
-                    },
-                    else => break
-                };
-
-                if let (Some(offset_known), Some(offset_committed)) =
-                    (offset_known, offset_committed)
-                {
-                    stats_output
-                        .give(
+                    let offset_known = aggregate_mysql_frontier(&upstream_frontier);
+                    if let Some(offset_committed) = prev_offset_committed.get() {
+                        stats_output.borrow_mut().give(
                             &stats_cap[0],
                             ProgressStatisticsUpdate::SteadyState {
                                 offset_known,
                                 offset_committed,
                             },
-                        )
-                        .await;
-                }
-            }
+                        );
+                    }
+                    prev_offset_known.set(Some(offset_known));
 
-            Ok(())
+                    probe_output.give(
+                        &probe_cap[0],
+                        Probe {
+                            probe_ts,
+                            upstream_frontier,
+                        },
+                    );
+                }
+            };
+            let commit_loop = async {
+                while let Some(committed_frontier) = resume_uppers.next().await {
+                    let offset_committed = aggregate_mysql_frontier(&committed_frontier);
+                    if let Some(offset_known) = prev_offset_known.get() {
+                        stats_output.borrow_mut().give(
+                            &stats_cap[0],
+                            ProgressStatisticsUpdate::SteadyState {
+                                offset_known,
+                                offset_committed,
+                            },
+                        );
+                    }
+                    prev_offset_committed.set(Some(offset_committed));
+                }
+            };
+
+            futures::future::join(probe_loop, commit_loop).await.0
         })
     });
 
     (
         stats_stream,
         transient_errors.map(ReplicationError::from),
+        probe_stream,
         button.press_on_drop(),
     )
 }
 
 /// Aggregate a mysql frontier into single number representing the
 /// _number of transactions_ it represents.
-fn aggregate_mysql_frontier(frontier: Antichain<GtidPartition>) -> u64 {
+fn aggregate_mysql_frontier(frontier: &Antichain<GtidPartition>) -> u64 {
     let mut progress_stat = 0;
     for ts in frontier.iter() {
         if let Some(_uuid) = ts.interval().singleton() {

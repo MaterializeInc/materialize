@@ -18,11 +18,11 @@
 use std::fs::OpenOptions;
 use std::io::Read;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use std::{collections::BTreeMap, str::FromStr};
 
 use maplit::btreemap;
 use mz_ore::str::StrExt;
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 use toml_edit::{value, Document};
@@ -44,12 +44,13 @@ static KEYCHAIN_SERVICE_NAME: &str = "Materialize";
 static OLD_KEYCHAIN_SERVICE_NAME: &str = "Materialize mz CLI";
 
 #[cfg(target_os = "macos")]
-static DEFAULT_VAULT_VALUE: Lazy<Option<&str>> = Lazy::new(|| Some(Vault::Keychain.as_str()));
+static DEFAULT_VAULT_VALUE: LazyLock<Option<&str>> =
+    LazyLock::new(|| Some(Vault::Keychain.as_str()));
 
 #[cfg(not(target_os = "macos"))]
-static DEFAULT_VAULT_VALUE: Lazy<Option<&str>> = Lazy::new(|| Some(Vault::Inline.as_str()));
+static DEFAULT_VAULT_VALUE: LazyLock<Option<&str>> = LazyLock::new(|| Some(Vault::Inline.as_str()));
 
-static GLOBAL_PARAMS: Lazy<BTreeMap<&'static str, GlobalParam>> = Lazy::new(|| {
+static GLOBAL_PARAMS: LazyLock<BTreeMap<&'static str, GlobalParam>> = LazyLock::new(|| {
     btreemap! {
         "profile" => GlobalParam {
             get: |config_file| {
@@ -114,7 +115,7 @@ impl ConfigFile {
 
     /// Loads a profile from the configuration file.
     /// Panics if the profile is not found.
-    pub fn load_profile<'a>(&'a self, name: &'a str) -> Result<Profile, Error> {
+    pub fn load_profile<'a>(&'a self, name: &'a str) -> Result<Profile<'a>, Error> {
         match &self.parsed.profiles {
             Some(profiles) => match profiles.get(name) {
                 None => Err(Error::ProfileMissing(name.to_string())),
@@ -197,7 +198,7 @@ impl ConfigFile {
     }
 
     /// Removes a profile from the configuration file.
-    pub async fn remove_profile<'a>(&self, name: &str) -> Result<(), Error> {
+    pub async fn remove_profile(&self, name: &str) -> Result<(), Error> {
         let mut editable = self.editable.clone();
         let profiles = editable["profiles"]
             .as_table_mut()
@@ -256,7 +257,7 @@ impl ConfigFile {
         &'a self,
         name: &str,
         profile: &'a str,
-    ) -> Result<Option<&str>, Error> {
+    ) -> Result<Option<&'a str>, Error> {
         let profile = self.load_profile(profile)?;
         let value = (PROFILE_PARAMS[name].get)(profile.parsed);
 
@@ -324,7 +325,7 @@ impl ConfigFile {
     }
 }
 
-static PROFILE_PARAMS: Lazy<BTreeMap<&'static str, ProfileParam>> = Lazy::new(|| {
+static PROFILE_PARAMS: LazyLock<BTreeMap<&'static str, ProfileParam>> = LazyLock::new(|| {
     btreemap! {
         "app-password" => ProfileParam {
             get: |t| t.app_password.as_deref(),

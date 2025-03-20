@@ -7,24 +7,24 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fmt;
 use std::future::Future;
+use std::net::IpAddr;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::str::FromStr;
 
+use anyhow::Context;
 use async_trait::async_trait;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
-use mz_ore::netio::AsyncReady;
 use mz_pgwire_common::{
-    decode_startup, Conn, FrontendStartupMessage, ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION,
+    decode_startup, Conn, ConnectionCounter, FrontendStartupMessage, ACCEPT_SSL_ENCRYPTION,
+    CONN_UUID_KEY, MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION,
 };
-use mz_server_core::{ConnectionHandler, ReloadingTlsConfig};
-use mz_sql::session::vars::ConnectionCounter;
+use mz_server_core::{Connection, ConnectionHandler, ReloadingTlsConfig};
 use openssl::ssl::Ssl;
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::io::AsyncWriteExt;
 use tokio_openssl::SslStream;
-use tracing::trace;
+use tracing::{debug, error, trace};
+use uuid::Uuid;
 
 use crate::codec::FramedConn;
 use crate::metrics::{Metrics, MetricsConfig};
@@ -54,7 +54,9 @@ pub struct Config {
     /// system resources.
     pub internal: bool,
     /// Global connection limit and count
-    pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    pub active_connection_counter: ConnectionCounter,
+    /// Helm chart version
+    pub helm_chart_version: Option<String>,
 }
 
 /// A server that communicates with clients via the pgwire protocol.
@@ -64,14 +66,15 @@ pub struct Server {
     frontegg: Option<FronteggAuthentication>,
     metrics: Metrics,
     internal: bool,
-    active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    active_connection_counter: ConnectionCounter,
+    helm_chart_version: Option<String>,
 }
 
 #[async_trait]
 impl mz_server_core::Server for Server {
     const NAME: &'static str = "pgwire";
 
-    fn handle_connection(&self, conn: TcpStream) -> ConnectionHandler {
+    fn handle_connection(&self, conn: Connection) -> ConnectionHandler {
         // Using fully-qualified syntax means we won't accidentally call
         // ourselves (i.e., silently infinitely recurse) if the name or type of
         // `crate::Server::handle_connection` changes.
@@ -88,24 +91,24 @@ impl Server {
             frontegg: config.frontegg,
             metrics: Metrics::new(config.metrics, config.label),
             internal: config.internal,
-            active_connection_count: config.active_connection_count,
+            active_connection_counter: config.active_connection_counter,
+            helm_chart_version: config.helm_chart_version,
         }
     }
 
     #[mz_ore::instrument(level = "debug")]
-    pub fn handle_connection<A>(
+    pub fn handle_connection(
         &self,
-        conn: A,
-    ) -> impl Future<Output = Result<(), anyhow::Error>> + 'static + Send
-    where
-        A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin + fmt::Debug + 'static,
-    {
-        let mut adapter_client = self.adapter_client.clone();
+        conn: Connection,
+    ) -> impl Future<Output = Result<(), anyhow::Error>> + 'static + Send {
+        let adapter_client = self.adapter_client.clone();
         let frontegg = self.frontegg.clone();
         let tls = self.tls.clone();
         let internal = self.internal;
         let metrics = self.metrics.clone();
-        let active_connection_count = Arc::clone(&self.active_connection_count);
+        let active_connection_counter = self.active_connection_counter.clone();
+        let helm_chart_version = self.helm_chart_version.clone();
+
         // TODO(guswynn): remove this redundant_closure_call
         #[allow(clippy::redundant_closure_call)]
         async move {
@@ -127,17 +130,55 @@ impl Server {
                             // `SslRequest`. This is considered a graceful termination.
                             None => return Ok(()),
 
-                            Some(FrontendStartupMessage::Startup { version, params }) => {
-                                let mut conn = FramedConn::new(conn_id.clone(), conn);
+                            Some(FrontendStartupMessage::Startup {
+                                version,
+                                mut params,
+                            }) => {
+                                // If someone (usually the balancer) forwarded a connection UUID,
+                                // then use that, otherwise generate one.
+                                let conn_uuid_handle = conn.inner_mut().uuid_handle();
+                                let conn_uuid = params
+                                    .remove(CONN_UUID_KEY)
+                                    .and_then(|uuid| uuid.parse().inspect_err(|e| error!("pgwire connection with invalid conn UUID: {e}")).ok());
+                                let conn_uuid_forwarded = conn_uuid.is_some();
+                                let conn_uuid = conn_uuid.unwrap_or_else(Uuid::new_v4);
+                                conn_uuid_handle.set(conn_uuid);
+                                debug!(conn_uuid = %conn_uuid_handle.display(), conn_uuid_forwarded, "starting new pgwire connection in adapter");
+
+                                let direct_peer_addr = conn
+                                    .inner_mut()
+                                    .peer_addr()
+                                    .context("fetching peer addr")?
+                                    .ip();
+                                let peer_addr= match params.remove(MZ_FORWARDED_FOR_KEY) {
+                                    Some(ip_str) => {
+                                        match IpAddr::from_str(&ip_str) {
+                                            Ok(ip) => Some(ip),
+                                            Err(e) => {
+                                                error!("pgwire connection with invalid mz_forwarded_for address: {e}");
+                                                None
+                                            }
+                                        }
+                                    }
+                                    None => Some(direct_peer_addr)
+                                };
+                                let mut conn = FramedConn::new(
+                                    conn_id.clone(),
+                                    peer_addr,
+                                    conn,
+                                );
+
                                 protocol::run(protocol::RunParams {
                                     tls_mode: tls.as_ref().map(|tls| tls.mode),
                                     adapter_client,
                                     conn: &mut conn,
+                                    conn_uuid,
                                     version,
                                     params,
                                     frontegg: frontegg.as_ref(),
                                     internal,
-                                    active_connection_count,
+                                    active_connection_counter,
+                                    helm_chart_version,
                                 })
                                 .await?;
                                 conn.flush().await?;

@@ -14,11 +14,13 @@ secrets and connections.
 
 ## Syntax
 
-{{< diagram "show-objects.svg" >}}
+```mzsql
+SHOW OBJECTS [ FROM <schema_name> ]
+```
 
-Field | Use
-------|-----
-_schema&lowbar;name_ | The schema to show objects from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+Option                       | Description
+-----------------------------|------------
+**FROM** <schema_name>       | If specified, only show objects from the specified schema. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 
 ## Details
 
@@ -28,7 +30,7 @@ _schema&lowbar;name_ | The schema to show objects from. Defaults to first resolv
 
 ## Examples
 
-```sql
+```mzsql
 SHOW SCHEMAS;
 ```
 ```nofmt
@@ -36,7 +38,7 @@ SHOW SCHEMAS;
 --------
  public
 ```
-```sql
+```mzsql
 SHOW OBJECTS FROM public;
 ```
 ```nofmt
@@ -47,7 +49,7 @@ my_source       | source
 my_view         | view
 my_other_source | source
 ```
-```sql
+```mzsql
 SHOW OBJECTS;
 ```
 ```nofmt

@@ -15,11 +15,13 @@ operations provided by the standard [`subprocess`][subprocess] module.
 [subprocess]: https://docs.python.org/3/library/subprocess.html
 """
 
+import math
 import subprocess
 import sys
-from collections.abc import Sequence
+import time
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import IO
+from typing import IO, TypeVar
 
 from materialize import ui
 
@@ -140,3 +142,19 @@ def run_and_get_return_code(
         return 0
     except CalledProcessError as e:
         return e.returncode
+
+
+T = TypeVar("T")  # Generic type variable
+
+
+def run_with_retries(fn: Callable[[], T], max_duration: int = 60) -> T:
+    """Retry a function until it doesn't raise a `CalledProcessError`, uses
+    exponential backoff until `max_duration` is reached."""
+    for retry in range(math.ceil(math.log2(max_duration))):
+        try:
+            return fn()
+        except subprocess.CalledProcessError as e:
+            sleep_time = 2**retry
+            print(f"Failed: {e}, retrying in {sleep_time}s")
+            time.sleep(sleep_time)
+    return fn()

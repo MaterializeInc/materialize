@@ -9,13 +9,12 @@
 
 import logging
 import re
-import ssl
 from enum import Enum
 from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
-import pg8000
+import psycopg
 import sqlparse
 
 from . import Scenario, util
@@ -87,19 +86,13 @@ class Database:
     ) -> None:
         logging.debug(f"Initialize Database with host={host} port={port}, user={user}")
 
-        if require_ssl:
-            # verify_mode=ssl.CERT_REQUIRED is the default
-            ssl_context = ssl.create_default_context()
-        else:
-            ssl_context = None
-
-        self.conn = pg8000.connect(
+        self.conn = psycopg.connect(
             host=host,
             port=port,
             user=user,
             password=password,
-            database=database,
-            ssl_context=ssl_context,
+            dbname=database,
+            sslmode="require" if require_ssl else "disable",
         )
         self.conn.autocommit = True
         self.dialect = Dialect.MZ if "Materialize" in self.version() else Dialect.PG
@@ -132,21 +125,21 @@ class Database:
 
     def execute(self, statement: str) -> None:
         with self.conn.cursor() as cursor:
-            cursor.execute(statement)
+            cursor.execute(statement.encode())
 
     def execute_all(self, statements: list[str]) -> None:
         with self.conn.cursor() as cursor:
             for statement in statements:
-                cursor.execute(statement)
+                cursor.execute(statement.encode())
 
     def query_one(self, query: str) -> dict[Any, Any]:
         with self.conn.cursor() as cursor:
-            cursor.execute(query)
+            cursor.execute(query.encode())
             return cast(dict[Any, Any], cursor.fetchone())
 
     def query_all(self, query: str) -> dict[Any, Any]:
         with self.conn.cursor() as cursor:
-            cursor.execute(query)
+            cursor.execute(query.encode())
             return cast(dict[Any, Any], cursor.fetchall())
 
 

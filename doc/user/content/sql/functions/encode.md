@@ -48,7 +48,7 @@ each encoded byte, though not within a byte.
 
 Encoding and decoding in the `base64` format:
 
-```sql
+```mzsql
 SELECT encode('\x00404142ff', 'base64');
 ```
 ```nofmt
@@ -57,7 +57,7 @@ SELECT encode('\x00404142ff', 'base64');
  AEBBQv8=
 ```
 
-```sql
+```mzsql
 SELECT decode('A   EB BQv8 =', 'base64');
 ```
 ```nofmt
@@ -66,7 +66,7 @@ SELECT decode('A   EB BQv8 =', 'base64');
  \x00404142ff
 ```
 
-```sql
+```mzsql
 SELECT encode('This message is long enough that the output will run to multiple lines.', 'base64');
 ```
 ```nofmt
@@ -80,7 +80,7 @@ SELECT encode('This message is long enough that the output will run to multiple 
 
 Encoding and decoding in the `escape` format:
 
-```sql
+```mzsql
 SELECT encode('\x00404142ff', 'escape');
 ```
 ```nofmt
@@ -89,7 +89,7 @@ SELECT encode('\x00404142ff', 'escape');
  \000@AB\377
 ```
 
-```sql
+```mzsql
 SELECT decode('\000@AB\377', 'escape');
 ```
 ```nofmt
@@ -102,7 +102,7 @@ SELECT decode('\000@AB\377', 'escape');
 
 Encoding and decoding in the `hex` format:
 
-```sql
+```mzsql
 SELECT encode('\x00404142ff', 'hex');
 ```
 ```nofmt
@@ -111,7 +111,7 @@ SELECT encode('\x00404142ff', 'hex');
  00404142ff
 ```
 
-```sql
+```mzsql
 SELECT decode('00  40  41  42  ff', 'hex');
 ```
 ```nofmt

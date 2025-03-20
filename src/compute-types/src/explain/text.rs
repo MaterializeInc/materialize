@@ -20,7 +20,6 @@
 //!    pairs on the same line or as lowercase `$key` fields on indented lines.
 //! 5. A single non-recursive parameter can be written just as `$val`.
 
-use std::collections::BTreeMap;
 use std::fmt;
 use std::ops::Deref;
 
@@ -36,8 +35,10 @@ use mz_repr::explain::{
 use crate::plan::join::delta_join::{DeltaPathPlan, DeltaStagePlan};
 use crate::plan::join::linear_join::LinearStagePlan;
 use crate::plan::join::{DeltaJoinPlan, JoinClosure, LinearJoinPlan};
-use crate::plan::reduce::{AccumulablePlan, BasicPlan, CollationPlan, HierarchicalPlan};
-use crate::plan::{AvailableCollections, LirId, Plan};
+use crate::plan::reduce::{
+    AccumulablePlan, BasicPlan, CollationPlan, HierarchicalPlan, SingleBasicPlan,
+};
+use crate::plan::{AvailableCollections, LirId, Plan, PlanNode};
 
 impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
     fn fmt_text(
@@ -45,13 +46,13 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
     ) -> fmt::Result {
-        use Plan::*;
+        use PlanNode::*;
 
         let mode = HumanizedExplain::new(ctx.config.redacted);
         let annotations = PlanAnnotations::new(ctx.config.clone(), self);
 
-        match &self {
-            Constant { rows, lir_id: _ } => match rows {
+        match &self.node {
+            Constant { rows } => match rows {
                 Ok(rows) => {
                     if !rows.is_empty() {
                         writeln!(f, "{}Constant{}", ctx.indent, annotations)?;
@@ -81,12 +82,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                     }
                 }
             },
-            Get {
-                id,
-                keys,
-                plan,
-                lir_id: _,
-            } => {
+            Get { id, keys, plan } => {
                 ctx.indent.set(); // mark the current indent level
 
                 // Resolve the id as a string.
@@ -134,54 +130,40 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
 
                 ctx.indent.reset(); // reset the original indent level
             }
-            Let {
-                id,
-                value,
-                body,
-                lir_id: _,
-            } => {
+            Let { id, value, body } => {
                 let mut bindings = vec![(id, value.as_ref())];
                 let mut head = body.as_ref();
 
                 // Render Let-blocks nested in the body an outer Let-block in one step
                 // with a flattened list of bindings
-                while let Let {
-                    id,
-                    value,
-                    body,
-                    lir_id: _,
-                } = head
-                {
+                while let Let { id, value, body } = &head.node {
                     bindings.push((id, value.as_ref()));
                     head = body.as_ref();
                 }
 
-                writeln!(f, "{}Return{}", ctx.indent, annotations)?;
-                ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                 writeln!(f, "{}With", ctx.indent)?;
                 ctx.indented(|ctx| {
-                    for (id, value) in bindings.iter().rev() {
+                    for (id, value) in bindings.iter() {
                         writeln!(f, "{}cte {} =", ctx.indent, *id)?;
                         ctx.indented(|ctx| value.fmt_text(f, ctx))?;
                     }
                     Ok(())
                 })?;
+                writeln!(f, "{}Return{}", ctx.indent, annotations)?;
+                ctx.indented(|ctx| head.fmt_text(f, ctx))?;
             }
             LetRec {
                 ids,
                 values,
                 limits,
                 body,
-                lir_id: _,
             } => {
                 let bindings = izip!(ids.iter(), values, limits).collect_vec();
                 let head = body.as_ref();
 
-                writeln!(f, "{}Return{}", ctx.indent, annotations)?;
-                ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                 writeln!(f, "{}With Mutually Recursive", ctx.indent)?;
                 ctx.indented(|ctx| {
-                    for (id, value, limit) in bindings.iter().rev() {
+                    for (id, value, limit) in bindings.iter() {
                         if let Some(limit) = limit {
                             writeln!(f, "{}cte {} {} =", ctx.indent, limit, *id)?;
                         } else {
@@ -191,12 +173,13 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                     }
                     Ok(())
                 })?;
+                writeln!(f, "{}Return{}", ctx.indent, annotations)?;
+                ctx.indented(|ctx| head.fmt_text(f, ctx))?;
             }
             Mfp {
                 input,
                 mfp,
                 input_key_val,
-                lir_id: _,
             } => {
                 writeln!(f, "{}Mfp{}", ctx.indent, annotations)?;
                 ctx.indented(|ctx| {
@@ -221,7 +204,6 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 exprs,
                 mfp_after,
                 input_key,
-                lir_id: _,
             } => {
                 let exprs = mode.seq(exprs, None);
                 let exprs = CompactScalars(exprs);
@@ -243,11 +225,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                     input.fmt_text(f, ctx)
                 })?;
             }
-            Join {
-                inputs,
-                plan,
-                lir_id: _,
-            } => {
+            Join { inputs, plan } => {
                 use crate::plan::join::JoinPlan;
                 match plan {
                     JoinPlan::Linear(plan) => {
@@ -272,7 +250,6 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 plan,
                 input_key,
                 mfp_after,
-                lir_id: _,
             } => {
                 use crate::plan::reduce::ReducePlan;
                 match plan {
@@ -328,11 +305,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                     input.fmt_text(f, ctx)
                 })?;
             }
-            TopK {
-                input,
-                top_k_plan,
-                lir_id: _,
-            } => {
+            TopK { input, top_k_plan } => {
                 use crate::plan::top_k::TopKPlan;
                 match top_k_plan {
                     TopKPlan::MonotonicTop1(plan) => {
@@ -395,14 +368,13 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 writeln!(f, "{}", annotations)?;
                 ctx.indented(|ctx| input.fmt_text(f, ctx))?;
             }
-            Negate { input, lir_id: _ } => {
+            Negate { input } => {
                 writeln!(f, "{}Negate{}", ctx.indent, annotations)?;
                 ctx.indented(|ctx| input.fmt_text(f, ctx))?;
             }
             Threshold {
                 input,
                 threshold_plan,
-                lir_id: _,
             } => {
                 use crate::plan::threshold::ThresholdPlan;
                 match threshold_plan {
@@ -419,7 +391,6 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
             Union {
                 inputs,
                 consolidate_output,
-                lir_id: _,
             } => {
                 if *consolidate_output {
                     writeln!(
@@ -442,7 +413,6 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 forms,
                 input_key,
                 input_mfp,
-                lir_id: _,
             } => {
                 writeln!(f, "{}ArrangeBy{}", ctx.indent, annotations)?;
                 ctx.indented(|ctx| {
@@ -488,7 +458,9 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for AvailableCollections {
                     "{}",
                     separated(
                         ", ",
-                        types.iter().map(|c| ctx.humanizer.humanize_column_type(c))
+                        types
+                            .iter()
+                            .map(|c| ctx.humanizer.humanize_column_type(c, false))
                     )
                 )?;
                 writeln!(f, "]")?;
@@ -756,9 +728,22 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for BasicPlan {
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         match self {
-            BasicPlan::Single(idx, agg) => {
-                let agg = mode.expr(agg, None);
-                writeln!(f, "{}aggr=({}, {})", ctx.indent, idx, agg)?;
+            BasicPlan::Single(SingleBasicPlan {
+                index,
+                expr,
+                fused_unnest_list,
+            }) => {
+                let agg = mode.expr(expr, None);
+                let fused_unnest_list = if *fused_unnest_list {
+                    ", fused_unnest_list=true"
+                } else {
+                    ""
+                };
+                writeln!(
+                    f,
+                    "{}aggr=({}, {}{})",
+                    ctx.indent, index, agg, fused_unnest_list
+                )?;
             }
             BasicPlan::Multiple(aggs) => {
                 for (i, (i_datum, agg)) in aggs.iter().enumerate() {
@@ -814,9 +799,9 @@ struct Arrangement<'a> {
     thinning: &'a Vec<usize>,
 }
 
-impl<'a> From<&'a (Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>)> for Arrangement<'a> {
+impl<'a> From<&'a (Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)> for Arrangement<'a> {
     fn from(
-        (key, permutation, thinning): &'a (Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>),
+        (key, permutation, thinning): &'a (Vec<MirScalarExpr>, Vec<usize>, Vec<usize>),
     ) -> Self {
         Arrangement {
             key,
@@ -850,12 +835,12 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Arrangement<'a> {
 }
 
 /// Helper struct for rendering a permutation.
-struct Permutation<'a>(&'a BTreeMap<usize, usize>);
+struct Permutation<'a>(&'a Vec<usize>);
 
 impl<'a> fmt::Display for Permutation<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut pairs = vec![];
-        for (x, y) in self.0.iter().filter(|(x, y)| x != y) {
+        for (x, y) in self.0.iter().enumerate().filter(|(x, y)| x != *y) {
             pairs.push(format!("#{}: #{}", x, y));
         }
 
@@ -880,7 +865,7 @@ struct PlanAnnotations {
 // `AnnotatedPlan` here as well.
 impl PlanAnnotations {
     fn new(config: ExplainConfig, plan: &Plan) -> Self {
-        let node_id = plan.lir_id();
+        let node_id = plan.lir_id;
         Self { config, node_id }
     }
 }

@@ -20,6 +20,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::num::{NonNeg, NonNegError};
 use num::Signed;
 use proptest::prelude::Strategy;
+use prost::UnknownEnumValue;
 use uuid::Uuid;
 
 #[cfg(feature = "chrono")]
@@ -27,7 +28,6 @@ pub mod chrono;
 
 #[cfg(feature = "tokio-postgres")]
 pub mod tokio_postgres;
-pub mod wire_compatible;
 
 include!(concat!(env!("OUT_DIR"), "/mz_proto.rs"));
 
@@ -106,6 +106,12 @@ impl From<NonNegError> for TryFromProtoError {
 impl From<CharTryFromError> for TryFromProtoError {
     fn from(error: CharTryFromError) -> Self {
         TryFromProtoError::CharTryFromError(error)
+    }
+}
+
+impl From<UnknownEnumValue> for TryFromProtoError {
+    fn from(UnknownEnumValue(n): UnknownEnumValue) -> Self {
+        TryFromProtoError::UnknownEnumVariant(format!("value {n}"))
     }
 }
 
@@ -236,6 +242,13 @@ pub trait RustType<Proto>: Sized {
     /// Convert a `Self` into a `Proto` value.
     fn into_proto(&self) -> Proto;
 
+    /// A zero clone version of [`Self::into_proto`] that types can
+    /// optionally implement, otherwise, the default implementation
+    /// delegates to [`Self::into_proto`].
+    fn into_proto_owned(self) -> Proto {
+        self.into_proto()
+    }
+
     /// Consume and convert a `Proto` back into a `Self` value.
     ///
     /// Since `Proto` can be "bigger" than the original, this
@@ -331,10 +344,21 @@ where
     }
 
     fn from_proto(proto: Vec<P>) -> Result<Self, TryFromProtoError> {
-        proto
-            .into_iter()
-            .map(R::from_proto)
-            .collect::<Result<Vec<_>, _>>()
+        proto.into_iter().map(R::from_proto).collect()
+    }
+}
+
+/// Blanket implementation for `Box<[R]>` where `R` is a [`RustType`].
+impl<R, P> RustType<Vec<P>> for Box<[R]>
+where
+    R: RustType<P>,
+{
+    fn into_proto(&self) -> Vec<P> {
+        self.iter().map(R::into_proto).collect()
+    }
+
+    fn from_proto(proto: Vec<P>) -> Result<Self, TryFromProtoError> {
+        proto.into_iter().map(R::from_proto).collect()
     }
 }
 
@@ -535,6 +559,15 @@ impl<'a> RustType<String> for Cow<'a, str> {
     }
 }
 
+impl RustType<String> for Box<str> {
+    fn into_proto(&self) -> String {
+        self.to_string()
+    }
+    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
+        Ok(proto.into())
+    }
+}
+
 /// The symmetric counterpart of [`RustType`], similar to
 /// what [`Into`] is to [`From`].
 ///
@@ -623,6 +656,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
     use proptest::prelude::*;
 
     use super::*;
@@ -634,7 +668,7 @@ mod tests {
         #[cfg_attr(miri, ignore)] // too slow
         fn duration_protobuf_roundtrip(expect in any_duration() ) {
             let actual = protobuf_roundtrip::<_, ProtoDuration>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }

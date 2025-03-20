@@ -43,17 +43,19 @@ $ set schema={
 > CREATE SOURCE s
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${schema}'
 
 ! CREATE SOURCE s
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-blah-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${schema}'
 contains:source "materialize.public.s" already exists
 
-> CREATE SOURCE IF NOT EXISTS s
+> DROP SOURCE s
+
+> CREATE SOURCE s
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-blah-${testdrive.seed}')
+
+> CREATE TABLE s_tbl FROM SOURCE s (REFERENCE "testdrive-data-blah-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE VIEW test1 AS SELECT 1;
@@ -113,7 +115,7 @@ contains:unknown catalog item 'test2'
 # Test that CASCADE causes all dependent views to be dropped along with the
 # named source.
 
-> CREATE VIEW test4 as SELECT * FROM s;
+> CREATE VIEW test4 as SELECT * FROM s_tbl;
 
 > DROP SOURCE s CASCADE;
 
@@ -123,18 +125,20 @@ contains:unknown catalog item 'test4'
 > CREATE SOURCE s
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+
+> CREATE TABLE s_tbl FROM SOURCE s (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE SINK s1
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM s
+  FROM s_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-v-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
 ! CREATE SINK s1
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM s
+  FROM s_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-v-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -142,14 +146,14 @@ contains:sink "materialize.public.s1" already exists
 
 > CREATE SINK IF NOT EXISTS s1
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM s
+  FROM s_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-v2-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
 > CREATE SINK s2
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM s
+  FROM s_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-v3-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -158,7 +162,7 @@ contains:sink "materialize.public.s1" already exists
 ! CREATE VIEW v2 AS SELECT * FROM s1;
 contains:catalog item 'materialize.public.s1' is a sink and so cannot be depended upon
 
-> CREATE VIEW v2 AS SELECT X from s;
+> CREATE VIEW v2 AS SELECT X from s_tbl;
 
 > CREATE VIEW v2a AS SELECT X+1 as X from v2;
 
@@ -172,14 +176,14 @@ contains:catalog item 'materialize.public.i1' is an index and so cannot be depen
 > CREATE INDEX i2 ON v2a(x*2);
 
 > SHOW INDEXES ON v2a;
-name    on  cluster         key
+name    on  cluster         key        comment
 ---------------------------------------------------------------------------------------
-i2      v2a <CLUSTER_NAME>  "{x * 2}"
+i2      v2a <CLUSTER_NAME>  "{x * 2}"  ""
 
 > SHOW INDEXES ON v2;
-name    on  cluster         key
+name    on  cluster         key    comment
 ------------------------------------------------------------------------------------
-i1      v2  <CLUSTER_NAME>  {x}
+i1      v2  <CLUSTER_NAME>  {x}    ""
 
 # Test that dependent indexes do not prevent view deletion when restrict is specified
 # but do not cause deletion of dependent views
@@ -189,30 +193,30 @@ i1      v2  <CLUSTER_NAME>  {x}
 contains:unknown catalog item 'v2a'
 
 > SHOW INDEXES ON v2;
-name    on  cluster         key
+name    on  cluster         key    comment
 -----------------------------------------------------------------------------------
-i1      v2  <CLUSTER_NAME>  {x}
+i1      v2  <CLUSTER_NAME>  {x}    ""
 
 ! DROP INDEX i2;
 contains:unknown catalog item 'i2'
 
-> CREATE VIEW v4 AS SELECT x, y from s;
+> CREATE VIEW v4 AS SELECT x, y from s_tbl;
 
 > CREATE VIEW v4a AS SELECT y from v4;
 
 > CREATE INDEX i3 ON v4a(y);
 
 > SHOW INDEXES ON v4a;
-name    on  cluster         key
+name    on  cluster         key    comment
 ------------------------------------------------------------------------------------
-i3      v4a <CLUSTER_NAME>  {y}
+i3      v4a <CLUSTER_NAME>  {y}    ""
 
 > CREATE INDEX i4 ON v4(x);
 
 > SHOW INDEXES ON v4;
-name    on  cluster         key
+name    on  cluster         key    comment
 ----------------------------------------------------------------------------------
-i4      v4  <CLUSTER_NAME>  {x}
+i4      v4  <CLUSTER_NAME>  {x}    ""
 
 # Test cascade deletes associated indexes as well
 > DROP VIEW v4a CASCADE;
@@ -224,25 +228,25 @@ contains:unknown catalog item 'v4a'
 contains:unknown catalog item 'i3'
 
 > SHOW INDEXES ON v4;
-name    on  cluster         key
+name    on  cluster         key    comment
 ----------------------------------------------------------------------------------
-i4      v4  <CLUSTER_NAME>  {x}
+i4      v4  <CLUSTER_NAME>  {x}    ""
 
 > CREATE VIEW v5 AS SELECT substr(y, 3, 2) as substr from v4;
 
 > CREATE INDEX i5 ON v5(substr);
 
 > SHOW INDEXES ON v5;
-name    on  cluster         key
+name    on  cluster         key        comment
 ----------------------------------------------------------------------------------
-i5      v5  <CLUSTER_NAME>  {substr}
+i5      v5  <CLUSTER_NAME>  {substr}   ""
 
 > CREATE VIEW multicol AS SELECT 'a' AS a, 'b' AS b, 'c' AS c, 'd' AS d
 > CREATE INDEX i6 ON multicol (2, a, 4)
 > SHOW INDEXES ON multicol
-name    on          cluster         key
+name    on          cluster         key      comment
 -------------------------------------------------------------------------------
-i6      multicol    <CLUSTER_NAME>  {b,a,d}
+i6      multicol    <CLUSTER_NAME>  {b,a,d}  ""
 
 # Test cascade deletes all indexes associated with cascaded views
 > DROP VIEW v4 CASCADE;
@@ -265,20 +269,24 @@ contains:unknown catalog item 'i4'
 
 > DROP VIEW v2;
 
+> DROP TABLE s_tbl CASCADE;
+
 # Materialized source tests
 
 > CREATE SOURCE s3
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+
+> CREATE TABLE s3_tbl FROM SOURCE s3 (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
 
 # Test that dependent indexes do not prevent source deletion when restrict is specified
-> CREATE INDEX j1 on s3(ascii(y))
+> CREATE INDEX j1 on s3_tbl(ascii(y))
 
-> SHOW INDEXES ON s3;
-name    on  cluster         key
+> SHOW INDEXES ON s3_tbl;
+name    on      cluster         key                      comment
 ----------------------------------------------------------------------------------------------
-j1      s3  <CLUSTER_NAME>  "{pg_catalog.ascii(y)}"
+j1      s3_tbl  <CLUSTER_NAME>  "{pg_catalog.ascii(y)}"  ""
 
 > DROP SOURCE s3 CASCADE;
 
@@ -293,23 +301,25 @@ contains:unknown catalog item 'j1'
 > CREATE SOURCE s4
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+
+> CREATE TABLE s4_tbl FROM SOURCE s4 (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
 
-> CREATE INDEX j2 on s4(x+2);
+> CREATE INDEX j2 on s4_tbl(x+2);
 
-> CREATE VIEW w as SELECT y, x + 2 as z from s4;
+> CREATE VIEW w as SELECT y, x + 2 as z from s4_tbl;
 
 > CREATE INDEX j3 on w(z);
 
-> SHOW INDEXES ON s4;
-name    on  cluster         key
+> SHOW INDEXES ON s4_tbl;
+name    on      cluster         key         comment
 ------------------------------------------------------------------------------------
-j2      s4  <CLUSTER_NAME>  "{x + 2}"
+j2      s4_tbl  <CLUSTER_NAME>  "{x + 2}"   ""
 
 > SHOW INDEXES ON w;
-name    on          cluster         key
+name    on          cluster         key    comment
 -----------------------------------------------------------------------------
-j3      w           <CLUSTER_NAME>  {z}
+j3      w           <CLUSTER_NAME>  {z}    ""
 
 > DROP SOURCE s4 CASCADE;
 
@@ -330,15 +340,17 @@ contains:unknown catalog item 'j2'
 > CREATE SOURCE s5
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+
+> CREATE TABLE s5_tbl FROM SOURCE s5 (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
 
-> CREATE DEFAULT INDEX ON s5;
+> CREATE DEFAULT INDEX ON s5_tbl;
 
-> DROP INDEX s5_primary_idx CASCADE;
+> DROP INDEX s5_tbl_primary_idx CASCADE;
 
 > DROP SOURCE s5 CASCADE;
 
-# https://github.com/MaterializeInc/materialize/issues/5577
+# https://github.com/MaterializeInc/database-issues/issues/1714
 > CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4)
 
 > CREATE VIEW v1 AS SELECT CAST('{2}' AS int4_list)
@@ -413,9 +425,9 @@ contains:cannot drop type "int4_list": still depended upon by type "int4_list_li
 > DROP TYPE int4_list_list
 
 #cleanup
-> DROP SINK s1;
+> DROP SINK IF EXISTS s1;
 
-> DROP SINK s2;
+> DROP SINK IF EXISTS s2;
 
 > DROP SOURCE s CASCADE;
 

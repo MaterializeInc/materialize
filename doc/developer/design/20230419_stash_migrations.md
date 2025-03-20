@@ -1,5 +1,5 @@
 - Feature name: Improved Stash Migrations
-- Associated: [#17466](https://github.com/MaterializeInc/materialize/issues/17466)
+- Associated: [#17466](https://github.com/MaterializeInc/database-issues/issues/5072)
 
 # Summary
 [summary]: #summary
@@ -31,7 +31,7 @@ if our builds and tests are passing, then the migration won't break anything in 
 
 There have been several issues caused by Stash migrations:
 
-* [materialize#17824](https://github.com/MaterializeInc/materialize/issues/17824)
+* [database-issues#5197](https://github.com/MaterializeInc/database-issues/issues/5197)
   * General difficulty in writing Stash migrations, see [materialize#18719](https://github.com/MaterializeInc/materialize/pull/18719) or [materialize#17727](https://github.com/MaterializeInc/materialize/pull/17727) for examples.
 * [materialize#18578](https://github.com/MaterializeInc/materialize/pull/18578)
   * Fixed previous migrations that failed to remove old types from the Stash.
@@ -339,12 +339,12 @@ We can test this change in the following ways:
 `environmentd` after this change has been applied, assert we're able to migrate successfully.
 2. As mentioned above, use the `stash-debug` tool's `upgrade-check` command to make sure customer
 environments would be able to successfully upgrade.
-3. Track the number of rows, and the size of rows, that exist in the Stash [materialize#18871](https://github.com/MaterializeInc/materialize/issues/18871).
+3. Track the number of rows, and the size of rows, that exist in the Stash [database-issues#5575](https://github.com/MaterializeInc/database-issues/issues/5575).
 If we don't see any change in these numbers, and we don't see any errors otherwise (e.g. in Sentry),
 that's a strong indication that the migration is working as expected.
 4. Add more cases to the existing [upgrade tests](https://github.com/MaterializeInc/materialize/blob/main/test/upgrade/mzcompose.py)
 to cover any features we might be missing.
-5. (Future) Re-introduce the builtin-migration tests [materialize#17236](https://github.com/MaterializeInc/materialize/issues/17236)
+5. (Future) Re-introduce the builtin-migration tests [database-issues#4994](https://github.com/MaterializeInc/database-issues/issues/4994)
 that start Materialize at a previous version of the repo, and then restarts it with the current
 commit.
 6. (Future) In a Rust test, use the snapshotted Stash types to generate "old" version of the Stash
@@ -423,7 +423,7 @@ engineering cost.
 [unresolved-questions]: #unresolved-questions
 
 * How important do we believe human readability of the Stash is?
-* ~~Does the Stash need to be JSON for billing purposes? This [issue](https://github.com/MaterializeInc/materialize/issues/14264) indicates it might, but this [comment](https://github.com/MaterializeInc/materialize/issues/14264#issuecomment-1218250985) indicates it does not.~~
+* ~~Does the Stash need to be JSON for billing purposes? This [issue](https://github.com/MaterializeInc/database-issues/issues/4076) indicates it might, but this [comment](https://github.com/MaterializeInc/database-issues/issues/4076#issuecomment-1218250985) indicates it does not.~~
     * **Answer:** No. `environmentd` and `stash-debug` are the only two things that directly depend
     on the Stash. If application code wants to access the Stash, it needs to do it through
     `environmentd`.

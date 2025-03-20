@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_create_source_denylist_with_options = true
+ALTER SYSTEM SET kafka_transaction_timeout = '60s'
 
 # Test creating a Kafka sink using ssh.
 
@@ -29,10 +29,9 @@ one
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE non_ssh IN CLUSTER sc
-  FROM KAFKA CONNECTION kafka_conn_non_ssh (
-    TOPIC 'testdrive-thetopic-${testdrive.seed}',
-    TOPIC METADATA REFRESH INTERVAL '1s'
-  )
+  FROM KAFKA CONNECTION kafka_conn_non_ssh (TOPIC 'testdrive-thetopic-${testdrive.seed}')
+
+> CREATE TABLE non_ssh_tbl FROM SOURCE non_ssh (REFERENCE "testdrive-thetopic-${testdrive.seed}")
   FORMAT TEXT
   ENVELOPE NONE
 
@@ -45,13 +44,13 @@ one
 
 > CREATE SINK sink_fixed
   IN CLUSTER sc
-  FROM non_ssh
+  FROM non_ssh_tbl
   INTO KAFKA CONNECTION kafka_conn_using (TOPIC 'sink_fixed-${testdrive.seed}')
   FORMAT JSON ENVELOPE DEBEZIUM
 
 > CREATE SINK sink_dynamic
   IN CLUSTER sc
-  FROM non_ssh
+  FROM non_ssh_tbl
   INTO KAFKA CONNECTION kafka_conn_dynamic (TOPIC 'sink_dynamic-${testdrive.seed}')
   FORMAT JSON ENVELOPE DEBEZIUM
 

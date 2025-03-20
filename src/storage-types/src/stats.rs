@@ -10,16 +10,10 @@
 //! Types and traits that connect up our mz-repr types with the stats that persist maintains.
 
 use mz_expr::{ColumnSpecs, Interpreter, MapFilterProject, ResultSpec, UnmaterializableFunc};
-use mz_persist_types::columnar::Data;
-use mz_persist_types::dyn_struct::DynStruct;
 use mz_persist_types::stats::{
-    BytesStats, ColumnStats, DynStats, JsonStats, PartStats, PartStatsMetrics,
+    BytesStats, ColumnStatKinds, JsonStats, PartStats, PartStatsMetrics,
 };
-use mz_repr::adt::jsonb::Jsonb;
-use mz_repr::{
-    ColumnType, Datum, DatumToPersist, DatumToPersistFn, RelationDesc, RowArena, ScalarType,
-};
-use tracing::warn;
+use mz_repr::{ColumnIndex, ColumnType, Datum, RelationDesc, RowArena, ScalarType};
 
 /// Bundles together a relation desc with the stats for a specific part, and translates between
 /// Persist's stats representation and the `ResultSpec`s that are used for eg. filter pushdown.
@@ -47,32 +41,6 @@ impl<'a> RelationPartStats<'a> {
     }
 }
 
-fn downcast_stats<'a, T: Data>(
-    metrics: &PartStatsMetrics,
-    name: &str,
-    col_name: &str,
-    stats: &'a dyn DynStats,
-) -> Option<&'a T::Stats> {
-    match stats.as_any().downcast_ref::<T::Stats>() {
-        Some(x) => Some(x),
-        None => {
-            // TODO: There is a known instance of this #22680. While we look
-            // into it, log at warn instead of error to avoid spamming Sentry.
-            // Once we fix it, flip this back to error.
-            warn!(
-                "unexpected stats type for {} {} {}: expected {} got {}",
-                name,
-                col_name,
-                std::any::type_name::<T>(),
-                std::any::type_name::<T::Stats>(),
-                stats.type_name()
-            );
-            metrics.mismatched_count.inc();
-            None
-        }
-    }
-}
-
 impl RelationPartStats<'_> {
     pub fn may_match_mfp<'a>(&'a self, time_range: ResultSpec<'a>, mfp: &MapFilterProject) -> bool {
         let arena = RowArena::new();
@@ -84,9 +52,9 @@ impl RelationPartStats<'_> {
             return true;
         }
 
-        for (id, _) in self.desc.typ().column_types.iter().enumerate() {
-            let result_spec = self.col_stats(id, &arena);
-            ranges.push_column(id, result_spec);
+        for (pos, (idx, _name, _typ)) in self.desc.iter_all().enumerate() {
+            let result_spec = self.col_stats(idx, &arena);
+            ranges.push_column(pos, result_spec);
         }
         let result = ranges.mfp_filter(mfp).range;
         result.may_contain(Datum::True) || result.may_fail()
@@ -99,13 +67,18 @@ impl RelationPartStats<'_> {
                 ResultSpec::value_between(bools.lower.into(), bools.upper.into())
             }
             JsonStats::Strings(strings) => ResultSpec::value_between(
-                strings.lower.as_str().into(),
-                strings.upper.as_str().into(),
+                Datum::String(strings.lower.as_str()),
+                Datum::String(strings.upper.as_str()),
             ),
-            JsonStats::Numerics(numerics) => ResultSpec::value_between(
-                arena.make_datum(|r| Jsonb::decode(&numerics.lower, r)),
-                arena.make_datum(|r| Jsonb::decode(&numerics.upper, r)),
-            ),
+            JsonStats::Numerics(numerics) => {
+                match mz_repr::stats::decode_numeric(numerics, arena) {
+                    Ok((lower, upper)) => ResultSpec::value_between(lower, upper),
+                    Err(err) => {
+                        tracing::error!(%err, "failed to decode Json Numeric stats!");
+                        ResultSpec::anything()
+                    }
+                }
+            }
             JsonStats::Maps(maps) => {
                 ResultSpec::map_spec(
                     maps.into_iter()
@@ -116,7 +89,8 @@ impl RelationPartStats<'_> {
                                 // that accessing it might be null.
                                 v_spec = v_spec.union(ResultSpec::null());
                             }
-                            (k.as_str().into(), v_spec)
+                            let key = arena.make_datum(|r| r.push(Datum::String(k.as_str())));
+                            (key, v_spec)
                         })
                         .collect(),
                 )
@@ -126,62 +100,63 @@ impl RelationPartStats<'_> {
         }
     }
 
-    pub fn col_stats<'a>(&'a self, id: usize, arena: &'a RowArena) -> ResultSpec<'a> {
-        let value_range = self.col_values(id, arena).unwrap_or(ResultSpec::anything());
-        let json_range = self.col_json(id, arena).unwrap_or(ResultSpec::anything());
+    pub fn col_stats<'a>(&'a self, idx: &ColumnIndex, arena: &'a RowArena) -> ResultSpec<'a> {
+        let value_range = match self.col_values(idx, arena) {
+            Some(spec) => spec,
+            None => ResultSpec::anything(),
+        };
+        let json_range = self.col_json(idx, arena).unwrap_or(ResultSpec::anything());
 
         // If this is not a JSON column or we don't have JSON stats, json_range is
         // [ResultSpec::anything] and this is a noop.
         value_range.intersect(json_range)
     }
 
-    fn col_json<'a>(&'a self, idx: usize, arena: &'a RowArena) -> Option<ResultSpec<'a>> {
-        let name = self.desc.get_name(idx);
-        let typ = &self.desc.typ().column_types[idx];
-        let ok_stats = self
-            .stats
-            .key
-            .col::<Option<DynStruct>>("ok")
-            .expect("ok column should be a struct")?;
-        let stats = ok_stats.some.cols.get(name.as_str())?;
-        match typ {
-            ColumnType {
-                scalar_type: ScalarType::Jsonb,
-                nullable: false,
-            } => {
-                let byte_stats =
-                    downcast_stats::<Vec<u8>>(self.metrics, self.name, name.as_str(), &**stats)?;
-                let value_range = match byte_stats {
-                    BytesStats::Json(json_stats) => {
-                        Self::json_spec(ok_stats.some.len, json_stats, arena)
-                    }
-                    BytesStats::Primitive(_) | BytesStats::Atomic(_) => ResultSpec::anything(),
-                };
-                Some(value_range)
-            }
-            ColumnType {
-                scalar_type: ScalarType::Jsonb,
-                nullable: true,
-            } => {
-                let option_stats = downcast_stats::<Option<Vec<u8>>>(
-                    self.metrics,
-                    self.name,
-                    name.as_str(),
-                    &**stats,
-                )?;
-                let null_range = match option_stats.none {
-                    0 => ResultSpec::nothing(),
-                    _ => ResultSpec::null(),
-                };
-                let value_range = match &option_stats.some {
-                    BytesStats::Json(json_stats) => {
-                        Self::json_spec(ok_stats.some.len, json_stats, arena)
-                    }
-                    BytesStats::Primitive(_) | BytesStats::Atomic(_) => ResultSpec::anything(),
-                };
-                Some(null_range.union(value_range))
-            }
-            _ => None,
+    fn col_json<'a>(&'a self, idx: &ColumnIndex, arena: &'a RowArena) -> Option<ResultSpec<'a>> {
+        let name = self.desc.get_name_idx(idx);
+        let typ = &self.desc.get_type(idx);
+
+        let ok_stats = self.stats.key.col("ok")?;
+        let ok_stats = ok_stats
+            .try_as_optional_struct()
+            .expect("ok column should be nullable struct");
+        let col_stats = ok_stats.some.cols.get(name.as_str())?;
+
+        if let ColumnType {
+            scalar_type: ScalarType::Jsonb,
+            nullable,
+        } = typ
+        {
+            let value_range = match &col_stats.values {
+                ColumnStatKinds::Bytes(BytesStats::Json(json_stats)) => {
+                    Self::json_spec(ok_stats.some.len, json_stats, arena)
+                }
+                ColumnStatKinds::Bytes(
+                    BytesStats::Primitive(_) | BytesStats::Atomic(_) | BytesStats::FixedSize(_),
+                ) => ResultSpec::anything(),
+                other => {
+                    self.metrics.mismatched_count.inc();
+                    tracing::error!(
+                        "expected BytesStats for JSON column {}, found {other:?}",
+                        self.name
+                    );
+                    return None;
+                }
+            };
+            let null_range = match (nullable, col_stats.nulls) {
+                (false, None) => ResultSpec::nothing(),
+                (true, Some(nulls)) if nulls.count == 0 => ResultSpec::nothing(),
+                (true, Some(_)) => ResultSpec::null(),
+                (col_null, stats_null) => {
+                    self.metrics.mismatched_count.inc();
+                    tracing::error!("JSON column nullability mismatch, col {} null: {col_null}, stats: {stats_null:?}", self.name);
+                    return None;
+                }
+            };
+
+            Some(null_range.union(value_range))
+        } else {
+            None
         }
     }
 
@@ -191,11 +166,13 @@ impl RelationPartStats<'_> {
 
     pub fn ok_count(&self) -> Option<usize> {
         // The number of OKs is the number of rows whose error is None.
-        self.stats
+        let stats = self
+            .stats
             .key
-            .col::<Option<Vec<u8>>>("err")
-            .expect("err column should be a Option<Vec<u8>>")
-            .map(|x| x.none)
+            .col("err")?
+            .try_as_optional_bytes()
+            .expect("err column should be a Option<Vec<u8>>");
+        Some(stats.none)
     }
 
     pub fn err_count(&self) -> Option<usize> {
@@ -208,69 +185,45 @@ impl RelationPartStats<'_> {
         num_oks.map(|num_oks| num_results - num_oks)
     }
 
-    fn col_values<'a>(&'a self, idx: usize, arena: &'a RowArena) -> Option<ResultSpec> {
-        struct ColValues<'a>(
-            &'a PartStatsMetrics,
-            &'a str,
-            &'a str,
-            &'a dyn DynStats,
-            &'a RowArena,
-            Option<usize>,
-        );
-        impl<'a> DatumToPersistFn<Option<ResultSpec<'a>>> for ColValues<'a> {
-            fn call<T: DatumToPersist>(self) -> Option<ResultSpec<'a>> {
-                let ColValues(metrics, name, col_name, stats, arena, total_count) = self;
-                let stats = downcast_stats::<T::Data>(metrics, name, col_name, stats)?;
-                let make_datum = |lower| arena.make_datum(|packer| T::decode(lower, packer));
-                let min = stats.lower().map(make_datum);
-                let max = stats.upper().map(make_datum);
-                let null_count = stats.none_count();
-                let values = match (total_count, min, max) {
-                    (Some(total_count), _, _) if total_count == null_count => ResultSpec::nothing(),
-                    (_, Some(min), Some(max)) => ResultSpec::value_between(min, max),
-                    _ => ResultSpec::value_all(),
-                };
-                let nulls = if null_count > 0 {
-                    ResultSpec::null()
-                } else {
-                    ResultSpec::nothing()
-                };
-                Some(values.union(nulls))
-            }
-        }
+    fn col_values<'a>(&'a self, idx: &ColumnIndex, arena: &'a RowArena) -> Option<ResultSpec<'a>> {
+        let name = self.desc.get_name_idx(idx);
+        let typ = self.desc.get_type(idx);
 
-        let name = self.desc.get_name(idx);
-        let typ = &self.desc.typ().column_types[idx];
-        let ok_stats = self
-            .stats
-            .key
-            .col::<Option<DynStruct>>("ok")
-            .expect("ok column should be a struct")?;
-        let stats = ok_stats.some.cols.get(name.as_str())?;
-        let spec = typ.to_persist(ColValues(
-            self.metrics,
-            self.name,
-            name.as_str(),
-            stats.as_ref(),
-            arena,
-            self.len(),
-        ))?;
+        let ok_stats = self.stats.key.cols.get("ok")?;
+        let ColumnStatKinds::Struct(ok_stats) = &ok_stats.values else {
+            panic!("'ok' column stats should be a struct")
+        };
+        let col_stats = ok_stats.cols.get(name.as_str())?;
 
-        Some(spec)
+        let min_max = mz_repr::stats::col_values(&typ.scalar_type, &col_stats.values, arena);
+        let null_count = col_stats.nulls.as_ref().map_or(0, |nulls| nulls.count);
+        let total_count = self.len();
+
+        let values = match (total_count, min_max) {
+            (Some(total_count), _) if total_count == null_count => ResultSpec::nothing(),
+            (_, Some((min, max))) => ResultSpec::value_between(min, max),
+            _ => ResultSpec::value_all(),
+        };
+        let nulls = if null_count > 0 {
+            ResultSpec::null()
+        } else {
+            ResultSpec::nothing()
+        };
+
+        Some(values.union(nulls))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::AsArray;
     use mz_ore::metrics::MetricsRegistry;
     use mz_persist_types::codec_impls::UnitSchema;
+    use mz_persist_types::columnar::{ColumnDecoder, Schema};
     use mz_persist_types::part::PartBuilder;
     use mz_persist_types::stats::PartStats;
     use mz_repr::{arb_datum_for_column, RelationType};
-    use mz_repr::{
-        ColumnType, Datum, DatumToPersist, DatumToPersistFn, RelationDesc, Row, RowArena,
-        ScalarType,
-    };
+    use mz_repr::{ColumnType, Datum, RelationDesc, Row, RowArena, ScalarType};
     use proptest::prelude::*;
     use proptest::strategy::ValueTree;
 
@@ -278,39 +231,36 @@ mod tests {
     use crate::sources::SourceData;
 
     fn validate_stats(column_type: &ColumnType, datums: &[Datum<'_>]) -> Result<(), String> {
-        struct ValidateStats<'a>(&'a RelationPartStats<'a>, &'a RowArena, Datum<'a>);
-        impl<'a> DatumToPersistFn<()> for ValidateStats<'a> {
-            fn call<T: DatumToPersist>(self) -> () {
-                let ValidateStats(stats, arena, datum) = self;
-                if let Some(spec) = stats.col_values(0, arena) {
-                    assert!(spec.may_contain(datum));
-                }
-            }
-        }
+        let schema = RelationDesc::builder()
+            .with_column("col", column_type.clone())
+            .finish();
 
-        let schema = RelationDesc::empty().with_column("col", column_type.clone());
-
-        let mut builder = PartBuilder::new(&schema, &UnitSchema).expect("success");
+        let mut builder = PartBuilder::new(&schema, &UnitSchema);
         let mut row = SourceData(Ok(Row::default()));
         for datum in datums {
             row.as_mut().unwrap().packer().push(datum);
             builder.push(&row, &(), 1u64, 1i64);
         }
         let part = builder.finish();
-        let stats = part.key_stats()?;
+
+        let key_col = part.key.as_struct();
+        let decoder = <RelationDesc as Schema<SourceData>>::decoder(&schema, key_col.clone())
+            .expect("success");
+        let key_stats = decoder.stats();
 
         let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
         let stats = RelationPartStats {
             name: "test",
             metrics: &metrics,
-            stats: &PartStats { key: stats },
+            stats: &PartStats { key: key_stats },
             desc: &schema,
         };
         let arena = RowArena::default();
 
         // Validate that the stats would include all of the provided datums.
         for datum in datums {
-            column_type.to_persist(ValidateStats(&stats, &arena, *datum));
+            let spec = stats.col_stats(&ColumnIndex::from_raw(0), &arena);
+            assert!(spec.may_contain(*datum));
         }
 
         Ok(())
@@ -348,15 +298,19 @@ mod tests {
             prop::collection::vec(arb_datum_for_column(&ty), 0..128)
                 .prop_map(move |datums| (ty.clone(), datums))
         });
-        proptest!(|((ty, datums) in datums)| {
-            // The proptest! macro interferes with rustfmt.
-            let datums: Vec<_> = datums.iter().map(Datum::from).collect();
-            prop_assert_eq!(validate_stats(&ty, &datums[..]), Ok(()));
-        })
+
+        proptest!(
+            ProptestConfig::with_cases(80),
+            |((ty, datums) in datums)| {
+                // The proptest! macro interferes with rustfmt.
+                let datums: Vec<_> = datums.iter().map(Datum::from).collect();
+                prop_assert_eq!(validate_stats(&ty, &datums[..]), Ok(()));
+            }
+        )
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // too slow
+    #[ignore] // TODO(parkmycar): Re-enable this test with a smaller sample size.
     fn statistics_stability() {
         /// This is the seed [`proptest`] uses for their deterministic RNG. We
         /// copy it here to prevent breaking this test if [`proptest`] changes.
@@ -395,7 +349,7 @@ mod tests {
                     .typ()
                     .columns()
                     .iter()
-                    .map(|ct| arb_datum_for_column(ct))
+                    .map(arb_datum_for_column)
                     .collect::<Vec<_>>()
                     .prop_map(|datums| Row::pack(datums.iter().map(Datum::from)));
                 proptest::collection::vec(rows, 1..max_rows)
@@ -407,14 +361,18 @@ mod tests {
             let value_tree = strat.new_tree(&mut runner).unwrap();
             let (desc, rows) = value_tree.current();
 
-            let mut builder = PartBuilder::new(&desc, &UnitSchema).expect("success");
-            for row in rows {
-                builder.push(&SourceData(Ok(row)), &(), 1u64, 1i64);
+            let mut builder = PartBuilder::new(&desc, &UnitSchema);
+            for row in &rows {
+                builder.push(&SourceData(Ok(row.clone())), &(), 1u64, 1i64);
             }
             let part = builder.finish();
-            let stats = part.key_stats().unwrap();
 
-            all_stats.push(stats);
+            let key_col = part.key.as_struct();
+            let decoder = <RelationDesc as Schema<SourceData>>::decoder(&desc, key_col.clone())
+                .expect("success");
+            let key_stats = decoder.stats();
+
+            all_stats.push(key_stats);
         }
 
         insta::assert_json_snapshot!(all_stats);

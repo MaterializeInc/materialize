@@ -58,7 +58,7 @@ Operation | Computes
 
 ## Examples
 
-```sql
+```mzsql
 SELECT TIME '01:23:45' AS t_v;
 ```
 ```nofmt
@@ -69,7 +69,7 @@ SELECT TIME '01:23:45' AS t_v;
 
 <hr/>
 
-```sql
+```mzsql
 SELECT DATE '2001-02-03' + TIME '12:34:56' AS d_t;
 ```
 ```nofmt

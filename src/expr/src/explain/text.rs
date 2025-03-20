@@ -11,14 +11,12 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::atomic::Ordering;
 
-use mz_ore::assert::SOFT_ASSERTIONS;
 use mz_ore::soft_assert_eq_or_log;
 use mz_ore::str::{closure_to_display, separated, Indent, IndentLike, StrExt};
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{
-    CompactScalars, ExprHumanizer, HumanizedAttributes, IndexUsageType, Indices,
+    CompactScalars, ExprHumanizer, HumanizedAnalyses, IndexUsageType, Indices,
     PlanRenderingContext, RenderingContext, ScalarOps,
 };
 use mz_repr::{Datum, Diff, GlobalId, Row};
@@ -46,8 +44,10 @@ where
 
         if let Some(finishing) = &self.context.finishing {
             if ctx.config.humanized_exprs {
-                let attrs = ctx.annotations.get(&self.plan.plan);
-                let cols = attrs.map(|attrs| attrs.column_names.clone()).flatten();
+                let analyses = ctx.annotations.get(&self.plan.plan);
+                let cols = analyses
+                    .map(|analyses| analyses.column_names.clone())
+                    .flatten();
                 mode.expr(finishing, cols.as_ref()).fmt_text(f, &mut ctx)?;
             } else {
                 mode.expr(finishing, None).fmt_text(f, &mut ctx)?;
@@ -112,8 +112,10 @@ where
                     // If present, a RowSetFinishing always applies to the first rendered plan.
                     Some(finishing) if no == 0 => {
                         if ctx.config.humanized_exprs {
-                            let attrs = ctx.annotations.get(plan.plan);
-                            let cols = attrs.map(|attrs| attrs.column_names.clone()).flatten();
+                            let analyses = ctx.annotations.get(plan.plan);
+                            let cols = analyses
+                                .map(|analyses| analyses.column_names.clone())
+                                .flatten();
                             mode.expr(finishing, cols.as_ref()).fmt_text(f, ctx)?;
                         } else {
                             mode.expr(finishing, None).fmt_text(f, ctx)?;
@@ -295,7 +297,7 @@ impl MirRelationExpr {
                 Ok(rows) => {
                     if !rows.is_empty() {
                         write!(f, "{}Constant", ctx.indent)?;
-                        self.fmt_attributes(f, ctx)?;
+                        self.fmt_analyses(f, ctx)?;
                         ctx.indented(|ctx| {
                             fmt_text_constant_rows(
                                 f,
@@ -306,14 +308,14 @@ impl MirRelationExpr {
                         })?;
                     } else {
                         write!(f, "{}Constant <empty>", ctx.indent)?;
-                        self.fmt_attributes(f, ctx)?;
+                        self.fmt_analyses(f, ctx)?;
                     }
                 }
                 Err(err) => {
                     if mode.redacted() {
                         writeln!(f, "{}Error █", ctx.indent)?;
                     } else {
-                        writeln!(f, "{}Error {}", ctx.indent, err.to_string().quoted())?;
+                        writeln!(f, "{}Error {}", ctx.indent, err.to_string().escaped())?;
                     }
                 }
             },
@@ -338,20 +340,20 @@ impl MirRelationExpr {
                         Ok(())
                     })?;
                     write!(f, "{}Return", ctx.indent)?;
-                    self.fmt_attributes(f, ctx)?;
+                    self.fmt_analyses(f, ctx)?;
                     ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                 } else {
-                    write!(f, "{}Return", ctx.indent)?;
-                    self.fmt_attributes(f, ctx)?;
-                    ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                     writeln!(f, "{}With", ctx.indent)?;
                     ctx.indented(|ctx| {
-                        for (id, value) in bindings.iter().rev() {
+                        for (id, value) in bindings.iter() {
                             writeln!(f, "{}cte {} =", ctx.indent, *id)?;
                             ctx.indented(|ctx| value.fmt_text(f, ctx))?;
                         }
                         Ok(())
                     })?;
+                    write!(f, "{}Return", ctx.indent)?;
+                    self.fmt_analyses(f, ctx)?;
+                    ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                 }
             }
             LetRec {
@@ -378,16 +380,13 @@ impl MirRelationExpr {
                 if ctx.config.linear_chains {
                     unreachable!(); // We exclude this case in `as_explain_single_plan`.
                 } else {
-                    write!(f, "{}Return", ctx.indent)?;
-                    self.fmt_attributes(f, ctx)?;
-                    ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                     write!(f, "{}With Mutually Recursive", ctx.indent)?;
                     if let Some(limit) = all_limits_same {
                         write!(f, " {}", limit)?;
                     }
                     writeln!(f)?;
                     ctx.indented(|ctx| {
-                        for (id, value, limit) in bindings.iter().rev() {
+                        for (id, value, limit) in bindings.iter() {
                             write!(f, "{}cte", ctx.indent)?;
                             if all_limits_same.is_none() {
                                 if let Some(limit) = limit {
@@ -399,6 +398,9 @@ impl MirRelationExpr {
                         }
                         Ok(())
                     })?;
+                    write!(f, "{}Return", ctx.indent)?;
+                    self.fmt_analyses(f, ctx)?;
+                    ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                 }
             }
             Get {
@@ -475,15 +477,15 @@ impl MirRelationExpr {
                         }
                     }
                 }
-                self.fmt_attributes(f, ctx)?;
+                self.fmt_analyses(f, ctx)?;
             }
             Project { outputs, input } => {
                 FmtNode {
                     fmt_root: |f, ctx| {
-                        let outputs = mode.seq(outputs, self.column_names(ctx));
+                        let outputs = mode.seq(outputs, input.column_names(ctx));
                         let outputs = CompactScalars(outputs);
                         write!(f, "{}Project ({})", ctx.indent, outputs)?;
-                        self.fmt_attributes(f, ctx)
+                        self.fmt_analyses(f, ctx)
                     },
                     fmt_children: |f, ctx| input.fmt_text(f, ctx),
                 }
@@ -492,10 +494,13 @@ impl MirRelationExpr {
             Map { scalars, input } => {
                 FmtNode {
                     fmt_root: |f, ctx: &mut PlanRenderingContext<'_, MirRelationExpr>| {
+                        // Here, it's better to refer to `self.column_names(ctx)` rather than
+                        // `input.column_names(ctx)`, because then we also get humanization for refs
+                        // to cols introduced earlier by the same `Map`.
                         let scalars = mode.seq(scalars, self.column_names(ctx));
                         let scalars = CompactScalars(scalars);
                         write!(f, "{}Map ({})", ctx.indent, scalars)?;
-                        self.fmt_attributes(f, ctx)
+                        self.fmt_analyses(f, ctx)
                     },
                     fmt_children: |f, ctx| input.fmt_text(f, ctx),
                 }
@@ -507,7 +512,7 @@ impl MirRelationExpr {
                         let exprs = mode.seq(exprs, input.column_names(ctx));
                         let exprs = CompactScalars(exprs);
                         write!(f, "{}FlatMap {}({})", ctx.indent, func, exprs)?;
-                        self.fmt_attributes(f, ctx)
+                        self.fmt_analyses(f, ctx)
                     },
                     fmt_children: |f, ctx| input.fmt_text(f, ctx),
                 }
@@ -524,7 +529,7 @@ impl MirRelationExpr {
                             let predicates = separated(" AND ", predicates);
                             write!(f, "{}Filter {}", ctx.indent, predicates)?;
                         }
-                        self.fmt_attributes(f, ctx)
+                        self.fmt_analyses(f, ctx)
                     },
                     fmt_children: |f, ctx| input.fmt_text(f, ctx),
                 }
@@ -557,7 +562,7 @@ impl MirRelationExpr {
                     write!(f, " type={}", name)?;
                 }
 
-                self.fmt_attributes(f, ctx)?;
+                self.fmt_analyses(f, ctx)?;
 
                 if ctx.config.join_impls {
                     let input_name = &|pos: usize| -> String {
@@ -712,7 +717,7 @@ impl MirRelationExpr {
                     Some(literal_constraints.clone()),
                     cse_id,
                 )?;
-                self.fmt_attributes(f, ctx)?;
+                self.fmt_analyses(f, ctx)?;
             }
             Reduce {
                 group_key,
@@ -749,7 +754,7 @@ impl MirRelationExpr {
                         if let Some(expected_group_size) = expected_group_size {
                             write!(f, " exp_group_size={}", expected_group_size)?;
                         }
-                        self.fmt_attributes(f, ctx)
+                        self.fmt_analyses(f, ctx)
                     },
                     fmt_children: |f, ctx| input.fmt_text(f, ctx),
                 }
@@ -794,7 +799,7 @@ impl MirRelationExpr {
                         if let Some(expected_group_size) = expected_group_size {
                             write!(f, " exp_group_size={}", expected_group_size)?;
                         }
-                        self.fmt_attributes(f, ctx)
+                        self.fmt_analyses(f, ctx)
                     },
                     fmt_children: |f, ctx| input.fmt_text(f, ctx),
                 }
@@ -804,7 +809,7 @@ impl MirRelationExpr {
                 FmtNode {
                     fmt_root: |f, ctx| {
                         write!(f, "{}Negate", ctx.indent)?;
-                        self.fmt_attributes(f, ctx)
+                        self.fmt_analyses(f, ctx)
                     },
                     fmt_children: |f, ctx| input.fmt_text(f, ctx),
                 }
@@ -814,7 +819,7 @@ impl MirRelationExpr {
                 FmtNode {
                     fmt_root: |f, ctx| {
                         write!(f, "{}Threshold", ctx.indent)?;
-                        self.fmt_attributes(f, ctx)
+                        self.fmt_analyses(f, ctx)
                     },
                     fmt_children: |f, ctx| input.fmt_text(f, ctx),
                 }
@@ -822,7 +827,7 @@ impl MirRelationExpr {
             }
             Union { base, inputs } => {
                 write!(f, "{}Union", ctx.indent)?;
-                self.fmt_attributes(f, ctx)?;
+                self.fmt_analyses(f, ctx)?;
                 ctx.indented(|ctx| {
                     base.fmt_text(f, ctx)?;
                     for input in inputs.iter() {
@@ -843,7 +848,7 @@ impl MirRelationExpr {
                         let keys = separated("], [", keys);
                         write!(f, " keys=[[{}]]", keys)?;
 
-                        self.fmt_attributes(f, ctx)
+                        self.fmt_analyses(f, ctx)
                     },
                     fmt_children: |f, ctx| input.fmt_text(f, ctx),
                 }
@@ -854,16 +859,16 @@ impl MirRelationExpr {
         Ok(())
     }
 
-    fn fmt_attributes(
+    fn fmt_analyses(
         &self,
         f: &mut fmt::Formatter<'_>,
         ctx: &PlanRenderingContext<'_, MirRelationExpr>,
     ) -> fmt::Result {
-        if ctx.config.requires_attributes() {
-            if let Some(attrs) = ctx.annotations.get(self) {
-                writeln!(f, " {}", HumanizedAttributes::new(attrs, ctx))
+        if ctx.config.requires_analyses() {
+            if let Some(analyses) = ctx.annotations.get(self) {
+                writeln!(f, " {}", HumanizedAnalyses::new(analyses, ctx))
             } else {
-                writeln!(f, " // error: no attrs for subtree in map")
+                writeln!(f, " // error: no analyses for subtree in map")
             }
         } else {
             writeln!(f)
@@ -873,11 +878,11 @@ impl MirRelationExpr {
     fn column_names<'a>(
         &'a self,
         ctx: &'a PlanRenderingContext<'_, MirRelationExpr>,
-    ) -> Option<&Vec<String>> {
+    ) -> Option<&'a Vec<String>> {
         if !ctx.config.humanized_exprs {
             None
-        } else if let Some(attrs) = ctx.annotations.get(self) {
-            attrs.column_names.as_ref()
+        } else if let Some(analyses) = ctx.annotations.get(self) {
+            analyses.column_names.as_ref()
         } else {
             None
         }
@@ -1051,7 +1056,7 @@ pub trait HumanizerMode: Sized + Clone {
     /// This will produce a [`HumanizerMode`] instance that redacts output in
     /// production deployments, but not in debug builds and in CI.
     fn default() -> Self {
-        let redacted = !SOFT_ASSERTIONS.load(Ordering::Relaxed);
+        let redacted = !mz_ore::assert::soft_assertions_enabled();
         Self::new(redacted)
     }
 
@@ -1090,6 +1095,15 @@ pub trait HumanizerMode: Sized + Clone {
             write!(f, "{}", datum)
         }
     }
+
+    /// Wrap the given `exprs` (with `cols`) into [`HumanizedExpr`] with the current `mode`.
+    fn seq<'i, T>(
+        &self,
+        exprs: &'i [T],
+        cols: Option<&'i Vec<String>>,
+    ) -> impl Iterator<Item = HumanizedExpr<'i, T, Self>> + Clone {
+        exprs.iter().map(move |expr| self.expr(expr, cols))
+    }
 }
 
 /// A [`HumanizerMode`] that is ambiguous but allows us to print valid SQL
@@ -1098,21 +1112,6 @@ pub trait HumanizerMode: Sized + Clone {
 /// The inner parameter is `true` iff literals should be redacted.
 #[derive(Debug, Clone)]
 pub struct HumanizedNotice(bool);
-
-impl HumanizedNotice {
-    // TODO: move to `HumanizerMode` once we start using a Rust version with the
-    // corresponding Rust stabilization issue:
-    //
-    // https://github.com/rust-lang/rust/pull/115822
-    pub fn seq<'i, T>(
-        &self,
-        exprs: &'i [T],
-        cols: Option<&'i Vec<String>>,
-    ) -> impl Iterator<Item = HumanizedExpr<'i, T, Self>> + Clone {
-        let mode = self.clone();
-        exprs.iter().map(move |expr| mode.expr(expr, cols))
-    }
-}
 
 impl HumanizerMode for HumanizedNotice {
     fn new(redacted: bool) -> Self {
@@ -1134,21 +1133,6 @@ impl HumanizerMode for HumanizedNotice {
 /// The inner parameter is `true` iff literals should be redacted.
 #[derive(Debug, Clone)]
 pub struct HumanizedExplain(bool);
-
-impl HumanizedExplain {
-    // TODO: move to `HumanizerMode` once we start using a Rust version with the
-    // corresponding Rust stabilization issue:
-    //
-    // https://github.com/rust-lang/rust/pull/115822
-    pub fn seq<'i, T>(
-        &self,
-        exprs: &'i [T],
-        cols: Option<&'i Vec<String>>,
-    ) -> impl Iterator<Item = HumanizedExpr<'i, T, Self>> + Clone {
-        let mode = self.clone();
-        exprs.iter().map(move |expr| mode.expr(expr, cols))
-    }
-}
 
 impl HumanizerMode for HumanizedExplain {
     fn new(redacted: bool) -> Self {
@@ -1313,7 +1297,7 @@ where
 /// Render a literal value represented as a single-element [`Row`] or an
 /// [`EvalError`].
 ///
-/// The default implemntation calls [`HumanizerMode::humanize_datum`] for
+/// The default implementation calls [`HumanizerMode::humanize_datum`] for
 /// the former and handles the error case (including redaction) directly for
 /// the latter.
 impl<'a, M> fmt::Display for HumanizedExpr<'a, Result<Row, EvalError>, M>
@@ -1327,7 +1311,7 @@ where
                 if self.mode.redacted() {
                     write!(f, "error(█)")
                 } else {
-                    write!(f, "error({})", err.to_string().quoted())
+                    write!(f, "error({})", err.to_string().escaped())
                 }
             }
         }

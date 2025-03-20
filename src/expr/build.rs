@@ -7,13 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::env;
+use std::path::PathBuf;
 
 fn main() {
-    env::set_var("PROTOC", mz_build_tools::protoc());
-    env::set_var("PROTOC_INCLUDE", mz_build_tools::protoc_include());
-
     prost_build::Config::new()
+        .protoc_executable(mz_build_tools::protoc())
         .extern_path(".mz_pgtz", "::mz_pgtz")
         .extern_path(".mz_proto", "::mz_proto")
         .extern_path(".mz_repr.adt.array", "::mz_repr::adt::array")
@@ -30,16 +28,19 @@ fn main() {
         .extern_path(".mz_repr.strconv", "::mz_repr::strconv")
         .type_attribute(".", "#[allow(missing_docs)]")
         .btree_map(["."])
+        .bytes([".mz_expr.row.collection"])
         .compile_protos(
             &[
                 "expr/src/id.proto",
                 "expr/src/linear.proto",
                 "expr/src/relation.proto",
                 "expr/src/relation/func.proto",
+                "expr/src/row/collection.proto",
                 "expr/src/scalar.proto",
+                "expr/src/scalar/func/format.proto",
                 "expr/src/scalar/like_pattern.proto",
             ],
-            &[".."],
+            &[PathBuf::from(".."), mz_build_tools::protoc_include()],
         )
         .unwrap_or_else(|e| panic!("{e}"))
 }

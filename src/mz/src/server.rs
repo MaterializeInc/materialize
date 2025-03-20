@@ -7,16 +7,18 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::future::{Future, IntoFuture};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
 use axum::{
     extract::Query,
     response::{Html, IntoResponse, Response},
-    routing::{get, IntoMakeService},
-    Router, Server,
+    routing::get,
+    Router,
 };
 use mz_frontegg_auth::AppPassword;
 use serde::Deserialize;
+use tokio::net::TcpListener;
 use tokio::sync::mpsc::UnboundedSender;
 use uuid::Uuid;
 
@@ -81,16 +83,16 @@ async fn request(
 }
 
 /// Server for handling login's information.
-pub fn server(
+pub async fn server(
     tx: UnboundedSender<Result<AppPassword, Error>>,
-) -> (
-    Server<hyper::server::conn::AddrIncoming, IntoMakeService<Router>>,
-    u16,
-) {
+) -> (impl Future<Output = Result<(), std::io::Error>>, u16) {
     let app = Router::new().route("/", get(|body| request(body, tx)));
     let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
-    let server = axum::Server::bind(&addr).serve(app.into_make_service());
-    let port = server.local_addr().port();
+    let listener = TcpListener::bind(addr).await.unwrap_or_else(|e| {
+        panic!("error binding to {}: {}", addr, e);
+    });
+    let port = listener.local_addr().unwrap().port();
+    let server = axum::serve(listener, app.into_make_service());
 
-    (server, port)
+    (server.into_future(), port)
 }

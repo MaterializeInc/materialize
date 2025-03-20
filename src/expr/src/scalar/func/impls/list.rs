@@ -222,7 +222,7 @@ impl LazyUnaryFunc for ListLength {
         let count = a.unwrap_list().iter().count();
         match count.try_into() {
             Ok(c) => Ok(Datum::Int32(c)),
-            Err(_) => Err(EvalError::Int32OutOfRange(count.to_string())),
+            Err(_) => Err(EvalError::Int32OutOfRange(count.to_string().into())),
         }
     }
 

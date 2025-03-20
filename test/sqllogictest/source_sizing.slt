@@ -30,7 +30,7 @@ u3  u3  s2_progress  progress  NULL  NULL
 query TTTT
 SHOW SOURCES
 ----
-s1  load-generator  2  quickstart
-s1_progress  progress  NULL  NULL
-s2  load-generator  2  quickstart
-s2_progress  progress  NULL  NULL
+s1  load-generator  quickstart (empty)
+s1_progress  progress  NULL (empty)
+s2  load-generator  quickstart (empty)
+s2_progress  progress  NULL (empty)

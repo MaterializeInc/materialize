@@ -1,20 +1,32 @@
 -- Copyright Materialize, Inc. and contributors. All rights reserved.
 --
--- Licensed under the Apache License, Version 2.0 (the "License");
--- you may not use this file except in compliance with the License.
--- You may obtain a copy of the License in the LICENSE file at the
--- root of this repository, or online at
+-- Use of this software is governed by the Business Source License
+-- included in the LICENSE file at the root of this repository.
 --
---     http://www.apache.org/licenses/LICENSE-2.0
---
--- Unless required by applicable law or agreed to in writing, software
--- distributed under the License is distributed on an "AS IS" BASIS,
--- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
--- See the License for the specific language governing permissions and
--- limitations under the License.
+-- As of the Change Date specified in that file, in accordance with
+-- the Business Source License, use of this software will be governed
+-- by the Apache License, Version 2.0.
 
 CREATE TABLE config (
-   min_required_data_version_for_uploads INT
+   uploads_enabled BOOL NOT NULL,
+   min_required_data_version_for_uploads INT NOT NULL,
+   only_notify_about_communication_failures_on_main BOOL NOT NULL
 );
 
-INSERT INTO config (min_required_data_version_for_uploads) VALUES (6);
+INSERT INTO config
+(
+    uploads_enabled,
+    min_required_data_version_for_uploads,
+    only_notify_about_communication_failures_on_main
+)
+VALUES
+(
+    TRUE,
+    6,
+    FALSE
+);
+
+CREATE ROLE qa;
+GRANT qa TO "dennis.felsing@materialize.com";
+ALTER TABLE config OWNER TO qa;
+GRANT SELECT ON TABLE config TO "hetzner-ci";

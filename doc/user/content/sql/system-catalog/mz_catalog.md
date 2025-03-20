@@ -63,6 +63,32 @@ Field          | Type       | Meaning
 ---------------|------------|----------
 `id`           | [`text`]   | The ID of the type.
 
+### `mz_cluster_replica_frontiers`
+
+{{< warn-if-unreleased "v0.118" >}}
+
+The `mz_cluster_replica_frontiers` table describes the per-replica frontiers of
+sources, sinks, materialized views, indexes, and subscriptions in the system,
+as observed from the coordinator.
+
+[`mz_compute_frontiers`](../mz_introspection/#mz_compute_frontiers) is similar to
+`mz_cluster_replica_frontiers`, but `mz_compute_frontiers` reports the
+frontiers known to the active compute replica, while
+`mz_cluster_replica_frontiers` reports the frontiers of all replicas. Note also
+that `mz_compute_frontiers` is restricted to compute objects (indexes,
+materialized views, and subscriptions) while `mz_cluster_replica_frontiers`
+contains storage objects that are installed on replicas (sources, sinks) as
+well.
+
+At this time, we do not make any guarantees about the freshness of these numbers.
+
+<!-- RELATION_SPEC mz_catalog.mz_cluster_replica_frontiers -->
+| Field            | Type             | Meaning                                                                |
+| -----------------| ---------------- | --------                                                               |
+| `object_id`      | [`text`]         | The ID of the source, sink, index, materialized view, or subscription. |
+| `replica_id`     | [`text`]         | The ID of a cluster replica.                                           |
+| `write_frontier` | [`mz_timestamp`] | The next timestamp at which the output may change.                     |
+
 ### `mz_cluster_replica_sizes`
 
 The `mz_cluster_replica_sizes` table contains a mapping of logical sizes
@@ -109,15 +135,17 @@ The `mz_clusters` table contains a row for each cluster in the system.
 <!-- RELATION_SPEC mz_catalog.mz_clusters -->
 | Field                | Type                 | Meaning                                                                                                                                  |
 |----------------------|----------------------|------------------------------------------------------------------------------------------------------------------------------------------|
-| `id`                 | [`text`]             | Materialize's unique ID for the cluster.                                                                                                 |
-| `name`               | [`text`]             | The name of the cluster.                                                                                                                 |
-| `owner_id`           | [`text`]             | The role ID of the owner of the cluster. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).                       |
-| `privileges`         | [`mz_aclitem array`] | The privileges belonging to the cluster.                                                                                                 |
-| `managed`            | [`boolean`]          | Whether the cluster is a [managed cluster](/sql/create-cluster/) with automatically managed replicas.                   |
-| `size`               | [`text`]             | If the cluster is managed, the desired size of the cluster's replicas. `NULL` for unmanaged clusters.                                    |
-| `replication_factor` | [`uint4`]            | If the cluster is managed, the desired number of replicas of the cluster. `NULL` for unmanaged clusters.                                 |
-| `disk`               | [`boolean`]          | **Unstable** If the cluster is managed, `true` if the replicas have the `DISK` option . `NULL` for unmanaged clusters.                   |
-| `availability_zones` | [`text list`]        | **Unstable** If the cluster is managed, the list of availability zones specified in `AVAILABILITY ZONES`. `NULL` for unmanaged clusters. |
+| `id`                      | [`text`]             | Materialize's unique ID for the cluster.                                                                                                 |
+| `name`                    | [`text`]             | The name of the cluster.                                                                                                                 |
+| `owner_id`                | [`text`]             | The role ID of the owner of the cluster. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).                       |
+| `privileges`              | [`mz_aclitem array`] | The privileges belonging to the cluster.                                                                                                 |
+| `managed`                 | [`boolean`]          | Whether the cluster is a [managed cluster](/sql/create-cluster/) with automatically managed replicas.                                    |
+| `size`                    | [`text`]             | If the cluster is managed, the desired size of the cluster's replicas. `NULL` for unmanaged clusters.                                    |
+| `replication_factor`      | [`uint4`]            | If the cluster is managed, the desired number of replicas of the cluster. `NULL` for unmanaged clusters.                                 |
+| `disk`                    | [`boolean`]          | **Unstable** If the cluster is managed, `true` if the replicas have the `DISK` option . `NULL` for unmanaged clusters.                   |
+| `availability_zones`      | [`text list`]        | **Unstable** If the cluster is managed, the list of availability zones specified in `AVAILABILITY ZONES`. `NULL` for unmanaged clusters. |
+| `introspection_debugging` | [`boolean`]          | Whether introspection of the gathering of the introspection data is enabled.                                                             |
+| `introspection_interval`  | [`interval`]         | The interval at which to collect introspection data.                                                                                     |
 
 ### `mz_columns`
 
@@ -144,7 +172,7 @@ The `mz_connections` table contains a row for each connection in the system.
 Field        | Type                 | Meaning
 -------------|----------------------|--------
 `id`         | [`text`]             | The unique ID of the connection.
-`oid`        | [`oid`]              | A [PostgreSQL-compatible OID][oid] for the connection.
+`oid`        | [`oid`]              | A [PostgreSQL-compatible OID][`oid`] for the connection.
 `schema_id`  | [`text`]             | The ID of the schema to which the connection belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`       | [`text`]             | The name of the connection.
 `type`       | [`text`]             | The type of the connection: `confluent-schema-registry`, `kafka`, `postgres`, or `ssh-tunnel`.
@@ -161,7 +189,7 @@ The `mz_databases` table contains a row for each database in the system.
 Field       | Type                 | Meaning
 ------------|----------------------|--------
 `id`        | [`text`]             | Materialize's unique ID for the database.
-`oid`       | [`oid`]              | A [PostgreSQL-compatible OID][oid] for the database.
+`oid`       | [`oid`]              | A [PostgreSQL-compatible OID][`oid`] for the database.
 `name`      | [`text`]             | The name of the database.
 `owner_id`  | [`text`]             | The role ID of the owner of the database. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `privileges`| [`mz_aclitem array`] | The privileges belonging to the database.
@@ -187,9 +215,11 @@ The `mz_egress_ips` table contains a row for each potential IP address that the
 system may connect to external systems from.
 
 <!-- RELATION_SPEC mz_catalog.mz_egress_ips -->
-Field       | Type     | Meaning
-------------|----------|--------
-`egress_ip` | [`text`] | The IP address.
+Field           | Type        | Meaning
+----------------|-------------|--------
+`egress_ip`     | [`text`]    | The start of the range of IP addresses.
+`prefix_length` | [`integer`] | The number of leading bits in the CIDR netmask.
+`cidr`          | [`text`]    | The CIDR representation.
 
 ### `mz_functions`
 
@@ -199,7 +229,7 @@ The `mz_functions` table contains a row for each function in the system.
 Field                       | Type           | Meaning
 ----------------------------|----------------|--------
 `id`                        | [`text`]       | Materialize's unique ID for the function.
-`oid`                       | [`oid`]        | A [PostgreSQL-compatible OID][oid] for the function.
+`oid`                       | [`oid`]        | A [PostgreSQL-compatible OID][`oid`] for the function.
 `schema_id`                 | [`text`]       | The ID of the schema to which the function belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`                      | [`text`]       | The name of the function.
 `argument_type_ids`         | [`text array`] | The ID of each argument's type. Each entry refers to `mz_types.id`.
@@ -216,7 +246,7 @@ The `mz_indexes` table contains a row for each index in the system.
 Field        | Type        | Meaning
 -------------|-------------|--------
 `id`         | [`text`]    | Materialize's unique ID for the index.
-`oid`        | [`oid`]     | A [PostgreSQL-compatible OID][oid] for the index.
+`oid`        | [`oid`]     | A [PostgreSQL-compatible OID][`oid`] for the index.
 `name`       | [`text`]    | The name of the index.
 `on_id`      | [`text`]    | The ID of the relation on which the index is built.
 `cluster_id` | [`text`]    | The ID of the cluster in which the index is built.
@@ -264,6 +294,22 @@ Field                | Type     | Meaning
 `id`                 | [`text`] | The ID of the sink.
 `topic`              | [`text`] | The name of the Kafka topic into which the sink is writing.
 
+### `mz_kafka_sources`
+
+{{< warn-if-unreleased v0.115 >}}
+The `mz_kafka_sources` table contains a row for each Kafka source in the system.
+
+This table was previously in the `mz_internal` schema. All queries previously referencing
+`mz_internal.mz_kafka_sources` should now reference `mz_catalog.mz_kafka_sources`.
+
+<!-- RELATION_SPEC mz_catalog.mz_kafka_sources -->
+| Field                  | Type           | Meaning                                                                                                   |
+|------------------------|----------------|-----------------------------------------------------------------------------------------------------------|
+| `id`                   | [`text`]       | The ID of the Kafka source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).        |
+| `group_id_prefix`      | [`text`]       | The value of the `GROUP ID PREFIX` connection option.                                                     |
+| `topic          `      | [`text`]       | The name of the Kafka topic the source is reading from.                                                              |
+
+
 ### `mz_list_types`
 
 The `mz_list_types` table contains a row for each list type in the system.
@@ -273,7 +319,7 @@ Field        | Type     | Meaning
 -------------|----------|--------
 `id`         | [`text`] | The ID of the list type.
 `element_id` | [`text`] | The IID of the list's element type.
-`element_modifiers` | [`int8 list`] | The element type modifiers, or `NULL` if none.
+`element_modifiers` | [`uint8 list`] | The element type modifiers, or `NULL` if none.
 
 ### `mz_map_types`
 
@@ -285,8 +331,8 @@ Field          | Type       | Meaning
 `id`           | [`text`]   | The ID of the map type.
 `key_id `      | [`text`]   | The ID of the map's key type.
 `value_id`     | [`text`]   | The ID of the map's value type.
-`key_modifiers` | [`int8 list`] | The key type modifiers, or `NULL` if none.
-`value_modifiers` | [`int8 list`] | The value type modifiers, or `NULL` if none.
+`key_modifiers` | [`uint8 list`] | The key type modifiers, or `NULL` if none.
+`value_modifiers` | [`uint8 list`] | The value type modifiers, or `NULL` if none.
 
 ### `mz_materialized_views`
 
@@ -297,7 +343,7 @@ the system.
 Field          | Type                 | Meaning
 ---------------|----------------------|----------
 `id`           | [`text`]             | Materialize's unique ID for the materialized view.
-`oid`          | [`oid`]              | A [PostgreSQL-compatible OID][oid] for the materialized view.
+`oid`          | [`oid`]              | A [PostgreSQL-compatible OID][`oid`] for the materialized view.
 `schema_id`    | [`text`]             | The ID of the schema to which the materialized view belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`         | [`text`]             | The name of the materialized view.
 `cluster_id`   | [`text`]             | The ID of the cluster maintaining the materialized view. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
@@ -320,11 +366,12 @@ sink, index, connection, secret, type, or function with ID `u1`.
 Field       | Type                 | Meaning
 ------------|----------------------|--------
 `id`        | [`text`]             | Materialize's unique ID for the object.
-`oid`       | [`oid`]              | A [PostgreSQL-compatible OID][oid] for the object.
+`oid`       | [`oid`]              | A [PostgreSQL-compatible OID][`oid`] for the object.
 `schema_id` | [`text`]             | The ID of the schema to which the object belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`      | [`text`]             | The name of the object.
 `type`      | [`text`]             | The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.
 `owner_id`  | [`text`]             | The role ID of the owner of the object. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+`cluster_id`| [`text`]             | The ID of the cluster maintaining the source, materialized view, index, or sink. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters). `NULL` for other object types.
 `privileges`| [`mz_aclitem array`] | The privileges belonging to the object.
 
 ### `mz_pseudo_types`
@@ -345,12 +392,32 @@ materialized view in the system.
 Field       | Type                 | Meaning
 ------------|----------------------|--------
 `id`        | [`text`]             | Materialize's unique ID for the relation.
-`oid`       | [`oid`]              | A [PostgreSQL-compatible OID][oid] for the relation.
+`oid`       | [`oid`]              | A [PostgreSQL-compatible OID][`oid`] for the relation.
 `schema_id` | [`text`]             | The ID of the schema to which the relation belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`      | [`text`]             | The name of the relation.
 `type`      | [`text`]             | The type of the relation: either `table`, `source`, `view`, or `materialized view`.
 `owner_id`  | [`text`]             | The role ID of the owner of the relation. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+`cluster_id`| [`text`]             | The ID of the cluster maintaining the source, materialized view, index, or sink. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters). `NULL` for other object types.
 `privileges`| [`mz_aclitem array`] | The privileges belonging to the relation.
+
+### `mz_recent_storage_usage`
+
+{{< warn-if-unreleased "v0.113" >}}
+
+The `mz_recent_storage_usage` table describes the storage utilization of each
+table, source, and materialized view in the system in the most recent storage
+utilization assessment. Storage utilization assessments occur approximately
+every hour.
+
+See [`mz_storage_usage`](../mz_catalog#mz_storage_usage) for historical storage
+usage information.
+
+<!-- RELATION_SPEC mz_catalog.mz_recent_storage_usage -->
+Field                  | Type                         | Meaning
+---------------------- | ---------------------------- | -----------------------------------------------------------
+`object_id`            | [`text`]                     | The ID of the table, source, or materialized view.
+`size_bytes`           | [`uint8`]                    | The number of storage bytes used by the object in the most recent assessment.
+
 
 ### `mz_roles`
 
@@ -360,7 +427,7 @@ The `mz_roles` table contains a row for each role in the system.
 Field            | Type       | Meaning
 -----------------|------------|--------
 `id`             | [`text`]   | Materialize's unique ID for the role.
-`oid`            | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the role.
+`oid`            | [`oid`]    | A [PostgreSQL-compatible OID][`oid`] for the role.
 `name`           | [`text`]   | The name of the role.
 `inherit`        | [`boolean`]   | Indicates whether the role has inheritance of privileges.
 
@@ -397,7 +464,7 @@ The `mz_schemas` table contains a row for each schema in the system.
 Field         | Type                 | Meaning
 --------------|----------------------|--------
 `id`          | [`text`]             | Materialize's unique ID for the schema.
-`oid`         | [`oid`]              | A [PostgreSQL-compatible oid][oid] for the schema.
+`oid`         | [`oid`]              | A [PostgreSQL-compatible oid][`oid`] for the schema.
 `database_id` | [`text`]             | The ID of the database containing the schema. Corresponds to [`mz_databases.id`](/sql/system-catalog/mz_catalog/#mz_databases).
 `name`        | [`text`]             | The name of the schema.
 `owner_id`    | [`text`]             | The role ID of the owner of the schema. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
@@ -411,7 +478,7 @@ The `mz_secrets` table contains a row for each connection in the system.
 Field            | Type                 | Meaning
 -----------------|----------------------|--------
 `id`             | [`text`]             | The unique ID of the secret.
-`oid`            | [`oid`]              | A [PostgreSQL-compatible oid][oid] for the secret.
+`oid`            | [`oid`]              | A [PostgreSQL-compatible oid][`oid`] for the secret.
 `schema_id`      | [`text`]             | The ID of the schema to which the secret belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`           | [`text`]             | The name of the secret.
 `owner_id`       | [`text`]             | The role ID of the owner of the secret. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
@@ -437,14 +504,16 @@ The `mz_sinks` table contains a row for each sink in the system.
 Field            | Type     | Meaning
 -----------------|----------|--------
 `id`             | [`text`] | Materialize's unique ID for the sink.
-`oid`            | [`oid`]  | A [PostgreSQL-compatible OID][oid] for the sink.
+`oid`            | [`oid`]  | A [PostgreSQL-compatible OID][`oid`] for the sink.
 `schema_id`      | [`text`] | The ID of the schema to which the sink belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`           | [`text`] | The name of the sink.
 `type`           | [`text`] | The type of the sink: `kafka`.
 `connection_id`  | [`text`] | The ID of the connection associated with the sink, if any. Corresponds to [`mz_connections.id`](/sql/system-catalog/mz_catalog/#mz_connections).
 `size`           | [`text`] | The size of the sink.
 `envelope_type`  | [`text`] | The [envelope](/sql/create-sink/kafka/#envelopes) of the sink: `upsert`, or `debezium`.
-`format`         | [`text`] | The [format](/sql/create-sink/kafka/#formats) of the sink's output: `avro` or `json`.
+`format`         | [`text`] | *Deprecated* The [format](/sql/create-sink/kafka/#formats) of the Kafka messages produced by the sink: `avro`, `json`, `text`, or `bytes`.
+`key_format`     | [`text`] | The [format](/sql/create-sink/kafka/#formats) of the Kafka message key for messages produced by the sink: `avro`, `json`, `bytes`, `text`, or `NULL`.
+`value_format`   | [`text`] | The [format](/sql/create-sink/kafka/#formats) of the Kafka message value for messages produced by the sink: `avro`, `json`, `text`, or `bytes`.
 `cluster_id`     | [`text`] | The ID of the cluster maintaining the sink. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
 `owner_id`       | [`text`] | The role ID of the owner of the sink. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `create_sql`     | [`text`] | The `CREATE` SQL statement for the sink.
@@ -458,26 +527,37 @@ The `mz_sources` table contains a row for each source in the system.
 Field            | Type                 | Meaning
 -----------------|----------------------|----------
 `id`             | [`text`]             | Materialize's unique ID for the source.
-`oid`            | [`oid`]              | A [PostgreSQL-compatible OID][oid] for the source.
+`oid`            | [`oid`]              | A [PostgreSQL-compatible OID][`oid`] for the source.
 `schema_id`      | [`text`]             | The ID of the schema to which the source belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`           | [`text`]             | The name of the source.
-`type`           | [`text`]             | The type of the source: `kafka`, `postgres`, `load-generator`, `progress`, or `subsource`.
+`type`           | [`text`]             | The type of the source: `kafka`, `mysql`, `postgres`, `load-generator`, `progress`, or `subsource`.
 `connection_id`  | [`text`]             | The ID of the connection associated with the source, if any. Corresponds to [`mz_connections.id`](/sql/system-catalog/mz_catalog/#mz_connections).
-`size`           | [`text`]             | The [size](/sql/create-source/#sizing-a-source) of the source.
-`envelope_type`  | [`text`]             | The [envelope](/sql/create-source/#envelopes) of the source: `none`, `upsert`, or `debezium`.
-`key_format`     | [`text`]             | The [format](/sql/create-source/#formats) of the source's key, if any: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`.
-`value_format`     | [`text`]             | The [format](/sql/create-source/#formats) of the source, if any: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`.
+`size`           | [`text`]             | *Deprecated* The [size](/sql/create-source/#sizing-a-source) of the source.
+`envelope_type`  | [`text`]             | For Kafka sources, the [envelope](/sql/create-source/#envelopes) type: `none`, `upsert`, or `debezium`. `NULL` for other source types.
+`key_format`     | [`text`]             | For Kafka sources, the [format](/sql/create-source/#formats) of the Kafka message key: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`.
+`value_format`     | [`text`]           | For Kafka sources, the [format](/sql/create-source/#formats) of the Kafka message value: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`. `NULL` for other source types.
 `cluster_id`     | [`text`]             | The ID of the cluster maintaining the source. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
 `owner_id`       | [`text`]             | The role ID of the owner of the source. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
-`privileges`     | [`mz_aclitem array`] | The privileges belonging to the source.
+`privileges`     | [`mz_aclitem array`] | The privileges granted on the source.
 `create_sql`     | [`text`]             | The `CREATE` SQL statement for the source.
 `redacted_create_sql` | [`text`]        | The redacted `CREATE` SQL statement for the source.
 
 ### `mz_storage_usage`
 
-The `mz_storage_usage` table describes the storage utilization of each table,
-source, and materialized view in the system. Storage utilization is assessed
-approximately every hour.
+{{< warning >}}
+This view is not indexed in the `mz_catalog_server` cluster. Querying this view
+can be slow due to the amount of unindexed data that must be scanned.
+{{< /warning >}}
+
+The `mz_storage_usage` table describes the historical storage utilization of
+each table, source, and materialized view in the system. Storage utilization is
+assessed approximately every hour.
+
+{{< if-released "v0.111" >}}
+Consider querying
+[`mz_catalog.mz_recent_storage_usage`](#mz_recent_storage_usage)
+instead if you are interested in only the most recent storage usage information.
+{{< /if-released >}}
 
 <!-- RELATION_SPEC mz_catalog.mz_storage_usage -->
 Field                  | Type                         | Meaning
@@ -503,13 +583,14 @@ The `mz_tables` table contains a row for each table in the system.
 Field        | Type                 | Meaning
 -------------|----------------------|----------
 `id`         | [`text`]             | Materialize's unique ID for the table.
-`oid`        | [`oid`]              | A [PostgreSQL-compatible OID][oid] for the table.
+`oid`        | [`oid`]              | A [PostgreSQL-compatible OID][`oid`] for the table.
 `schema_id`  | [`text`]             | The ID of the schema to which the table belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`       | [`text`]             | The name of the table.
 `owner_id`   | [`text`]             | The role ID of the owner of the table. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `privileges` | [`mz_aclitem array`] | The privileges belonging to the table.
 `create_sql` | [`text`]             | The `CREATE` SQL statement for the table.
 `redacted_create_sql` | [`text`]    | The redacted `CREATE` SQL statement for the table.
+`source_id`  | [`text`]             | The ID of the source associated with the table, if any. Corresponds to [`mz_sources.id`](/sql/system-catalog/mz_catalog/#mz_sources).
 
 ### `mz_timezone_abbreviations`
 
@@ -550,7 +631,7 @@ The `mz_types` table contains a row for each type in the system.
 Field          | Type                 | Meaning
 ---------------|----------------------|----------
 `id`           | [`text`]             | Materialize's unique ID for the type.
-`oid`          | [`oid`]              | A [PostgreSQL-compatible OID][oid] for the type.
+`oid`          | [`oid`]              | A [PostgreSQL-compatible OID][`oid`] for the type.
 `schema_id`    | [`text`]             | The ID of the schema to which the type belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`         | [`text`]             | The name of the type.
 `category`     | [`text`]             | The category of the type.
@@ -567,7 +648,7 @@ The `mz_views` table contains a row for each view in the system.
 Field          | Type                 | Meaning
 ---------------|----------------------|----------
 `id`           | [`text`]             | Materialize's unique ID for the view.
-`oid`          | [`oid`]              | A [PostgreSQL-compatible OID][oid] for the view.
+`oid`          | [`oid`]              | A [PostgreSQL-compatible OID][`oid`] for the view.
 `schema_id`    | [`text`]             | The ID of the schema to which the view belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`         | [`text`]             | The name of the view.
 `definition`   | [`text`]             | The view definition (a `SELECT` query).
@@ -578,16 +659,21 @@ Field          | Type                 | Meaning
 
 [`bigint`]: /sql/types/bigint
 [`boolean`]: /sql/types/boolean
+[`integer`]: /sql/types/integer/
+[`interval`]: /sql/types/interval
 [`jsonb`]: /sql/types/jsonb
+[`mz_aclitem`]: /sql/types/mz_aclitem
+[`mz_aclitem array`]: /sql/types/mz_aclitem
+[`mz_timestamp`]: /sql/types/mz_timestamp
+[`numeric`]: /sql/types/numeric/
 [`oid`]: /sql/types/oid
+[`record`]: /sql/types/record
 [`text`]: /sql/types/text
 [`timestamp with time zone`]: /sql/types/timestamp
-[oid]: /sql/types/oid
 [`text array`]: /sql/types/array
-[`record`]: /sql/types/record
+[`text list`]: /sql/types/list/
 [`uint8`]: /sql/types/uint8
+[`uint8 list`]: /sql/types/list
 [`uint4`]: /sql/types/uint4
-[`mz_aclitem array`]: /sql/types/mz_aclitem
-[`interval`]: /sql/types/interval
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_catalog.mz_operators -->

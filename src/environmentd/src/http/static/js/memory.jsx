@@ -166,7 +166,7 @@ function Views(props) {
         SELECT
           id, name, batches, records, size, capacity, allocations
         FROM
-          mz_internal.mz_records_per_dataflow
+          mz_introspection.mz_records_per_dataflow
         ${whereFragment}
         ORDER BY
           records DESC
@@ -281,7 +281,7 @@ function View(props) {
         SELECT
           name, batches, records, size
         FROM
-          mz_internal.mz_records_per_dataflow
+          mz_introspection.mz_records_per_dataflow
         WHERE
           id = ${props.dataflowId};
 
@@ -291,21 +291,21 @@ function View(props) {
         SELECT
           id, address
         FROM
-          mz_internal.mz_dataflow_addresses
+          mz_introspection.mz_dataflow_addresses
         WHERE
           address[1] = ${props.dataflowId};
 
         SELECT
           id, name
         FROM
-          mz_internal.mz_dataflow_operators
+          mz_introspection.mz_dataflow_operators
         WHERE
           id
           IN (
               SELECT
                 id
               FROM
-                mz_internal.mz_dataflow_addresses
+                mz_introspection.mz_dataflow_addresses
               WHERE
                 address[1] = ${props.dataflowId}
             );
@@ -313,8 +313,8 @@ function View(props) {
         SELECT
           id, from_index, to_index, sent, batch_sent
         FROM
-          mz_internal.mz_dataflow_channels AS channels
-          LEFT JOIN mz_internal.mz_message_counts AS counts
+          mz_introspection.mz_dataflow_channels AS channels
+          LEFT JOIN mz_introspection.mz_message_counts AS counts
               ON channels.id = counts.channel_id
         WHERE
           id
@@ -322,7 +322,7 @@ function View(props) {
               SELECT
                 id
               FROM
-                mz_internal.mz_dataflow_addresses
+                mz_introspection.mz_dataflow_addresses
               WHERE
                 address[1] = ${props.dataflowId}
             );
@@ -330,14 +330,14 @@ function View(props) {
         SELECT
           id, elapsed_ns
         FROM
-          mz_internal.mz_scheduling_elapsed
+          mz_introspection.mz_scheduling_elapsed
         WHERE
           id
           IN (
               SELECT
                 id
               FROM
-                mz_internal.mz_dataflow_addresses
+                mz_introspection.mz_dataflow_addresses
               WHERE
                 address[1] = ${props.dataflowId}
             );
@@ -345,7 +345,7 @@ function View(props) {
         SELECT
           id, records, size
         FROM
-          mz_internal.mz_records_per_dataflow_operator
+          mz_introspection.mz_records_per_dataflow_operator
         WHERE
           dataflow_id = ${props.dataflowId};
       `);

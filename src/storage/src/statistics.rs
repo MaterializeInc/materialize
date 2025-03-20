@@ -29,8 +29,8 @@ use std::time::Instant;
 
 use mz_ore::metric;
 use mz_ore::metrics::{
-    CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt, IntCounterVec, IntGaugeVec,
-    MetricsRegistry, UIntGaugeVec,
+    DeleteOnDropCounter, DeleteOnDropGauge, IntCounterVec, IntGaugeVec, MetricsRegistry,
+    UIntGaugeVec,
 };
 use mz_repr::{GlobalId, Timestamp};
 use mz_storage_client::statistics::{Gauge, SinkStatisticsUpdate, SourceStatisticsUpdate};
@@ -142,24 +142,24 @@ impl SourceStatisticsMetricDefs {
 #[derive(Debug)]
 pub struct SourceStatisticsMetrics {
     // Counters
-    pub(crate) messages_received: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) updates_staged: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) updates_committed: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) bytes_received: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) messages_received: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) updates_staged: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) updates_committed: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) bytes_received: DeleteOnDropCounter<AtomicU64, Vec<String>>,
 
     // Gauges
-    pub(crate) snapshot_committed: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) bytes_indexed: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) records_indexed: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) rehydration_latency_ms: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub(crate) snapshot_committed: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub(crate) bytes_indexed: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub(crate) records_indexed: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub(crate) rehydration_latency_ms: DeleteOnDropGauge<AtomicI64, Vec<String>>,
 
-    pub(crate) offset_known: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) offset_committed: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) snapshot_records_known: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) snapshot_records_staged: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) offset_known: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub(crate) offset_committed: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub(crate) snapshot_records_known: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub(crate) snapshot_records_staged: DeleteOnDropGauge<AtomicU64, Vec<String>>,
 
     // Just prometheus.
-    pub(crate) envelope_state_tombstones: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) envelope_state_tombstones: DeleteOnDropGauge<AtomicU64, Vec<String>>,
 }
 
 impl SourceStatisticsMetrics {
@@ -179,47 +179,47 @@ impl SourceStatisticsMetrics {
         };
 
         SourceStatisticsMetrics {
-            snapshot_committed: defs.snapshot_committed.get_delete_on_drop_gauge(vec![
+            snapshot_committed: defs.snapshot_committed.get_delete_on_drop_metric(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
                 shard.clone(),
             ]),
-            messages_received: defs.messages_received.get_delete_on_drop_counter(vec![
+            messages_received: defs.messages_received.get_delete_on_drop_metric(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
             ]),
-            updates_staged: defs.updates_staged.get_delete_on_drop_counter(vec![
-                id.to_string(),
-                worker_id.to_string(),
-                parent_source_id.to_string(),
-                shard.clone(),
-            ]),
-            updates_committed: defs.updates_committed.get_delete_on_drop_counter(vec![
+            updates_staged: defs.updates_staged.get_delete_on_drop_metric(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
                 shard.clone(),
             ]),
-            bytes_received: defs.bytes_received.get_delete_on_drop_counter(vec![
-                id.to_string(),
-                worker_id.to_string(),
-                parent_source_id.to_string(),
-            ]),
-            bytes_indexed: defs.bytes_indexed.get_delete_on_drop_gauge(vec![
+            updates_committed: defs.updates_committed.get_delete_on_drop_metric(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
                 shard.clone(),
             ]),
-            records_indexed: defs.records_indexed.get_delete_on_drop_gauge(vec![
+            bytes_received: defs.bytes_received.get_delete_on_drop_metric(vec![
+                id.to_string(),
+                worker_id.to_string(),
+                parent_source_id.to_string(),
+            ]),
+            bytes_indexed: defs.bytes_indexed.get_delete_on_drop_metric(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
                 shard.clone(),
             ]),
-            envelope_state_tombstones: defs.envelope_state_tombstones.get_delete_on_drop_gauge(
+            records_indexed: defs.records_indexed.get_delete_on_drop_metric(vec![
+                id.to_string(),
+                worker_id.to_string(),
+                parent_source_id.to_string(),
+                shard.clone(),
+            ]),
+            envelope_state_tombstones: defs.envelope_state_tombstones.get_delete_on_drop_metric(
                 vec![
                     id.to_string(),
                     worker_id.to_string(),
@@ -227,29 +227,29 @@ impl SourceStatisticsMetrics {
                     shard.clone(),
                 ],
             ),
-            rehydration_latency_ms: defs.rehydration_latency_ms.get_delete_on_drop_gauge(vec![
+            rehydration_latency_ms: defs.rehydration_latency_ms.get_delete_on_drop_metric(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
                 shard.clone(),
                 envelope.to_string(),
             ]),
-            offset_known: defs.offset_known.get_delete_on_drop_gauge(vec![
+            offset_known: defs.offset_known.get_delete_on_drop_metric(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
             ]),
-            offset_committed: defs.offset_committed.get_delete_on_drop_gauge(vec![
+            offset_committed: defs.offset_committed.get_delete_on_drop_metric(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
             ]),
-            snapshot_records_known: defs.snapshot_records_known.get_delete_on_drop_gauge(vec![
+            snapshot_records_known: defs.snapshot_records_known.get_delete_on_drop_metric(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
             ]),
-            snapshot_records_staged: defs.snapshot_records_staged.get_delete_on_drop_gauge(vec![
+            snapshot_records_staged: defs.snapshot_records_staged.get_delete_on_drop_metric(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
@@ -298,10 +298,10 @@ impl SinkStatisticsMetricDefs {
 #[derive(Debug)]
 pub struct SinkStatisticsMetrics {
     // Counters
-    pub(crate) messages_staged: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) messages_committed: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) bytes_staged: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) bytes_committed: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) messages_staged: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) messages_committed: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) bytes_staged: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) bytes_committed: DeleteOnDropCounter<AtomicU64, Vec<String>>,
 }
 
 impl SinkStatisticsMetrics {
@@ -313,16 +313,16 @@ impl SinkStatisticsMetrics {
         SinkStatisticsMetrics {
             messages_staged: defs
                 .messages_staged
-                .get_delete_on_drop_counter(vec![id.to_string(), worker_id.to_string()]),
+                .get_delete_on_drop_metric(vec![id.to_string(), worker_id.to_string()]),
             messages_committed: defs
                 .messages_committed
-                .get_delete_on_drop_counter(vec![id.to_string(), worker_id.to_string()]),
+                .get_delete_on_drop_metric(vec![id.to_string(), worker_id.to_string()]),
             bytes_staged: defs
                 .bytes_staged
-                .get_delete_on_drop_counter(vec![id.to_string(), worker_id.to_string()]),
+                .get_delete_on_drop_metric(vec![id.to_string(), worker_id.to_string()]),
             bytes_committed: defs
                 .bytes_committed
-                .get_delete_on_drop_counter(vec![id.to_string(), worker_id.to_string()]),
+                .get_delete_on_drop_metric(vec![id.to_string(), worker_id.to_string()]),
         }
     }
 }
@@ -414,12 +414,7 @@ pub struct SourceStatisticsRecord {
 }
 
 impl SourceStatisticsRecord {
-    fn clear(&mut self) {
-        self.messages_received = 0;
-        self.bytes_received = 0;
-        self.updates_staged = 0;
-        self.updates_committed = 0;
-
+    fn reset_gauges(&mut self) {
         // These gauges MUST be initialized across all workers before we aggregate and
         // report statistics.
         self.rehydration_latency_ms = None;
@@ -498,12 +493,7 @@ pub struct SinkStatisticsRecord {
 }
 
 impl SinkStatisticsRecord {
-    fn clear(&mut self) {
-        self.messages_staged = 0;
-        self.messages_committed = 0;
-        self.bytes_staged = 0;
-        self.bytes_committed = 0;
-    }
+    fn reset_gauges(&self) {}
 
     /// Reset counters so that we continue to ship diffs to the controller.
     fn reset_counters(&mut self) {
@@ -584,17 +574,17 @@ impl SourceStatistics {
         }
     }
 
-    /// Clear the data, resetting gauges to uninitialized.
+    /// Reset gauges to uninitialized state.
     /// This does not reset prometheus gauges, which will be overwritten with new values.
-    pub fn clear(&self) {
+    pub fn reset_gauges(&self) {
         let mut cur = self.stats.borrow_mut();
-        cur.stats.clear();
+        cur.stats.reset_gauges();
     }
 
     /// Get a snapshot of the data, returning `None` if all gauges are not initialized.
     ///
     /// This also resets counters, so that we continue to move diffs around.
-    pub fn snapshot(&mut self) -> Option<SourceStatisticsRecord> {
+    pub fn snapshot(&self) -> Option<SourceStatisticsRecord> {
         let mut cur = self.stats.borrow_mut();
 
         match &cur.stats {
@@ -834,17 +824,17 @@ impl SinkStatistics {
         }
     }
 
-    /// Clear the data, resetting gauges to uninitialized.
+    /// Reset gauges to uninitialized state.
     /// This does not reset prometheus gauges, which will be overwritten with new values.
-    pub fn clear(&self) {
-        let mut cur = self.stats.borrow_mut();
-        cur.stats.clear()
+    pub fn reset_gauges(&self) {
+        let cur = self.stats.borrow_mut();
+        cur.stats.reset_gauges();
     }
 
     /// Get a snapshot of the data, returning `None` if all gauges are not initialized.
     ///
     /// This also resets counters, so that we continue to move diffs around.
-    pub fn snapshot(&mut self) -> Option<SinkStatisticsRecord> {
+    pub fn snapshot(&self) -> Option<SinkStatisticsRecord> {
         let mut cur = self.stats.borrow_mut();
 
         match &cur.stats {
@@ -951,32 +941,42 @@ impl AggregatedStatistics {
         self.global_sink_statistics.remove(&id);
     }
 
-    /// Advance the _global epoch_ for statistics. Local statistics before this epoch will be
-    /// ignored.
+    /// Advance the _global epoch_ for statistics.
+    ///
+    /// Gauge values from previous epochs will be ignored. Counter values from previous epochs will
+    /// still be applied as usual.
     pub fn advance_global_epoch(&mut self, id: GlobalId) {
-        if self.worker_id == 0 {
-            self.global_source_statistics
-                .entry(id)
-                .and_modify(|(ref mut epoch, ref mut stats)| {
-                    *epoch += 1;
-                    *stats = vec![None; self.worker_count];
-                });
-            self.global_sink_statistics
-                .entry(id)
-                .and_modify(|(ref mut epoch, ref mut stats)| {
-                    *epoch += 1;
-                    *stats = vec![None; self.worker_count];
-                });
+        if let Some((epoch, stats)) = self.global_source_statistics.get_mut(&id) {
+            *epoch += 1;
+            for worker_stats in stats {
+                if let Some(update) = worker_stats {
+                    update.reset_gauges();
+                }
+            }
+        }
+        if let Some((epoch, stats)) = self.global_sink_statistics.get_mut(&id) {
+            *epoch += 1;
+            for worker_stats in stats {
+                if let Some(update) = worker_stats {
+                    update.reset_gauges();
+                }
+            }
         }
     }
 
     /// Re-initialize a source. If it already exists, then its local epoch is advanced.
-    pub fn initialize_source<F: FnOnce() -> SourceStatistics>(&mut self, id: GlobalId, stats: F) {
+    pub fn initialize_source<F: FnOnce() -> SourceStatistics>(
+        &mut self,
+        id: GlobalId,
+        resume_upper: Antichain<Timestamp>,
+        stats: F,
+    ) {
         self.local_source_statistics
             .entry(id)
             .and_modify(|(ref mut epoch, ref mut stats)| {
                 *epoch += 1;
-                stats.clear()
+                stats.reset_gauges();
+                stats.meta = SourceStatisticsMetadata::new(resume_upper);
             })
             .or_insert_with(|| (0, stats()));
 
@@ -993,7 +993,7 @@ impl AggregatedStatistics {
             .entry(id)
             .and_modify(|(ref mut epoch, ref mut stats)| {
                 *epoch += 1;
-                stats.clear()
+                stats.reset_gauges();
             })
             .or_insert_with(|| (0, stats()));
         if self.worker_id == 0 {
@@ -1010,35 +1010,43 @@ impl AggregatedStatistics {
         sink_statistics: Vec<(usize, SinkStatisticsRecord)>,
     ) {
         // Currently, only worker 0 ingest data from other workers.
-        if self.worker_id == 0 {
-            for (epoch, stat) in source_statistics {
-                self.global_source_statistics.entry(stat.id).and_modify(
-                    |(global_epoch, ref mut stats)| {
-                        if epoch >= *global_epoch {
-                            match &mut stats[stat.worker_id] {
-                                None => {
-                                    stats[stat.worker_id] = Some(stat.as_update());
-                                }
-                                Some(occupied) => occupied.incorporate(stat.as_update()),
-                            }
-                        }
-                    },
-                );
-            }
+        if self.worker_id != 0 {
+            return;
+        }
 
-            for (epoch, stat) in sink_statistics {
-                self.global_sink_statistics.entry(stat.id).and_modify(
-                    |(global_epoch, ref mut stats)| {
-                        if epoch >= *global_epoch {
-                            match &mut stats[stat.worker_id] {
-                                None => {
-                                    stats[stat.worker_id] = Some(stat.as_update());
-                                }
-                                Some(occupied) => occupied.incorporate(stat.as_update()),
-                            }
-                        }
-                    },
-                );
+        for (epoch, stat) in source_statistics {
+            if let Some((global_epoch, stats)) = self.global_source_statistics.get_mut(&stat.id) {
+                // The record might be from a previous incarnation of the source. If that's the
+                // case, we only incorporate its counter values and ignore its gauge values.
+                let epoch_match = epoch >= *global_epoch;
+                let mut update = stat.as_update();
+                match (&mut stats[stat.worker_id], epoch_match) {
+                    (None, true) => stats[stat.worker_id] = Some(update),
+                    (None, false) => {
+                        update.reset_gauges();
+                        stats[stat.worker_id] = Some(update);
+                    }
+                    (Some(occupied), true) => occupied.incorporate(update),
+                    (Some(occupied), false) => occupied.incorporate_counters(update),
+                }
+            }
+        }
+
+        for (epoch, stat) in sink_statistics {
+            if let Some((global_epoch, stats)) = self.global_sink_statistics.get_mut(&stat.id) {
+                // The record might be from a previous incarnation of the sink. If that's the
+                // case, we only incorporate its counter values and ignore its gauge values.
+                let epoch_match = epoch >= *global_epoch;
+                let update = stat.as_update();
+                match (&mut stats[stat.worker_id], epoch_match) {
+                    (None, true) => stats[stat.worker_id] = Some(update),
+                    (None, false) => {
+                        update.reset_gauges();
+                        stats[stat.worker_id] = Some(update);
+                    }
+                    (Some(occupied), true) => occupied.incorporate(update),
+                    (Some(occupied), false) => occupied.incorporate_counters(update),
+                }
             }
         }
     }

@@ -35,7 +35,7 @@ pub fn instrument_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
     // syn appears to not be able to parse the `%` part of things like `#[instrument(fields(shard =
     // %id))]`, so we use the more naive proc_macro crate and look for strings.
     let mut iter = attr.into_iter();
-    let mut args: TokenStream2 = quote! { skip_all }.into();
+    let mut args: TokenStream2 = quote! { skip_all };
     while let Some(tok) = iter.next() {
         match &tok {
             TokenTree::Ident(ident) => match ident.to_string().as_str() {

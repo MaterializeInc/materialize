@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import json
 import os
 import subprocess
 import sys
@@ -16,6 +17,9 @@ from kubernetes.client import V1Container, V1EnvVar, V1ObjectMeta, V1Pod, V1PodS
 
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_pod import K8sPod
+from materialize.mzcompose import (
+    cluster_replica_size_map,
+)
 from materialize.mzcompose.test_result import (
     extract_error_chunks_from_output,
 )
@@ -68,6 +72,7 @@ class TestdriveBase:
             "--var=single-replica-cluster=quickstart",
             "--var=default-storage-size=1",
             "--var=default-replica-size=1",
+            f"--cluster-replica-sizes={json.dumps(cluster_replica_size_map())}",
             *([f"--aws-region={self.aws_region}"] if self.aws_region else []),
             *(
                 [

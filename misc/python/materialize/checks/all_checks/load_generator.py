@@ -15,14 +15,18 @@ from materialize.mz_version import MzVersion
 
 
 class LoadGeneratorAsOfUpTo(Check):
-    def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.101.0")
-
     def initialize(self) -> Testdrive:
         return Testdrive(
             dedent(
                 """
             > CREATE SOURCE counter1 FROM LOAD GENERATOR COUNTER (AS OF 100, UP TO 200);
+
+            > CREATE SOURCE auction1 FROM LOAD GENERATOR AUCTION (AS OF 100, UP TO 200);
+            > CREATE TABLE accounts FROM SOURCE auction1 (REFERENCE accounts);
+            > CREATE TABLE auctions FROM SOURCE auction1 (REFERENCE auctions);
+            > CREATE TABLE bids FROM SOURCE auction1 (REFERENCE bids);
+            > CREATE TABLE organizations FROM SOURCE auction1 (REFERENCE organizations);
+            > CREATE TABLE users FROM SOURCE auction1 (REFERENCE users);
         """
             )
         )
@@ -50,6 +54,57 @@ class LoadGeneratorAsOfUpTo(Check):
                 1200
                 > SELECT COUNT(*) FROM counter3;
                 11200
+                > SELECT COUNT(*) FROM users;
+                4076
+            """
+            )
+        )
+
+
+class LoadGeneratorMultiReplica(Check):
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version >= MzVersion.parse_mz("v0.134.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+            > CREATE CLUSTER multi_cluster1 SIZE '1', REPLICATION FACTOR 1;
+            > CREATE CLUSTER multi_cluster2 SIZE '1', REPLICATION FACTOR 1;
+                """
+            )
+        )
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+            > CREATE SOURCE multi_counter1 IN CLUSTER multi_cluster1 FROM LOAD GENERATOR COUNTER (UP TO 10);
+            > CREATE SOURCE multi_counter2 IN CLUSTER multi_cluster2 FROM LOAD GENERATOR COUNTER (UP TO 10);
+
+            > ALTER CLUSTER multi_cluster1 SET (REPLICATION FACTOR 2);
+                """,
+                """
+            > CREATE SOURCE multi_counter3 IN CLUSTER multi_cluster1 FROM LOAD GENERATOR COUNTER (UP TO 10);
+            > CREATE SOURCE multi_counter4 IN CLUSTER multi_cluster2 FROM LOAD GENERATOR COUNTER (UP TO 10);
+            > ALTER CLUSTER multi_cluster2 SET (REPLICATION FACTOR 2);
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                > SELECT COUNT(*) FROM multi_counter1;
+                10
+                > SELECT COUNT(*) FROM multi_counter2;
+                10
+                > SELECT COUNT(*) FROM multi_counter3;
+                10
+                > SELECT COUNT(*) FROM multi_counter4;
+                10
             """
             )
         )

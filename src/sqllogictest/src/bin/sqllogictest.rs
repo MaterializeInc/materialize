@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use chrono::Utc;
+use clap::ArgAction;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::metrics::MetricsRegistry;
@@ -26,6 +27,7 @@ use mz_sql::session::vars::{
 use mz_sqllogictest::runner::{self, Outcomes, RunConfig, Runner, WriteFmt};
 use mz_sqllogictest::util;
 use mz_tracing::CloneableEnvFilter;
+#[allow(deprecated)] // fails with libraries still using old time lib
 use time::Instant;
 use walkdir::WalkDir;
 
@@ -37,8 +39,8 @@ struct Args {
     /// If specified once, print summary for each source file.
     /// If specified twice, also show descriptions of each error.
     /// If specified thrice, also print each query before it is executed.
-    #[clap(short = 'v', long = "verbose", parse(from_occurrences))]
-    verbosity: usize,
+    #[clap(short = 'v', long = "verbose", action = ArgAction::Count)]
+    verbosity: u8,
     /// Don't exit with a failing code if not all queries are successful.
     #[clap(long)]
     no_fail: bool,
@@ -71,11 +73,11 @@ struct Args {
     /// ported SQLite SLT files. Does not work generally, so don't use it for other tests.
     #[clap(long)]
     auto_transactions: bool,
-    /// Inject `ALTER SYSTEM SET enable_table_keys = true` before running the SLT file.
+    /// Inject `ALTER SYSTEM SET unsafe_enable_table_keys = true` before running the SLT file.
     #[clap(long)]
     enable_table_keys: bool,
     /// Divide the test files into shards and run only the test files in this shard.
-    #[clap(long, requires = "shard-count", value_name = "N")]
+    #[clap(long, requires = "shard_count", value_name = "N")]
     shard: Option<usize>,
     /// Total number of shards in use.
     #[clap(long, requires = "shard", value_name = "N")]
@@ -91,7 +93,7 @@ struct Args {
     #[clap(
         long,
         env = "SYSTEM_PARAMETER_DEFAULT",
-        multiple = true,
+        action = ArgAction::Append,
         value_delimiter = ';'
     )]
     system_parameter_default: Vec<KeyValueArg<String, String>>,
@@ -106,7 +108,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    mz_ore::panic::set_abort_on_panic();
+    mz_ore::panic::install_enhanced_handler();
 
     let args: Args = cli::parse_args(CliConfig {
         env_prefix: Some("MZ_"),
@@ -222,6 +224,7 @@ async fn main() -> ExitCode {
         for entry in WalkDir::new(path) {
             match entry {
                 Ok(entry) if entry.file_type().is_file() => {
+                    #[allow(deprecated)] // fails with libraries still using old time lib
                     let start_time = Instant::now();
                     match runner::run_file(&mut runner, entry.path()).await {
                         Ok(o) => {
@@ -229,17 +232,25 @@ async fn main() -> ExitCode {
                                 writeln!(
                                     config.stdout,
                                     "{}",
-                                    util::indent(&o.display(config.no_fail).to_string(), 4)
+                                    util::indent(&o.display(config.no_fail, false).to_string(), 4)
                                 );
                             }
                             if let Some((_, junit_suite)) = &mut junit {
-                                let mut test_case = if o.any_failed() {
-                                    junit_report::TestCase::failure(
+                                let mut test_case = if o.any_failed() && !args.no_fail {
+                                    let mut result = junit_report::TestCase::failure(
                                         &entry.path().to_string_lossy(),
                                         start_time.elapsed(),
                                         "failure",
-                                        &o.display(false).to_string(),
-                                    )
+                                        "",
+                                    );
+                                    // Encode in system_out so we can display newlines
+                                    result.system_out = Some(
+                                        o.display(false, true)
+                                            .to_string()
+                                            .trim_end_matches('\n')
+                                            .to_string(),
+                                    );
+                                    result
                                 } else {
                                     junit_report::TestCase::success(
                                         &entry.path().to_string_lossy(),
@@ -275,7 +286,7 @@ async fn main() -> ExitCode {
         }
     }
 
-    writeln!(config.stdout, "{}", outcomes.display(config.no_fail));
+    writeln!(config.stdout, "{}", outcomes.display(config.no_fail, false));
 
     if let Some((mut junit_file, junit_suite)) = junit {
         let report = junit_report::ReportBuilder::new()

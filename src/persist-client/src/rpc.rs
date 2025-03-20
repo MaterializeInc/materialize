@@ -70,6 +70,15 @@ pub(crate) const PUBSUB_PUSH_DIFF_ENABLED: Config<bool> = Config::new(
     "Whether to push state diffs to Persist PubSub.",
 );
 
+/// For connected clients, determines whether to push state diffs to the PubSub
+/// server. For the server, determines whether to broadcast state diffs to
+/// subscribed clients.
+pub(crate) const PUBSUB_SAME_PROCESS_DELEGATE_ENABLED: Config<bool> = Config::new(
+    "persist_pubsub_same_process_delegate_enabled",
+    true,
+    "Whether to push state diffs to Persist PubSub on the same process.",
+);
+
 /// Top-level Trait to create a PubSubClient.
 ///
 /// Returns a [PubSubClientConnection] with a [PubSubSender] for issuing RPCs to the PubSub
@@ -213,7 +222,7 @@ impl GrpcPubSubClient {
         // Once enabled, the PubSub server cannot be disabled or otherwise
         // reconfigured. So we wait for at least one configuration sync to
         // complete. This gives `environmentd` at least one chance to update
-        // PubSub configuration parameters. See #23869 for details.
+        // PubSub configuration parameters. See database-issues#7168 for details.
         config.persist_cfg.configs_synced_once().await;
 
         let mut is_first_connection_attempt = true;
@@ -553,6 +562,7 @@ impl PubSubSender for SubscriptionTrackingSender {
 /// by [PersistGrpcPubSubServer::new_same_process_connection].
 #[derive(Debug)]
 pub struct MetricsSameProcessPubSubSender {
+    delegate_subscribe: bool,
     metrics: Arc<Metrics>,
     delegate: Arc<dyn PubSubSender>,
 }
@@ -560,8 +570,13 @@ pub struct MetricsSameProcessPubSubSender {
 impl MetricsSameProcessPubSubSender {
     /// Returns a new [MetricsSameProcessPubSubSender], wrapping the given
     /// `Arc<dyn PubSubSender>`'s calls to provide client-side metrics.
-    pub fn new(pubsub_sender: Arc<dyn PubSubSender>, metrics: Arc<Metrics>) -> Self {
+    pub fn new(
+        cfg: &PersistConfig,
+        pubsub_sender: Arc<dyn PubSubSender>,
+        metrics: Arc<Metrics>,
+    ) -> Self {
         Self {
+            delegate_subscribe: PUBSUB_SAME_PROCESS_DELEGATE_ENABLED.get(cfg),
             delegate: pubsub_sender,
             metrics,
         }
@@ -575,14 +590,20 @@ impl PubSubSender for MetricsSameProcessPubSubSender {
     }
 
     fn subscribe(self: Arc<Self>, shard_id: &ShardId) -> Arc<ShardSubscriptionToken> {
-        // Create a no-op token that does not subscribe nor unsubscribe.
-        // For clients running in the same process as the server, this is
-        // safe because the StateCached is shared between them, and the
-        // server necessarily always receives and applies all diffs.
-        Arc::new(ShardSubscriptionToken {
-            shard_id: *shard_id,
-            sender: Arc::new(NoopPubSubSender),
-        })
+        if self.delegate_subscribe {
+            let delegate = Arc::clone(&self.delegate);
+            delegate.subscribe(shard_id)
+        } else {
+            // Create a no-op token that does not subscribe nor unsubscribe.
+            // This is ideal for single-process persist setups, since the sender and
+            // receiver should already share a state cache... but if the diffs are
+            // generated remotely but applied on the server, this may cause us to fall
+            // back to polling consensus.
+            Arc::new(ShardSubscriptionToken {
+                shard_id: *shard_id,
+                sender: Arc::new(NoopPubSubSender),
+            })
+        }
     }
 }
 
@@ -959,8 +980,7 @@ impl PersistGrpcPubSubServer {
         PubSubClientConnection {
             sender,
             receiver: Box::new(
-                ReceiverStream::new(rx)
-                    .filter_map(|x| Some(x.expect("cannot receive grpc errors locally"))),
+                ReceiverStream::new(rx).map(|x| x.expect("cannot receive grpc errors locally")),
             ),
         }
     }
@@ -1011,7 +1031,7 @@ impl proto_persist_pub_sub_server::ProtoPersistPubSub for PersistGrpcPubSubServe
         let (tx, rx) = tokio::sync::mpsc::channel(self.cfg.pubsub_server_connection_channel_size);
 
         let caller = caller_id.clone();
-        let cfg = self.cfg.configs.clone();
+        let cfg = Arc::clone(&self.cfg.configs);
         let server_state = Arc::clone(&self.state);
         // this spawn here to cleanup after connection error / disconnect, otherwise the stream
         // would not be polled after the connection drops. in our case, we want to clear the
@@ -1100,12 +1120,12 @@ impl Drop for PubSubConnection {
 mod pubsub_state {
     use std::str::FromStr;
     use std::sync::Arc;
+    use std::sync::LazyLock;
 
     use bytes::Bytes;
     use mz_ore::collections::HashSet;
     use mz_persist::location::{SeqNo, VersionedData};
     use mz_proto::RustType;
-    use once_cell::sync::Lazy;
     use tokio::sync::mpsc::error::TryRecvError;
     use tokio::sync::mpsc::Receiver;
     use tonic::Status;
@@ -1115,10 +1135,10 @@ mod pubsub_state {
     use crate::rpc::{PubSubSenderInternal, PubSubState};
     use crate::ShardId;
 
-    const SHARD_ID_0: Lazy<ShardId> =
-        Lazy::new(|| ShardId::from_str("s00000000-0000-0000-0000-000000000000").unwrap());
-    const SHARD_ID_1: Lazy<ShardId> =
-        Lazy::new(|| ShardId::from_str("s11111111-1111-1111-1111-111111111111").unwrap());
+    static SHARD_ID_0: LazyLock<ShardId> =
+        LazyLock::new(|| ShardId::from_str("s00000000-0000-0000-0000-000000000000").unwrap());
+    static SHARD_ID_1: LazyLock<ShardId> =
+        LazyLock::new(|| ShardId::from_str("s11111111-1111-1111-1111-111111111111").unwrap());
 
     const VERSIONED_DATA_0: VersionedData = VersionedData {
         seqno: SeqNo(0),
@@ -1322,11 +1342,12 @@ mod grpc {
     use bytes::Bytes;
     use futures_util::FutureExt;
     use mz_dyncfg::ConfigUpdates;
+    use mz_ore::assert_none;
     use mz_ore::collections::HashMap;
     use mz_ore::metrics::MetricsRegistry;
     use mz_persist::location::{SeqNo, VersionedData};
     use mz_proto::RustType;
-    use once_cell::sync::Lazy;
+    use std::sync::LazyLock;
     use tokio::net::TcpListener;
     use tokio_stream::wrappers::TcpListenerStream;
     use tokio_stream::StreamExt;
@@ -1341,10 +1362,10 @@ mod grpc {
     };
     use crate::ShardId;
 
-    static SHARD_ID_0: Lazy<ShardId> =
-        Lazy::new(|| ShardId::from_str("s00000000-0000-0000-0000-000000000000").unwrap());
-    static SHARD_ID_1: Lazy<ShardId> =
-        Lazy::new(|| ShardId::from_str("s11111111-1111-1111-1111-111111111111").unwrap());
+    static SHARD_ID_0: LazyLock<ShardId> =
+        LazyLock::new(|| ShardId::from_str("s00000000-0000-0000-0000-000000000000").unwrap());
+    static SHARD_ID_1: LazyLock<ShardId> =
+        LazyLock::new(|| ShardId::from_str("s11111111-1111-1111-1111-111111111111").unwrap());
     const VERSIONED_DATA_0: VersionedData = VersionedData {
         seqno: SeqNo(0),
         data: Bytes::from_static(&[0, 1, 2, 3]),
@@ -1614,8 +1635,8 @@ mod grpc {
         // these calls are race-y, since there's no guarantee on the time it
         // would take for a message to be received were one to have been sent,
         // but, better than nothing?
-        assert!(client_1.receiver.next().now_or_never().is_none());
-        assert!(client_2.receiver.next().now_or_never().is_none());
+        assert_none!(client_1.receiver.next().now_or_never());
+        assert_none!(client_2.receiver.next().now_or_never());
 
         // start the server
         let server_state = server_runtime.block_on(spawn_server(tcp_listener_stream));
@@ -1626,8 +1647,8 @@ mod grpc {
         }));
 
         // no messages have been broadcast yet
-        assert!(client_1.receiver.next().now_or_never().is_none());
-        assert!(client_2.receiver.next().now_or_never().is_none());
+        assert_none!(client_1.receiver.next().now_or_never());
+        assert_none!(client_2.receiver.next().now_or_never());
 
         // subscribe and send a diff
         let _token_client_1 = Arc::clone(&client_1.sender).subscribe(&SHARD_ID_0);
@@ -1638,7 +1659,7 @@ mod grpc {
 
         // the subscriber non-sender client receives the diff
         client_1.sender.push_diff(&SHARD_ID_0, &VERSIONED_DATA_1);
-        assert!(client_1.receiver.next().now_or_never().is_none());
+        assert_none!(client_1.receiver.next().now_or_never());
         client_runtime.block_on(async {
             assert_push(
                 client_2.receiver.next().await.expect("has diff"),
@@ -1651,8 +1672,8 @@ mod grpc {
         server_runtime.shutdown_timeout(SERVER_SHUTDOWN_TIMEOUT);
 
         // receivers can still be polled without error
-        assert!(client_1.receiver.next().now_or_never().is_none());
-        assert!(client_2.receiver.next().now_or_never().is_none());
+        assert_none!(client_1.receiver.next().now_or_never());
+        assert_none!(client_2.receiver.next().now_or_never());
 
         // create a new server
         let server_runtime = tokio::runtime::Runtime::new().expect("server runtime");
@@ -1687,7 +1708,7 @@ mod grpc {
                 &VERSIONED_DATA_0,
             )
         });
-        assert!(client_2.receiver.next().now_or_never().is_none());
+        assert_none!(client_2.receiver.next().now_or_never());
     }
 
     async fn new_tcp_listener() -> (SocketAddr, TcpListenerStream) {

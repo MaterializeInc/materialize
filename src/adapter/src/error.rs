@@ -24,7 +24,6 @@ use mz_pgwire_common::{ErrorResponse, Severity};
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::explain::ExplainError;
 use mz_repr::{NotNullViolation, Timestamp};
-use mz_sql::ast::UnresolvedItemName;
 use mz_sql::plan::PlanError;
 use mz_sql::rbac;
 use mz_sql::session::vars::VarError;
@@ -35,6 +34,7 @@ use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use tokio_postgres::error::SqlState;
 
+use crate::coord::NetworkPolicyError;
 use crate::optimize::OptimizerError;
 
 /// Errors that can occur in the coordinator.
@@ -46,7 +46,7 @@ pub enum AdapterError {
         up_to: mz_repr::Timestamp,
     },
     /// Attempted to use a potentially ambiguous column reference expression with a system table.
-    // We don't allow this until https://github.com/MaterializeInc/materialize/issues/16650 is
+    // We don't allow this until https://github.com/MaterializeInc/database-issues/issues/4824 is
     // resolved because it prevents us from adding columns to system tables.
     AmbiguousSystemColumnReference,
     /// An error occurred in a catalog operation.
@@ -98,7 +98,10 @@ pub enum AdapterError {
     /// Transaction cluster was dropped in the middle of a transaction.
     ConcurrentClusterDrop,
     /// Target cluster has no replicas to service query.
-    NoClusterReplicasAvailable(String),
+    NoClusterReplicasAvailable {
+        name: String,
+        is_managed: bool,
+    },
     /// The named operation cannot be run in a transaction.
     OperationProhibitsTransaction(String),
     /// The named operation requires an active transaction.
@@ -133,6 +136,8 @@ pub enum AdapterError {
     ResultSize(String),
     /// The specified feature is not permitted in safe mode.
     SafeModeViolation(String),
+    /// The current transaction had the wrong set of write locks.
+    WrongSetOfLocks,
     /// Waiting on a query timed out.
     ///
     /// Note this differs slightly from PG's implementation/semantics.
@@ -176,8 +181,6 @@ pub enum AdapterError {
     },
     /// The transaction is in write-only mode.
     WriteOnlyTransaction,
-    /// The transaction only supports single table writes
-    MultiTableWriteTransaction,
     /// The transaction can only execute a single statement.
     SingleStatementTransaction,
     /// The transaction can only execute simple DDL.
@@ -214,10 +217,6 @@ pub enum AdapterError {
     /// A CREATE MATERIALIZED VIEW statement tried to acquire a read hold at a REFRESH AT time,
     /// but was unable to get a precise read hold.
     InputNotReadableAtRefreshAtTime(Timestamp, Antichain<Timestamp>),
-    /// An ALTER SOURCE referred to an upstream table that's already referred to.
-    SubsourceAlreadyReferredTo {
-        name: UnresolvedItemName,
-    },
     /// A humanized version of [`StorageError::RtrTimeout`].
     RtrTimeout(String),
     /// A humanized version of [`StorageError::RtrDropFailure`].
@@ -226,6 +225,12 @@ pub enum AdapterError {
     UnreadableSinkCollection,
     /// User sessions have been blocked.
     UserSessionsDisallowed,
+    /// This use session has been deneid by a NetworkPolicy.
+    NetworkPolicyDenied(NetworkPolicyError),
+    /// Something attempted a write (to catalog, storage, tables, etc.) while in
+    /// read-only mode.
+    ReadOnly,
+    AlterClusterTimeout,
 }
 
 impl AdapterError {
@@ -251,8 +256,7 @@ impl AdapterError {
     pub fn detail(&self) -> Option<String> {
         match self {
             AdapterError::AmbiguousSystemColumnReference => {
-                Some("This is a limitation in Materialize that will be lifted in a future release. \
-                See https://github.com/MaterializeInc/materialize/issues/16650 for details.".to_string())
+                Some("This is a current limitation in Materialize".into())
             },
             AdapterError::Catalog(c) => c.detail(),
             AdapterError::Eval(e) => e.detail(),
@@ -338,7 +342,8 @@ impl AdapterError {
             }
             AdapterError::RtrTimeout(name) => Some(format!("{name} failed to ingest data up to the real-time recency point")),
             AdapterError::RtrDropFailure(name) => Some(format!("{name} dropped before ingesting data to the real-time recency point")),
-            AdapterError::UserSessionsDisallowed => Some(format!("Your organization has been blocked. Please contact support.")),
+            AdapterError::UserSessionsDisallowed => Some("Your organization has been blocked. Please contact support.".to_string()),
+            AdapterError::NetworkPolicyDenied(reason)=> Some(format!("{reason}.")),
             _ => None,
         }
     }
@@ -367,8 +372,13 @@ impl AdapterError {
                 "Try choosing one of the smaller sizes to start. Available sizes: {}",
                 expected.join(", ")
             )),
-            AdapterError::NoClusterReplicasAvailable(_) => {
-                Some("You can create cluster replicas using CREATE CLUSTER REPLICA".into())
+            AdapterError::NoClusterReplicasAvailable { is_managed, .. } => {
+                Some(if *is_managed {
+                    "Use ALTER CLUSTER to adjust the replication factor of the cluster. \
+                    Example:`ALTER CLUSTER <cluster-name> SET (REPLICATION FACTOR 1)`".into()
+                } else {
+                    "Use CREATE CLUSTER REPLICA to attach cluster replicas to the cluster".into()
+                })
             }
             AdapterError::UntargetedLogRead { .. } => Some(
                 "Use `SET cluster_replica = <replica-name>` to target a specific replica in the \
@@ -383,7 +393,7 @@ impl AdapterError {
             AdapterError::StatementTimeout => Some(
                 "Consider increasing the maximum allowed statement duration for this session by \
                  setting the statement_timeout session variable. For example, `SET \
-                 statement_timeout = '60s'`."
+                 statement_timeout = '120s'`."
                     .into(),
             ),
             AdapterError::PlanError(e) => e.hint(),
@@ -401,9 +411,9 @@ impl AdapterError {
                  either at the explicitly specified timestamp, or now if the given timestamp would \
                  be in the past.".to_string()
             ),
-            Self::SubsourceAlreadyReferredTo { .. } => {
-                Some("Specify target table names using FOR TABLES (foo AS bar), or limit the upstream tables using FOR SCHEMAS (foo)".into())
-            },
+            AdapterError::AlterClusterTimeout => Some(
+                "Consider increasing the timeout duration in the alter cluster statement.".into(),
+            ),
             _ => None,
         }
     }
@@ -457,16 +467,20 @@ impl AdapterError {
             AdapterError::InvalidTableMutationSelection => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::ConstraintViolation(NotNullViolation(_)) => SqlState::NOT_NULL_VIOLATION,
             AdapterError::ConcurrentClusterDrop => SqlState::INVALID_TRANSACTION_STATE,
-            AdapterError::NoClusterReplicasAvailable(_) => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::NoClusterReplicasAvailable { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
             AdapterError::OperationRequiresTransaction(_) => SqlState::NO_ACTIVE_SQL_TRANSACTION,
             AdapterError::ParseError(_) => SqlState::SYNTAX_ERROR,
             AdapterError::PlanError(PlanError::InvalidSchemaName) => SqlState::INVALID_SCHEMA_NAME,
+            AdapterError::PlanError(PlanError::ColumnAlreadyExists { .. }) => {
+                SqlState::DUPLICATE_COLUMN
+            }
             AdapterError::PlanError(_) => SqlState::INTERNAL_ERROR,
             AdapterError::PreparedStatementExists(_) => SqlState::DUPLICATE_PSTATEMENT,
             AdapterError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
             AdapterError::ReadWriteUnavailable => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::SingleStatementTransaction => SqlState::INVALID_TRANSACTION_STATE,
+            AdapterError::WrongSetOfLocks => SqlState::LOCK_NOT_AVAILABLE,
             AdapterError::StatementTimeout => SqlState::QUERY_CANCELED,
             AdapterError::Canceled => SqlState::QUERY_CANCELED,
             AdapterError::IdleInTransactionSessionTimeout => {
@@ -494,6 +508,9 @@ impl AdapterError {
                 OptimizerError::TransformError(_) => SqlState::INTERNAL_ERROR,
                 OptimizerError::UnmaterializableFunction(_) => SqlState::FEATURE_NOT_SUPPORTED,
                 OptimizerError::UncallableFunction { .. } => SqlState::FEATURE_NOT_SUPPORTED,
+                // This should be handled by peek optimization, so it's an internal error if it
+                // reaches the user.
+                OptimizerError::UnsafeMfpPlan => SqlState::INTERNAL_ERROR,
             },
             AdapterError::UnallowedOnCluster { .. } => {
                 SqlState::S_R_E_PROHIBITED_SQL_STATEMENT_ATTEMPTED
@@ -514,7 +531,6 @@ impl AdapterError {
             // transaction" are not things in Postgres. This error code is the generic "bad txn
             // thing" code, so it's probably the best choice.
             AdapterError::WriteOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
-            AdapterError::MultiTableWriteTransaction => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::DDLOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::Storage(_) | AdapterError::Compute(_) | AdapterError::Orchestrator(_) => {
                 SqlState::INTERNAL_ERROR
@@ -525,13 +541,15 @@ impl AdapterError {
             // `DATA_EXCEPTION`, similarly to `AbsurdSubscribeBounds`.
             AdapterError::MaterializedViewWouldNeverRefresh(_, _) => SqlState::DATA_EXCEPTION,
             AdapterError::InputNotReadableAtRefreshAtTime(_, _) => SqlState::DATA_EXCEPTION,
-            // Calling this `FEATURE_NOT_SUPPORTED` because we will eventually allow multiple
-            // references to the same subsource (albeit with different schemas).
-            AdapterError::SubsourceAlreadyReferredTo { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::RtrTimeout(_) => SqlState::QUERY_CANCELED,
             AdapterError::RtrDropFailure(_) => SqlState::UNDEFINED_OBJECT,
             AdapterError::UnreadableSinkCollection => SqlState::from_code("MZ009"),
             AdapterError::UserSessionsDisallowed => SqlState::from_code("MZ010"),
+            AdapterError::NetworkPolicyDenied(_) => SqlState::from_code("MZ011"),
+            // In read-only mode all transactions are implicitly read-only
+            // transactions.
+            AdapterError::ReadOnly => SqlState::READ_ONLY_SQL_TRANSACTION,
+            AdapterError::AlterClusterTimeout => SqlState::QUERY_CANCELED,
         }
     }
 
@@ -599,11 +617,11 @@ impl fmt::Display for AdapterError {
             AdapterError::ConcurrentClusterDrop => {
                 write!(f, "the transaction's active cluster has been dropped")
             }
-            AdapterError::NoClusterReplicasAvailable(cluster) => {
+            AdapterError::NoClusterReplicasAvailable { name, .. } => {
                 write!(
                     f,
                     "CLUSTER {} has no replicas available to service request",
-                    cluster.quoted()
+                    name.quoted()
                 )
             }
             AdapterError::OperationProhibitsTransaction(op) => {
@@ -623,6 +641,9 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::ReadWriteUnavailable => {
                 f.write_str("transaction read-write mode must be set before any query")
+            }
+            AdapterError::WrongSetOfLocks => {
+                write!(f, "internal error, wrong set of locks acquired")
             }
             AdapterError::StatementTimeout => {
                 write!(f, "canceling statement due to statement timeout")
@@ -705,9 +726,6 @@ impl fmt::Display for AdapterError {
             AdapterError::UntargetedLogRead { .. } => {
                 f.write_str("log source reads must target a replica")
             }
-            AdapterError::MultiTableWriteTransaction => {
-                f.write_str("write transactions only support writes to a single table")
-            }
             AdapterError::DDLOnlyTransaction => f.write_str(
                 "transactions which modify objects are restricted to just modifying objects",
             ),
@@ -747,9 +765,6 @@ impl fmt::Display for AdapterError {
                     "REFRESH AT requested for a time where not all the inputs are readable"
                 )
             }
-            Self::SubsourceAlreadyReferredTo { name } => {
-                write!(f, "another subsource already refers to {}", name)
-            }
             AdapterError::RtrTimeout(_) => {
                 write!(f, "timed out before ingesting the source's visible frontier when real-time-recency query issued")
             }
@@ -761,6 +776,11 @@ impl fmt::Display for AdapterError {
                 write!(f, "collection is not readable at any time")
             }
             AdapterError::UserSessionsDisallowed => write!(f, "login blocked"),
+            AdapterError::NetworkPolicyDenied(_) => write!(f, "session denied"),
+            AdapterError::ReadOnly => write!(f, "cannot write in read-only mode"),
+            AdapterError::AlterClusterTimeout => {
+                write!(f, "canceling statement, provided timeout lapsed")
+            }
         }
     }
 }
@@ -795,6 +815,12 @@ impl From<mz_catalog::memory::error::Error> for AdapterError {
 impl From<mz_catalog::durable::CatalogError> for AdapterError {
     fn from(e: mz_catalog::durable::CatalogError) -> Self {
         mz_catalog::memory::error::Error::from(e).into()
+    }
+}
+
+impl From<mz_catalog::durable::DurableCatalogError> for AdapterError {
+    fn from(e: mz_catalog::durable::DurableCatalogError) -> Self {
+        mz_catalog::durable::CatalogError::from(e).into()
     }
 }
 
@@ -900,10 +926,10 @@ impl From<mz_sql_parser::ast::IdentError> for AdapterError {
     }
 }
 
-impl From<mz_sql::session::vars::ConnectionError> for AdapterError {
-    fn from(value: mz_sql::session::vars::ConnectionError) -> Self {
+impl From<mz_pgwire_common::ConnectionError> for AdapterError {
+    fn from(value: mz_pgwire_common::ConnectionError) -> Self {
         match value {
-            mz_sql::session::vars::ConnectionError::TooManyConnections { current, limit } => {
+            mz_pgwire_common::ConnectionError::TooManyConnections { current, limit } => {
                 AdapterError::ResourceExhaustion {
                     resource_type: "connection".into(),
                     limit_name: "max_connections".into(),
@@ -913,6 +939,12 @@ impl From<mz_sql::session::vars::ConnectionError> for AdapterError {
                 }
             }
         }
+    }
+}
+
+impl From<NetworkPolicyError> for AdapterError {
+    fn from(value: NetworkPolicyError) -> Self {
+        AdapterError::NetworkPolicyDenied(value)
     }
 }
 

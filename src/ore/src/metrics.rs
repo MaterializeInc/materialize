@@ -45,10 +45,11 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
+use derivative::Derivative;
 use pin_project::pin_project;
 use prometheus::core::{
     Atomic, AtomicF64, AtomicI64, AtomicU64, Collector, Desc, GenericCounter, GenericCounterVec,
@@ -108,9 +109,12 @@ pub struct MakeCollectorOpts {
 }
 
 /// The materialize metrics registry.
-#[derive(Debug, Clone)]
+#[derive(Clone, Derivative)]
+#[derivative(Debug)]
 pub struct MetricsRegistry {
     inner: Registry,
+    #[derivative(Debug = "ignore")]
+    postprocessors: Arc<Mutex<Vec<Box<dyn FnMut(&mut Vec<MetricFamily>) + Send + Sync>>>>,
 }
 
 /// A wrapper for metrics to require delete on drop semantics
@@ -149,34 +153,13 @@ impl<M: MakeCollector> MakeCollector for DeleteOnDropWrapper<M> {
     }
 }
 
-impl<M: GaugeVecExt> GaugeVecExt for DeleteOnDropWrapper<M> {
-    type GaugeType = M::GaugeType;
-
-    fn get_delete_on_drop_gauge<'a, L: PromLabelsExt<'a>>(
+impl<M: MetricVecExt> DeleteOnDropWrapper<M> {
+    /// Returns a metric that deletes its labels from this metrics vector when dropped.
+    pub fn get_delete_on_drop_metric<L: PromLabelsExt>(
         &self,
         labels: L,
-    ) -> DeleteOnDropGauge<'a, Self::GaugeType, L> {
-        self.inner.get_delete_on_drop_gauge(labels)
-    }
-}
-
-impl<M: CounterVecExt> CounterVecExt for DeleteOnDropWrapper<M> {
-    type CounterType = M::CounterType;
-
-    fn get_delete_on_drop_counter<'a, L: PromLabelsExt<'a>>(
-        &self,
-        labels: L,
-    ) -> DeleteOnDropCounter<'a, Self::CounterType, L> {
-        self.inner.get_delete_on_drop_counter(labels)
-    }
-}
-
-impl<M: HistogramVecExt> HistogramVecExt for DeleteOnDropWrapper<M> {
-    fn get_delete_on_drop_histogram<'a, L: PromLabelsExt<'a>>(
-        &self,
-        labels: L,
-    ) -> DeleteOnDropHistogram<'a, L> {
-        self.inner.get_delete_on_drop_histogram(labels)
+    ) -> DeleteOnDropMetric<M, L> {
+        self.inner.get_delete_on_drop_metric(labels)
     }
 }
 
@@ -199,17 +182,19 @@ pub type IntGaugeVec = DeleteOnDropWrapper<prometheus::IntGaugeVec>;
 /// Delete-on-drop shadow of Prometheus [raw::UIntGaugeVec].
 pub type UIntGaugeVec = DeleteOnDropWrapper<raw::UIntGaugeVec>;
 
+use crate::assert_none;
+
 pub use prometheus::{Counter, Histogram, IntCounter, IntGauge};
 
 /// Access to non-delete-on-drop vector types
 pub mod raw {
     use prometheus::core::{AtomicU64, GenericGaugeVec};
 
-    /// The unsigned integer version of [`GaugeVec`](prometheus::GaugeVec).
+    /// The unsigned integer version of [`GaugeVec`].
     /// Provides better performance if metric values are all unsigned integers.
     pub type UIntGaugeVec = GenericGaugeVec<AtomicU64>;
 
-    pub use prometheus::{CounterVec, HistogramVec, IntCounterVec, IntGaugeVec};
+    pub use prometheus::{CounterVec, Gauge, GaugeVec, HistogramVec, IntCounterVec, IntGaugeVec};
 }
 
 impl MetricsRegistry {
@@ -217,6 +202,7 @@ impl MetricsRegistry {
     pub fn new() -> Self {
         MetricsRegistry {
             inner: Registry::new(),
+            postprocessors: Arc::new(Mutex::new(vec![])),
         }
     }
 
@@ -231,13 +217,12 @@ impl MetricsRegistry {
     }
 
     /// Registers a gauge whose value is computed when observed.
-    pub fn register_computed_gauge<F, P>(
+    pub fn register_computed_gauge<P>(
         &self,
         opts: MakeCollectorOpts,
-        f: F,
+        f: impl Fn() -> P::T + Send + Sync + 'static,
     ) -> ComputedGenericGauge<P>
     where
-        F: Fn() -> P::T + Send + Sync + 'static,
         P: Atomic + 'static,
     {
         let gauge = ComputedGenericGauge {
@@ -255,11 +240,32 @@ impl MetricsRegistry {
             .expect("registering pre-defined metrics collector");
     }
 
+    /// Registers a metric postprocessor.
+    ///
+    /// Postprocessors are invoked on every call to [`MetricsRegistry::gather`]
+    /// in the order that they are registered.
+    pub fn register_postprocessor<F>(&self, f: F)
+    where
+        F: FnMut(&mut Vec<MetricFamily>) + Send + Sync + 'static,
+    {
+        let mut postprocessors = self.postprocessors.lock().expect("lock poisoned");
+        postprocessors.push(Box::new(f));
+    }
+
     /// Gather all the metrics from the metrics registry for reporting.
+    ///
+    /// This function invokes the postprocessors on all gathered metrics (see
+    /// [`MetricsRegistry::register_postprocessor`]) in the order the
+    /// postprocessors were registered.
     ///
     /// See also [`prometheus::Registry::gather`].
     pub fn gather(&self) -> Vec<MetricFamily> {
-        self.inner.gather()
+        let mut metrics = self.inner.gather();
+        let mut postprocessors = self.postprocessors.lock().expect("lock poisoned");
+        for postprocessor in &mut *postprocessors {
+            postprocessor(&mut metrics);
+        }
+        metrics
     }
 }
 
@@ -277,7 +283,7 @@ where
     T: Atomic + 'static,
 {
     fn make_collector(mk_opts: MakeCollectorOpts) -> Self {
-        assert!(mk_opts.buckets.is_none());
+        assert_none!(mk_opts.buckets);
         Self::with_opts(mk_opts.opts).expect("defining a counter")
     }
 }
@@ -287,7 +293,7 @@ where
     T: Atomic + 'static,
 {
     fn make_collector(mk_opts: MakeCollectorOpts) -> Self {
-        assert!(mk_opts.buckets.is_none());
+        assert_none!(mk_opts.buckets);
         let labels: Vec<String> = mk_opts.opts.variable_labels.clone();
         let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
         Self::new(mk_opts.opts, label_refs.as_slice()).expect("defining a counter vec")
@@ -299,7 +305,7 @@ where
     T: Atomic + 'static,
 {
     fn make_collector(mk_opts: MakeCollectorOpts) -> Self {
-        assert!(mk_opts.buckets.is_none());
+        assert_none!(mk_opts.buckets);
         Self::with_opts(mk_opts.opts).expect("defining a gauge")
     }
 }
@@ -309,7 +315,7 @@ where
     T: Atomic + 'static,
 {
     fn make_collector(mk_opts: MakeCollectorOpts) -> Self {
-        assert!(mk_opts.buckets.is_none());
+        assert_none!(mk_opts.buckets);
         let labels = mk_opts.opts.variable_labels.clone();
         let labels = &labels.iter().map(|x| x.as_str()).collect::<Vec<_>>();
         Self::new(mk_opts.opts, labels).expect("defining a gauge vec")
@@ -759,6 +765,68 @@ impl DurationMetric for prometheus::Counter {
 impl DurationMetric for &'_ mut f64 {
     fn record(&mut self, seconds: f64) {
         **self = seconds;
+    }
+}
+
+/// Register the Tokio runtime's metrics in our metrics registry.
+#[cfg(feature = "async")]
+pub fn register_runtime_metrics(
+    name: &'static str,
+    runtime_metrics: tokio::runtime::RuntimeMetrics,
+    registry: &MetricsRegistry,
+) {
+    macro_rules! register {
+        ($method:ident, $doc:literal) => {
+            let metrics = runtime_metrics.clone();
+            registry.register_computed_gauge::<prometheus::core::AtomicU64>(
+                crate::metric!(
+                    name: concat!("mz_tokio_", stringify!($method)),
+                    help: $doc,
+                    const_labels: {"runtime" => name},
+                ),
+                move || <u64 as crate::cast::CastFrom<_>>::cast_from(metrics.$method()),
+            );
+        };
+    }
+
+    register!(
+        num_workers,
+        "The number of worker threads used by the runtime."
+    );
+    register!(
+        num_alive_tasks,
+        "The current number of alive tasks in the runtime."
+    );
+    register!(
+        global_queue_depth,
+        "The number of tasks currently scheduled in the runtime's global queue."
+    );
+    #[cfg(tokio_unstable)]
+    {
+        register!(
+            num_blocking_threads,
+            "The number of additional threads spawned by the runtime."
+        );
+        register!(
+            num_idle_blocking_threads,
+            "The number of idle threads which have spawned by the runtime for spawn_blocking calls."
+        );
+        register!(
+            spawned_tasks_count,
+            "The number of tasks spawned in this runtime since it was created."
+        );
+        register!(
+            remote_schedule_count,
+            "The number of tasks scheduled from outside of the runtime."
+        );
+        register!(
+            budget_forced_yield_count,
+            "The number of times that tasks have been forced to yield back to the scheduler after exhausting their task budgets."
+        );
+        register!(
+            blocking_queue_depth,
+            "The number of tasks currently scheduled in the blocking thread pool, spawned using spawn_blocking."
+        );
     }
 }
 

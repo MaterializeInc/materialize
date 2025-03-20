@@ -35,6 +35,7 @@ def c_repositories():
         integrity = BZIP2_INTEGRITY,
         strip_prefix = "bzip2-{0}".format(BZIP2_VERSION),
         urls = [
+            "https://mirror.bazel.build/sourceware.org/pub/bzip2/bzip2-{0}.tar.gz".format(BZIP2_VERSION),
             "https://sourceware.org/pub/bzip2/bzip2-{0}.tar.gz".format(BZIP2_VERSION),
         ],
     )
@@ -65,8 +66,8 @@ def c_repositories():
         ],
     )
 
-    OPENSSL_VERSION = "1.1.1w"
-    OPENSSL_INTEGRITY = "sha256-zzCYlQy02FOtlcCEHx+cbT3BAtzPys1SHZOSUgi3asg="
+    OPENSSL_VERSION = "3.3.1"
+    OPENSSL_INTEGRITY = "sha256-d3zVlihMiDN1oqehG/XSeG/FQTJV76sgxQ1v/m0CC34="
     maybe(
         http_archive,
         name = "openssl",
@@ -92,8 +93,8 @@ def c_repositories():
         ],
     )
 
-    ZLIB_VERSION = "1.2.13"
-    ZLIB_INTEGRITY = "sha256-s6JN6XqP28g1uYMxaVAQMLiXcDG8tUs7OsE3QPhGqzA="
+    ZLIB_VERSION = "1.3.1"
+    ZLIB_INTEGRITY = "sha256-OO+WuN/lENQnB9nHgYd5FHklQRM+GHCEFGO/pz+IPjI="
     maybe(
         http_archive,
         name = "zlib",
@@ -101,7 +102,7 @@ def c_repositories():
         integrity = ZLIB_INTEGRITY,
         strip_prefix = "zlib-{0}".format(ZLIB_VERSION),
         urls = [
-            "https://github.com/madler/zlib/releases/download/v{0}/zlib-{0}.tar.gz".format(ZLIB_VERSION),
+            "https://github.com/madler/zlib/releases/download/v{0}/zlib-{0}.tar.xz".format(ZLIB_VERSION),
         ],
     )
 

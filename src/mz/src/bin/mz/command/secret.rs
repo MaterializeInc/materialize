@@ -38,6 +38,7 @@ pub enum SecretSubcommand {
         /// The name of the secret.
         name: String,
         /// Overwrite the existing value of the secret, if it exists.
+        #[clap(long)]
         force: bool,
     },
 }

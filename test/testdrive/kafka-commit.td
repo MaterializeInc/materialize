@@ -31,9 +31,11 @@ three
   FROM KAFKA CONNECTION conn (
     TOPIC 'testdrive-topic-${testdrive.seed}'
   )
+
+> CREATE TABLE topic_tbl FROM SOURCE topic (REFERENCE "testdrive-topic-${testdrive.seed}")
   FORMAT BYTES
 
-> SELECT * from topic
+> SELECT * from topic_tbl
 one
 two
 three
@@ -42,7 +44,7 @@ $ set-from-sql var=consumer-group-id
 SELECT
   ks.group_id_prefix
 FROM mz_sources s
-JOIN mz_internal.mz_kafka_sources ks ON s.id = ks.id
+JOIN mz_catalog.mz_kafka_sources ks ON s.id = ks.id
 WHERE s.name = 'topic'
 
 $ kafka-verify-commit consumer-group-id=${consumer-group-id} topic=topic partition=0
@@ -58,9 +60,11 @@ $ kafka-verify-commit consumer-group-id=${consumer-group-id} topic=topic partiti
     TOPIC 'testdrive-topic-${testdrive.seed}',
     GROUP ID PREFIX 'OVERRIDE-'
   )
+
+> CREATE TABLE topic_tbl FROM SOURCE topic (REFERENCE "testdrive-topic-${testdrive.seed}")
   FORMAT BYTES
 
-> SELECT * from topic
+> SELECT * from topic_tbl
 one
 two
 three
@@ -69,7 +73,7 @@ $ set-from-sql var=consumer-group-id
 SELECT
   ks.group_id_prefix
 FROM mz_sources s
-JOIN mz_internal.mz_kafka_sources ks ON s.id = ks.id
+JOIN mz_catalog.mz_kafka_sources ks ON s.id = ks.id
 WHERE s.name = 'topic'
 
 $ kafka-verify-commit consumer-group-id=${consumer-group-id} topic=topic partition=0

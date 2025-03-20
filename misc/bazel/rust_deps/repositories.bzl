@@ -20,7 +20,7 @@ included via crates_repository.
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
-load("@rules_rust//crate_universe:defs.bzl", "crates_repository", "crate")
+load("@rules_rust//crate_universe:defs.bzl", "crate", "crates_repository")
 
 def rust_repositories():
     """Download third-party Rust repositories and their dependencies."""
@@ -42,13 +42,26 @@ def rust_repositories():
         cargo_lockfile = "@cxxbridge-cmd//:Cargo.lock",
         lockfile = "//misc/bazel/rust_deps:cxxbridge-cmd/Cargo.cxxbridge-cmd.lock",
         manifests = ["@cxxbridge-cmd//:Cargo.toml"],
-        packages = {
-            # Any invocations of `cxx` depend on C-headers that this crate
-            # exports. It might not be included in the normal dependency tree,
-            # so we explicitly include it here.
-            "cxx": crate.spec(
-                version = CXX_VERSION,
-            ),
+        # Restricting the number of platforms we support _greatly_ reduces the
+        # amount of time it takes to "Splice Cargo Workspace".
+        supported_platform_triples = [
+            "aarch64-unknown-linux-gnu",
+            "x86_64-unknown-linux-gnu",
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+            "wasm32-unknown-unknown",
+        ],
+        generator_urls = {
+            "aarch64-apple-darwin": "https://github.com/MaterializeInc/rules_rust/releases/download/v0.54.2/cargo-bazel-aarch64-apple-darwin",
+            "x86_64-apple-darwin": "https://github.com/MaterializeInc/rules_rust/releases/download/v0.54.2/cargo-bazel-x86_64-apple-darwin",
+            "aarch64-unknown-linux-gnu": "https://github.com/MaterializeInc/rules_rust/releases/download/v0.54.2/cargo-bazel-aarch64-unknown-linux-gnu",
+            "x86_64-unknown-linux-gnu": "https://github.com/MaterializeInc/rules_rust/releases/download/v0.54.2/cargo-bazel-x86_64-unknown-linux-gnu",
+        },
+        generator_sha256s = {
+            "aarch64-apple-darwin": "8204746334a17823bd6a54ce2c3821b0bdca96576700d568e2ca2bd8224dc0ea",
+            "x86_64-apple-darwin": "2ee14b230d32c05415852b7a388b76e700c87c506459e5b31ced19d6c131b6d0",
+            "aarch64-unknown-linux-gnu": "3792feb084bd43b9a7a9cd75be86ee9910b46db59360d6b29c9cca2f8889a0aa",
+            "x86_64-unknown-linux-gnu": "2b9d07f34694f63f0cc704989ad6ec148ff8d126579832f4f4d88edea75875b2",
         },
         isolated = False,
         # Only used if developing rules_rust.

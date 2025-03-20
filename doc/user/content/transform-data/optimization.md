@@ -13,60 +13,136 @@ aliases:
 
 ## Indexes
 
-Like in any standard relational database, you can use [indexes](/get-started/key-concepts/#indexes) to optimize query performance in Materialize. Improvements can be significant, reducing some query times down to single-digit milliseconds.
+Indexes in Materialize maintain the complete up-to-date query results in memory
+(and not just the index keys and the pointers to data rows). Unlike some other
+databases, Materialize can use an index to serve query results even if the query
+does not specify a `WHERE` condition on the index keys. Serving queries from
+an index is fast since the results are already up-to-date and in memory.
 
-Building an efficient index depends on the clauses used in your queries, as well as your expected access patterns. Use the following as a guide:
+Materialize can use [indexes](/concepts/indexes/) to further optimize query
+performance in Materialize. Improvements can be significant, reducing some query
+times down to single-digit milliseconds.
 
-* [WHERE](#where-point-lookups)
+Building an efficient index depends on the clauses used in your queries as well
+as your expected access patterns. Use the following as a guide:
+
+* [WHERE point lookups](#where-point-lookups)
 * [JOIN](#join)
 * [DEFAULT](#default-index)
 
-`GROUP BY`, `ORDER BY` and `LIMIT` clauses currently do not benefit from an index.
-
-
 ### `WHERE` point lookups
-Speed up a query involving a `WHERE` clause with equality comparisons to literals (e.g., `42`, or `'foo'`):
 
-| Clause                                            | Index                                    |
+Unlike some other databases, Materialize can use an index to serve query results
+even if the query does not specify a `WHERE` condition on the index keys. For
+some queries, Materialize can perform [**point
+lookups**](/concepts/indexes/#point-lookups) on the index (as opposed to an
+index scan) if the query's `WHERE` clause:
+
+- Specifies equality (`=` or `IN`) condition on **all** the indexed fields. The
+  equality conditions must specify the **exact** index key expression (including
+  type).
+
+- Only uses `AND` (conjunction) to combine conditions for **different** fields.
+
+Depending on your query pattern, you may want to build indexes to support point
+lookups.
+
+#### Create an index to support point lookups
+
+To [create an index](/sql/create-index/) to support [**point
+lookups**](/concepts/indexes/#point-lookups):
+
+```mzsql
+CREATE INDEX ON obj_name (<keys>);
+```
+
+- Specify **only** the keys that are constrained in the query's `WHERE` clause.
+  If your index contains keys not specified in the query's `WHERE` clause, then
+  Materialize performs a full index scan.
+
+- Specify all (or a subset of) keys that are constrained in the query pattern's
+  `WHERE` clause. If the index specifies all the keys, Materialize performs a
+  point lookup only. If the index specifies a subset of keys, then Materialize
+  performs a point lookup on the index keys and then filters these results using
+  the conditions on the non-indexed fields.
+
+- Specify index keys that **exactly match** the column expressions in the
+  `WHERE` clause. For example, if the query specifies `WHERE quantity * price =
+  100`, the index key should be `quantity * price` and not `price * quantity`.
+
+- If the `WHERE` uses `OR` clauses and:
+
+  - The `OR` arguments constrain all the same fields (e.g., `WHERE (quantity = 5
+    AND price = 1.25) OR (quantity = 10 AND price = 1.25)`), create an index for
+    the constrained fields (e.g., `quantity` and `price`).
+
+  - The `OR` arguments constrain some of the same fields (e.g., `WHERE (quantity
+    = 5 AND price = 1.25) OR (quantity = 10 AND item = 'brownie)`), create an
+    index for the intersection of the constrained fields (e.g., `quantity`).
+    Materialize performs a point lookup on the indexed key and then filters the
+    results using the conditions on the non-indexed fields.
+
+  - The `OR` arguments constrain completely disjoint sets of fields (e.g.,
+    `WHERE quantity = 5 OR item = 'brownie'`), try to rewrite your query using a
+    `UNION` (or `UNION ALL`), where each argument of the `UNION` has one of the
+    original `OR` arguments.
+
+    For example, the query can be rewritten as:
+
+    ```mzsql
+    SELECT * FROM orders_view WHERE quantity = 5
+    UNION
+    SELECT * FROM orders_view WHERE item = 'brownie';
+    ```
+
+    Depending on your usage pattern, you may want point-lookup indexes on both
+    `quantity` and `item` (i.e., create two indexes, one on `quantity` and one
+    on `item`). However, since each index will hold a copy of the data, consider
+    the tradeoff between speed and memory usage. If the memory impact of having
+    both indexes is too high, you might want to take a more global look at all
+    of your queries to determine which index to build.
+
+#### Examples
+
+| WHERE clause of your query patterns    | Index for point lookups                                 |
 |---------------------------------------------------|------------------------------------------|
 | `WHERE x = 42`                                    | `CREATE INDEX ON obj_name (x);`        |
 | `WHERE x IN (1, 2, 3)`                            | `CREATE INDEX ON obj_name (x);`        |
-| `WHERE (x, y) IN ((1, 'a'), (7, 'b'), (8, 'c'))`  | `CREATE INDEX ON obj_name (x, y);`     |
-| `WHERE x = 1 AND y = 'abc'`                       | `CREATE INDEX ON obj_name (x, y);`     |
-| `WHERE (x = 5 AND y = 'a') OR (x = 7 AND y = ''`) | `CREATE INDEX ON obj_name (x, y);`     |
-| `WHERE 2 * x = 64`                                | `CREATE INDEX ON obj_name (2 * x);`    |
+| `WHERE x = 1 OR x = 2`                            | `CREATE INDEX ON obj_name (x);`        |
+| `WHERE (x, y) IN ((1, 'a'), (7, 'b'), (8, 'c'))`  | `CREATE INDEX ON obj_name (x, y);` or <br/> `CREATE INDEX ON obj_name (y, x);`  |
+| `WHERE x = 1 AND y = 'abc'`                       | `CREATE INDEX ON obj_name (x, y);` or <br/> `CREATE INDEX ON obj_name (y, x);` |
+| `WHERE (x = 5 AND y = 'a') OR (x = 7 AND y = ''`) | `CREATE INDEX ON obj_name (x, y);` or <br/> `CREATE INDEX ON obj_name (y, x);`     |
+| `WHERE y * x = 64`                                | `CREATE INDEX ON obj_name (y * x);`    |
 | `WHERE upper(y) = 'HELLO'`                        | `CREATE INDEX ON obj_name (upper(y));` |
 
-You can verify that Materialize is accessing the input by an index lookup using `EXPLAIN`. Check for `lookup_value` after the index name to confirm that an index lookup is happening, i.e., that Materialize is only reading the matching records from the index instead of scanning the entire index:
-```sql
-EXPLAIN SELECT * FROM foo WHERE x = 42 AND y = 'hello';
-```
-```
-                               Optimized Plan
------------------------------------------------------------------------------
- Explained Query (fast path):                                               +
-   Project (#0, #1)                                                         +
-     ReadExistingIndex materialize.public.foo_x_y lookup_value=(42, "hello")+
-                                                                            +
- Used Indexes:                                                              +
-   - materialize.public.foo_x_y (lookup)                                    +
+You can verify that Materialize is accessing the input by an index lookup using [`EXPLAIN`](/sql/explain-plan/).
+
+```mzsql
+CREATE INDEX ON foo (x, y);
+EXPLAIN SELECT * FROM foo WHERE x = 42 AND y = 50;
 ```
 
-#### Matching multi-column indexes to multi-column `WHERE` clauses
+In the [`EXPLAIN`](/sql/explain-plan/) output, check for `lookup_value` after
+the index name to confirm that Materialize will use a point lookup; i.e., that
+Materialize will only read the matching records from the index instead of
+scanning the entire index:
 
-In general, your index key should exactly match the columns that are constrained in the `WHERE` clause. In more detail:
-{{< warning >}} If the `WHERE` clause constrains fewer fields than your index key includes, then the index will not be used for a lookup, but will be fully scanned. For example, an index on `(x, y)` cannot be used to execute `WHERE x = 7` as a point lookup. {{< /warning >}}
-- If the `WHERE` clause constrains more fields than your index key includes, then the index might still provide some speedup, but it won't necessarily be optimal: In this case, the index lookup is performed using only those constraints that are included in the index key, and the rest of the constraints will be used to subsequently filter the result of the index lookup.
-- If `OR` is used and not all arguments constrain the same fields, create an index for the intersection of the constrained fields. For example, if you have `WHERE (x = 51 AND y = 'bbb') OR (x = 76 AND z = 9)`, create an index just on `x`.
-- If `OR` is used and its arguments constrain completely disjoint sets of fields (e.g. `WHERE x = 5 OR y = 'aaa'`), try to rewrite your query using a `UNION` (or `UNION ALL`), where each argument of the `UNION` has one of the original `OR` arguments.
+```
+ Explained Query (fast path):
+   Project (#0{x}, #1{y})
+     ReadIndex on=materialize.public.foo foo_x_y_idx=[lookup value=(42, 50)]
+
+ Used Indexes:
+   - materialize.public.foo_x_y_idx (lookup)
+```
 
 ### `JOIN`
 
-In general, you can [improve the performance of your joins](https://materialize.com/blog/maintaining-joins-using-few-resources)  by creating indexes on the columns occurring in join keys. This comes at the cost of additional memory usage. Materialize's in-memory [arrangements](/overview/arrangements) (the internal data structure of indexes) allow the system to share indexes across queries: **for multiple queries, an index is a fixed upfront cost with memory savings for each new query that uses it.**
+In general, you can [improve the performance of your joins](https://materialize.com/blog/maintaining-joins-using-few-resources) by creating indexes on the columns occurring in join keys. (When a relation is joined with different relations on different keys, then separate indexes should be created for these keys.) This comes at the cost of additional memory usage. Materialize's in-memory [arrangements](/overview/arrangements) (the internal data structure of indexes) allow the system to share indexes across queries: **for multiple queries, an index is a fixed upfront cost with memory savings for each new query that uses it.**
 
 Let's create a few tables to work through examples.
 
-```sql
+```mzsql
 CREATE TABLE teachers (id INT, name TEXT);
 CREATE TABLE sections (id INT, teacher_id INT, course_id INT, schedule TEXT);
 CREATE TABLE courses (id INT, name TEXT);
@@ -78,7 +154,7 @@ Let's consider two queries that join on a common collection. The idea is to crea
 
 Here is a query where we join a collection `teachers` to a collection `sections` to see the name of the teacher, schedule, and course ID for a specific section of a course.
 
-```sql
+```mzsql
 SELECT
     t.name,
     s.schedule,
@@ -89,7 +165,7 @@ INNER JOIN sections s ON t.id = s.teacher_id;
 
 Here is another query that also joins on `teachers.id`. This one counts the number of sections each teacher teaches.
 
-```sql
+```mzsql
 SELECT
     t.id,
     t.name,
@@ -101,7 +177,7 @@ GROUP BY t.id, t.name;
 
 We can eliminate redundant memory usage for these two queries by creating an index on the common column being joined, `teachers.id`.
 
-```sql
+```mzsql
 CREATE INDEX pk_teachers ON teachers (id);
 ```
 
@@ -113,7 +189,7 @@ Note that when the same input is being used in a join as well as being constrain
 - on `teachers(name)` to perform the `t.name = 'Escalante'` point lookup before the join,
 - on `teachers(id)` to speed up the join and then perform the `WHERE t.name = 'Escalante'`.
 
-```sql
+```mzsql
 SELECT
     t.name,
     s.schedule,
@@ -127,11 +203,11 @@ In this case, the index on `teachers(name)` might work better, as the `WHERE t.n
 
 #### Optimize Multi-Way Joins with Delta Joins
 
-Materialize has access to a join execution strategy we call `DeltaQuery`, a.k.a. **delta joins**, that aggressively re-uses indexes and maintains no intermediate results. Materialize considers this plan only if all the necessary indexes already exist, in which case the additional memory cost of the join is zero. This is typically possible when you index all the join keys.
+Materialize has access to a join execution strategy we call **delta joins**, which aggressively re-uses indexes and maintains no intermediate results in memory. Materialize considers this plan only if all the necessary indexes already exist, in which case the additional memory cost of the join is zero. This is typically possible when you index all the join keys (including primary keys and foreign keys that are involved in the join). Delta joins are relevant only for joins of more than 2 inputs.
 
-From the previous example, add the name of the course rather than just the course ID.
+Let us extend the previous example by also querying for the name of the course rather than just the course ID, needing a 3-input join.
 
-```sql
+```mzsql
 CREATE VIEW course_schedule AS
   SELECT
       t.name AS teacher_name,
@@ -144,14 +220,14 @@ CREATE VIEW course_schedule AS
 
 In this case, we create indexes on the join keys to optimize the query:
 
-```sql
+```mzsql
 CREATE INDEX pk_teachers ON teachers (id);
 CREATE INDEX sections_fk_teachers ON sections (teacher_id);
 CREATE INDEX pk_courses ON courses (id);
 CREATE INDEX sections_fk_courses ON sections (course_id);
 ```
 
-```sql
+```mzsql
 EXPLAIN SELECT * FROM course_schedule;
 ```
 
@@ -175,7 +251,9 @@ Used Indexes:
   - materialize.public.sections_fk_courses (delta join lookup)
 ```
 
-For [ad hoc `SELECT` queries](/sql/select/#ad-hoc-queries) with a delta join, place the smallest input (taking into account predicates that filter from it) first in the `FROM` clause.
+For [ad hoc `SELECT` queries](/sql/select/#ad-hoc-queries) with a delta join, place the smallest input (taking into account predicates that filter from it) first in the `FROM` clause. (This is only relevant for joins with more than two inputs, because two-input joins are always Differential joins.)
+
+It is important to note that often more than one index is needed on a single input of a multi-way join. In the above example, `sections` needs an index on the `teacher_id` column and another index on the `course_id` column. Generally, when a relation is joined with different relations on different keys, then separate indexes should be created for each of these keys.
 
 #### Further Optimize with Late Materialization
 
@@ -186,7 +264,7 @@ To understand late materialization, you need to know about primary and foreign k
 In many relational databases, indexes don't replicate the entire collection of data. Rather, they maintain just a mapping from the indexed columns back to a primary key. These few columns can take substantially less space than the whole collection, and may also change less as various unrelated attributes are updated. This is called **late materialization**, and it is possible to achieve in Materialize as well. Here are the steps to implementing late materialization along with examples.
 
 1. Create indexes on the primary key column(s) for your input collections.
-    ```sql
+    ```mzsql
     CREATE INDEX pk_teachers ON teachers (id);
     CREATE INDEX pk_sections ON sections (id);
     CREATE INDEX pk_courses ON courses (id);
@@ -194,7 +272,7 @@ In many relational databases, indexes don't replicate the entire collection of d
 
 
 2. For each foreign key in the join, create a "narrow" view with just two columns: foreign key and primary key. Then create two indexes: one for the foreign key and one for the primary key. In our example, the two foreign keys are `sections.teacher_id` and `sections.course_id`, so we do the following:
-    ```sql
+    ```mzsql
     -- Create a "narrow" view containing primary key sections.id
     -- and foreign key sections.teacher_id
     CREATE VIEW sections_narrow_teachers AS SELECT id, teacher_id FROM sections;
@@ -202,7 +280,7 @@ In many relational databases, indexes don't replicate the entire collection of d
     CREATE INDEX sections_narrow_teachers_0 ON sections_narrow_teachers (id);
     CREATE INDEX sections_narrow_teachers_1 ON sections_narrow_teachers (teacher_id);
     ```
-    ```sql
+    ```mzsql
     -- Create a "narrow" view containing primary key sections.id
     -- and foreign key sections.course_id
     CREATE VIEW sections_narrow_courses AS SELECT id, course_id FROM sections;
@@ -216,7 +294,7 @@ In many relational databases, indexes don't replicate the entire collection of d
 
 3. Rewrite your query to use your narrow collections in the join conditions. Example:
 
-    ```sql
+    ```mzsql
     SELECT
       t.name AS teacher_name,
       s.schedule,
@@ -240,7 +318,7 @@ Clause                                               | Index                    
 
 Use `EXPLAIN` to verify that indexes are used as you expect. For example:
 
-```SQL
+```mzsql
 CREATE TABLE teachers (id INT, name TEXT);
 CREATE TABLE sections (id INT, teacher_id INT, course_id INT, schedule TEXT);
 CREATE TABLE courses (id INT, name TEXT);
@@ -293,6 +371,10 @@ The following are the possible index usage types:
 - `delta join lookup`: Materialize will use the index for a non-first input of a [delta join](#optimize-multi-way-joins-with-delta-joins). This means that, in an ad hoc query, the join will perform only lookups into the index.
 - `fast path limit`: When a [fast path](/sql/explain-plan/#fast-path-queries) query has a `LIMIT` clause but no `ORDER BY` clause, then Materialize will read from the index only as many records as required to satisfy the `LIMIT` (plus `OFFSET`) clause.
 
+### Limitations
+
+{{% index_usage/index-ordering %}}
+
 ## Query hints
 
 Materialize has at present three important [query hints]: `AGGREGATE INPUT GROUP SIZE`, `DISTINCT ON INPUT GROUP SIZE`, and `LIMIT INPUT GROUP SIZE`. These hints apply to indexed or materialized views that need to incrementally maintain [`MIN`], [`MAX`], or [Top K] queries, as specified by SQL aggregations, `DISTINCT ON`, or `LIMIT` clauses. Maintaining these queries while delivering low latency result updates is demanding in terms of main memory. This is because Materialize builds a hierarchy of aggregations so that data can be physically partitioned into small groups. By having only small groups at each level of the hierarchy, we can make sure that recomputing aggregations is not slowed down by skew in the sizes of the original query groups.
@@ -301,7 +383,7 @@ The number of levels needed in the hierarchical scheme is by default set assumin
 
 Consider the previous example with the collection `sections`. Maintenance of the maximum `course_id` per `teacher` can be achieved with a materialized view:
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW max_course_id_per_teacher AS
 SELECT teacher_id, MAX(course_id)
 FROM sections
@@ -310,7 +392,7 @@ GROUP BY teacher_id;
 
 If the largest number of `course_id` values that are allocated to a single `teacher_id` is known, then this number can be provided as the `AGGREGATE INPUT GROUP SIZE`. For the query above, it is possible to get an estimate for this number by:
 
-```sql
+```mzsql
 SELECT MAX(course_count)
 FROM (
   SELECT teacher_id, COUNT(*) course_count
@@ -323,7 +405,7 @@ However, the estimate is based only on data that is already present in the syste
 
 For our example, let's suppose that we determined the largest number of courses per teacher to be `1000`. Then, the original definition of `max_course_id_per_teacher` can be revised to include the `AGGREGATE INPUT GROUP SIZE` query hint as follows:
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW max_course_id_per_teacher AS
 SELECT teacher_id, MAX(course_id)
 FROM sections
@@ -333,7 +415,7 @@ OPTIONS (AGGREGATE INPUT GROUP SIZE = 1000)
 
 The other two hints can be provided in [Top K] query patterns specified by `DISTINCT ON` or `LIMIT`. As examples, consider that we wish not to compute the maximum `course_id`, but rather the `id` of the section of this top course. This computation can be incrementally maintained by the following materialized view:
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW section_of_top_course_per_teacher AS
 SELECT DISTINCT ON(teacher_id) teacher_id, id AS section_id
 FROM sections
@@ -343,7 +425,7 @@ ORDER BY teacher_id ASC, course_id DESC;
 
 In the above examples, we see that the query hints are always positioned in an `OPTIONS` clause after a `GROUP BY` clause, but before an `ORDER BY`, as captured by the [`SELECT` syntax]. However, in the case of Top K using a `LATERAL` subquery and `LIMIT`, it is important to note that the hint is specified in the subquery. For instance, the following materialized view illustrates how to incrementally maintain the top-3 section `id`s ranked by `course_id` for each teacher:
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW sections_of_top_3_courses_per_teacher AS
 SELECT id AS teacher_id, section_id
 FROM teachers grp,
@@ -355,11 +437,11 @@ FROM teachers grp,
               LIMIT 3);
 ```
 
-For indexed and materialized views that have already been created without specifying query hints, Materialize includes an introspection view, [`mz_internal.mz_expected_group_size_advice`], that can be used to query, for a given cluster, all incrementally maintained [dataflows] where tuning of the above query hints could be beneficial. The introspection view also provides an advice value based on an estimate of how many levels could be cut from the hierarchy. The following query illustrates how to access this introspection view:
+For indexed and materialized views that have already been created without specifying query hints, Materialize includes an introspection view, [`mz_introspection.mz_expected_group_size_advice`], that can be used to query, for a given cluster, all incrementally maintained [dataflows] where tuning of the above query hints could be beneficial. The introspection view also provides an advice value based on an estimate of how many levels could be cut from the hierarchy. The following query illustrates how to access this introspection view:
 
-```sql
+```mzsql
 SELECT dataflow_name, region_name, levels, to_cut, hint
-FROM mz_internal.mz_expected_group_size_advice
+FROM mz_introspection.mz_expected_group_size_advice
 ORDER BY dataflow_name, region_name;
 ```
 
@@ -374,6 +456,6 @@ Check out the blog post [Delta Joins and Late Materialization](https://materiali
 [`MIN`]: /sql/functions/#min
 [`MAX`]: /sql/functions/#max
 [Top K]: /transform-data/patterns/top-k
-[`mz_internal.mz_expected_group_size_advice`]: /sql/system-catalog/mz_internal/#mz_expected_group_size_advice
+[`mz_introspection.mz_expected_group_size_advice`]: /sql/system-catalog/mz_introspection/#mz_expected_group_size_advice
 [dataflows]: /get-started/arrangements/#dataflows
 [`SELECT` syntax]: /sql/select/#syntax

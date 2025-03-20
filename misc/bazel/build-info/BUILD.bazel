@@ -30,11 +30,16 @@ workspace status/build info. The process works in the following way:
 
 py_binary(
     name = "gen_rust_module",
-    srcs = ["gen_rust_module.py"]
+    srcs = ["gen_rust_module.py"],
 )
 
 gen_build_info(
     name = "gen_build_info",
     rust_file = "build_info.rs",
     visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "stamped",
+    values = {"stamp": "true"},
 )

@@ -27,10 +27,10 @@ DefSource name=y keys=[[#0]]
 Source defined as t1
 
 
-# Regression test for #25015.
+# Regression test for database-issues#7467.
 #
-# The Join has a contition that is a local predicate
-# and was lost prior to #25015.
+# The Join has a condition that is a local predicate
+# and was lost prior to database-issues#7467.
 apply pipeline=reduction_pushdown
 Distinct project=[#1]
   Join on=((#1 + #1) = #0)
@@ -40,7 +40,7 @@ Distinct project=[#1]
 Project (#0)
   CrossJoin
     Distinct project=[#1]
-      Filter ((#1 + #1) = #0)
+      Filter ((#0 = (#1 + #1)) OR ((#0) IS NULL AND ((#1 + #1)) IS NULL))
         Get x
     Distinct project=[]
       Get y

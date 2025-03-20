@@ -1,0 +1,9 @@
+In Materialize, both [indexes](/concepts/indexes) on views and [materialized
+views](/concepts/views/#materialized-views) incrementally update the view
+results when Materialize ingests new data. Whereas materialized views persist
+the view results in durable storage and can be accessed across clusters, indexes
+on views compute and store view results in memory within a **single** cluster.
+
+Maintaining a materialized view in durable storage has resource and latency
+costs that should be carefully considered depending on the main usage of the
+view, while maintaining an index has [memory costs](/sql/create-index/#memory-footprint).

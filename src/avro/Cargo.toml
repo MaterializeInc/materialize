@@ -15,30 +15,27 @@ autobenches = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.66"
+anyhow = "1.0.95"
 byteorder = { version = "1.4.3", optional = true }
-chrono = { version = "0.4.35", default-features = false, features = ["std"] }
+chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 crc32fast = { version = "1.3.2", optional = true }
-digest = "0.10.6"
+digest = "0.10.7"
 enum-kinds = "0.5.1"
-flate2 = "1.0.24"
-itertools = "0.10.5"
+flate2 = "1.1.0"
+itertools = "0.12.1"
 mz-ore = { path = "../ore", features = ["test"] }
-once_cell = "1.16.0"
 rand = "0.8.5"
-regex = "1.7.0"
-serde = { version = "1.0.152", features = ["derive"] }
-serde_json = "1.0.89"
-sha2 = "0.10.6"
-snap = { version = "1.1.0", optional = true }
+regex = "1.10.6"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.125"
+sha2 = "0.10.8"
+snap = { version = "1.1.1", optional = true }
 tracing = "0.1.37"
-uuid = "1.2.2"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
-
-[dev-dependencies]
-once_cell = "1.16.0"
+uuid = "1.16.0"
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [features]
+default = ["workspace-hack"]
 snappy = ["byteorder", "crc32fast", "snap"]
 
 [package.metadata.cargo-udeps.ignore]

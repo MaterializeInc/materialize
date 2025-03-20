@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -18,8 +19,10 @@ use aws_sdk_secretsmanager::error::SdkError;
 use aws_sdk_secretsmanager::primitives::Blob;
 use aws_sdk_secretsmanager::types::{Filter, FilterNameStringType, Tag};
 use aws_sdk_secretsmanager::Client;
-use mz_repr::GlobalId;
+use mz_repr::CatalogItemId;
 use mz_secrets::{SecretsController, SecretsReader};
+use tracing::info;
+use uuid::Uuid;
 
 #[derive(Clone, Debug)]
 pub struct AwsSecretsController {
@@ -65,7 +68,7 @@ impl AwsSecretsController {
 
 #[async_trait]
 impl SecretsController for AwsSecretsController {
-    async fn ensure(&self, id: GlobalId, contents: &[u8]) -> Result<(), anyhow::Error> {
+    async fn ensure(&self, id: CatalogItemId, contents: &[u8]) -> Result<(), anyhow::Error> {
         match self
             .client
             .client
@@ -92,7 +95,7 @@ impl SecretsController for AwsSecretsController {
         Ok(())
     }
 
-    async fn delete(&self, id: GlobalId) -> Result<(), anyhow::Error> {
+    async fn delete(&self, id: CatalogItemId) -> Result<(), anyhow::Error> {
         match self
             .client
             .client
@@ -111,7 +114,7 @@ impl SecretsController for AwsSecretsController {
         }
     }
 
-    async fn list(&self) -> Result<Vec<GlobalId>, anyhow::Error> {
+    async fn list(&self) -> Result<Vec<CatalogItemId>, anyhow::Error> {
         let mut ids = Vec::new();
         let mut filters = self.default_tags.iter().fold(
             Vec::with_capacity(self.default_tags.len() * 2 + 1),
@@ -196,11 +199,11 @@ impl AwsSecretsClient {
         }
     }
 
-    fn secret_name(&self, id: GlobalId) -> String {
+    fn secret_name(&self, id: CatalogItemId) -> String {
         format!("{}{}", self.secret_name_prefix, id)
     }
 
-    fn id_from_secret_name(&self, name: &str) -> Option<GlobalId> {
+    fn id_from_secret_name(&self, name: &str) -> Option<CatalogItemId> {
         name.strip_prefix(&self.secret_name_prefix)
             .and_then(|id| id.parse().ok())
     }
@@ -208,16 +211,24 @@ impl AwsSecretsClient {
 
 #[async_trait]
 impl SecretsReader for AwsSecretsClient {
-    async fn read(&self, id: GlobalId) -> Result<Vec<u8>, anyhow::Error> {
-        Ok(self
-            .client
-            .get_secret_value()
-            .secret_id(self.secret_name(id))
-            .send()
-            .await?
-            .secret_binary()
-            .ok_or_else(|| anyhow!("internal error: secret missing secret_binary field"))?
-            .to_owned()
-            .into_inner())
+    async fn read(&self, id: CatalogItemId) -> Result<Vec<u8>, anyhow::Error> {
+        let op_id = Uuid::new_v4();
+        info!(secret_id = %id, %op_id, "reading secret from AWS");
+        let start = Instant::now();
+        let secret = async {
+            Ok(self
+                .client
+                .get_secret_value()
+                .secret_id(self.secret_name(id))
+                .send()
+                .await?
+                .secret_binary()
+                .ok_or_else(|| anyhow!("internal error: secret missing secret_binary field"))?
+                .to_owned()
+                .into_inner())
+        }
+        .await;
+        info!(%op_id, success = %secret.is_ok(), "secret read in {:?}", start.elapsed());
+        secret
     }
 }

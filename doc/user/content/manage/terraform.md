@@ -8,15 +8,16 @@ menu:
     name: "Use Terraform to manage Materialize"
 ---
 
-[Terraform](https://www.terraform.io/) is an infrastructure-as-code tool that allows you to manage your
-resources in a declarative configuration language. Materialize maintains a
-[Terraform provider](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs) to help you safely and predictably provision and manage
-connections, sources, and other database objects.
+[Terraform](https://www.terraform.io/) is an infrastructure-as-code tool that
+allows you to manage your resources in a declarative configuration language.
+Materialize maintains a [Terraform provider](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs)
+to help you safely and predictably provision and manage connections, sources,
+and other database objects.
 
-Materialize also maintains several modules that make it easier to manage
-other cloud resources that Materialize depends on. Modules allow you to bypass
-manually configuring cloud resources and are an efficient way of deploying
-infrastructure with a single `terraform apply` command.
+Materialize also maintains [several modules](#terraform-modules) that make it
+easier to manage other cloud resources that Materialize depends on. Modules
+allow you to bypass manually configuring cloud resources and are an efficient
+way of deploying infrastructure with a single `terraform apply` command.
 
 ## Terraform provider
 
@@ -41,12 +42,10 @@ To configure the provider to communicate with your Materialize region, you
 need to authenticate with a Materialize username, app password, and other
 specifics from your account.
 
-{{< note >}}
-Materialize recommends creating a new app password for each application you use. To create a new app password, navigate to [https://console.materialize.com/access](https://console.materialize.com/access).
-{{</ note >}}
-
-Materialize recommends saving sensitive input variables as environment variables
-to avoid checking secrets into source control. In Terraform, you can export your Materialize app password as a [Terraform environment variable](https://developer.hashicorp.com/terraform/cli/config/environment-variables#tf_var_name) with the `TF_VAR_<name>` format.
+We recommend saving sensitive input variables as environment variables to avoid
+checking secrets into source control. In Terraform, you can export Materialize
+app passwords as a [Terraform environment variable](https://developer.hashicorp.com/terraform/cli/config/environment-variables#tf_var_name)
+with the `TF_VAR_<name>` format.
 
 ```shell
 export TF_VAR_MZ_PASSWORD=<app_password>
@@ -62,6 +61,49 @@ provider "materialize" {
   password       = var.MZ_PASSWORD
   default_region = <region>
   database       = <database>
+}
+```
+
+#### Creating service accounts
+
+**Minimum requirements:** `terraform-provider-materialize` v0.8.1+
+
+As a best practice, we strongly recommend using [service accounts](/manage/access-control/create-service-accounts)
+to connect external applications to Materialize. To create a
+service account, create a new [`materialize_role`](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs/resources/role)
+and associate it with a new [`materialize_app_password`](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs/resources/app_password)
+of type `service`. More granular permissions for the service account can then
+be configured using [role-based access control (RBAC)](/manage/access-control/#role-based-access-control-rbac).
+
+```hcl
+# Create a service user in the aws/us-east-1 region.
+resource "materialize_role" "production_dashboard" {
+  name   = "svc_production_dashboard"
+  region = "aws/us-east-1"
+}
+
+# Create an app password for the service user.
+resource "materialize_app_password" "production_dashboard" {
+  name = "production_dashboard_app_password"
+  type = "service"
+  user = materialize_role.production_dashboard.name
+  roles = ["Member"]
+}
+
+# Allow the service user to use the "production_analytics" database.
+resource "materialize_database_grant" "database_usage" {
+  role_name     = materialize_role.production_dashboard.name
+  privilege     = "USAGE"
+  database_name = "production_analytics"
+  region        = "aws/us-east-1"
+}
+
+# Export the user and password for use in the external tool.
+output "production_dashboard_user" {
+  value = materialize_role.production_dashboard.name
+}
+output "production_dashboard_password" {
+  value = materialize_app_password.production_dashboard.password
 }
 ```
 
@@ -160,7 +202,7 @@ The Materialize provider uses [connection resource blocks](https://registry.terr
 Materialize to communicate with the PrivateLink endpoint. After you deploy the
 module, you can create a new Materialize connection with the AWS resource
 information. The configuration below is an example of the Materialize provider,
-performing the same necessary steps as the [`CREATE CONNECTION`](https://materialize.com/docs/sql/create-connection/#aws-privatelink) statement in SQL:
+performing the same necessary steps as the [`CREATE CONNECTION`](/sql/create-connection/#aws-privatelink) statement in SQL:
 
 
 ```hcl
@@ -202,7 +244,7 @@ After using the module, you can configure the [`materialize_connection_ssh_tunne
 resource with the module output, allowing Materialize an end-to-end connection
 to your source. The provider will configure the same Materialize objects as the
 [`CREATE
-CONNECTION`](https://materialize.com/docs/sql/create-connection/#ssh-tunnel)
+CONNECTION`](/sql/create-connection/#ssh-tunnel)
 statement.
 
 
@@ -217,7 +259,7 @@ After you run the module, you
 can create a secret, connection, and source with the Materialize
 provider for an end-to-end connection to this instance as a new source. The
 Materialize provider will create these objects just like the [`CREATE
-SECRET`](https://materialize.com/docs/sql/create-secret/), [`CREATE CONNECTION`](https://materialize.com/docs/sql/create-connection/#postgresql), and [`CREATE SOURCE`](https://materialize.com/docs/sql/create-source/postgres/) statements in SQL. The
+SECRET`](/sql/create-secret/), [`CREATE CONNECTION`](/sql/create-connection/#postgresql), and [`CREATE SOURCE`](/sql/create-source/postgres/) statements in SQL. The
 secret, connection, and source resources would be similar to the example
 Terraform configuration below with output from the module:
 

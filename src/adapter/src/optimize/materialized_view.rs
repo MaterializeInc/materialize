@@ -25,15 +25,19 @@
 //!
 //! See also MaterializeInc/materialize#22940.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use mz_compute_types::plan::Plan;
-use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
+use mz_compute_types::sinks::{
+    ComputeSinkConnection, ComputeSinkDesc, MaterializedViewSinkConnection,
+};
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_repr::explain::trace_plan;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
+use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
@@ -41,21 +45,19 @@ use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
 use mz_transform::TransformCtx;
 use timely::progress::Antichain;
 
-use crate::catalog::Catalog;
 use crate::optimize::dataflows::{
     prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle,
 };
-use crate::optimize::metrics::OptimizerMetrics;
 use crate::optimize::{
     optimize_mir_local, trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize,
-    OptimizeMode, OptimizerConfig, OptimizerError,
+    OptimizeMode, OptimizerCatalog, OptimizerConfig, OptimizerError,
 };
 
 pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.
     typecheck_ctx: TypecheckContext,
     /// A snapshot of the catalog state.
-    catalog: Arc<Catalog>,
+    catalog: Arc<dyn OptimizerCatalog>,
     /// A snapshot of the cluster that will run the dataflows.
     compute_instance: ComputeInstanceSnapshot,
     /// A durable GlobalId to be used with the exported materialized view sink.
@@ -77,11 +79,29 @@ pub struct Optimizer {
     metrics: OptimizerMetrics,
     /// The time spent performing optimization so far.
     duration: Duration,
+    /// Overrides monotonicity for the given source collections.
+    ///
+    /// This is here only for continual tasks, which at runtime introduce
+    /// synthetic retractions to "input sources". If/when we split a CT
+    /// optimizer out of the MV optimizer, this can be removed.
+    ///
+    /// TODO(ct3): There are other differences between a GlobalId used as a CT
+    /// input vs as a normal collection, such as the statistical size estimates.
+    /// Plus, at the moment, it is not possible to use the same GlobalId as both
+    /// an "input" and a "reference" in a CT. So, better than this approach
+    /// would be for the optimizer itself to somehow understand the distinction
+    /// between a CT input and a normal collection.
+    ///
+    /// In the meantime, it might be desirable to refactor the MV optimizer to
+    /// have a small amount of knowledge about CTs, in particular producing the
+    /// CT sink connection directly. This would allow us to replace this field
+    /// with something derived directly from that sink connection.
+    force_source_non_monotonic: BTreeSet<GlobalId>,
 }
 
 impl Optimizer {
     pub fn new(
-        catalog: Arc<Catalog>,
+        catalog: Arc<dyn OptimizerCatalog>,
         compute_instance: ComputeInstanceSnapshot,
         sink_id: GlobalId,
         view_id: GlobalId,
@@ -91,6 +111,7 @@ impl Optimizer {
         debug_name: String,
         config: OptimizerConfig,
         metrics: OptimizerMetrics,
+        force_source_non_monotonic: BTreeSet<GlobalId>,
     ) -> Self {
         Self {
             typecheck_ctx: empty_context(),
@@ -105,6 +126,7 @@ impl Optimizer {
             config,
             metrics,
             duration: Default::default(),
+            force_source_non_monotonic,
         }
     }
 }
@@ -168,12 +190,16 @@ impl Optimize<HirRelationExpr> for Optimizer {
         trace_plan!(at: "raw", &expr);
 
         // HIR ⇒ MIR lowering and decorrelation
-        let expr = expr.lower(&self.config)?;
+        let expr = expr.lower(&self.config, Some(&self.metrics))?;
 
         // MIR ⇒ MIR optimization (local)
         let mut df_meta = DataflowMetainfo::default();
-        let mut transform_ctx =
-            TransformCtx::local(&self.config.features, &self.typecheck_ctx, &mut df_meta);
+        let mut transform_ctx = TransformCtx::local(
+            &self.config.features,
+            &self.typecheck_ctx,
+            &mut df_meta,
+            Some(&self.metrics),
+        );
         let expr = optimize_mir_local(expr, &mut transform_ctx)?.into_inner();
 
         self.duration += time.elapsed();
@@ -217,21 +243,25 @@ impl Optimize<LocalMirPlan> for Optimizer {
         let rel_desc = RelationDesc::new(rel_typ, self.column_names.clone());
 
         let mut df_builder = {
-            let catalog = self.catalog.state();
             let compute = self.compute_instance.clone();
-            DataflowBuilder::new(catalog, compute).with_config(&self.config)
+            DataflowBuilder::new(&*self.catalog, compute).with_config(&self.config)
         };
         let mut df_desc = MirDataflowDescription::new(self.debug_name.clone());
 
         df_desc.refresh_schedule.clone_from(&self.refresh_schedule);
 
-        df_builder.import_view_into_dataflow(&self.view_id, &expr, &mut df_desc)?;
+        df_builder.import_view_into_dataflow(
+            &self.view_id,
+            &expr,
+            &mut df_desc,
+            &self.config.features,
+        )?;
         df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
         let sink_description = ComputeSinkDesc {
             from: self.view_id,
             from_desc: rel_desc.clone(),
-            connection: ComputeSinkConnection::Persist(PersistSinkConnection {
+            connection: ComputeSinkConnection::MaterializedView(MaterializedViewSinkConnection {
                 value_desc: rel_desc,
                 storage_metadata: (),
             }),
@@ -256,9 +286,16 @@ impl Optimize<LocalMirPlan> for Optimizer {
             &self.config.features,
             &self.typecheck_ctx,
             &mut df_meta,
+            Some(&self.metrics),
         );
+        // Apply source monotonicity overrides.
+        for id in self.force_source_non_monotonic.iter() {
+            if let Some((_desc, monotonic, _upper)) = df_desc.source_imports.get_mut(id) {
+                *monotonic = false;
+            }
+        }
         // Run global optimization.
-        mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx)?;
+        mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx, false)?;
 
         if self.config.mode == OptimizeMode::Explain {
             // Collect the list of indexes used by the dataflow at this point.

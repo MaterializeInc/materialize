@@ -30,7 +30,7 @@ query error column "t1.a" must appear in the GROUP BY clause or be used in an ag
 SELECT t1.a FROM t1 JOIN (t2 JOIN t3 ON t2.a = t3.a) ON t1.a = t2.a GROUP BY t3.a
 
 # Ensure that reflexive equality expressions do not cause the specified column
-# to become unnameable. See #5765.
+# to become unnameable. See database-issues#1778.
 query I
 SELECT t1.a FROM t1 JOIN t2 ON t1.a = t1.a GROUP BY t1.a
 ----
@@ -45,7 +45,7 @@ query I
 SELECT t2.a FROM t1 NATURAL JOIN t2
 ----
 
-# Regression tests for #16920.
+# Regression tests for database-issues#4887.
 query I
 SELECT t.a FROM (t1 NATURAL JOIN t2) t
 ----
@@ -145,6 +145,9 @@ SELECT * FROM (SELECT 1 f1) s1 CROSS JOIN ((SELECT 2 f1) s2 CROSS JOIN LATERAL (
 
 query error column reference "a" is ambiguous
 SELECT * FROM (SELECT 1 a) t1 CROSS JOIN ((SELECT 1 a) t1 CROSS JOIN LATERAL (SELECT a) t2) t3;
+
+query error column reference "a" is ambiguous
+WITH cte1 AS (SELECT 1 AS a, 2 AS a) SELECT * FROM cte1 WHERE cte1.a = 1
 
 query error table reference "t1" is ambiguous
 SELECT * FROM (SELECT 1 a) t1 CROSS JOIN ((SELECT 1 a) t1 CROSS JOIN LATERAL (SELECT t1.a) t2) t3;

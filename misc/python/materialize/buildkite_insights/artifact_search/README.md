@@ -7,12 +7,14 @@ zst-compressed files are included by default.
 ```
 usage: buildkite-artifact-search [-h]
                                  [--fetch {auto,always,avoid,never}]
+                                 [--file-name-regex FILE_NAME_REGEX]
                                  [--include-zst-files | --no-include-zst-files]
+                                 [--job-id JOB_ID]
                                  [--max-results MAX_RESULTS]
+                                 [--search-logs-instead-of-artifacts]
                                  [--use-regex]
-                                 {cleanup,coverage,deploy,deploy-mz-lsp-server,deploy-mz,deploy-website,license,nightly,release-qualification,security,slt,test,www}
+                                 {cleanup,coverage,deploy,deploy-mz-lsp-server,deploy-mz,deploy-website,license,nightly,qa-canary,release-qualification,security,slt,test,www}
                                  buildnumber
-                                 jobid
                                  pattern
 ```
 
@@ -25,8 +27,14 @@ This tool will need:
 
 ## Examples
 
-Search artifacts of the job execution `018f4888-2d3f-494c-8ea0-6ab854a6b1f1` in nightly build #7639 for the string `mytable0`
+Search artifacts in nightly build materialize#7639 for the string `mytable0`
 
 ```
-bin/buildkite-artifact-search nightly 7639 "018f4888-2d3f-494c-8ea0-6ab854a6b1f1" "mytable0"
+bin/buildkite-artifact-search nightly 7639 "mytable0"
+```
+
+Search artifacts of the job execution `018f4888-2d3f-494c-8ea0-6ab854a6b1f1` in nightly build materialize#7639 for the string `mytable0`
+
+```
+bin/buildkite-artifact-search nightly 7639 "mytable0" --job-id "018f4888-2d3f-494c-8ea0-6ab854a6b1f1"
 ```

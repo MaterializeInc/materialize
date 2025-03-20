@@ -73,6 +73,22 @@ for num_data_type in NUMERIC_DATA_TYPES:
             },
         )
 
+    if num_data_type.supports_infinity:
+        values_of_type.add_raw_value(
+            "'+Infinity'",
+            "P_INFINITY",
+            {
+                ExpressionCharacteristics.INFINITY,
+            },
+        )
+        values_of_type.add_raw_value(
+            "'-Infinity'",
+            "N_INFINITY",
+            {
+                ExpressionCharacteristics.INFINITY,
+            },
+        )
+
     for index, tiny_value in enumerate(num_data_type.further_tiny_dec_values):
         values_of_type.add_raw_value(
             tiny_value,

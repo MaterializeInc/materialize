@@ -16,6 +16,9 @@ from materialize.output_consistency.expression.expression import (
     Expression,
     LeafExpression,
 )
+from materialize.output_consistency.expression.expression_characteristics import (
+    ExpressionCharacteristics,
+)
 from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
@@ -25,8 +28,14 @@ from materialize.output_consistency.input_data.operations.date_time_operations_p
 from materialize.output_consistency.input_data.params.enum_constant_operation_params import (
     TAG_DATA_TYPE_ENUM,
 )
+from materialize.output_consistency.input_data.return_specs.number_return_spec import (
+    NumericReturnTypeSpec,
+)
 from materialize.output_consistency.input_data.types.all_types_provider import (
     internal_type_identifiers_to_data_type_names,
+)
+from materialize.output_consistency.input_data.types.number_types_provider import (
+    NON_INTEGER_TYPE_IDENTIFIERS,
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
@@ -34,6 +43,10 @@ from materialize.output_consistency.operation.operation import (
     match_function_by_name,
 )
 from materialize.output_consistency.query.query_template import QueryTemplate
+from materialize.output_consistency.selection.row_selection import (
+    ALL_ROWS_SELECTION,
+    DataRowSelection,
+)
 
 
 def matches_x_or_y(
@@ -105,6 +118,18 @@ def matches_any_expression_arg(
     return False
 
 
+def matches_recursively(
+    expression: Expression, matcher: Callable[[Expression], bool]
+) -> bool:
+    if isinstance(expression, ExpressionWithArgs):
+        for arg_expression in expression.args:
+            is_match = matches_recursively(arg_expression, matcher)
+            if is_match:
+                return True
+
+    return matcher(expression)
+
+
 def matches_nested_expression(expression: Expression) -> bool:
     return not matches_expression_with_only_plain_arguments(expression)
 
@@ -129,15 +154,29 @@ def is_function_invoked_only_with_non_nested_parameters(
 def involves_data_type_category(
     expression: Expression, data_type_category: DataTypeCategory
 ) -> bool:
-    return expression.resolve_resulting_return_type_category() == data_type_category
+    return involves_data_type_categories(expression, {data_type_category})
+
+
+def involves_data_type_categories(
+    expression: Expression, data_type_categories: set[DataTypeCategory]
+) -> bool:
+    return expression.resolve_resulting_return_type_category() in data_type_categories
 
 
 def is_known_to_involve_exact_data_types(
     expression: Expression, internal_data_type_identifiers: set[str]
 ):
+    if (
+        len(internal_data_type_identifiers.intersection(NON_INTEGER_TYPE_IDENTIFIERS))
+        > 0
+    ):
+        if is_known_to_return_non_integer_number(expression):
+            return True
+
     if isinstance(expression, EnumConstant) and expression.is_tagged(
         TAG_DATA_TYPE_ENUM
     ):
+        # this matches castings to a certain type
         type_names = internal_type_identifiers_to_data_type_names(
             internal_data_type_identifiers
         )
@@ -155,6 +194,28 @@ def is_known_to_involve_exact_data_types(
 def is_operation_tagged(expression: Expression, tag: str) -> bool:
     if isinstance(expression, ExpressionWithArgs):
         return expression.operation.is_tagged(tag)
+
+    return False
+
+
+def argument_has_any_characteristic(
+    expression: Expression,
+    arg_index: int,
+    characteristics: set[ExpressionCharacteristics],
+    row_selection: DataRowSelection = ALL_ROWS_SELECTION,
+) -> bool:
+    if isinstance(expression, ExpressionWithArgs):
+        assert arg_index < len(
+            expression.operation.params
+        ), f"Invalid argument index for {expression.operation_to_pattern()}"
+        param = expression.operation.params[arg_index]
+        if param.optional and len(expression.args) <= arg_index:
+            return False
+
+        argument = expression.args[arg_index]
+        return argument.has_any_characteristic(
+            characteristics, row_selection=row_selection
+        )
 
     return False
 
@@ -194,3 +255,34 @@ def is_any_date_time_expression(expression: Expression) -> bool:
             True,
         )
     )
+
+
+def is_timezone_conversion_expression(expression: Expression) -> bool:
+    return expression.matches(
+        partial(
+            matches_fun_by_any_name,
+            function_names_in_lower_case={"timezone"},
+        ),
+        True,
+    ) or expression.matches(
+        partial(
+            matches_op_by_any_pattern,
+            patterns={"$ AT TIME ZONE $::TEXT"},
+        ),
+        True,
+    )
+
+
+def is_known_to_return_non_integer_number(expression: Expression):
+    return_type_spec = expression.resolve_return_type_spec()
+
+    if isinstance(return_type_spec, NumericReturnTypeSpec):
+        return return_type_spec.always_floating_type
+
+    return False
+
+
+def is_table_function(expression: Expression) -> bool:
+    if isinstance(expression, ExpressionWithArgs):
+        return expression.operation.is_table_function
+    return False

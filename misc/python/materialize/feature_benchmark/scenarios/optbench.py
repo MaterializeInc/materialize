@@ -20,8 +20,8 @@ from materialize.feature_benchmark.action import Action
 from materialize.feature_benchmark.executor import Executor
 from materialize.feature_benchmark.measurement import (
     MeasurementType,
-    WallclockMeasurement,
-    WallclockUnit,
+    MeasurementUnit,
+    WallclockDuration,
 )
 from materialize.feature_benchmark.measurement_source import (
     MeasurementSource,
@@ -30,6 +30,8 @@ from materialize.feature_benchmark.scenario import Scenario
 
 # for pdoc ignores
 __pdoc__ = {}
+
+from materialize.feature_benchmark.scenario_version import ScenarioVersion
 
 
 class OptbenchInit(Action):
@@ -55,11 +57,11 @@ class OptbenchInit(Action):
 
 class OptbenchRun(MeasurementSource):
     def __init__(self, optbench_scenario: str, query: int):
-        self._executor: Executor | None = None
+        super().__init__()
         self._optbench_scenario = optbench_scenario
         self._query = query
 
-    def run(self, executor: Executor | None = None) -> list[WallclockMeasurement]:
+    def run(self, executor: Executor | None = None) -> list[WallclockDuration]:
         assert not (executor is None and self._executor is None)
         assert not (executor is not None and self._executor is not None)
         e = executor or self._executor
@@ -75,13 +77,16 @@ class OptbenchRun(MeasurementSource):
         explain_output = materialize.optbench.sql.ExplainOutput(
             e._composition.sql_query(explain_query)[0][0]  # type: ignore
         )
-        # Optimization time is in microseconds, divide by 3 to get a more readable number (still in wrong unit)
-        optimization_duration = float(explain_output.optimization_time()) / 3  # type: ignore
+        # Optimization time is in nanoseconds, divide by 3 to get a more readable number (still in wrong unit)
+        optimization_time = explain_output.optimization_time()
+        assert optimization_time is not None
+        optimization_time_in_ns = optimization_time.astype("timedelta64[ns]")
+        optimization_duration_in_ns = float(optimization_time_in_ns)
         timestamps = [
-            WallclockMeasurement(0, WallclockUnit.ONE_THIRD_MICROSECONDS),
-            WallclockMeasurement(
-                optimization_duration,
-                WallclockUnit.ONE_THIRD_MICROSECONDS,
+            WallclockDuration(0, MeasurementUnit.NANOSECONDS),
+            WallclockDuration(
+                optimization_duration_in_ns,
+                MeasurementUnit.NANOSECONDS,
             ),
         ]
         return timestamps
@@ -106,9 +111,8 @@ class OptbenchTPCH(Scenario):
     QUERY = 1
     RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
         MeasurementType.WALLCLOCK: 0.20,  # increased because it's easy to regress
-        MeasurementType.MESSAGES: 0.10,
-        MeasurementType.MEMORY_MZ: 0.10,
-        MeasurementType.MEMORY_CLUSTERD: 0.10,
+        MeasurementType.MEMORY_MZ: 0.20,
+        MeasurementType.MEMORY_CLUSTERD: 0.50,
     }
 
     def init(self) -> list[Action]:
@@ -116,3 +120,6 @@ class OptbenchTPCH(Scenario):
 
     def benchmark(self) -> MeasurementSource:
         return OptbenchRun("tpch", self.QUERY)
+
+    def version(self) -> ScenarioVersion:
+        return ScenarioVersion.create(1, 1, 0)

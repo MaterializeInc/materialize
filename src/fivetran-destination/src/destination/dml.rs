@@ -28,7 +28,6 @@ use crate::destination::{
     config, ColumnMetadata, FIVETRAN_SYSTEM_COLUMN_DELETE, FIVETRAN_SYSTEM_COLUMN_SYNCED,
 };
 use crate::error::{Context, OpError, OpErrorKind};
-use crate::fivetran_sdk::write_batch_request::FileParams;
 use crate::fivetran_sdk::{Compression, Encryption, Table, TruncateRequest, WriteBatchRequest};
 use crate::utils::{self, AsyncCsvReaderTableAdapter};
 
@@ -51,15 +50,14 @@ pub async fn handle_truncate_table(request: TruncateRequest) -> Result<(), OpErr
 
     let (_dbname, client) = config::connect(request.configuration).await?;
 
-    let exists_stmt = format!(
-        r#"
+    let exists_stmt = r#"
         SELECT EXISTS(
             SELECT 1 FROM mz_tables t
             LEFT JOIN mz_schemas s
             ON t.schema_id = s.id
             WHERE s.name = $1 AND t.name = $2
         )"#
-    );
+    .to_string();
     let exists: bool = client
         .query_one(&exists_stmt, &[&request.schema_name, &request.table_name])
         .await
@@ -102,22 +100,22 @@ pub async fn handle_write_batch(request: WriteBatchRequest) -> Result<(), OpErro
         return Err(err.into());
     }
 
-    let FileParams::Csv(csv_file_params) = request
+    let file_params = request
         .file_params
         .ok_or(OpErrorKind::FieldMissing("file_params"))?;
 
     let file_config = FileConfig {
-        compression: match csv_file_params.compression() {
+        compression: match file_params.compression() {
             Compression::Off => FileCompression::None,
             Compression::Zstd => FileCompression::Zstd,
             Compression::Gzip => FileCompression::Gzip,
         },
-        aes_encryption_keys: match csv_file_params.encryption() {
+        aes_encryption_keys: match file_params.encryption() {
             Encryption::None => None,
             Encryption::Aes => Some(request.keys),
         },
-        null_string: csv_file_params.null_string,
-        unmodified_string: csv_file_params.unmodified_string,
+        null_string: file_params.null_string,
+        unmodified_string: file_params.unmodified_string,
     };
 
     let (dbname, client) = config::connect(request.configuration).await?;
@@ -557,13 +555,13 @@ async fn get_scratch_table<'a>(
                 .columns
                 .iter()
                 .enumerate()
-                .map(|(pos, col)| (&col.name, (col.r#type, &col.decimal, pos)))
+                .map(|(pos, col)| (&col.name, (col.r#type, &col.params, pos)))
                 .collect();
             let scratch_columns: BTreeMap<_, _> = scratch
                 .columns
                 .iter()
                 .enumerate()
-                .map(|(pos, col)| (&col.name, (col.r#type, &col.decimal, pos)))
+                .map(|(pos, col)| (&col.name, (col.r#type, &col.params, pos)))
                 .collect();
 
             if table_columns != scratch_columns {

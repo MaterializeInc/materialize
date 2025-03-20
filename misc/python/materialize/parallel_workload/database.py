@@ -9,7 +9,7 @@
 
 import random
 import threading
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from copy import copy
 from enum import Enum
 
@@ -20,6 +20,7 @@ from materialize.data_ingest.data_type import (
     DATA_TYPES_FOR_AVRO,
     DATA_TYPES_FOR_KEY,
     DATA_TYPES_FOR_MYSQL,
+    NUMBER_TYPES,
     Bytea,
     DataType,
     Jsonb,
@@ -37,34 +38,34 @@ from materialize.parallel_workload.executor import Executor
 from materialize.parallel_workload.settings import Complexity, Scenario
 from materialize.util import naughty_strings
 
-MAX_COLUMNS = 10
+MAX_COLUMNS = 5
 MAX_INCLUDE_HEADERS = 5
-MAX_ROWS = 100
-MAX_CLUSTERS = 5
+MAX_ROWS = 50
+MAX_CLUSTERS = 4
 MAX_CLUSTER_REPLICAS = 2
-MAX_DBS = 10
-MAX_SCHEMAS = 20
-MAX_TABLES = 40
-MAX_VIEWS = 100
-MAX_INDEXES = 100
-MAX_ROLES = 100
-MAX_WEBHOOK_SOURCES = 20
-MAX_KAFKA_SOURCES = 20
-MAX_MYSQL_SOURCES = 20
-MAX_POSTGRES_SOURCES = 20
-MAX_KAFKA_SINKS = 20
+MAX_DBS = 5
+MAX_SCHEMAS = 5
+MAX_TABLES = 5
+MAX_VIEWS = 15
+MAX_INDEXES = 15
+MAX_ROLES = 15
+MAX_WEBHOOK_SOURCES = 5
+MAX_KAFKA_SOURCES = 5
+MAX_MYSQL_SOURCES = 5
+MAX_POSTGRES_SOURCES = 5
+MAX_KAFKA_SINKS = 5
 
 MAX_INITIAL_DBS = 1
 MAX_INITIAL_SCHEMAS = 1
 MAX_INITIAL_CLUSTERS = 2
-MAX_INITIAL_TABLES = 10
-MAX_INITIAL_VIEWS = 10
-MAX_INITIAL_ROLES = 3
-MAX_INITIAL_WEBHOOK_SOURCES = 3
-MAX_INITIAL_KAFKA_SOURCES = 3
-MAX_INITIAL_MYSQL_SOURCES = 3
-MAX_INITIAL_POSTGRES_SOURCES = 3
-MAX_INITIAL_KAFKA_SINKS = 3
+MAX_INITIAL_TABLES = 2
+MAX_INITIAL_VIEWS = 2
+MAX_INITIAL_ROLES = 1
+MAX_INITIAL_WEBHOOK_SOURCES = 1
+MAX_INITIAL_KAFKA_SOURCES = 1
+MAX_INITIAL_MYSQL_SOURCES = 1
+MAX_INITIAL_POSTGRES_SOURCES = 1
+MAX_INITIAL_KAFKA_SINKS = 1
 
 NAUGHTY_IDENTIFIERS = False
 
@@ -79,7 +80,7 @@ def naughtify(name: str) -> str:
 
     strings = naughty_strings()
     # This rng is just to get a more interesting integer for the name
-    index = sum([10**i * c for i, c in enumerate(name.encode("utf-8"))]) % len(strings)
+    index = sum([10**i * c for i, c in enumerate(name.encode())]) % len(strings)
     # Keep them short so we can combine later with other identifiers, 255 char limit
     return f"{name}_{strings[index].encode('utf-8')[:16].decode('utf-8', 'ignore')}"
 
@@ -194,7 +195,7 @@ class Schema:
 
 
 class DBObject:
-    columns: Sequence[Column]
+    columns: list[Column]
     lock: threading.Lock
 
     def __init__(self):
@@ -516,7 +517,7 @@ class KafkaSource(DBObject):
             schema.name(),
             cluster.name(),
         )
-        workload = rng.choice(list(WORKLOADS))(None)
+        workload = rng.choice(list(WORKLOADS))(azurite=False)
         for transaction_def in workload.cycle:
             for definition in transaction_def.operations:
                 if type(definition) == Insert and definition.count > MAX_ROWS:
@@ -539,8 +540,8 @@ class KafkaSink(DBObject):
     rename: int
     cluster: "Cluster"
     schema: Schema
+    base_object: DBObject
     envelope: str
-    format: str
     key: str
 
     def __init__(
@@ -556,24 +557,50 @@ class KafkaSink(DBObject):
         self.cluster = cluster
         self.schema = schema
         self.base_object = base_object
-        self.format = rng.choice(
-            ["AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn", "JSON"]
-        )
+        universal_formats = [
+            "FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn",
+            "FORMAT JSON",
+        ]
+        single_column_formats = ["FORMAT BYTES", "FORMAT TEXT"]
+        formats = universal_formats.copy()
+        if len(base_object.columns) == 1:
+            formats.extend(single_column_formats)
+        self.format = rng.choice(formats)
         self.envelope = (
             "UPSERT" if self.format == "JSON" else rng.choice(["DEBEZIUM", "UPSERT"])
         )
-        if self.envelope == "UPSERT":
-            key_cols = ", ".join(
-                [
-                    column.name(True)
-                    for column in rng.sample(
-                        base_object.columns, k=rng.randint(1, len(base_object.columns))
-                    )
-                ]
-            )
-            self.key = f"KEY ({key_cols}) NOT ENFORCED"
+        if self.envelope == "UPSERT" or rng.choice([True, False]):
+            key_cols = [
+                column
+                for column in rng.sample(
+                    base_object.columns, k=rng.randint(1, len(base_object.columns))
+                )
+            ]
+            key_col_names = [column.name(True) for column in key_cols]
+            self.key = f"KEY ({', '.join(key_col_names)}) NOT ENFORCED"
+
+            potential_partition_keys = [
+                key_col for key_col in key_cols if key_col.data_type in NUMBER_TYPES
+            ]
+            if potential_partition_keys:
+                self.partition_key = rng.choice(potential_partition_keys).name(True)
+                self.partition_count = rng.randint(1, 10)
+            else:
+                self.partition_count = 0
+
+            if rng.choice([True, False]):
+                key_formats = universal_formats.copy()
+                if len(key_cols) == 1:
+                    key_formats.extend(single_column_formats)
+                value_formats = universal_formats.copy()
+                if len(base_object.columns) == 1:
+                    value_formats.extend(single_column_formats)
+                self.format = (
+                    f"KEY {rng.choice(key_formats)} VALUE {rng.choice(value_formats)}"
+                )
         else:
             self.key = ""
+            self.partition_count = 0
         self.rename = 0
 
     def name(self) -> str:
@@ -586,7 +613,12 @@ class KafkaSink(DBObject):
 
     def create(self, exe: Executor) -> None:
         topic = f"sink_topic{self.sink_id}"
-        query = f"CREATE SINK {self} IN CLUSTER {self.cluster} FROM {self.base_object} INTO KAFKA CONNECTION kafka_conn (TOPIC {topic}) {self.key} FORMAT {self.format} ENVELOPE {self.envelope}"
+        maybe_partition = (
+            f", TOPIC PARTITION COUNT {self.partition_count}, PARTITION BY {self.partition_key}"
+            if self.partition_count
+            else ""
+        )
+        query = f"CREATE SINK {self} IN CLUSTER {self.cluster} FROM {self.base_object} INTO KAFKA CONNECTION kafka_conn (TOPIC {topic}{maybe_partition}) {self.key} {self.format} ENVELOPE {self.envelope}"
         exe.execute(query)
 
 
@@ -645,7 +677,7 @@ class MySqlSource(DBObject):
             schema.name(),
             cluster.name(),
         )
-        self.generator = rng.choice(list(WORKLOADS))(None).generate(fields)
+        self.generator = rng.choice(list(WORKLOADS))(azurite=False).generate(fields)
         self.lock = threading.Lock()
 
     def name(self) -> str:
@@ -713,7 +745,7 @@ class PostgresSource(DBObject):
             schema.name(),
             cluster.name(),
         )
-        self.generator = rng.choice(list(WORKLOADS))(None).generate(fields)
+        self.generator = rng.choice(list(WORKLOADS))(azurite=False).generate(fields)
         self.lock = threading.Lock()
 
     def name(self) -> str:
@@ -868,6 +900,7 @@ class Database:
     lock: threading.Lock
     seed: str
     sqlsmith_state: str
+    flags: dict[str, str]
 
     def __init__(
         self,
@@ -941,6 +974,7 @@ class Database:
         self.kafka_sink_id = len(self.kafka_sinks)
         self.lock = threading.Lock()
         self.sqlsmith_state = ""
+        self.flags = {}
 
     def db_objects(
         self,
@@ -982,7 +1016,11 @@ class Database:
 
         exe.execute("SELECT name FROM mz_roles WHERE name LIKE 'r%'")
         for row in exe.cur.fetchall():
-            exe.execute(f"DROP ROLE {identifier(row[0])} CASCADE")
+            exe.execute(f"DROP ROLE {identifier(row[0])}")
+
+        exe.execute("DROP SECRET IF EXISTS pgpass CASCADE")
+        exe.execute("DROP SECRET IF EXISTS mypass CASCADE")
+        exe.execute("DROP SECRET IF EXISTS minio CASCADE")
 
         print("Creating connections")
 

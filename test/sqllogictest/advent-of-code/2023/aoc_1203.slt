@@ -1,0 +1,473 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# https://github.com/MaterializeInc/advent-of-code-2023/blob/main/week1/aoc_1203.md
+
+mode cockroach
+
+statement ok
+CREATE TABLE input (input TEXT);
+
+statement ok
+INSERT INTO input VALUES (
+'...14...954......104...98..........11...222.........38.104....708..........................217..................330.................19..
+.......@...................*...............................*.664........677................@....459.........187..........73.............
+....41............178.....398....*...548..495..........983.........99.........282......409........*...........$.248...............165...
+......261......300...............704.&.......*.......*........9.65..904.....6....*773....=.....680../511...2*.....=..99*....*..../......
+..........200..............398.......22...100...........&...........10.......*.......73.....833...*...........*......300.............22.
+..................@.100....*...........*...............*....19...300.....*.................@....954.......................200...........
+.....-....&..@............828...........@268..844....534...................563.........409........$..........244.........722.286........');
+
+
+query II
+WITH MUTUALLY RECURSIVE
+    -- PART 0
+    -- Parse the input as lines of text with line numbers.
+    lines(line TEXT, row_idx INT) AS (
+        SELECT
+           regexp_split_to_array(input, '\n')[row_idx],
+           row_idx
+         FROM
+            input,
+            generate_series(1, (SELECT COUNT(*)::INT FROM (SELECT regexp_split_to_table(input, '\n') FROM input))) as row_idx
+    ),
+    chars(symbol TEXT, row_idx INT, col_idx INT) AS (
+        SELECT
+            substring(line, start, 1),
+            row_idx,
+            start
+        FROM
+            lines,
+            generate_series(1, length(line)) as start
+        WHERE
+            substring(line, start, 1) != '.'
+    ),
+    numerals(number TEXT, row_idx INT, col_idx INT) AS (
+        SELECT symbol, row_idx, col_idx
+        FROM chars
+        WHERE symbol IN ( VALUES ('0'), ('1'), ('2'), ('3'), ('4'), ('5'), ('6'), ('7'), ('8'), ('9') )
+    ),
+    symbols(symbol TEXT, row_idx INT, col_idx INT) AS (
+        SELECT symbol, row_idx, col_idx
+        FROM chars
+        WHERE symbol NOT IN ( VALUES ('0'), ('1'), ('2'), ('3'), ('4'), ('5'), ('6'), ('7'), ('8'), ('9') )
+    ),
+    -- PART 1
+    -- Recursively build up ranges of numerals that are "active", in the sense of being adjacent to a symbol.
+    -- Each range has an accumulated number (as a string), a row index, a column index and length of the run.
+    active(number TEXT, row_idx INT, col_idx INT, length INT) AS (
+        -- Base case: numerals adjacent to a symbol
+        SELECT numerals.*, 1
+        FROM
+            numerals,
+            symbols,
+            generate_series(-1, 1) row_off,
+            generate_series(-1, 1) col_off
+        WHERE numerals.row_idx = symbols.row_idx + row_off
+          AND numerals.col_idx = symbols.col_idx + col_off
+        UNION
+        -- Inductive case 1: Join to the left
+        SELECT numerals.number || active.number, numerals.row_idx, numerals.col_idx, active.length + 1
+        FROM numerals, active
+        WHERE numerals.row_idx = active.row_idx
+          AND numerals.col_idx = active.col_idx - 1
+        UNION
+        -- Inductive case 2: Join to the right
+        SELECT active.number || numerals.number, numerals.row_idx, active.col_idx, active.length + 1
+        FROM numerals, active
+        WHERE numerals.row_idx = active.row_idx
+          AND numerals.col_idx = active.col_idx + active.length
+    ),
+    parts(number INT, row_idx INT, col_idx INT, length INT) AS (
+        SELECT active.number::INT, row_idx, col_idx, length
+        FROM active
+        WHERE (active.row_idx, active.col_idx-1) NOT IN (SELECT row_idx, col_idx FROM numerals)
+          AND (active.row_idx, active.col_idx+length) NOT IN (SELECT row_idx, col_idx FROM numerals)
+    ),
+    part1(part1 BIGINT) AS ( SELECT SUM(parts.number::INT) FROM parts ),
+    -- PART 2
+    -- A "gear" is a `*` adjacent to exactly two part numbers. We want the sum over gears of their product.
+    -- A gear is identified by a location, which we will want to attempt to join with part numbers.
+    gear_adjacent(row_idx INT, col_idx INT, number INT, part_row INT, part_col INT) AS (
+        SELECT DISTINCT symbols.row_idx, symbols.col_idx, parts.number, parts.row_idx, parts.col_idx
+        FROM
+            symbols,
+            generate_series(-1, 1) gear_r_off,
+            generate_series(-1, 1) gear_c_off,
+            parts,
+            generate_series(parts.col_idx, parts.col_idx + parts.length - 1) part_col
+        WHERE symbols.symbol = '*'
+          AND symbols.row_idx + gear_r_off = parts.row_idx
+          AND symbols.col_idx + gear_c_off = part_col
+    ),
+    gears(row_idx INT, col_idx INT) AS (
+        SELECT row_idx, col_idx
+        FROM gear_adjacent
+        GROUP BY row_idx, col_idx
+        HAVING COUNT(*) = 2
+    ),
+    gear_products(row_idx INT, col_idx INT, product INT) AS (
+        SELECT DISTINCT gears.row_idx, gears.col_idx, p1.number * p2.number
+        FROM gears, gear_adjacent p1, gear_adjacent p2
+        WHERE gears.row_idx = p1.row_idx
+          AND gears.col_idx = p1.col_idx
+          AND gears.row_idx = p2.row_idx
+          AND gears.col_idx = p2.col_idx
+          AND (p1.part_row != p2.part_row OR p1.part_col != p2.part_col)
+    ),
+    part2(part2 BIGINT) AS ( SELECT SUM(product) FROM gear_products)
+
+SELECT * FROM part1, part2;
+----
+11374  1587570
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
+WITH MUTUALLY RECURSIVE
+    -- PART 0
+    -- Parse the input as lines of text with line numbers.
+    lines(line TEXT, row_idx INT) AS (
+        SELECT
+           regexp_split_to_array(input, '\n')[row_idx],
+           row_idx
+         FROM
+            input,
+            generate_series(1, (SELECT COUNT(*)::INT FROM (SELECT regexp_split_to_table(input, '\n') FROM input))) as row_idx
+    ),
+    chars(symbol TEXT, row_idx INT, col_idx INT) AS (
+        SELECT
+            substring(line, start, 1),
+            row_idx,
+            start
+        FROM
+            lines,
+            generate_series(1, length(line)) as start
+        WHERE
+            substring(line, start, 1) != '.'
+    ),
+    numerals(number TEXT, row_idx INT, col_idx INT) AS (
+        SELECT symbol, row_idx, col_idx
+        FROM chars
+        WHERE symbol IN ( VALUES ('0'), ('1'), ('2'), ('3'), ('4'), ('5'), ('6'), ('7'), ('8'), ('9') )
+    ),
+    symbols(symbol TEXT, row_idx INT, col_idx INT) AS (
+        SELECT symbol, row_idx, col_idx
+        FROM chars
+        WHERE symbol NOT IN ( VALUES ('0'), ('1'), ('2'), ('3'), ('4'), ('5'), ('6'), ('7'), ('8'), ('9') )
+    ),
+    -- PART 1
+    -- Recursively build up ranges of numerals that are "active", in the sense of being adjacent to a symbol.
+    -- Each range has an accumulated number (as a string), a row index, a column index and length of the run.
+    active(number TEXT, row_idx INT, col_idx INT, length INT) AS (
+        -- Base case: numerals adjacent to a symbol
+        SELECT numerals.*, 1
+        FROM
+            numerals,
+            symbols,
+            generate_series(-1, 1) row_off,
+            generate_series(-1, 1) col_off
+        WHERE numerals.row_idx = symbols.row_idx + row_off
+          AND numerals.col_idx = symbols.col_idx + col_off
+        UNION
+        -- Inductive case 1: Join to the left
+        SELECT numerals.number || active.number, numerals.row_idx, numerals.col_idx, active.length + 1
+        FROM numerals, active
+        WHERE numerals.row_idx = active.row_idx
+          AND numerals.col_idx = active.col_idx - 1
+        UNION
+        -- Inductive case 2: Join to the right
+        SELECT active.number || numerals.number, numerals.row_idx, active.col_idx, active.length + 1
+        FROM numerals, active
+        WHERE numerals.row_idx = active.row_idx
+          AND numerals.col_idx = active.col_idx + active.length
+    ),
+    parts(number INT, row_idx INT, col_idx INT, length INT) AS (
+        SELECT active.number::INT, row_idx, col_idx, length
+        FROM active
+        WHERE (active.row_idx, active.col_idx-1) NOT IN (SELECT row_idx, col_idx FROM numerals)
+          AND (active.row_idx, active.col_idx+length) NOT IN (SELECT row_idx, col_idx FROM numerals)
+    ),
+    part1(part1 BIGINT) AS ( SELECT SUM(parts.number::INT) FROM parts ),
+    -- PART 2
+    -- A "gear" is a `*` adjacent to exactly two part numbers. We want the sum over gears of their product.
+    -- A gear is identified by a location, which we will want to attempt to join with part numbers.
+    gear_adjacent(row_idx INT, col_idx INT, number INT, part_row INT, part_col INT) AS (
+        SELECT DISTINCT symbols.row_idx, symbols.col_idx, parts.number, parts.row_idx, parts.col_idx
+        FROM
+            symbols,
+            generate_series(-1, 1) gear_r_off,
+            generate_series(-1, 1) gear_c_off,
+            parts,
+            generate_series(parts.col_idx, parts.col_idx + parts.length - 1) part_col
+        WHERE symbols.symbol = '*'
+          AND symbols.row_idx + gear_r_off = parts.row_idx
+          AND symbols.col_idx + gear_c_off = part_col
+    ),
+    gears(row_idx INT, col_idx INT) AS (
+        SELECT row_idx, col_idx
+        FROM gear_adjacent
+        GROUP BY row_idx, col_idx
+        HAVING COUNT(*) = 2
+    ),
+    gear_products(row_idx INT, col_idx INT, product INT) AS (
+        SELECT DISTINCT gears.row_idx, gears.col_idx, p1.number * p2.number
+        FROM gears, gear_adjacent p1, gear_adjacent p2
+        WHERE gears.row_idx = p1.row_idx
+          AND gears.col_idx = p1.col_idx
+          AND gears.row_idx = p2.row_idx
+          AND gears.col_idx = p2.col_idx
+          AND (p1.part_row != p2.part_row OR p1.part_col != p2.part_col)
+    ),
+    part2(part2 BIGINT) AS ( SELECT SUM(product) FROM gear_products)
+
+SELECT * FROM part1, part2;
+----
+Explained Query:
+  With Mutually Recursive
+    cte l0 =
+      Reduce aggregates=[count(*)] // { arity: 1 }
+        Project () // { arity: 0 }
+          FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](#0{input})) // { arity: 2 }
+            ReadStorage materialize.public.input // { arity: 1 }
+    cte l1 =
+      Project (#0, #2, #3) // { arity: 3 }
+        Filter (#3 != ".") // { arity: 4 }
+          Map (substr(#1, #2, 1)) // { arity: 4 }
+            FlatMap generate_series(1, char_length(#1), 1) // { arity: 3 }
+              Project (#1, #2) // { arity: 2 }
+                Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1))) // { arity: 3 }
+                  CrossJoin type=differential // { arity: 2 }
+                    implementation
+                      %0:input[×] » %1[×]
+                    ArrangeBy keys=[[]] // { arity: 1 }
+                      ReadStorage materialize.public.input // { arity: 1 }
+                    ArrangeBy keys=[[]] // { arity: 1 }
+                      Project (#1) // { arity: 1 }
+                        FlatMap generate_series(1, #0, 1) // { arity: 2 }
+                          Project (#1) // { arity: 1 }
+                            Map (bigint_to_integer(#0{count})) // { arity: 2 }
+                              Union // { arity: 1 }
+                                Get l0 // { arity: 1 }
+                                Map (0) // { arity: 1 }
+                                  Union // { arity: 0 }
+                                    Negate // { arity: 0 }
+                                      Project () // { arity: 0 }
+                                        Get l0 // { arity: 1 }
+                                    Constant // { arity: 0 }
+                                      - ()
+    cte l2 =
+      Distinct project=[#0] // { arity: 1 }
+        Project (#2) // { arity: 1 }
+          Get l1 // { arity: 3 }
+    cte l3 =
+      Distinct project=[#0] // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          Filter (#0 = #1) // { arity: 2 }
+            FlatMap wrap1("0", "1", "2", "3", "4", "5", "6", "7", "8", "9") // { arity: 2 }
+              Get l2 // { arity: 1 }
+    cte l4 =
+      ArrangeBy keys=[[#2]] // { arity: 3 }
+        Get l1 // { arity: 3 }
+    cte l5 =
+      Project (#0..=#2) // { arity: 3 }
+        Join on=(#2 = #3) type=differential // { arity: 4 }
+          implementation
+            %1:l3[#0]UK » %0:l4[#2]K
+          Get l4 // { arity: 3 }
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Get l3 // { arity: 1 }
+    cte l6 =
+      Project (#0..=#2) // { arity: 3 }
+        Join on=(#2 = #3) type=differential // { arity: 4 }
+          implementation
+            %0:l4[#2]K » %1[#0]K
+          Get l4 // { arity: 3 }
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Union // { arity: 1 }
+              Negate // { arity: 1 }
+                Get l3 // { arity: 1 }
+              Get l2 // { arity: 1 }
+    cte l7 =
+      ArrangeBy keys=[[]] // { arity: 1 }
+        Constant // { arity: 1 }
+          - (0)
+          - (-1)
+          - (1)
+    cte l8 =
+      ArrangeBy keys=[[#0, #1]] // { arity: 3 }
+        Get l5 // { arity: 3 }
+    cte l9 =
+      Distinct project=[#0..=#3] // { arity: 4 }
+        Union // { arity: 4 }
+          Distinct project=[#0..=#3] // { arity: 4 }
+            Union // { arity: 4 }
+              Project (#2, #0, #1, #7) // { arity: 4 }
+                Map (1) // { arity: 8 }
+                  Join on=(#0 = (#3 + #5) AND #1 = (#4 + #6)) type=delta // { arity: 7 }
+                    implementation
+                      %0:l5 » %1:l6[×] » %2:l7[×] » %3:l7[×]
+                      %1:l6 » %0:l5[×] » %2:l7[×] » %3:l7[×]
+                      %2:l7 » %0:l5[×] » %1:l6[×] » %3:l7[×]
+                      %3:l7 » %0:l5[×] » %1:l6[×] » %2:l7[×]
+                    ArrangeBy keys=[[]] // { arity: 3 }
+                      Get l5 // { arity: 3 }
+                    ArrangeBy keys=[[]] // { arity: 2 }
+                      Project (#0, #1) // { arity: 2 }
+                        Get l6 // { arity: 3 }
+                    Get l7 // { arity: 1 }
+                    Get l7 // { arity: 1 }
+              Project (#7, #0, #1, #8) // { arity: 4 }
+                Map ((#2 || #3), (#6 + 1)) // { arity: 9 }
+                  Join on=(#0 = #4 AND #1 = (#5 - 1)) type=differential // { arity: 7 }
+                    implementation
+                      %0:l8[#0, #1]KK » %1:l9[#1, (#2 - 1)]KK
+                    Get l8 // { arity: 3 }
+                    ArrangeBy keys=[[#1, (#2 - 1)]] // { arity: 4 }
+                      Get l9 // { arity: 4 }
+          Project (#7, #0, #5, #8) // { arity: 4 }
+            Map ((#3 || #2), (#6 + 1)) // { arity: 9 }
+              Join on=(#0 = #4 AND #1 = (#5 + #6)) type=differential // { arity: 7 }
+                implementation
+                  %0:l8[#0, #1]KK » %1:l9[#1, (#2 + #3)]KK
+                Get l8 // { arity: 3 }
+                ArrangeBy keys=[[#1, (#2 + #3)]] // { arity: 4 }
+                  Get l9 // { arity: 4 }
+  Return // { arity: 2 }
+    With
+      cte l10 =
+        Distinct project=[#0, #1] // { arity: 2 }
+          Project (#1, #2) // { arity: 2 }
+            Get l9 // { arity: 4 }
+      cte l11 =
+        ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+          Project (#0, #1) // { arity: 2 }
+            Get l5 // { arity: 3 }
+      cte l12 =
+        Project (#0..=#3) // { arity: 4 }
+          Join on=(#1 = #4 AND #2 = #5) type=differential // { arity: 6 }
+            implementation
+              %0:l9[#1, #2]KK » %1[#0, #1]KK
+            ArrangeBy keys=[[#1, #2]] // { arity: 4 }
+              Get l9 // { arity: 4 }
+            ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+              Union // { arity: 2 }
+                Negate // { arity: 2 }
+                  Distinct project=[#0, #1] // { arity: 2 }
+                    Project (#0, #1) // { arity: 2 }
+                      Join on=(#0 = #2 AND #3 = (#1 - 1)) type=differential // { arity: 4 }
+                        implementation
+                          %0:l10[#0, (#1 - 1)]KK » %1:l11[#0, #1]KK
+                        ArrangeBy keys=[[#0, (#1 - 1)]] // { arity: 2 }
+                          Get l10 // { arity: 2 }
+                        Get l11 // { arity: 2 }
+                Get l10 // { arity: 2 }
+      cte l13 =
+        Distinct project=[#0..=#2] // { arity: 3 }
+          Project (#1..=#3) // { arity: 3 }
+            Get l12 // { arity: 4 }
+      cte l14 =
+        Project (#1..=#3, #7) // { arity: 4 }
+          Map (text_to_integer(#0)) // { arity: 8 }
+            Join on=(#1 = #4 AND #2 = #5 AND #3 = #6) type=differential // { arity: 7 }
+              implementation
+                %0:l12[#1..=#3]KKK » %1[#0..=#2]KKK
+              ArrangeBy keys=[[#1..=#3]] // { arity: 4 }
+                Get l12 // { arity: 4 }
+              ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
+                Union // { arity: 3 }
+                  Negate // { arity: 3 }
+                    Distinct project=[#0..=#2] // { arity: 3 }
+                      Project (#0..=#2) // { arity: 3 }
+                        Join on=(#0 = #3 AND #4 = (#1 + #2)) type=differential // { arity: 5 }
+                          implementation
+                            %0:l13[#0, (#1 + #2)]KK » %1:l11[#0, #1]KK
+                          ArrangeBy keys=[[#0, (#1 + #2)]] // { arity: 3 }
+                            Get l13 // { arity: 3 }
+                          Get l11 // { arity: 2 }
+                  Get l13 // { arity: 3 }
+      cte l15 =
+        Reduce aggregates=[sum(#0)] // { arity: 1 }
+          Project (#3) // { arity: 1 }
+            Get l14 // { arity: 4 }
+      cte l16 =
+        ArrangeBy keys=[[]] // { arity: 1 }
+          Constant // { arity: 1 }
+            - (0)
+            - (-1)
+            - (1)
+      cte l17 =
+        Distinct project=[#0, #1, #4, #2, #3] // { arity: 5 }
+          Project (#0, #1, #3, #4, #6) // { arity: 5 }
+            Filter (#7 = (#1 + #2)) // { arity: 8 }
+              FlatMap generate_series(#4, ((#4 + #5) - 1), 1) // { arity: 8 }
+                Project (#0, #1, #3..=#7) // { arity: 7 }
+                  Join on=(#4 = (#0 + #2)) type=delta // { arity: 8 }
+                    implementation
+                      %0:l6 » %1:l16[×] » %3:l14[#0]K » %2:l16[×]
+                      %1:l16 » %0:l6[×]ef » %3:l14[#0]K » %2:l16[×]
+                      %2:l16 » %0:l6[×]ef » %1:l16[×] » %3:l14[#0]K
+                      %3:l14 » %0:l6[×]ef » %1:l16[×] » %2:l16[×]
+                    ArrangeBy keys=[[]] // { arity: 2 }
+                      Project (#0, #1) // { arity: 2 }
+                        Filter (#2 = "*") // { arity: 3 }
+                          Get l6 // { arity: 3 }
+                    Get l16 // { arity: 1 }
+                    Get l16 // { arity: 1 }
+                    ArrangeBy keys=[[#0]] // { arity: 4 }
+                      Get l14 // { arity: 4 }
+      cte l18 =
+        ArrangeBy keys=[[#0, #1]] // { arity: 5 }
+          Get l17 // { arity: 5 }
+      cte l19 =
+        Reduce aggregates=[sum(#0)] // { arity: 1 }
+          Project (#2) // { arity: 1 }
+            Distinct project=[#0, #1, (#2 * #3)] // { arity: 3 }
+              Project (#0, #1, #5, #10) // { arity: 4 }
+                Filter (#2{count} = 2) AND ((#6 != #11) OR (#7 != #12)) // { arity: 13 }
+                  Join on=(#0 = #3 = #8 AND #1 = #4 = #9) type=delta // { arity: 13 }
+                    implementation
+                      %0 » %1:l18[#0, #1]KK » %2:l18[#0, #1]KK
+                      %1:l18 » %0[#0, #1]UKKAef » %2:l18[#0, #1]KK
+                      %2:l18 » %0[#0, #1]UKKAef » %1:l18[#0, #1]KK
+                    ArrangeBy keys=[[#0, #1]] // { arity: 3 }
+                      Reduce group_by=[#0, #1] aggregates=[count(*)] // { arity: 3 }
+                        Project (#0, #1) // { arity: 2 }
+                          Get l17 // { arity: 5 }
+                    Get l18 // { arity: 5 }
+                    Get l18 // { arity: 5 }
+    Return // { arity: 2 }
+      CrossJoin type=differential // { arity: 2 }
+        implementation
+          %0[×]U » %1[×]U
+        ArrangeBy keys=[[]] // { arity: 1 }
+          Union // { arity: 1 }
+            Get l15 // { arity: 1 }
+            Map (null) // { arity: 1 }
+              Union // { arity: 0 }
+                Negate // { arity: 0 }
+                  Project () // { arity: 0 }
+                    Get l15 // { arity: 1 }
+                Constant // { arity: 0 }
+                  - ()
+        ArrangeBy keys=[[]] // { arity: 1 }
+          Union // { arity: 1 }
+            Get l19 // { arity: 1 }
+            Map (null) // { arity: 1 }
+              Union // { arity: 0 }
+                Negate // { arity: 0 }
+                  Project () // { arity: 0 }
+                    Get l19 // { arity: 1 }
+                Constant // { arity: 0 }
+                  - ()
+
+Source materialize.public.input
+
+Target cluster: quickstart
+
+EOF

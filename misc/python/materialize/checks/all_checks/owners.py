@@ -10,22 +10,17 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.checks.executors import Executor
-from materialize.mz_version import MzVersion
 
 
 class Owners(Check):
     def _create_objects(self, role: str, i: int, expensive: bool = False) -> str:
         s = dedent(
             f"""
-            $[version>=5200] postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
+            $ postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
             GRANT CREATE ON DATABASE materialize TO {role}
             GRANT CREATE ON SCHEMA materialize.public TO {role}
             GRANT CREATE ON CLUSTER {self._default_cluster()} TO {role}
-            $[version>=5900] postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
             GRANT CREATEDB ON SYSTEM TO {role}
-            $[version<5900] postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
-            ALTER ROLE {role} CREATEDB
             $ postgres-execute connection=postgres://{role}@${{testdrive.materialize-sql-addr}}
             CREATE DATABASE owner_db{i}
             CREATE SCHEMA owner_schema{i}
@@ -42,9 +37,7 @@ class Owners(Check):
         if expensive:
             s += dedent(
                 f"""
-                $[version<9300] postgres-execute connection=postgres://{role}@${{testdrive.materialize-sql-addr}}
-                CREATE SOURCE owner_source{i} FROM LOAD GENERATOR COUNTER (SCALE FACTOR 0.01)
-                $[version>=9300] postgres-execute connection=postgres://{role}@${{testdrive.materialize-sql-addr}}
+                $ postgres-execute connection=postgres://{role}@${{testdrive.materialize-sql-addr}}
                 CREATE SOURCE owner_source{i} FROM LOAD GENERATOR COUNTER
                 $ postgres-execute connection=postgres://{role}@${{testdrive.materialize-sql-addr}}
                 CREATE SINK owner_sink{i} FROM owner_mv{i} INTO KAFKA CONNECTION owner_kafka_conn{i} (TOPIC 'sink-sink-owner{i}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION owner_csr_conn{i} ENVELOPE DEBEZIUM
@@ -118,24 +111,17 @@ class Owners(Check):
             [f"! {cmd} CASCADE\ncontains: must be owner of\n" for cmd in cmds]
         )
 
-    def _can_run(self, e: Executor) -> bool:
-        # Object owner changes weren't persisted in some cases earlier than 0.63.0.
-        return self.base_version >= MzVersion.parse_mz("v0.63.0-dev")
-
     def initialize(self) -> Testdrive:
         return Testdrive(
             dedent(
                 """
-                $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+                > SET SESSION enable_session_rbac_checks TO true
+
+                $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT CREATEROLE ON SYSTEM TO materialize
 
-                $[version<5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
-                ALTER ROLE materialize CREATEROLE
-
                 > CREATE ROLE owner_role_01
-                >[version<5900] ALTER ROLE owner_role_01 CREATEDB CREATECLUSTER
-
-                $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+                $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO owner_role_01
 
                 > CREATE ROLE other_owner
@@ -150,21 +136,22 @@ class Owners(Check):
         return [
             Testdrive(s)
             for s in [
-                self._create_objects("owner_role_01", 3)
+                dedent(
+                    """
+                        > SET SESSION enable_session_rbac_checks TO true
+                    """
+                )
+                + self._create_objects("owner_role_01", 3)
                 + self._create_objects("owner_role_01", 4)
                 + self._alter_object_owners(4)
                 + dedent(
                     """
-                    $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+                    $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                     GRANT CREATEROLE ON SYSTEM TO materialize
 
-                    $[version<5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
-                    ALTER ROLE materialize CREATEROLE
-
                     > CREATE ROLE owner_role_02
-                    >[version<5900] ALTER ROLE owner_role_02 CREATEDB CREATECLUSTER
 
-                    $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+                    $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                     GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO owner_role_02
                     """
                 ),
@@ -176,16 +163,12 @@ class Owners(Check):
                 + self._alter_object_owners(8)
                 + dedent(
                     """
-                    $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+                    $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                     GRANT CREATEROLE ON SYSTEM TO materialize
 
-                    $[version<5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
-                    ALTER ROLE materialize CREATEROLE
-
                     > CREATE ROLE owner_role_03
-                    >[version<5900] ALTER ROLE owner_role_03 CREATEDB CREATECLUSTER
 
-                    $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+                    $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                     GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO owner_role_03
                     """
                 ),
@@ -194,44 +177,42 @@ class Owners(Check):
 
     def validate(self) -> Testdrive:
         return Testdrive(
+            dedent(
+                """
+                > SET SESSION enable_session_rbac_checks TO true
+                """
+            )
+            +
             # materialize role is not allowed to drop the objects since it is
             # not the owner, verify this:
-            (
-                (
-                    self._drop_objects("materialize", 1, success=False, expensive=True)
-                    + self._drop_objects(
-                        "materialize", 2, success=False, expensive=True
-                    )
-                    + self._drop_objects("materialize", 3, success=False)
-                    + self._drop_objects("materialize", 4, success=False)
-                    + self._drop_objects("materialize", 5, success=False)
-                    + self._drop_objects("materialize", 6, success=False)
-                    + self._drop_objects("materialize", 7, success=False)
-                    + self._drop_objects("materialize", 8, success=False)
-                )
-                if self.base_version >= MzVersion.parse_mz("v0.51.0-dev")
-                else ""
-            )
+            self._drop_objects("materialize", 1, success=False, expensive=True)
+            + self._drop_objects("materialize", 2, success=False, expensive=True)
+            + self._drop_objects("materialize", 3, success=False)
+            + self._drop_objects("materialize", 4, success=False)
+            + self._drop_objects("materialize", 5, success=False)
+            + self._drop_objects("materialize", 6, success=False)
+            + self._drop_objects("materialize", 7, success=False)
+            + self._drop_objects("materialize", 8, success=False)
             + self._create_objects("owner_role_01", 9)
             + self._create_objects("owner_role_02", 10)
             + self._create_objects("owner_role_03", 11)
             + dedent(
                 """
                 $ psql-execute command="\\l owner_db*"
-                \\                              List of databases
-                    Name    |     Owner     | Encoding | Collate | Ctype | Access privileges
-                ------------+---------------+----------+---------+-------+-------------------
-                 owner_db1  | owner_role_01 | UTF8     | C       | C     |
-                 owner_db10 | owner_role_02 | UTF8     | C       | C     |
-                 owner_db11 | owner_role_03 | UTF8     | C       | C     |
-                 owner_db2  | other_owner   | UTF8     | C       | C     |
-                 owner_db3  | owner_role_01 | UTF8     | C       | C     |
-                 owner_db4  | other_owner   | UTF8     | C       | C     |
-                 owner_db5  | owner_role_01 | UTF8     | C       | C     |
-                 owner_db6  | other_owner   | UTF8     | C       | C     |
-                 owner_db7  | owner_role_02 | UTF8     | C       | C     |
-                 owner_db8  | other_owner   | UTF8     | C       | C     |
-                 owner_db9  | owner_role_01 | UTF8     | C       | C     |
+                \\                                                   List of databases
+                    Name    |     Owner     | Encoding | Locale Provider | Collate | Ctype | ICU Locale | ICU Rules | Access privileges
+                ------------+---------------+----------+-----------------+---------+-------+------------+-----------+-------------------
+                 owner_db1  | owner_role_01 | UTF8     | libc            | C       | C     |            |           |
+                 owner_db10 | owner_role_02 | UTF8     | libc            | C       | C     |            |           |
+                 owner_db11 | owner_role_03 | UTF8     | libc            | C       | C     |            |           |
+                 owner_db2  | other_owner   | UTF8     | libc            | C       | C     |            |           |
+                 owner_db3  | owner_role_01 | UTF8     | libc            | C       | C     |            |           |
+                 owner_db4  | other_owner   | UTF8     | libc            | C       | C     |            |           |
+                 owner_db5  | owner_role_01 | UTF8     | libc            | C       | C     |            |           |
+                 owner_db6  | other_owner   | UTF8     | libc            | C       | C     |            |           |
+                 owner_db7  | owner_role_02 | UTF8     | libc            | C       | C     |            |           |
+                 owner_db8  | other_owner   | UTF8     | libc            | C       | C     |            |           |
+                 owner_db9  | owner_role_01 | UTF8     | libc            | C       | C     |            |           |
 
 
                 $ psql-execute command="\\dn owner_schema*"

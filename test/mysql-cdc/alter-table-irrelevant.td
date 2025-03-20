@@ -10,8 +10,6 @@
 $ set-sql-timeout duration=1s
 $ set-max-tries max-tries=20
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_mysql_source = true
 
 #
 # Test ALTER TABLE -- tables that are created after the source are irrelevant
@@ -34,9 +32,9 @@ USE public;
 CREATE TABLE base_table (f1 INTEGER);
 INSERT INTO base_table VALUES (1);
 
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE base_table FROM SOURCE mz_source (REFERENCE public.base_table);
 
 > SELECT * FROM base_table;
 1
@@ -65,9 +63,10 @@ INSERT INTO irrelevant_table VALUES ('ab');
 
 # Recreate the source and views to verify the irrelevant_table is part of the publication
 > DROP SOURCE mz_source CASCADE;
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE base_table FROM SOURCE mz_source (REFERENCE public.base_table);
+> CREATE TABLE irrelevant_table FROM SOURCE mz_source (REFERENCE public.irrelevant_table);
 
 # Check the first view still works
 > SELECT * FROM base_table;

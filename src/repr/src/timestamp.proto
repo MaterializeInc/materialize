@@ -12,5 +12,5 @@ syntax = "proto3";
 package mz_repr.timestamp;
 
 message ProtoTimestamp {
-    uint64 internal = 1;
+  uint64 internal = 1;
 }

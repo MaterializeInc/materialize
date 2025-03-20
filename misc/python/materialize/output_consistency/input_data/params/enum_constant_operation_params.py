@@ -19,6 +19,17 @@ TIME_ZONE_PARAM = EnumConstantOperationParam(
     ["UTC", "CET", "+8", "America/New_York"], add_quotes=True
 )
 
+TIME_COMPONENT_PARAM = EnumConstantOperationParam(
+    [
+        "microseconds",
+        "milliseconds",
+        "second",
+        "minute",
+        "hour",
+    ],
+    add_quotes=True,
+)
+
 DATE_TIME_COMPONENT_PARAM = EnumConstantOperationParam(
     [
         "microseconds",
@@ -59,8 +70,12 @@ REGEX_PARAM = EnumConstantOperationParam(
     [".*", "A+", "[ab]"], add_quotes=True, invalid_value="ab("
 )
 
-REGEX_FLAG_PARAM = EnumConstantOperationParam(
-    ["i", "g"], add_quotes=True, optional=True
+REGEX_PARAM_WITH_GROUP = EnumConstantOperationParam(
+    ["(.)", "(.*)", "(A+)", "([ab])"], add_quotes=True, invalid_value="ab("
+)
+
+REGEX_FLAG_OPTIONAL_PARAM = EnumConstantOperationParam(
+    ["i", "g", "n"], add_quotes=True, optional=True
 )
 
 STRING_TRIM_SPEC_PARAM = EnumConstantOperationParam(
@@ -71,7 +86,7 @@ STRING_TRIM_SPEC_PARAM = EnumConstantOperationParam(
 REPETITIONS_PARAM = EnumConstantOperationParam(
     ["0", "1", "2", "10", "100", "-2"], add_quotes=False
 )
-REPETITIONS_PARAM.characteristics_per_index[REPETITIONS_PARAM.values.index("-2")].add(
+REPETITIONS_PARAM.characteristics_per_value["-2"].add(
     ExpressionCharacteristics.NEGATIVE
 )
 
@@ -115,6 +130,17 @@ COLLECTION_INDEX_PARAM = EnumConstantOperationParam(
     ["0", "1", "2", "8"], add_quotes=False, add_invalid_value=False
 )
 
-COLLECTION_INDEX_PARAM_OPT = EnumConstantOperationParam(
+COLLECTION_INDEX_OPTIONAL_PARAM = EnumConstantOperationParam(
     ["0", "1", "2", "8"], add_quotes=False, add_invalid_value=False, optional=True
+)
+
+ARRAY_DIMENSION_PARAM = EnumConstantOperationParam(
+    ["0", "1", "8"], add_quotes=False, add_invalid_value=False
+)
+
+RECORD_FIELD_PARAM = EnumConstantOperationParam(
+    # do not use "*" because it will mess up the column mapping between query and result
+    ["f1", "f2", "f3", "f4", "key", "value"],
+    add_quotes=False,
+    add_invalid_value=True,
 )

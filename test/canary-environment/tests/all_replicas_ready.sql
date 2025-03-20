@@ -9,4 +9,4 @@
 
 select *
 from mz_internal.mz_cluster_replica_statuses
-where status != 'ready'
+where status != 'online'

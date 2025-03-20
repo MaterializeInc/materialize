@@ -75,12 +75,12 @@ CREATE MATERIALIZED VIEW error (name, age) AS SELECT 'jon'
 statement ok
 CREATE MATERIALIZED VIEW other_mv IN CLUSTER other AS SELECT 1
 
-query TT colnames,rowsort
+query TTT colnames,rowsort
 SHOW MATERIALIZED VIEWS
 ----
-name      cluster
-mv        quickstart
-other_mv  other
+name      cluster     comment
+mv        quickstart  (empty)
+other_mv  other       (empty)
 
 statement ok
 DROP MATERIALIZED VIEW other_mv
@@ -226,7 +226,7 @@ SELECT * FROM v
 
 # Test: a view on a materialized view that optimizes to the empty set
 # still prevents the underlying view from being dropped.
-# See: https://github.com/MaterializeInc/materialize/issues/20315
+# See: https://github.com/MaterializeInc/database-issues/issues/6101
 
 statement ok
 CREATE VIEW v AS SELECT 1 AS c
@@ -247,10 +247,10 @@ SELECT count(*) FROM mz_materialized_views WHERE name = 'mv'
 
 # mz_scheduling_elapsed_raw, a log source, is optimized away, but should still count as a dependency
 query error db error: ERROR: materialized view objects cannot depend on log sources
-CREATE MATERIALIZED VIEW mv AS SELECT (SELECT 1 FROM mz_internal.mz_scheduling_elapsed_raw WHERE FALSE);
+CREATE MATERIALIZED VIEW mv AS SELECT (SELECT 1 FROM mz_introspection.mz_scheduling_elapsed_raw WHERE FALSE);
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_table_keys = true
+ALTER SYSTEM SET unsafe_enable_table_keys = true
 ----
 COMPLETE 0
 
@@ -385,18 +385,18 @@ COMPLETE 1
 statement ok
 CREATE MATERIALIZED VIEW other_mv IN CLUSTER other AS SELECT 1
 
-query TT colnames,rowsort
+query TTT colnames,rowsort
 SHOW MATERIALIZED VIEWS
 ----
-name      cluster
-mv        quickstart
-other_mv  other
+name      cluster     comment
+mv        quickstart  (empty)
+other_mv  other       (empty)
 
-query TT colnames,rowsort
+query TTT colnames,rowsort
 SHOW MATERIALIZED VIEWS IN CLUSTER other
 ----
-name      cluster
-other_mv  other
+name      cluster  comment
+other_mv  other    (empty)
 
 statement ok
 DROP MATERIALIZED VIEW other_mv
@@ -443,14 +443,16 @@ CREATE MATERIALIZED VIEW mv AS SELECT 1
 
 mode standard
 
-query TT colnames,rowsort
+query TTT colnames,rowsort
 SHOW OBJECTS
 ----
-name type
+name type comment
 mv
 materialized-view
+(empty)
 t
 table
+(empty)
 
 mode cockroach
 
@@ -459,17 +461,17 @@ mode cockroach
 statement ok
 CREATE DEFAULT INDEX ON mv
 
-query TTTT colnames
+query TTTTT colnames
 SHOW INDEXES ON mv
 ----
-name            on  cluster key
-mv_primary_idx  mv  quickstart {?column?}
+name            on  cluster    key         comment
+mv_primary_idx  mv  quickstart {?column?}  (empty)
 
 
 # Test: Creating materialized views that depend on log sources is forbidden.
 
 statement error materialized view objects cannot depend on log sources
-CREATE OR REPLACE MATERIALIZED VIEW mv AS SELECT id, name FROM mz_internal.mz_dataflow_operators;
+CREATE OR REPLACE MATERIALIZED VIEW mv AS SELECT id, name FROM mz_introspection.mz_dataflow_operators;
 
 
 # Test: Attempting to use view commands on materialized views gives helpful errors.
@@ -516,10 +518,10 @@ statement error SHOW commands are not allowed in views
 CREATE MATERIALIZED VIEW mat_secrets AS SELECT name FROM (SHOW SECRETS);
 
 statement error SHOW commands are not allowed in views
-CREATE MATERIALIZED VIEW mat_sinks AS SELECT name, type, size FROM (SHOW SINKS);
+CREATE MATERIALIZED VIEW mat_sinks AS SELECT name, type FROM (SHOW SINKS);
 
 statement error SHOW commands are not allowed in views
-CREATE MATERIALIZED VIEW mat_sources AS SELECT name, type, size FROM (SHOW SOURCES);
+CREATE MATERIALIZED VIEW mat_sources AS SELECT name, type FROM (SHOW SOURCES);
 
 statement error SHOW commands are not allowed in views
 CREATE MATERIALIZED VIEW mat_tables AS SELECT name FROM (SHOW TABLES);
@@ -641,7 +643,7 @@ ALTER SYSTEM SET enable_refresh_every_mvs = false
 COMPLETE 0
 
 # Should be disabled
-query error db error: ERROR: REFRESH EVERY and REFRESH AT materialized views is not supported
+query error db error: ERROR: REFRESH EVERY and REFRESH AT materialized views is not available
 CREATE MATERIALIZED VIEW mv_bad WITH (ASSERT NOT NULL x, REFRESH EVERY '8 seconds') AS SELECT * FROM t2;
 
 simple conn=mz_system,user=mz_system
@@ -744,7 +746,7 @@ CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY '213503982001' days) AS SELE
 
 # This tests that we don't forget to purify EXPLAIN CREATE MATERIALIZED VIEW
 statement ok
-EXPLAIN CREATE MATERIALIZED VIEW mv_explain WITH (REFRESH EVERY '2 seconds') AS SELECT * FROM t2;
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR CREATE MATERIALIZED VIEW mv_explain WITH (REFRESH EVERY '2 seconds') AS SELECT * FROM t2;
 
 statement ok
 CREATE MATERIALIZED VIEW mv_on_commit WITH (REFRESH ON COMMIT) AS SELECT * FROM t2;
@@ -1003,9 +1005,15 @@ NULL  -1  -2
 30  30  30
 100  100  100
 
-# Regression test for https://github.com/MaterializeInc/materialize/issues/24288
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/7265
 # The sleep makes _optimization_ take a few seconds, so we need to grab read holds in purification right away after
 # choosing a timestamp for mz_now.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true
+----
+COMPLETE 0
+
 statement ok
 create materialized view mv4 with (refresh at creation) as
 select * from
@@ -1019,7 +1027,7 @@ CREATE MATERIALIZED VIEW mv5 WITH (REFRESH AT mz_now()::text::int8 + 1000000) AS
 SELECT x+y+z from t2;
 
 statement ok
-EXPLAIN SELECT * FROM mv5;
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM mv5;
 
 statement ok
 EXPLAIN TIMESTAMP FOR SELECT * FROM mv5;
@@ -1265,11 +1273,17 @@ ALTER SYSTEM SET enable_cluster_schedule_refresh = false
 COMPLETE 0
 
 # Should be disabled
-query error db error: ERROR: `SCHEDULE = ON REFRESH` cluster option is not supported
+query error db error: ERROR: `SCHEDULE = ON REFRESH` cluster option is not available
 CREATE CLUSTER c_schedule_0 (SIZE = '1', SCHEDULE = ON REFRESH);
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_cluster_schedule_refresh = true
+----
+COMPLETE 0
+
+# Let's not complicate things with `cluster_refresh_mv_compaction_estimate` at first.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET cluster_refresh_mv_compaction_estimate = 0
 ----
 COMPLETE 0
 
@@ -1333,7 +1347,7 @@ statement ok
 ALTER CLUSTER c_schedule_1 SET (MANAGED = true, SIZE = '1');
 
 statement ok
-ALTER CLUSTER c_schedule_1 SET (SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '0 seconds'));
+ALTER CLUSTER c_schedule_1 SET (SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '0 seconds'));
 
 # Setting some other cluster option in ALTER CLUSTER shouldn't change the SCHEDULE.
 # (The sleep is needed so that if the following ALTER erroneously sets the SCHEDULE to MANUAL, then we should be in a
@@ -1459,22 +1473,22 @@ SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_4
 ----
 0
 
-## REHYDRATION TIME ESTIMATE
+## HYDRATION TIME ESTIMATE
 
 statement error db error: ERROR: Expected literal string, found number "0"
-CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = 0));
+CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = 0));
 
-statement error db error: ERROR: REHYDRATION TIME ESTIMATE must be non\-negative; got: \-01:00:00
-CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '-1 hour'));
+statement error db error: ERROR: HYDRATION TIME ESTIMATE must be non\-negative; got: \-01:00:00
+CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '-1 hour'));
 
 statement error db error: ERROR: invalid input syntax for type interval: unknown units aaaa: "1 aaaa"
-CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1 aaaa'));
+CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 aaaa'));
 
-statement error db error: ERROR: REHYDRATION TIME ESTIMATE must not involve units larger than days
-CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1 month'));
+statement error db error: ERROR: HYDRATION TIME ESTIMATE must not involve units larger than days
+CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 month'));
 
 statement error db error: ERROR: invalid input syntax for type interval: Overflows maximum days; cannot exceed 2147483647/\-2147483648 days: "1000000000000 days"
-CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1000000000000 days'));
+CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1000000000000 days'));
 
 # ----------------------------------------
 # Introspection
@@ -1527,18 +1541,19 @@ mvi3  at  NULL  NULL  true
 mvi3  at  NULL  NULL  true
 
 statement ok
-CREATE CLUSTER c_schedule_rehydration_time_estimate (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '995 seconds'));
+CREATE CLUSTER c_schedule_hydration_time_estimate (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '995 seconds'));
 
-# Make the above cluster turn on, so that we can test how the REHYDRATION TIME ESTIMATE looks in `mz_audit_events`.
+# Make the above cluster turn on, so that we can test how the HYDRATION TIME ESTIMATE looks in `mz_audit_events`.
 statement ok
 CREATE MATERIALIZED VIEW mv_rte
-IN CLUSTER c_schedule_rehydration_time_estimate
+IN CLUSTER c_schedule_hydration_time_estimate
 WITH (REFRESH EVERY '1 sec') AS SELECT * FROM t2;
 
 query TTT
-SELECT name, cs.type, cs.refresh_rehydration_time_estimate
+SELECT name, cs.type, cs.refresh_hydration_time_estimate
 FROM mz_internal.mz_cluster_schedules cs, mz_catalog.mz_clusters c
 WHERE c.id = cs.cluster_id
+AND name LIKE 'c_schedule_%'
 ORDER BY name;
 ----
 c_schedule_1  on-refresh  00:00:00
@@ -1546,52 +1561,10 @@ c_schedule_2  manual  NULL
 c_schedule_3  on-refresh  00:00:00
 c_schedule_4  manual  NULL
 c_schedule_5  manual  NULL
-c_schedule_rehydration_time_estimate  on-refresh  00:16:35
-mz_catalog_server  manual  NULL
-mz_probe  manual  NULL
-mz_support  manual  NULL
-mz_system  manual  NULL
-quickstart  manual  NULL
+c_schedule_hydration_time_estimate  on-refresh  00:16:35
 
 statement ok
 SELECT mz_unsafe.mz_sleep(4);
-
-# If this fails with a recently created MV not yet being present, then bump the above sleep.
-# (Skip `mv_rte`, because it was created recently, and might not have been refreshed yet.)
-query TBB
-SELECT
-  name,
-  now() - INTERVAL '30 minutes' < last_completed_refresh,
-  next_refresh > now() - INTERVAL '5 seconds'
-FROM mz_internal.mz_materialized_view_refreshes mvr, mz_catalog.mz_materialized_views mv
-WHERE
-  mv.id = mvr.materialized_view_id AND
-  name != 'mv_rte'
-ORDER BY name;
-----
-const_mv  true  NULL
-const_mv2  true  NULL
-mv10  true  NULL
-mv11  true  NULL
-mv12  true  false
-mv3  true  NULL
-mv4  true  NULL
-mv5  NULL  true
-mv6  true  NULL
-mv7  true  NULL
-mv8  true  NULL
-mv9  true  true
-mv_aligned_to_future  true  true
-mv_aligned_to_past  true  true
-mv_assertion_plus_refresh_every  true  true
-mv_desugar1  true  NULL
-mv_desugar2  true  true
-mv_greatest  true  NULL
-mv_multiple_refresh_options  true  true
-mv_no_creation_refresh  true  true
-mvi1  true  true
-mvi2  true  true
-mvi3  true  NULL
 
 query TTTTBT
 SELECT DISTINCT
@@ -1613,14 +1586,102 @@ drop  cluster-replica  "c_schedule_4"  "manual"  true  NULL
 create  cluster-replica  "c_schedule_1"  "manual"  true  NULL
 create  cluster-replica  "c_schedule_2"  "manual"  true  NULL
 create  cluster-replica  "c_schedule_5"  "manual"  true  NULL
-drop  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"off","objects_needing_refresh":[],"rehydration_time_estimate":"00:00:00"}
-drop  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"off","objects_needing_refresh":[],"rehydration_time_estimate":"00:00:00"}
-create  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"on","objects_needing_refresh":["uXXX"],"rehydration_time_estimate":"00:00:00"}
-create  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"on","objects_needing_refresh":["uXXX"],"rehydration_time_estimate":"00:00:00"}
-create  cluster-replica  "c_schedule_4"  "schedule"  false  {"decision":"on","objects_needing_refresh":["uXXX"],"rehydration_time_estimate":"00:00:00"}
-create  cluster-replica  "c_schedule_rehydration_time_estimate"  "schedule"  false  {"decision":"on","objects_needing_refresh":["uXXX"],"rehydration_time_estimate":"00:16:35"}
+drop  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"off","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":[]}
+drop  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"off","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":[]}
+create  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
+create  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
+create  cluster-replica  "c_schedule_4"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
+create  cluster-replica  "c_schedule_hydration_time_estimate"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:16:35","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
 
-# Materialized views in this file can be explained
+## Now test `cluster_refresh_mv_compaction_estimate`.
+## (This would make the above audit test flaky, so it should be after that.)
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET cluster_refresh_mv_compaction_estimate = 1200000
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER c_schedule_6 (SIZE = '1', SCHEDULE = ON REFRESH);
+
+query I
+SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_6';
+----
+0
+
+statement ok
+CREATE MATERIALIZED VIEW mv13
+IN CLUSTER c_schedule_6
+WITH (REFRESH AT CREATION)
+AS SELECT sum(x*y) - count(*) AS r FROM t2;
+
+# Wait until the first refresh is complete.
+query I
+SELECT r+r FROM mv13;
+----
+31916
+
+# We'd turn it off at the next scheduling decision if it were not for `cluster_refresh_mv_compaction_estimate`
+statement ok
+SELECT mz_unsafe.mz_sleep(3+1+1);
+
+query I
+SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_6';
+----
+1
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET cluster_refresh_mv_compaction_estimate = 0
+----
+COMPLETE 0
+
+# Should turn off at the next scheduling decision.
+statement ok
+SELECT mz_unsafe.mz_sleep(3+1+1);
+
+query I
+SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_6';
+----
+0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET cluster_refresh_mv_compaction_estimate = 120000
+----
+COMPLETE 0
+
+# Should turn on at the next scheduling decision.
+statement ok
+SELECT mz_unsafe.mz_sleep(3+1+1);
+
+query I
+SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_6';
+----
+1
+
+# The audit events should now have a row that has a non-empty `objects_needing_compaction`.
+query TTTTBT
+SELECT DISTINCT
+  event_type,
+  object_type,
+  (details->'cluster_name')::text,
+  (details->'reason')::text,
+  (details->'scheduling_policies') IS NULL,
+  regexp_replace((details->'scheduling_policies'->'on_refresh')::text, '\["u.*"\]', '["uXXX"]')
+FROM mz_audit_events
+WHERE
+  event_type IN ('create', 'drop') AND
+  object_type = 'cluster-replica' AND
+  (details->'cluster_name')::text = '"c_schedule_6"';
+----
+drop  cluster-replica  "c_schedule_6"  "schedule"  false  {"decision":"off","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":[]}
+create  cluster-replica  "c_schedule_6"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_compaction":["uXXX"],"objects_needing_refresh":[]}
+create  cluster-replica  "c_schedule_6"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET cluster_refresh_mv_compaction_estimate = 0
+----
+COMPLETE 0
+
+## EXPLAIN FILTER PUSHDOWN can be run on materialized views in this file
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_explain_pushdown = true

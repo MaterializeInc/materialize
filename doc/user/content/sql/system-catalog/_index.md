@@ -15,7 +15,7 @@ disable_list: true
 Materialize exposes a system catalog that contains metadata about the running
 Materialize instance.
 
-The system catalog consists of four schemas that are implicitly available in
+The system catalog consists of several schemas that are implicitly available in
 all databases. These schemas contain sources, tables, and views that expose
 different types of metadata.
 
@@ -30,6 +30,9 @@ different types of metadata.
 
   * [`mz_internal`](mz_internal), which exposes internal metadata about
     Materialize in an unstable format that is likely to change.
+
+  * [`mz_introspection`](mz_introspection), which contains replica
+    introspection relations.
 
 These schemas contain sources, tables, and views that expose metadata like:
 

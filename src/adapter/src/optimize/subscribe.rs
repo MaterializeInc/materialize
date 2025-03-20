@@ -21,6 +21,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_or_log;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
+use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::SubscribeFrom;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
@@ -28,15 +29,13 @@ use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
 use mz_transform::TransformCtx;
 use timely::progress::Antichain;
 
-use crate::catalog::Catalog;
 use crate::optimize::dataflows::{
     dataflow_import_id_bundle, prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot,
     DataflowBuilder, ExprPrepStyle,
 };
-use crate::optimize::metrics::OptimizerMetrics;
 use crate::optimize::{
     optimize_mir_local, trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize,
-    OptimizeMode, OptimizerConfig, OptimizerError,
+    OptimizeMode, OptimizerCatalog, OptimizerConfig, OptimizerError,
 };
 use crate::CollectionIdBundle;
 
@@ -44,7 +43,7 @@ pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.
     typecheck_ctx: TypecheckContext,
     /// A snapshot of the catalog state.
-    catalog: Arc<Catalog>,
+    catalog: Arc<dyn OptimizerCatalog>,
     /// A snapshot of the cluster that will run the dataflows.
     compute_instance: ComputeInstanceSnapshot,
     /// A transient GlobalId to be used for the exported sink.
@@ -53,7 +52,7 @@ pub struct Optimizer {
     /// `SUBSCRIBE FROM <SELECT>` variants.
     view_id: GlobalId,
     /// The id of the session connection in which the optimizer will run.
-    conn_id: ConnectionId,
+    conn_id: Option<ConnectionId>,
     /// Should the plan produce an initial snapshot?
     with_snapshot: bool,
     /// Sink timestamp.
@@ -83,11 +82,11 @@ impl std::fmt::Debug for Optimizer {
 
 impl Optimizer {
     pub fn new(
-        catalog: Arc<Catalog>,
+        catalog: Arc<dyn OptimizerCatalog>,
         compute_instance: ComputeInstanceSnapshot,
         view_id: GlobalId,
         sink_id: GlobalId,
-        conn_id: ConnectionId,
+        conn_id: Option<ConnectionId>,
         with_snapshot: bool,
         up_to: Option<Timestamp>,
         debug_name: String,
@@ -184,9 +183,8 @@ impl Optimize<SubscribeFrom> for Optimizer {
         let time = Instant::now();
 
         let mut df_builder = {
-            let catalog = self.catalog.state();
             let compute = self.compute_instance.clone();
-            DataflowBuilder::new(catalog, compute).with_config(&self.config)
+            DataflowBuilder::new(&*self.catalog, compute).with_config(&self.config)
         };
         let mut df_desc = MirDataflowDescription::new(self.debug_name.clone());
         let mut df_meta = DataflowMetainfo::default();
@@ -198,13 +196,12 @@ impl Optimize<SubscribeFrom> for Optimizer {
                     .desc(
                         &self
                             .catalog
-                            .state()
-                            .resolve_full_name(from.name(), Some(&self.conn_id)),
+                            .resolve_full_name(from.name(), self.conn_id.as_ref()),
                     )
                     .expect("subscribes can only be run on items with descs")
                     .into_owned();
 
-                df_builder.import_into_dataflow(&from_id, &mut df_desc)?;
+                df_builder.import_into_dataflow(&from_id, &mut df_desc, &self.config.features)?;
                 df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
                 // Make SinkDesc
@@ -229,11 +226,20 @@ impl Optimize<SubscribeFrom> for Optimizer {
                 // let expr = expr.lower(&self.config)?;
 
                 // MIR ⇒ MIR optimization (local)
-                let mut transform_ctx =
-                    TransformCtx::local(&self.config.features, &self.typecheck_ctx, &mut df_meta);
+                let mut transform_ctx = TransformCtx::local(
+                    &self.config.features,
+                    &self.typecheck_ctx,
+                    &mut df_meta,
+                    Some(&self.metrics),
+                );
                 let expr = optimize_mir_local(expr, &mut transform_ctx)?;
 
-                df_builder.import_view_into_dataflow(&self.view_id, &expr, &mut df_desc)?;
+                df_builder.import_view_into_dataflow(
+                    &self.view_id,
+                    &expr,
+                    &mut df_desc,
+                    &self.config.features,
+                )?;
                 df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
                 // Make SinkDesc
@@ -266,9 +272,10 @@ impl Optimize<SubscribeFrom> for Optimizer {
             &self.config.features,
             &self.typecheck_ctx,
             &mut df_meta,
+            Some(&self.metrics),
         );
         // Run global optimization.
-        mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx)?;
+        mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx, false)?;
 
         if self.config.mode == OptimizeMode::Explain {
             // Collect the list of indexes used by the dataflow at this point.
@@ -293,7 +300,7 @@ impl GlobalMirPlan<Unresolved> {
     /// optimization stage in order to profit from possible single-time
     /// optimizations in the `Plan::finalize_dataflow` call.
     pub fn resolve(mut self, as_of: Antichain<Timestamp>) -> GlobalMirPlan<Resolved> {
-        // A datalfow description for a `SUBSCRIBE` statement should not have
+        // A dataflow description for a `SUBSCRIBE` statement should not have
         // index exports.
         soft_assert_or_log!(
             self.df_desc.index_exports.is_empty(),

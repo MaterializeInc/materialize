@@ -24,10 +24,10 @@ statement ok
 CREATE SOURCE webhook_bytes IN CLUSTER webhook_cluster FROM WEBHOOK
     BODY FORMAT BYTES
 
-query TTT
+query TTTT
 SHOW COLUMNS FROM webhook_bytes
 ----
-body false bytea
+body false bytea (empty)
 
 query TT
 SELECT name, regexp_match(url, '(/api/webhook/.*)') FROM mz_internal.mz_webhook_sources
@@ -56,51 +56,51 @@ CREATE SOURCE webhook_bytes_include_headers IN CLUSTER webhook_cluster FROM WEBH
     BODY FORMAT BYTES
     INCLUDE HEADERS
 
-query TTT
+query TTTT
 SHOW COLUMNS FROM webhook_bytes_include_headers
 ----
-body false bytea
-headers false map
+body false bytea (empty)
+headers false map (empty)
 
 statement ok
 CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK
     BODY FORMAT JSON
 
-query TTT
+query TTTT
 SHOW COLUMNS FROM webhook_json
 ----
-body false jsonb
+body false jsonb (empty)
 
 statement ok
 CREATE SOURCE webhook_json_include_headers IN CLUSTER webhook_cluster FROM WEBHOOK
     BODY FORMAT JSON
     INCLUDE HEADERS
 
-query TTT
+query TTTT
 SHOW COLUMNS FROM webhook_json_include_headers
 ----
-body false jsonb
-headers false map
+body false jsonb (empty)
+headers false map (empty)
 
 statement ok
 CREATE SOURCE webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK
     BODY FORMAT TEXT
 
-query TTT
+query TTTT
 SHOW COLUMNS FROM webhook_text
 ----
-body false text
+body false text (empty)
 
 statement ok
 CREATE SOURCE webhook_text_include_headers IN CLUSTER webhook_cluster FROM WEBHOOK
     BODY FORMAT TEXT
     INCLUDE HEADERS
 
-query TTT
+query TTTT
 SHOW COLUMNS FROM webhook_text_include_headers
 ----
-body false text
-headers false map
+body false text (empty)
+headers false map (empty)
 
 statement ok
 CREATE MATERIALIZED VIEW mat_view_text IN CLUSTER webhook_cluster AS (
@@ -326,13 +326,13 @@ CREATE SOURCE webhook_text_with_mapped_headers IN CLUSTER webhook_cluster FROM W
   INCLUDE HEADER 'x-hash' AS hash BYTES
   INCLUDE HEADER 'content-type' AS content_type
 
-query TTT
+query TTTT
 SHOW COLUMNS FROM webhook_text_with_mapped_headers
 ----
-body false text
-specialHeader true text
-hash true bytea
-content_type true text
+body false text (empty)
+specialHeader true text (empty)
+hash true bytea (empty)
+content_type true text (empty)
 
 statement ok
 CREATE SOURCE webhook_text_mapped_and_filtered_headers IN CLUSTER webhook_cluster FROM WEBHOOK
@@ -341,13 +341,13 @@ CREATE SOURCE webhook_text_mapped_and_filtered_headers IN CLUSTER webhook_cluste
   INCLUDE HEADER 'content-type' as content_type
   INCLUDE HEADERS ('x-special-header')
 
-query TTT
+query TTTT
 SHOW COLUMNS FROM webhook_text_mapped_and_filtered_headers
 ----
-body false text
-headers false map
-hash true bytea
-content_type true text
+body false text (empty)
+headers false map (empty)
+hash true bytea (empty)
+content_type true text (empty)
 
 statement error column reference "header_a" is ambiguous
 CREATE SOURCE webhook_text_with_duplicate_header_alias IN CLUSTER webhook_cluster FROM WEBHOOK

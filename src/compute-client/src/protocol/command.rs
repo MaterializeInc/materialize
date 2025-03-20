@@ -9,9 +9,11 @@
 
 //! Compute protocol commands.
 
+use std::time::Duration;
+
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::flat_plan::FlatPlan;
+use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigUpdates;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -60,9 +62,9 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// use the `epoch` to ensure that their individual processes agree on which protocol iteration
     /// they are in.
     CreateTimely {
-        /// TODO(#25239): Add documentation.
+        /// TODO(database-issues#7533): Add documentation.
         config: TimelyConfig,
-        /// TODO(#25239): Add documentation.
+        /// TODO(database-issues#7533): Add documentation.
         epoch: ClusterStartupEpoch,
     },
 
@@ -168,7 +170,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// [`as_of`]: DataflowDescription::as_of
     /// [`Frontiers`]: super::response::ComputeResponse::Frontiers
     /// [`SubscribeResponse`]: super::response::ComputeResponse::SubscribeResponse
-    CreateDataflow(DataflowDescription<FlatPlan<T>, CollectionMetadata, T>),
+    CreateDataflow(DataflowDescription<RenderPlan<T>, CollectionMetadata, T>),
 
     /// `Schedule` allows the replica to start computation for a compute collection.
     ///
@@ -210,11 +212,11 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// same collection. ([#16271])
     ///
     /// [`Frontiers`]: super::response::ComputeResponse::Frontiers
-    /// [#16271]: https://github.com/MaterializeInc/materialize/issues/16271
+    /// [#16271]: https://github.com/MaterializeInc/database-issues/issues/4699
     AllowCompaction {
-        /// TODO(#25239): Add documentation.
+        /// TODO(database-issues#7533): Add documentation.
         id: GlobalId,
-        /// TODO(#25239): Add documentation.
+        /// TODO(database-issues#7533): Add documentation.
         frontier: Antichain<T>,
     },
 
@@ -348,7 +350,7 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
             any::<ComputeParameters>()
                 .prop_map(ComputeCommand::UpdateConfiguration)
                 .boxed(),
-            any::<DataflowDescription<FlatPlan, CollectionMetadata, mz_repr::Timestamp>>()
+            any::<DataflowDescription<RenderPlan, CollectionMetadata, mz_repr::Timestamp>>()
                 .prop_map(ComputeCommand::CreateDataflow)
                 .boxed(),
             any::<GlobalId>().prop_map(ComputeCommand::Schedule).boxed(),
@@ -368,14 +370,49 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
 /// for anything in this struct.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct InstanceConfig {
-    /// TODO(#25239): Add documentation.
+    /// Specification of introspection logging.
     pub logging: LoggingConfig,
+    /// The offset relative to the replica startup at which it should expire. None disables feature.
+    pub expiration_offset: Option<Duration>,
+}
+
+impl InstanceConfig {
+    /// Check if the configuration is compatible with another configuration. This is true iff the
+    /// logging configuration is equivalent, and the other configuration (non-strictly) strengthens
+    /// the expiration offset.
+    ///
+    /// We consider a stricter offset compatible, which allows us to strengthen the value without
+    /// forcing replica restarts. However, it also means that replicas will only pick up the new
+    /// value after a restart.
+    pub fn compatible_with(&self, other: &InstanceConfig) -> bool {
+        // Destructure to protect against adding fields in the future.
+        let InstanceConfig {
+            logging: self_logging,
+            expiration_offset: self_offset,
+        } = self;
+        let InstanceConfig {
+            logging: other_logging,
+            expiration_offset: other_offset,
+        } = other;
+
+        // Logging is compatible if exactly the same.
+        let logging_compatible = self_logging == other_logging;
+
+        // The offsets are compatible of other_offset is less than or equal to self_offset, i.e., it
+        // is a smaller offset and strengthens the offset.
+        let self_offset = Antichain::from_iter(*self_offset);
+        let other_offset = Antichain::from_iter(*other_offset);
+        let offset_compatible = timely::PartialOrder::less_equal(&other_offset, &self_offset);
+
+        logging_compatible && offset_compatible
+    }
 }
 
 impl RustType<ProtoInstanceConfig> for InstanceConfig {
     fn into_proto(&self) -> ProtoInstanceConfig {
         ProtoInstanceConfig {
             logging: Some(self.logging.into_proto()),
+            expiration_offset: self.expiration_offset.into_proto(),
         }
     }
 
@@ -384,6 +421,7 @@ impl RustType<ProtoInstanceConfig> for InstanceConfig {
             logging: proto
                 .logging
                 .into_rust_if_some("ProtoCreateInstance::logging")?,
+            expiration_offset: proto.expiration_offset.into_rust()?,
         })
     }
 }
@@ -394,6 +432,12 @@ impl RustType<ProtoInstanceConfig> for InstanceConfig {
 /// Unset parameters should be interpreted to mean "use the previous value".
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct ComputeParameters {
+    /// An optional arbitrary string that describes the class of the workload
+    /// this compute instance is running (e.g., `production` or `staging`).
+    ///
+    /// When `Some(x)`, a `workload_class=x` label is applied to all metrics
+    /// exported by the metrics registry associated with the compute instance.
+    pub workload_class: Option<Option<String>>,
     /// The maximum allowed size in bytes for results of peeks and subscribes.
     ///
     /// Peeks and subscribes that would return results larger than this maximum return the
@@ -418,12 +462,16 @@ impl ComputeParameters {
     /// Update the parameter values with the set ones from `other`.
     pub fn update(&mut self, other: ComputeParameters) {
         let ComputeParameters {
+            workload_class,
             max_result_size,
             tracing,
             grpc_client,
             dyncfg_updates,
         } = other;
 
+        if workload_class.is_some() {
+            self.workload_class = workload_class;
+        }
         if max_result_size.is_some() {
             self.max_result_size = max_result_size;
         }
@@ -436,15 +484,14 @@ impl ComputeParameters {
 
     /// Return whether all parameters are unset.
     pub fn all_unset(&self) -> bool {
-        self.max_result_size.is_none()
-            && self.grpc_client.all_unset()
-            && self.dyncfg_updates.updates.is_empty()
+        *self == Self::default()
     }
 }
 
 impl RustType<ProtoComputeParameters> for ComputeParameters {
     fn into_proto(&self) -> ProtoComputeParameters {
         ProtoComputeParameters {
+            workload_class: self.workload_class.into_proto(),
             max_result_size: self.max_result_size.into_proto(),
             tracing: Some(self.tracing.into_proto()),
             grpc_client: Some(self.grpc_client.into_proto()),
@@ -454,6 +501,7 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
 
     fn from_proto(proto: ProtoComputeParameters) -> Result<Self, TryFromProtoError> {
         Ok(Self {
+            workload_class: proto.workload_class.into_rust()?,
             max_result_size: proto.max_result_size.into_rust()?,
             tracing: proto
                 .tracing
@@ -466,6 +514,32 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
             })?,
         })
     }
+}
+
+impl RustType<ProtoWorkloadClass> for Option<String> {
+    fn into_proto(&self) -> ProtoWorkloadClass {
+        ProtoWorkloadClass {
+            value: self.clone(),
+        }
+    }
+
+    fn from_proto(proto: ProtoWorkloadClass) -> Result<Self, TryFromProtoError> {
+        Ok(proto.value)
+    }
+}
+
+/// Compute parameters supplied to new replicas as part of the Timely instantiation. Usually cannot
+/// be changed once set.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Arbitrary)]
+pub struct InitialComputeParameters {
+    /// `arrangement_exert_proportionality` value passed to new replicas.
+    pub arrangement_exert_proportionality: u32,
+    /// Enable zero copy allocator.
+    pub enable_zero_copy: bool,
+    /// Enable lgalloc to back the zero copy allocator.
+    pub enable_zero_copy_lgalloc: bool,
+    /// Optional limit on the number of empty buffers retained by the zero copy allocator.
+    pub zero_copy_limit: Option<usize>,
 }
 
 /// Metadata specific to the peek variant.
@@ -484,6 +558,16 @@ pub enum PeekTarget {
         /// The identifying metadata of the Persist shard.
         metadata: CollectionMetadata,
     },
+}
+
+impl PeekTarget {
+    /// Returns the ID of the peeked collection.
+    pub fn id(&self) -> GlobalId {
+        match self {
+            Self::Index { id } => *id,
+            Self::Persist { id, .. } => *id,
+        }
+    }
 }
 
 /// Peek a collection, either in an arrangement or Persist.
@@ -604,6 +688,7 @@ impl TryIntoTimelyConfig for ComputeCommand {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::ProptestConfig;
     use proptest::proptest;
@@ -617,14 +702,14 @@ mod tests {
         #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn peek_protobuf_roundtrip(expect in any::<Peek>() ) {
             let actual = protobuf_roundtrip::<_, ProtoPeek>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
 
         #[mz_ore::test]
         fn compute_command_protobuf_roundtrip(expect in any::<ComputeCommand<mz_repr::Timestamp>>() ) {
             let actual = protobuf_roundtrip::<_, ProtoComputeCommand>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }

@@ -23,5 +23,11 @@
 > CREATE SOURCE mz_source
   FROM POSTGRES
   CONNECTION pg
-  (PUBLICATION 'mz_source')
-  FOR ALL TABLES;
+  (PUBLICATION 'mz_source');
+
+> CREATE TABLE ten FROM SOURCE mz_source (REFERENCE ten);
+> CREATE TABLE t0 FROM SOURCE mz_source (REFERENCE t0);
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
+> CREATE TABLE t2 FROM SOURCE mz_source (REFERENCE t2);
+> CREATE TABLE alter_fail_drop_col FROM SOURCE mz_source (REFERENCE alter_fail_drop_col);
+> CREATE TABLE alter_fail_drop_constraint FROM SOURCE mz_source (REFERENCE alter_fail_drop_constraint);

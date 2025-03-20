@@ -6,7 +6,7 @@ accordingly.
 1. Still in a SQL client connected to Materialize, use the [`ALTER CLUSTER`](/sql/alter-cluster/)
    command to downsize the cluster to `100cc`:
 
-    ```sql
+    ```mzsql
     ALTER CLUSTER ingest_postgres SET (SIZE '100cc');
     ```
 
@@ -16,7 +16,7 @@ accordingly.
 1. Use the [`SHOW CLUSTER REPLICAS`](/sql/show-cluster-replicas/) command to
    check the status of the new replica:
 
-    ```sql
+    ```mzsql
     SHOW CLUSTER REPLICAS WHERE cluster = 'ingest_postgres';
     ```
     <p></p>
@@ -35,7 +35,7 @@ follows:
     PostgreSQL source from the [`mz_internal.mz_postgres_sources`](/sql/system-catalog/mz_internal/#mz_postgres_sources)
     table:
 
-        ```sql
+        ```mzsql
         SELECT
             d.name AS database_name,
             n.name AS schema_name,
@@ -51,7 +51,7 @@ follows:
     1. In PostgreSQL, check the replication slot lag, using the replication slot
        name from the previous step:
 
-        ```sql
+        ```postgres
         SELECT
             pg_size_pretty(pg_current_wal_lsn() - confirmed_flush_lsn)
             AS replication_lag_bytes

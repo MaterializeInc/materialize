@@ -58,7 +58,7 @@ pub struct DataSnapshot<T> {
     pub(crate) empty_to: T,
 }
 
-impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
+impl<T: Timestamp + Lattice + TotalOrder + Codec64 + Sync> DataSnapshot<T> {
     /// Unblocks reading a snapshot at `self.as_of` by waiting for the latest
     /// write before that time and then running an empty CaA if necessary.
     #[instrument(level = "debug", fields(shard = %self.data_id, ts = ?self.as_of, empty_to = ?self.empty_to))]
@@ -104,7 +104,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
 
         // TODO(jkosh44) We should not be writing to unregistered shards, but
         // we haven't checked to see if this was registered at `self.empty_to`.
-        // See https://github.com/MaterializeInc/materialize/issues/27088.
+        // See https://github.com/MaterializeInc/database-issues/issues/8022.
         while data_upper < self.empty_to {
             // It would be very bad if we accidentally filled any times <=
             // latest_write with empty updates, so defensively assert on each
@@ -178,8 +178,8 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
         data_read: &mut ReadHandle<K, V, T, D>,
     ) -> Result<impl Stream<Item = ((Result<K, String>, Result<V, String>), T, D)>, Since<T>>
     where
-        K: Debug + Codec + Ord + Default,
-        V: Debug + Codec + Ord + Default,
+        K: Debug + Codec + Ord,
+        V: Debug + Codec + Ord,
         D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
     {
         let data_write = WriteHandle::from_read(data_read, "unblock_read");
@@ -190,7 +190,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
     }
 
     /// See [SinceHandle::snapshot_stats].
-    pub fn snapshot_stats<K, V, D, O>(
+    pub fn snapshot_stats_from_critical<K, V, D, O>(
         &self,
         data_since: &SinceHandle<K, V, T, D, O>,
     ) -> impl Future<Output = Result<SnapshotStats, Since<T>>> + Send + 'static
@@ -220,10 +220,40 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
         data_since.snapshot_stats(as_of)
     }
 
+    /// See [ReadHandle::snapshot_stats].
+    pub fn snapshot_stats_from_leased<K, V, D>(
+        &self,
+        data_since: &ReadHandle<K, V, T, D>,
+    ) -> impl Future<Output = Result<SnapshotStats, Since<T>>> + Send + 'static
+    where
+        K: Debug + Codec + Ord,
+        V: Debug + Codec + Ord,
+        D: Ord + Semigroup + Codec64 + Send + Sync,
+    {
+        // This is used by the optimizer in planning to get cost statistics, so
+        // it can't use `unblock_read`. Instead use the "translated as_of"
+        // trick we invented but didn't end up using for read of the shard
+        // contents. The reason we didn't use it for that was because we'd have
+        // to deal with advancing timestamps of the updates we read, but the
+        // stats we return here don't have that issue.
+        //
+        // TODO: If we don't have a `latest_write`, then the `None` option to
+        // `snapshot_stats` is not quite correct because of pubsub races
+        // (probably marginal) and historical `as_of`s (probably less marginal
+        // but not common in mz right now). Fixing this more precisely in a
+        // performant way (i.e. no crdb queries involved) seems to require that
+        // txn-wal always keep track of the latest write, even when it's
+        // known to have been applied. `snapshot_stats` is an estimate anyway,
+        // it doesn't even attempt to account for things like consolidation, so
+        // this seems fine for now.
+        let as_of = self.latest_write.clone().map(Antichain::from_elem);
+        data_since.snapshot_stats(as_of)
+    }
+
     /// See [ReadHandle::snapshot_parts_stats].
     pub async fn snapshot_parts_stats<K, V, D>(
         &self,
-        data_read: &mut ReadHandle<K, V, T, D>,
+        data_read: &ReadHandle<K, V, T, D>,
     ) -> Result<SnapshotPartsStats, Since<T>>
     where
         K: Debug + Codec + Ord,
@@ -305,7 +335,7 @@ pub(crate) struct DataSubscribe<T> {
 
 /// An active subscription of [`DataRemapEntry`]s for a data shard.
 #[derive(Debug)]
-pub struct DataSubscription<T: Timestamp + Lattice + Codec64> {
+pub struct DataSubscription<T> {
     /// Metadata and current [`DataRemapEntry`] for the data shard.
     subscribe: DataSubscribe<T>,
     /// Channel to send [`DataRemapEntry`]s.
@@ -322,7 +352,7 @@ impl<K, V, T, D> UnblockRead<T> for WriteHandle<K, V, T, D>
 where
     K: Debug + Codec + Send + Sync,
     V: Debug + Codec + Send + Sync,
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
     D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
 {
     async fn unblock_read(self: Box<Self>, snapshot: DataSnapshot<T>) {
@@ -339,7 +369,7 @@ pub struct TxnsRead<T> {
     _subscribe_task: Arc<AbortOnDropHandle<()>>,
 }
 
-impl<T: Timestamp + Lattice + Codec64> TxnsRead<T> {
+impl<T: Timestamp + Lattice + Codec64 + Sync> TxnsRead<T> {
     /// Starts the task worker and returns a handle for communicating with it.
     pub async fn start<C>(client: PersistClient, txns_id: ShardId) -> Self
     where
@@ -553,7 +583,7 @@ impl<T: Ord> PartialOrd for WaitTs<T> {
     }
 }
 
-impl<T: Timestamp + Lattice + Codec64> WaitTs<T> {
+impl<T: Timestamp + Lattice> WaitTs<T> {
     /// Returns `true` iff (sic) this [WaitTs] is ready.
     fn is_ready(&self, frontier: &T) -> bool {
         match &self {
@@ -574,7 +604,7 @@ impl<T: Timestamp + Lattice + Codec64> WaitTs<T> {
 }
 
 #[derive(Debug)]
-struct TxnsReadTask<T: Timestamp + Lattice + Codec64> {
+struct TxnsReadTask<T> {
     rx: mpsc::UnboundedReceiver<TxnsReadCmd<T>>,
     cache: TxnsCacheState<T>,
     pending_waits_by_ts: BTreeSet<(WaitTs<T>, Uuid)>,
@@ -585,7 +615,7 @@ struct TxnsReadTask<T: Timestamp + Lattice + Codec64> {
 /// A pending "wait" notification that we will complete once the frontier
 /// advances far enough.
 #[derive(Debug)]
-struct PendingWait<T: Timestamp + Lattice + Codec64> {
+struct PendingWait<T> {
     ts: WaitTs<T>,
     tx: Option<oneshot::Sender<()>>,
 }
@@ -620,7 +650,7 @@ impl<T: Timestamp + Lattice + Codec64> PendingWait<T> {
 
 impl<T> TxnsReadTask<T>
 where
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
 {
     async fn run(&mut self) {
         while let Some(cmd) = self.rx.recv().await {
@@ -683,7 +713,7 @@ where
                     let mut subscribe = self.cache.data_subscribe(data_id, as_of.clone());
                     if let Some(snapshot) = subscribe.snapshot.take() {
                         mz_ore::task::spawn(
-                            || "persist-txn::unblock_subscribe",
+                            || "txn-wal::unblock_subscribe",
                             unblock.unblock_read(snapshot),
                         );
                     }
@@ -761,7 +791,7 @@ where
 /// Reads txn updates from a [Subscribe] and forwards them to a [TxnsReadTask]
 /// when receiving a progress update.
 #[derive(Debug)]
-struct TxnsSubscribeTask<T: Timestamp + Lattice + Codec64, C: TxnsCodec = TxnsCodecDefault> {
+struct TxnsSubscribeTask<T, C: TxnsCodec = TxnsCodecDefault> {
     txns_subscribe: Subscribe<C::Key, C::Val, T, i64>,
 
     /// Staged update that we will consume and forward to the [TxnsReadTask]
@@ -782,7 +812,7 @@ struct TxnsSubscribeTask<T: Timestamp + Lattice + Codec64, C: TxnsCodec = TxnsCo
 
 impl<T, C> TxnsSubscribeTask<T, C>
 where
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
     C: TxnsCodec,
 {
     /// Creates a [TxnsSubscribeTask] reading from the given txn shard that

@@ -9,15 +9,19 @@ aliases:
 ---
 
 `SHOW COLUMNS` lists the columns available for an object. This can be a source,
-subsource, sink, materialized view, view, or table.
+subsource, materialized view, view, or table.
 
 ## Syntax
 
-{{< diagram "show-columns.svg" >}}
+```sql
+SHOW COLUMNS FROM <object_name>
+[LIKE <pattern> | WHERE <condition(s)>]
+```
 
-Field | Use
-------|-----
-_item&lowbar;ref_ | The name of the object whose columns you want to view. This can be a source, subsource, sink, materialized view, view, or table.
+Option                        | Description
+------------------------------|------------
+**LIKE** \<pattern\>          | If specified, only show columns that match the pattern.
+**WHERE** <condition(s)>      | If specified, only show columns that match the condition(s).
 
 ## Details
 
@@ -44,7 +48,7 @@ object.
 
 ## Examples
 
-```sql
+```mzsql
 SHOW SOURCES;
 ```
 ```nofmt
@@ -52,7 +56,7 @@ SHOW SOURCES;
 ----------
 my_sources
 ```
-```sql
+```mzsql
 SHOW COLUMNS FROM my_source;
 ```
 ```nofmt

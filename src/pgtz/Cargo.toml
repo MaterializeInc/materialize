@@ -10,26 +10,26 @@ publish = false
 workspace = true
 
 [dependencies]
-chrono = { version = "0.4.35", default-features = false, features = ["serde", "std"] }
+chrono = { version = "0.4.39", default-features = false, features = ["serde", "std"] }
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
-mz-lowertest = { path = "../lowertest" }
+mz-lowertest = { path = "../lowertest", default-features = false }
 mz-ore = { path = "../ore", features = ["test"], default-features = false }
 mz-proto = { path = "../proto", features = ["chrono"], default-features = false }
 phf = { version = "0.11.1", default-features = false }
-proptest = { version = "1.0.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
-prost = { version = "0.11.3", features = ["no-recursion-limit"] }
-serde = { version = "1.0.152", features = ["derive"] }
+proptest = { version = "1.6.0", default-features = false, features = ["std"] }
+proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
+prost = { version = "0.13.5", features = ["no-recursion-limit"] }
+serde = { version = "1.0.219", features = ["derive"] }
 uncased = "0.9.7"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [build-dependencies]
-anyhow = "1.0.66"
+anyhow = "1.0.95"
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
 mz-build-tools = { path = "../build-tools", default-features = false }
-mz-ore = { path = "../ore", default-features = false }
-phf_codegen = "0.11.1"
-prost-build = "0.11.2"
+mz-ore-build = { path = "../ore-build", default-features = false }
+phf_codegen = "0.11.3"
+prost-build = "0.13.4"
 uncased = "0.9.7"
 
 [package.metadata.cargo-udeps.ignore]

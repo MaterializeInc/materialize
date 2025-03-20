@@ -11,27 +11,27 @@
 
 syntax = "proto3";
 
-import "expr/src/scalar.proto";
-
 package mz_expr.linear;
 
+import "expr/src/scalar.proto";
+
 message ProtoMapFilterProject {
-    message ProtoPredicate {
-        uint64 column_to_apply = 1;
-        mz_expr.scalar.ProtoMirScalarExpr predicate = 2;
-    }
-    repeated mz_expr.scalar.ProtoMirScalarExpr expressions = 1;
-    repeated ProtoPredicate predicates = 2;
-    repeated uint64 projection = 3;
-    uint64 input_arity = 4;
+  message ProtoPredicate {
+    uint64 column_to_apply = 1;
+    mz_expr.scalar.ProtoMirScalarExpr predicate = 2;
+  }
+  repeated mz_expr.scalar.ProtoMirScalarExpr expressions = 1;
+  repeated ProtoPredicate predicates = 2;
+  repeated uint64 projection = 3;
+  uint64 input_arity = 4;
 }
 
 message ProtoSafeMfpPlan {
-    ProtoMapFilterProject mfp = 1;
+  ProtoMapFilterProject mfp = 1;
 }
 
 message ProtoMfpPlan {
-    ProtoSafeMfpPlan mfp = 1;
-    repeated mz_expr.scalar.ProtoMirScalarExpr lower_bounds = 2;
-    repeated mz_expr.scalar.ProtoMirScalarExpr upper_bounds = 3;
+  ProtoSafeMfpPlan mfp = 1;
+  repeated mz_expr.scalar.ProtoMirScalarExpr lower_bounds = 2;
+  repeated mz_expr.scalar.ProtoMirScalarExpr upper_bounds = 3;
 }

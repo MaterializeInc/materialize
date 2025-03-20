@@ -329,6 +329,7 @@ pub struct SchemaResolver<'a> {
     pub writer_to_reader_names: BTreeMap<usize, usize>,
     pub reader_to_writer_names: BTreeMap<usize, usize>,
     pub reader_to_resolved_names: BTreeMap<usize, usize>,
+    #[allow(dead_code)]
     pub reader_fullnames: BTreeMap<usize, &'a FullName>,
     pub reader_schema: &'a Schema,
 }
@@ -932,6 +933,8 @@ pub fn from_avro_datum<R: AvroRead>(schema: &Schema, reader: &mut R) -> Result<V
 mod tests {
     use std::io::Cursor;
 
+    use mz_ore::assert_err;
+
     use crate::types::{Record, ToAvro};
     use crate::Reader;
 
@@ -1039,7 +1042,7 @@ mod tests {
             .collect::<Vec<u8>>();
         let reader = Reader::with_schema(&schema, &invalid[..]).unwrap();
         for value in reader {
-            assert!(value.is_err());
+            assert_err!(value);
         }
     }
 
@@ -1054,7 +1057,7 @@ mod tests {
         let invalid = ENCODED.iter().copied().take(165).collect::<Vec<u8>>();
         let reader = Reader::new(&invalid[..]).unwrap();
         for value in reader {
-            assert!(value.is_err());
+            assert_err!(value);
         }
     }
 

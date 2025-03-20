@@ -1,0 +1,4 @@
+{{- $links := apply .Params "partial" "github-discussion" "." -}}
+{{- $clean := apply $links "chomp" "." -}}
+({{ delimit $clean ", " }})
+{{- /* Chomp trailing newline. */ -}}

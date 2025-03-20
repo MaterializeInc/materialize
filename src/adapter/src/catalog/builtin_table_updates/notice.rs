@@ -44,56 +44,53 @@ impl Catalog {
         // relative to any user's session.
         let conn_catalog = self.for_system_session();
 
-        let optimizer_notices = std::iter::zip(
-            df_meta.optimizer_notices.into_iter(),
-            notice_ids.into_iter(),
-        )
-        .map(|(notice, id)| {
-            // Render non-redacted fields.
-            let message = notice.message(&conn_catalog, false).to_string();
-            let hint = notice.hint(&conn_catalog, false).to_string();
-            let action = match notice.action_kind(&conn_catalog) {
-                ActionKind::SqlStatements => {
-                    Action::SqlStatements(notice.action(&conn_catalog, false).to_string())
+        let optimizer_notices = std::iter::zip(df_meta.optimizer_notices, notice_ids)
+            .map(|(notice, id)| {
+                // Render non-redacted fields.
+                let message = notice.message(&conn_catalog, false).to_string();
+                let hint = notice.hint(&conn_catalog, false).to_string();
+                let action = match notice.action_kind(&conn_catalog) {
+                    ActionKind::SqlStatements => {
+                        Action::SqlStatements(notice.action(&conn_catalog, false).to_string())
+                    }
+                    ActionKind::PlainText => {
+                        Action::PlainText(notice.action(&conn_catalog, false).to_string())
+                    }
+                    ActionKind::None => {
+                        Action::None // No concrete action.
+                    }
+                };
+                // Render redacted fields.
+                let message_redacted = notice.message(&conn_catalog, true).to_string();
+                let hint_redacted = notice.hint(&conn_catalog, true).to_string();
+                let action_redacted = match notice.action_kind(&conn_catalog) {
+                    ActionKind::SqlStatements => {
+                        Action::SqlStatements(notice.action(&conn_catalog, true).to_string())
+                    }
+                    ActionKind::PlainText => {
+                        Action::PlainText(notice.action(&conn_catalog, true).to_string())
+                    }
+                    ActionKind::None => {
+                        Action::None // No concrete action.
+                    }
+                };
+                // Assemble the rendered notice.
+                OptimizerNotice {
+                    id,
+                    kind: OptimizerNoticeKind::from(&notice),
+                    item_id,
+                    dependencies: notice.dependencies(),
+                    message_redacted: some_if_neq(message_redacted, &message),
+                    hint_redacted: some_if_neq(hint_redacted, &hint),
+                    action_redacted: some_if_neq(action_redacted, &action),
+                    message,
+                    hint,
+                    action,
+                    created_at: (self.config().now)(),
                 }
-                ActionKind::PlainText => {
-                    Action::PlainText(notice.action(&conn_catalog, false).to_string())
-                }
-                ActionKind::None => {
-                    Action::None // No concrete action.
-                }
-            };
-            // Render redacted fields.
-            let message_redacted = notice.message(&conn_catalog, true).to_string();
-            let hint_redacted = notice.hint(&conn_catalog, true).to_string();
-            let action_redacted = match notice.action_kind(&conn_catalog) {
-                ActionKind::SqlStatements => {
-                    Action::SqlStatements(notice.action(&conn_catalog, true).to_string())
-                }
-                ActionKind::PlainText => {
-                    Action::PlainText(notice.action(&conn_catalog, true).to_string())
-                }
-                ActionKind::None => {
-                    Action::None // No concrete action.
-                }
-            };
-            // Assemble the rendered notice.
-            OptimizerNotice {
-                id,
-                kind: OptimizerNoticeKind::from(&notice),
-                item_id,
-                dependencies: notice.dependencies(),
-                message_redacted: some_if_neq(message_redacted, &message),
-                hint_redacted: some_if_neq(hint_redacted, &hint),
-                action_redacted: some_if_neq(action_redacted, &action),
-                message,
-                hint,
-                action,
-                created_at: (self.config().now)(),
-            }
-        })
-        .map(From::from) // Wrap each notice into an `Arc`.
-        .collect();
+            })
+            .map(From::from) // Wrap each notice into an `Arc`.
+            .collect();
 
         DataflowMetainfo {
             optimizer_notices,
@@ -131,7 +128,7 @@ impl CatalogState {
 
             // push `id` column
             packer.push(Datum::String(id.as_str()));
-            // push `notice_type` column (TODO(21513): encode as int?)
+            // push `notice_type` column (TODO: encode as int?)
             packer.push(Datum::String(notice.kind.as_str()));
             // push `message` column
             packer.push(Datum::String(&notice.message));
@@ -162,7 +159,7 @@ impl CatalogState {
                 },
                 None => Datum::Null,
             });
-            // push `action_type` column (TODO(21513): encode as int?)
+            // push `action_type` column (TODO: encode as int?)
             packer.push(match &notice.action {
                 Action::None => Datum::Null,
                 action => Datum::String(action.kind().as_str()),
@@ -177,11 +174,11 @@ impl CatalogState {
             // push `created_at` column
             packer.push(Datum::TimestampTz(created_at));
 
-            updates.push(BuiltinTableUpdate {
-                id: self.resolve_builtin_table(&MZ_OPTIMIZER_NOTICES),
-                row: row.clone(),
+            updates.push(BuiltinTableUpdate::row(
+                self.resolve_builtin_table(&MZ_OPTIMIZER_NOTICES),
+                row.clone(),
                 diff,
-            });
+            ));
         }
     }
 }

@@ -40,15 +40,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::iter::repeat;
 
 use itertools::Itertools;
+use mz_expr::visit::Visit;
 use mz_expr::{AccessStrategy, AggregateFunc, MirRelationExpr, MirScalarExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::maybe_grow;
 use mz_repr::*;
 
-use crate::plan::expr::{
+use crate::optimizer_metrics::OptimizerMetrics;
+use crate::plan::hir::{
     AggregateExpr, ColumnOrder, ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType,
 };
-use crate::plan::{transform_expr, PlanError};
+use crate::plan::{transform_hir, PlanError};
 use crate::session::vars::SystemVars;
 
 mod variadic_left;
@@ -132,9 +134,9 @@ struct CteDesc {
 
 #[derive(Debug)]
 pub struct Config {
-    /// Enable outer join lowering implemented in #22343.
+    /// Enable outer join lowering implemented in database-issues#6747.
     pub enable_new_outer_join_lowering: bool,
-    /// Enable outer join lowering implemented in #25340.
+    /// Enable outer join lowering implemented in database-issues#7561.
     pub enable_variadic_left_join_lowering: bool,
 }
 
@@ -147,41 +149,60 @@ impl From<&SystemVars> for Config {
     }
 }
 
+/// Context passed to the lowering. This is wired to most parts of the lowering.
+pub(crate) struct Context<'a> {
+    /// Feature flags affecting the behavior of lowering.
+    pub config: &'a Config,
+    /// Optional, because some callers don't have an `OptimizerMetrics` handy. When it's None, we
+    /// simply don't write metrics.
+    pub metrics: Option<&'a OptimizerMetrics>,
+}
+
 impl HirRelationExpr {
     /// Rewrite `self` into a `MirRelationExpr`.
     /// This requires rewriting all correlated subqueries (nested `HirRelationExpr`s) into flat queries
     #[mz_ore::instrument(target = "optimizer", level = "trace", name = "hir_to_mir")]
-    pub fn lower<C: Into<Config>>(self, config: C) -> Result<MirRelationExpr, PlanError> {
-        let result =
-            match self {
-                // We directly rewrite a Constant into the corresponding `MirRelationExpr::Constant`
-                // to ensure that the downstream optimizer can easily bypass most
-                // irrelevant optimizations (e.g. reduce folding) for this expression
-                // without having to re-learn the fact that it is just a constant,
-                // as it would if the constant were wrapped in a Let-Get pair.
-                HirRelationExpr::Constant { rows, typ } => {
-                    let rows: Vec<_> = rows.into_iter().map(|row| (row, 1)).collect();
-                    MirRelationExpr::Constant {
-                        rows: Ok(rows),
-                        typ,
-                    }
+    pub fn lower<C: Into<Config>>(
+        self,
+        config: C,
+        metrics: Option<&OptimizerMetrics>,
+    ) -> Result<MirRelationExpr, PlanError> {
+        let context = Context {
+            config: &config.into(),
+            metrics,
+        };
+        let result = match self {
+            // We directly rewrite a Constant into the corresponding `MirRelationExpr::Constant`
+            // to ensure that the downstream optimizer can easily bypass most
+            // irrelevant optimizations (e.g. reduce folding) for this expression
+            // without having to re-learn the fact that it is just a constant,
+            // as it would if the constant were wrapped in a Let-Get pair.
+            HirRelationExpr::Constant { rows, typ } => {
+                let rows: Vec<_> = rows.into_iter().map(|row| (row, 1)).collect();
+                MirRelationExpr::Constant {
+                    rows: Ok(rows),
+                    typ,
                 }
-                mut other => {
-                    let mut id_gen = mz_ore::id_gen::IdGen::default();
-                    transform_expr::split_subquery_predicates(&mut other);
-                    transform_expr::try_simplify_quantified_comparisons(&mut other);
-                    MirRelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
-                        .let_in_fallible(&mut id_gen, |id_gen, get_outer| {
-                            other.applied_to(
-                                id_gen,
-                                get_outer,
-                                &ColumnMap::empty(),
-                                &mut CteMap::new(),
-                                &config.into(),
-                            )
-                        })?
-                }
-            };
+            }
+            mut other => {
+                let mut id_gen = mz_ore::id_gen::IdGen::default();
+                transform_hir::split_subquery_predicates(&mut other)?;
+                transform_hir::try_simplify_quantified_comparisons(&mut other)?;
+                transform_hir::fuse_window_functions(&mut other, &context)?;
+                MirRelationExpr::constant(vec![vec![]], RelationType::new(vec![])).let_in(
+                    &mut id_gen,
+                    |id_gen, get_outer| {
+                        other.applied_to(
+                            id_gen,
+                            get_outer,
+                            &ColumnMap::empty(),
+                            &mut CteMap::new(),
+                            &context,
+                        )
+                    },
+                )?
+            }
+        };
 
         mz_repr::explain::trace_plan(&result);
 
@@ -206,7 +227,7 @@ impl HirRelationExpr {
         get_outer: MirRelationExpr,
         col_map: &ColumnMap,
         cte_map: &mut CteMap,
-        config: &Config,
+        context: &Context,
     ) -> Result<MirRelationExpr, PlanError> {
         maybe_grow(|| {
             use MirRelationExpr as SR;
@@ -299,8 +320,8 @@ impl HirRelationExpr {
                     body,
                 } => {
                     let value =
-                        value.applied_to(id_gen, get_outer.clone(), col_map, cte_map, config)?;
-                    value.let_in_fallible(id_gen, |id_gen, get_value| {
+                        value.applied_to(id_gen, get_outer.clone(), col_map, cte_map, context)?;
+                    value.let_in(id_gen, |id_gen, get_value| {
                         let (new_id, typ) = if let MirRelationExpr::Get {
                             id: mz_expr::Id::Local(id),
                             typ,
@@ -324,7 +345,7 @@ impl HirRelationExpr {
                                 outer_relation: get_outer.clone(),
                             },
                         );
-                        let body = body.applied_to(id_gen, get_outer, col_map, cte_map, config);
+                        let body = body.applied_to(id_gen, get_outer, col_map, cte_map, context);
                         if let Some(old_value) = old_value {
                             cte_map.insert(id, old_value);
                         } else {
@@ -373,11 +394,11 @@ impl HirRelationExpr {
                             get_outer.clone(),
                             col_map,
                             cte_map,
-                            config,
+                            context,
                         )?);
                     }
 
-                    let mir_body = body.applied_to(id_gen, get_outer, col_map, cte_map, config)?;
+                    let mir_body = body.applied_to(id_gen, get_outer, col_map, cte_map, context)?;
 
                     // Remove our bindings and reinstate any shadowed bindings.
                     for (id, shadowed) in shadowed_bindings {
@@ -400,7 +421,7 @@ impl HirRelationExpr {
                     // Projections should be applied to the decorrelated `inner`, and to its columns,
                     // which means rebasing `outputs` to start `get_outer.arity()` columns later.
                     let input =
-                        input.applied_to(id_gen, get_outer.clone(), col_map, cte_map, config)?;
+                        input.applied_to(id_gen, get_outer.clone(), col_map, cte_map, context)?;
                     let outputs = (0..get_outer.arity())
                         .chain(outputs.into_iter().map(|i| get_outer.arity() + i))
                         .collect::<Vec<_>>();
@@ -414,7 +435,7 @@ impl HirRelationExpr {
                     let mut lowered_arity = input.arity();
 
                     let mut input =
-                        input.applied_to(id_gen, get_outer, col_map, cte_map, config)?;
+                        input.applied_to(id_gen, get_outer, col_map, cte_map, context)?;
 
                     // Lower subqueries in maximally sized batches, such as no subquery in the current
                     // batch depends on columns from the same batch.
@@ -435,13 +456,14 @@ impl HirRelationExpr {
                                 requires_nonexistent_column
                             })
                             .unwrap_or(scalars.len());
+                        assert!(end_idx > 0, "a Map expression references itself or a later column; lowered_arity: {}, expressions: {:?}", lowered_arity, scalars);
 
                         lowered_arity = lowered_arity + end_idx;
                         let scalars = scalars.drain(0..end_idx).collect_vec();
 
                         let old_arity = input.arity();
                         let (with_subqueries, subquery_map) = HirScalarExpr::lower_subqueries(
-                            &scalars, id_gen, col_map, cte_map, config, input,
+                            &scalars, id_gen, col_map, cte_map, input, context,
                         )?;
                         input = with_subqueries;
 
@@ -459,9 +481,9 @@ impl HirRelationExpr {
                                 id_gen,
                                 col_map,
                                 cte_map,
-                                config,
                                 &mut input,
                                 &Some(&subquery_map),
+                                context,
                             )?;
                             input = input.map_one(scalar);
                             scalar_columns.push(input.arity() - 1);
@@ -484,7 +506,7 @@ impl HirRelationExpr {
 
                     let exprs = exprs
                         .into_iter()
-                        .map(|e| e.applied_to(id_gen, col_map, cte_map, config, &mut input, &None))
+                        .map(|e| e.applied_to(id_gen, col_map, cte_map, &mut input, &None, context))
                         .collect::<Result<Vec<_>, _>>()?;
 
                     let new_arity = input.arity();
@@ -505,11 +527,11 @@ impl HirRelationExpr {
                     // We extend `get_outer` with sufficient values to determine the value of the predicate,
                     // then filter the results, then strip off any columns that were added for this purpose.
                     let mut input =
-                        input.applied_to(id_gen, get_outer, col_map, cte_map, config)?;
+                        input.applied_to(id_gen, get_outer, col_map, cte_map, context)?;
                     for predicate in predicates {
                         let old_arity = input.arity();
                         let predicate = predicate
-                            .applied_to(id_gen, col_map, cte_map, config, &mut input, &None)?;
+                            .applied_to(id_gen, col_map, cte_map, &mut input, &None, context)?;
                         let new_arity = input.arity();
                         input = input.filter(vec![predicate]);
                         if old_arity != new_arity {
@@ -536,26 +558,26 @@ impl HirRelationExpr {
 
                     assert!(kind.can_be_correlated());
 
-                    let left = left.applied_to(id_gen, get_outer, col_map, cte_map, config)?;
-                    left.let_in_fallible(id_gen, |id_gen, get_left| {
+                    let left = left.applied_to(id_gen, get_outer, col_map, cte_map, context)?;
+                    left.let_in(id_gen, |id_gen, get_left| {
                         let apply_requires_distinct_outer = false;
                         let mut join = branch(
                             id_gen,
                             get_left.clone(),
                             col_map,
                             cte_map,
-                            config,
                             *right,
                             apply_requires_distinct_outer,
-                            |id_gen, right, get_left, col_map, cte_map, config| {
-                                right.applied_to(id_gen, get_left, col_map, cte_map, config)
+                            context,
+                            |id_gen, right, get_left, col_map, cte_map, context| {
+                                right.applied_to(id_gen, get_left, col_map, cte_map, context)
                             },
                         )?;
 
                         // Plan the `on` predicate.
                         let old_arity = join.arity();
                         let on =
-                            on.applied_to(id_gen, col_map, cte_map, config, &mut join, &None)?;
+                            on.applied_to(id_gen, col_map, cte_map, &mut join, &None, context)?;
                         join = join.filter(vec![on]);
                         let new_arity = join.arity();
                         if old_arity != new_arity {
@@ -574,7 +596,7 @@ impl HirRelationExpr {
                                 .skip(get_left.arity())
                                 .map(|typ| (Datum::Null, typ.scalar_type))
                                 .collect();
-                            Ok::<_, PlanError>(get_left.lookup(id_gen, join, default))
+                            get_left.lookup(id_gen, join, default)
                         } else {
                             Ok::<_, PlanError>(join)
                         }
@@ -586,7 +608,7 @@ impl HirRelationExpr {
                     on,
                     kind,
                 } => {
-                    if config.enable_variadic_left_join_lowering {
+                    if context.config.enable_variadic_left_join_lowering {
                         // Attempt to extract a stack of left joins.
                         if let JoinKind::LeftOuter = kind {
                             let mut rights = vec![(&*right, &on)];
@@ -601,7 +623,7 @@ impl HirRelationExpr {
                                 rights.push((&**right, on));
                                 left_test = left;
                             }
-                            if rights.len() > 1 && get_outer.arity() == 0 {
+                            if rights.len() > 1 {
                                 // Defensively clone `cte_map` as it may be mutated.
                                 let cte_map_clone = cte_map.clone();
                                 if let Ok(Some(magic)) = variadic_left::attempt_left_join_magic(
@@ -611,7 +633,7 @@ impl HirRelationExpr {
                                     get_outer.clone(),
                                     col_map,
                                     cte_map,
-                                    config,
+                                    context,
                                 ) {
                                     return Ok(magic);
                                 } else {
@@ -632,21 +654,21 @@ impl HirRelationExpr {
                     // depending on the type of join.
                     let oa = get_outer.arity();
                     let left =
-                        left.applied_to(id_gen, get_outer.clone(), col_map, cte_map, config)?;
+                        left.applied_to(id_gen, get_outer.clone(), col_map, cte_map, context)?;
                     let lt = left.typ().column_types.into_iter().skip(oa).collect_vec();
                     let la = lt.len();
-                    left.let_in_fallible(id_gen, |id_gen, get_left| {
+                    left.let_in(id_gen, |id_gen, get_left| {
                         let right_col_map = col_map.enter_scope(0);
                         let right = right.applied_to(
                             id_gen,
                             get_outer.clone(),
                             &right_col_map,
                             cte_map,
-                            config,
+                            context,
                         )?;
                         let rt = right.typ().column_types.into_iter().skip(oa).collect_vec();
                         let ra = rt.len();
-                        right.let_in_fallible(id_gen, |id_gen, get_right| {
+                        right.let_in(id_gen, |id_gen, get_right| {
                             let mut product = SR::join(
                                 vec![get_left.clone(), get_right.clone()],
                                 (0..oa).map(|i| vec![(0, i), (1, i)]).collect(),
@@ -663,9 +685,9 @@ impl HirRelationExpr {
                                 id_gen,
                                 col_map,
                                 cte_map,
-                                config,
                                 &mut product,
                                 &None,
+                                context,
                             )?;
                             // Collect the types of all subqueries appearing in
                             // the `on` clause. The subquery results were
@@ -692,13 +714,19 @@ impl HirRelationExpr {
                                     kind.clone(),
                                     oa,
                                     id_gen,
-                                    config.enable_new_outer_join_lowering,
+                                    context,
                                 )? {
+                                    if let Some(metrics) = context.metrics {
+                                        metrics.inc_outer_join_lowering("equi");
+                                    }
                                     return Ok(joined);
                                 }
                             }
 
                             // Otherwise, perform a more general join.
+                            if let Some(metrics) = context.metrics {
+                                metrics.inc_outer_join_lowering("general");
+                            }
                             let mut join = product.filter(vec![on]);
                             if on_has_subqueries {
                                 // This means that `on.applied_to(...)` appended
@@ -706,24 +734,24 @@ impl HirRelationExpr {
                                 // need to get rid of them.
                                 join = join.project((0..oa + la + ra).collect());
                             }
-                            join.let_in_fallible(id_gen, |id_gen, get_join| {
+                            join.let_in(id_gen, |id_gen, get_join| {
                                 let mut result = get_join.clone();
                                 if let JoinKind::LeftOuter { .. } | JoinKind::FullOuter { .. } =
                                     kind
                                 {
-                                    let left_outer = get_left.clone().anti_lookup(
+                                    let left_outer = get_left.clone().anti_lookup::<PlanError>(
                                         id_gen,
                                         get_join.clone(),
                                         rt.into_iter()
                                             .map(|typ| (Datum::Null, typ.scalar_type))
                                             .collect(),
-                                    );
+                                    )?;
                                     result = result.union(left_outer);
                                 }
                                 if let JoinKind::RightOuter | JoinKind::FullOuter = kind {
                                     let right_outer = get_right
                                         .clone()
-                                        .anti_lookup(
+                                        .anti_lookup::<PlanError>(
                                             id_gen,
                                             get_join
                                                 // need to swap left and right to make the anti_lookup work
@@ -736,7 +764,7 @@ impl HirRelationExpr {
                                             lt.into_iter()
                                                 .map(|typ| (Datum::Null, typ.scalar_type))
                                                 .collect(),
-                                        )
+                                        )?
                                         // swap left and right back again
                                         .project(
                                             (0..oa)
@@ -759,7 +787,7 @@ impl HirRelationExpr {
                             get_outer.clone(),
                             col_map,
                             cte_map,
-                            config,
+                            context,
                         )?),
                         inputs: inputs
                             .into_iter()
@@ -769,7 +797,7 @@ impl HirRelationExpr {
                                     get_outer.clone(),
                                     col_map,
                                     cte_map,
-                                    config,
+                                    context,
                                 )
                             })
                             .collect::<Result<Vec<_>, _>>()?,
@@ -785,14 +813,14 @@ impl HirRelationExpr {
                     // In addition, here an empty reduction key signifies that we need to supply default values
                     // in the case that there are no results (as in a SQL aggregation without an explicit GROUP BY).
                     let mut input =
-                        input.applied_to(id_gen, get_outer.clone(), col_map, cte_map, config)?;
+                        input.applied_to(id_gen, get_outer.clone(), col_map, cte_map, context)?;
                     let applied_group_key = (0..get_outer.arity())
                         .chain(group_key.iter().map(|i| get_outer.arity() + i))
                         .collect();
                     let applied_aggregates = aggregates
                         .into_iter()
                         .map(|aggregate| {
-                            aggregate.applied_to(id_gen, col_map, cte_map, config, &mut input)
+                            aggregate.applied_to(id_gen, col_map, cte_map, &mut input, context)
                         })
                         .collect::<Result<Vec<_>, _>>()?;
                     let input_type = input.typ();
@@ -811,14 +839,14 @@ impl HirRelationExpr {
 
                     // Introduce default values in the case the group key is empty.
                     if group_key.is_empty() {
-                        reduced = get_outer.lookup(id_gen, reduced, default);
+                        reduced = get_outer.lookup::<PlanError>(id_gen, reduced, default)?;
                     }
                     reduced
                 }
                 Distinct { input } => {
                     // Distinct is uncomplicated.
                     input
-                        .applied_to(id_gen, get_outer, col_map, cte_map, config)?
+                        .applied_to(id_gen, get_outer, col_map, cte_map, context)?
                         .distinct()
                 }
                 TopK {
@@ -831,7 +859,7 @@ impl HirRelationExpr {
                 } => {
                     // TopK is uncomplicated, except that we must group by the columns of `get_outer` as well.
                     let mut input =
-                        input.applied_to(id_gen, get_outer.clone(), col_map, cte_map, config)?;
+                        input.applied_to(id_gen, get_outer.clone(), col_map, cte_map, context)?;
                     let mut applied_group_key: Vec<_> = (0..get_outer.arity())
                         .chain(group_key.iter().map(|i| get_outer.arity() + i))
                         .collect();
@@ -851,7 +879,7 @@ impl HirRelationExpr {
                     if let Some(limit) = limit {
                         limit_mir = Some(
                             limit
-                                .applied_to(id_gen, col_map, cte_map, config, &mut input, &None)?,
+                                .applied_to(id_gen, col_map, cte_map, &mut input, &None, context)?,
                         );
                     }
 
@@ -877,13 +905,13 @@ impl HirRelationExpr {
                 Negate { input } => {
                     // Negate is uncomplicated.
                     input
-                        .applied_to(id_gen, get_outer, col_map, cte_map, config)?
+                        .applied_to(id_gen, get_outer, col_map, cte_map, context)?
                         .negate()
                 }
                 Threshold { input } => {
                     // Threshold is uncomplicated.
                     input
-                        .applied_to(id_gen, get_outer, col_map, cte_map, config)?
+                        .applied_to(id_gen, get_outer, col_map, cte_map, context)?
                         .threshold()
                 }
             })
@@ -907,9 +935,9 @@ impl HirScalarExpr {
         id_gen: &mut mz_ore::id_gen::IdGen,
         col_map: &ColumnMap,
         cte_map: &mut CteMap,
-        config: &Config,
         inner: &mut MirRelationExpr,
         subquery_map: &Option<&BTreeMap<HirScalarExpr, usize>>,
+        context: &Context,
     ) -> Result<MirScalarExpr, PlanError> {
         maybe_grow(|| {
             use MirScalarExpr as SS;
@@ -933,9 +961,9 @@ impl HirScalarExpr {
                         id_gen,
                         col_map,
                         cte_map,
-                        config,
                         inner,
                         subquery_map,
+                        context,
                     )?),
                 },
                 CallBinary { func, expr1, expr2 } => SS::CallBinary {
@@ -944,17 +972,17 @@ impl HirScalarExpr {
                         id_gen,
                         col_map,
                         cte_map,
-                        config,
                         inner,
                         subquery_map,
+                        context,
                     )?),
                     expr2: Box::new(expr2.applied_to(
                         id_gen,
                         col_map,
                         cte_map,
-                        config,
                         inner,
                         subquery_map,
+                        context,
                     )?),
                 },
                 CallVariadic { func, exprs } => SS::CallVariadic {
@@ -962,7 +990,7 @@ impl HirScalarExpr {
                     exprs: exprs
                         .into_iter()
                         .map(|expr| {
-                            expr.applied_to(id_gen, col_map, cte_map, config, inner, subquery_map)
+                            expr.applied_to(id_gen, col_map, cte_map, inner, subquery_map, context)
                         })
                         .collect::<Result<Vec<_>, _>>()?,
                 },
@@ -989,7 +1017,7 @@ impl HirScalarExpr {
 
                     let inner_arity = inner.arity();
                     let cond_expr =
-                        cond.applied_to(id_gen, col_map, cte_map, config, inner, subquery_map)?;
+                        cond.applied_to(id_gen, col_map, cte_map, inner, subquery_map, context)?;
 
                     // Defensive copies, in case we mangle these in decorrelation.
                     let inner_clone = inner.clone();
@@ -998,9 +1026,9 @@ impl HirScalarExpr {
 
                     let cond_arity = inner.arity();
                     let then_expr =
-                        then.applied_to(id_gen, col_map, cte_map, config, inner, subquery_map)?;
+                        then.applied_to(id_gen, col_map, cte_map, inner, subquery_map, context)?;
                     let else_expr =
-                        els.applied_to(id_gen, col_map, cte_map, config, inner, subquery_map)?;
+                        els.applied_to(id_gen, col_map, cte_map, inner, subquery_map, context)?;
 
                     if cond_arity == inner.arity() {
                         // If no additional columns were added, we simply return the
@@ -1016,16 +1044,16 @@ impl HirScalarExpr {
                         // the two expressions independently, and apply their cases
                         // as `MirRelationExpr::Map` operations.
 
-                        *inner = inner_clone.let_in_fallible(id_gen, |id_gen, get_inner| {
+                        *inner = inner_clone.let_in(id_gen, |id_gen, get_inner| {
                             // Restrict to records satisfying `cond_expr` and apply `then` as a map.
                             let mut then_inner = get_inner.clone().filter(vec![cond_expr.clone()]);
                             let then_expr = then_clone.applied_to(
                                 id_gen,
                                 col_map,
                                 cte_map,
-                                config,
                                 &mut then_inner,
                                 subquery_map,
+                                context,
                             )?;
                             let then_arity = then_inner.arity();
                             then_inner = then_inner
@@ -1046,9 +1074,9 @@ impl HirScalarExpr {
                                 id_gen,
                                 col_map,
                                 cte_map,
-                                config,
                                 &mut else_inner,
                                 subquery_map,
+                                context,
                             )?;
                             let else_arity = else_inner.arity();
                             else_inner = else_inner
@@ -1081,9 +1109,9 @@ impl HirScalarExpr {
                         inner.take_dangerous(),
                         col_map,
                         cte_map,
-                        config,
                         *expr,
                         apply_requires_distinct_outer,
+                        context,
                     )?;
                     SS::Column(inner.arity() - 1)
                 }
@@ -1095,9 +1123,9 @@ impl HirScalarExpr {
                         inner.take_dangerous(),
                         col_map,
                         cte_map,
-                        config,
                         *expr,
                         apply_requires_distinct_outer,
+                        context,
                     )?;
                     SS::Column(inner.arity() - 1)
                 }
@@ -1142,7 +1170,7 @@ impl HirScalarExpr {
                                     .map(|t| {
                                         (ColumnName::from("?column?"), t.clone().nullable(false))
                                     })
-                                    .collect_vec(),
+                                    .collect(),
                                 custom_id: None,
                             }
                             .nullable(false);
@@ -1167,22 +1195,25 @@ impl HirScalarExpr {
                                 id_gen,
                                 col_map,
                                 cte_map,
-                                config,
                                 get_inner,
                                 subquery_map,
+                                context,
                             )?;
                             let mir_encoded_args_type = mir_encoded_args
                                 .typ(&get_inner.typ().column_types)
                                 .scalar_type;
 
-                            // Build a new record with the original row in a record in a list + the encoded args in a record
-                            let fn_input_record_fields =
+                            // Build a new record that has two fields:
+                            // 1. the original row in a record
+                            // 2. the encoded args (which can be either a single value, or a record
+                            //    if the window function has multiple arguments, such as `lag`)
+                            let fn_input_record_fields: Box<[_]> =
                                 [original_row_record_type, mir_encoded_args_type]
                                     .iter()
                                     .map(|t| {
                                         (ColumnName::from("?column?"), t.clone().nullable(false))
                                     })
-                                    .collect_vec();
+                                    .collect();
                             let fn_input_record = MirScalarExpr::CallVariadic {
                                 func: mz_expr::VariadicFunc::RecordCreate {
                                     field_names: fn_input_record_fields
@@ -1212,10 +1243,11 @@ impl HirScalarExpr {
                             };
 
                             let agg_input_type = ScalarType::Record {
-                                fields: vec![(
+                                fields: [(
                                     ColumnName::from("?column?"),
                                     fn_input_record_type.nullable(false),
-                                )],
+                                )]
+                                .into(),
                                 custom_id: None,
                             }
                             .nullable(false);
@@ -1231,13 +1263,13 @@ impl HirScalarExpr {
                                 id_gen,
                                 col_map,
                                 cte_map,
-                                config,
                                 inner,
                                 subquery_map,
                                 partition_by,
                                 order_by,
                                 mir_aggr_func,
                                 scalar_lower_args,
+                                context,
                             )?
                         }
                         WindowExprType::Value(value_window_expr) => {
@@ -1247,13 +1279,13 @@ impl HirScalarExpr {
                                 id_gen,
                                 col_map,
                                 cte_map,
-                                config,
                                 inner,
                                 subquery_map,
                                 partition_by,
                                 order_by,
                                 mir_aggr_func,
                                 value_or_aggr_lower_args(hir_encoded_args),
+                                context,
                             )?
                         }
                         WindowExprType::Aggregate(aggr_window_expr) => {
@@ -1263,13 +1295,13 @@ impl HirScalarExpr {
                                 id_gen,
                                 col_map,
                                 cte_map,
-                                config,
                                 inner,
                                 subquery_map,
                                 partition_by,
                                 order_by,
                                 mir_aggr_func,
                                 value_or_aggr_lower_args(hir_encoded_args),
+                                context,
                             )?
                         }
                     }
@@ -1282,13 +1314,13 @@ impl HirScalarExpr {
         id_gen: &mut mz_ore::id_gen::IdGen,
         col_map: &ColumnMap,
         cte_map: &mut CteMap,
-        config: &Config,
         inner: &mut MirRelationExpr,
         subquery_map: &Option<&BTreeMap<HirScalarExpr, usize>>,
         partition_by: Vec<HirScalarExpr>,
         order_by: Vec<HirScalarExpr>,
         mir_aggr_func: AggregateFunc,
         lower_args: F,
+        context: &Context,
     ) -> Result<MirScalarExpr, PlanError>
     where
         F: FnOnce(
@@ -1342,7 +1374,7 @@ impl HirScalarExpr {
         //     ORDER BY columns.
         //   - The <original row> currently always captures the entire original row. This should
         //     improve when we make `ProjectionPushdown` smarter, see
-        //     https://github.com/MaterializeInc/materialize/issues/17522
+        //     https://github.com/MaterializeInc/database-issues/issues/5090
         //
         // TODO:
         // We should probably introduce some dedicated Datum constructor functions instead of `row`
@@ -1352,7 +1384,7 @@ impl HirScalarExpr {
 
         *inner = inner
             .take_dangerous()
-            .let_in_fallible(id_gen, |id_gen, mut get_inner| {
+            .let_in(id_gen, |id_gen, mut get_inner| {
                 let order_by_mir = order_by
                     .into_iter()
                     .map(|o| {
@@ -1360,16 +1392,17 @@ impl HirScalarExpr {
                             id_gen,
                             col_map,
                             cte_map,
-                            config,
                             &mut get_inner,
                             subquery_map,
+                            context,
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
 
                 // Record input arity here so that any group_keys that need to mutate get_inner
                 // don't add those columns to the aggregate input.
-                let input_arity = get_inner.typ().arity();
+                let input_type = get_inner.typ();
+                let input_arity = input_type.arity();
                 // The reduction that computes the window function must be keyed on the columns
                 // from the outer context, plus the expressions in the partition key. The current
                 // subquery will be 'executed' for every distinct row from the outer context so
@@ -1385,9 +1418,9 @@ impl HirScalarExpr {
                         id_gen,
                         col_map,
                         cte_map,
-                        config,
                         &mut get_inner,
                         subquery_map,
+                        context,
                     )?;
                     if let MirScalarExpr::Column(c) = key {
                         group_key.push(c);
@@ -1397,16 +1430,14 @@ impl HirScalarExpr {
                     }
                 }
 
-                get_inner.let_in_fallible(id_gen, |id_gen, mut get_inner| {
-                    let input_type = get_inner.typ();
-
+                get_inner.let_in(id_gen, |id_gen, mut get_inner| {
                     // Original columns of the relation
-                    let fields = input_type
+                    let fields: Box<_> = input_type
                         .column_types
                         .iter()
                         .take(input_arity)
                         .map(|t| (ColumnName::from("?column?"), t.clone()))
-                        .collect_vec();
+                        .collect();
 
                     // Original row made into a record
                     let original_row_record = MirScalarExpr::CallVariadic {
@@ -1488,15 +1519,14 @@ impl HirScalarExpr {
         id_gen: &mut mz_ore::id_gen::IdGen,
         col_map: &ColumnMap,
         cte_map: &mut CteMap,
-        config: &Config,
         inner: MirRelationExpr,
+        context: &Context,
     ) -> Result<(MirRelationExpr, BTreeMap<HirScalarExpr, usize>), PlanError> {
         let mut subquery_map = BTreeMap::new();
-        let output = inner.let_in_fallible(id_gen, |id_gen, get_inner| {
+        let output = inner.let_in(id_gen, |id_gen, get_inner| {
             let mut subqueries = Vec::new();
             let distinct_inner = get_inner.clone().distinct();
             for expr in exprs.iter() {
-                #[allow(deprecated)]
                 expr.visit_pre_post(
                     &mut |e| match e {
                         // For simplicity, subqueries within a conditional statement will be
@@ -1512,9 +1542,9 @@ impl HirScalarExpr {
                                 distinct_inner.clone(),
                                 col_map,
                                 cte_map,
-                                config,
                                 (**expr).clone(),
                                 apply_requires_distinct_outer,
+                                context,
                             )
                             .unwrap();
 
@@ -1527,16 +1557,16 @@ impl HirScalarExpr {
                                 distinct_inner.clone(),
                                 col_map,
                                 cte_map,
-                                config,
                                 (**expr).clone(),
                                 apply_requires_distinct_outer,
+                                context,
                             )
                             .unwrap();
                             subqueries.push((e.clone(), subquery));
                         }
                         _ => {}
                     },
-                );
+                )?;
             }
 
             if subqueries.is_empty() {
@@ -1545,12 +1575,14 @@ impl HirScalarExpr {
                 let inner_arity = get_inner.arity();
                 let mut total_arity = inner_arity;
                 let mut join_inputs = vec![get_inner];
+                let mut join_input_arities = vec![inner_arity];
                 for (expr, subquery) in subqueries.into_iter() {
                     // Avoid lowering duplicated subqueries
                     if !subquery_map.contains_key(&expr) {
                         let subquery_arity = subquery.arity();
                         assert_eq!(subquery_arity, inner_arity + 1);
                         join_inputs.push(subquery);
+                        join_input_arities.push(subquery_arity);
                         total_arity += subquery_arity;
 
                         // Column with the value of the subquery
@@ -1560,7 +1592,8 @@ impl HirScalarExpr {
                 // Each subquery projects all the columns of the outer context (distinct_inner)
                 // plus 1 column, containing the result of the subquery. Those columns must be
                 // joined with the outer/main relation (get_inner).
-                let input_mapper = mz_expr::JoinInputMapper::new(&join_inputs);
+                let input_mapper =
+                    mz_expr::JoinInputMapper::new_from_input_arities(join_input_arities);
                 let equivalences = (0..inner_arity)
                     .map(|col| {
                         join_inputs
@@ -1639,9 +1672,9 @@ fn branch<F>(
     outer: MirRelationExpr,
     col_map: &ColumnMap,
     cte_map: &mut CteMap,
-    config: &Config,
     inner: HirRelationExpr,
     apply_requires_distinct_outer: bool,
+    context: &Context,
     apply: F,
 ) -> Result<MirRelationExpr, PlanError>
 where
@@ -1651,7 +1684,7 @@ where
         MirRelationExpr,
         &ColumnMap,
         &mut CteMap,
-        &Config,
+        &Context,
     ) -> Result<MirRelationExpr, PlanError>,
 {
     // TODO: It would be nice to have a version of this code w/o optimizations,
@@ -1713,8 +1746,8 @@ where
     });
     if is_simple && !apply_requires_distinct_outer {
         let new_col_map = col_map.enter_scope(outer.arity() - col_map.len());
-        return outer.let_in_fallible(id_gen, |id_gen, get_outer| {
-            apply(id_gen, inner, get_outer, &new_col_map, cte_map, config)
+        return outer.let_in(id_gen, |id_gen, get_outer| {
+            apply(id_gen, inner, get_outer, &new_col_map, cte_map, context)
         });
     }
 
@@ -1790,7 +1823,7 @@ where
         }));
     }
     let new_col_map = ColumnMap::new(new_col_map);
-    outer.let_in_fallible(id_gen, |id_gen, get_outer| {
+    outer.let_in(id_gen, |id_gen, get_outer| {
         let keyed_outer = if key.is_empty() {
             // Don't depend on outer at all if the branch is not correlated,
             // which yields vastly better query plans. Note that this is a bit
@@ -1802,7 +1835,7 @@ where
         } else {
             get_outer.clone().distinct_by(key.clone())
         };
-        keyed_outer.let_in_fallible(id_gen, |id_gen, get_keyed_outer| {
+        keyed_outer.let_in(id_gen, |id_gen, get_keyed_outer| {
             let oa = get_outer.arity();
             let branch = apply(
                 id_gen,
@@ -1810,7 +1843,7 @@ where
                 get_keyed_outer,
                 &new_col_map,
                 cte_map,
-                config,
+                context,
             )?;
             let ba = branch.arity();
             let joined = MirRelationExpr::join(
@@ -1832,33 +1865,33 @@ fn apply_scalar_subquery(
     outer: MirRelationExpr,
     col_map: &ColumnMap,
     cte_map: &mut CteMap,
-    config: &Config,
     scalar_subquery: HirRelationExpr,
     apply_requires_distinct_outer: bool,
+    context: &Context,
 ) -> Result<MirRelationExpr, PlanError> {
     branch(
         id_gen,
         outer,
         col_map,
         cte_map,
-        config,
         scalar_subquery,
         apply_requires_distinct_outer,
-        |id_gen, expr, get_inner, col_map, cte_map, config| {
+        context,
+        |id_gen, expr, get_inner, col_map, cte_map, context| {
             // compute for every row in get_inner
-            let select = expr.applied_to(id_gen, get_inner.clone(), col_map, cte_map, config)?;
+            let select = expr.applied_to(id_gen, get_inner.clone(), col_map, cte_map, context)?;
             let col_type = select.typ().column_types.into_last();
 
             let inner_arity = get_inner.arity();
             // We must determine a count for each `get_inner` prefix,
             // and report an error if that count exceeds one.
-            let guarded = select.let_in_fallible(id_gen, |_id_gen, get_select| {
+            let guarded = select.let_in(id_gen, |_id_gen, get_select| {
                 // Count for each `get_inner` prefix.
                 let counts = get_select.clone().reduce(
                     (0..inner_arity).collect::<Vec<_>>(),
                     vec![mz_expr::AggregateExpr {
                         func: mz_expr::AggregateFunc::Count,
-                        expr: MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool),
+                        expr: MirScalarExpr::literal_true(),
                         distinct: false,
                     }],
                     None,
@@ -1879,7 +1912,7 @@ fn apply_scalar_subquery(
             })?;
             // append Null to anything that didn't return any rows
             let default = vec![(Datum::Null, col_type.scalar_type)];
-            Ok(get_inner.lookup(id_gen, guarded, default))
+            get_inner.lookup(id_gen, guarded, default)
         },
     )
 }
@@ -1889,29 +1922,29 @@ fn apply_existential_subquery(
     outer: MirRelationExpr,
     col_map: &ColumnMap,
     cte_map: &mut CteMap,
-    config: &Config,
     subquery_expr: HirRelationExpr,
     apply_requires_distinct_outer: bool,
+    context: &Context,
 ) -> Result<MirRelationExpr, PlanError> {
     branch(
         id_gen,
         outer,
         col_map,
         cte_map,
-        config,
         subquery_expr,
         apply_requires_distinct_outer,
-        |id_gen, expr, get_inner, col_map, cte_map, config| {
+        context,
+        |id_gen, expr, get_inner, col_map, cte_map, context| {
             let exists = expr
                 // compute for every row in get_inner
-                .applied_to(id_gen, get_inner.clone(), col_map, cte_map, config)?
+                .applied_to(id_gen, get_inner.clone(), col_map, cte_map, context)?
                 // throw away actual values and just remember whether or not there were __any__ rows
                 .distinct_by((0..get_inner.arity()).collect())
                 // Append true to anything that returned any rows.
                 .map(vec![MirScalarExpr::literal_true()]);
 
             // append False to anything that didn't return any rows
-            Ok(get_inner.lookup(id_gen, exists, vec![(Datum::False, ScalarType::Bool)]))
+            get_inner.lookup(id_gen, exists, vec![(Datum::False, ScalarType::Bool)])
         },
     )
 }
@@ -1922,8 +1955,8 @@ impl AggregateExpr {
         id_gen: &mut mz_ore::id_gen::IdGen,
         col_map: &ColumnMap,
         cte_map: &mut CteMap,
-        config: &Config,
         inner: &mut MirRelationExpr,
+        context: &Context,
     ) -> Result<mz_expr::AggregateExpr, PlanError> {
         let AggregateExpr {
             func,
@@ -1933,7 +1966,7 @@ impl AggregateExpr {
 
         Ok(mz_expr::AggregateExpr {
             func: func.into_expr(),
-            expr: expr.applied_to(id_gen, col_map, cte_map, config, inner, &None)?,
+            expr: expr.applied_to(id_gen, col_map, cte_map, inner, &None, context)?,
             distinct,
         })
     }
@@ -1959,13 +1992,13 @@ fn attempt_outer_equijoin(
     kind: JoinKind,
     oa: usize,
     id_gen: &mut mz_ore::id_gen::IdGen,
-    enable_new_outer_join_lowering: bool,
+    context: &Context,
 ) -> Result<Option<MirRelationExpr>, PlanError> {
-    // TODO(#22581): In theory, we can be smarter and also handle `on`
+    // TODO(database-issues#6827): In theory, we can be smarter and also handle `on`
     // predicates that reference subqueries as long as these subqueries don't
     // reference `left` and `right` at the same time.
     //
-    // TODO(#22582): This code can be improved as follows:
+    // TODO(database-issues#6828): This code can be improved as follows:
     //
     // 1. Move the `canonicalize_predicates(...)` call to `applied_to`.
     // 2. Use the canonicalized `on` predicate in the non-equijoin based
@@ -2004,15 +2037,15 @@ fn attempt_outer_equijoin(
     let rt = output_type.drain(0..ra).collect_vec();
     assert!(output_type.len() == sa);
 
-    let on_predicates = OnPredicates::new(oa, la, ra, sa, on.clone());
-    if !on_predicates.is_equijoin(enable_new_outer_join_lowering) {
+    let on_predicates = OnPredicates::new(oa, la, ra, sa, on.clone(), context);
+    if !on_predicates.is_equijoin(context) {
         return Ok(None);
     }
 
     // If we've gotten this far, we can do the clever thing.
     // We'll want to use left and right multiple times
-    let result = left.let_in_fallible(id_gen, |id_gen, get_left| {
-        right.let_in_fallible(id_gen, |id_gen, get_right| {
+    let result = left.let_in(id_gen, |id_gen, get_left| {
+        right.let_in(id_gen, |id_gen, get_right| {
             // TODO: we know that we can re-use the arrangements of left and right
             // needed for the inner join with each of the conditional outer joins.
             // It is not clear whether we should hint that, or just let the planner
@@ -2033,7 +2066,7 @@ fn attempt_outer_equijoin(
             .filter(on);
 
             // We'll want to re-use the results of the join multiple times.
-            join.let_in_fallible(id_gen, |id_gen, get_join| {
+            join.let_in(id_gen, |id_gen, get_join| {
                 let mut result = get_join.clone();
 
                 // A collection of keys present in both left and right collections.
@@ -2045,13 +2078,16 @@ fn attempt_outer_equijoin(
                 // inner join, subtract them from left and right respectively, pad what
                 // remains with nulls, and fold them in to `result`.
 
-                both_keys.let_in_fallible(id_gen, |_id_gen, get_both| {
+                both_keys.let_in(id_gen, |_id_gen, get_both| {
                     if let JoinKind::LeftOuter { .. } | JoinKind::FullOuter = kind {
                         // Rows in `left` matched in the inner equijoin. This is
                         // a semi-join between `left` and `both_keys`.
                         let left_present = MirRelationExpr::join_scalars(
                             vec![
-                                get_left.clone().filter(on_predicates.lhs()), // Push local predicates.
+                                get_left
+                                    .clone()
+                                    // Push local predicates.
+                                    .filter(on_predicates.lhs()),
                                 get_both.clone(),
                             ],
                             itertools::zip_eq(
@@ -2082,7 +2118,10 @@ fn attempt_outer_equijoin(
                         // is a semi-join between `right` and `both_keys`.
                         let right_present = MirRelationExpr::join_scalars(
                             vec![
-                                get_right.clone().filter(on_predicates.rhs()), // Push local predicates.
+                                get_right
+                                    .clone()
+                                    // Push local predicates.
+                                    .filter(on_predicates.rhs()),
                                 get_both,
                             ],
                             itertools::zip_eq(
@@ -2159,7 +2198,14 @@ impl OnPredicates {
     /// 2. The `on` parameter is already adjusted to assume that schema.
     /// 3. The `on` parameter is obtained by canonicalizing the original `on:
     ///    MirScalarExpr` with `canonicalize_predicates`.
-    fn new(oa: usize, la: usize, ra: usize, sa: usize, on: Vec<MirScalarExpr>) -> Self {
+    fn new(
+        oa: usize,
+        la: usize,
+        ra: usize,
+        sa: usize,
+        on: Vec<MirScalarExpr>,
+        _context: &Context,
+    ) -> Self {
         use mz_expr::BinaryFunc::Eq;
 
         // Re-bind those locally for more compact pattern matching.
@@ -2216,14 +2262,18 @@ impl OnPredicates {
                         let lhs = expr1.take();
                         let mut rhs = expr2.take();
                         rhs.permute(&rhs_permutation);
-                        predicates.push(OnPredicate::Eq(lhs, rhs));
+                        predicates.push(OnPredicate::Eq(lhs.clone(), rhs.clone()));
+                        predicates.push(OnPredicate::LhsConsequence(lhs.call_is_null().not()));
+                        predicates.push(OnPredicate::RhsConsequence(rhs.call_is_null().not()));
                     }
                     // Both sides reference different inputs (swapped).
                     ([I_RHS], [I_LHS]) => {
                         let lhs = expr2.take();
                         let mut rhs = expr1.take();
                         rhs.permute(&rhs_permutation);
-                        predicates.push(OnPredicate::Eq(lhs, rhs));
+                        predicates.push(OnPredicate::Eq(lhs.clone(), rhs.clone()));
+                        predicates.push(OnPredicate::LhsConsequence(lhs.call_is_null().not()));
+                        predicates.push(OnPredicate::RhsConsequence(rhs.call_is_null().not()));
                     }
                     // Both sides reference the left input or no input.
                     ([I_LHS], [I_LHS]) | ([I_LHS], []) | ([], [I_LHS]) => {
@@ -2273,7 +2323,7 @@ impl OnPredicates {
     }
 
     /// Check if the predicates can be lowered with an equijoin-based strategy.
-    fn is_equijoin(&self, enable_new_outer_join_lowering: bool) -> bool {
+    fn is_equijoin(&self, context: &Context) -> bool {
         // Count each `OnPredicate` variant in `self.predicates`.
         let (const_cnt, lhs_cnt, rhs_cnt, eq_cnt, eq_cols, theta_cnt) =
             self.predicates.iter().fold(
@@ -2290,7 +2340,7 @@ impl OnPredicates {
                 },
             );
 
-        let is_equijion = if enable_new_outer_join_lowering {
+        let is_equijion = if context.config.enable_new_outer_join_lowering {
             // New classifier.
             eq_cnt > 0 && theta_cnt == 0
         } else {
@@ -2360,24 +2410,26 @@ impl OnPredicates {
         )
     }
 
-    /// Return an iterator over the [`OnPredicate::Lhs`] and
+    /// Return an iterator over the [`OnPredicate::Lhs`], [`OnPredicate::LhsConsequence`] and
     /// [`OnPredicate::Const`] conditions in the predicates list.
     fn lhs(&self) -> impl Iterator<Item = MirScalarExpr> + '_ {
         self.predicates.iter().filter_map(|p| match p {
             // We treat Const predicates local to both inputs.
             OnPredicate::Const(p) => Some(p.clone()),
             OnPredicate::Lhs(p) => Some(p.clone()),
+            OnPredicate::LhsConsequence(p) => Some(p.clone()),
             _ => None,
         })
     }
 
-    /// Return an iterator over the [`OnPredicate::Rhs`] and
+    /// Return an iterator over the [`OnPredicate::Rhs`], [`OnPredicate::RhsConsequence`] and
     /// [`OnPredicate::Const`] conditions in the predicates list.
     fn rhs(&self) -> impl Iterator<Item = MirScalarExpr> + '_ {
         self.predicates.iter().filter_map(|p| match p {
             // We treat Const predicates local to both inputs.
             OnPredicate::Const(p) => Some(p.clone()),
             OnPredicate::Rhs(p) => Some(p.clone()),
+            OnPredicate::RhsConsequence(p) => Some(p.clone()),
             _ => None,
         })
     }
@@ -2386,10 +2438,35 @@ impl OnPredicates {
 enum OnPredicate {
     // A predicate that is either constant or references only outer columns.
     Const(MirScalarExpr),
-    // A local predicate on the left-hand side of the join.
+    // A local predicate on the left-hand side of the join, i.e., it references only the left input
+    // and possibly outer columns.
+    //
+    // This is one of the original predicates from the ON clause.
+    //
+    // One _must_ apply this predicate.
     Lhs(MirScalarExpr),
+    // A local predicate on the left-hand side of the join, i.e., it references only the left input
+    // and possibly outer columns.
+    //
+    // This is not one of the original predicates from the ON clause, but is just a consequence
+    // of an original predicate in the ON clause, where the original predicate references both
+    // inputs, but the consequence references only the left input.
+    //
+    // For example, the original predicate `input1.x = input2.a` has the consequence
+    // `input1.x IS NOT NULL`. Applying such a consequence before the input is fed into the join
+    // prevents null skew, and also makes more CSE opportunities available when the left input's key
+    // doesn't have a NOT NULL constraint, saving us an arrangement.
+    //
+    // Applying the predicate is optional, because the original predicate will be applied anyway.
+    LhsConsequence(MirScalarExpr),
     // A local predicate on the right-hand side of the join.
+    //
+    // This is one of the original predicates from the ON clause.
+    //
+    // One _must_ apply this predicate.
     Rhs(MirScalarExpr),
+    // A consequence of an original ON predicate, see above.
+    RhsConsequence(MirScalarExpr),
     // An equality predicate between the two sides.
     Eq(MirScalarExpr, MirScalarExpr),
     // a non-equality predicate between the two sides.

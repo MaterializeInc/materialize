@@ -3,8 +3,12 @@ title = "Materialize Documentation"
 pygmentsCodeFences = true
 pygmentsUseClasses = true
 
+disableKinds = ['taxonomy']
+
 [params]
 repo = "//github.com/MaterializeInc/materialize"
+bannerMessage = ""
+bannerLink = ""
 
 [frontmatter]
 publishDate = ["publishDate"]
@@ -16,28 +20,11 @@ publishDate = ["publishDate"]
 [[menu.main]]
 identifier = "get-started"
 name = "Get started"
-weight= 5
+weight = 5
 
 #
 # Connect sources
 #
-
-[[menu.main]]
-identifier = "ingest-data"
-name = "Ingest data"
-weight= 11
-
-[[menu.main]]
-name = "MySQL"
-parent = 'ingest-data'
-identifier = 'mysql'
-weight = 5
-
-[[menu.main]]
-name = "PostgreSQL"
-parent = 'ingest-data'
-identifier = 'postgresql'
-weight = 10
 
 [[menu.main]]
 name = "SQL Server"
@@ -46,9 +33,9 @@ identifier = 'sql-server'
 weight = 15
 
 [[menu.main]]
-name = "Kafka"
+name = "CockroachDB"
 parent = 'ingest-data'
-identifier = 'kafka'
+identifier = 'crdb'
 weight = 20
 
 [[menu.main]]
@@ -67,7 +54,7 @@ weight = 30
 identifier = "network-security"
 name = "Network security"
 parent = 'ingest-data'
-weight= 35
+weight = 35
 
 #
 # Transform data
@@ -76,37 +63,7 @@ weight= 35
 [[menu.main]]
 identifier = "transform-data"
 name = "Transform data"
-weight= 12
-
-[[menu.main]]
-name = "Overview"
-parent = 'transform-data'
-identifier = 'transform-overview'
-weight = 5
-
-[[menu.main]]
-name = "Views"
-parent = "transform-overview"
-url = "/sql/create-view/"
-weight= 5
-
-[[menu.main]]
-name = "Indexes"
-parent = "transform-overview"
-url = "/sql/create-index"
-weight= 10
-
-[[menu.main]]
-name = "Materialized views"
-parent = "transform-overview"
-url = "/sql/create-materialized-view/"
-weight= 15
-
-[[menu.main]]
-name = "Common patterns"
-parent = 'transform-data'
-identifier = 'sql-patterns'
-weight = 30
+weight = 12
 
 #
 # Serve results
@@ -115,43 +72,43 @@ weight = 30
 [[menu.main]]
 identifier = "serve"
 name = "Serve results"
-weight= 13
+weight = 13
 
 [[menu.main]]
 name = "Query using `SELECT`"
 parent = "serve"
 url = "/sql/select/"
-weight= 5
+weight = 5
 
 [[menu.main]]
 name = "Query using external tools"
 identifier = "bi-tools"
 parent = "serve"
-weight= 10
+weight = 10
 
 [[menu.main]]
 name = "Subscribe to results (`SUBSCRIBE`)"
 parent = "serve"
 url = "/sql/subscribe/"
-weight= 15
+weight = 15
 
 [[menu.main]]
 name = "Sink results to external tools"
 identifier = "sink"
 parent = "serve"
-weight= 20
+weight = 20
 
 [[menu.main]]
 name = "Kafka"
 parent = "sink"
 url = "/sql/create-sink"
-weight= 20
+weight = 20
 
 [[menu.main]]
 name = "Redpanda"
 parent = "sink"
 url = "/sql/create-sink"
-weight= 30
+weight = 30
 #
 # Manage Materialize
 #
@@ -159,20 +116,13 @@ weight= 30
 [[menu.main]]
 identifier = "manage"
 name = "Manage Materialize"
-weight= 14
+weight = 14
 
 [[menu.main]]
 name = "Monitoring"
 identifier = "monitor"
-weight= 5
+weight = 5
 parent = "manage"
-
-[[menu.main]]
-identifier = "manage-dbt"
-name = "Use dbt to manage Materialize"
-weight= 10
-parent = "manage"
-
 
 #
 # Reference
@@ -181,27 +131,15 @@ parent = "manage"
 [[menu.main]]
 identifier = "reference"
 name = "Reference"
-weight= 15
+weight = 15
 
-[[menu.main]]
-identifier = "cs_kafka"
-name = "Kafka"
-parent = "create-source"
-url = "/sql/create-source/kafka"
-weight= 5
 
 [[menu.main]]
 identifier = "cs_redpanda"
 name = "Redpanda"
 parent = "create-source"
 url = "/sql/create-source/kafka"
-weight= 10
-
-[[menu.main]]
-identifier = "csink_kafka"
-name = "Kafka"
-parent = "create-sink"
-url = "/sql/create-sink/kafka"
+weight = 10
 
 [[menu.main]]
 identifier = "csink_redpanda"
@@ -232,14 +170,7 @@ url = '/sql/create-sink'
 [[menu.main]]
 identifier = "integrations"
 name = "Tools and integrations"
-weight= 25
-
-[[menu.main]]
-identifier = "tools-and-integrations"
-name = "Overview"
-parent = "integrations"
-url = "/integrations"
-weight = 5
+weight = 25
 
 [[menu.main]]
 identifier = "cli-reference"
@@ -251,6 +182,15 @@ identifier = "client-libraries"
 name = "SQL drivers"
 parent = "integrations"
 weight = 15
+
+#
+# Releases
+#
+
+[[menu.main]]
+identifier = "releases-previews"
+name = "Releases"
+weight = 65
 
 #
 # About
@@ -265,13 +205,13 @@ weight = 70
 name = "Security overview"
 parent = "about"
 url = "https://materialize.com/security-overview"
-weight= 25
+weight = 25
 
 [[menu.main]]
 name = "Responsible disclosure policy"
 parent = "about"
 url = "https://materialize.com/securitydisclosure"
-weight= 30
+weight = 30
 
 [markup.goldmark.renderer]
 # allow <a name="link-target">, the old syntax no longer works
@@ -280,8 +220,16 @@ unsafe = true
 [[deployment.targets]]
 name = "production"
 url = "s3://materialize-website?region=us-east-1"
-cloudFrontDistributionID = "E1F8Q2NUUC41QE"
 # Sync only the docs, to avoid deleting the marketing website.
 include = "docs/**"
-# Avoid deleting the LTS docs, which are deployed from the lts-docs branch.
-exclude = "docs/lts/**"
+
+# Per Hugo docs:
+# The pattern syntax is documented here: https://godoc.org/github.com/gobwas/glob#Glob
+# Patterns should be written with forward slashes as separator.
+#
+# include = "**.html" # would only include files with ".html" suffix
+# exclude = "**.{jpg, png}" # would exclude files with ".jpg" or ".png" suffix
+
+# Avoid deleting the LTS and self-managed docs which are deployed from the
+# lts-docs and self-managed-docs branches.
+exclude = "docs/{lts,self-managed/v25.1}/**"

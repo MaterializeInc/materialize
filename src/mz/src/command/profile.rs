@@ -62,7 +62,7 @@ fn strip_api_from_endpoint(endpoint: Url) -> Url {
 pub async fn init_with_browser(cloud_endpoint: Option<Url>) -> Result<AppPassword, Error> {
     // Bind a web server to a local port to receive the app password.
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let (server, port) = server(tx);
+    let (server, port) = server(tx).await;
 
     // Build the login URL
     let mut url =

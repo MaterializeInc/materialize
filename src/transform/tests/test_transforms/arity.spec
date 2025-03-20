@@ -42,11 +42,11 @@ With
   cte l0 =
     Get t0
 ----
-Return // { arity: 2 }
-  Get l0 // { arity: 2 }
 With
   cte l0 =
     Get t0 // { arity: 2 }
+Return // { arity: 2 }
+  Get l0 // { arity: 2 }
 
 # Local Get in a LetRec block
 explain with=arity
@@ -56,11 +56,11 @@ With Mutually Recursive
   cte l0 = // { types: "(bigint, bigint)" }
     Get t0
 ----
-Return // { arity: 2 }
-  Get l0 // { arity: 2 }
 With Mutually Recursive
   cte l0 =
     Get t0 // { arity: 2 }
+Return // { arity: 2 }
+  Get l0 // { arity: 2 }
 
 # Project
 explain with=arity

@@ -37,7 +37,7 @@
   - signature: 'bool_or(x: T) -> T'
     description: _NULL_ if all values of `x` are _NULL_, otherwise true if any values of `x` are true, otherwise false.
 
-  - signature: 'count(x: T) -> int'
+  - signature: 'count(x: T) -> bigint'
     description: Number of non-_NULL_ inputs.
 
   - signature: jsonb_agg(expression) -> jsonb
@@ -276,6 +276,9 @@
   - signature: 'btrim(s: str, c: str) -> str'
     description: Trim any character in `c` from both sides of `s`.
 
+  - signature: 'bit_count(b: bytea) -> int'
+    description: Returns the number of bits set in the bit string (aka _popcount_).
+
   - signature: 'bit_length(s: str) -> int'
     description: Number of bits in `s`.
 
@@ -307,6 +310,9 @@
   - signature: 'encode(b: bytea, format: text) -> text'
     description: Encode `b` using the specified textual representation
     url: /sql/functions/encode
+
+  - signature: 'get_bit(b: bytea, n: int) -> int'
+    description: Return the `n`th bit from `b`, where the left-most bit in `b` is at the 0th position.
 
   - signature: 'get_byte(b: bytea, n: int) -> int'
     description: Return the `n`th byte from `b`, where the left-most byte in `b` is at the 0th position.
@@ -416,6 +422,9 @@
   - signature: 'split_part(s: str, d: s, i: int) -> str'
     description: Split `s` on delimiter `d`. Return the `str` at index `i`, counting from 1.
 
+  - signature: 'starts_with(s: str, prefix: str) -> bool'
+    description: Report whether `s` starts with `prefix`.
+
   - signature: 'substring(s: str, start_pos: int) -> str'
     description: Substring of `s` starting at `start_pos`
     url: /sql/functions/substring
@@ -456,12 +465,17 @@
   description: Scalar functions take a list of scalar expressions
   functions:
   - signature: 'expression bool_op ALL(s: Scalars) -> bool'
-    description: "`true` if applying [bool_op](#boolean) to `expression` and every
+    description: "`true` if applying [bool_op](#boolean-operators) to `expression` and every
       value of `s` evaluates to `true`."
 
   - signature: 'expression bool_op ANY(s: Scalars) -> bool'
-    description: "`true` if applying [bool_op](#boolean) to `expression` and any value
-      of `s` evaluates to `true`."
+    description: |
+
+      `true` if applying [bool_op](#boolean-operators) to `expression` and any
+      value of `s` evaluates to `true`. Avoid using in equi-join conditions as
+      its use in the equi-join condition can lead to a significant increase in
+      memory usage. See [idiomatic Materialize
+      SQL](/transform-data/idiomatic-materialize-sql/any) for the alternative.
 
   - signature: 'expression IN(s: Scalars) -> bool'
     description: "`true` for each value in `expression` if it matches at least one
@@ -472,18 +486,18 @@
       of `s`."
 
   - signature: 'expression bool_op SOME(s: Scalars) -> bool'
-    description: "`true` if applying [bool_op](#boolean) to `expression` and any value
+    description: "`true` if applying [bool_op](#boolean-operators) to `expression` and any value
       of `s` evaluates to `true`."
 
 - type: Subquery
   description: Subquery functions take a query, e.g. [`SELECT`](/sql/select)
   functions:
   - signature: 'expression bool_op ALL(s: Query) -> bool'
-    description: "`s` must return exactly one column; `true` if applying [bool_op](#boolean)
+    description: "`s` must return exactly one column; `true` if applying [bool_op](#boolean-operators)
       to `expression` and every value of `s` evaluates to `true`."
 
   - signature: 'expression bool_op ANY(s: Query) -> bool'
-    description: "`s` must return exactly one column; `true` if applying [bool_op](#boolean)
+    description: "`s` must return exactly one column; `true` if applying [bool_op](#boolean-operators)
       to `expression` and any value of `s` evaluates to `true`."
 
   - signature: 'csv_extract(num_csv_col: int, col_name: string) -> col1: string, ... coln: string'
@@ -505,7 +519,7 @@
       if it does not match any elements of `s`."
 
   - signature: 'expression bool_op SOME(s: Query) -> bool'
-    description: "`s` must return exactly one column; `true` if applying [bool_op](#boolean)
+    description: "`s` must return exactly one column; `true` if applying [bool_op](#boolean-operators)
       to `expression` and any value of `s` evaluates to `true`."
 
 - type: Date and time
@@ -724,8 +738,16 @@
       The array must be one-dimensional. Comparisons are done using `IS NOT
       DISTINCT FROM semantics, so it is possible to remove NULLs.
 
-- type: Cryptography
+- type: Hash
   functions:
+    - signature: 'crc32(data: bytea) -> uint32'
+      description: |
+        Computes the 32-bit cyclic redundancy check of the given bytea `data` using the IEEE 802.3 polynomial.
+      version-added: v0.114
+    - signature: 'crc32(data: text) -> uint32'
+      description: |
+        Computes the 32-bit cyclic redundancy check of the given text `data` using the IEEE 802.3 polynomial.
+      version-added: v0.114
     - signature: 'digest(data: text, type: text) -> bytea'
       description: |
         Computes a binary hash of the given text `data` using the specified `type` algorithm.
@@ -742,10 +764,26 @@
       description: |
         Computes a hashed MAC of the given bytea `data` using the specified `key` and
         `type` algorithm. The supported hash algorithms are the same as for `digest`.
+    - signature: 'kafka_murmur2(data: bytea) -> integer'
+      description: |
+        Computes the Murmur2 hash of the given bytea `data` using the seed used by Kafka's default partitioner and with the high bit cleared.
+      version-added: v0.114
+    - signature: 'kafka_murmur2(data: text) -> integer'
+      description: |
+        Computes the Murmur2 hash of the given text `data` using the seed used by Kafka's default partitioner and with the high bit cleared.
+      version-added: v0.114
     - signature: 'md5(data: bytea) -> text'
       description: |
         Computes the MD5 hash of the given bytea `data`.
         For PostgreSQL compatibility, returns a hex-encoded value of type `text` rather than `bytea`.
+    - signature: 'seahash(data: bytea) -> u64'
+      description: |
+        Computes the [SeaHash](https://docs.rs/seahash) hash of the given bytea `data`.
+      version-added: v0.114
+    - signature: 'seahash(data: text) -> u64'
+      description: |
+        Computes the [SeaHash](https://docs.rs/seahash) hash of the given text `data`.
+      version-added: v0.114
     - signature: 'sha224(data: bytea) -> bytea'
       description: |
         Computes the SHA-224 hash of the given bytea `data`.
@@ -761,6 +799,13 @@
 
 - type: Window
   description: |
+    {{< tip >}}
+
+    For some window function query patterns, rewriting your query to not use
+    window functions can yield better performance.  See [Idiomatic Materialize SQL](/transform-data/idiomatic-materialize-sql/) for details.
+
+    {{</ tip >}}
+
     Window functions compute values across sets of rows related to the current row.
     For example, you can use a window aggregation to smooth measurement data by computing the average of the last 5
     measurements before every row as follows:
@@ -772,10 +817,24 @@
     ```
 
     Window functions always need an `OVER` clause. For the `OVER` clause, Materialize supports the same
-    [syntax as PostgreSQL](https://www.postgresql.org/docs/current/tutorial-window.html), but currently
-    only with the `ROWS` frame mode (except for the default frame, which is
-    `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`, and is supported).
-    In addition to the below window functions, you can use the `OVER` clause with any aggregation function
+    [syntax as
+    PostgreSQL](https://www.postgresql.org/docs/current/tutorial-window.html),
+    but supports only the following frame modes:
+
+    - the `ROWS` frame mode.
+
+    - the default frame, which is `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT
+    ROW`.
+
+    {{< note >}}
+    {{% idiomatic-sql/materialize-window-functions %}}
+
+    See [Idiomatic Materialize SQL](/transform-data/idiomatic-materialize-sql/)
+    for examples of rewriting window functions.
+
+    {{</ note >}}
+
+    In addition to the below window functions, you can use the `OVER` clause with any [aggregation function](#aggregate-functions)
     (e.g., `sum`, `avg`) as well. Using an aggregation with an `OVER` clause is called a _window aggregation_. A
     window aggregation computes the aggregate not on the groups specified by the `GROUP BY` clause, but on the frames
     specified inside the `OVER` clause. (Note that a window aggregation produces exactly one output value _for each input
@@ -790,6 +849,9 @@
     description: |
       Returns `value` evaluated at the first row of the window frame. The default window frame is
       `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`.
+
+      See also [Idiomatic Materialize SQL: First value](/transform-data/idiomatic-materialize-sql/first-value/).
+
   - signature: 'lag(value anycompatible [, offset integer [, default anycompatible ]]) -> int'
     description: |
       Returns `value` evaluated at the row that is `offset` rows before the current row within the partition;
@@ -797,10 +859,17 @@
       If `offset` is `NULL`, `NULL` is returned instead.
       Both `offset` and `default` are evaluated with respect to the current row.
       If omitted, `offset` defaults to 1 and `default` to `NULL`.
+
+      See also [Idiomatic Materialize SQL: Lag over](/transform-data/idiomatic-materialize-sql/lag/).
+
   - signature: 'last_value(value anycompatible) -> anyelement'
     description: |
       Returns `value` evaluated at the last row of the window frame. The default window frame is
       `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`.
+
+      See also [Idiomatic Materialize SQL: Last
+      value](/transform-data/idiomatic-materialize-sql/last-value/).
+
   - signature: 'lead(value anycompatible [, offset integer [, default anycompatible ]]) -> int'
     description: |
       Returns `value` evaluated at the row that is `offset` rows after the current row within the partition;
@@ -808,6 +877,10 @@
       If `offset` is `NULL`, `NULL` is returned instead.
       Both `offset` and `default` are evaluated with respect to the current row.
       If omitted, `offset` defaults to 1 and `default` to `NULL`.
+
+      See also [Idiomatic Materialize SQL: Lead
+      over](/transform-data/idiomatic-materialize-sql/lead/).
+
   - signature: 'rank() -> int'
     description: |
       Returns the rank of the current row within its partition with gaps (counting from 1):
@@ -817,6 +890,9 @@
     description: |
       Returns the number of the current row within its partition, counting from 1.
       Rows that compare equal will be ordered in an unspecified way.
+
+      See also [Idiomatic Materialize SQL: Top-K](/transform-data/idiomatic-materialize-sql/top-k/).
+
 
 - type: System information
   description: Functions that return information about the system.
@@ -902,6 +978,8 @@
     side_effecting: true
   - signature: 'pg_column_size(expr: any) -> int'
     description: Returns the number of bytes used to store any individual data value.
+  - signature: 'pg_size_pretty(expr: numeric) -> text'
+    description: Converts a size in bytes into a human-readable format.
   - signature: 'pg_get_constraintdef(oid: oid[, pretty: bool]) -> text'
     description: |
       Returns the constraint definition for the given `oid`. Currently always

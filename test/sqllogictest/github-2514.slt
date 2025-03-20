@@ -1,0 +1,70 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/2514
+# See https://github.com/MaterializeInc/database-issues/issues/2535
+
+# Verify that an index added after a transaction has started complains.
+
+statement ok
+CREATE TABLE t1 (f1 INTEGER, f2 INTEGER);
+
+statement ok
+CREATE INDEX i1 ON t1 (f2);
+
+statement ok
+CREATE VIEW v1 AS SELECT * FROM t1;
+
+simple conn=conn1
+BEGIN;
+SELECT * FROM v1;
+----
+COMPLETE 0
+COMPLETE 0
+
+statement ok
+CREATE INDEX i2 ON t1 (f2);
+
+simple conn=conn1
+SELECT * FROM v1;
+----
+db error: ERROR: Transactions can only reference objects in the same timedomain. See https://materialize.com/docs/sql/begin/#same-timedomain-error
+DETAIL: The following relations in the query are outside the transaction's time domain:
+"materialize.public.i2"
+Only the following relations are available:
+"materialize.public.i1"
+"mz_catalog.mz_array_types"
+"mz_catalog.mz_base_types"
+"mz_catalog.mz_columns"
+"mz_catalog.mz_connections"
+"mz_catalog.mz_databases"
+"mz_catalog.mz_functions"
+"mz_catalog.mz_index_columns"
+"mz_catalog.mz_indexes"
+"mz_catalog.mz_list_types"
+"mz_catalog.mz_map_types"
+"mz_catalog.mz_materialized_views"
+"mz_catalog.mz_operators"
+"mz_catalog.mz_pseudo_types"
+"mz_catalog.mz_role_members"
+"mz_catalog.mz_role_parameters"
+"mz_catalog.mz_roles"
+"mz_catalog.mz_schemas"
+"mz_catalog.mz_secrets"
+"mz_catalog.mz_sinks"
+"mz_catalog.mz_sources"
+"mz_catalog.mz_system_privileges"
+"mz_catalog.mz_tables"
+"mz_catalog.mz_types"
+"mz_catalog.mz_views"
+"mz_internal.mz_aggregates"
+"mz_internal.mz_comments"
+"mz_internal.mz_continual_tasks"
+"mz_internal.mz_object_dependencies"
+"mz_internal.mz_type_pg_metadata"

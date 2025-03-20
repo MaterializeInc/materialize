@@ -39,9 +39,11 @@ CREATE TABLE unique_nullable (f1 INT, f2 INT, f3 INT, UNIQUE (f1, f2));
 INSERT INTO unique_nullable VALUES (1,1,null), (null,null,null), (null,null,null);
 ALTER TABLE unique_nullable REPLICA IDENTITY FULL;
 
-> CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR ALL TABLES;
+> CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+
+> CREATE TABLE pk FROM SOURCE mz_source (REFERENCE pk);
+> CREATE TABLE unique_not_null FROM SOURCE mz_source (REFERENCE unique_not_null);
+> CREATE TABLE unique_nullable FROM SOURCE mz_source (REFERENCE unique_nullable);
 
 > CREATE DEFAULT INDEX ON pk;
 > CREATE DEFAULT INDEX ON unique_not_null;
@@ -62,13 +64,13 @@ ALTER TABLE unique_nullable REPLICA IDENTITY FULL;
 <null> <null> <null>
 
 # Not null constraint optimizes like this:
-? EXPLAIN SELECT * FROM pk WHERE f1 IS NULL OR f2 IS NULL;
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM pk WHERE f1 IS NULL OR f2 IS NULL;
 Explained Query (fast path):
   Constant <empty>
 
 Target cluster: quickstart
 
-? EXPLAIN SELECT * FROM unique_not_null WHERE f1 IS NULL OR f2 IS NULL;
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM unique_not_null WHERE f1 IS NULL OR f2 IS NULL;
 Explained Query (fast path):
   Constant <empty>
 
@@ -76,7 +78,7 @@ Target cluster: quickstart
 
 #
 # Unique converted to keys
-? EXPLAIN SELECT DISTINCT f1, f2 FROM pk
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT f1, f2 FROM pk
 Explained Query (fast path):
   Project (#0, #1)
     ReadIndex on=materialize.public.pk pk_primary_idx=[*** full scan ***]
@@ -88,7 +90,7 @@ Target cluster: quickstart
 
 #
 # Unique converted to keys
-? EXPLAIN SELECT DISTINCT f1, f2 FROM unique_not_null
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT f1, f2 FROM unique_not_null
 Explained Query (fast path):
   Project (#0, #1)
     ReadIndex on=materialize.public.unique_not_null unique_not_null_primary_idx=[*** full scan ***]
@@ -100,7 +102,7 @@ Target cluster: quickstart
 
 #
 # Unique NOT converted to keys because values are nullable
-? EXPLAIN SELECT DISTINCT f1, f2 FROM unique_nullable
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT f1, f2 FROM unique_nullable
 Explained Query:
   Distinct project=[#0, #1]
     Project (#0, #1)

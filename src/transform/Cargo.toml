@@ -10,28 +10,39 @@ publish = false
 workspace = true
 
 [dependencies]
-differential-dataflow = "0.12.0"
+differential-dataflow = "0.13.7"
 enum-kinds = "0.5.1"
-itertools = "0.10.5"
+itertools = "0.12.1"
 mz-compute-types = { path = "../compute-types" }
 mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore" }
-mz-repr = { path = "../repr", features = ["tracing_"] }
-num-traits = "0.2"
-ordered-float = { version = "4.2.0", features = ["serde"] }
+mz-repr = { path = "../repr", features = ["tracing"] }
+mz-sql = { path = "../sql" }
+ordered-float = { version = "4.6.0", features = ["serde"] }
 paste = "1.0.11"
+proptest = { version = "1.6.0", default-features = false, features = ["std"] }
+proptest-derive = { version = "0.5.1" }
+serde = "1.0.219"
 tracing = "0.1.37"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-anyhow = "1.0.66"
+anyhow = "1.0.95"
 datadriven = "0.8.0"
 mz-expr-parser = { path = "../expr-parser" }
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore", features = ["test"] }
 proc-macro2 = "1.0.60"
-serde_json = "1.0.89"
+serde_json = "1.0.125"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
+
+[features]
+default = ["workspace-hack"]
+
+# This crate is relatively fast to compile and enabling optimizations greatly
+# speeds up test execution.
+[package.metadata.cargo-gazelle.lib]
+rustc_flags = ["-Copt-level=3"]

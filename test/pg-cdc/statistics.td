@@ -40,8 +40,9 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SOURCE mz_source
   IN CLUSTER stats_cluster
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR TABLES ("t1")
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
 
 > SELECT COUNT(*) > 0 FROM t1;
 true
@@ -70,7 +71,6 @@ SELECT
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO t1 VALUES ('three');
-
 
 > SELECT
     s.name,
@@ -119,7 +119,7 @@ CREATE TABLE alt (f1 TEXT);
 ALTER TABLE alt REPLICA IDENTITY FULL;
 INSERT INTO alt VALUES ('one');
 
-> ALTER SOURCE mz_source ADD SUBSOURCE alt;
+> CREATE TABLE alt FROM SOURCE mz_source (REFERENCE alt);
 
 > SELECT COUNT(*) > 0 FROM alt;
 true
@@ -138,22 +138,22 @@ mz_source 1 1
 
 # Ensure subsource stats show up, and then are removed when we drop subsources.
 > SELECT
-    s.name,
+    t.name,
     SUM(u.updates_committed) > 0
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('alt')
-  GROUP BY s.name
-  ORDER BY s.name
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  WHERE t.name IN ('alt')
+  GROUP BY t.name
+  ORDER BY t.name
 alt true
 
-> DROP SOURCE alt;
+> DROP TABLE alt;
 
 > SELECT
     count(*)
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('alt')
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  WHERE t.name IN ('alt')
 0
 
 # TODO(guswynn): consider adding an envd restart test for pg statistics, not just kafka ones like in test/cluster.

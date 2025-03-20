@@ -47,8 +47,8 @@ After an `ALTER SECRET` command is executed:
 
 ## Examples
 
-```sql
-ALTER SECRET upstash_kafka_ca_cert AS decode('c2VjcmV0Cg==', 'base64');
+```mzsql
+ALTER SECRET kafka_ca_cert AS decode('c2VjcmV0Cg==', 'base64');
 ```
 
 ## Privileges

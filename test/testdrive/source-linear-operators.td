@@ -37,20 +37,22 @@ $ kafka-ingest format=avro topic=data schema=${schema}
 > CREATE SOURCE data
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+
+> CREATE TABLE data_tbl FROM SOURCE data (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
 
 $ set-regex match=u\d+ replacement=UID
 
 # basic test: pushing filters down to sources
 
-> CREATE VIEW v as SELECT * from data where a = 1 and d = 3;
+> CREATE VIEW v as SELECT * from data_tbl where a = 1 and d = 3;
 
-? EXPLAIN SELECT * FROM v;
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM v;
 Explained Query:
   Filter (#0 = 1) AND (#3 = 3)
-    ReadStorage materialize.public.data
+    ReadStorage materialize.public.data_tbl
 
-Source materialize.public.data
+Source materialize.public.data_tbl
   filter=((#0 = 1) AND (#3 = 3))
 
 Target cluster: quickstart
@@ -63,15 +65,15 @@ Target cluster: quickstart
 
 # basic test: pushing demand down to sources
 
-> CREATE VIEW v as SELECT b from data where b = 1;
+> CREATE VIEW v as SELECT b from data_tbl where b = 1;
 
-? EXPLAIN SELECT * FROM v;
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM v;
 Explained Query:
   Project (#1)
     Filter (#1 = 1)
-      ReadStorage materialize.public.data
+      ReadStorage materialize.public.data_tbl
 
-Source materialize.public.data
+Source materialize.public.data_tbl
   filter=((#1 = 1))
 
 Target cluster: quickstart
@@ -84,19 +86,19 @@ Target cluster: quickstart
 
 > DROP VIEW v;
 
-> CREATE VIEW inner_view as SELECT a, b, d from data where d = 4;
+> CREATE VIEW inner_view as SELECT a, b, d from data_tbl where d = 4;
 
 # Filter gets pushed through intervening view.
 
 > CREATE VIEW v as SELECT b from inner_view where a = 1
 
-? EXPLAIN SELECT * FROM v;
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM v;
 Explained Query:
   Project (#1)
     Filter (#0 = 1) AND (#3 = 4)
-      ReadStorage materialize.public.data
+      ReadStorage materialize.public.data_tbl
 
-Source materialize.public.data
+Source materialize.public.data_tbl
   filter=((#0 = 1) AND (#3 = 4))
 
 Target cluster: quickstart
@@ -111,13 +113,13 @@ Target cluster: quickstart
 
 > CREATE VIEW v as SELECT d from inner_view where a = 1;
 
-? EXPLAIN SELECT * FROM v;
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM v;
 Explained Query:
   Project (#3)
     Filter (#0 = 1) AND (#3 = 4)
-      ReadStorage materialize.public.data
+      ReadStorage materialize.public.data_tbl
 
-Source materialize.public.data
+Source materialize.public.data_tbl
   filter=((#0 = 1) AND (#3 = 4))
 
 Target cluster: quickstart
@@ -128,22 +130,22 @@ Target cluster: quickstart
 
 > DROP VIEW v;
 
-> CREATE VIEW v as SELECT s1.a from data s1, data s2 where s1.a = s2.b and s2.d = 4;
+> CREATE VIEW v as SELECT s1.a from data_tbl s1, data_tbl s2 where s1.a = s2.b and s2.d = 4;
 
-? EXPLAIN SELECT * FROM v;
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM v;
 Explained Query:
   Project (#0)
     Join on=(#0 = #1) type=differential
       ArrangeBy keys=[[#0]]
         Project (#0)
           Filter (#0) IS NOT NULL
-            ReadStorage materialize.public.data
+            ReadStorage materialize.public.data_tbl
       ArrangeBy keys=[[#0]]
         Project (#1)
           Filter (#3 = 4) AND (#1) IS NOT NULL
-            ReadStorage materialize.public.data
+            ReadStorage materialize.public.data_tbl
 
-Source materialize.public.data
+Source materialize.public.data_tbl
 
 Target cluster: quickstart
 
@@ -158,22 +160,22 @@ Target cluster: quickstart
 
 # filters and demand can be inferred in more complicated queries
 
-> CREATE VIEW v as SELECT s2.a from data s1, data s2 where s1.a = s2.b and s2.d = 4 and s1.d = 4;
+> CREATE VIEW v as SELECT s2.a from data_tbl s1, data_tbl s2 where s1.a = s2.b and s2.d = 4 and s1.d = 4;
 
-? EXPLAIN SELECT * FROM v;
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM v;
 Explained Query:
   Project (#1)
     Join on=(#0 = #2) type=differential
       ArrangeBy keys=[[#0]]
         Project (#0)
           Filter (#3 = 4) AND (#0) IS NOT NULL
-            ReadStorage materialize.public.data
+            ReadStorage materialize.public.data_tbl
       ArrangeBy keys=[[#1]]
         Project (#0, #1)
           Filter (#3 = 4) AND (#1) IS NOT NULL
-            ReadStorage materialize.public.data
+            ReadStorage materialize.public.data_tbl
 
-Source materialize.public.data
+Source materialize.public.data_tbl
   filter=((#3 = 4))
 
 Target cluster: quickstart
@@ -185,10 +187,15 @@ Target cluster: quickstart
 
 > DROP VIEW v;
 
-> CREATE VIEW v as SELECT s2.c from data s1, data s2 where s1.a = s2.a
+> CREATE VIEW v as SELECT s2.c from data_tbl s1, data_tbl s2 where s1.a = s2.a
 
-? EXPLAIN SELECT * FROM v;
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM v;
 Explained Query:
+  With
+    cte l0 =
+      Project (#0, #2)
+        Filter (#0) IS NOT NULL
+          ReadStorage materialize.public.data_tbl
   Return
     Project (#2)
       Join on=(#0 = #1) type=differential
@@ -196,14 +203,9 @@ Explained Query:
           Project (#0)
             Get l0
         ArrangeBy keys=[[#0]]
-          Project (#0, #2)
-            Get l0
-  With
-    cte l0 =
-      Filter (#0) IS NOT NULL
-        ReadStorage materialize.public.data
+          Get l0
 
-Source materialize.public.data
+Source materialize.public.data_tbl
   filter=((#0) IS NOT NULL)
 
 Target cluster: quickstart
@@ -219,23 +221,23 @@ Target cluster: quickstart
 
 > DROP VIEW v;
 
-> CREATE VIEW v as SELECT * FROM (SELECT a, sum(b) FROM data GROUP BY a UNION ALL SELECT a, (a + c)::numeric FROM data) WHERE a = 1;
+> CREATE VIEW v as SELECT * FROM (SELECT a, sum(b) FROM data_tbl GROUP BY a UNION ALL SELECT a, (a + c)::numeric FROM data_tbl) WHERE a = 1;
 
-? EXPLAIN SELECT * FROM v;
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM v;
 Explained Query:
   Union
     Project (#1, #0)
       Map (1)
-        Reduce aggregates=[sum(#0)] monotonic
+        Reduce aggregates=[sum(#0)]
           Project (#1)
             Filter (#0 = 1)
-              ReadStorage materialize.public.data
+              ReadStorage materialize.public.data_tbl
     Project (#0, #4)
       Filter (#0 = 1)
         Map (bigint_to_numeric((1 + #2)))
-          ReadStorage materialize.public.data
+          ReadStorage materialize.public.data_tbl
 
-Source materialize.public.data
+Source materialize.public.data_tbl
   filter=((#0 = 1))
 
 Target cluster: quickstart
@@ -259,23 +261,25 @@ $ kafka-ingest format=avro topic=data2 schema=${schema}
 > CREATE SOURCE data2
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data2-${testdrive.seed}')
+
+> CREATE TABLE data2_tbl FROM SOURCE data2 (REFERENCE "testdrive-data2-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
 
-> CREATE VIEW v as SELECT a, c FROM data EXCEPT ALL SELECT a, c FROM data2 where d is null
+> CREATE VIEW v as SELECT a, c FROM data_tbl EXCEPT ALL SELECT a, c FROM data2_tbl where d is null
 
-? EXPLAIN SELECT * FROM v;
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM v;
 Explained Query:
   Threshold
     Union
       Project (#0, #2)
-        ReadStorage materialize.public.data
+        ReadStorage materialize.public.data_tbl
       Negate
         Project (#0, #2)
           Filter (#3) IS NULL
-            ReadStorage materialize.public.data2
+            ReadStorage materialize.public.data2_tbl
 
-Source materialize.public.data
-Source materialize.public.data2
+Source materialize.public.data_tbl
+Source materialize.public.data2_tbl
   filter=((#3) IS NULL)
 
 Target cluster: quickstart

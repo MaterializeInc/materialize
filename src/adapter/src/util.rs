@@ -9,13 +9,13 @@
 
 use std::fmt::Debug;
 
+use mz_catalog::durable::{DurableCatalogError, FenceError};
 use mz_compute_client::controller::error::{
     CollectionUpdateError, DataflowCreationError, InstanceMissing, PeekError, ReadPolicyError,
-    SubscribeTargetError,
 };
 use mz_controller_types::ClusterId;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{halt, soft_assert_no_log};
+use mz_ore::{exit, soft_assert_no_log};
 use mz_repr::{RelationDesc, RowIterator, ScalarType};
 use mz_sql::names::FullItemName;
 use mz_sql::plan::StatementDesc;
@@ -265,32 +265,33 @@ pub fn describe(
 }
 
 pub trait ResultExt<T> {
-    /// Like [`Result::expect`], but terminates the process with `halt` instead
-    /// of `panic` if the underlying error is a condition that should halt,
-    /// rather than panic the process.
+    /// Like [`Result::expect`], but terminates the process with `halt` or
+    /// exit code 0 instead of `panic` if the error indicates that it should
+    /// cause a halt of graceful termination.
     fn unwrap_or_terminate(self, context: &str) -> T;
 
-    /// Terminates the process with `halt` if `self` is an error that should halt.
-    /// Otherwise does nothing.
+    /// Terminates the process with `halt` or exit code 0 if `self` is an
+    /// error that should halt or cause graceful termination. Otherwise,
+    /// does nothing.
     fn maybe_terminate(self, context: &str) -> Self;
 }
 
 impl<T, E> ResultExt<T> for Result<T, E>
 where
-    E: ShouldHalt + Debug,
+    E: ShouldTerminateGracefully + Debug,
 {
     fn unwrap_or_terminate(self, context: &str) -> T {
         match self {
             Ok(t) => t,
-            Err(e) if e.should_halt() => halt!("{context}: {e:?}"),
+            Err(e) if e.should_terminate_gracefully() => exit!(0, "{context}: {e:?}"),
             Err(e) => panic!("{context}: {e:?}"),
         }
     }
 
     fn maybe_terminate(self, context: &str) -> Self {
         if let Err(e) = &self {
-            if e.should_halt() {
-                halt!("{context}: {e:?}");
+            if e.should_terminate_gracefully() {
+                exit!(0, "{context}: {e:?}");
             }
         }
 
@@ -298,63 +299,88 @@ where
     }
 }
 
-/// A trait for errors that should halt rather than panic the process.
-trait ShouldHalt {
-    /// Reports whether the error should halt rather than panic the process.
-    fn should_halt(&self) -> bool;
+/// A trait for errors that should terminate gracefully rather than panic
+/// the process.
+trait ShouldTerminateGracefully {
+    /// Reports whether the error should terminate the process gracefully
+    /// rather than panic.
+    fn should_terminate_gracefully(&self) -> bool;
 }
 
-impl ShouldHalt for AdapterError {
-    fn should_halt(&self) -> bool {
+impl ShouldTerminateGracefully for AdapterError {
+    fn should_terminate_gracefully(&self) -> bool {
         match self {
-            AdapterError::Catalog(e) => e.should_halt(),
+            AdapterError::Catalog(e) => e.should_terminate_gracefully(),
             _ => false,
         }
     }
 }
 
-impl ShouldHalt for mz_catalog::memory::error::Error {
-    fn should_halt(&self) -> bool {
+impl ShouldTerminateGracefully for mz_catalog::memory::error::Error {
+    fn should_terminate_gracefully(&self) -> bool {
         match &self.kind {
-            mz_catalog::memory::error::ErrorKind::Durable(e) => e.should_halt(),
+            mz_catalog::memory::error::ErrorKind::Durable(e) => e.should_terminate_gracefully(),
             _ => false,
         }
     }
 }
 
-impl ShouldHalt for mz_catalog::durable::CatalogError {
-    fn should_halt(&self) -> bool {
+impl ShouldTerminateGracefully for mz_catalog::durable::CatalogError {
+    fn should_terminate_gracefully(&self) -> bool {
         match &self {
-            Self::Durable(e) => e.should_halt(),
+            Self::Durable(e) => e.should_terminate_gracefully(),
             _ => false,
         }
     }
 }
 
-impl ShouldHalt for mz_catalog::durable::DurableCatalogError {
-    fn should_halt(&self) -> bool {
-        self.should_halt()
+impl ShouldTerminateGracefully for DurableCatalogError {
+    fn should_terminate_gracefully(&self) -> bool {
+        match self {
+            DurableCatalogError::Fence(err) => err.should_terminate_gracefully(),
+            DurableCatalogError::IncompatibleDataVersion { .. }
+            | DurableCatalogError::IncompatiblePersistVersion { .. }
+            | DurableCatalogError::Proto(_)
+            | DurableCatalogError::Uninitialized
+            | DurableCatalogError::NotWritable(_)
+            | DurableCatalogError::DuplicateKey
+            | DurableCatalogError::UniquenessViolation
+            | DurableCatalogError::Storage(_)
+            | DurableCatalogError::Internal(_) => false,
+        }
     }
 }
 
-impl<T> ShouldHalt for StorageError<T> {
-    fn should_halt(&self) -> bool {
+impl ShouldTerminateGracefully for FenceError {
+    fn should_terminate_gracefully(&self) -> bool {
+        match self {
+            FenceError::DeployGeneration { .. } => true,
+            FenceError::Epoch { .. } | FenceError::MigrationUpper { .. } => false,
+        }
+    }
+}
+
+impl<T> ShouldTerminateGracefully for StorageError<T> {
+    fn should_terminate_gracefully(&self) -> bool {
         match self {
             StorageError::ResourceExhausted(_)
             | StorageError::CollectionMetadataAlreadyExists(_)
             | StorageError::PersistShardAlreadyInUse(_)
-            | StorageError::TxnWalShardAlreadyExists => true,
-            StorageError::UpdateBeyondUpper(_)
+            | StorageError::PersistSchemaEvolveRace { .. }
+            | StorageError::PersistInvalidSchemaEvolve { .. }
+            | StorageError::TxnWalShardAlreadyExists
+            | StorageError::UpdateBeyondUpper(_)
             | StorageError::ReadBeforeSince(_)
             | StorageError::InvalidUppers(_)
             | StorageError::InvalidUsage(_)
-            | StorageError::SourceIdReused(_)
+            | StorageError::CollectionIdReused(_)
             | StorageError::SinkIdReused(_)
             | StorageError::IdentifierMissing(_)
             | StorageError::IdentifierInvalid(_)
             | StorageError::IngestionInstanceMissing { .. }
             | StorageError::ExportInstanceMissing { .. }
             | StorageError::Generic(_)
+            | StorageError::ReadOnly
             | StorageError::DataflowError(_)
             | StorageError::InvalidAlter { .. }
             | StorageError::ShuttingDown(_)
@@ -365,12 +391,13 @@ impl<T> ShouldHalt for StorageError<T> {
     }
 }
 
-impl ShouldHalt for DataflowCreationError {
-    fn should_halt(&self) -> bool {
+impl ShouldTerminateGracefully for DataflowCreationError {
+    fn should_terminate_gracefully(&self) -> bool {
         match self {
             DataflowCreationError::SinceViolation(_)
             | DataflowCreationError::InstanceMissing(_)
             | DataflowCreationError::CollectionMissing(_)
+            | DataflowCreationError::ReplicaMissing(_)
             | DataflowCreationError::MissingAsOf
             | DataflowCreationError::EmptyAsOfForSubscribe
             | DataflowCreationError::EmptyAsOfForCopyTo => false,
@@ -378,8 +405,8 @@ impl ShouldHalt for DataflowCreationError {
     }
 }
 
-impl ShouldHalt for CollectionUpdateError {
-    fn should_halt(&self) -> bool {
+impl ShouldTerminateGracefully for CollectionUpdateError {
+    fn should_terminate_gracefully(&self) -> bool {
         match self {
             CollectionUpdateError::InstanceMissing(_)
             | CollectionUpdateError::CollectionMissing(_) => false,
@@ -387,8 +414,8 @@ impl ShouldHalt for CollectionUpdateError {
     }
 }
 
-impl ShouldHalt for PeekError {
-    fn should_halt(&self) -> bool {
+impl ShouldTerminateGracefully for PeekError {
+    fn should_terminate_gracefully(&self) -> bool {
         match self {
             PeekError::SinceViolation(_)
             | PeekError::InstanceMissing(_)
@@ -398,8 +425,8 @@ impl ShouldHalt for PeekError {
     }
 }
 
-impl ShouldHalt for ReadPolicyError {
-    fn should_halt(&self) -> bool {
+impl ShouldTerminateGracefully for ReadPolicyError {
+    fn should_terminate_gracefully(&self) -> bool {
         match self {
             ReadPolicyError::InstanceMissing(_)
             | ReadPolicyError::CollectionMissing(_)
@@ -408,19 +435,8 @@ impl ShouldHalt for ReadPolicyError {
     }
 }
 
-impl ShouldHalt for SubscribeTargetError {
-    fn should_halt(&self) -> bool {
-        match self {
-            SubscribeTargetError::InstanceMissing(_)
-            | SubscribeTargetError::SubscribeMissing(_)
-            | SubscribeTargetError::ReplicaMissing(_)
-            | SubscribeTargetError::SubscribeAlreadyStarted => false,
-        }
-    }
-}
-
-impl ShouldHalt for TransformError {
-    fn should_halt(&self) -> bool {
+impl ShouldTerminateGracefully for TransformError {
+    fn should_terminate_gracefully(&self) -> bool {
         match self {
             TransformError::Internal(_)
             | TransformError::IdentifierMissing(_)
@@ -429,8 +445,8 @@ impl ShouldHalt for TransformError {
     }
 }
 
-impl ShouldHalt for InstanceMissing {
-    fn should_halt(&self) -> bool {
+impl ShouldTerminateGracefully for InstanceMissing {
+    fn should_terminate_gracefully(&self) -> bool {
         false
     }
 }
@@ -444,10 +460,7 @@ pub(crate) fn viewable_variables<'a>(
         .vars()
         .iter()
         .chain(catalog.system_config().iter())
-        .filter(|v| {
-            v.visible(session.user(), Some(catalog.system_config()))
-                .is_ok()
-        })
+        .filter(|v| v.visible(session.user(), catalog.system_config()).is_ok())
 }
 
 /// Verify that the rows in [`RowIterator`] match the expected [`RelationDesc`].
@@ -458,7 +471,7 @@ pub fn verify_datum_desc(
     // Verify the first row is of the expected type. This is often good enough to
     // find problems.
     //
-    // Notably it failed to find #6304 when "FETCH 2" was used in a test, instead
+    // Notably it failed to find database-issues#1946 when "FETCH 2" was used in a test, instead
     // we had to use "FETCH 1" twice.
 
     let Some(row) = rows.peek() else {

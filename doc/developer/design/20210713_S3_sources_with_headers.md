@@ -209,7 +209,7 @@ schema we will put its dataflow into an error state to prevent users from
 reading invalid data. Currently there is no way to recover from this state.
 There are a few options:
 
-* Issue [#6605](https://github.com/MaterializeInc/materialize/issues/6605#issuecomment-880101445)
+* Issue [#6605](https://github.com/MaterializeInc/database-issues/issues/2060#issuecomment-880101445)
   suggests that with a full sql-accessible catalog we could use standard sql to
   retract S3 objects that are invalid, thereby recovering.
 * We could add specific syntax for S3 sources that allow retracting invalid CSV

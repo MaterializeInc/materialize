@@ -9,6 +9,14 @@
 
 mode cockroach
 
+# Run all tests on a multi-process cluster, because there were some serialization issues in the past that happened
+# only on multi-process clusters.
+statement ok
+CREATE CLUSTER multiprocess REPLICAS (a (SIZE '2-2'));
+
+statement ok
+SET cluster = 'multiprocess';
+
 statement ok
 CREATE TABLE data (input text)
 
@@ -22,7 +30,7 @@ asdf asdf NULL
 asdfjkl asdf NULL
 jkl NULL jkl
 
-# TODO - Test that the columns have the correct nullability, once they actually do (#1685)
+# TODO - Test that the columns have the correct nullability, once they actually do (database-issues#612)
 
 # Standard regex matching.
 query TTT
@@ -52,7 +60,7 @@ mode standard
 
 # Check that literal regexes are pre-compiled...
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT input ~ 'foo?' FROM data
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT input ~ 'foo?' FROM data
 ----
 Explained Query:
   Project (#1) // { arity: 1 }
@@ -61,13 +69,13 @@ Explained Query:
 
 Source materialize.public.data
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
 # ...but not variable regexes.
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT input ~ input FROM data
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT input ~ input FROM data
 ----
 Explained Query:
   Project (#1) // { arity: 1 }
@@ -76,19 +84,19 @@ Explained Query:
 
 Source materialize.public.data
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT regexp_match('ABC', 'a.*');
 ----
 Explained Query (fast path):
   Constant
     - (null)
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -98,14 +106,14 @@ SELECT regexp_match('ABC', 'a.*');
 NULL
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT regexp_match('ABC', 'a.*', 'i');
 ----
 Explained Query (fast path):
   Constant
     - ({"ABC"})
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -149,20 +157,19 @@ INSERT INTO t VALUES (
 
 # Note that sqllogictest can't handle newlines in string output, so replace those when displaying `s`
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT replace(s, E'\n', '<newline>') FROM t WHERE s~'a.*';
 ----
 Explained Query:
   Project (#3)
     Filter is_regexp_match["a.*", case_insensitive=false](#0)
-      Map (replace(#0, "
-", "<newline>"))
+      Map (replace(#0, "\n", "<newline>"))
         ReadStorage materialize.public.t
 
 Source materialize.public.t
   filter=(is_regexp_match["a.*", case_insensitive=false](#0))
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -172,20 +179,19 @@ SELECT replace(s, E'\n', '<newline>') FROM t WHERE s~'a.*';
 abc
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT replace(s, E'\n', '<newline>') FROM t WHERE s~*'a.*';
 ----
 Explained Query:
   Project (#3)
     Filter is_regexp_match["a.*", case_insensitive=true](#0)
-      Map (replace(#0, "
-", "<newline>"))
+      Map (replace(#0, "\n", "<newline>"))
         ReadStorage materialize.public.t
 
 Source materialize.public.t
   filter=(is_regexp_match["a.*", case_insensitive=true](#0))
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -196,18 +202,17 @@ ABC
 abc
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT replace(s, E'\n', '<newline>'), regexp_match(s, 'a.*') FROM t;
 ----
 Explained Query:
   Project (#3, #4)
-    Map (replace(#0, "
-", "<newline>"), regexp_match["a.*", case_insensitive=false](#0))
+    Map (replace(#0, "\n", "<newline>"), regexp_match["a.*", case_insensitive=false](#0))
       ReadStorage materialize.public.t
 
 Source materialize.public.t
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -224,18 +229,17 @@ abc
 {abc}
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT replace(s, E'\n', '<newline>'), regexp_match(s, 'a.*', 'i') FROM t;
 ----
 Explained Query:
   Project (#3, #4)
-    Map (replace(#0, "
-", "<newline>"), regexp_match["a.*", case_insensitive=true](#0))
+    Map (replace(#0, "\n", "<newline>"), regexp_match["a.*", case_insensitive=true](#0))
       ReadStorage materialize.public.t
 
 Source materialize.public.t
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -281,20 +285,19 @@ SELECT replace(s, E'\n', '<newline>') FROM t WHERE s ~ '\';
 # Dynamic regexes (binary (or variadic) versions)
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT replace(s, E'\n', '<newline>') FROM t WHERE s ~ regex_pat;
 ----
 Explained Query:
   Project (#3)
     Filter (#0 ~ #2)
-      Map (replace(#0, "
-", "<newline>"))
+      Map (replace(#0, "\n", "<newline>"))
         ReadStorage materialize.public.t
 
 Source materialize.public.t
   filter=((#0 ~ #2))
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -305,20 +308,19 @@ abc
 test line 1<newline>test line 2
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT replace(s, E'\n', '<newline>') FROM t WHERE s ~* regex_pat;
 ----
 Explained Query:
   Project (#3)
     Filter (#0 ~* #2)
-      Map (replace(#0, "
-", "<newline>"))
+      Map (replace(#0, "\n", "<newline>"))
         ReadStorage materialize.public.t
 
 Source materialize.public.t
   filter=((#0 ~* #2))
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -330,18 +332,17 @@ abc
 test line 1<newline>test line 2
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT replace(s, E'\n', '<newline>'), regex_pat, regexp_match(s, regex_pat) FROM t;
 ----
 Explained Query:
   Project (#3, #2, #4)
-    Map (replace(#0, "
-", "<newline>"), regexp_match(#0, #2))
+    Map (replace(#0, "\n", "<newline>"), regexp_match(#0, #2))
       ReadStorage materialize.public.t
 
 Source materialize.public.t
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -363,18 +364,17 @@ test line 1<newline>test line 2
 {"1<newline>test line 2"}
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT replace(s, E'\n', '<newline>'), regex_pat, regexp_match(s, regex_pat, 'i') FROM t;
 ----
 Explained Query:
   Project (#3, #2, #4)
-    Map (replace(#0, "
-", "<newline>"), regexp_match(#0, #2, "i"))
+    Map (replace(#0, "\n", "<newline>"), regexp_match(#0, #2, "i"))
       ReadStorage materialize.public.t
 
 Source materialize.public.t
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -436,19 +436,16 @@ SELECT replace(s, E'\n', '<newline>') FROM t WHERE s ~* regex_pat;
 
 # TODO: multiline literal errors should be printed somehow differently in EXPLAIN
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT *, s~'\' FROM t;
 ----
 Explained Query:
-  Map (error("invalid regular expression: regex parse error:
-    \
-    ^
-error: incomplete escape sequence, reached end of pattern prematurely"))
+  Map (error("invalid regular expression: regex parse error:\n    \\n    ^\nerror: incomplete escape sequence, reached end of pattern prematurely"))
     ReadStorage materialize.public.t
 
 Source materialize.public.t
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -497,7 +494,7 @@ ORDER BY 1
 {hello,world}
 {hello,world}
 
-# TODO: Correct ordering when #16464 is fixed.
+# TODO: Correct ordering when database-issues#4764 is fixed.
 query T
 SELECT foo FROM regexp_split_to_table('the quick brown fox jumps over the lazy dog', '\s+') AS foo ORDER BY 1
 ----
@@ -511,7 +508,7 @@ quick
 the
 the
 
-# TODO: Correct ordering when #16464 is fixed.
+# TODO: Correct ordering when database-issues#4764 is fixed.
 query T
 SELECT foo FROM regexp_split_to_table('the quick brown fox', '\s*') AS foo ORDER BY 1
 ----
@@ -545,14 +542,14 @@ no match
 # Test regexp_replace success paths
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT regexp_replace('FOOBARBAZ', 'b..', 'X');
 ----
 Explained Query (fast path):
   Constant
     - ("FOOBARBAZ")
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -562,14 +559,14 @@ SELECT regexp_replace('FOOBARBAZ', 'b..', 'X');
 FOOBARBAZ
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT regexp_replace('FOOBARBAZ', 'b..', 'X', 'i');
 ----
 Explained Query (fast path):
   Constant
     - ("FOOXBAZ")
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -600,7 +597,7 @@ statement ok
 INSERT INTO r VALUES ('foobarbaz', 'b..', 'X'), ('foobarbaz', 'b(..)', '>${1}<'), ('FOOBARBAZ', 'b..', 'X'), ('FOOZARZAZ', 'b..', 'X');
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT regexp_replace(s, 'b..', 'X') FROM r;
 ----
 Explained Query:
@@ -610,7 +607,7 @@ Explained Query:
 
 Source materialize.public.r
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -627,7 +624,7 @@ FOOZARZAZ
 FOOZARZAZ
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT regexp_replace(s, 'b..', 'X', 'i') FROM r;
 ----
 Explained Query:
@@ -637,7 +634,7 @@ Explained Query:
 
 Source materialize.public.r
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -654,7 +651,7 @@ FOOZARZAZ
 FOOZARZAZ
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT regexp_replace(s, 'b..', 'X', 'ig') FROM r;
 ----
 Explained Query:
@@ -664,7 +661,7 @@ Explained Query:
 
 Source materialize.public.r
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -681,7 +678,7 @@ FOOZARZAZ
 FOOZARZAZ
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT regexp_replace(s, regex, replacement, 'ig') FROM r;
 ----
 Explained Query:
@@ -691,7 +688,7 @@ Explained Query:
 
 Source materialize.public.r
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -710,16 +707,13 @@ foo>ar<>az<
 # Test regexp_replace error paths
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT regexp_replace('foobarbaz', 'b(..', 'X', 'ig');
 ----
 Explained Query (fast path):
-  Error "invalid regular expression: regex parse error:
-    b(..
-     ^
-error: unclosed group"
+  Error "invalid regular expression: regex parse error:\n    b(..\n     ^\nerror: unclosed group"
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -736,7 +730,7 @@ statement ok
 INSERT INTO e VALUES ('foobarbaz', 'b(..', 'X');
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT s, regexp_replace(s, 'b(..', replacement, 'ig') FROM e;
 ----
 Explained Query:
@@ -749,7 +743,7 @@ error: unclosed group(#0, #2))
 
 Source materialize.public.e
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -761,3 +755,6 @@ SELECT s, regexp_replace(s, regex, replacement, 'ig') FROM e;
 
 query error invalid regular expression flag: x
 SELECT regexp_replace(s, regex, replacement, 'igx') FROM e;
+
+statement ok
+DROP CLUSTER multiprocess;

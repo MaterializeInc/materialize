@@ -20,9 +20,7 @@ use maplit::{btreemap, btreeset};
 use mz_adapter_types::compaction::SINCE_GRANULARITY;
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::VersionedEvent;
-use mz_catalog::memory::objects::{
-    CatalogItem, Connection, DataSourceDesc, Index, MaterializedView, Sink,
-};
+use mz_catalog::memory::objects::{CatalogItem, Connection, DataSourceDesc, Sink};
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_controller::clusters::ReplicaLocation;
@@ -34,27 +32,31 @@ use mz_ore::now::to_datetime;
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
 use mz_ore::task;
+use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_repr::adt::numeric::Numeric;
-use mz_repr::{GlobalId, Timestamp};
-use mz_sql::catalog::{CatalogCluster, CatalogSchema};
+use mz_repr::{CatalogItemId, GlobalId, Timestamp};
+use mz_sql::catalog::{CatalogCluster, CatalogClusterReplica, CatalogSchema};
 use mz_sql::names::ResolvedDatabaseSpecifier;
+use mz_sql::plan::ConnectionDetails;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::{
-    self, SystemVars, Var, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS,
+    self, SystemVars, Var, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS, MAX_CONTINUAL_TASKS,
     MAX_CREDIT_CONSUMPTION_RATE, MAX_DATABASES, MAX_KAFKA_CONNECTIONS, MAX_MATERIALIZED_VIEWS,
-    MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS, MAX_REPLICAS_PER_CLUSTER, MAX_ROLES,
-    MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS, MAX_SOURCES, MAX_TABLES,
+    MAX_MYSQL_CONNECTIONS, MAX_NETWORK_POLICIES, MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS,
+    MAX_REPLICAS_PER_CLUSTER, MAX_ROLES, MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS,
+    MAX_SOURCES, MAX_TABLES,
 };
-use mz_storage_client::controller::ExportDescription;
+use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
 use mz_storage_types::connections::inline::IntoInlineConnection;
-use mz_storage_types::controller::StorageError;
+use mz_storage_types::connections::PostgresConnection;
 use mz_storage_types::read_policy::ReadPolicy;
+use mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC;
 use mz_storage_types::sources::GenericSourceConnection;
 use serde_json::json;
 use tracing::{event, info_span, warn, Instrument, Level};
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
-use crate::catalog::{DropObjectInfo, Op, TransactionResult};
+use crate::catalog::{DropObjectInfo, Op, ReplicaCreateDropReason, TransactionResult};
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::{Coordinator, ReplicaMetadata};
@@ -161,7 +163,7 @@ impl Coordinator {
         match result {
             // We purposefully fail with this error to prevent committing the transaction.
             Err(AdapterError::TransactionDryRun { new_ops, new_state }) => {
-                // Adds these ops to our transaction, bailing if the Catalog has changed since we
+                // Sets these ops to our transaction, bailing if the Catalog has changed since we
                 // ran the transaction.
                 session.transaction_mut().add_ops(TransactionOps::DDL {
                     ops: new_ops,
@@ -184,24 +186,31 @@ impl Coordinator {
         conn_id: Option<&ConnectionId>,
         ops: Vec<catalog::Op>,
     ) -> Result<BuiltinTableAppendNotify, AdapterError> {
+        if self.controller.read_only() {
+            return Err(AdapterError::ReadOnly);
+        }
+
         event!(Level::TRACE, ops = format!("{:?}", ops));
 
         let mut sources_to_drop = vec![];
         let mut webhook_sources_to_restart = BTreeSet::new();
-        let mut tables_to_drop = vec![];
-        let mut storage_sinks_to_drop = vec![];
+        let mut table_gids_to_drop = vec![];
+        let mut storage_sink_gids_to_drop = vec![];
         let mut indexes_to_drop = vec![];
         let mut materialized_views_to_drop = vec![];
+        let mut continual_tasks_to_drop = vec![];
         let mut views_to_drop = vec![];
-        let mut replication_slots_to_drop: Vec<(mz_postgres_util::Config, String)> = vec![];
+        let mut replication_slots_to_drop: Vec<(PostgresConnection, String)> = vec![];
         let mut secrets_to_drop = vec![];
         let mut vpc_endpoints_to_drop = vec![];
         let mut clusters_to_drop = vec![];
         let mut cluster_replicas_to_drop = vec![];
         let mut compute_sinks_to_drop = BTreeMap::new();
         let mut peeks_to_drop = vec![];
+        let mut copies_to_drop = vec![];
         let mut clusters_to_create = vec![];
         let mut cluster_replicas_to_create = vec![];
+        let mut update_metrics_config = false;
         let mut update_tracing_config = false;
         let mut update_compute_config = false;
         let mut update_storage_config = false;
@@ -211,7 +220,6 @@ impl Coordinator {
         let mut update_cluster_scheduling_config = false;
         let mut update_arrangement_exert_proportionality = false;
         let mut update_http_config = false;
-        let mut log_indexes_to_drop = Vec::new();
 
         for op in &ops {
             match op {
@@ -220,11 +228,12 @@ impl Coordinator {
                         match &drop_object_info {
                             catalog::DropObjectInfo::Item(id) => {
                                 match self.catalog().get_entry(id).item() {
-                                    CatalogItem::Table(_) => {
-                                        tables_to_drop.push(*id);
+                                    CatalogItem::Table(table) => {
+                                        table_gids_to_drop
+                                            .extend(table.global_ids().map(|gid| (*id, gid)));
                                     }
                                     CatalogItem::Source(source) => {
-                                        sources_to_drop.push(*id);
+                                        sources_to_drop.push((*id, source.global_id()));
                                         if let DataSourceDesc::Ingestion {
                                             ingestion_desc, ..
                                         } = &source.data_source
@@ -234,75 +243,58 @@ impl Coordinator {
                                                     let conn = conn.clone().into_inline_connection(
                                                         self.catalog().state(),
                                                     );
-                                                    let config = conn
-                                                    .connection
-                                                    .config(
-                                                        self.secrets_reader(),
-                                                        self.controller.storage.config(),
-                                                        InTask::No,
-                                                    )
-                                                    .await
-                                                    .map_err(|e| {
-                                                        AdapterError::Storage(StorageError::Generic(
-                                                            anyhow::anyhow!(
-                                                                "error creating Postgres client for \
-                                                                dropping acquired slots: {}",
-                                                                e.display_with_causes()
-                                                            ),
-                                                        ))
-                                                    })?;
-
-                                                    replication_slots_to_drop.push((
-                                                        config,
+                                                    let pending_drop = (
+                                                        conn.connection.clone(),
                                                         conn.publication_details.slot.clone(),
-                                                    ));
+                                                    );
+                                                    replication_slots_to_drop.push(pending_drop);
                                                 }
                                                 _ => {}
                                             }
                                         }
                                     }
-                                    CatalogItem::Sink(Sink { .. }) => {
-                                        storage_sinks_to_drop.push(*id);
+                                    CatalogItem::Sink(sink) => {
+                                        storage_sink_gids_to_drop.push(sink.global_id());
                                     }
-                                    CatalogItem::Index(Index { cluster_id, .. }) => {
-                                        indexes_to_drop.push((*cluster_id, *id));
+                                    CatalogItem::Index(index) => {
+                                        indexes_to_drop.push((index.cluster_id, index.global_id()));
                                     }
-                                    CatalogItem::MaterializedView(MaterializedView {
-                                        cluster_id,
-                                        ..
-                                    }) => {
-                                        materialized_views_to_drop.push((*cluster_id, *id));
+                                    CatalogItem::MaterializedView(mv) => {
+                                        materialized_views_to_drop
+                                            .push((mv.cluster_id, mv.global_id()));
                                     }
-                                    CatalogItem::View(_) => views_to_drop.push(*id),
+                                    CatalogItem::View(view) => {
+                                        views_to_drop.push((*id, view.clone()))
+                                    }
+                                    CatalogItem::ContinualTask(ct) => {
+                                        continual_tasks_to_drop.push((
+                                            *id,
+                                            ct.cluster_id,
+                                            ct.global_id(),
+                                        ));
+                                    }
                                     CatalogItem::Secret(_) => {
                                         secrets_to_drop.push(*id);
                                     }
-                                    CatalogItem::Connection(Connection { connection, .. }) => {
-                                        match connection {
-                                        // SSH connections have an associated secret that should be dropped
-                                        mz_storage_types::connections::Connection::Ssh(_) => {
-                                            secrets_to_drop.push(*id);
+                                    CatalogItem::Connection(Connection { details, .. }) => {
+                                        match details {
+                                            // SSH connections have an associated secret that should be dropped
+                                            ConnectionDetails::Ssh { .. } => {
+                                                secrets_to_drop.push(*id);
+                                            }
+                                            // AWS PrivateLink connections have an associated
+                                            // VpcEndpoint K8S resource that should be dropped
+                                            ConnectionDetails::AwsPrivatelink(_) => {
+                                                vpc_endpoints_to_drop.push(*id);
+                                            }
+                                            _ => (),
                                         }
-                                        // AWS PrivateLink connections have an associated
-                                        // VpcEndpoint K8S resource that should be dropped
-                                        mz_storage_types::connections::Connection::AwsPrivatelink(_) => {
-                                            vpc_endpoints_to_drop.push(*id);
-                                        }
-                                        _ => (),
-                                    }
                                     }
                                     _ => (),
                                 }
                             }
                             catalog::DropObjectInfo::Cluster(id) => {
                                 clusters_to_drop.push(*id);
-                                log_indexes_to_drop.extend(
-                                    self.catalog()
-                                        .get_cluster(*id)
-                                        .log_indexes
-                                        .values()
-                                        .cloned(),
-                                );
                             }
                             catalog::DropObjectInfo::ClusterReplica((
                                 cluster_id,
@@ -318,6 +310,11 @@ impl Coordinator {
                 }
                 catalog::Op::ResetSystemConfiguration { name }
                 | catalog::Op::UpdateSystemConfiguration { name, .. } => {
+                    update_metrics_config |= self
+                        .catalog
+                        .state()
+                        .system_config()
+                        .is_metrics_config_var(name);
                     update_tracing_config |= vars::is_tracing_var(name);
                     update_compute_config |= self
                         .catalog
@@ -385,13 +382,13 @@ impl Coordinator {
                 }
                 catalog::Op::CreateClusterReplica {
                     cluster_id,
-                    id,
+                    name,
                     config,
                     ..
                 } => {
                     cluster_replicas_to_create.push((
                         *cluster_id,
-                        *id,
+                        name.clone(),
                         config.location.num_processes(),
                     ));
                 }
@@ -399,13 +396,15 @@ impl Coordinator {
             }
         }
 
-        let relations_to_drop: BTreeSet<_> = sources_to_drop
+        let collections_to_drop: BTreeSet<GlobalId> = sources_to_drop
             .iter()
-            .chain(tables_to_drop.iter())
-            .chain(storage_sinks_to_drop.iter())
-            .chain(indexes_to_drop.iter().map(|(_, id)| id))
-            .chain(materialized_views_to_drop.iter().map(|(_, id)| id))
-            .chain(views_to_drop.iter())
+            .map(|(_, gid)| *gid)
+            .chain(table_gids_to_drop.iter().map(|(_, gid)| *gid))
+            .chain(storage_sink_gids_to_drop.iter().copied())
+            .chain(indexes_to_drop.iter().map(|(_, gid)| *gid))
+            .chain(materialized_views_to_drop.iter().map(|(_, gid)| *gid))
+            .chain(continual_tasks_to_drop.iter().map(|(_, _, gid)| *gid))
+            .chain(views_to_drop.iter().map(|(_id, view)| view.global_id()))
             .collect();
 
         // Clean up any active compute sinks like subscribes or copy to-s that rely on dropped relations or clusters.
@@ -415,9 +414,9 @@ impl Coordinator {
             if let Some(id) = sink
                 .depends_on()
                 .iter()
-                .find(|id| relations_to_drop.contains(id))
+                .find(|id| collections_to_drop.contains(id))
             {
-                let entry = self.catalog().get_entry(id);
+                let entry = self.catalog().get_entry_by_global_id(id);
                 let name = self
                     .catalog()
                     .resolve_full_name(entry.name(), Some(conn_id))
@@ -446,9 +445,9 @@ impl Coordinator {
             if let Some(id) = pending_peek
                 .depends_on
                 .iter()
-                .find(|id| relations_to_drop.contains(id))
+                .find(|id| collections_to_drop.contains(id))
             {
-                let entry = self.catalog().get_entry(id);
+                let entry = self.catalog().get_entry_by_global_id(id);
                 let name = self
                     .catalog()
                     .resolve_full_name(entry.name(), Some(&pending_peek.conn_id));
@@ -462,16 +461,34 @@ impl Coordinator {
             }
         }
 
+        // Clean up any pending `COPY` statements that rely on dropped relations or clusters.
+        for (conn_id, pending_copy) in &self.active_copies {
+            let dropping_table = table_gids_to_drop
+                .iter()
+                .any(|(item_id, _gid)| pending_copy.table_id == *item_id);
+            let dropping_cluster = clusters_to_drop.contains(&pending_copy.cluster_id);
+
+            if dropping_table || dropping_cluster {
+                copies_to_drop.push(conn_id.clone());
+            }
+        }
+
         let storage_ids_to_drop = sources_to_drop
             .iter()
-            .chain(storage_sinks_to_drop.iter())
-            .chain(tables_to_drop.iter())
-            .chain(materialized_views_to_drop.iter().map(|(_, id)| id))
-            .cloned();
+            .map(|(_, gid)| *gid)
+            .chain(storage_sink_gids_to_drop.iter().copied())
+            .chain(table_gids_to_drop.iter().map(|(_, gid)| *gid))
+            .chain(materialized_views_to_drop.iter().map(|(_, gid)| *gid))
+            .chain(continual_tasks_to_drop.iter().map(|(_, _, gid)| *gid));
         let compute_ids_to_drop = indexes_to_drop
             .iter()
-            .chain(materialized_views_to_drop.iter())
-            .cloned();
+            .copied()
+            .chain(materialized_views_to_drop.iter().copied())
+            .chain(
+                continual_tasks_to_drop
+                    .iter()
+                    .map(|(_, cluster_id, gid)| (*cluster_id, *gid)),
+            );
 
         // Check if any Timelines would become empty, if we dropped the specified storage or
         // compute resources.
@@ -525,7 +542,12 @@ impl Coordinator {
             mut builtin_table_updates,
             audit_events,
         } = catalog
-            .transact(Some(&mut *controller.storage), oracle_write_ts, conn, ops)
+            .transact(
+                Some(&mut controller.storage_collections),
+                oracle_write_ts,
+                conn,
+                ops,
+            )
             .await?;
 
         // Update in-memory cluster replica statuses.
@@ -581,7 +603,11 @@ impl Coordinator {
             }
         }
         let now = to_datetime((catalog.config().now)());
-        for (cluster_id, replica_id, num_processes) in cluster_replicas_to_create {
+        for (cluster_id, replica_name, num_processes) in cluster_replicas_to_create {
+            let replica_id = catalog
+                .resolve_replica_in_cluster(&cluster_id, &replica_name)
+                .expect("just created")
+                .replica_id();
             cluster_replica_statuses.initialize_cluster_replica_statuses(
                 cluster_id,
                 replica_id,
@@ -606,7 +632,7 @@ impl Coordinator {
 
         // Append our builtin table updates, then return the notify so we can run other tasks in
         // parallel.
-        let builtin_update_notify = self
+        let (builtin_update_notify, _) = self
             .builtin_table_update()
             .execute(builtin_table_updates)
             .await;
@@ -621,18 +647,23 @@ impl Coordinator {
                     assert_eq!(should_be_empty, became_empty, "emptiness did not match!");
                 }
             }
+            if !table_gids_to_drop.is_empty() {
+                let ts = self.get_local_write_ts().await;
+                self.drop_tables(table_gids_to_drop, ts.timestamp);
+            }
+            // Note that we drop tables before sources since there can be a weak dependency
+            // on sources from tables in the storage controller that will result in error
+            // logging that we'd prefer to avoid. This isn't an actual dependency issue but
+            // we'd like to keep that error logging around to indicate when an actual
+            // dependency error might occur.
             if !sources_to_drop.is_empty() {
                 self.drop_sources(sources_to_drop);
-            }
-            if !tables_to_drop.is_empty() {
-                let ts = self.get_local_write_ts().await;
-                self.drop_tables(tables_to_drop, ts.timestamp);
             }
             if !webhook_sources_to_restart.is_empty() {
                 self.restart_webhook_sources(webhook_sources_to_restart);
             }
-            if !storage_sinks_to_drop.is_empty() {
-                self.drop_storage_sinks(storage_sinks_to_drop);
+            if !storage_sink_gids_to_drop.is_empty() {
+                self.drop_storage_sinks(storage_sink_gids_to_drop);
             }
             if !compute_sinks_to_drop.is_empty() {
                 self.retire_compute_sinks(compute_sinks_to_drop).await;
@@ -640,19 +671,23 @@ impl Coordinator {
             if !peeks_to_drop.is_empty() {
                 for (dropped_name, uuid) in peeks_to_drop {
                     if let Some(pending_peek) = self.remove_pending_peek(&uuid) {
+                        let cancel_reason = PeekResponse::Error(format!(
+                            "query could not complete because {dropped_name} was dropped"
+                        ));
                         self.controller
                             .compute
-                            .cancel_peek(pending_peek.cluster_id, uuid)
+                            .cancel_peek(pending_peek.cluster_id, uuid, cancel_reason)
                             .unwrap_or_terminate("unable to cancel peek");
                         self.retire_execution(
                             StatementEndedExecutionReason::Canceled,
                             pending_peek.ctx_extra,
                         );
-                        // Client may have left.
-                        let _ = pending_peek.sender.send(PeekResponse::Error(format!(
-                            "query could not complete because {dropped_name} was dropped"
-                        )));
                     }
+                }
+            }
+            if !copies_to_drop.is_empty() {
+                for conn_id in copies_to_drop {
+                    self.cancel_pending_copy(&conn_id);
                 }
             }
             if !indexes_to_drop.is_empty() {
@@ -661,8 +696,8 @@ impl Coordinator {
             if !materialized_views_to_drop.is_empty() {
                 self.drop_materialized_views(materialized_views_to_drop);
             }
-            if !secrets_to_drop.is_empty() {
-                self.drop_secrets(secrets_to_drop).await;
+            if !continual_tasks_to_drop.is_empty() {
+                self.drop_continual_tasks(continual_tasks_to_drop);
             }
             if !vpc_endpoints_to_drop.is_empty() {
                 self.drop_vpc_endpoints_in_background(vpc_endpoints_to_drop)
@@ -670,12 +705,7 @@ impl Coordinator {
             if !cluster_replicas_to_drop.is_empty() {
                 fail::fail_point!("after_catalog_drop_replica");
                 for (cluster_id, replica_id) in cluster_replicas_to_drop {
-                    self.drop_replica(cluster_id, replica_id).await;
-                }
-            }
-            if !log_indexes_to_drop.is_empty() {
-                for id in log_indexes_to_drop {
-                    self.drop_compute_read_policy(&id);
+                    self.drop_replica(cluster_id, replica_id);
                 }
             }
             if !clusters_to_drop.is_empty() {
@@ -684,32 +714,88 @@ impl Coordinator {
                 }
             }
 
-            // We don't want to block the coordinator on an external postgres server, so
-            // move the drop slots to a separate task. This does mean that a failed drop
-            // slot won't bubble up to the user as an error message. However, even if it
-            // did (and how the code previously worked), mz has already dropped it from our
-            // catalog, and so we wouldn't be able to retry anyway.
-            let ssh_tunnel_manager = self.connection_context().ssh_tunnel_manager.clone();
-            if !replication_slots_to_drop.is_empty() {
-                // TODO(guswynn): see if there is more relevant info to add to this name
-                task::spawn(|| "drop_replication_slots", async move {
-                    for (config, slot_name) in replication_slots_to_drop {
-                        // Try to drop the replication slots, but give up after a while.
-                        let _ = Retry::default()
+            // We don't want to block the main coordinator thread on cleaning
+            // up external resources (PostgreSQL replication slots and secrets),
+            // so we perform that cleanup in a background task.
+            //
+            // TODO(database-issues#4154): This is inherently best effort. An ill-timed crash
+            // means we'll never clean these resources up. Safer cleanup for non-Materialize resources.
+            // See <https://github.com/MaterializeInc/database-issues/issues/4154>
+            task::spawn(|| "drop_replication_slots_and_secrets", {
+                let ssh_tunnel_manager = self.connection_context().ssh_tunnel_manager.clone();
+                let secrets_controller = Arc::clone(&self.secrets_controller);
+                let secrets_reader = Arc::clone(self.secrets_reader());
+                let storage_config = self.controller.storage.config().clone();
+
+                async move {
+                    for (connection, replication_slot_name) in replication_slots_to_drop {
+                        tracing::info!(?replication_slot_name, "dropping replication slot");
+
+                        // Try to drop the replication slots, but give up after
+                        // a while. The PostgreSQL server may no longer be
+                        // healthy. Users often drop PostgreSQL sources
+                        // *because* the PostgreSQL server has been
+                        // decomissioned.
+                        let result: Result<(), anyhow::Error> = Retry::default()
                             .max_duration(Duration::from_secs(60))
                             .retry_async(|_state| async {
+                                let config = connection
+                                    .config(&secrets_reader, &storage_config, InTask::No)
+                                    .await
+                                    .map_err(|e| {
+                                        anyhow::anyhow!(
+                                            "error creating Postgres client for \
+                                            dropping acquired slots: {}",
+                                            e.display_with_causes()
+                                        )
+                                    })?;
+
+                                // Yugabyte does not support waiting for the replication to become
+                                // inactive before dropping it. That is fine though because in that
+                                // case dropping will fail and we'll go around the retry loop which
+                                // is effectively the same as waiting 60 seconds.
+                                let should_wait = match connection.flavor {
+                                    PostgresFlavor::Vanilla => true,
+                                    PostgresFlavor::Yugabyte => false,
+                                };
                                 mz_postgres_util::drop_replication_slots(
                                     &ssh_tunnel_manager,
                                     config.clone(),
-                                    &[&slot_name],
+                                    &[(&replication_slot_name, should_wait)],
                                 )
-                                .await
+                                .await?;
+
+                                Ok(())
                             })
                             .await;
-                    }
-                });
-            }
 
+                        if let Err(err) = result {
+                            tracing::warn!(
+                                ?replication_slot_name,
+                                ?err,
+                                "failed to drop replication slot"
+                            );
+                        }
+                    }
+
+                    // Drop secrets *after* dropping the replication slots,
+                    // because those replication slots may.
+                    //
+                    // It's okay if we crash before processing the secret drops,
+                    // as we look for and remove any orphaned secrets during
+                    // startup.
+                    fail_point!("drop_secrets");
+                    for secret in secrets_to_drop {
+                        if let Err(e) = secrets_controller.delete(secret).await {
+                            warn!("Dropping secrets has encountered an error: {}", e);
+                        }
+                    }
+                }
+            });
+
+            if update_metrics_config {
+                mz_metrics::update_dyncfg(&self.catalog().system_config().dyncfg_updates());
+            }
             if update_compute_config {
                 self.update_compute_config();
             }
@@ -775,7 +861,7 @@ impl Coordinator {
         Ok(builtin_update_notify)
     }
 
-    async fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
+    fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
         if let Some(Some(ReplicaMetadata { metrics })) =
             self.transient_replica_metadata.insert(replica_id, None)
         {
@@ -791,38 +877,43 @@ impl Coordinator {
                     .resolve_builtin_table_updates(retractions);
                 updates.extend(retractions);
             }
-            self.builtin_table_update().background(updates);
+            // We don't care about when the write finishes.
+            let _notify = self.builtin_table_update().background(updates);
         }
+
+        self.drop_introspection_subscribes(replica_id);
+
         self.controller
             .drop_replica(cluster_id, replica_id)
-            .await
             .expect("dropping replica must not fail");
     }
 
     /// A convenience method for dropping sources.
-    fn drop_sources(&mut self, sources: Vec<GlobalId>) {
-        for id in &sources {
-            self.active_webhooks.remove(id);
-            self.drop_storage_read_policy(id);
+    fn drop_sources(&mut self, sources: Vec<(CatalogItemId, GlobalId)>) {
+        for (item_id, _gid) in &sources {
+            self.active_webhooks.remove(item_id);
         }
         let storage_metadata = self.catalog.state().storage_metadata();
+        let source_gids = sources.into_iter().map(|(_id, gid)| gid).collect();
         self.controller
             .storage
-            .drop_sources(storage_metadata, sources)
+            .drop_sources(storage_metadata, source_gids)
             .unwrap_or_terminate("cannot fail to drop sources");
     }
 
-    fn drop_tables(&mut self, tables: Vec<GlobalId>, ts: Timestamp) {
-        for id in &tables {
-            self.drop_storage_read_policy(id);
+    fn drop_tables(&mut self, tables: Vec<(CatalogItemId, GlobalId)>, ts: Timestamp) {
+        for (item_id, _gid) in &tables {
+            self.active_webhooks.remove(item_id);
         }
+        let storage_metadata = self.catalog.state().storage_metadata();
+        let table_gids = tables.into_iter().map(|(_id, gid)| gid).collect();
         self.controller
             .storage
-            .drop_tables(tables, ts)
+            .drop_tables(storage_metadata, table_gids, ts)
             .unwrap_or_terminate("cannot fail to drop tables");
     }
 
-    fn restart_webhook_sources(&mut self, sources: impl IntoIterator<Item = GlobalId>) {
+    fn restart_webhook_sources(&mut self, sources: impl IntoIterator<Item = CatalogItemId>) {
         for id in sources {
             self.active_webhooks.remove(&id);
         }
@@ -897,11 +988,57 @@ impl Coordinator {
         }
     }
 
+    /// Drops all pending replicas for a set of clusters
+    /// that are undergoing reconfiguration.
+    pub async fn drop_reconfiguration_replicas(
+        &mut self,
+        cluster_ids: BTreeSet<ClusterId>,
+    ) -> Result<(), AdapterError> {
+        let pending_cluster_ops: Vec<Op> = cluster_ids
+            .iter()
+            .map(|c| {
+                self.catalog()
+                    .get_cluster(c.clone())
+                    .replicas()
+                    .filter_map(|r| match r.config.location {
+                        ReplicaLocation::Managed(ref l) if l.pending => {
+                            Some(DropObjectInfo::ClusterReplica((
+                                c.clone(),
+                                r.replica_id,
+                                ReplicaCreateDropReason::Manual,
+                            )))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<DropObjectInfo>>()
+            })
+            .filter_map(|pending_replica_drop_ops_by_cluster| {
+                match pending_replica_drop_ops_by_cluster.len() {
+                    0 => None,
+                    _ => Some(Op::DropObjects(pending_replica_drop_ops_by_cluster)),
+                }
+            })
+            .collect();
+        if !pending_cluster_ops.is_empty() {
+            self.catalog_transact(None, pending_cluster_ops).await?;
+        }
+        Ok(())
+    }
+
     /// Cancels all active compute sinks for the identified connection.
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn cancel_compute_sinks_for_conn(&mut self, conn_id: &ConnectionId) {
         self.retire_compute_sinks_for_conn(conn_id, ActiveComputeSinkRetireReason::Canceled)
             .await
+    }
+
+    /// Cancels all active cluster reconfigurations sinks for the identified connection.
+    #[mz_ore::instrument(level = "debug")]
+    pub(crate) async fn cancel_cluster_reconfigurations_for_conn(
+        &mut self,
+        conn_id: &ConnectionId,
+    ) {
+        self.retire_cluster_reconfigurations_for_conn(conn_id).await
     }
 
     /// Retires all active compute sinks for the identified connection with the
@@ -923,25 +1060,64 @@ impl Coordinator {
         self.retire_compute_sinks(drop_sinks).await;
     }
 
-    pub(crate) fn drop_storage_sinks(&mut self, sinks: Vec<GlobalId>) {
-        for id in &sinks {
-            self.drop_storage_read_policy(id);
-        }
+    /// Cleans pending cluster reconfiguraiotns for the identified connection
+    #[mz_ore::instrument(level = "debug")]
+    pub(crate) async fn retire_cluster_reconfigurations_for_conn(
+        &mut self,
+        conn_id: &ConnectionId,
+    ) {
+        let reconfiguring_clusters = self
+            .active_conns
+            .get(conn_id)
+            .expect("must exist for active session")
+            .pending_cluster_alters
+            .clone();
+        // try to drop reconfig replicas
+        self.drop_reconfiguration_replicas(reconfiguring_clusters)
+            .await
+            .unwrap_or_terminate("cannot fail to drop reconfiguration replicas");
+
+        self.active_conns
+            .get_mut(conn_id)
+            .expect("must exist for active session")
+            .pending_cluster_alters
+            .clear();
+    }
+
+    pub(crate) fn drop_storage_sinks(&mut self, sink_gids: Vec<GlobalId>) {
+        let storage_metadata = self.catalog.state().storage_metadata();
         self.controller
             .storage
-            .drop_sinks(sinks)
+            .drop_sinks(storage_metadata, sink_gids)
             .unwrap_or_terminate("cannot fail to drop sinks");
     }
 
     pub(crate) fn drop_indexes(&mut self, indexes: Vec<(ClusterId, GlobalId)>) {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
-        for (cluster_id, id) in indexes {
-            if self.drop_compute_read_policy(&id) {
-                by_cluster.entry(cluster_id).or_default().push(id);
-            } else {
-                tracing::error!("Instructed to drop a non-index index");
+        for (cluster_id, gid) in indexes {
+            by_cluster.entry(cluster_id).or_default().push(gid);
+        }
+        for (cluster_id, gids) in by_cluster {
+            let compute = &mut self.controller.compute;
+            // A cluster could have been dropped, so verify it exists.
+            if compute.instance_exists(cluster_id) {
+                compute
+                    .drop_collections(cluster_id, gids)
+                    .unwrap_or_terminate("cannot fail to drop collections");
             }
         }
+    }
+
+    /// A convenience method for dropping materialized views.
+    fn drop_materialized_views(&mut self, mviews: Vec<(ClusterId, GlobalId)>) {
+        let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        let mut mv_gids = Vec::new();
+        for (cluster_id, gid) in mviews {
+            by_cluster.entry(cluster_id).or_default().push(gid);
+            mv_gids.push(gid);
+        }
+
+        // Drop compute sinks.
         for (cluster_id, ids) in by_cluster {
             let compute = &mut self.controller.compute;
             // A cluster could have been dropped, so verify it exists.
@@ -951,15 +1127,22 @@ impl Coordinator {
                     .unwrap_or_terminate("cannot fail to drop collections");
             }
         }
+
+        // Drop storage resources.
+        let storage_metadata = self.catalog.state().storage_metadata();
+        self.controller
+            .storage
+            .drop_sources(storage_metadata, mv_gids)
+            .unwrap_or_terminate("cannot fail to drop sources");
     }
 
-    /// A convenience method for dropping materialized views.
-    fn drop_materialized_views(&mut self, mviews: Vec<(ClusterId, GlobalId)>) {
+    /// A convenience method for dropping continual tasks.
+    fn drop_continual_tasks(&mut self, cts: Vec<(CatalogItemId, ClusterId, GlobalId)>) {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
         let mut source_ids = Vec::new();
-        for (cluster_id, id) in mviews {
-            by_cluster.entry(cluster_id).or_default().push(id);
-            source_ids.push(id);
+        for (item_id, cluster_id, gid) in cts {
+            by_cluster.entry(cluster_id).or_default().push(gid);
+            source_ids.push((item_id, gid));
         }
 
         // Drop compute sinks.
@@ -977,16 +1160,7 @@ impl Coordinator {
         self.drop_sources(source_ids)
     }
 
-    async fn drop_secrets(&mut self, secrets: Vec<GlobalId>) {
-        fail_point!("drop_secrets");
-        for secret in secrets {
-            if let Err(e) = self.secrets_controller.delete(secret).await {
-                warn!("Dropping secrets has encountered an error: {}", e);
-            }
-        }
-    }
-
-    fn drop_vpc_endpoints_in_background(&mut self, vpc_endpoints: Vec<GlobalId>) {
+    fn drop_vpc_endpoints_in_background(&self, vpc_endpoints: Vec<CatalogItemId>) {
         let cloud_resource_controller = Arc::clone(self.cloud_resource_controller
             .as_ref()
             .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))
@@ -1049,18 +1223,18 @@ impl Coordinator {
             .expect("unable to drop temporary items for conn_id");
     }
 
-    fn update_cluster_scheduling_config(&mut self) {
+    fn update_cluster_scheduling_config(&self) {
         let config = flags::orchestrator_scheduling_config(self.catalog.system_config());
         self.controller
             .update_orchestrator_scheduling_config(config);
     }
 
-    fn update_secrets_caching_config(&mut self) {
+    fn update_secrets_caching_config(&self) {
         let config = flags::caching_config(self.catalog.system_config());
         self.caching_secrets_reader.set_policy(config);
     }
 
-    fn update_tracing_config(&mut self) {
+    fn update_tracing_config(&self) {
         let tracing = flags::tracing_config(self.catalog().system_config());
         tracing.apply(&self.tracing_handle);
     }
@@ -1075,14 +1249,14 @@ impl Coordinator {
         self.controller.storage.update_parameters(config_params);
     }
 
-    fn update_pg_timestamp_oracle_config(&mut self) {
+    fn update_pg_timestamp_oracle_config(&self) {
         let config_params = flags::pg_timstamp_oracle_config(self.catalog().system_config());
         if let Some(config) = self.pg_timestamp_oracle_config.as_ref() {
             config_params.apply(config)
         }
     }
 
-    fn update_metrics_retention(&mut self) {
+    fn update_metrics_retention(&self) {
         let duration = self.catalog().system_config().metrics_retention();
         let policy = ReadPolicy::lag_writes_by(
             Timestamp::new(u64::try_from(duration.as_millis()).unwrap_or_else(|_e| {
@@ -1114,8 +1288,8 @@ impl Coordinator {
                 }
             })
             .collect::<Vec<_>>();
-        self.update_storage_base_read_policies(storage_policies);
-        self.update_compute_base_read_policies(compute_policies);
+        self.update_storage_read_policies(storage_policies);
+        self.update_compute_read_policies(compute_policies);
     }
 
     fn update_arrangement_exert_proportionality(&mut self) {
@@ -1145,11 +1319,6 @@ impl Coordinator {
         // Validate `sink.from` is in fact a storage collection
         self.controller.storage.check_exists(sink.from)?;
 
-        let status_id = Some(
-            self.catalog()
-                .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SINK_STATUS_HISTORY),
-        );
-
         // The AsOf is used to determine at what time to snapshot reading from
         // the persist collection.  This is primarily relevant when we do _not_
         // want to include the snapshot in the sink.
@@ -1171,7 +1340,7 @@ impl Coordinator {
         let read_holds = self.acquire_read_holds(&id_bundle);
         let as_of = self.least_valid_read(&read_holds);
 
-        let storage_sink_from_entry = self.catalog().get_entry(&sink.from);
+        let storage_sink_from_entry = self.catalog().get_entry_by_global_id(&sink.from);
         let storage_sink_desc = mz_storage_types::sinks::StorageSinkDesc {
             from: sink.from,
             from_desc: storage_sink_from_entry
@@ -1179,7 +1348,7 @@ impl Coordinator {
                     storage_sink_from_entry.name(),
                     storage_sink_from_entry.conn_id(),
                 ))
-                .expect("indexes can only be built on items with descs")
+                .expect("sinks can only be built on items with descs")
                 .into_owned(),
             connection: sink
                 .connection
@@ -1189,20 +1358,31 @@ impl Coordinator {
             as_of,
             with_snapshot: sink.with_snapshot,
             version: sink.version,
-            status_id,
             from_storage_metadata: (),
+            to_storage_metadata: (),
         };
 
-        let res = self
-            .controller
-            .storage
-            .create_exports(vec![(
-                id,
-                ExportDescription {
+        let collection_desc = CollectionDescription {
+            // TODO(sinks): make generic once we have more than one sink type.
+            desc: KAFKA_PROGRESS_DESC.clone(),
+            data_source: DataSource::Sink {
+                desc: ExportDescription {
                     sink: storage_sink_desc,
                     instance_id: sink.cluster_id,
                 },
-            )])
+            },
+            since: None,
+            status_collection_id: None,
+            timeline: None,
+        };
+        let collections = vec![(id, collection_desc)];
+
+        // Create the collections.
+        let storage_metadata = self.catalog.state().storage_metadata();
+        let res = self
+            .controller
+            .storage
+            .create_collections(storage_metadata, None, collections)
             .await;
 
         // Drop read holds after the export has been created, at which point
@@ -1221,6 +1401,7 @@ impl Coordinator {
     ) -> Result<(), AdapterError> {
         let mut new_kafka_connections = 0;
         let mut new_postgres_connections = 0;
+        let mut new_mysql_connections = 0;
         let mut new_aws_privatelink_connections = 0;
         let mut new_tables = 0;
         let mut new_sources = 0;
@@ -1234,6 +1415,8 @@ impl Coordinator {
         let mut new_objects_per_schema = BTreeMap::new();
         let mut new_secrets = 0;
         let mut new_roles = 0;
+        let mut new_continual_tasks = 0;
+        let mut new_network_policies = 0;
         for op in ops {
             match op {
                 Op::CreateDatabase { .. } => {
@@ -1247,6 +1430,9 @@ impl Coordinator {
                 Op::CreateRole { .. } => {
                     new_roles += 1;
                 }
+                Op::CreateNetworkPolicy { .. } => {
+                    new_network_policies += 1;
+                }
                 Op::CreateCluster { .. } => {
                     // TODO(benesch): having deprecated linked clusters, remove
                     // the `max_sources` and `max_sinks` limit, and set a higher
@@ -1256,15 +1442,19 @@ impl Coordinator {
                 Op::CreateClusterReplica {
                     cluster_id, config, ..
                 } => {
-                    *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) += 1;
-                    if let ReplicaLocation::Managed(location) = &config.location {
-                        let replica_allocation = self
-                            .catalog()
-                            .cluster_replica_sizes()
-                            .0
-                            .get(location.size_for_billing())
-                            .expect("location size is validated against the cluster replica sizes");
-                        new_credit_consumption_rate += replica_allocation.credits_per_hour
+                    if cluster_id.is_user() {
+                        *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) += 1;
+                        if let ReplicaLocation::Managed(location) = &config.location {
+                            let replica_allocation = self
+                                .catalog()
+                                .cluster_replica_sizes()
+                                .0
+                                .get(location.size_for_billing())
+                                .expect(
+                                    "location size is validated against the cluster replica sizes",
+                                );
+                            new_credit_consumption_rate += replica_allocation.credits_per_hour
+                        }
                     }
                 }
                 Op::CreateItem { name, item, .. } => {
@@ -1275,21 +1465,17 @@ impl Coordinator {
                         ))
                         .or_insert(0) += 1;
                     match item {
-                        CatalogItem::Connection(connection) => {
-                            use mz_storage_types::connections::Connection;
-                            match connection.connection {
-                                Connection::Kafka(_) => new_kafka_connections += 1,
-                                Connection::Postgres(_) => new_postgres_connections += 1,
-                                Connection::AwsPrivatelink(_) => {
-                                    new_aws_privatelink_connections += 1
-                                }
-                                // TODO(roshan): Implement limits for MySQL
-                                Connection::Csr(_)
-                                | Connection::Ssh(_)
-                                | Connection::Aws(_)
-                                | Connection::MySql(_) => {}
+                        CatalogItem::Connection(connection) => match connection.details {
+                            ConnectionDetails::Kafka(_) => new_kafka_connections += 1,
+                            ConnectionDetails::Postgres(_) => new_postgres_connections += 1,
+                            ConnectionDetails::MySql(_) => new_mysql_connections += 1,
+                            ConnectionDetails::AwsPrivatelink(_) => {
+                                new_aws_privatelink_connections += 1
                             }
-                        }
+                            ConnectionDetails::Csr(_)
+                            | ConnectionDetails::Ssh { .. }
+                            | ConnectionDetails::Aws(_) => {}
+                        },
                         CatalogItem::Table(_) => {
                             new_tables += 1;
                         }
@@ -1302,6 +1488,9 @@ impl Coordinator {
                         }
                         CatalogItem::Secret(_) => {
                             new_secrets += 1;
+                        }
+                        CatalogItem::ContinualTask(_) => {
+                            new_continual_tasks += 1;
                         }
                         CatalogItem::Log(_)
                         | CatalogItem::View(_)
@@ -1317,21 +1506,25 @@ impl Coordinator {
                                 new_clusters -= 1;
                             }
                             DropObjectInfo::ClusterReplica((cluster_id, replica_id, _reason)) => {
-                                *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) -= 1;
-                                let cluster =
-                                    self.catalog().get_cluster_replica(*cluster_id, *replica_id);
-                                if let ReplicaLocation::Managed(location) = &cluster.config.location
-                                {
-                                    let replica_allocation = self
-                                .catalog()
-                                .cluster_replica_sizes()
-                                .0
-                                .get(location.size_for_billing())
-                                .expect(
-                                    "location size is validated against the cluster replica sizes",
-                                );
-                                    new_credit_consumption_rate -=
-                                        replica_allocation.credits_per_hour
+                                if cluster_id.is_user() {
+                                    *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) -= 1;
+                                    let cluster = self
+                                        .catalog()
+                                        .get_cluster_replica(*cluster_id, *replica_id);
+                                    if let ReplicaLocation::Managed(location) =
+                                        &cluster.config.location
+                                    {
+                                        let replica_allocation = self
+                                            .catalog()
+                                            .cluster_replica_sizes()
+                                            .0
+                                            .get(location.size_for_billing())
+                                            .expect(
+                                                "location size is validated against the cluster replica sizes",
+                                            );
+                                        new_credit_consumption_rate -=
+                                            replica_allocation.credits_per_hour
+                                    }
                                 }
                             }
                             DropObjectInfo::Database(_) => {
@@ -1345,6 +1538,9 @@ impl Coordinator {
                             DropObjectInfo::Role(_) => {
                                 new_roles -= 1;
                             }
+                            DropObjectInfo::NetworkPolicy(_) => {
+                                new_network_policies -= 1;
+                            }
                             DropObjectInfo::Item(id) => {
                                 let entry = self.catalog().get_entry(id);
                                 *new_objects_per_schema
@@ -1354,31 +1550,36 @@ impl Coordinator {
                                     ))
                                     .or_insert(0) -= 1;
                                 match entry.item() {
-                            CatalogItem::Connection(connection) => match connection.connection {
-                                mz_storage_types::connections::Connection::AwsPrivatelink(_) => {
-                                    new_aws_privatelink_connections -= 1;
+                                    CatalogItem::Connection(connection) => match connection.details
+                                    {
+                                        ConnectionDetails::AwsPrivatelink(_) => {
+                                            new_aws_privatelink_connections -= 1;
+                                        }
+                                        _ => (),
+                                    },
+                                    CatalogItem::Table(_) => {
+                                        new_tables -= 1;
+                                    }
+                                    CatalogItem::Source(source) => {
+                                        new_sources -=
+                                            source.user_controllable_persist_shard_count()
+                                    }
+                                    CatalogItem::Sink(_) => new_sinks -= 1,
+                                    CatalogItem::MaterializedView(_) => {
+                                        new_materialized_views -= 1;
+                                    }
+                                    CatalogItem::Secret(_) => {
+                                        new_secrets -= 1;
+                                    }
+                                    CatalogItem::ContinualTask(_) => {
+                                        new_continual_tasks -= 1;
+                                    }
+                                    CatalogItem::Log(_)
+                                    | CatalogItem::View(_)
+                                    | CatalogItem::Index(_)
+                                    | CatalogItem::Type(_)
+                                    | CatalogItem::Func(_) => {}
                                 }
-                                _ => (),
-                            },
-                            CatalogItem::Table(_) => {
-                                new_tables -= 1;
-                            }
-                            CatalogItem::Source(source) => {
-                                new_sources -= source.user_controllable_persist_shard_count()
-                            }
-                            CatalogItem::Sink(_) => new_sinks -= 1,
-                            CatalogItem::MaterializedView(_) => {
-                                new_materialized_views -= 1;
-                            }
-                            CatalogItem::Secret(_) => {
-                                new_secrets -= 1;
-                            }
-                            CatalogItem::Log(_)
-                            | CatalogItem::View(_)
-                            | CatalogItem::Index(_)
-                            | CatalogItem::Type(_)
-                            | CatalogItem::Func(_) => {}
-                        }
                             }
                         }
                     }
@@ -1407,10 +1608,13 @@ impl Coordinator {
                     | CatalogItem::View(_)
                     | CatalogItem::Index(_)
                     | CatalogItem::Type(_)
-                    | CatalogItem::Func(_) => {}
+                    | CatalogItem::Func(_)
+                    | CatalogItem::ContinualTask(_) => {}
                 },
                 Op::AlterRole { .. }
                 | Op::AlterRetainHistory { .. }
+                | Op::AlterNetworkPolicy { .. }
+                | Op::AlterAddColumn { .. }
                 | Op::UpdatePrivilege { .. }
                 | Op::UpdateDefaultPrivilege { .. }
                 | Op::GrantRole { .. }
@@ -1421,34 +1625,34 @@ impl Coordinator {
                 | Op::UpdateOwner { .. }
                 | Op::RevokeRole { .. }
                 | Op::UpdateClusterConfig { .. }
-                | Op::UpdateStorageUsage { .. }
+                | Op::UpdateClusterReplicaConfig { .. }
+                | Op::UpdateSourceReferences { .. }
                 | Op::UpdateSystemConfiguration { .. }
                 | Op::ResetSystemConfiguration { .. }
                 | Op::ResetAllSystemConfiguration { .. }
                 | Op::Comment { .. }
-                | Op::WeirdBuiltinTableUpdates { .. }
+                | Op::WeirdStorageUsageUpdates { .. }
                 | Op::TransactionDryRun => {}
             }
         }
 
         let mut current_aws_privatelink_connections = 0;
         let mut current_postgres_connections = 0;
+        let mut current_mysql_connections = 0;
         let mut current_kafka_connections = 0;
         for c in self.catalog().user_connections() {
             let connection = c
                 .connection()
                 .expect("`user_connections()` only returns connection objects");
 
-            use mz_storage_types::connections::Connection;
-            match connection.connection {
-                Connection::AwsPrivatelink(_) => current_aws_privatelink_connections += 1,
-                Connection::Postgres(_) => current_postgres_connections += 1,
-                Connection::Kafka(_) => current_kafka_connections += 1,
-                // TODO(roshan): Implement limits for MySQL
-                Connection::Csr(_)
-                | Connection::Ssh(_)
-                | Connection::Aws(_)
-                | Connection::MySql(_) => {}
+            match connection.details {
+                ConnectionDetails::AwsPrivatelink(_) => current_aws_privatelink_connections += 1,
+                ConnectionDetails::Postgres(_) => current_postgres_connections += 1,
+                ConnectionDetails::MySql(_) => current_mysql_connections += 1,
+                ConnectionDetails::Kafka(_) => current_kafka_connections += 1,
+                ConnectionDetails::Csr(_)
+                | ConnectionDetails::Ssh { .. }
+                | ConnectionDetails::Aws(_) => {}
             }
         }
         self.validate_resource_limit(
@@ -1464,6 +1668,13 @@ impl Coordinator {
             SystemVars::max_postgres_connections,
             "PostgreSQL Connection",
             MAX_POSTGRES_CONNECTIONS.name(),
+        )?;
+        self.validate_resource_limit(
+            current_mysql_connections,
+            new_mysql_connections,
+            SystemVars::max_mysql_connections,
+            "MySQL Connection",
+            MAX_MYSQL_CONNECTIONS.name(),
         )?;
         self.validate_resource_limit(
             current_aws_privatelink_connections,
@@ -1527,7 +1738,7 @@ impl Coordinator {
             let current_amount = self
                 .catalog()
                 .try_get_cluster(cluster_id)
-                .map(|instance| instance.replicas().count())
+                .map(|instance| instance.user_replicas().count())
                 .unwrap_or(0);
             self.validate_resource_limit(
                 current_amount,
@@ -1601,6 +1812,20 @@ impl Coordinator {
             SystemVars::max_roles,
             "role",
             MAX_ROLES.name(),
+        )?;
+        self.validate_resource_limit(
+            self.catalog().user_continual_tasks().count(),
+            new_continual_tasks,
+            SystemVars::max_continual_tasks,
+            "continual_task",
+            MAX_CONTINUAL_TASKS.name(),
+        )?;
+        self.validate_resource_limit(
+            self.catalog().user_continual_tasks().count(),
+            new_network_policies,
+            SystemVars::max_network_policies,
+            "network_policy",
+            MAX_NETWORK_POLICIES.name(),
         )?;
         Ok(())
     }

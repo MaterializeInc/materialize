@@ -1,0 +1,142 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# https://github.com/MaterializeInc/advent-of-code-2023/blob/main/week1/aoc_1202.md
+
+mode cockroach
+
+statement ok
+CREATE TABLE input (time INT, distance INT);
+
+statement ok
+INSERT INTO input VALUES (16, 18);
+
+statement ok
+INSERT INTO input VALUES (20, 20);
+
+statement ok
+INSERT INTO input VALUES (27, 30);
+
+statement ok
+INSERT INTO input VALUES (50, 47);
+
+statement ok
+INSERT INTO input VALUES (60, 49);
+
+statement ok
+INSERT INTO input VALUES (78, 62);
+
+query I
+WITH options AS
+(
+	SELECT
+	  (floor((time - sqrt(time * time - 4 * distance)) / 2) + 1)::int low,
+	  (ceil((time + sqrt(time * time - 4 * distance)) / 2) - 1)::int hi
+	FROM input
+)
+SELECT exp(sum(ln(hi - low + 1)))::int
+FROM options;
+----
+1180707298
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
+WITH options AS
+(
+	SELECT
+	  (floor((time - sqrt(time * time - 4 * distance)) / 2) + 1)::int low,
+	  (ceil((time + sqrt(time * time - 4 * distance)) / 2) - 1)::int hi
+	FROM input
+)
+SELECT exp(sum(ln(hi - low + 1)))::int
+FROM options;
+----
+Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[sum(lnf64(integer_to_double(((double_to_integer((ceilf64(((integer_to_double(#0{time}) + sqrtf64(integer_to_double(((#0{time} * #0{time}) - (4 * #1{distance}))))) / 2)) - 1)) - double_to_integer((floorf64(((integer_to_double(#0{time}) - sqrtf64(integer_to_double(((#0{time} * #0{time}) - (4 * #1{distance}))))) / 2)) + 1))) + 1))))] // { arity: 1 }
+        ReadStorage materialize.public.input // { arity: 2 }
+  Return // { arity: 1 }
+    Project (#1) // { arity: 1 }
+      Map (double_to_integer(expf64(#0{sum}))) // { arity: 2 }
+        Union // { arity: 1 }
+          Get l0 // { arity: 1 }
+          Map (null) // { arity: 1 }
+            Union // { arity: 0 }
+              Negate // { arity: 0 }
+                Project () // { arity: 0 }
+                  Get l0 // { arity: 1 }
+              Constant // { arity: 0 }
+                - ()
+
+Source materialize.public.input
+
+Target cluster: quickstart
+
+EOF
+
+
+query I
+WITH MUTUALLY RECURSIVE
+    ties(slower NUMERIC, faster NUMERIC) AS (
+        SELECT
+            (time + sqrt(time * time - 4 * distance)) / 2 as slower,
+            (time - sqrt(time * time - 4 * distance)) / 2 as faster
+        FROM input
+    ),
+    options(choices NUMERIC) AS (
+        SELECT 1 + FLOOR(slower)::NUMERIC - CEIL(faster)::NUMERIC FROM ties
+    ),
+    part12(part12 NUMERIC) AS (
+        SELECT pow(10.0, SUM(log(choices))) FROM options
+    )
+SELECT * FROM part12;
+----
+1180707528
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
+WITH MUTUALLY RECURSIVE
+    ties(slower NUMERIC, faster NUMERIC) AS (
+        SELECT
+            (time + sqrt(time * time - 4 * distance)) / 2 as slower,
+            (time - sqrt(time * time - 4 * distance)) / 2 as faster
+        FROM input
+    ),
+    options(choices NUMERIC) AS (
+        SELECT 1 + FLOOR(slower)::NUMERIC - CEIL(faster)::NUMERIC FROM ties
+    ),
+    part12(part12 NUMERIC) AS (
+        SELECT pow(10.0, SUM(log(choices))) FROM options
+    )
+SELECT * FROM part12;
+----
+Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[sum(log10numeric(((1 + floornumeric(double_to_numeric(((integer_to_double(#0{time}) + sqrtf64(integer_to_double(((#0{time} * #0{time}) - (4 * #1{distance}))))) / 2)))) - ceilnumeric(double_to_numeric(((integer_to_double(#0{time}) - sqrtf64(integer_to_double(((#0{time} * #0{time}) - (4 * #1{distance}))))) / 2))))))] // { arity: 1 }
+        ReadStorage materialize.public.input // { arity: 2 }
+  Return // { arity: 1 }
+    Project (#1) // { arity: 1 }
+      Map (power_numeric(10, #0{sum})) // { arity: 2 }
+        Union // { arity: 1 }
+          Get l0 // { arity: 1 }
+          Map (null) // { arity: 1 }
+            Union // { arity: 0 }
+              Negate // { arity: 0 }
+                Project () // { arity: 0 }
+                  Get l0 // { arity: 1 }
+              Constant // { arity: 0 }
+                - ()
+
+Source materialize.public.input
+
+Target cluster: quickstart
+
+EOF

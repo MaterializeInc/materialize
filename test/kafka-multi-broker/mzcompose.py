@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Functional test against Kafka with 3 brokers, most of our other tests only use
+a single Broker.
+"""
+
 import time
 
 from materialize.mzcompose.composition import Composition
@@ -36,6 +41,7 @@ SERVICES = [
 
 def workflow_default(c: Composition) -> None:
     c.up("zookeeper", "kafka1", "kafka2", "kafka3", "schema-registry", "materialized")
+    c.setup_quickstart_cluster()
     c.run_testdrive_files("--kafka-addr=kafka2", "01-init.td")
     time.sleep(10)
     c.kill("kafka1")

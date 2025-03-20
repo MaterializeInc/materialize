@@ -12,7 +12,7 @@ syntax = "proto3";
 package mz_repr.adt.regex;
 
 message ProtoRegex {
-    string pattern = 1;
-    bool case_insensitive = 2;
-    bool dot_matches_new_line = 3;
+  string pattern = 1;
+  bool case_insensitive = 2;
+  bool dot_matches_new_line = 3;
 }

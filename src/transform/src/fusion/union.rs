@@ -17,12 +17,16 @@ use mz_expr::MirRelationExpr;
 pub struct Union;
 
 impl crate::Transform for Union {
+    fn name(&self) -> &'static str {
+        "UnionFusion"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "union")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut crate::TransformCtx,

@@ -1,0 +1,29 @@
+[package]
+name = "mz-sql-server-util"
+description = "SQL Server utility library."
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1.0.66"
+derivative = "2.2.0"
+futures = "0.3.31"
+smallvec = { version = "1.14.0", features = ["union"] }
+static_assertions = "1.1"
+tiberius = { version = "0.12", default-features = false, features = ["tds73"] }
+tokio = { version = "1.44.1", features = ["net"] }
+tokio-util = { version = "0.7.4", features = ["compat"] }
+tracing = "0.1.37"
+uuid = "1.16.0"
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[features]
+default = ["workspace-hack"]
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

@@ -11,48 +11,50 @@ import os
 from textwrap import dedent
 from urllib.parse import quote
 
+import psycopg
+
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.dbt import Dbt
 from materialize.mzcompose.services.testdrive import Testdrive
 
 # The actual values are stored as Pulumi secrets in the i2 repository
-MATERIALIZE_PROD_SANDBOX_HOSTNAME = os.environ["MATERIALIZE_PROD_SANDBOX_HOSTNAME"]
-MATERIALIZE_PROD_SANDBOX_USERNAME = os.environ["MATERIALIZE_PROD_SANDBOX_USERNAME"]
-MATERIALIZE_PROD_SANDBOX_APP_PASSWORD = os.environ[
+MATERIALIZE_PROD_SANDBOX_HOSTNAME = os.getenv("MATERIALIZE_PROD_SANDBOX_HOSTNAME")
+MATERIALIZE_PROD_SANDBOX_USERNAME = os.getenv("MATERIALIZE_PROD_SANDBOX_USERNAME")
+MATERIALIZE_PROD_SANDBOX_APP_PASSWORD = os.getenv(
     "MATERIALIZE_PROD_SANDBOX_APP_PASSWORD"
-]
+)
 
-MATERIALIZE_PROD_SANDBOX_RDS_HOSTNAME = os.environ[
+MATERIALIZE_PROD_SANDBOX_RDS_HOSTNAME = os.getenv(
     "MATERIALIZE_PROD_SANDBOX_RDS_HOSTNAME"
-]
-MATERIALIZE_PROD_SANDBOX_RDS_PASSWORD = os.environ[
+)
+MATERIALIZE_PROD_SANDBOX_RDS_PASSWORD = os.getenv(
     "MATERIALIZE_PROD_SANDBOX_RDS_PASSWORD"
-]
+)
 
-MATERIALIZE_PROD_SANDBOX_RDS_MYSQL_HOSTNAME = os.environ[
+MATERIALIZE_PROD_SANDBOX_RDS_MYSQL_HOSTNAME = os.getenv(
     "MATERIALIZE_PROD_SANDBOX_RDS_MYSQL_HOSTNAME"
-]
-MATERIALIZE_PROD_SANDBOX_RDS_MYSQL_PASSWORD = os.environ[
+)
+MATERIALIZE_PROD_SANDBOX_RDS_MYSQL_PASSWORD = os.getenv(
     "MATERIALIZE_PROD_SANDBOX_RDS_MYSQL_PASSWORD"
-]
+)
 
-CONFLUENT_CLOUD_FIELDENG_KAFKA_BROKER = os.environ[
+CONFLUENT_CLOUD_FIELDENG_KAFKA_BROKER = os.getenv(
     "CONFLUENT_CLOUD_FIELDENG_KAFKA_BROKER"
-]
-CONFLUENT_CLOUD_FIELDENG_CSR_URL = os.environ["CONFLUENT_CLOUD_FIELDENG_CSR_URL"]
+)
+CONFLUENT_CLOUD_FIELDENG_CSR_URL = os.getenv("CONFLUENT_CLOUD_FIELDENG_CSR_URL")
 
-CONFLUENT_CLOUD_FIELDENG_CSR_USERNAME = os.environ[
+CONFLUENT_CLOUD_FIELDENG_CSR_USERNAME = os.getenv(
     "CONFLUENT_CLOUD_FIELDENG_CSR_USERNAME"
-]
-CONFLUENT_CLOUD_FIELDENG_CSR_PASSWORD = os.environ[
+)
+CONFLUENT_CLOUD_FIELDENG_CSR_PASSWORD = os.getenv(
     "CONFLUENT_CLOUD_FIELDENG_CSR_PASSWORD"
-]
-CONFLUENT_CLOUD_FIELDENG_KAFKA_USERNAME = os.environ[
+)
+CONFLUENT_CLOUD_FIELDENG_KAFKA_USERNAME = os.getenv(
     "CONFLUENT_CLOUD_FIELDENG_KAFKA_USERNAME"
-]
-CONFLUENT_CLOUD_FIELDENG_KAFKA_PASSWORD = os.environ[
+)
+CONFLUENT_CLOUD_FIELDENG_KAFKA_PASSWORD = os.getenv(
     "CONFLUENT_CLOUD_FIELDENG_KAFKA_PASSWORD"
-]
+)
 
 
 SERVICES = [
@@ -81,6 +83,9 @@ def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.up("dbt", persistent=True)
     c.up("testdrive", persistent=True)
 
+    assert MATERIALIZE_PROD_SANDBOX_USERNAME is not None
+    assert MATERIALIZE_PROD_SANDBOX_APP_PASSWORD is not None
+    assert MATERIALIZE_PROD_SANDBOX_HOSTNAME is not None
     materialize_url = f"postgres://{quote(MATERIALIZE_PROD_SANDBOX_USERNAME)}:{quote(MATERIALIZE_PROD_SANDBOX_APP_PASSWORD)}@{quote(MATERIALIZE_PROD_SANDBOX_HOSTNAME)}:6875"
 
     with c.override(
@@ -191,11 +196,49 @@ def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
             )
         )
 
+        c.testdrive(
+            input=dedent(
+                """
+            > SET DATABASE=qa_canary_environment
+
+            > CREATE SCHEMA IF NOT EXISTS public_table;
+
+            # create the table here because dbt creates it as materialized view, which will not allow inserts
+            > CREATE TABLE IF NOT EXISTS public_table.table (c INT);
+
+            > GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public_table.table TO "infra+qacanaryload@materialize.io"
+            > GRANT SELECT ON TABLE public_table.table TO "dennis.felsing@materialize.com"
+            """
+            )
+        )
+
     c.exec("dbt", "dbt", "run", "--threads", "8", workdir="/workdir")
 
 
 def workflow_test(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.up("dbt", persistent=True)
+
+    con = psycopg.connect(
+        host=MATERIALIZE_PROD_SANDBOX_RDS_HOSTNAME,
+        user="postgres",
+        dbname="postgres",
+        password=MATERIALIZE_PROD_SANDBOX_RDS_PASSWORD,
+        sslmode="require",
+    )
+    try:
+        with con.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM pg_replication_slots")
+            result = cur.fetchall()
+        assert (
+            result[0][0] == 1
+        ), f"""RDS Postgres has wrong number of pg_replication_slots {result[0][0]}, please fix manually to prevent Postgres from going out of disk from stalled Materialize connections:
+$ psql postgres://postgres:$MATERIALIZE_PROD_SANDBOX_RDS_PASSWORD@$MATERIALIZE_PROD_SANDBOX_RDS_HOSTNAME
+postgres=> SELECT * FROM pg_replication_slots;
+postgres=> SELECT pg_drop_replication_slot('...');
+"""
+    finally:
+        con.close()
+
     c.exec("dbt", "dbt", "test", workdir="/workdir")
 
 

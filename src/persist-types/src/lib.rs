@@ -16,7 +16,8 @@
     clippy::cast_sign_loss
 )]
 
-use bytes::BufMut;
+use bytes::{BufMut, Bytes};
+use mz_ore::url::SensitiveUrl;
 use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -24,25 +25,25 @@ use uuid::Uuid;
 
 use crate::columnar::Schema;
 
+pub mod arrow;
 pub mod codec_impls;
 pub mod columnar;
-pub mod dyn_col;
-pub mod dyn_struct;
 pub mod parquet;
 pub mod part;
+pub mod schema;
 pub mod stats;
 pub mod timestamp;
 pub mod txn;
 
 /// Encoding and decoding operations for a type usable as a persisted key or
 /// value.
-pub trait Codec: Sized + PartialEq + 'static {
+pub trait Codec: Default + Sized + PartialEq + 'static {
     /// The type of the associated schema for [Self].
     ///
     /// This is a separate type because Row is not self-describing. For Row, you
     /// need a RelationDesc to determine the types of any columns that are
     /// Datum::Null.
-    type Schema: Schema<Self>;
+    type Schema: Schema<Self> + PartialEq;
 
     /// Name of the codec.
     ///
@@ -57,6 +58,17 @@ pub trait Codec: Sized + PartialEq + 'static {
     fn encode<B>(&self, buf: &mut B)
     where
         B: BufMut;
+
+    /// Encode a key or value to a Vec.
+    ///
+    /// This is a convenience function for calling [Self::encode] with a fresh
+    /// `Vec` each time. Reuse an allocation when performance matters!
+    fn encode_to_vec(&self) -> Vec<u8> {
+        let mut buf = vec![];
+        self.encode(&mut buf);
+        buf
+    }
+
     /// Decode a key or value previous encoded with this codec's
     /// [Codec::encode].
     ///
@@ -69,11 +81,11 @@ pub trait Codec: Sized + PartialEq + 'static {
     //
     // TODO: Mechanically, this could return a ref to the original bytes
     // without any copies, see if we can make the types work out for that.
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String>;
+    fn decode<'a>(buf: &'a [u8], schema: &Self::Schema) -> Result<Self, String>;
 
     /// A type used with [Self::decode_from] for allocation reuse. Set to `()`
     /// if unnecessary.
-    type Storage;
+    type Storage: Default + Send + Sync;
     /// An alternate form of [Self::decode] which enables amortizing allocs.
     ///
     /// First, instead of returning `Self`, it takes `&mut Self` as a parameter,
@@ -91,10 +103,36 @@ pub trait Codec: Sized + PartialEq + 'static {
         &mut self,
         buf: &'a [u8],
         _storage: &mut Option<Self::Storage>,
+        schema: &Self::Schema,
     ) -> Result<(), String> {
-        *self = Self::decode(buf)?;
+        *self = Self::decode(buf, schema)?;
         Ok(())
     }
+
+    /// Checks that the given value matches the provided schema.
+    ///
+    /// A no-op default implementation is provided for convenience.
+    fn validate(_val: &Self, _schema: &Self::Schema) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Encode a schema for permanent storage.
+    ///
+    /// This must perfectly round-trip the schema through [Self::decode_schema].
+    /// If the encode_schema function ever changes, decode_schema must be able
+    /// to handle bytes output by all previous versions of encode_schema.
+    ///
+    /// TODO: Move this to instead be a new trait that is required by
+    /// Self::Schema?
+    fn encode_schema(schema: &Self::Schema) -> Bytes;
+
+    /// Decode a schema previous encoded with this codec's
+    /// [Self::encode_schema].
+    ///
+    /// This must perfectly round-trip the schema through [Self::encode_schema].
+    /// If the encode_schema function ever changes, decode_schema must be able
+    /// to handle bytes output by all previous versions of encode_schema.
+    fn decode_schema(buf: &Bytes) -> Self::Schema;
 }
 
 /// Encoding and decoding operations for a type usable as a persisted timestamp
@@ -131,18 +169,18 @@ pub trait Codec64: Sized + Clone + 'static {
 #[derive(Arbitrary, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
 pub struct PersistLocation {
     /// Uri string that identifies the blob store.
-    pub blob_uri: String,
+    pub blob_uri: SensitiveUrl,
 
     /// Uri string that identifies the consensus system.
-    pub consensus_uri: String,
+    pub consensus_uri: SensitiveUrl,
 }
 
 impl PersistLocation {
     /// Returns a PersistLocation indicating in-mem blob and consensus.
     pub fn new_in_mem() -> Self {
         PersistLocation {
-            blob_uri: "mem://".to_owned(),
-            consensus_uri: "mem://".to_owned(),
+            blob_uri: "mem://".parse().unwrap(),
+            consensus_uri: "mem://".parse().unwrap(),
         }
     }
 }

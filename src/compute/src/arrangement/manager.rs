@@ -14,32 +14,29 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Instant;
 
-use differential_dataflow::lattice::{antichain_join, Lattice};
+use differential_dataflow::lattice::antichain_join;
 use differential_dataflow::operators::arrange::{Arranged, ShutdownButton, TraceAgent};
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use differential_dataflow::trace::TraceReader;
 use mz_repr::{Diff, GlobalId, Timestamp};
-use timely::dataflow::operators::{probe, CapabilitySet, Probe};
-use timely::dataflow::scopes::Child;
+use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::Scope;
 use timely::progress::frontier::{Antichain, AntichainRef};
-use timely::progress::timestamp::Refines;
 use timely::PartialOrder;
 
-use crate::metrics::TraceMetrics;
-use crate::render::context::MzArrangementImport;
+use crate::metrics::WorkerMetrics;
 use crate::typedefs::{ErrAgent, RowRowAgent};
 
 /// A `TraceManager` stores maps from global identifiers to the primary arranged
 /// representation of that collection.
 pub struct TraceManager {
     pub(crate) traces: BTreeMap<GlobalId, TraceBundle>,
-    metrics: TraceMetrics,
+    metrics: WorkerMetrics,
 }
 
 impl TraceManager {
     /// TODO(undocumented)
-    pub fn new(metrics: TraceMetrics) -> Self {
+    pub fn new(metrics: WorkerMetrics) -> Self {
         TraceManager {
             traces: BTreeMap::new(),
             metrics,
@@ -55,7 +52,7 @@ impl TraceManager {
     /// be able to remove this code.
     pub fn maintenance(&mut self) {
         let start = Instant::now();
-        self.metrics.maintenance_active_info.set(1);
+        self.metrics.arrangement_maintenance_active_info.set(1);
 
         let mut antichain = Antichain::new();
         for bundle in self.traces.values_mut() {
@@ -66,8 +63,10 @@ impl TraceManager {
         }
 
         let duration = start.elapsed().as_secs_f64();
-        self.metrics.maintenance_seconds_total.inc_by(duration);
-        self.metrics.maintenance_active_info.set(0);
+        self.metrics
+            .arrangement_maintenance_seconds_total
+            .inc_by(duration);
+        self.metrics.arrangement_maintenance_active_info.set(0);
     }
 
     /// Enables compaction of traces associated with the identifier.
@@ -102,89 +101,6 @@ impl TraceManager {
     /// Removes the trace for `id`.
     pub fn remove(&mut self, id: &GlobalId) -> Option<TraceBundle> {
         self.traces.remove(id)
-    }
-}
-
-/// An abstraction of a trace handle.
-///
-/// This type exists as an `enum` to support potential experimentation with alternate
-/// representation and layouts.
-#[derive(Clone)]
-pub enum SpecializedTraceHandle {
-    RowRow(PaddedTrace<RowRowAgent<Timestamp, Diff>>),
-}
-
-impl From<RowRowAgent<Timestamp, Diff>> for SpecializedTraceHandle {
-    fn from(trace: RowRowAgent<Timestamp, Diff>) -> Self {
-        Self::RowRow(trace.into())
-    }
-}
-
-impl SpecializedTraceHandle {
-    /// Obtains the logical compaction frontier for the underlying trace handle.
-    fn get_logical_compaction(&mut self) -> AntichainRef<Timestamp> {
-        match self {
-            SpecializedTraceHandle::RowRow(handle) => handle.get_logical_compaction(),
-        }
-    }
-
-    /// Advances the logical compaction frontier for the underlying trace handle.
-    pub fn set_logical_compaction(&mut self, frontier: AntichainRef<Timestamp>) {
-        match self {
-            SpecializedTraceHandle::RowRow(handle) => handle.set_logical_compaction(frontier),
-        }
-    }
-
-    /// Advances the physical compaction frontier for the underlying trace handle.
-    pub fn set_physical_compaction(&mut self, frontier: AntichainRef<Timestamp>) {
-        match self {
-            SpecializedTraceHandle::RowRow(handle) => handle.set_physical_compaction(frontier),
-        }
-    }
-
-    /// Reads the upper frontier of the underlying trace handle.
-    pub fn read_upper(&mut self, target: &mut Antichain<Timestamp>) {
-        match self {
-            SpecializedTraceHandle::RowRow(handle) => handle.read_upper(target),
-        }
-    }
-
-    /// Maps the underlying trace handle to a `MzArrangementImport`,
-    /// while readjusting times by `since` and `until`.
-    pub fn import_frontier<'g, G, T>(
-        &mut self,
-        scope: &Child<'g, G, T>,
-        name: &str,
-        since: Antichain<Timestamp>,
-        until: Antichain<Timestamp>,
-        input_probe: probe::Handle<Timestamp>,
-    ) -> (
-        MzArrangementImport<Child<'g, G, T>, Timestamp>,
-        ShutdownButton<CapabilitySet<Timestamp>>,
-    )
-    where
-        G: Scope<Timestamp = Timestamp>,
-        T: Lattice + Refines<G::Timestamp>,
-    {
-        match self {
-            SpecializedTraceHandle::RowRow(handle) => {
-                let (oks, oks_button) =
-                    handle.import_frontier_core(&scope.parent, name, since, until);
-                let oks = Arranged {
-                    stream: oks.stream.probe_with(&input_probe),
-                    trace: oks.trace,
-                };
-                (MzArrangementImport::RowRow(oks.enter(scope)), oks_button)
-            }
-        }
-    }
-
-    /// Turns this trace into a padded version that reports empty data for all times less than the
-    /// trace's current logical compaction frontier.
-    fn into_padded(self) -> Self {
-        match self {
-            Self::RowRow(trace) => Self::RowRow(trace.into_padded()),
-        }
     }
 }
 
@@ -329,7 +245,7 @@ where
 /// the lifetime of the bundled traces (`to_drop`).
 #[derive(Clone)]
 pub struct TraceBundle {
-    oks: SpecializedTraceHandle,
+    oks: PaddedTrace<RowRowAgent<Timestamp, Diff>>,
     errs: PaddedTrace<ErrAgent<Timestamp, Diff>>,
     to_drop: Option<Rc<dyn Any>>,
 }
@@ -338,7 +254,7 @@ impl TraceBundle {
     /// Constructs a new trace bundle out of an `oks` trace and `errs` trace.
     pub fn new<O, E>(oks: O, errs: E) -> TraceBundle
     where
-        O: Into<SpecializedTraceHandle>,
+        O: Into<PaddedTrace<RowRowAgent<Timestamp, Diff>>>,
         E: Into<PaddedTrace<ErrAgent<Timestamp, Diff>>>,
     {
         TraceBundle {
@@ -360,7 +276,7 @@ impl TraceBundle {
     }
 
     /// Returns a mutable reference to the `oks` trace.
-    pub fn oks_mut(&mut self) -> &mut SpecializedTraceHandle {
+    pub fn oks_mut(&mut self) -> &mut PaddedTrace<RowRowAgent<Timestamp, Diff>> {
         &mut self.oks
     }
 

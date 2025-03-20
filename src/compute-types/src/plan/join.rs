@@ -84,9 +84,9 @@ impl RustType<ProtoJoinPlan> for JoinPlan {
 /// this with a Rust closure (glorious battle was waged, but ultimately lost).
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct JoinClosure {
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub ready_equivalences: Vec<Vec<MirScalarExpr>>,
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub before: mz_expr::SafeMfpPlan,
 }
 
@@ -260,7 +260,7 @@ impl JoinClosure {
             }
         }
 
-        before.permute(permutation, thinned_arity_with_key);
+        before.permute_fn(|c| permutation[&c], thinned_arity_with_key);
 
         // `before` should not be modified after this point.
         before.optimize();
@@ -385,7 +385,7 @@ impl JoinBuildState {
             }
         }
         let column_map_len = column_map.len();
-        mfp.permute(column_map, column_map_len);
+        mfp.permute_fn(|c| column_map[&c], column_map_len);
         mfp.optimize();
 
         JoinClosure {
@@ -415,6 +415,7 @@ impl JoinBuildState {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
 
     use super::*;
@@ -426,7 +427,7 @@ mod tests {
         #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn join_plan_protobuf_roundtrip(expect in any::<JoinPlan>() ) {
             let actual = protobuf_roundtrip::<_, ProtoJoinPlan>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }

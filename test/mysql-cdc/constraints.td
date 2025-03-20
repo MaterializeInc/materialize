@@ -10,8 +10,6 @@
 $ set-sql-timeout duration=1s
 $ set-max-tries max-tries=20
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_mysql_source = true
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
 > CREATE CONNECTION mysql_conn TO MYSQL (
@@ -36,9 +34,11 @@ INSERT INTO unique_not_null VALUES (1,1,null);
 CREATE TABLE unique_nullable (f1 INT, f2 INT, f3 INT, UNIQUE (f1, f2));
 INSERT INTO unique_nullable VALUES (1,1,null), (null,null,null), (null,null,null);
 
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE pk FROM SOURCE mz_source (REFERENCE public.pk);
+> CREATE TABLE unique_not_null FROM SOURCE mz_source (REFERENCE public.unique_not_null);
+> CREATE TABLE unique_nullable FROM SOURCE mz_source (REFERENCE public.unique_nullable);
 
 > CREATE DEFAULT INDEX ON pk;
 > CREATE DEFAULT INDEX ON unique_not_null;
@@ -59,13 +59,13 @@ INSERT INTO unique_nullable VALUES (1,1,null), (null,null,null), (null,null,null
 <null> <null> <null>
 
 # Not null constraint optimizes like this:
-? EXPLAIN SELECT * FROM pk WHERE f1 IS NULL OR f2 IS NULL;
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM pk WHERE f1 IS NULL OR f2 IS NULL;
 Explained Query (fast path):
   Constant <empty>
 
 Target cluster: quickstart
 
-? EXPLAIN SELECT * FROM unique_not_null WHERE f1 IS NULL OR f2 IS NULL;
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM unique_not_null WHERE f1 IS NULL OR f2 IS NULL;
 Explained Query (fast path):
   Constant <empty>
 
@@ -73,7 +73,7 @@ Target cluster: quickstart
 
 #
 # Unique converted to keys
-? EXPLAIN SELECT DISTINCT f1, f2 FROM pk
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT f1, f2 FROM pk
 Explained Query (fast path):
   Project (#0, #1)
     ReadIndex on=materialize.public.pk pk_primary_idx=[*** full scan ***]
@@ -85,7 +85,7 @@ Target cluster: quickstart
 
 #
 # Unique converted to keys
-? EXPLAIN SELECT DISTINCT f1, f2 FROM unique_not_null
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT f1, f2 FROM unique_not_null
 Explained Query (fast path):
   Project (#0, #1)
     ReadIndex on=materialize.public.unique_not_null unique_not_null_primary_idx=[*** full scan ***]
@@ -97,7 +97,7 @@ Target cluster: quickstart
 
 #
 # Unique NOT converted to keys because values are nullable
-? EXPLAIN SELECT DISTINCT f1, f2 FROM unique_nullable
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT f1, f2 FROM unique_nullable
 Explained Query:
   Distinct project=[#0, #1]
     Project (#0, #1)

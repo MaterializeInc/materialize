@@ -15,11 +15,11 @@ mode cockroach
 reset-server
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = on;
+ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = on;
 ----
 COMPLETE 0
 
-statement error db error: ERROR: Expected one of AVAILABILITY or DISK or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE or SCHEDULE, found EOF
+statement error db error: ERROR: Expected one of AVAILABILITY or DISK or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE or SCHEDULE or WORKLOAD, found EOF
 CREATE CLUSTER foo
 
 statement ok
@@ -91,6 +91,7 @@ s1  mz_system
 s2  mz_catalog_server
 s3  mz_probe
 s4  mz_support
+s5  mz_analytics
 u1  quickstart
 u4  foo
 u7  bar
@@ -155,18 +156,18 @@ SELECT * FROM v
 ----
 1
 
-query TTTT
+query TTTTT
 SHOW INDEXES ON v IN CLUSTER bar;
 ----
-v_primary_idx v bar {?column?}
+v_primary_idx v bar {?column?} (empty)
 
 statement ok
 CREATE DEFAULT INDEX foo_v_idx IN CLUSTER foo ON v
 
-query TTTT
+query TTTTT
 SHOW INDEXES IN CLUSTER bar WHERE name NOT LIKE 'mz_%';
 ----
-v_primary_idx v bar {?column?}
+v_primary_idx v bar {?column?} (empty)
 
 query TTTTTTT
 SELECT
@@ -209,15 +210,22 @@ bar  mz_arrangement_records_raw  mz_arrangement_records_raw_u7_primary_idx  1  o
 bar  mz_arrangement_records_raw  mz_arrangement_records_raw_u7_primary_idx  2  worker_id  NULL  false
 bar  mz_arrangement_sharing_raw  mz_arrangement_sharing_raw_u7_primary_idx  1  operator_id  NULL  false
 bar  mz_arrangement_sharing_raw  mz_arrangement_sharing_raw_u7_primary_idx  2  worker_id  NULL  false
+bar  mz_compute_dataflow_global_ids_per_worker  mz_compute_dataflow_global_ids_per_worker_u7_primary_idx  1  id  NULL  false
+bar  mz_compute_dataflow_global_ids_per_worker  mz_compute_dataflow_global_ids_per_worker_u7_primary_idx  2  worker_id  NULL  false
 bar  mz_compute_error_counts_raw  mz_compute_error_counts_raw_u7_primary_idx  1  export_id  NULL  false
 bar  mz_compute_error_counts_raw  mz_compute_error_counts_raw_u7_primary_idx  2  worker_id  NULL  false
 bar  mz_compute_exports_per_worker  mz_compute_exports_per_worker_u7_primary_idx  1  export_id  NULL  false
 bar  mz_compute_exports_per_worker  mz_compute_exports_per_worker_u7_primary_idx  2  worker_id  NULL  false
 bar  mz_compute_frontiers_per_worker  mz_compute_frontiers_per_worker_u7_primary_idx  1  export_id  NULL  false
 bar  mz_compute_frontiers_per_worker  mz_compute_frontiers_per_worker_u7_primary_idx  2  worker_id  NULL  false
+bar  mz_compute_hydration_times_per_worker  mz_compute_hydration_times_per_worker_u7_primary_idx  1  export_id  NULL  false
+bar  mz_compute_hydration_times_per_worker  mz_compute_hydration_times_per_worker_u7_primary_idx  2  worker_id  NULL  false
 bar  mz_compute_import_frontiers_per_worker  mz_compute_import_frontiers_per_worker_u7_primary_idx  1  export_id  NULL  false
 bar  mz_compute_import_frontiers_per_worker  mz_compute_import_frontiers_per_worker_u7_primary_idx  2  import_id  NULL  false
 bar  mz_compute_import_frontiers_per_worker  mz_compute_import_frontiers_per_worker_u7_primary_idx  3  worker_id  NULL  false
+bar  mz_compute_lir_mapping_per_worker  mz_compute_lir_mapping_per_worker_u7_primary_idx  1  global_id  NULL  false
+bar  mz_compute_lir_mapping_per_worker  mz_compute_lir_mapping_per_worker_u7_primary_idx  2  lir_id  NULL  false
+bar  mz_compute_lir_mapping_per_worker  mz_compute_lir_mapping_per_worker_u7_primary_idx  3  worker_id  NULL  false
 bar  mz_compute_operator_durations_histogram_raw  mz_compute_operator_durations_histogram_raw_u7_primary_idx  1  id  NULL  false
 bar  mz_compute_operator_durations_histogram_raw  mz_compute_operator_durations_histogram_raw_u7_primary_idx  2  worker_id  NULL  false
 bar  mz_compute_operator_durations_histogram_raw  mz_compute_operator_durations_histogram_raw_u7_primary_idx  3  duration_ns  NULL  false
@@ -225,11 +233,12 @@ bar  mz_dataflow_addresses_per_worker  mz_dataflow_addresses_per_worker_u7_prima
 bar  mz_dataflow_addresses_per_worker  mz_dataflow_addresses_per_worker_u7_primary_idx  2  worker_id  NULL  false
 bar  mz_dataflow_channels_per_worker  mz_dataflow_channels_per_worker_u7_primary_idx  1  id  NULL  false
 bar  mz_dataflow_channels_per_worker  mz_dataflow_channels_per_worker_u7_primary_idx  2  worker_id  NULL  false
-bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u7_primary_idx  1  address  NULL  false
-bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u7_primary_idx  2  port  NULL  false
-bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u7_primary_idx  3  worker_id  NULL  false
-bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u7_primary_idx  4  update_type  NULL  false
-bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u7_primary_idx  5  time  NULL  true
+bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u7_primary_idx  1  id  NULL  false
+bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u7_primary_idx  2  worker_id  NULL  false
+bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u7_primary_idx  3  source  NULL  false
+bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u7_primary_idx  4  port  NULL  false
+bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u7_primary_idx  5  update_type  NULL  false
+bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u7_primary_idx  6  time  NULL  true
 bar  mz_dataflow_operators_per_worker  mz_dataflow_operators_per_worker_u7_primary_idx  1  id  NULL  false
 bar  mz_dataflow_operators_per_worker  mz_dataflow_operators_per_worker_u7_primary_idx  2  worker_id  NULL  false
 bar  mz_dataflow_shutdown_durations_histogram_raw  mz_dataflow_shutdown_durations_histogram_raw_u7_primary_idx  1  worker_id  NULL  false
@@ -256,11 +265,11 @@ bar  mz_scheduling_parks_histogram_raw  mz_scheduling_parks_histogram_raw_u7_pri
 bar  mz_scheduling_parks_histogram_raw  mz_scheduling_parks_histogram_raw_u7_primary_idx  3  requested_ns  NULL  false
 bar  v  v_primary_idx  1  ?column?  NULL  false
 
-query TTTT
+query TTTTT
 SHOW INDEXES;
 ----
-foo_v_idx v foo {?column?}
-v_primary_idx v bar {?column?}
+foo_v_idx v foo {?column?} (empty)
+v_primary_idx v bar {?column?} (empty)
 
 query T
 SELECT
@@ -303,11 +312,11 @@ v_primary_idx
 statement ok
 CREATE DEFAULT INDEX IN CLUSTER bar ON v
 
-query TTTT
+query TTTTT
 SHOW INDEXES ON v IN CLUSTER bar;
 ----
-v_primary_idx v bar {?column?}
-v_primary_idx1 v bar {?column?}
+v_primary_idx v bar {?column?} (empty)
+v_primary_idx1 v bar {?column?} (empty)
 
 statement error unknown cluster 'noexist'
 CREATE DEFAULT INDEX IN CLUSTER noexist ON v
@@ -325,11 +334,11 @@ DROP CLUSTER baz
 statement error cannot drop cluster "bar" because other objects depend on it
 DROP CLUSTER bar
 
-query TTTT
+query TTTTT
 SHOW INDEXES IN CLUSTER bar WHERE on = 'v';
 ----
-v_primary_idx v bar {?column?}
-v_primary_idx1 v bar {?column?}
+v_primary_idx v bar {?column?} (empty)
+v_primary_idx1 v bar {?column?} (empty)
 
 statement ok
 DROP INDEX v_primary_idx
@@ -404,7 +413,7 @@ DROP CLUSTER foo, foo2, foo3, foo4 CASCADE
 query I
 SELECT COUNT(name) FROM mz_indexes WHERE cluster_id = 'u1';
 ----
-28
+31
 
 query I
 SELECT COUNT(name) FROM mz_indexes WHERE cluster_id <> 'u1' AND cluster_id NOT LIKE 's%';
@@ -417,7 +426,7 @@ CREATE CLUSTER test REPLICAS (foo (SIZE '1'));
 query I
 SELECT COUNT(name) FROM mz_indexes;
 ----
-217
+288
 
 statement ok
 DROP CLUSTER test CASCADE
@@ -425,7 +434,7 @@ DROP CLUSTER test CASCADE
 query T
 SELECT COUNT(name) FROM mz_indexes;
 ----
-189
+257
 
 simple conn=mz_system,user=mz_system
 ALTER CLUSTER quickstart OWNER TO materialize
@@ -558,9 +567,29 @@ CREATE CLUSTER empty REPLICAS ()
 statement ok
 SET cluster = empty
 
-query error CLUSTER "empty" has no replicas available to service request
-SELECT generate_series(1, 1);
+simple
+SELECT generate_series(1, 1)
+----
+db error: ERROR: CLUSTER "empty" has no replicas available to service request
+HINT: Use CREATE CLUSTER REPLICA to attach cluster replicas to the cluster
 
+statement ok
+DROP CLUSTER empty
+
+statement ok
+CREATE CLUSTER empty (SIZE '1', REPLICATION FACTOR 0)
+
+simple
+SELECT generate_series(1, 1)
+----
+db error: ERROR: CLUSTER "empty" has no replicas available to service request
+HINT: Use ALTER CLUSTER to adjust the replication factor of the cluster. Example:`ALTER CLUSTER <cluster-name> SET (REPLICATION FACTOR 1)`
+
+simple
+SUBSCRIBE (SELECT generate_series(1, 1))
+----
+db error: ERROR: CLUSTER "empty" has no replicas available to service request
+HINT: Use ALTER CLUSTER to adjust the replication factor of the cluster. Example:`ALTER CLUSTER <cluster-name> SET (REPLICATION FACTOR 1)`
 
 # Phillip's tests
 
@@ -837,4 +866,183 @@ DROP CLUSTER t1
 ----
 COMPLETE 0
 
+# Test SHOW CREATE
+
+mode standard
+
+statement ok
+CREATE CLUSTER c1 (SIZE '1', REPLICATION FACTOR 2)
+
+query TT
+SHOW CREATE CLUSTER c1
+----
+c1
+CREATE CLUSTER "c1" (DISK = true, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 2, SIZE = '1', SCHEDULE = MANUAL)
+
+statement ok
+ALTER CLUSTER c1 SET (SIZE = '2');
+
+query TT
+SHOW CREATE CLUSTER c1
+----
+c1
+CREATE CLUSTER "c1" (DISK = true, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 2, SIZE = '2', SCHEDULE = MANUAL)
+
+statement ok
+DROP CLUSTER c1
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER c1 SIZE = '1' FEATURES (ENABLE EAGER DELTA JOINS = TRUE);
+----
+COMPLETE 0
+
+query TT
+SHOW CREATE CLUSTER c1
+----
+c1
+CREATE CLUSTER "c1" (DISK = true, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 1, SIZE = '1', SCHEDULE = MANUAL) FEATURES (ENABLE EAGER DELTA JOINS = true)
+
+simple conn=mz_system,user=mz_system
+DROP CLUSTER c1;
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER c1 REPLICAS ()
+
+query error SHOW CREATE for unmanaged clusters not yet supported
+SHOW CREATE CLUSTER c1
+
+statement ok
+DROP CLUSTER c1
+
+mode cockroach
+
 reset-server
+
+# Test setting and altering WORKLOAD CLASS.
+
+query TT colnames
+SELECT * FROM mz_internal.mz_cluster_workload_classes
+----
+id  workload_class
+s1  NULL
+s2  NULL
+s3  NULL
+s4  NULL
+s5  NULL
+u1  NULL
+
+statement error WORKLOAD CLASS not supported for non-system users
+CREATE CLUSTER c1 SIZE '1', WORKLOAD CLASS 'production'
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER c1 SIZE '1', WORKLOAD CLASS 'production'
+----
+COMPLETE 0
+
+query TT colnames
+SELECT * FROM mz_internal.mz_cluster_workload_classes
+----
+id  workload_class
+s1  NULL
+s2  NULL
+s3  NULL
+s4  NULL
+s5  NULL
+u1  NULL
+u2  production
+
+simple conn=mz_system,user=mz_system
+DROP CLUSTER c1
+----
+COMPLETE 0
+
+query TT colnames
+SELECT * FROM mz_internal.mz_cluster_workload_classes
+----
+id  workload_class
+s1  NULL
+s2  NULL
+s3  NULL
+s4  NULL
+s5  NULL
+u1  NULL
+
+statement ok
+CREATE CLUSTER c1 SIZE '1'
+
+query TT colnames
+SELECT * FROM mz_internal.mz_cluster_workload_classes
+----
+id  workload_class
+s1  NULL
+s2  NULL
+s3  NULL
+s4  NULL
+s5  NULL
+u1  NULL
+u3  NULL
+
+statement error WORKLOAD CLASS not supported for non-system users
+ALTER CLUSTER c1 RESET (WORKLOAD CLASS)
+
+statement error WORKLOAD CLASS not supported for non-system users
+ALTER CLUSTER c1 SET (WORKLOAD CLASS 'qa')
+
+statement error WORKLOAD CLASS not supported for non-system users
+ALTER CLUSTER c1 SET (WORKLOAD CLASS NULL)
+
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER c1 RESET (WORKLOAD CLASS)
+----
+COMPLETE 0
+
+query TT colnames
+SELECT * FROM mz_internal.mz_cluster_workload_classes
+----
+id  workload_class
+s1  NULL
+s2  NULL
+s3  NULL
+s4  NULL
+s5  NULL
+u1  NULL
+u3  NULL
+
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER c1 SET (WORKLOAD CLASS 'qa')
+----
+COMPLETE 0
+
+query TT colnames
+SELECT * FROM mz_internal.mz_cluster_workload_classes
+----
+id  workload_class
+s1  NULL
+s2  NULL
+s3  NULL
+s4  NULL
+s5  NULL
+u1  NULL
+u3  qa
+
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER c1 SET (WORKLOAD CLASS NULL)
+----
+COMPLETE 0
+
+query TT colnames
+SELECT * FROM mz_internal.mz_cluster_workload_classes
+----
+id  workload_class
+s1  NULL
+s2  NULL
+s3  NULL
+s4  NULL
+s5  NULL
+u1  NULL
+u3  NULL
+
+statement ok
+DROP CLUSTER c1

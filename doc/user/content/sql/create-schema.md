@@ -33,10 +33,10 @@ _schema&lowbar;name_ | A name for the schema. <br/><br/>You can specify the data
 
 ## Examples
 
-```sql
+```mzsql
 CREATE SCHEMA my_db.my_schema;
 ```
-```sql
+```mzsql
 SHOW SCHEMAS FROM my_db;
 ```
 ```nofmt

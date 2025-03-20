@@ -7,8 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_mysql_source = true
 
 $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
 
@@ -42,12 +40,12 @@ INSERT INTO table_b SELECT 1,2 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT
   )
 
 > CREATE SOURCE mysql_source1
-  FROM MYSQL CONNECTION mysql_conn_1
-  FOR TABLES (public.table_a);
+  FROM MYSQL CONNECTION mysql_conn_1;
+> CREATE TABLE table_a FROM SOURCE mysql_source1 (REFERENCE public.table_a);
 
 > CREATE SOURCE mysql_source2
-  FROM MYSQL CONNECTION mysql_conn_2
-  FOR TABLES (public.table_b);
+  FROM MYSQL CONNECTION mysql_conn_2;
+> CREATE TABLE table_b FROM SOURCE mysql_source2 (REFERENCE public.table_b);
 
 > CREATE TABLE t (a int);
 > INSERT INTO t VALUES (1);

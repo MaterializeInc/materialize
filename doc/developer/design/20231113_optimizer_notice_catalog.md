@@ -1,8 +1,8 @@
 # Catalog tables for Optimizer Notices
 
 - Associated:
-  - MaterializeInc/materialize#21513 (part of MaterializeInc/console#549)
-  - MaterializeInc/materialize#19850 (add `redacted_..._sql` columns to system catalog)
+  - MaterializeInc/database-issues#6468 (part of MaterializeInc/console#549)
+  - MaterializeInc/database-issues#5916 (add `redacted_..._sql` columns to system catalog)
 
 <!--
 The goal of a design document is to thoroughly discover problems and
@@ -56,7 +56,7 @@ CREATE VIEW AS <query>
 statements. Since literal constrains appearing in these statements are
 [classified as "Customer Data"][data_mgmt_policy], we should obfuscate those in
 `redacted_~` columns similarly to the `redacted_create_sql` columns proposed in
-MaterializeInc/materialize#19850.
+MaterializeInc/database-issues#5916.
 
 ### Notice state transitions
 
@@ -446,7 +446,7 @@ Discussed Alternatives can be found in [the alternatives
 section](#rbac-handling-alternatives).
 
 In the long term, we will most probably adopt the dedicated roles mechanism
-proposed by MaterializeInc/materialize#24267 in order to allow admins to grant
+proposed by MaterializeInc/database-issues#7261 in order to allow admins to grant
 read access to other users.
 
 <!--

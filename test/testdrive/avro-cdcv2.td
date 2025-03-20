@@ -112,6 +112,8 @@ $ kafka-ingest format=avro topic=data schema=${schema}
 > CREATE SOURCE data_schema_inline
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+
+> CREATE TABLE data_schema_inline_tbl FROM SOURCE data_schema_inline (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
 
@@ -119,7 +121,7 @@ $ kafka-ingest format=avro topic=data schema=${schema}
 {"com.materialize.cdc.progress":{"lower":[0],"upper":[3],"counts":[]}}
 {"com.materialize.cdc.progress":{"lower":[3],"upper":[10],"counts":[{"time":4,"count":1},{"time":5,"count":2}, {"time": 6, "count": 1}]}}
 
-> SELECT * FROM data_schema_inline
+> SELECT * FROM data_schema_inline_tbl
 id price
 --------
 5 10
@@ -127,7 +129,7 @@ id price
 $ kafka-ingest format=avro topic=data schema=${schema}
 {"array":[{"data":{"id":5,"price":{"int":10}},"time":6,"diff":-1}]}
 
-> SELECT * FROM data_schema_inline
+> SELECT * FROM data_schema_inline_tbl
 
 # Inject "junk" with a previous timestamp, which could simulate a materialized
 # that restarted and emits previously emitted data at a compacted timestamp
@@ -140,7 +142,7 @@ $ kafka-ingest format=avro topic=data schema=${schema}
 $ kafka-ingest format=avro topic=data schema=${schema}
 {"com.materialize.cdc.progress":{"lower":[3],"upper":[6],"counts":[{"time":4,"count":1},{"time":5,"count":2}]}}
 
-> SELECT * FROM data_schema_inline
+> SELECT * FROM data_schema_inline_tbl
 
 # and now, new data again
 
@@ -150,7 +152,7 @@ $ kafka-ingest format=avro topic=data schema=${schema}
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=5
 {"com.materialize.cdc.progress":{"lower":[10],"upper":[15],"counts":[{"time":10,"count":1}]}}
 
-> SELECT * FROM data_schema_inline
+> SELECT * FROM data_schema_inline_tbl
 id price
 --------
 6 10
@@ -163,7 +165,7 @@ SELECT '${arg.default-replica-size}' != '4-4';
 
 > BEGIN
 
-> DECLARE c CURSOR FOR SUBSCRIBE data_schema_inline WITH (SNAPSHOT = FALSE, PROGRESS = TRUE);
+> DECLARE c CURSOR FOR SUBSCRIBE data_schema_inline_tbl WITH (SNAPSHOT = FALSE, PROGRESS = TRUE);
 
 > FETCH 2 FROM c WITH (timeout = '60s')
 14 true <null> <null> <null>

@@ -1,5 +1,101 @@
 # dbt-materialize Changelog
 
+## 1.9.3 - 2025-01-22
+
+* Fix a bug in the `truncate_relation_sql` macro where specifying a cluster for
+  seeds wasn't respecting custom cluster naming logic from user-defined
+  `generate_cluster_name` macros.
+
+## 1.9.2 - 2025-01-21
+
+* Fix schema tagging to work with current transaction limitations.
+
+## 1.9.1 - 2025-01-17
+
+* Fix a bug in the `deploy_init` macro where source cluster validation wasn't
+  respecting custom cluster naming logic from user-defined
+  `generate_cluster_name` macros.
+
+## 1.9.0 - 2024-12-17
+
+* Upgrade to `dbt-postgres` v1.9.0.
+
+## 1.8.6 - 2024-09-25
+
+* Enable the `cluster` configuration for seeds, which allows specifying a target
+  cluster for `dbt seed` to run against (which is required for specific seed
+  operations).
+
+  ```yaml
+    # dbt_project.yml
+  seeds:
+    +cluster: 'dbt_seed_cluster'
+  ```
+
+  ```yaml
+  # /seeds/properties.yml
+  version: 2
+
+  seeds:
+    - name: test_29324
+      config:
+        cluster: dbt_seed_cluster
+  ```
+
+* Add a new `source_table` materialization type, in support of an upcoming
+  feature in Materialize (source versioning).
+
+## 1.8.5 - 2024-08-21
+
+* Fix a bug in the `materialize__drop_relation` macro that prevented using the
+  [`--full-refresh` flag](https://docs.getdbt.com/reference/resource-configs/full_refresh)
+  (or the `full_refresh` configuration) with `dbt seed`.
+
+* Fix a bug that would prevent `dbt seed` from succeeding on subsequent runs
+  without a valid default cluster. It's important to note that this scenario
+  will still fail if no cluster is specified for the target in
+  `profiles.yml` _and_ the default cluster for the user is invalid
+  (or intentionally set to `mz_catalog_server`, which cannot query user data).
+
+* Produce an error message when attempting to use the [`grants` configuration](https://docs.getdbt.com/reference/resource-configs/grants),
+  which is not supported in the adapter. This configuration will be supported in
+  the future (see [#20244](https://github.com/MaterializeInc/database-issues/issues/6073)).
+
+* Stop hardcoding `quickstart` as the default cluster to fall back to when no
+  cluster is specified. When no cluster is specified, either in `profiles.yml`
+  or as a configuration, we should default to the default cluster configured
+  for the connected dbt user (or, the active cluster for the connection). This
+  will still fail if the defalt cluster for the connected user is invalid or
+  set to `mz_catalog_server` (which cannot be modified).
+
+## 1.8.4 - 2024-08-07
+
+* Include the dbt version in the `application_name` connection parameter [#28813](https://github.com/MaterializeInc/materialize/pull/28813).
+
+* Allow users to override the maximum lag threshold in [blue/green deployment
+  macros](https://materialize.com/docs/manage/dbt/development-workflows/#bluegreen-deployments)
+  using the new `lag_threshold` argument.
+
+  **Example**
+  ```bash
+  dbt run-operation deploy_await --args '{lag_threshold: "5s"}'
+  dbt run-operation deploy_promote --args '{wait: true, poll_interval: 30, lag_threshold: "5s"}'
+  ```
+
+  **We do not recommend** changing the default value of the `lag_threshold`
+  (`1s`), unless prompted by the Materialize team.
+
+## 1.8.3 - 2024-07-19
+
+* Enable cross-database references ([#27686](https://github.com/MaterializeInc/materialize/pull/27686)).
+  Although cross-database references are not supported in `dbt-postgres`,
+  databases in Materialize are purely used for namespacing, and therefore do not
+  present the same constraint.
+
+* Add the `create_cluster` and `drop_cluster` macros, which allow managing the
+  creation and deletion of clusters in workflows requiring transient
+  infrastructure (e.g. CI/CD).
+
 ## 1.8.2 - 2024-06-21
 
 * Add support for sink cutover to the blue/green deployment workflow [#27557](https://github.com/MaterializeInc/materialize/pull/27557).
@@ -39,7 +135,7 @@
 ## 1.7.7 - 2024-04-19
 
 * Tweak [`deploy_permission_validation`](https://github.com/MaterializeInc/materialize/blob/main/misc/dbt-materialize/dbt/include/materialize/macros/deploy/deploy_permission_validation.sql)
-  macro to work around [#26738](https://github.com/MaterializeInc/materialize/issues/26738).
+  macro to work around [#26738](https://github.com/MaterializeInc/database-issues/issues/7902).
 
 ## 1.7.6 - 2024-04-18
 
@@ -144,7 +240,7 @@
 ## 1.7.1 - 2023-12-14
 
 * Remove the dependency of data contracts pre-flight checks on the existence of
-  the pre-installed `default` cluster. Fixes [#23600](https://github.com/MaterializeInc/materialize/issues/23600).
+  the pre-installed `default` cluster. Fixes [#23600](https://github.com/MaterializeInc/database-issues/issues/7091).
 
 * Work around [dbt-core #8353](https://github.com/dbt-labs/dbt-core/issues/8353)
   while a permanent fix doesn't land in dbt Core to unblock users using UUID
@@ -285,7 +381,7 @@
   supported** in this release (see [dbt-core #7213](https://github.com/dbt-labs/dbt-core/discussions/7213#discussioncomment-5903205)).
 
 * Fix a bug in the `materialize__list_relations_without_caching` macro which
-  could cause the adapter to break for multi-output sources ([#20483](https://github.com/MaterializeInc/materialize/issues/20483)).
+  could cause the adapter to break for multi-output sources ([#20483](https://github.com/MaterializeInc/database-issues/issues/6162)).
 
 * Expose `owner` in the dbt documentation, now that Materialize supports
   [role-based access control (RBAC)](https://materialize.com/docs/manage/access-control/).
@@ -476,7 +572,7 @@
   dbt adapters, which simply execute all hooks outside of a transaction
   regardless of their configured `transaction` behavior.
 
-[#7675]: https://github.com/MaterializeInc/materialize/issues/7675
+[#7675]: https://github.com/MaterializeInc/database-issues/issues/2375
 
 ## 1.0.1.post1 - 2022-02-14
 
@@ -519,7 +615,7 @@
 * Add three new custom materialization types: `source`, `index`, and `sink`.
   These replace the aforementioned macros that were removed in this release.
 
-[#7810]: https://github.com/MaterializeInc/materialize/issues/7810
+[#7810]: https://github.com/MaterializeInc/database-issues/issues/2404
 
 ## 0.20.1 - 2021-08-12
 
@@ -556,7 +652,7 @@
   incorrectly determined ([#6063]). This most notably caused information about
   model columns to be missing in the documentation generated by `dbt docs`.
 
-[#6063]: https://github.com/MaterializeInc/materialize/issues/6063
+[#6063]: https://github.com/MaterializeInc/database-issues/issues/1871
 
 
 ## 0.18.1 - 2021-02-25

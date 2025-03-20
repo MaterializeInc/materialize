@@ -21,7 +21,7 @@ use mz_repr::GlobalId;
 use crate::notice::{ActionKind, OptimizerNoticeApi};
 
 /// Trying to re-create an index that already exists.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct IndexAlreadyExists {
     /// The id of the identical index.
     pub index_id: GlobalId,

@@ -12,10 +12,10 @@
 use super::Coordinator;
 use crate::catalog::consistency::CatalogInconsistencies;
 use mz_adapter_types::connection::ConnectionIdType;
-use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source};
+use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source, Table, TableDataSource};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::instrument;
-use mz_repr::GlobalId;
+use mz_repr::{CatalogItemId, GlobalId};
 use mz_sql::catalog::{CatalogCluster, CatalogClusterReplica};
 use serde::Serialize;
 
@@ -23,8 +23,8 @@ use serde::Serialize;
 pub struct CoordinatorInconsistencies {
     /// Inconsistencies found in the catalog.
     catalog_inconsistencies: Box<CatalogInconsistencies>,
-    /// Inconsistencies found in read capabilities.
-    read_capabilities: Vec<ReadCapabilitiesInconsistency>,
+    /// Inconsistencies found in read holds.
+    read_holds: Vec<ReadHoldsInconsistency>,
     /// Inconsistencies found with our map of active webhooks.
     active_webhooks: Vec<ActiveWebhookInconsistency>,
     /// Inconsistencies found with our map of cluster statuses.
@@ -34,7 +34,7 @@ pub struct CoordinatorInconsistencies {
 impl CoordinatorInconsistencies {
     pub fn is_empty(&self) -> bool {
         self.catalog_inconsistencies.is_empty()
-            && self.read_capabilities.is_empty()
+            && self.read_holds.is_empty()
             && self.active_webhooks.is_empty()
             && self.cluster_statuses.is_empty()
     }
@@ -50,8 +50,8 @@ impl Coordinator {
             inconsistencies.catalog_inconsistencies = catalog_inconsistencies;
         }
 
-        if let Err(read_capabilities) = self.check_read_capabilities() {
-            inconsistencies.read_capabilities = read_capabilities;
+        if let Err(read_holds) = self.check_read_holds() {
+            inconsistencies.read_holds = read_holds;
         }
 
         if let Err(active_webhooks) = self.check_active_webhooks() {
@@ -71,34 +71,37 @@ impl Coordinator {
 
     /// # Invariants:
     ///
-    /// * Read capabilities should reference known objects.
+    /// * Read holds should reference known objects.
     ///
-    fn check_read_capabilities(&self) -> Result<(), Vec<ReadCapabilitiesInconsistency>> {
-        let mut read_capabilities_inconsistencies = Vec::new();
-        for (gid, _) in &self.storage_read_capabilities {
-            if self.catalog().try_get_entry(gid).is_none() {
-                read_capabilities_inconsistencies
-                    .push(ReadCapabilitiesInconsistency::Storage(gid.clone()));
+    fn check_read_holds(&self) -> Result<(), Vec<ReadHoldsInconsistency>> {
+        let mut inconsistencies = Vec::new();
+
+        for timeline in self.global_timelines.values() {
+            for id in timeline.read_holds.storage_ids() {
+                if self.catalog().try_get_entry_by_global_id(&id).is_none() {
+                    inconsistencies.push(ReadHoldsInconsistency::Storage(id));
+                }
             }
-        }
-        for (gid, _) in &self.compute_read_capabilities {
-            if !gid.is_transient() && self.catalog().try_get_entry(gid).is_none() {
-                read_capabilities_inconsistencies
-                    .push(ReadCapabilitiesInconsistency::Compute(gid.clone()));
-            }
-        }
-        for (conn_id, _) in &self.txn_read_holds {
-            if !self.active_conns.contains_key(conn_id) {
-                read_capabilities_inconsistencies.push(ReadCapabilitiesInconsistency::Transaction(
-                    conn_id.unhandled(),
-                ));
+            for (cluster_id, id) in timeline.read_holds.compute_ids() {
+                if self.catalog().try_get_cluster(cluster_id).is_none() {
+                    inconsistencies.push(ReadHoldsInconsistency::Cluster(cluster_id));
+                }
+                if !id.is_transient() && self.catalog().try_get_entry_by_global_id(&id).is_none() {
+                    inconsistencies.push(ReadHoldsInconsistency::Compute(id));
+                }
             }
         }
 
-        if read_capabilities_inconsistencies.is_empty() {
+        for conn_id in self.txn_read_holds.keys() {
+            if !self.active_conns.contains_key(conn_id) {
+                inconsistencies.push(ReadHoldsInconsistency::Transaction(conn_id.unhandled()));
+            }
+        }
+
+        if inconsistencies.is_empty() {
             Ok(())
         } else {
-            Err(read_capabilities_inconsistencies)
+            Err(inconsistencies)
         }
     }
 
@@ -114,8 +117,13 @@ impl Coordinator {
                 .try_get_entry(id)
                 .map(|entry| entry.item())
                 .and_then(|item| {
-                    let CatalogItem::Source(Source { data_source, .. }) = &item else {
-                        return None;
+                    let data_source = match &item {
+                        CatalogItem::Source(Source { data_source, .. }) => data_source,
+                        CatalogItem::Table(Table {
+                            data_source: TableDataSource::DataSource { desc, .. },
+                            ..
+                        }) => desc,
+                        _ => return None,
                     };
                     Some(matches!(data_source, DataSourceDesc::Webhook { .. }))
                 })
@@ -184,15 +192,16 @@ impl Coordinator {
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
-enum ReadCapabilitiesInconsistency {
+enum ReadHoldsInconsistency {
     Storage(GlobalId),
     Compute(GlobalId),
+    Cluster(ClusterId),
     Transaction(ConnectionIdType),
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 enum ActiveWebhookInconsistency {
-    NonExistentWebhook(GlobalId),
+    NonExistentWebhook(CatalogItemId),
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]

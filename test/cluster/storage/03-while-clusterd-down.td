@@ -20,20 +20,24 @@ $ set-sql-timeout duration=180s
 > SELECT * from remote1
 one
 two
+three
 > SELECT * from remote2
 one
 two
+three
 
 $ kafka-ingest format=bytes topic=remote1
-three
+four
 $ kafka-ingest format=bytes topic=remote2
-three
+four
 
 > SELECT * from remote1
 one
 two
+three
 > SELECT * from remote2
 one
 two
+three
 
 > SET transaction_isolation = 'strict serializable'

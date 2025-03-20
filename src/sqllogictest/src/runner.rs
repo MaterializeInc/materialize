@@ -32,6 +32,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::Duration;
 use std::{env, fmt, ops, str, thread};
 
@@ -42,11 +43,18 @@ use fallible_iterator::FallibleIterator;
 use futures::sink::SinkExt;
 use itertools::Itertools;
 use md5::{Digest, Md5};
+use mz_adapter_types::bootstrap_builtin_cluster_config::{
+    BootstrapBuiltinClusterConfig, ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+};
+use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_controller::ControllerConfig;
 use mz_environmentd::CatalogConfig;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::cast::{CastFrom, ReinterpretCast};
+use mz_ore::channel::trigger;
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -54,6 +62,7 @@ use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use mz_ore::tracing::TracingHandle;
+use mz_ore::url::SensitiveUrl;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::{
@@ -77,8 +86,6 @@ use mz_sql_parser::ast::{
 };
 use mz_sql_parser::parser;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::TxnWalTablesImpl;
-use once_cell::sync::Lazy;
 use postgres_protocol::types;
 use regex::Regex;
 use tempfile::TempDir;
@@ -297,42 +304,46 @@ impl fmt::Display for Outcome<'_> {
     }
 }
 
-#[derive(Default, Debug, Eq, PartialEq)]
-pub struct Outcomes([usize; NUM_OUTCOMES]);
+#[derive(Default, Debug)]
+pub struct Outcomes {
+    stats: [usize; NUM_OUTCOMES],
+    details: Vec<String>,
+}
 
 impl ops::AddAssign<Outcomes> for Outcomes {
     fn add_assign(&mut self, rhs: Outcomes) {
-        for (lhs, rhs) in self.0.iter_mut().zip(rhs.0.iter()) {
+        for (lhs, rhs) in self.stats.iter_mut().zip(rhs.stats.iter()) {
             *lhs += rhs
         }
     }
 }
 impl Outcomes {
     pub fn any_failed(&self) -> bool {
-        self.0[SUCCESS_OUTCOME] + self.0[WARNING_OUTCOME] < self.0.iter().sum::<usize>()
+        self.stats[SUCCESS_OUTCOME] + self.stats[WARNING_OUTCOME] < self.stats.iter().sum::<usize>()
     }
 
     pub fn as_json(&self) -> serde_json::Value {
         serde_json::json!({
-            "unsupported": self.0[0],
-            "parse_failure": self.0[1],
-            "plan_failure": self.0[2],
-            "unexpected_plan_success": self.0[3],
-            "wrong_number_of_rows_affected": self.0[4],
-            "wrong_column_count": self.0[5],
-            "wrong_column_names": self.0[6],
-            "output_failure": self.0[7],
-            "inconsistent_view_outcome": self.0[8],
-            "bail": self.0[9],
-            "warning": self.0[10],
-            "success": self.0[11],
+            "unsupported": self.stats[0],
+            "parse_failure": self.stats[1],
+            "plan_failure": self.stats[2],
+            "unexpected_plan_success": self.stats[3],
+            "wrong_number_of_rows_affected": self.stats[4],
+            "wrong_column_count": self.stats[5],
+            "wrong_column_names": self.stats[6],
+            "output_failure": self.stats[7],
+            "inconsistent_view_outcome": self.stats[8],
+            "bail": self.stats[9],
+            "warning": self.stats[10],
+            "success": self.stats[11],
         })
     }
 
-    pub fn display(&self, no_fail: bool) -> OutcomesDisplay<'_> {
+    pub fn display(&self, no_fail: bool, failure_details: bool) -> OutcomesDisplay<'_> {
         OutcomesDisplay {
             inner: self,
             no_fail,
+            failure_details,
         }
     }
 }
@@ -340,45 +351,56 @@ impl Outcomes {
 pub struct OutcomesDisplay<'a> {
     inner: &'a Outcomes,
     no_fail: bool,
+    failure_details: bool,
 }
 
 impl<'a> fmt::Display for OutcomesDisplay<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let total: usize = self.inner.0.iter().sum();
-        write!(
-            f,
-            "{}:",
-            if self.inner.0[SUCCESS_OUTCOME] + self.inner.0[WARNING_OUTCOME] == total {
-                "PASS"
-            } else if self.no_fail {
-                "FAIL-IGNORE"
-            } else {
-                "FAIL"
+        let total: usize = self.inner.stats.iter().sum();
+        if self.failure_details
+            && (self.inner.stats[SUCCESS_OUTCOME] + self.inner.stats[WARNING_OUTCOME] != total
+                || self.no_fail)
+        {
+            for outcome in &self.inner.details {
+                writeln!(f, "{}", outcome)?;
             }
-        )?;
-        static NAMES: Lazy<Vec<&'static str>> = Lazy::new(|| {
-            vec![
-                "unsupported",
-                "parse-failure",
-                "plan-failure",
-                "unexpected-plan-success",
-                "wrong-number-of-rows-inserted",
-                "wrong-column-count",
-                "wrong-column-names",
-                "output-failure",
-                "inconsistent-view-outcome",
-                "bail",
-                "warning",
-                "success",
-                "total",
-            ]
-        });
-        for (i, n) in self.inner.0.iter().enumerate() {
-            if *n > 0 {
-                write!(f, " {}={}", NAMES[i], n)?;
+            Ok(())
+        } else {
+            write!(
+                f,
+                "{}:",
+                if self.inner.stats[SUCCESS_OUTCOME] + self.inner.stats[WARNING_OUTCOME] == total {
+                    "PASS"
+                } else if self.no_fail {
+                    "FAIL-IGNORE"
+                } else {
+                    "FAIL"
+                }
+            )?;
+            static NAMES: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
+                vec![
+                    "unsupported",
+                    "parse-failure",
+                    "plan-failure",
+                    "unexpected-plan-success",
+                    "wrong-number-of-rows-inserted",
+                    "wrong-column-count",
+                    "wrong-column-names",
+                    "output-failure",
+                    "inconsistent-view-outcome",
+                    "bail",
+                    "warning",
+                    "success",
+                    "total",
+                ]
+            });
+            for (i, n) in self.inner.stats.iter().enumerate() {
+                if *n > 0 {
+                    write!(f, " {}={}", NAMES[i], n)?;
+                }
             }
+            write!(f, " total={}", total)
         }
-        write!(f, " total={}", total)
     }
 }
 
@@ -409,9 +431,9 @@ pub struct RunnerInner<'a> {
     auto_index_selects: bool,
     auto_transactions: bool,
     enable_table_keys: bool,
-    verbosity: usize,
+    verbosity: u8,
     stdout: &'a dyn WriteFmt,
-    _shutdown_trigger: oneshot::Sender<()>,
+    _shutdown_trigger: trigger::Trigger,
     _server_thread: JoinOnDropHandle<()>,
     _temp_dir: TempDir,
 }
@@ -796,7 +818,7 @@ impl<'a> Runner<'a> {
             let name: &str = row.get("name");
             inner
                 .system_client
-                .batch_execute(&format!("DROP DATABASE {name}"))
+                .batch_execute(&format!("DROP DATABASE \"{name}\""))
                 .await?;
         }
         inner
@@ -892,7 +914,7 @@ impl<'a> Runner<'a> {
         if inner.enable_table_keys {
             inner
                 .system_client
-                .simple_query("ALTER SYSTEM SET enable_table_keys = true")
+                .simple_query("ALTER SYSTEM SET unsafe_enable_table_keys = true")
                 .await?;
         }
 
@@ -911,7 +933,7 @@ impl<'a> RunnerInner<'a> {
         let temp_dir = tempfile::tempdir()?;
         let scratch_dir = tempfile::tempdir()?;
         let environment_id = EnvironmentId::for_tests();
-        let (consensus_uri, timestamp_oracle_url) = {
+        let (consensus_uri, timestamp_oracle_url): (SensitiveUrl, SensitiveUrl) = {
             let postgres_url = &config.postgres_url;
             info!(%postgres_url, "starting server");
             let (client, conn) = Retry::default()
@@ -939,8 +961,12 @@ impl<'a> RunnerInner<'a> {
                 )
                 .await?;
             (
-                format!("{postgres_url}?options=--search_path=sqllogictest_consensus"),
-                format!("{postgres_url}?options=--search_path=sqllogictest_tsoracle"),
+                format!("{postgres_url}?options=--search_path=sqllogictest_consensus")
+                    .parse()
+                    .expect("invalid consensus URI"),
+                format!("{postgres_url}?options=--search_path=sqllogictest_tsoracle")
+                    .parse()
+                    .expect("invalid timestamp oracle URI"),
             )
         };
 
@@ -988,8 +1014,9 @@ impl<'a> RunnerInner<'a> {
                 .expect("success")
         });
         let persist_clients =
-            PersistClientCache::new(persist_config, &metrics_registry, |_, metrics| {
+            PersistClientCache::new(persist_config, &metrics_registry, |cfg, metrics| {
                 let sender: Arc<dyn PubSubSender> = Arc::new(MetricsSameProcessPubSubSender::new(
+                    cfg,
                     persist_pubsub_client.sender,
                     metrics,
                 ));
@@ -1022,7 +1049,9 @@ impl<'a> RunnerInner<'a> {
                     blob_uri: format!(
                         "file://{}/persist/blob",
                         config.persist_dir.path().display()
-                    ),
+                    )
+                    .parse()
+                    .expect("invalid blob URI"),
                     consensus_uri,
                 },
                 persist_clients,
@@ -1034,6 +1063,7 @@ impl<'a> RunnerInner<'a> {
                     secrets_reader_local_file_dir: Some(secrets_dir),
                     secrets_reader_kubernetes_context: None,
                     secrets_reader_aws_prefix: None,
+                    secrets_reader_name_prefix: None,
                 },
                 connection_context,
             },
@@ -1047,12 +1077,28 @@ impl<'a> RunnerInner<'a> {
             metrics_registry,
             now,
             environment_id,
-            cluster_replica_sizes: Default::default(),
+            cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
             bootstrap_default_cluster_replica_size: config.replicas.to_string(),
-            bootstrap_builtin_system_cluster_replica_size: config.replicas.to_string(),
-            bootstrap_builtin_catalog_server_cluster_replica_size: config.replicas.to_string(),
-            bootstrap_builtin_probe_cluster_replica_size: config.replicas.to_string(),
-            bootstrap_builtin_support_cluster_replica_size: config.replicas.to_string(),
+            bootstrap_builtin_system_cluster_config: BootstrapBuiltinClusterConfig {
+                replication_factor: SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                size: config.replicas.to_string(),
+            },
+            bootstrap_builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig {
+                replication_factor: CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                size: config.replicas.to_string(),
+            },
+            bootstrap_builtin_probe_cluster_config: BootstrapBuiltinClusterConfig {
+                replication_factor: PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                size: config.replicas.to_string(),
+            },
+            bootstrap_builtin_support_cluster_config: BootstrapBuiltinClusterConfig {
+                replication_factor: SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                size: config.replicas.to_string(),
+            },
+            bootstrap_builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig {
+                replication_factor: ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                size: config.replicas.to_string(),
+            },
             system_parameter_defaults: {
                 let mut params = BTreeMap::new();
                 params.insert(
@@ -1067,7 +1113,8 @@ impl<'a> RunnerInner<'a> {
             storage_usage_collection_interval: Duration::from_secs(3600),
             storage_usage_retention_period: None,
             segment_api_key: None,
-            egress_ips: vec![],
+            segment_client_side: false,
+            egress_addresses: vec![],
             aws_account_id: None,
             aws_privatelink_availability_zones: None,
             launchdarkly_sdk_key: None,
@@ -1077,19 +1124,19 @@ impl<'a> RunnerInner<'a> {
             bootstrap_role: Some("materialize".into()),
             http_host_name: Some(host_name),
             internal_console_redirect_url: None,
-            txn_wal_tables_cli: Some(TxnWalTablesImpl::Lazy),
             tls_reload_certs: mz_server_core::cert_reload_never_reload(),
-            read_only_controllers: false,
+            helm_chart_version: None,
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
         // by the server to be shutdown at the end of each file. If we were to
         // share a Tokio runtime, tasks from the last file's server would still
         // be live at the start of the next file's server.
-        let (server_addr_tx, server_addr_rx) = oneshot::channel();
+        let (server_addr_tx, server_addr_rx): (oneshot::Sender<Result<_, anyhow::Error>>, _) =
+            oneshot::channel();
         let (internal_server_addr_tx, internal_server_addr_rx) = oneshot::channel();
         let (internal_http_server_addr_tx, internal_http_server_addr_rx) = oneshot::channel();
-        let (shutdown_trigger, shutdown_tripwire) = oneshot::channel();
+        let (shutdown_trigger, shutdown_trigger_rx) = trigger::channel();
         let server_thread = thread::spawn(|| {
             let runtime = match Runtime::new() {
                 Ok(runtime) => runtime,
@@ -1104,7 +1151,7 @@ impl<'a> RunnerInner<'a> {
                 Ok(runtime) => runtime,
                 Err(e) => {
                     server_addr_tx
-                        .send(Err(e))
+                        .send(Err(e.into()))
                         .expect("receiver should not drop first");
                     return;
                 }
@@ -1118,7 +1165,7 @@ impl<'a> RunnerInner<'a> {
             internal_http_server_addr_tx
                 .send(server.internal_http_local_addr())
                 .expect("receiver should not drop first");
-            let _ = runtime.block_on(shutdown_tripwire);
+            let _ = runtime.block_on(shutdown_trigger_rx);
         });
         let server_addr = server_addr_rx.await??;
         let internal_server_addr = internal_server_addr_rx.await?;
@@ -1161,7 +1208,7 @@ impl<'a> RunnerInner<'a> {
 
         // Dangerous functions are useful for tests so we enable it for all tests.
         self.system_client
-            .execute("ALTER SYSTEM SET enable_unsafe_functions = on", &[])
+            .execute("ALTER SYSTEM SET unsafe_enable_unsafe_functions = on", &[])
             .await?;
         Ok(())
     }
@@ -1254,8 +1301,8 @@ impl<'a> RunnerInner<'a> {
         sql: &'r str,
         location: Location,
     ) -> Result<Outcome<'r>, anyhow::Error> {
-        static UNSUPPORTED_INDEX_STATEMENT_REGEX: Lazy<Regex> =
-            Lazy::new(|| Regex::new("^(CREATE UNIQUE INDEX|REINDEX)").unwrap());
+        static UNSUPPORTED_INDEX_STATEMENT_REGEX: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new("^(CREATE UNIQUE INDEX|REINDEX)").unwrap());
         if UNSUPPORTED_INDEX_STATEMENT_REGEX.is_match(sql) {
             // sure, we totally made you an index
             return Ok(Outcome::Success);
@@ -1340,7 +1387,7 @@ impl<'a> RunnerInner<'a> {
         match output {
             Ok(_) => {
                 if self.auto_transactions && !*in_transaction {
-                    // No ISOLATION LEVEL SERIALIZABLE because of #18136
+                    // No ISOLATION LEVEL SERIALIZABLE because of database-issues#5323
                     self.client.execute("BEGIN", &[]).await?;
                     *in_transaction = true;
                 }
@@ -1693,15 +1740,18 @@ impl<'a> RunnerInner<'a> {
         let actual = Output::Values(match client.simple_query(sql).await {
             Ok(result) => result
                 .into_iter()
-                .map(|m| match m {
+                .filter_map(|m| match m {
                     SimpleQueryMessage::Row(row) => {
                         let mut s = vec![];
                         for i in 0..row.len() {
                             s.push(row.get(i).unwrap_or("NULL"));
                         }
-                        s.join(",")
+                        Some(s.join(","))
                     }
-                    SimpleQueryMessage::CommandComplete(count) => format!("COMPLETE {}", count),
+                    SimpleQueryMessage::CommandComplete(count) => {
+                        Some(format!("COMPLETE {}", count))
+                    }
+                    SimpleQueryMessage::RowDescription(_) => None,
                     _ => panic!("unexpected"),
                 })
                 .collect::<Vec<_>>(),
@@ -1767,7 +1817,7 @@ pub trait WriteFmt {
 pub struct RunConfig<'a> {
     pub stdout: &'a dyn WriteFmt,
     pub stderr: &'a dyn WriteFmt,
-    pub verbosity: usize,
+    pub verbosity: u8,
     pub postgres_url: String,
     pub no_fail: bool,
     pub fail_fast: bool,
@@ -1904,7 +1954,10 @@ pub async fn run_string(
             }
         }
 
-        outcomes.0[outcome.code()] += 1;
+        outcomes.stats[outcome.code()] += 1;
+        if outcome.failure() {
+            outcomes.details.push(format!("{}", outcome));
+        }
 
         if let Outcome::Bail { .. } = outcome {
             break;
@@ -2372,6 +2425,7 @@ fn generate_view_sql(
                 selection: None,
                 group_by: vec![],
                 having: None,
+                qualify: None,
                 options: vec![],
             })),
             order_by: view_order_by,

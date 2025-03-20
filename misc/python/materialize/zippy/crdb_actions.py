@@ -11,14 +11,14 @@ import time
 
 from materialize.mzcompose.composition import Composition
 from materialize.zippy.crdb_capabilities import CockroachIsRunning
-from materialize.zippy.framework import Action, Capability
+from materialize.zippy.framework import Action, Capability, State
 
 
 class CockroachStart(Action):
     """Starts a CockroachDB instance."""
 
-    def run(self, c: Composition) -> None:
-        c.up("cockroach")
+    def run(self, c: Composition, state: State) -> None:
+        c.up(c.metadata_store())
 
     def provides(self) -> list[Capability]:
         return [CockroachIsRunning()]
@@ -31,7 +31,7 @@ class CockroachRestart(Action):
     def requires(cls) -> set[type[Capability]]:
         return {CockroachIsRunning}
 
-    def run(self, c: Composition) -> None:
-        c.kill("cockroach")
+    def run(self, c: Composition, state: State) -> None:
+        c.kill(c.metadata_store())
         time.sleep(1)
-        c.up("cockroach")
+        c.up(c.metadata_store())

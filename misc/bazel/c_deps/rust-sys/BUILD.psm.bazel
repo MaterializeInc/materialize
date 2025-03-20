@@ -1,0 +1,54 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License in the LICENSE file at the
+# root of this repository, or online at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Builds the assembly coded included with `psm`"""
+
+# Note: `psm` supports more platforms and OS's than we configure for here.
+# They're omitted because we have no use for them.
+cc_library(
+    name = "psm_s",
+    srcs = select(
+        {
+            "@platforms//cpu:x86_64": ["src/arch/x86_64.s"],
+            "@platforms//cpu:aarch64": ["src/arch/aarch_aapcs64.s"],
+        },
+        no_match_error = "The specified cpu is not supported.",
+    ),
+    hdrs = ["src/arch/psm.h"],
+    # Always optimize `psm` since it's small and in some very hot code paths.
+    copts = [
+        "-xassembler-with-cpp",
+        "-O3",
+    ] + select(
+        {
+            "@platforms//os:linux": [
+                "-DCFG_TARGET_OS_linux",
+                "-DCFG_TARGET_ENV_gnu",
+            ],
+            "@platforms//os:macos": [
+                "-DCFG_TARGET_OS_macos",
+                "-DCFG_TARGET_ENV_",
+            ],
+        },
+        no_match_error = "The specified OS is not supported.",
+    ) + select(
+        {
+            "@platforms//cpu:x86_64": ["-DCFG_TARGET_ARCH_x86_64"],
+            "@platforms//cpu:aarch64": ["-DCFG_TARGET_ARCH_aarch64"],
+        },
+        no_match_error = "The specified cpu is not supported.",
+    ),
+    visibility = ["//visibility:public"],
+)

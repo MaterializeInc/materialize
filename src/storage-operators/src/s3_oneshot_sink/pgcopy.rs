@@ -12,14 +12,16 @@ use aws_types::sdk_config::SdkConfig;
 use mz_aws_util::s3_uploader::{
     CompletedUpload, S3MultiPartUploadError, S3MultiPartUploader, S3MultiPartUploaderConfig,
 };
+use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
 use mz_ore::task::JoinHandleExt;
-use mz_pgcopy::{encode_copy_format, CopyFormatParams};
+use mz_pgcopy::{encode_copy_format, encode_copy_format_header, CopyFormatParams};
 use mz_repr::{GlobalId, RelationDesc, Row};
+use mz_storage_types::sinks::s3_oneshot_sink::S3KeyManager;
 use mz_storage_types::sinks::{S3SinkFormat, S3UploadInfo};
 use tracing::info;
 
-use super::{CopyToParameters, CopyToS3Uploader, S3KeyManager};
+use super::{CopyToParameters, CopyToS3Uploader};
 
 /// Required state to upload batches to S3
 pub(super) struct PgCopyUploader {
@@ -118,13 +120,17 @@ impl CopyToS3Uploader for PgCopyUploader {
             Err(e) => Err(e.into()),
         }
     }
+
+    async fn force_new_file(&mut self) -> Result<(), anyhow::Error> {
+        self.start_new_file_upload().await
+    }
 }
 
 impl PgCopyUploader {
     /// Creates the uploader for the next file and starts the multi part upload.
     async fn start_new_file_upload(&mut self) -> Result<(), anyhow::Error> {
         self.finish().await?;
-        assert!(self.current_file_uploader.is_none());
+        assert_none!(self.current_file_uploader);
 
         self.file_index += 1;
         let object_key =
@@ -154,7 +160,14 @@ impl PgCopyUploader {
         });
         let (uploader, sdk_config) = handle.wait_and_assert_finished().await;
         self.sdk_config = Some(sdk_config);
-        self.current_file_uploader = Some(uploader?);
+        let mut uploader = uploader?;
+        if self.format.requires_header() {
+            let mut buf: Vec<u8> = vec![];
+            encode_copy_format_header(&self.format, &self.desc, &mut buf)
+                .map_err(|_| anyhow!("error encoding header"))?;
+            uploader.buffer_chunk(&buf)?;
+        }
+        self.current_file_uploader = Some(uploader);
         Ok(())
     }
 }
@@ -199,8 +212,9 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
-    #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18898
+    #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5586
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
+    #[ignore] // TODO: Reenable against minio so it can run locally
     async fn test_multiple_files() -> Result<(), anyhow::Error> {
         let sdk_config = mz_aws_util::defaults().load().await;
         let (bucket, path) = match s3_bucket_path_for_test() {

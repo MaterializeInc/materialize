@@ -27,12 +27,16 @@ use crate::TransformCtx;
 pub struct Fusion;
 
 impl crate::Transform for Fusion {
+    fn name(&self) -> &'static str {
+        "Fusion"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "fusion")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,

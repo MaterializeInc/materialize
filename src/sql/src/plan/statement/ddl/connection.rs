@@ -11,9 +11,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use anyhow::Context;
 use array_concat::concat_arrays;
 use itertools::Itertools;
+use maplit::btreemap;
+use mz_ore::num::NonNeg;
 use mz_ore::str::StrExt;
+use mz_postgres_util::tunnel::PostgresFlavor;
+use mz_repr::CatalogItemId;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::ConnectionOptionName::*;
 use mz_sql_parser::ast::{
@@ -21,18 +26,23 @@ use mz_sql_parser::ast::{
     KafkaBroker, KafkaBrokerAwsPrivatelinkOption, KafkaBrokerAwsPrivatelinkOptionName,
     KafkaBrokerTunnel,
 };
-use mz_storage_types::connections::aws::{AwsAssumeRole, AwsAuth, AwsConnection, AwsCredentials};
+use mz_ssh_util::keys::SshKeyPair;
+use mz_storage_types::connections::aws::{
+    AwsAssumeRole, AwsAuth, AwsConnection, AwsConnectionReference, AwsCredentials,
+};
 use mz_storage_types::connections::inline::ReferencedConnection;
+use mz_storage_types::connections::string_or_secret::StringOrSecret;
 use mz_storage_types::connections::{
     AwsPrivatelink, AwsPrivatelinkConnection, CsrConnection, CsrConnectionHttpAuth,
-    KafkaConnection, KafkaSaslConfig, KafkaTlsConfig, MySqlConnection, MySqlSslMode,
-    PostgresConnection, SshConnection, SshTunnel, StringOrSecret, TlsIdentity, Tunnel,
+    KafkaConnection, KafkaSaslConfig, KafkaTlsConfig, KafkaTopicOptions, MySqlConnection,
+    MySqlSslMode, PostgresConnection, SshConnection, SshTunnel, TlsIdentity, Tunnel,
 };
 
 use crate::names::Aug;
 use crate::plan::statement::{Connection, ResolvedItemName};
-use crate::plan::with_options::{self, TryFromValue};
-use crate::plan::{PlanError, StatementContext};
+use crate::plan::with_options;
+use crate::plan::{ConnectionDetails, PlanError, SshKey, StatementContext};
+use crate::session::vars::{self, ENABLE_AWS_MSK_IAM_AUTH};
 
 generate_extracted_config!(
     ConnectionOption,
@@ -40,6 +50,7 @@ generate_extracted_config!(
     (AssumeRoleArn, String),
     (AssumeRoleSessionName, String),
     (AvailabilityZones, Vec<String>),
+    (AwsConnection, with_options::Object),
     (AwsPrivatelink, ConnectionDefaultAwsPrivatelink<Aug>),
     // (AwsPrivatelink, with_options::Object),
     (Broker, Vec<KafkaBroker<Aug>>),
@@ -50,6 +61,9 @@ generate_extracted_config!(
     (Password, with_options::Secret),
     (Port, u16),
     (ProgressTopic, String),
+    (ProgressTopicReplicationFactor, i32),
+    (PublicKey1, String),
+    (PublicKey2, String),
     (Region, String),
     (SaslMechanisms, String),
     (SaslPassword, with_options::Secret),
@@ -74,7 +88,8 @@ generate_extracted_config!(
 );
 
 /// Options which cannot be changed using ALTER CONNECTION.
-pub(crate) const INALTERABLE_OPTIONS: &[ConnectionOptionName] = &[ProgressTopic];
+pub(crate) const INALTERABLE_OPTIONS: &[ConnectionOptionName] =
+    &[ProgressTopic, ProgressTopicReplicationFactor];
 
 /// Options of which only one may be specified.
 pub(crate) const MUTUALLY_EXCLUSIVE_SETS: &[&[ConnectionOptionName]] = &[&[Broker, Brokers]];
@@ -108,9 +123,11 @@ pub(super) fn validate_options_per_connection_type(
             User,
         ],
         CreateConnectionType::Kafka => &[
+            AwsConnection,
             Broker,
             Brokers,
             ProgressTopic,
+            ProgressTopicReplicationFactor,
             AwsPrivatelink,
             SshTunnel,
             SslKey,
@@ -121,7 +138,7 @@ pub(super) fn validate_options_per_connection_type(
             SaslPassword,
             SecurityProtocol,
         ],
-        CreateConnectionType::Postgres => &[
+        CreateConnectionType::Postgres | CreateConnectionType::Yugabyte => &[
             AwsPrivatelink,
             Database,
             Host,
@@ -134,9 +151,23 @@ pub(super) fn validate_options_per_connection_type(
             SslMode,
             User,
         ],
-        CreateConnectionType::Ssh => &[Host, Port, User],
+        CreateConnectionType::Ssh => &[Host, Port, User, PublicKey1, PublicKey2],
         CreateConnectionType::MySql => &[
             AwsPrivatelink,
+            Host,
+            Password,
+            Port,
+            SshTunnel,
+            SslCertificate,
+            SslCertificateAuthority,
+            SslKey,
+            SslMode,
+            User,
+            AwsConnection,
+        ],
+        CreateConnectionType::SqlServer => &[
+            AwsPrivatelink,
+            Database,
             Host,
             Password,
             Port,
@@ -172,14 +203,14 @@ impl ConnectionOptionExtracted {
         validate_options_per_connection_type(t, self.seen.clone())
     }
 
-    pub fn try_into_connection(
+    pub fn try_into_connection_details(
         self,
         scx: &StatementContext,
         connection_type: CreateConnectionType,
-    ) -> Result<Connection<ReferencedConnection>, PlanError> {
+    ) -> Result<ConnectionDetails, PlanError> {
         self.ensure_only_valid_options(connection_type)?;
 
-        let connection: Connection<ReferencedConnection> = match connection_type {
+        let connection: ConnectionDetails = match connection_type {
             CreateConnectionType::Aws => {
                 let credentials = match (
                     self.access_key_id,
@@ -218,7 +249,7 @@ impl ConnectionOptionExtracted {
                     }
                 };
 
-                Connection::Aws(AwsConnection {
+                ConnectionDetails::Aws(AwsConnection {
                     auth,
                     endpoint: match self.endpoint {
                         // TODO(benesch): this should not treat an empty endpoint as equivalent to a `NULL`
@@ -263,16 +294,31 @@ impl ConnectionOptionExtracted {
                         });
                     }
                 }
-                Connection::AwsPrivatelink(connection)
+                ConnectionDetails::AwsPrivatelink(connection)
             }
             CreateConnectionType::Kafka => {
-                let (tls, sasl) = plan_kafka_security(&self)?;
+                let (tls, sasl) = plan_kafka_security(scx, &self)?;
 
-                Connection::Kafka(KafkaConnection {
+                ConnectionDetails::Kafka(KafkaConnection {
                     brokers: self.get_brokers(scx)?,
                     default_tunnel: scx
                         .build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?,
                     progress_topic: self.progress_topic,
+                    progress_topic_options: KafkaTopicOptions {
+                        // We only allow configuring the progress topic replication factor for now.
+                        // For correctness, the partition count MUST be one and for performance the compaction
+                        // policy MUST be enabled.
+                        partition_count: Some(NonNeg::try_from(1).expect("1 is positive")),
+                        replication_factor: self.progress_topic_replication_factor.map(|val| {
+                            if val <= 0 {
+                                Err(sql_err!("invalid CONNECTION: PROGRESS TOPIC REPLICATION FACTOR must be greater than 0"))?
+                            }
+                            NonNeg::try_from(val).map_err(|e| sql_err!("{e}"))
+                        }).transpose()?,
+                        topic_config: btreemap! {
+                            "cleanup.policy".to_string() => "compact".to_string(),
+                        },
+                    },
                     options: BTreeMap::new(),
                     tls,
                     sasl,
@@ -305,7 +351,7 @@ impl ConnectionOptionExtracted {
                     password: self.password.map(|secret| secret.into()),
                 });
 
-                // TODO we should move to self.port being unsupported if aws_privatelink is some, see <https://github.com/MaterializeInc/materialize/issues/24712#issuecomment-1925443977>
+                // TODO we should move to self.port being unsupported if aws_privatelink is some, see <https://github.com/MaterializeInc/database-issues/issues/7359#issuecomment-1925443977>
                 if let Some(privatelink) = self.aws_privatelink.as_ref() {
                     if privatelink.port.is_some() {
                         sql_bail!("invalid CONNECTION: PORT in AWS PRIVATELINK is only supported for kafka")
@@ -313,7 +359,7 @@ impl ConnectionOptionExtracted {
                 }
                 let tunnel = scx.build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?;
 
-                Connection::Csr(CsrConnection {
+                ConnectionDetails::Csr(CsrConnection {
                     url,
                     tls_root_cert: self.ssl_certificate_authority,
                     tls_identity,
@@ -321,7 +367,11 @@ impl ConnectionOptionExtracted {
                     tunnel,
                 })
             }
-            CreateConnectionType::Postgres => {
+            CreateConnectionType::Postgres | CreateConnectionType::Yugabyte => {
+                if matches!(connection_type, CreateConnectionType::Yugabyte) {
+                    scx.require_feature_flag(&vars::ENABLE_YUGABYTE_CONNECTION)?;
+                }
+
                 let cert = self.ssl_certificate;
                 let key = self.ssl_key.map(|secret| secret.into());
                 let tls_identity = match (cert, key) {
@@ -345,7 +395,7 @@ impl ConnectionOptionExtracted {
                     Some(m) => sql_bail!("invalid CONNECTION: unknown SSL MODE {}", m.quoted()),
                 };
 
-                // TODO we should move to self.port being unsupported if aws_privatelink is some, see <https://github.com/MaterializeInc/materialize/issues/24712#issuecomment-1925443977>
+                // TODO we should move to self.port being unsupported if aws_privatelink is some, see <https://github.com/MaterializeInc/database-issues/issues/7359#issuecomment-1925443977>
                 if let Some(privatelink) = self.aws_privatelink.as_ref() {
                     if privatelink.port.is_some() {
                         sql_bail!("invalid CONNECTION: PORT in AWS PRIVATELINK is only supported for kafka")
@@ -353,7 +403,7 @@ impl ConnectionOptionExtracted {
                 }
                 let tunnel = scx.build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?;
 
-                Connection::Postgres(PostgresConnection {
+                ConnectionDetails::Postgres(PostgresConnection {
                     database: self
                         .database
                         .ok_or_else(|| sql_err!("DATABASE option is required"))?,
@@ -369,25 +419,50 @@ impl ConnectionOptionExtracted {
                     user: self
                         .user
                         .ok_or_else(|| sql_err!("USER option is required"))?,
+                    flavor: match connection_type {
+                        CreateConnectionType::Postgres => PostgresFlavor::Vanilla,
+                        CreateConnectionType::Yugabyte => PostgresFlavor::Yugabyte,
+                        _ => unreachable!(),
+                    },
                 })
             }
-            CreateConnectionType::Ssh => Connection::Ssh(SshConnection {
-                host: self
-                    .host
-                    .ok_or_else(|| sql_err!("HOST option is required"))?,
-                port: self.port.unwrap_or(22_u16),
-                user: match self
-                    .user
-                    .ok_or_else(|| sql_err!("USER option is required"))?
-                {
-                    StringOrSecret::String(user) => user,
-                    StringOrSecret::Secret(_) => {
-                        sql_bail!("SSH connections do not support supplying USER value as SECRET")
+            CreateConnectionType::Ssh => {
+                let ensure_key = |public_key| match public_key {
+                    Some(public_key) => Ok::<_, anyhow::Error>(SshKey::PublicOnly(public_key)),
+                    None => {
+                        let key = SshKeyPair::new().context("creating SSH key")?;
+                        Ok(SshKey::Both(key))
                     }
-                },
-            }),
+                };
+                ConnectionDetails::Ssh {
+                    connection: SshConnection {
+                        host: self
+                            .host
+                            .ok_or_else(|| sql_err!("HOST option is required"))?,
+                        port: self.port.unwrap_or(22_u16),
+                        user: match self
+                            .user
+                            .ok_or_else(|| sql_err!("USER option is required"))?
+                        {
+                            StringOrSecret::String(user) => user,
+                            StringOrSecret::Secret(_) => {
+                                sql_bail!(
+                                    "SSH connections do not support supplying USER value as SECRET"
+                                )
+                            }
+                        },
+                    },
+                    key_1: ensure_key(self.public_key1)?,
+                    key_2: ensure_key(self.public_key2)?,
+                }
+            }
             CreateConnectionType::MySql => {
-                scx.require_feature_flag(&crate::session::vars::ENABLE_MYSQL_SOURCE)?;
+                let aws_connection = get_aws_connection_reference(scx, &self)?;
+                if aws_connection.is_some() && self.password.is_some() {
+                    sql_bail!(
+                        "invalid CONNECTION: AWS IAM authentication is not supported with password"
+                    );
+                }
 
                 let cert = self.ssl_certificate;
                 let key = self.ssl_key.map(|secret| secret.into());
@@ -406,7 +481,12 @@ impl ConnectionOptionExtracted {
                     .as_ref()
                     .map(|m| m.as_str())
                 {
-                    None | Some("DISABLED") => MySqlSslMode::Disabled,
+                    None | Some("DISABLED") => {
+                        if aws_connection.is_some() {
+                            sql_bail!("invalid CONNECTION: AWS IAM authentication requires SSL to be enabled")
+                        }
+                        MySqlSslMode::Disabled
+                    }
                     // "preferred" intentionally omitted because it has dubious security
                     // properties.
                     Some("REQUIRED") | Some("REQUIRE") => MySqlSslMode::Required,
@@ -417,7 +497,7 @@ impl ConnectionOptionExtracted {
                     Some(m) => sql_bail!("invalid CONNECTION: unknown SSL MODE {}", m.quoted()),
                 };
 
-                // TODO we should move to self.port being unsupported if aws_privatelink is some, see <https://github.com/MaterializeInc/materialize/issues/24712#issuecomment-1925443977>
+                // TODO we should move to self.port being unsupported if aws_privatelink is some, see <https://github.com/MaterializeInc/database-issues/issues/7359#issuecomment-1925443977>
                 if let Some(privatelink) = self.aws_privatelink.as_ref() {
                     if privatelink.port.is_some() {
                         sql_bail!("invalid CONNECTION: PORT in AWS PRIVATELINK is only supported for kafka")
@@ -425,7 +505,7 @@ impl ConnectionOptionExtracted {
                 }
                 let tunnel = scx.build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?;
 
-                Connection::MySql(MySqlConnection {
+                ConnectionDetails::MySql(MySqlConnection {
                     password: self.password.map(|password| password.into()),
                     host: self
                         .host
@@ -438,7 +518,17 @@ impl ConnectionOptionExtracted {
                     user: self
                         .user
                         .ok_or_else(|| sql_err!("USER option is required"))?,
+                    aws_connection,
                 })
+            }
+            CreateConnectionType::SqlServer => {
+                scx.require_feature_flag(&vars::ENABLE_SQL_SERVER_SOURCE)?;
+
+                // TODO(sql_server1)
+                return Err(PlanError::Unsupported {
+                    feature: "SQL SERVER".to_string(),
+                    discussion_no: None,
+                });
             }
         };
 
@@ -541,16 +631,43 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
     }
 }
 
+fn get_aws_connection_reference(
+    scx: &StatementContext,
+    conn_options: &ConnectionOptionExtracted,
+) -> Result<Option<AwsConnectionReference<ReferencedConnection>>, PlanError> {
+    let Some(aws_connection_id) = conn_options.aws_connection else {
+        return Ok(None);
+    };
+
+    let id = CatalogItemId::from(aws_connection_id);
+    let item = scx.catalog.get_item(&id);
+    Ok(match item.connection()? {
+        Connection::Aws(_) => Some(AwsConnectionReference {
+            connection_id: id,
+            connection: id,
+        }),
+        _ => sql_bail!("{} is not an AWS connection", item.name().item),
+    })
+}
+
 fn plan_kafka_security(
+    scx: &StatementContext,
     v: &ConnectionOptionExtracted,
-) -> Result<(Option<KafkaTlsConfig>, Option<KafkaSaslConfig>), PlanError> {
-    const SASL_CONFIGS: [ConnectionOptionName; 3] = [
+) -> Result<
+    (
+        Option<KafkaTlsConfig>,
+        Option<KafkaSaslConfig<ReferencedConnection>>,
+    ),
+    PlanError,
+> {
+    const SASL_CONFIGS: [ConnectionOptionName; 4] = [
+        ConnectionOptionName::AwsConnection,
         ConnectionOptionName::SaslMechanisms,
         ConnectionOptionName::SaslUsername,
         ConnectionOptionName::SaslPassword,
     ];
 
-    const ALL_CONFIGS: [ConnectionOptionName; 6] = concat_arrays!(
+    const ALL_CONFIGS: [ConnectionOptionName; 7] = concat_arrays!(
         [
             ConnectionOptionName::SslKey,
             ConnectionOptionName::SslCertificate,
@@ -613,35 +730,50 @@ fn plan_kafka_security(
 
     let sasl = match security_protocol {
         SecurityProtocol::SaslPlaintext | SecurityProtocol::SaslSsl => {
-            outstanding.remove(&ConnectionOptionName::SaslMechanisms);
-            outstanding.remove(&ConnectionOptionName::SaslUsername);
-            outstanding.remove(&ConnectionOptionName::SaslPassword);
-            let Some(mechanism) = &v.sasl_mechanisms else {
-                // TODO(benesch): support a less confusing `SASL MECHANISM`
-                // alias, as only a single mechanism that can be specified.
-                sql_bail!("SASL MECHANISMS must be specified");
-            };
-            let Some(username) = &v.sasl_username else {
-                sql_bail!("SASL USERNAME must be specified");
-            };
-            let Some(password) = &v.sasl_password else {
-                sql_bail!("SASL PASSWORD must be specified");
-            };
-            Some(KafkaSaslConfig {
-                // librdkafka requires SASL mechanisms to be upper case (PLAIN,
-                // SCRAM-SHA-256). For usability, we automatically uppercase the
-                // mechanism that user provides. This avoids a frustrating
-                // interaction with identifier case folding. Consider `SASL
-                // MECHANISMS = PLAIN`. Identifier case folding results in a
-                // SASL mechanism of `plain` (note the lowercase), which
-                // Materialize previously rejected with an error of "SASL
-                // mechanism must be uppercase." This was deeply frustarting for
-                // users who were not familiar with identifier case folding
-                // rules. See #22205.
-                mechanism: mechanism.to_uppercase(),
-                username: username.clone(),
-                password: (*password).into(),
-            })
+            outstanding.remove(&ConnectionOptionName::AwsConnection);
+            match get_aws_connection_reference(scx, v)? {
+                Some(aws) => {
+                    scx.require_feature_flag(&ENABLE_AWS_MSK_IAM_AUTH)?;
+                    Some(KafkaSaslConfig {
+                        mechanism: "OAUTHBEARER".into(),
+                        username: "".into(),
+                        password: None,
+                        aws: Some(aws),
+                    })
+                }
+                None => {
+                    outstanding.remove(&ConnectionOptionName::SaslMechanisms);
+                    outstanding.remove(&ConnectionOptionName::SaslUsername);
+                    outstanding.remove(&ConnectionOptionName::SaslPassword);
+                    // TODO(benesch): support a less confusing `SASL MECHANISM`
+                    // alias, as only a single mechanism that can be specified.
+                    let Some(mechanism) = &v.sasl_mechanisms else {
+                        sql_bail!("SASL MECHANISMS must be specified");
+                    };
+                    let Some(username) = &v.sasl_username else {
+                        sql_bail!("SASL USERNAME must be specified");
+                    };
+                    let Some(password) = &v.sasl_password else {
+                        sql_bail!("SASL PASSWORD must be specified");
+                    };
+                    Some(KafkaSaslConfig {
+                        // librdkafka requires SASL mechanisms to be upper case (PLAIN,
+                        // SCRAM-SHA-256). For usability, we automatically uppercase the
+                        // mechanism that user provides. This avoids a frustrating
+                        // interaction with identifier case folding. Consider `SASL
+                        // MECHANISMS = PLAIN`. Identifier case folding results in a
+                        // SASL mechanism of `plain` (note the lowercase), which
+                        // Materialize previously rejected with an error of "SASL
+                        // mechanism must be uppercase." This was deeply frustarting for
+                        // users who were not familiar with identifier case folding
+                        // rules. See database-issues#6693.
+                        mechanism: mechanism.to_uppercase(),
+                        username: username.clone(),
+                        password: Some((*password).into()),
+                        aws: None,
+                    })
+                }
+            }
         }
         _ => None,
     };

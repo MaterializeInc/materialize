@@ -1,0 +1,20 @@
+[package]
+name = "mz-ore-build"
+description = "Internal utility libraries used in Build Scripts for Materialize."
+version = "0.1.0"
+license = "Apache-2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors = ["Materialize, Inc."]
+
+[lints]
+workspace = true
+
+[dependencies]
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[features]
+default = ["workspace-hack"]
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

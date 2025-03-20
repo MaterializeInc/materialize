@@ -13,20 +13,21 @@
 use std::collections::{btree_map, BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
-use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use maplit::btreemap;
 use mz_catalog::memory::objects::ClusterReplicaProcessStatus;
 use mz_controller::clusters::{ClusterEvent, ClusterStatus};
 use mz_controller::ControllerResponse;
+use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_ore::option::OptionExt;
-use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_ore::{soft_assert_or_log, task};
 use mz_persist_client::usage::ShardsUsageReferenced;
+use mz_repr::{Datum, Row};
 use mz_sql::ast::Statement;
-use mz_sql::names::ResolvedIds;
 use mz_sql::pure::PurifiedStatement;
+use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::controller::CollectionMetadata;
 use opentelemetry::trace::TraceContextExt;
 use rand::{rngs, Rng, SeedableRng};
@@ -35,193 +36,175 @@ use tracing::{event, info_span, warn, Instrument, Level};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
+use crate::catalog::{BuiltinTableUpdate, Op};
 use crate::command::Command;
-use crate::coord::appends::Deferred;
 use crate::coord::{
     AlterConnectionValidationReady, ClusterReplicaStatuses, Coordinator,
     CreateConnectionValidationReady, Message, PurifiedStatementReady, WatchSetResponse,
 };
-use crate::session::Session;
 use crate::telemetry::{EventDetails, SegmentClientExt};
-use crate::util::ResultExt;
-use crate::{catalog, AdapterNotice, TimestampContext};
+use crate::{AdapterNotice, TimestampContext};
 
 impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 74KB. This would
     /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
-    /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
-    ///
-    /// We pass in a span from the outside, rather than instrumenting this
-    /// method using `#instrument[...]` or calling `.instrument()` at the
-    /// callsite so that we can correctly instrument the boxed future here _and_
-    /// so that we can stitch up the OpenTelemetryContext when we're processing
-    /// a `Message::Command` or other commands that pass around a context.
-    pub(crate) fn handle_message<'a>(
-        &'a mut self,
-        span: tracing::Span,
-        msg: Message,
-    ) -> LocalBoxFuture<'a, ()> {
-        async move {
-            match msg {
-                Message::Command(otel_ctx, cmd) => {
-                    // TODO: We need a Span that is not none for the otel_ctx to attach the parent
-                    // relationship to. If we swap the otel_ctx in `Command::Message` for a Span, we
-                    // can downgrade this to a debug_span.
-                    let span = tracing::info_span!("message_command").or_current();
-                    span.in_scope(|| otel_ctx.attach_as_parent());
-                    self.message_command(cmd).instrument(span).await
-                }
-                Message::ControllerReady => {
-                    let Coordinator {
-                        controller,
-                        catalog,
-                        ..
-                    } = self;
-                    let storage_metadata = catalog.state().storage_metadata();
-                    if let Some(m) = controller
-                        .process(storage_metadata)
-                        .await
-                        .expect("`process` never returns an error")
-                    {
-                        self.message_controller(m).await
-                    }
-                }
-                Message::PurifiedStatementReady(ready) => {
-                    self.message_purified_statement_ready(ready).await
-                }
-                Message::CreateConnectionValidationReady(ready) => {
-                    self.message_create_connection_validation_ready(ready).await
-                }
-                Message::AlterConnectionValidationReady(ready) => {
-                    self.message_alter_connection_validation_ready(ready).await
-                }
-                Message::WriteLockGrant(write_lock_guard) => {
-                    self.message_write_lock_grant(write_lock_guard).await;
-                }
-                Message::GroupCommitInitiate(span, permit) => {
-                    // Add an OpenTelemetry link to our current span.
-                    tracing::Span::current().add_link(span.context().span().span_context().clone());
-                    self.try_group_commit(permit).instrument(span).await
-                }
-                Message::GroupCommitApply(timestamp, responses, write_lock_guard, permit) => {
-                    self.group_commit_apply(timestamp, responses, write_lock_guard, permit)
-                        .await;
-                }
-                Message::AdvanceTimelines => {
-                    self.advance_timelines().await;
-                }
-                Message::DropReadHolds(dropped_read_holds) => {
-                    tracing::debug!(?dropped_read_holds, "releasing dropped read holds!");
-                    self.release_read_holds(dropped_read_holds);
-                }
-                Message::ClusterEvent(event) => self.message_cluster_event(event).await,
-                Message::CancelPendingPeeks { conn_id } => {
-                    self.cancel_pending_peeks(&conn_id);
-                }
-                Message::LinearizeReads => {
-                    self.message_linearize_reads().await;
-                }
-                Message::StorageUsageSchedule => {
-                    self.schedule_storage_usage_collection().await;
-                }
-                Message::StorageUsageFetch => {
-                    self.storage_usage_fetch().await;
-                }
-                Message::StorageUsageUpdate(sizes) => {
-                    self.storage_usage_update(sizes).await;
-                }
-                Message::RetireExecute {
-                    otel_ctx,
-                    data,
-                    reason,
-                } => {
-                    otel_ctx.attach_as_parent();
-                    self.retire_execution(reason, data);
-                }
-                Message::ExecuteSingleStatementTransaction {
-                    ctx,
-                    otel_ctx,
-                    stmt,
-                    params,
-                } => {
-                    otel_ctx.attach_as_parent();
-                    self.sequence_execute_single_statement_transaction(ctx, stmt, params)
-                        .await;
-                }
-                Message::PeekStageReady {
-                    ctx,
-                    span,
-                    stage,
-                } => {
-                    self.sequence_staged(ctx, span, stage).await;
-                }
-                Message::CreateIndexStageReady {
-                    ctx,
-                    span,
-                    stage,
-                } => {
-                    self.sequence_staged(ctx, span, stage).await;
-                }
-                Message::CreateViewStageReady {
-                    ctx,
-                    span,
-                    stage,
-                } => {
-                    self.sequence_staged(ctx, span, stage).await;
-                }
-                Message::CreateMaterializedViewStageReady {
-                    ctx,
-                    span,
-                    stage,
-                } => {
-                    self.sequence_staged(ctx, span, stage).await;
-                }
-                Message::SubscribeStageReady {
-                    ctx,
-                    span,
-                    stage,
-                } => {
-                    self.sequence_staged(ctx, span, stage).await;
-                }
-                Message::ExplainTimestampStageReady {
-                    ctx,
-                    span,
-                    stage,
-                } => {
-                    self.sequence_staged(ctx, span, stage).await;
-                }
-                Message::SecretStageReady {
-                    ctx,
-                    span,
-                    stage,
-                } => {
-                    self.sequence_staged(ctx, span, stage).await;
-                }
-                Message::DrainStatementLog => {
-                    self.drain_statement_log().await;
-                }
-                Message::PrivateLinkVpcEndpointEvents(events) => {
-                    self.controller
-                        .storage
-                        .append_introspection_updates(
-                            mz_storage_client::controller::IntrospectionType::PrivatelinkConnectionStatusHistory,
-                            events
-                                .into_iter()
-                                .map(|e| (mz_repr::Row::from(e), 1))
-                                .collect(),
-                        )
-                        .await;
-                }
-                Message::CheckSchedulingPolicies => {
-                    self.check_scheduling_policies().await;
-                }
-                Message::SchedulingDecisions(decisions) => {
-                    self.handle_scheduling_decisions(decisions).await;
+    /// Because of that we purposefully move Futures of inner function calls onto the heap
+    /// (i.e. Box it).
+    #[instrument]
+    pub(crate) async fn handle_message(&mut self, msg: Message) -> () {
+        match msg {
+            Message::Command(otel_ctx, cmd) => {
+                // TODO: We need a Span that is not none for the otel_ctx to attach the parent
+                // relationship to. If we swap the otel_ctx in `Command::Message` for a Span, we
+                // can downgrade this to a debug_span.
+                let span = tracing::info_span!("message_command").or_current();
+                span.in_scope(|| otel_ctx.attach_as_parent());
+                self.message_command(cmd).instrument(span).await
+            }
+            Message::ControllerReady => {
+                let Coordinator {
+                    controller,
+                    catalog,
+                    ..
+                } = self;
+                let storage_metadata = catalog.state().storage_metadata();
+                if let Some(m) = controller
+                    .process(storage_metadata)
+                    .expect("`process` never returns an error")
+                {
+                    self.message_controller(m).boxed_local().await
                 }
             }
+            Message::PurifiedStatementReady(ready) => {
+                self.message_purified_statement_ready(ready)
+                    .boxed_local()
+                    .await
+            }
+            Message::CreateConnectionValidationReady(ready) => {
+                self.message_create_connection_validation_ready(ready)
+                    .boxed_local()
+                    .await
+            }
+            Message::AlterConnectionValidationReady(ready) => {
+                self.message_alter_connection_validation_ready(ready)
+                    .boxed_local()
+                    .await
+            }
+            Message::TryDeferred {
+                conn_id,
+                acquired_lock,
+            } => self.try_deferred(conn_id, acquired_lock).await,
+            Message::GroupCommitInitiate(span, permit) => {
+                // Add an OpenTelemetry link to our current span.
+                tracing::Span::current().add_link(span.context().span().span_context().clone());
+                self.try_group_commit(permit)
+                    .instrument(span)
+                    .boxed_local()
+                    .await
+            }
+            Message::AdvanceTimelines => {
+                self.advance_timelines().boxed_local().await;
+            }
+            Message::ClusterEvent(event) => self.message_cluster_event(event).boxed_local().await,
+            Message::CancelPendingPeeks { conn_id } => {
+                self.cancel_pending_peeks(&conn_id);
+            }
+            Message::LinearizeReads => {
+                self.message_linearize_reads().boxed_local().await;
+            }
+            Message::StagedBatches {
+                conn_id,
+                table_id,
+                batches,
+            } => {
+                self.commit_staged_batches(conn_id, table_id, batches);
+            }
+            Message::StorageUsageSchedule => {
+                self.schedule_storage_usage_collection().boxed_local().await;
+            }
+            Message::StorageUsageFetch => {
+                self.storage_usage_fetch().boxed_local().await;
+            }
+            Message::StorageUsageUpdate(sizes) => {
+                self.storage_usage_update(sizes).boxed_local().await;
+            }
+            Message::StorageUsagePrune(expired) => {
+                self.storage_usage_prune(expired).boxed_local().await;
+            }
+            Message::RetireExecute {
+                otel_ctx,
+                data,
+                reason,
+            } => {
+                otel_ctx.attach_as_parent();
+                self.retire_execution(reason, data);
+            }
+            Message::ExecuteSingleStatementTransaction {
+                ctx,
+                otel_ctx,
+                stmt,
+                params,
+            } => {
+                otel_ctx.attach_as_parent();
+                self.sequence_execute_single_statement_transaction(ctx, stmt, params)
+                    .boxed_local()
+                    .await;
+            }
+            Message::PeekStageReady { ctx, span, stage } => {
+                self.sequence_staged(ctx, span, stage).boxed_local().await;
+            }
+            Message::CreateIndexStageReady { ctx, span, stage } => {
+                self.sequence_staged(ctx, span, stage).boxed_local().await;
+            }
+            Message::CreateViewStageReady { ctx, span, stage } => {
+                self.sequence_staged(ctx, span, stage).boxed_local().await;
+            }
+            Message::CreateMaterializedViewStageReady { ctx, span, stage } => {
+                self.sequence_staged(ctx, span, stage).boxed_local().await;
+            }
+            Message::SubscribeStageReady { ctx, span, stage } => {
+                self.sequence_staged(ctx, span, stage).boxed_local().await;
+            }
+            Message::IntrospectionSubscribeStageReady { span, stage } => {
+                self.sequence_staged((), span, stage).boxed_local().await;
+            }
+            Message::ExplainTimestampStageReady { ctx, span, stage } => {
+                self.sequence_staged(ctx, span, stage).boxed_local().await;
+            }
+            Message::SecretStageReady { ctx, span, stage } => {
+                self.sequence_staged(ctx, span, stage).boxed_local().await;
+            }
+            Message::ClusterStageReady { ctx, span, stage } => {
+                self.sequence_staged(ctx, span, stage).boxed_local().await;
+            }
+            Message::DrainStatementLog => {
+                self.drain_statement_log();
+            }
+            Message::PrivateLinkVpcEndpointEvents(events) => {
+                if !self.controller.read_only() {
+                    self.controller
+                            .storage
+                            .append_introspection_updates(
+                                mz_storage_client::controller::IntrospectionType::PrivatelinkConnectionStatusHistory,
+                                events
+                                    .into_iter()
+                                    .map(|e| (mz_repr::Row::from(e), 1))
+                                    .collect(),
+                            );
+                }
+            }
+            Message::CheckSchedulingPolicies => {
+                self.check_scheduling_policies().boxed_local().await;
+            }
+            Message::SchedulingDecisions(decisions) => {
+                self.handle_scheduling_decisions(decisions)
+                    .boxed_local()
+                    .await;
+            }
+            Message::DeferredStatementReady => {
+                self.handle_deferred_statement().boxed_local().await;
+            }
         }
-        .instrument(span)
-        .boxed_local()
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -239,7 +222,6 @@ impl Coordinator {
                 let CollectionMetadata {
                     data_shard,
                     remap_shard,
-                    status_shard,
                     // No wildcards, to improve the odds that the addition of a
                     // new shard type results in a compiler error here.
                     //
@@ -251,7 +233,7 @@ impl Coordinator {
                     relation_desc: _,
                     txns_shard: _,
                 } = collection_metadata;
-                [remap_shard, status_shard, Some(data_shard)].into_iter()
+                [remap_shard, Some(data_shard)].into_iter()
             })
             .filter_map(|shard| shard)
             .collect();
@@ -282,23 +264,30 @@ impl Coordinator {
         // increase. This is intentionally the timestamp of when collection
         // finished, not when it started, so that we don't write data with a
         // timestamp in the past.
-        let collection_timestamp: EpochMillis = self.get_local_write_ts().await.timestamp.into();
+        let collection_timestamp = if self.controller.read_only() {
+            self.peek_local_write_ts().await.into()
+        } else {
+            // Getting a write timestamp bumps the write timestamp in the
+            // oracle, which we're not allowed in read-only mode.
+            self.get_local_write_ts().await.timestamp.into()
+        };
 
-        let mut ops = vec![];
-        for (shard_id, shard_usage) in shards_usage.by_shard {
-            ops.push(catalog::Op::UpdateStorageUsage {
-                shard_id: Some(shard_id.to_string()),
+        let ops = shards_usage
+            .by_shard
+            .into_iter()
+            .map(|(shard_id, shard_usage)| Op::WeirdStorageUsageUpdates {
+                object_id: Some(shard_id.to_string()),
                 size_bytes: shard_usage.size_bytes(),
                 collection_timestamp,
-            });
-        }
+            })
+            .collect();
 
         match self.catalog_transact_inner(None, ops).await {
             Ok(table_updates) => {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
-                let mut task_span =
+                let task_span =
                     info_span!(parent: None, "coord::storage_usage_update::table_updates");
-                OpenTelemetryContext::obtain().attach_as_parent_to(&mut task_span);
+                OpenTelemetryContext::obtain().attach_as_parent_to(&task_span);
                 task::spawn(|| "storage_usage_update_table_updates", async move {
                     table_updates.instrument(task_span).await;
                     // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
@@ -309,6 +298,14 @@ impl Coordinator {
             }
             Err(err) => tracing::warn!("Failed to update storage metrics: {:?}", err),
         }
+    }
+
+    #[mz_ore::instrument(level = "debug")]
+    async fn storage_usage_prune(&mut self, expired: Vec<BuiltinTableUpdate>) {
+        let (fut, _) = self.builtin_table_update().execute(expired).await;
+        task::spawn(|| "storage_usage_pruning_apply", async move {
+            fut.await;
+        });
     }
 
     pub async fn schedule_storage_usage_collection(&self) {
@@ -370,23 +367,32 @@ impl Coordinator {
     async fn message_controller(&mut self, message: ControllerResponse) {
         event!(Level::TRACE, message = format!("{:?}", message));
         match message {
-            ControllerResponse::PeekResponse(uuid, response, otel_ctx) => {
-                self.send_peek_response(uuid, response, otel_ctx);
+            ControllerResponse::PeekNotification(uuid, response, otel_ctx) => {
+                self.handle_peek_notification(uuid, response, otel_ctx);
             }
             ControllerResponse::SubscribeResponse(sink_id, response) => {
-                match self.active_compute_sinks.get_mut(&sink_id) {
-                    Some(ActiveComputeSink::Subscribe(active_subscribe)) => {
-                        let finished = active_subscribe.process_response(response);
-                        if finished {
-                            self.retire_compute_sinks(btreemap! {
-                                sink_id => ActiveComputeSinkRetireReason::Finished,
-                            })
-                            .await;
-                        }
+                if let Some(ActiveComputeSink::Subscribe(active_subscribe)) =
+                    self.active_compute_sinks.get_mut(&sink_id)
+                {
+                    let finished = active_subscribe.process_response(response);
+                    if finished {
+                        self.retire_compute_sinks(btreemap! {
+                            sink_id => ActiveComputeSinkRetireReason::Finished,
+                        })
+                        .await;
                     }
-                    _ => {
-                        tracing::error!(%sink_id, "received SubscribeResponse for nonexistent subscribe");
-                    }
+
+                    soft_assert_or_log!(
+                        !self.introspection_subscribes.contains_key(&sink_id),
+                        "`sink_id` {sink_id} unexpectedly found in both `active_subscribes` \
+                         and `introspection_subscribes`",
+                    );
+                } else if self.introspection_subscribes.contains_key(&sink_id) {
+                    self.handle_introspection_subscribe_batch(sink_id, response)
+                        .await;
+                } else {
+                    // Cancellation may cause us to receive responses for subscribes no longer
+                    // tracked, so we quietly ignore them.
                 }
             }
             ControllerResponse::CopyToResponse(sink_id, response) => {
@@ -395,7 +401,8 @@ impl Coordinator {
                         active_copy_to.retire_with_response(response);
                     }
                     _ => {
-                        tracing::error!(%sink_id, "received CopyToResponse for nonexistent copy to");
+                        // Cancellation may cause us to receive responses for subscribes no longer
+                        // tracked, so we quietly ignore them.
                     }
                 }
             }
@@ -432,7 +439,8 @@ impl Coordinator {
                         .catalog()
                         .state()
                         .resolve_builtin_table_updates(updates);
-                    self.builtin_table_update().background(updates);
+                    // We don't care about when the write finishes.
+                    let _notify = self.builtin_table_update().background(updates);
                 }
             }
             ControllerResponse::WatchSetFinished(ws_ids) => {
@@ -500,48 +508,65 @@ impl Coordinator {
             PurifiedStatement::PurifiedCreateSource {
                 create_progress_subsource_stmt,
                 create_source_stmt,
-                create_subsource_stmts,
+                subsources,
+                available_source_references,
             } => {
                 self.plan_purified_create_source(
                     &ctx,
                     params,
                     create_progress_subsource_stmt,
                     create_source_stmt,
-                    create_subsource_stmts,
+                    subsources,
+                    available_source_references,
                 )
                 .await
             }
             PurifiedStatement::PurifiedAlterSourceAddSubsources {
-                altered_id,
+                source_name,
                 options,
-                create_subsource_stmts,
+                subsources,
             } => {
                 self.plan_purified_alter_source_add_subsource(
                     ctx.session(),
                     params,
-                    altered_id,
+                    source_name,
                     options,
-                    create_subsource_stmts,
+                    subsources,
                 )
                 .await
             }
+            PurifiedStatement::PurifiedAlterSourceRefreshReferences {
+                source_name,
+                available_source_references,
+            } => self.plan_purified_alter_source_refresh_references(
+                ctx.session(),
+                params,
+                source_name,
+                available_source_references,
+            ),
             o @ (PurifiedStatement::PurifiedAlterSource { .. }
-            | PurifiedStatement::PurifiedCreateSink(..)) => {
+            | PurifiedStatement::PurifiedCreateSink(..)
+            | PurifiedStatement::PurifiedCreateTableFromSource { .. }) => {
                 // Unify these into a `Statement`.
                 let stmt = match o {
                     PurifiedStatement::PurifiedAlterSource { alter_source_stmt } => {
                         Statement::AlterSource(alter_source_stmt)
                     }
+                    PurifiedStatement::PurifiedCreateTableFromSource { stmt } => {
+                        Statement::CreateTableFromSource(stmt)
+                    }
                     PurifiedStatement::PurifiedCreateSink(stmt) => Statement::CreateSink(stmt),
                     PurifiedStatement::PurifiedCreateSource { .. }
-                    | PurifiedStatement::PurifiedAlterSourceAddSubsources { .. } => {
+                    | PurifiedStatement::PurifiedAlterSourceAddSubsources { .. }
+                    | PurifiedStatement::PurifiedAlterSourceRefreshReferences { .. } => {
                         unreachable!("not part of exterior match stmt")
                     }
                 };
 
                 // Determine all dependencies, not just those in the statement
                 // itself.
-                let resolved_ids = mz_sql::names::visit_dependencies(&stmt);
+                let catalog = self.catalog().for_session(ctx.session());
+                let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &stmt);
                 self.plan_statement(ctx.session(), stmt, &params, &resolved_ids)
                     .map(|plan| (plan, resolved_ids))
             }
@@ -559,9 +584,11 @@ impl Coordinator {
         CreateConnectionValidationReady {
             mut ctx,
             result,
+            connection_id,
             connection_gid,
             mut plan_validity,
             otel_ctx,
+            resolved_ids,
         }: CreateConnectionValidationReady,
     ) {
         otel_ctx.attach_as_parent();
@@ -572,14 +599,14 @@ impl Coordinator {
         // WARNING: If we support `ALTER SECRET`, we'll need to also check
         // for connectors that were altered while we were purifying.
         if let Err(e) = plan_validity.check(self.catalog()) {
-            let _ = self.secrets_controller.delete(connection_gid).await;
+            let _ = self.secrets_controller.delete(connection_id).await;
             return ctx.retire(Err(e));
         }
 
         let plan = match result {
             Ok(ok) => ok,
             Err(e) => {
-                let _ = self.secrets_controller.delete(connection_gid).await;
+                let _ = self.secrets_controller.delete(connection_id).await;
                 return ctx.retire(Err(e));
             }
         };
@@ -587,9 +614,10 @@ impl Coordinator {
         let result = self
             .sequence_create_connection_stage_finish(
                 ctx.session_mut(),
+                connection_id,
                 connection_gid,
                 plan,
-                ResolvedIds(plan_validity.dependency_ids),
+                resolved_ids,
             )
             .await;
         ctx.retire(result);
@@ -601,9 +629,11 @@ impl Coordinator {
         AlterConnectionValidationReady {
             mut ctx,
             result,
-            connection_gid,
+            connection_id,
+            connection_gid: _,
             mut plan_validity,
             otel_ctx,
+            resolved_ids: _,
         }: AlterConnectionValidationReady,
     ) {
         otel_ctx.attach_as_parent();
@@ -625,40 +655,9 @@ impl Coordinator {
         };
 
         let result = self
-            .sequence_alter_connection_stage_finish(ctx.session_mut(), connection_gid, conn)
+            .sequence_alter_connection_stage_finish(ctx.session_mut(), connection_id, conn)
             .await;
         ctx.retire(result);
-    }
-
-    #[mz_ore::instrument(level = "debug")]
-    async fn message_write_lock_grant(
-        &mut self,
-        write_lock_guard: tokio::sync::OwnedMutexGuard<()>,
-    ) {
-        // It's possible to have more incoming write lock grants
-        // than pending writes because of cancellations.
-        if let Some(ready) = self.write_lock_wait_group.pop_front() {
-            match ready {
-                Deferred::Plan(mut ready) => {
-                    ready.ctx.session_mut().grant_write_lock(write_lock_guard);
-                    if let Err(e) = ready.validity.check(self.catalog()) {
-                        ready.ctx.retire(Err(e))
-                    } else {
-                        // Write statements never need to track resolved IDs (NOTE: This is not the
-                        // same thing as plan dependencies, which we do need to re-validate).
-                        let resolved_ids = ResolvedIds(BTreeSet::new());
-                        self.sequence_plan(ready.ctx, ready.plan, resolved_ids)
-                            .await;
-                    }
-                }
-                Deferred::GroupCommit => {
-                    self.group_commit_initiate(Some(write_lock_guard), None)
-                        .await
-                }
-            }
-        }
-        // N.B. if no deferred plans, write lock is released by drop
-        // here.
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -674,8 +673,8 @@ impl Coordinator {
                 "status": event.status.as_kebab_case_str(),
             });
             match event.status {
-                ClusterStatus::Ready => (),
-                ClusterStatus::NotReady(reason) => {
+                ClusterStatus::Online => (),
+                ClusterStatus::Offline(reason) => {
                     let properties = match &mut properties {
                         serde_json::Value::Object(map) => map,
                         _ => unreachable!(),
@@ -707,6 +706,25 @@ impl Coordinator {
         };
 
         if event.status != replica_statues[&event.process_id].status {
+            if !self.controller.read_only() {
+                let offline_reason = match event.status {
+                    ClusterStatus::Online => None,
+                    ClusterStatus::Offline(None) => None,
+                    ClusterStatus::Offline(Some(reason)) => Some(reason.to_string()),
+                };
+                let row = Row::pack_slice(&[
+                    Datum::String(&event.replica_id.to_string()),
+                    Datum::UInt64(event.process_id),
+                    Datum::String(event.status.as_kebab_case_str()),
+                    Datum::from(offline_reason.as_deref()),
+                    Datum::TimestampTz(event.time.try_into().expect("must fit")),
+                ]);
+                self.controller.storage.append_introspection_updates(
+                    IntrospectionType::ReplicaStatusHistory,
+                    vec![(row, 1)],
+                );
+            }
+
             let old_replica_status =
                 ClusterReplicaStatuses::cluster_replica_status(replica_statues);
             let old_process_status = replica_statues
@@ -745,19 +763,9 @@ impl Coordinator {
                 new_process_status,
             );
 
-            self.catalog_transact(
-                None::<&Session>,
-                vec![
-                    catalog::Op::WeirdBuiltinTableUpdates {
-                        builtin_table_update: builtin_table_retraction,
-                    },
-                    catalog::Op::WeirdBuiltinTableUpdates {
-                        builtin_table_update: builtin_table_addition,
-                    },
-                ],
-            )
-            .await
-            .unwrap_or_terminate("updating cluster status cannot fail");
+            let builtin_table_updates = vec![builtin_table_retraction, builtin_table_addition];
+            // Returns a Future that completes when the Builtin Table write is completed.
+            let builtin_table_completion = self.builtin_table_update().defer(builtin_table_updates);
 
             let cluster = self.catalog().get_cluster(event.cluster_id);
             let replica = cluster.replica(event.replica_id).expect("Replica exists");
@@ -766,12 +774,24 @@ impl Coordinator {
                 .get_cluster_replica_status(event.cluster_id, event.replica_id);
 
             if old_replica_status != new_replica_status {
-                self.broadcast_notice(AdapterNotice::ClusterReplicaStatusChanged {
+                let notifier = self.broadcast_notice_tx();
+                let notice = AdapterNotice::ClusterReplicaStatusChanged {
                     cluster: cluster.name.clone(),
                     replica: replica.name.clone(),
                     status: new_replica_status,
                     time: event.time,
-                });
+                };
+                // In a separate task, so we don't block the Coordinator, wait for the builtin
+                // table update to complete, and then notify active sessions.
+                mz_ore::task::spawn(
+                    || format!("cluster_event-{}-{}", event.cluster_id, event.replica_id),
+                    async move {
+                        // Wait for the builtin table updates to complete.
+                        builtin_table_completion.await;
+                        // Notify all sessions that were active at the time the cluster status changed.
+                        (notifier)(notice)
+                    },
+                );
             }
         }
     }
@@ -782,7 +802,7 @@ impl Coordinator {
     ///   containing timeline has advanced to that point in the future.
     ///   2. Confirming that we are still the current leader before sending results to the client.
     async fn message_linearize_reads(&mut self) {
-        let mut shortest_wait = Duration::from_millis(0);
+        let mut shortest_wait = Duration::MAX;
         let mut ready_txns = Vec::new();
 
         // Cache for `TimestampOracle::read_ts` calls. These are somewhat
@@ -846,13 +866,13 @@ impl Coordinator {
             // Sniff out one ctx, this is where tracing breaks down because we
             // process all outstanding txns as a batch here.
             let otel_ctx = ready_txns.first().expect("known to exist").otel_ctx.clone();
-            let mut span = tracing::debug_span!("message_linearize_reads");
-            otel_ctx.attach_as_parent_to(&mut span);
+            let span = tracing::debug_span!("message_linearize_reads");
+            otel_ctx.attach_as_parent_to(&span);
 
             let now = Instant::now();
             for ready_txn in ready_txns {
-                let mut span = tracing::debug_span!("retire_read_results");
-                ready_txn.otel_ctx.attach_as_parent_to(&mut span);
+                let span = tracing::debug_span!("retire_read_results");
+                ready_txn.otel_ctx.attach_as_parent_to(&span);
                 let _entered = span.enter();
                 self.metrics
                     .linearize_message_seconds

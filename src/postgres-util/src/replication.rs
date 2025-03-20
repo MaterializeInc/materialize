@@ -53,25 +53,13 @@ fn test_wal_level_max() {
     }
 }
 
-pub async fn get_wal_level(
-    ssh_tunnel_manager: &SshTunnelManager,
-    config: &Config,
-) -> Result<WalLevel, PostgresError> {
-    let client = config
-        .connect("wal_level_check", ssh_tunnel_manager)
-        .await?;
+pub async fn get_wal_level(client: &Client) -> Result<WalLevel, PostgresError> {
     let wal_level = client.query_one("SHOW wal_level", &[]).await?;
     let wal_level: String = wal_level.get("wal_level");
     Ok(WalLevel::from_str(&wal_level)?)
 }
 
-pub async fn get_max_wal_senders(
-    ssh_tunnel_manager: &SshTunnelManager,
-    config: &Config,
-) -> Result<i64, PostgresError> {
-    let client = config
-        .connect("max_wal_senders_check", ssh_tunnel_manager)
-        .await?;
+pub async fn get_max_wal_senders(client: &Client) -> Result<i64, PostgresError> {
     let max_wal_senders = client
         .query_one(
             "SELECT CAST(current_setting('max_wal_senders') AS int8) AS max_wal_senders",
@@ -81,14 +69,7 @@ pub async fn get_max_wal_senders(
     Ok(max_wal_senders.get("max_wal_senders"))
 }
 
-pub async fn available_replication_slots(
-    ssh_tunnel_manager: &SshTunnelManager,
-    config: &Config,
-) -> Result<i64, PostgresError> {
-    let client = config
-        .connect("postgres_check_replication_slots", ssh_tunnel_manager)
-        .await?;
-
+pub async fn available_replication_slots(client: &Client) -> Result<i64, PostgresError> {
     let available_replication_slots = client
         .query_one(
             "SELECT
@@ -108,21 +89,21 @@ pub async fn available_replication_slots(
 pub async fn drop_replication_slots(
     ssh_tunnel_manager: &SshTunnelManager,
     config: Config,
-    slots: &[&str],
+    slots: &[(&str, bool)],
 ) -> Result<(), PostgresError> {
     let client = config
         .connect("postgres_drop_replication_slots", ssh_tunnel_manager)
         .await?;
     let replication_client = config.connect_replication(ssh_tunnel_manager).await?;
-    for slot in slots {
+    for (slot, should_wait) in slots {
         let rows = client
             .query(
                 "SELECT active_pid FROM pg_replication_slots WHERE slot_name = $1::TEXT",
                 &[&slot],
             )
             .await?;
-        match rows.len() {
-            0 => {
+        match &*rows {
+            [] => {
                 // DROP_REPLICATION_SLOT will error if the slot does not exist
                 tracing::info!(
                     "drop_replication_slots called on non-existent slot {}",
@@ -130,9 +111,22 @@ pub async fn drop_replication_slots(
                 );
                 continue;
             }
-            1 => {
+            [row] => {
+                // The drop of a replication slot happens concurrently with an ingestion dataflow
+                // shutting down, therefore there is the possibility that the slot is still in use.
+                // We really don't want to leak the slot and not forcefully terminating the
+                // dataflow's connection risks timing out. For this reason we always kill the
+                // active backend and drop the slot.
+                let active_pid: Option<i32> = row.get("active_pid");
+                if let Some(active_pid) = active_pid {
+                    client
+                        .simple_query(&format!("SELECT pg_terminate_backend({active_pid})"))
+                        .await?;
+                }
+
+                let wait_str = if *should_wait { " WAIT" } else { "" };
                 replication_client
-                    .simple_query(&format!("DROP_REPLICATION_SLOT {} WAIT", slot))
+                    .simple_query(&format!("DROP_REPLICATION_SLOT {slot}{wait_str}"))
                     .await?;
             }
             _ => {
@@ -164,14 +158,7 @@ pub async fn get_timeline_id(replication_client: &Client) -> Result<u64, Postgre
     }
 }
 
-pub async fn get_current_wal_lsn(
-    ssh_tunnel_manager: &SshTunnelManager,
-    config: Config,
-) -> Result<PgLsn, PostgresError> {
-    let client = config
-        .connect("postgres_wal_lsn", ssh_tunnel_manager)
-        .await?;
-
+pub async fn get_current_wal_lsn(client: &Client) -> Result<PgLsn, PostgresError> {
     let row = client.query_one("SELECT pg_current_wal_lsn()", &[]).await?;
     let lsn: PgLsn = row.get(0);
 

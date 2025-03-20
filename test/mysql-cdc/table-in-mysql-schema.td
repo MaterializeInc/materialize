@@ -10,12 +10,12 @@
 $ set-sql-timeout duration=1s
 $ set-max-tries max-tries=20
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_mysql_source = true
 
 #
 # Test that tables in the mysql schema are not replicated
 #
+
+> DROP SOURCE IF EXISTS mz_source;
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
 > CREATE CONNECTION mysql_conn TO MYSQL (
@@ -30,26 +30,18 @@ $ mysql-execute name=mysql
 DROP DATABASE IF EXISTS public;
 DROP DATABASE IF EXISTS another_schema;
 USE mysql;
-
-# Insert data pre-snapshot
 CREATE TABLE t_in_mysql (f1 INT);
 INSERT INTO t_in_mysql VALUES (1), (2);
+CREATE DATABASE public;
+USE public;
+CREATE TABLE time_zone (f1 INT);
 
-> DROP SOURCE IF EXISTS mz_source;
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 
-! CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
-contains:No tables found
+! CREATE TABLE timezone FROM SOURCE mz_source (REFERENCE public.timezone);
+contains:reference to public.timezone not found in source
 
-! CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (mysql.timezone);
-contains:No tables found
-
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (mysql.t_in_mysql);
+> CREATE TABLE t_in_mysql FROM SOURCE mz_source (REFERENCE mysql.t_in_mysql);
 
 > SELECT * FROM t_in_mysql;
 1
@@ -57,10 +49,13 @@ contains:No tables found
 
 > DROP SOURCE mz_source CASCADE;
 
-! CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR SCHEMAS (mysql);
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
+! CREATE TABLE t_in_mysql FROM SOURCE mz_source (REFERENCE mysql.time_zone);
 contains:referenced tables use unsupported types
 
 $ mysql-execute name=mysql
+USE mysql;
 DROP TABLE t_in_mysql;
+USE public;
+DROP TABLE time_zone;

@@ -52,12 +52,16 @@ impl CheckedRecursion for LiteralLifting {
 }
 
 impl crate::Transform for LiteralLifting {
+    fn name(&self) -> &'static str {
+        "LiteralLifting"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "literal_lifting")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
@@ -124,7 +128,7 @@ impl LiteralLifting {
     /// In theory, all literals could be treated in the same way if this method
     /// returned both a list of literals and a projection vector, making the
     /// caller have to deal with the reshuffling.
-    /// (see <https://github.com/MaterializeInc/materialize/issues/6598>)
+    /// (see <https://github.com/MaterializeInc/database-issues/issues/2055>)
     ///
     pub fn action(
         &self,

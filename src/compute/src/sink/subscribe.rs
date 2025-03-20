@@ -13,12 +13,13 @@ use std::ops::DerefMut;
 use std::rc::Rc;
 
 use differential_dataflow::consolidation::consolidate_updates;
-use differential_dataflow::Collection;
+use differential_dataflow::{AsCollection, Collection};
 use mz_compute_client::protocol::response::{SubscribeBatch, SubscribeResponse};
 use mz_compute_types::sinks::{ComputeSinkDesc, SubscribeSinkConnection};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
+use mz_timely_util::probe::{Handle, ProbeNotify};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::Scope;
@@ -42,6 +43,8 @@ where
         _start_signal: StartSignal,
         sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
+        _ct_times: Option<Collection<G, (), Diff>>,
+        output_probe: &Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
         // An encapsulation of the Subscribe response protocol.
         // Used to send rows and progress messages,
@@ -54,7 +57,10 @@ where
             poison: None,
         })));
         let subscribe_protocol_weak = Rc::downgrade(&subscribe_protocol_handle);
-
+        let sinked_collection = sinked_collection
+            .inner
+            .probe_notify_with(vec![output_probe.clone()])
+            .as_collection();
         subscribe(
             sinked_collection,
             err_collection,
@@ -96,8 +102,6 @@ fn subscribe<G>(
         let mut rows_to_emit = Vec::new();
         let mut errors_to_emit = Vec::new();
         let mut finished = false;
-        let mut ok_buf = Default::default();
-        let mut err_buf = Default::default();
 
         move |frontiers| {
             if finished {
@@ -123,16 +127,14 @@ fn subscribe<G>(
             };
 
             ok_input.for_each(|_, data| {
-                data.swap(&mut ok_buf);
-                for (row, time, diff) in ok_buf.drain(..) {
+                for (row, time, diff) in data.drain(..) {
                     if should_emit(&time) {
                         rows_to_emit.push((time, row, diff));
                     }
                 }
             });
             err_input.for_each(|_, data| {
-                data.swap(&mut err_buf);
-                for (error, time, diff) in err_buf.drain(..) {
+                for (error, time, diff) in data.drain(..) {
                     if should_emit(&time) {
                         errors_to_emit.push((time, error, diff));
                     }
@@ -179,7 +181,7 @@ struct SubscribeProtocol {
     ///
     /// As soon as a subscribe has encountered an error, it is poisoned: It will only return the
     /// same error in subsequent batches, until it is dropped. The subscribe protocol currently
-    /// does not support retracting errors (#17781).
+    /// does not support retracting errors (database-issues#5182).
     pub poison: Option<String>,
 }
 

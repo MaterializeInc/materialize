@@ -99,12 +99,14 @@
 #![allow(clippy::cast_precision_loss)]
 
 use std::collections::BTreeMap;
+use std::future::IntoFuture;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use differential_dataflow::Hashable;
+use futures::StreamExt;
 use itertools::Itertools;
 use mz_build_info::{build_info, BuildInfo};
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
@@ -121,6 +123,7 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::PartialOrder;
+use tokio::net::TcpListener;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{debug, error, info, info_span, trace, warn, Instrument};
@@ -150,7 +153,7 @@ pub struct Args {
     num_timely_workers: usize,
 
     /// Runtime in a whole number of seconds
-    #[clap(long, parse(try_from_str = humantime::parse_duration), value_name = "S", default_value = "60s")]
+    #[clap(long, value_parser = humantime::parse_duration, value_name = "S", default_value = "60s")]
     runtime: Duration,
 
     /// How many records writers should emit per second, per source.
@@ -175,7 +178,7 @@ pub struct Args {
     batch_size: usize,
 
     /// Duration between subsequent informational log outputs.
-    #[clap(long, parse(try_from_str = humantime::parse_duration), value_name = "L", default_value = "1s")]
+    #[clap(long, value_parser = humantime::parse_duration, value_name = "L", default_value = "1s")]
     logging_granularity: Duration,
 
     /// The address of the internal HTTP server.
@@ -190,7 +193,7 @@ pub struct Args {
     tracing: TracingCliArgs,
 
     /// The type of key-value store to use.
-    #[clap(arg_enum, long, default_value_t = KeyValueStore::Noop)]
+    #[clap(value_enum, long, default_value_t = KeyValueStore::Noop)]
     key_value_store: KeyValueStore,
 
     /// Wether to buffer (and reduce) batches of records in the UPSERT operator. The materialize
@@ -242,7 +245,7 @@ pub struct Args {
 }
 
 /// Different key-value stores under examination.
-#[derive(clap::ArgEnum, Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(clap::ValueEnum, Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 enum KeyValueStore {
     /// Pass data straight through, without running any upsert logic.
     Noop,
@@ -301,9 +304,14 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
             "serving internal HTTP server on http://{}/metrics",
             args.internal_http_listen_addr
         );
+
+        let listener = TcpListener::bind(&args.internal_http_listen_addr)
+            .await
+            .expect("can bind");
         mz_ore::task::spawn(
             || "http_server",
-            axum::Server::bind(&args.internal_http_listen_addr).serve(
+            axum::serve(
+                listener,
                 axum::Router::new()
                     .route(
                         "/metrics",
@@ -312,7 +320,8 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
                         }),
                     )
                     .into_make_service(),
-            ),
+            )
+            .into_future(),
         );
     }
 
@@ -580,7 +589,6 @@ async fn run_benchmark(
                 let rocks_options = Arc::clone(rocks_options);
                 let mut num_additions = 0;
                 let mut num_retractions = 0;
-                let mut buffer = Vec::new();
 
                 let mut frontier = Antichain::from_elem(0);
                 let mut max_lag = 0;
@@ -592,8 +600,7 @@ async fn run_benchmark(
                             return;
                         }
                         input.for_each(|_time, data| {
-                            data.swap(&mut buffer);
-                            for (_k, _v, diff) in buffer.drain(..) {
+                            for (_k, _v, diff) in data.drain(..) {
                                 if diff == 1 {
                                     num_additions += 1;
                                 } else if diff == -1 {
@@ -786,7 +793,7 @@ where
 
     let mut source_op = AsyncOperatorBuilder::new(format!("source-{source_id}"), scope);
 
-    let (mut output, output_stream) = source_op.new_output::<CapacityContainerBuilder<_>>();
+    let (output, output_stream) = source_op.new_output::<CapacityContainerBuilder<_>>();
 
     let _shutdown_button = source_op.build(move |mut capabilities| async move {
         if !active_worker {
@@ -814,7 +821,7 @@ where
                         .map(|((key, value), _ts, _diff)| (key.to_vec(), value.to_vec()))
                         .collect_vec();
 
-                    output.give_container(&cap, &mut batch).await;
+                    output.give_container(&cap, &mut batch);
                 }
             }
         }
@@ -909,8 +916,7 @@ where
     let mut upsert_op =
         AsyncOperatorBuilder::new(format!("source-{source_id}-upsert"), scope.clone());
 
-    let (mut output, output_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) =
-        upsert_op.new_output();
+    let (output, output_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) = upsert_op.new_output();
     let mut input = upsert_op.new_input_for(
         source_stream,
         Exchange::new(|d: &(Vec<u8>, Vec<u8>)| d.0.hashed()),
@@ -980,10 +986,10 @@ where
                 if let Some(previous_v) = previous_v {
                     // we might be able to avoid this extra key clone here,
                     // if we really tried
-                    output.give(*cap, (k.clone(), previous_v, -1)).await;
+                    output.give(*cap, (k.clone(), previous_v, -1));
                 }
                 // we don't do deletes right now
-                output.give(*cap, (k, v, 1)).await;
+                output.give(*cap, (k, v, 1));
             }
 
             // Discard entries, capabilities for complete times.
@@ -1008,8 +1014,7 @@ where
     let mut upsert_op =
         AsyncOperatorBuilder::new(format!("source-{source_id}-upsert"), scope.clone());
 
-    let (mut output, output_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) =
-        upsert_op.new_output();
+    let (output, output_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) = upsert_op.new_output();
     let mut input = upsert_op.new_input_for(
         source_stream,
         Exchange::new(|d: &(Vec<u8>, Vec<u8>)| d.0.hashed()),
@@ -1029,10 +1034,10 @@ where
                         if let Some(previous_v) = previous_v {
                             // we might be able to avoid this extra key clone here,
                             // if we really tried
-                            output.give(&cap, (k.clone(), previous_v, -1)).await;
+                            output.give(&cap, (k.clone(), previous_v, -1));
                         }
                         // we don't do deletes right now
-                        output.give(&cap, (k, v, 1)).await;
+                        output.give(&cap, (k, v, 1));
                     }
                 }
                 AsyncEvent::Progress(_new_frontier) => (),
@@ -1202,7 +1207,7 @@ impl IoThreadRocksDB {
         Self { tx }
     }
 
-    async fn ingest_inner(&mut self, batches: Vec<Batch>) -> Batch<KVAndPrevious> {
+    async fn ingest_inner(&self, batches: Vec<Batch>) -> Batch<KVAndPrevious> {
         let (tx, rx) = channel();
 
         // We assume the rocksdb thread doesnt shutdown before timely

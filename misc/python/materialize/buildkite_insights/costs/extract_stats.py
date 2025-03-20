@@ -17,7 +17,7 @@ from materialize.buildkite_insights.util.data_io import (
 )
 
 # https://instances.vantage.sh/aws/ec2
-instance_cost = {
+aws_instance_cost = {
     "c5.2xlarge": 0.340,
     "c5.12xlarge": 2.040,
     "c5a.2xlarge": 0.308,
@@ -25,21 +25,38 @@ instance_cost = {
     "c6a.large": 0.0765,
     "c6a.xlarge": 0.153,
     "c6a.2xlarge": 0.306,
+    "c6a.4xlarge": 0.612,
     "c6a.8xlarge": 1.224,
     "c6a.12xlarge": 1.836,
+    "c7a.large": 0.1026,
+    "c7a.xlarge": 0.2053,
+    "c7a.2xlarge": 0.4106,
+    "c7a.4xlarge": 0.8211,
+    "c7a.8xlarge": 1.642,
+    "c7a.12xlarge": 2.463,
     "c7g.large": 0.0725,
+    "c8g.large": 0.0798,
     "c6g.xlarge": 0.1360,
     "c7g.xlarge": 0.1450,
+    "c8g.xlarge": 0.1595,
     "c6g.2xlarge": 0.272,
     "c7g.2xlarge": 0.290,
+    "c8g.2xlarge": 0.319,
+    "c6g.4xlarge": 0.544,
+    "c7g.4xlarge": 0.580,
+    "c8g.4xlarge": 0.6381,
     "c6g.8xlarge": 1.088,
     "c6g.12xlarge": 1.632,
     "c7g.12xlarge": 1.740,
+    "c8g.12xlarge": 1.914,
     "c7g.16xlarge": 2.320,
+    "c8g.16xlarge": 2.552,
     "m5.4xlarge": 0.768,
     "m5a.8xlarge": 1.376,
     "m6a.8xlarge": 1.382,
     "m7a.8xlarge": 1.855,
+    "m6a.12xlarge": 2.074,
+    "m7a.12xlarge": 2.782,
     "m6g.4xlarge": 0.616,
     "m6g.8xlarge": 1.232,
     "m7g.8xlarge": 1.306,
@@ -48,6 +65,27 @@ instance_cost = {
     "m6i.4xlarge": 0.768,
     "m6i.12xlarge": 2.304,
     "m7i.8xlarge": 1.613,
+    "r7g.8xlarge": 1.714,
+    "r8g.8xlarge": 1.885,
+}
+
+# https://www.hetzner.com/cloud/
+hetzner_instance_cost = {
+    "aarch64-2cpu-4gb": 0.0059,
+    "aarch64-4cpu-8gb": 0.0101,
+    "aarch64-8cpu-16gb": 0.0202,
+    "aarch64-16cpu-32gb": 0.0395,
+    "x86-64-2cpu-4gb": 0.0060,
+    "x86-64-4cpu-8gb": 0.0113,
+    "x86-64-8cpu-16gb": 0.0273,
+    "x86-64-16cpu-32gb": 0.0540,
+    "x86-64-dedi-2cpu-8gb": 0.0200,
+    "x86-64-dedi-4cpu-16gb": 0.0392,
+    "x86-64-dedi-8cpu-32gb": 0.0777,
+    "x86-64-dedi-16cpu-64gb": 0.1546,
+    "x86-64-dedi-32cpu-128gb": 0.3085,
+    "x86-64-dedi-48cpu-192gb": 0.4623,
+    "x86-64": 0,  # local experiments
 }
 
 
@@ -90,7 +128,14 @@ def main() -> None:
 
             for metadata in job["agent"]["meta_data"]:
                 if metadata.startswith("aws:instance-type="):
-                    cost = instance_cost[metadata.removeprefix("aws:instance-type=")]
+                    cost = aws_instance_cost[
+                        metadata.removeprefix("aws:instance-type=")
+                    ]
+                    break
+                if metadata.startswith("queue=hetzner-"):
+                    cost = hetzner_instance_cost[
+                        metadata.removeprefix("queue=hetzner-")
+                    ]
                     break
             else:
                 # Can't calculate cost for mac-aarch64

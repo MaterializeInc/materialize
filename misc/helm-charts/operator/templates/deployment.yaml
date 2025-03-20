@@ -1,0 +1,178 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "materialize-operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "materialize-operator.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "materialize-operator.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "materialize-operator.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "materialize-operator.serviceAccountName" . }}
+      {{- if .Values.operator.nodeSelector }}
+      nodeSelector:
+        {{- toYaml .Values.operator.nodeSelector | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: {{ .Chart.Name }}
+        image: "{{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag }}"
+        imagePullPolicy: {{ .Values.operator.image.pullPolicy }}
+        args:
+        - "--helm-chart-version={{ .Chart.Version }}"
+        - "--startup-log-filter={{ .Values.operator.args.startupLogFilter }}"
+        - "--cloud-provider={{ .Values.operator.cloudProvider.type }}"
+        - "--region={{ .Values.operator.cloudProvider.region }}"
+        - "--secrets-controller={{ .Values.operator.secretsController }}"
+        # (SangJunBak) For self-managed, we disable statement logging due to performance issues
+        # https://github.com/MaterializeInc/cloud/issues/10755
+        - "--disable-statement-logging"
+        {{- range $key, $value := include "materialize-operator.selectorLabels" . | fromYaml }}
+        - "--orchestratord-pod-selector-labels={{ $key }}={{ $value }}"
+        {{- end }}
+        {{- if .Values.operator.args.enableInternalStatementLogging }}
+        - "--enable-internal-statement-logging"
+        {{- end }}
+
+        {{/* AWS Configuration */}}
+        {{- if eq .Values.operator.cloudProvider.type "aws" }}
+        {{- with .Values.operator.cloudProvider.providers.aws }}
+        {{- if .accountID }}
+        - "--aws-account-id={{ .accountID }}"
+        {{- end }}
+        {{- if .iam.roles.environment }}
+        - "--environmentd-iam-role-arn={{ .iam.roles.environment }}"
+        {{- end }}
+        {{- if .iam.roles.connection }}
+        - "--environmentd-connection-role-arn={{ .iam.roles.connection }}"
+        {{- end }}
+        {{- end }}
+        {{- end }}
+
+        {{/* Feature Flags */}}
+        {{- if .Values.balancerd.enabled }}
+        - "--create-balancers"
+        {{- end }}
+        {{- if .Values.console.enabled }}
+        - "--create-console"
+        {{- end }}
+        - "--console-image-tag-default=25.2.0"
+        {{- range $key, $value := .Values.console.imageTagMapOverride }}
+        - "--console-image-tag-map={{ $key }}={{ $value }}"
+        {{- end }}
+        {{- if not .Values.operator.features.authentication }}
+        - "--disable-authentication"
+        {{- end }}
+
+        {{/* Cluster Configuration */}}
+        {{- if .Values.operator.clusters }}
+        {{- if .Values.operator.clusters.sizes }}
+        - '--environmentd-cluster-replica-sizes={{ include "materialize.processClusterSizes" . | fromYaml | toJson }}'
+        {{- end }}
+        {{ if .Values.operator.clusters.defaultSizes.default }}
+        - "--bootstrap-default-cluster-replica-size={{ .Values.operator.clusters.defaultSizes.default }}"
+        {{- end }}
+        {{ if .Values.operator.clusters.defaultSizes.system }}
+        - "--bootstrap-builtin-system-cluster-replica-size={{ .Values.operator.clusters.defaultSizes.system }}"
+        {{- end }}
+        {{ if .Values.operator.clusters.defaultSizes.probe }}
+        - "--bootstrap-builtin-probe-cluster-replica-size={{ .Values.operator.clusters.defaultSizes.probe }}"
+        {{- end }}
+        {{ if .Values.operator.clusters.defaultSizes.support }}
+        - "--bootstrap-builtin-support-cluster-replica-size={{ .Values.operator.clusters.defaultSizes.support }}"
+        {{- end }}
+        {{ if .Values.operator.clusters.defaultSizes.catalogServer }}
+        - "--bootstrap-builtin-catalog-server-cluster-replica-size={{ .Values.operator.clusters.defaultSizes.catalogServer }}"
+        {{- end }}
+        {{ if .Values.operator.clusters.defaultSizes.analytics }}
+        - "--bootstrap-builtin-analytics-cluster-replica-size={{ .Values.operator.clusters.defaultSizes.analytics }}"
+        {{- end }}
+        {{ if ne .Values.operator.clusters.defaultReplicationFactor.system nil }}
+        - "--bootstrap-builtin-system-cluster-replication-factor={{ .Values.operator.clusters.defaultReplicationFactor.system }}"
+        {{- end }}
+        {{ if ne .Values.operator.clusters.defaultReplicationFactor.probe nil }}
+        - "--bootstrap-builtin-probe-cluster-replication-factor={{ .Values.operator.clusters.defaultReplicationFactor.probe }}"
+        {{- end }}
+        {{ if ne .Values.operator.clusters.defaultReplicationFactor.support nil }}
+        - "--bootstrap-builtin-support-cluster-replication-factor={{ .Values.operator.clusters.defaultReplicationFactor.support }}"
+        {{- end }}
+        {{ if ne .Values.operator.clusters.defaultReplicationFactor.analytics nil }}
+        - "--bootstrap-builtin-analytics-cluster-replication-factor={{ .Values.operator.clusters.defaultReplicationFactor.analytics }}"
+        {{- end }}
+        {{- end }}
+        - "--image-pull-policy={{ kebabcase .Values.operator.image.pullPolicy }}"
+        {{- range $key, $value := .Values.environmentd.nodeSelector }}
+        - "--environmentd-node-selector={{ $key }}={{ $value }}"
+        {{- end }}
+        {{- range $key, $value := .Values.clusterd.nodeSelector }}
+        - "--clusterd-node-selector={{ $key }}={{ $value }}"
+        {{- end }}
+        {{- range $key, $value := .Values.balancerd.nodeSelector }}
+        - "--balancerd-node-selector={{ $key }}={{ $value }}"
+        {{- end }}
+        {{- range $key, $value := .Values.console.nodeSelector }}
+        - "--console-node-selector={{ $key }}={{ $value }}"
+        {{- end }}
+        {{- if .Values.storage.storageClass.name }}
+        - "--ephemeral-volume-class={{ .Values.storage.storageClass.name }}"
+        {{- end }}
+
+        {{/* Network Policies */}}
+        {{- if .Values.networkPolicies.enabled }}
+        {{- if .Values.networkPolicies.internal.enabled }}
+        - "--network-policies-internal-enabled"
+        {{- end }}
+        {{- if .Values.networkPolicies.ingress.enabled }}
+        - "--network-policies-ingress-enabled"
+        {{- range $cidr := .Values.networkPolicies.ingress.cidrs }}
+        - "--network-policies-ingress-cidrs={{$cidr}}"
+        {{- end }}
+        {{- end }}
+        {{- if .Values.networkPolicies.egress.enabled }}
+        - "--network-policies-egress-enabled"
+        {{- range $cidr := .Values.networkPolicies.egress.cidrs }}
+        - "--network-policies-egress-cidrs={{$cidr}}"
+        {{- end }}
+        {{- end }}
+        {{- end }}
+        {{- if .Values.tls.defaultCertificateSpecs }}
+        - '--default-certificate-specs={{ toJson .Values.tls.defaultCertificateSpecs }}'
+        {{- end }}
+        {{/* Observability */}}
+        {{- if .Values.observability.enabled }}
+        {{- if .Values.observability.podMetrics.enabled }}
+        - "--collect-pod-metrics"
+        {{- end }}
+        {{- if .Values.observability.prometheus.scrapeAnnotations.enabled }}
+        - "--enable-prometheus-scrape-annotations"
+        {{- end }}
+        {{- end }}
+        {{/* Telemetry */}}
+        {{- if .Values.telemetry.enabled }}
+        - "--segment-api-key={{ .Values.telemetry.segmentApiKey }}"
+        {{- if .Values.telemetry.segmentClientSide }}
+        - "--segment-client-side"
+        {{- end }}
+        {{- end }}
+        - "--enable-security-context"
+        {{- if .Values.schedulerName }}
+        - "--scheduler-name={{ .Values.schedulerName }}"
+        {{- end }}
+        resources:
+          {{- toYaml .Values.operator.resources | nindent 10 }}

@@ -19,7 +19,7 @@
 
 mode cockroach
 
-# Regression test for #37263. This test is broken in the heuristic planner
+# Regression test for cockroach#37263. This test is broken in the heuristic planner
 # because it does not correctly type check subqueries.
 query B
 SELECT 3::decimal IN (SELECT 1)
@@ -34,7 +34,7 @@ SELECT 1 IN (SELECT '1');
 ----
 true
 
-# Regression test for #14554.
+# Regression test for database-issues#4155.
 query ITIIIII
 SELECT t.oid, t.typname, t.typsend, t.typreceive, t.typoutput, t.typinput, t.typelem
 	FROM pg_type AS t

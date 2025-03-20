@@ -7,9 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-// Tonic generates code that calls clone on an Arc. Allow this here.
+// Tonic generates code that violates clippy lints.
 // TODO: Remove this once tonic does not produce this code anymore.
-#![allow(clippy::clone_on_ref_ptr)]
+#![allow(clippy::as_conversions, clippy::clone_on_ref_ptr)]
 
 //! Compute layer client and server.
 
@@ -19,8 +19,10 @@ use async_trait::async_trait;
 use bytesize::ByteSize;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
+use mz_expr::row::RowCollection;
+use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
-use mz_repr::{Diff, GlobalId, Row, RowCollection};
+use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
 use mz_service::grpc::{GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream};
 use timely::progress::frontier::{Antichain, MutableAntichain};
@@ -52,12 +54,19 @@ impl<T: Send> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for Box<dyn C
     async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
         (**self).send(cmd).await
     }
+
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe. If `recv` is used as the event in a [`tokio::select!`]
+    /// statement and some other branch completes first, it is guaranteed that no messages were
+    /// received by this client.
     async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
+        // `GenericClient::recv` is required to be cancel safe.
         (**self).recv().await
     }
 }
 
-/// TODO(#25239): Add documentation.
+/// TODO(database-issues#7533): Add documentation.
 #[derive(Debug, Clone)]
 pub enum ComputeProtoServiceTypes {}
 
@@ -68,7 +77,7 @@ impl ProtoServiceTypes for ComputeProtoServiceTypes {
     const URL: &'static str = "/mz_compute_client.service.ProtoCompute/CommandResponseStream";
 }
 
-/// TODO(#25239): Add documentation.
+/// TODO(database-issues#7533): Add documentation.
 pub type ComputeGrpcClient = GrpcClient<ComputeProtoServiceTypes>;
 
 #[async_trait]
@@ -280,10 +289,14 @@ where
                 let input_frontier = frontiers
                     .input_frontier
                     .and_then(|f| tracked.update_input_frontier(shard_id, &f));
+                let output_frontier = frontiers
+                    .output_frontier
+                    .and_then(|f| tracked.update_output_frontier(shard_id, &f));
 
                 let frontiers = FrontiersResponse {
                     write_frontier,
                     input_frontier,
+                    output_frontier,
                 };
                 let result = frontiers
                     .has_updates()
@@ -304,7 +317,7 @@ where
                     .entry(uuid)
                     .or_insert_with(Default::default);
                 let novel = entry.insert(shard_id, response);
-                assert!(novel.is_none(), "Duplicate peek response");
+                assert_none!(novel, "Duplicate peek response");
                 // We may be ready to respond.
                 if entry.len() == self.parts {
                     let mut response = PeekResponse::Rows(RowCollection::default());
@@ -437,7 +450,7 @@ where
                     .entry(id)
                     .or_insert_with(Default::default);
                 let novel = entry.insert(shard_id, response);
-                assert!(novel.is_none(), "Duplicate copy to response");
+                assert_none!(novel, "Duplicate copy to response");
                 // We may be ready to respond.
                 if entry.len() == self.parts {
                     let mut response = CopyToResponse::RowCount(0);
@@ -478,6 +491,8 @@ struct TrackedFrontiers<T> {
     write_frontier: (MutableAntichain<T>, Vec<Antichain<T>>),
     /// The tracked input frontier.
     input_frontier: (MutableAntichain<T>, Vec<Antichain<T>>),
+    /// The tracked output frontier.
+    output_frontier: (MutableAntichain<T>, Vec<Antichain<T>>),
 }
 
 impl<T> TrackedFrontiers<T>
@@ -497,13 +512,16 @@ where
 
         Self {
             write_frontier: frontier_entry.clone(),
-            input_frontier: frontier_entry,
+            input_frontier: frontier_entry.clone(),
+            output_frontier: frontier_entry,
         }
     }
 
     /// Returns whether all tracked frontiers have advanced to the empty frontier.
     fn all_empty(&self) -> bool {
-        self.write_frontier.0.frontier().is_empty() && self.input_frontier.0.frontier().is_empty()
+        self.write_frontier.0.frontier().is_empty()
+            && self.input_frontier.0.frontier().is_empty()
+            && self.output_frontier.0.frontier().is_empty()
     }
 
     /// Updates write frontier tracking with a new shard frontier.
@@ -526,6 +544,17 @@ where
         new_shard_frontier: &Antichain<T>,
     ) -> Option<Antichain<T>> {
         Self::update_frontier(&mut self.input_frontier, shard_id, new_shard_frontier)
+    }
+
+    /// Updates output frontier tracking with a new shard frontier.
+    ///
+    /// If this causes the global output frontier to advance, the advanced frontier is returned.
+    fn update_output_frontier(
+        &mut self,
+        shard_id: usize,
+        new_shard_frontier: &Antichain<T>,
+    ) -> Option<Antichain<T>> {
+        Self::update_frontier(&mut self.output_frontier, shard_id, new_shard_frontier)
     }
 
     /// Updates the provided frontier entry with a new shard frontier.

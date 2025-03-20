@@ -57,4 +57,4 @@ If you are having trouble making a PostgreSQL tool work with Materialize, please
 [file a GitHub issue][gh-issue]. Many PostgreSQL tools can be made to work with
 Materialize with minor changes to the `pg_catalog` compatibility shim.
 
-[gh-issue]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md
+[gh-issue]: https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests&labels=A-integration

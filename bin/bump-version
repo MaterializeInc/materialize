@@ -17,8 +17,17 @@ cd "$(dirname "$0")/.."
 
 . misc/shlib/shlib.bash
 
-if [[ $# -ne 1 ]]; then
-    die "usage: $0 VERSION"
+if [[ $# -ne 1 && $# -ne 2 ]]; then
+    die "usage: $0 VERSION [--no-commit]"
+fi
+
+commit=true
+if [[ $# -eq 2 ]]; then
+    if [[ "$2" == "--no-commit" ]]; then
+        commit=false
+    else
+        die "invalid flag: $2, only --no-commit is supported"
+    fi
 fi
 
 if ! run git diff HEAD --compact-summary --exit-code; then
@@ -29,9 +38,9 @@ version=${1#v}
 
 sed -i.bak \
     "s/^version = .*/version = \"$version\"/" \
-    src/{clusterd,environmentd,persist-client,testdrive,catalog-debug,balancerd}/Cargo.toml
+    src/{clusterd,environmentd,materialized,persist-client,testdrive,catalog-debug,balancerd,orchestratord,self-managed-debug}/Cargo.toml
 
-if ! [[ "$version" = *dev ]]; then
+if ! [[ "$version" = *-dev* ]]; then
     sed -i.bak \
         "s/^Licensed Work:.*/Licensed Work:             Materialize Version v$version/" \
         LICENSE
@@ -49,8 +58,27 @@ else
     done
 fi
 
-rm -f src/{clusterd,environmentd,persist-client,testdrive,catalog-debug,balancerd}/Cargo.toml.bak LICENSE.bak
+rm -f src/{clusterd,environmentd,materialized,persist-client,testdrive,catalog-debug,balancerd,orchestratord,self-managed-debug}/Cargo.toml.bak LICENSE.bak
 
-cargo check
+cargo update --workspace
 
-git commit -am "release: bump to version v$version"
+bin/bazel gen
+
+bin/helm-chart-version-bump "v$version"
+
+helm_docs_version=1.14.2
+if ! helm-docs --help > /dev/null; then
+    echo "helm-docs is currently not installed"
+    echo "Install helm-docs $helm_docs_version from https://github.com/norwoodj/helm-docs/releases/tag/v$helm_docs_version"
+    exit 1
+fi
+if [ "$(helm-docs --version)" != "helm-docs version $helm_docs_version" ]; then
+    echo "helm-docs is installed, but has wrong version: $(helm-docs --version)"
+    echo "Install helm-docs $helm_docs_version from https://github.com/norwoodj/helm-docs/releases/tag/v$helm_docs_version"
+    exit 1
+fi
+helm-docs misc/helm-charts
+
+if $commit; then
+    git commit -am "release: bump to version v$version"
+fi

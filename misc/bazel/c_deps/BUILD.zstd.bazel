@@ -20,7 +20,7 @@ filegroup(
     srcs = glob([
         "lib/common/*.c",
         "lib/common/*.h",
-    ])
+    ]),
 )
 
 filegroup(
@@ -28,7 +28,7 @@ filegroup(
     srcs = glob([
         "lib/compress/*.c",
         "lib/compress/*.h",
-    ])
+    ]),
 )
 
 filegroup(
@@ -38,7 +38,7 @@ filegroup(
         "lib/decompress/*.h",
         # Decompress includes an optimized assembly implementation.
         "lib/decompress/*.S",
-    ])
+    ]),
 )
 
 filegroup(
@@ -46,7 +46,7 @@ filegroup(
     srcs = glob([
         "lib/dictBuilder/*.c",
         "lib/dictBuilder/*.h",
-    ])
+    ]),
 )
 
 filegroup(
@@ -54,7 +54,7 @@ filegroup(
     srcs = glob([
         "lib/legacy/*.c",
         "lib/legacy/*.h",
-    ])
+    ]),
 )
 
 cc_library(
@@ -67,10 +67,11 @@ cc_library(
         ":legacy_sources",
     ],
     hdrs = [
+        "lib/zdict.h",
         "lib/zstd.h",
         "lib/zstd_errors.h",
-        "lib/zdict.h",
     ],
+    copts = ["-pthread"],
     includes = ["lib"],
     linkstatic = True,
     local_defines = [
@@ -83,6 +84,5 @@ cc_library(
         "ZSTD_BUILD_STATIC=on",
         "ZSTD_LEGACY_SUPPORT=1",
     ],
-    copts = ["-pthread"],
     visibility = ["//visibility:public"],
 )

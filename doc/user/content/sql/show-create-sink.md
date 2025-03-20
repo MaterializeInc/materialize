@@ -10,15 +10,15 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-create-sink.svg" >}}
+```sql
+SHOW CREATE SINK <sink_name>
+```
 
-Field | Use
-------|-----
-_sink&lowbar;name_ | The sink you want use. You can find available sink names through [`SHOW SINKS`](../show-sinks).
+For available sink names, see [`SHOW SINKS`](/sql/show-sinks).
 
 ## Examples
 
-```sql
+```mzsql
 SHOW SINKS
 ```
 
@@ -28,7 +28,7 @@ SHOW SINKS
  my_view_sink
 ```
 
-```sql
+```mzsql
 SHOW CREATE SINK my_view_sink;
 ```
 

@@ -1,8 +1,8 @@
 - Feature name: Faster Dataflow Shutdown
 - Associated:
-    * <https://github.com/MaterializeInc/materialize/issues/2392>
-    * <https://github.com/MaterializeInc/materialize/issues/7577>
-    * <https://github.com/MaterializeInc/materialize/issues/16800>
+    * <https://github.com/MaterializeInc/database-issues/issues/835>
+    * <https://github.com/MaterializeInc/database-issues/issues/2350>
+    * <https://github.com/MaterializeInc/database-issues/issues/4869>
 
 
 # Summary
@@ -85,9 +85,9 @@ For these reasons, we are interested in completing dataflow shutdowns as quickly
 [`Worker::drop_dataflow`]: https://dev.materialize.com/api/rust/timely/worker/struct.Worker.html#method.drop_dataflow
 [timely-dataflow/#519]: https://github.com/TimelyDataflow/timely-dataflow/pull/519
 [WMR]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20221204_with_mutually_recursive.md
-[#7577]: https://github.com/MaterializeInc/materialize/issues/7577
-[#16800]: https://github.com/MaterializeInc/materialize/issues/16800
-[#16860]: https://github.com/MaterializeInc/materialize/issues/16860
+[#7577]: https://github.com/MaterializeInc/database-issues/issues/2350
+[#16800]: https://github.com/MaterializeInc/database-issues/issues/4869
+[#16860]: https://github.com/MaterializeInc/database-issues/issues/4876
 
 
 # Explanation
@@ -150,7 +150,7 @@ As part of [#17178], COMPUTE operators have been made much more robust to unexpe
 They now consistently report errors gracefully instead of crashing the process.
 Because of this the workaround in the persist source is not necessary anymore and we are free to revert it to the previous more efficient behavior.
 
-[#17178]: https://github.com/MaterializeInc/materialize/issues/17178
+[#17178]: https://github.com/MaterializeInc/database-issues/issues/4967
 
 ## Tokenizing Join Operators
 
@@ -169,7 +169,7 @@ It is likely that the compiler is able to lift the token check out of the loop t
 There might be other places in the join implementations where adding a token check improves shutdown performance.
 In the interest of keeping code complexity in check, we suggest to not speculatively add more token checks to the join implementations, unless we have evidence (e.g., example queries) that they significantly improve dataflow shutdown performance. The same applies to adding token checks to other operators than join.
 
-[#7577]: https://github.com/MaterializeInc/materialize/issues/7577
+[#7577]: https://github.com/MaterializeInc/database-issues/issues/2350
 
 ## Handling Incomplete Time Slices
 
@@ -261,4 +261,4 @@ These instances can only be solved by adding or improving fueling for these oper
 Finally, we should continue the work of stabilizing `drop_dataflow`.
 As pointed out above, it is a simpler and more effective approach than what this design proposes, and therefore a strictly better solution provided we can gain confidence in it.
 
-[#8853]: https://github.com/MaterializeInc/materialize/issues/8853
+[#8853]: https://github.com/MaterializeInc/database-issues/issues/2700

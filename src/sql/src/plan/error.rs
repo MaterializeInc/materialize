@@ -26,11 +26,11 @@ use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::adt::numeric::InvalidNumericMaxScaleError;
 use mz_repr::adt::timestamp::InvalidTimestampPrecisionError;
 use mz_repr::adt::varchar::InvalidVarCharMaxLengthError;
-use mz_repr::{strconv, ColumnName, GlobalId};
+use mz_repr::{strconv, CatalogItemId, ColumnName};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{IdentError, UnresolvedItemName};
 use mz_sql_parser::parser::{ParserError, ParserStatementError};
-use mz_storage_types::sources::SubsourceResolutionError;
+use mz_storage_types::sources::ExternalReferenceResolutionError;
 
 use crate::catalog::{
     CatalogError, CatalogItemType, ErrorMessageObjectDescription, SystemObjectType,
@@ -51,7 +51,7 @@ pub enum PlanError {
     /// This feature is not yet supported, but may be supported at some point in the future.
     Unsupported {
         feature: String,
-        issue_no: Option<usize>,
+        discussion_no: Option<usize>,
     },
     /// This feature is not supported, and will likely never be supported.
     NeverSupported {
@@ -76,6 +76,10 @@ pub enum PlanError {
     TooManyColumns {
         max_num_columns: usize,
         req_num_columns: usize,
+    },
+    ColumnAlreadyExists {
+        column_name: ColumnName,
+        object_name: String,
     },
     AmbiguousTable(PartialItemName),
     UnknownColumnInUsingClause {
@@ -106,7 +110,7 @@ pub enum PlanError {
     InvalidWmrRecursionLimit(String),
     InvalidNumericMaxScale(InvalidNumericMaxScaleError),
     InvalidCharLength(InvalidCharLengthError),
-    InvalidId(GlobalId),
+    InvalidId(CatalogItemId),
     InvalidIdent(IdentError),
     InvalidObject(Box<ResolvedItemName>),
     InvalidObjectType {
@@ -127,6 +131,13 @@ pub enum PlanError {
         ccx: CastContext,
         from: String,
         to: String,
+    },
+    InvalidTable {
+        name: String,
+    },
+    InvalidVersion {
+        name: String,
+        version: String,
     },
     MangedReplicaName(String),
     ParserStatement(ParserStatementError),
@@ -160,6 +171,7 @@ pub enum PlanError {
         name: UnresolvedItemName,
         target_names: Vec<UnresolvedItemName>,
     },
+    NoTablesFoundForSchemas(Vec<String>),
     InvalidProtobufSchema {
         cause: protobuf_native::OperationFailedError,
     },
@@ -207,6 +219,9 @@ pub enum PlanError {
     },
     InvalidKeysInSubscribeEnvelopeUpsert,
     InvalidKeysInSubscribeEnvelopeDebezium,
+    InvalidPartitionByEnvelopeDebezium {
+        column_name: String,
+    },
     InvalidOrderByInSubscribeWithinTimestampOrderBy,
     FromValueRequiresParen,
     VarError(VarError),
@@ -231,6 +246,7 @@ pub enum PlanError {
     LoadGeneratorSourcePurification(LoadGeneratorSourcePurificationError),
     CsrPurification(CsrPurificationError),
     MySqlSourcePurification(MySqlSourcePurificationError),
+    UseTablesForSources(String),
     MissingName(CatalogItemType),
     InvalidRefreshAt,
     InvalidRefreshEveryAlignedTo,
@@ -249,8 +265,8 @@ pub enum PlanError {
         expected_type: ObjectType,
     },
     /// MZ failed to generate cast for the data type.
-    PublicationContainsUningestableTypes {
-        publication: String,
+    TableContainsUningestableTypes {
+        name: String,
         type_: String,
         column: String,
     },
@@ -258,7 +274,11 @@ pub enum PlanError {
         limit: Duration,
     },
     RetainHistoryRequired,
-    SubsourceResolutionError(SubsourceResolutionError),
+    UntilReadyTimeoutRequired,
+    SubsourceResolutionError(ExternalReferenceResolutionError),
+    Replan(String),
+    NetworkPolicyLockoutError,
+    NetworkPolicyInUse,
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -338,6 +358,13 @@ impl PlanError {
                 "subsources referencing table: {}",
                 itertools::join(target_names, ", ")
             )),
+            Self::InvalidPartitionByEnvelopeDebezium { .. } => Some(
+                "When using ENVELOPE DEBEZIUM, only columns in the key can be referenced in the PARTITION BY expression.".to_string()
+            ),
+            Self::NoTablesFoundForSchemas(schemas) => Some(format!(
+                "missing schemas: {}",
+                separated(", ", schemas.iter().map(|c| c.quoted()))
+            )),
             _ => None,
         }
     }
@@ -366,7 +393,7 @@ impl PlanError {
                         if cause.kind() == io::ErrorKind::TimedOut {
                             return Some(
                                 "Do you have a firewall or security group that is \
-                                preventing Materialize from conecting to your PostgreSQL server?"
+                                preventing Materialize from connecting to your PostgreSQL server?"
                                     .into(),
                             );
                         }
@@ -430,11 +457,14 @@ impl PlanError {
             | Self::InvalidRefreshEveryAlignedTo => {
                 Some("Calling `mz_now()` is allowed.".into())
             },
-            Self::PublicationContainsUningestableTypes { column,.. } => {
-                Some(format!("Remove the table from the publication or use TEXT COLUMNS ({column}, ..) to ingest this column as text"))
+            Self::TableContainsUningestableTypes { column,.. } => {
+                Some(format!("Remove the table or use TEXT COLUMNS ({column}, ..) to ingest this column as text"))
             }
             Self::RetainHistoryLow { .. } | Self::RetainHistoryRequired => {
                 Some("Use ALTER ... RESET (RETAIN HISTORY) to set the retain history to its default and lowest value.".into())
+            }
+            Self::NetworkPolicyInUse => {
+                Some("Use ALTER SYSTEM SET 'network_policy' to change the default network policy.".into())
             }
             _ => None,
         }
@@ -444,10 +474,10 @@ impl PlanError {
 impl fmt::Display for PlanError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::Unsupported { feature, issue_no } => {
+            Self::Unsupported { feature, discussion_no } => {
                 write!(f, "{} not yet supported", feature)?;
-                if let Some(issue_no) = issue_no {
-                    write!(f, ", see https://github.com/MaterializeInc/materialize/issues/{} for more details", issue_no)?;
+                if let Some(discussion_no) = discussion_no {
+                    write!(f, ", see https://github.com/MaterializeInc/materialize/discussions/{} for more details", discussion_no)?;
                 }
                 Ok(())
             }
@@ -483,6 +513,11 @@ impl fmt::Display for PlanError {
                 f,
                 "attempt to create relation with too many columns, {} max: {}",
                 req_num_columns, max_num_columns
+            ),
+            Self::ColumnAlreadyExists { column_name, object_name } => write!(
+                f,
+                "column {} of relation {} already exists",
+                column_name.as_str().quoted(), object_name.quoted(),
             ),
             Self::AmbiguousTable(table) => write!(
                 f,
@@ -565,6 +600,12 @@ impl fmt::Display for PlanError {
                     },
                 )
             }
+            Self::InvalidTable { name } => {
+                write!(f, "invalid table definition for {}", name.quoted())
+            },
+            Self::InvalidVersion { name, version } => {
+                write!(f, "invalid version {} for {}", version.quoted(), name.quoted())
+            },
             Self::DropViewOnMaterializedView(name)
             | Self::AlterViewOnMaterializedView(name)
             | Self::ShowCreateViewOnMaterializedView(name)
@@ -588,6 +629,11 @@ impl fmt::Display for PlanError {
                 target_names: _,
             } => {
                 write!(f, "multiple subsources refer to table {}", name)
+            },
+            Self::NoTablesFoundForSchemas(schemas) => {
+                write!(f, "no tables found in referenced schemas: {}",
+                    separated(", ", schemas.iter().map(|c| c.quoted()))
+                )
             },
             Self::InvalidProtobufSchema { .. } => {
                 write!(f, "invalid protobuf schema")
@@ -646,6 +692,13 @@ impl fmt::Display for PlanError {
             Self::InvalidKeysInSubscribeEnvelopeDebezium => {
                 write!(f, "invalid keys in SUBSCRIBE ENVELOPE DEBEZIUM (KEY (..))")
             }
+            Self::InvalidPartitionByEnvelopeDebezium { column_name } => {
+                write!(
+                    f,
+                    "PARTITION BY expression cannot refer to non-key column {}",
+                    column_name.quoted(),
+                )
+            }
             Self::InvalidOrderByInSubscribeWithinTimestampOrderBy => {
                 write!(f, "invalid ORDER BY in SUBSCRIBE WITHIN TIMESTAMP ORDER BY")
             }
@@ -679,6 +732,7 @@ impl fmt::Display for PlanError {
             Self::KafkaSinkPurification(e) => write!(f, "KAFKA sink validation: {}", e),
             Self::CsrPurification(e) => write!(f, "CONFLUENT SCHEMA REGISTRY validation: {}", e),
             Self::MySqlSourcePurification(e) => write!(f, "MYSQL source validation: {}", e),
+            Self::UseTablesForSources(command) => write!(f, "{command} not supported; use CREATE TABLE .. FROM SOURCE instead"),
             Self::MangedReplicaName(name) => {
                 write!(f, "{name} is reserved for replicas of managed clusters")
             }
@@ -718,8 +772,8 @@ impl fmt::Display for PlanError {
                     expected_type.to_string().to_lowercase()
                 )
             }
-            Self::PublicationContainsUningestableTypes { publication, type_, column } => {
-                write!(f, "publication {publication} contains column {column} of type {type_} which Materialize cannot currently ingest")
+            Self::TableContainsUningestableTypes { name, type_, column } => {
+                write!(f, "table {name} contains column {column} of type {type_} which Materialize cannot currently ingest")
             },
             Self::RetainHistoryLow { limit } => {
                 write!(f, "RETAIN HISTORY cannot be set lower than {}ms", limit.as_millis())
@@ -728,6 +782,12 @@ impl fmt::Display for PlanError {
                 write!(f, "RETAIN HISTORY cannot be disabled or set to 0")
             },
             Self::SubsourceResolutionError(e) => write!(f, "{}", e),
+            Self::Replan(msg) => write!(f, "internal error while replanning, please contact support: {msg}"),
+            Self::NetworkPolicyLockoutError => write!(f, "policy would block current session IP"),
+            Self::NetworkPolicyInUse => write!(f, "network policy is currently in use"),
+            Self::UntilReadyTimeoutRequired => {
+                write!(f, "TIMEOUT=<duration> option is required for ALTER CLUSTER ... WITH (WAIT UNTIL READY ( ... ))")
+            },
         }
     }
 }
@@ -873,8 +933,8 @@ impl From<IdentError> for PlanError {
     }
 }
 
-impl From<SubsourceResolutionError> for PlanError {
-    fn from(e: SubsourceResolutionError) -> Self {
+impl From<ExternalReferenceResolutionError> for PlanError {
+    fn from(e: ExternalReferenceResolutionError) -> Self {
         PlanError::SubsourceResolutionError(e)
     }
 }

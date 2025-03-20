@@ -20,24 +20,9 @@ def schemas() -> str:
 
 
 class Webhook(Check):
-    def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.62.0-dev")
-
-    def enable(self) -> str:
-        if self.base_version < MzVersion.parse_mz("v0.76.0-dev"):
-            return dedent(
-                """
-                $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-                ALTER SYSTEM SET enable_webhook_sources = true
-                """
-            )
-        else:
-            return ""
-
     def initialize(self) -> Testdrive:
         return Testdrive(
             schemas()
-            + self.enable()
             + dedent(
                 """
                 > CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));
@@ -97,14 +82,14 @@ class Webhook(Check):
             dedent(
                 """
                 > SHOW COLUMNS FROM webhook_text
-                body false text
+                body false text ""
 
                 > SHOW COLUMNS FROM webhook_json
-                body false jsonb
-                headers false map
+                body false jsonb ""
+                headers false map ""
 
                 > SHOW COLUMNS FROM webhook_bytes
-                body false bytea
+                body false bytea ""
 
                 > SELECT * FROM webhook_text
                 fooä
@@ -124,6 +109,63 @@ class Webhook(Check):
                 \\\\x00\\x00\\x00\\x00
                 \\\\x01
                 \\\\x01\\x02\\x03\\x04
+
+                > SHOW CREATE SOURCE webhook_text
+                materialize.public.webhook_text "CREATE SOURCE \\"materialize\\".\\"public\\".\\"webhook_text\\" IN CLUSTER \\"webhook_cluster\\" FROM WEBHOOK BODY FORMAT TEXT"
+
+                > SHOW CREATE SOURCE webhook_json
+                materialize.public.webhook_json "CREATE SOURCE \\"materialize\\".\\"public\\".\\"webhook_json\\" IN CLUSTER \\"webhook_cluster\\" FROM WEBHOOK BODY FORMAT JSON INCLUDE HEADERS"
+
+                > SHOW CREATE SOURCE webhook_bytes
+                materialize.public.webhook_bytes "CREATE SOURCE \\"materialize\\".\\"public\\".\\"webhook_bytes\\" IN CLUSTER \\"webhook_cluster\\" FROM WEBHOOK BODY FORMAT BYTES"
+           """
+            )
+        )
+
+
+class WebhookTable(Check):
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version >= MzVersion.parse_mz("v0.130.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(
+            schemas()
+            + dedent(
+                """
+                > CREATE TABLE webhook_table_text FROM WEBHOOK BODY FORMAT TEXT;
+
+                $ webhook-append database=materialize schema=public name=webhook_table_text
+                hello_world
+                """
+            )
+        )
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(schemas() + dedent(s))
+            for s in [
+                """
+                $ webhook-append database=materialize schema=public name=webhook_table_text
+                anotha_one!
+                """,
+                """
+                $ webhook-append database=materialize schema=public name=webhook_table_text
+                threeeeeee
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                > SELECT * FROM webhook_table_text
+                hello_world
+                anotha_one!
+                threeeeeee
+
+                > SHOW CREATE TABLE webhook_table_text
+                materialize.public.webhook_table_text "CREATE TABLE \\"materialize\\".\\"public\\".\\"webhook_table_text\\" FROM WEBHOOK BODY FORMAT TEXT"
            """
             )
         )

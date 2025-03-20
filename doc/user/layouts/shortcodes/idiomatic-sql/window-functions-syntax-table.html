@@ -1,0 +1,141 @@
+
+<!--
+  To render properly, keep the left-hand alignment.
+-->
+
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Idiomatic Materialize SQL Pattern</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Top-K over partition<br>(K >= 1)</td>
+<td class="copyableCode">
+
+```mzsql
+SELECT fieldA, fieldB, ...
+FROM (SELECT DISTINCT fieldA FROM tableA) grp,
+      LATERAL (SELECT fieldB, ... , fieldZ FROM tableA
+         WHERE fieldA = grp.fieldA
+         ORDER BY fieldZ ... LIMIT K)   -- K is a number >= 1
+ORDER BY fieldA, fieldZ ... ;
+```
+
+</td>
+</tr>
+<tr>
+<td>Top-K over partition<br>(K = 1)</td>
+<td class="copyableCode">
+
+```mzsql
+SELECT DISTINCT ON(fieldA) fieldA, fieldB, ...
+FROM tableA
+ORDER BY fieldA, fieldZ ...  -- Top-K where K is 1;
+```
+
+</td>
+</tr>
+
+<tr>
+<td>First value over partition<br>order by ... </td>
+<td class="copyableCode">
+
+```mzsql
+SELECT tableA.fieldA, tableA.fieldB, minmax.Z
+   FROM tableA,
+   (SELECT fieldA,
+      MIN(fieldZ)      -- Or MAX()
+   FROM tableA
+   GROUP BY fieldA) minmax
+WHERE tableA.fieldA = minmax.fieldA
+ORDER BY fieldA ... ;
+```
+
+</td>
+</tr>
+
+<tr>
+<td>Last value over partition<br>order by ...  <br>range between unbounded preceding<br>and unbounded following</td>
+<td class="copyableCode">
+
+```mzsql
+SELECT tableA.fieldA, tableA.fieldB, minmax.Z
+   FROM tableA,
+   (SELECT fieldA,
+      MAX(fieldZ)      -- Or MIN()
+   FROM tableA
+   GROUP BY fieldA) minmax
+WHERE tableA.fieldA = minmax.fieldA
+ORDER BY fieldA ... ;
+```
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+Lag over (order by) whose ordering can be represented by some equality
+condition.
+
+</td>
+<td class="copyableCode">
+
+***To exclude the first row since it has no previous row***
+
+```mzsql
+SELECT t1.fieldA, t2.fieldB
+FROM tableA t1, tableA t2
+WHERE t1.fieldA = t2.fieldA +  ...
+ORDER BY fieldA;
+```
+
+***To include the first row***
+
+```mzsql
+SELECT t1.fieldA, t2.fieldB
+FROM tableA t1
+LEFT JOIN tableA t2
+ON t1.fieldA = t2.fieldA +  ...
+ORDER BY fieldA;
+```
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+Lead over (order by) whose ordering can be represented by some equality
+condition.
+
+</td>
+<td class="copyableCode">
+
+***To exclude the last row since it has no next row***
+
+```mzsql
+SELECT t1.fieldA, t2.fieldB
+FROM tableA t1, tableA t2
+WHERE t1.fieldA = t2.fieldA - ...
+ORDER BY fieldA;
+```
+
+***To include the last row***
+
+```mzsql
+SELECT t1.fieldA, t2.fieldB
+FROM tableA t1
+LEFT JOIN tableA t2
+ON t1.fieldA = t2.fieldA -  ...
+ORDER BY fieldA;
+```
+
+</td>
+</tr>
+
+</tbody>
+</table>

@@ -78,7 +78,7 @@ sqlfunc!(
         if (f >= (i16::MIN as f64)) && (f < -(i16::MIN as f64)) {
             Ok(f as i16)
         } else {
-            Err(EvalError::Int16OutOfRange(f.to_string()))
+            Err(EvalError::Int16OutOfRange(f.to_string().into()))
         }
     }
 );
@@ -99,7 +99,7 @@ sqlfunc!(
         if (f >= (i32::MIN as f64)) && (f < -(i32::MIN as f64)) {
             Ok(f as i32)
         } else {
-            Err(EvalError::Int32OutOfRange(f.to_string()))
+            Err(EvalError::Int32OutOfRange(f.to_string().into()))
         }
     }
 );
@@ -120,7 +120,7 @@ sqlfunc!(
         if (f >= (i64::MIN as f64)) && (f < -(i64::MIN as f64)) {
             Ok(f as i64)
         } else {
-            Err(EvalError::Int64OutOfRange(f.to_string()))
+            Err(EvalError::Int64OutOfRange(f.to_string().into()))
         }
     }
 );
@@ -167,7 +167,7 @@ sqlfunc!(
         if (f >= 0.0) && (f <= (u16::MAX as f64)) {
             Ok(f as u16)
         } else {
-            Err(EvalError::UInt16OutOfRange(f.to_string()))
+            Err(EvalError::UInt16OutOfRange(f.to_string().into()))
         }
     }
 );
@@ -184,7 +184,7 @@ sqlfunc!(
         if (f >= 0.0) && (f <= (u32::MAX as f64)) {
             Ok(f as u32)
         } else {
-            Err(EvalError::UInt32OutOfRange(f.to_string()))
+            Err(EvalError::UInt32OutOfRange(f.to_string().into()))
         }
     }
 );
@@ -201,7 +201,7 @@ sqlfunc!(
         if (f >= 0.0) && (f <= (u64::MAX as f64)) {
             Ok(f as u64)
         } else {
-            Err(EvalError::UInt64OutOfRange(f.to_string()))
+            Err(EvalError::UInt64OutOfRange(f.to_string().into()))
         }
     }
 );
@@ -216,7 +216,7 @@ impl<'a> EagerUnaryFunc<'a> for CastFloat64ToNumeric {
     fn call(&self, a: f64) -> Result<Numeric, EvalError> {
         if a.is_infinite() {
             return Err(EvalError::InfinityOutOfDomain(
-                "casting double precision to numeric".to_owned(),
+                "casting double precision to numeric".into(),
             ));
         }
         let mut a = Numeric::from(a);
@@ -270,7 +270,7 @@ sqlfunc!(
 sqlfunc!(
     fn cos(a: f64) -> Result<f64, EvalError> {
         if a.is_infinite() {
-            return Err(EvalError::InfinityOutOfDomain("cos".to_owned()));
+            return Err(EvalError::InfinityOutOfDomain("cos".into()));
         }
         Ok(a.cos())
     }
@@ -282,7 +282,7 @@ sqlfunc!(
             return Err(EvalError::OutOfDomain(
                 DomainLimit::Inclusive(-1),
                 DomainLimit::Inclusive(1),
-                "acos".to_owned(),
+                "acos".into(),
             ));
         }
         Ok(a.acos())
@@ -301,7 +301,7 @@ sqlfunc!(
             return Err(EvalError::OutOfDomain(
                 DomainLimit::Inclusive(1),
                 DomainLimit::None,
-                "acosh".to_owned(),
+                "acosh".into(),
             ));
         }
         Ok(a.acosh())
@@ -311,7 +311,7 @@ sqlfunc!(
 sqlfunc!(
     fn sin(a: f64) -> Result<f64, EvalError> {
         if a.is_infinite() {
-            return Err(EvalError::InfinityOutOfDomain("sin".to_owned()));
+            return Err(EvalError::InfinityOutOfDomain("sin".into()));
         }
         Ok(a.sin())
     }
@@ -323,7 +323,7 @@ sqlfunc!(
             return Err(EvalError::OutOfDomain(
                 DomainLimit::Inclusive(-1),
                 DomainLimit::Inclusive(1),
-                "asin".to_owned(),
+                "asin".into(),
             ));
         }
         Ok(a.asin())
@@ -345,7 +345,7 @@ sqlfunc!(
 sqlfunc!(
     fn tan(a: f64) -> Result<f64, EvalError> {
         if a.is_infinite() {
-            return Err(EvalError::InfinityOutOfDomain("tan".to_owned()));
+            return Err(EvalError::InfinityOutOfDomain("tan".into()));
         }
         Ok(a.tan())
     }
@@ -369,7 +369,7 @@ sqlfunc!(
             return Err(EvalError::OutOfDomain(
                 DomainLimit::Inclusive(-1),
                 DomainLimit::Inclusive(1),
-                "atanh".to_owned(),
+                "atanh".into(),
             ));
         }
         Ok(a.atanh())
@@ -379,7 +379,7 @@ sqlfunc!(
 sqlfunc!(
     fn cot(a: f64) -> Result<f64, EvalError> {
         if a.is_infinite() {
-            return Err(EvalError::InfinityOutOfDomain("cot".to_owned()));
+            return Err(EvalError::InfinityOutOfDomain("cot".into()));
         }
         Ok(1.0 / a.tan())
     }
@@ -401,10 +401,10 @@ sqlfunc!(
     #[sqlname = "log10f64"]
     fn log10(a: f64) -> Result<f64, EvalError> {
         if a.is_sign_negative() {
-            return Err(EvalError::NegativeOutOfDomain("log10".to_owned()));
+            return Err(EvalError::NegativeOutOfDomain("log10".into()));
         }
         if a == 0.0 {
-            return Err(EvalError::ZeroOutOfDomain("log10".to_owned()));
+            return Err(EvalError::ZeroOutOfDomain("log10".into()));
         }
         Ok(a.log10())
     }
@@ -414,10 +414,10 @@ sqlfunc!(
     #[sqlname = "lnf64"]
     fn ln(a: f64) -> Result<f64, EvalError> {
         if a.is_sign_negative() {
-            return Err(EvalError::NegativeOutOfDomain("ln".to_owned()));
+            return Err(EvalError::NegativeOutOfDomain("ln".into()));
         }
         if a == 0.0 {
-            return Err(EvalError::ZeroOutOfDomain("ln".to_owned()));
+            return Err(EvalError::ZeroOutOfDomain("ln".into()));
         }
         Ok(a.ln())
     }

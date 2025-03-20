@@ -1,0 +1,813 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# https://github.com/MaterializeInc/advent-of-code-2023/blob/main/week1/aoc_1214.md
+
+mode cockroach
+
+statement ok
+CREATE TABLE input (input TEXT);
+
+statement ok
+INSERT INTO input VALUES (
+'.O.#....#.#.#.....O..O..O...
+.O.#....O....#..#....#####..
+.O..##..O..#O...##..#...O...
+O.##.OO#O.#...#.#.#.O..##.O.
+O..#..OO#...#..#.#O.#.#.OO.#
+#.#.#.O.O##...O...#0##..O...
+.O#...#..#.O..O.#.##..#..O..');
+
+query I
+WITH MUTUALLY RECURSIVE
+
+    lines(r INT, line TEXT) AS (
+        SELECT r, regexp_split_to_array(input, '\n')[r] as block
+        FROM input, generate_series(1, array_length(regexp_split_to_array(input, '\n'), 1)) r
+    ),
+    cells(r INT, c INT, symbol TEXT) AS (
+        SELECT r, c, substring(line, c, 1)
+        FROM lines, generate_series(1, length(line)) c
+    ),
+
+    northward(r INT, c INT, symbol TEXT) AS (
+        SELECT * FROM northward
+        -- Anyone on the move does so
+        UNION  ALL SELECT r - 1, c, 'O' FROM north_move
+        EXCEPT ALL SELECT r - 1, c, '.' FROM north_move
+        UNION  ALL SELECT r, c, '.' FROM north_move
+        EXCEPT ALL SELECT r, c, 'O' FROM north_move
+        -- Initial state is cells, but not refreshed each round.
+        UNION  ALL SELECT * FROM cells
+        EXCEPT ALL SELECT * FROM cells_delay
+    ),
+
+    -- Each 'O' with a '.' to the north will move.
+    north_move(r INT, c INT) AS (
+        SELECT n1.r, n1.c
+        FROM northward n1, northward n2
+        WHERE n1.symbol = 'O'
+          AND n1.r = n2.r + 1
+          AND n1.c = n2.c
+          AND n2.symbol = '.'
+    ),
+
+    part1(part1 BIGINT) AS (
+        SELECT SUM(1 + (SELECT MAX(r) FROM lines) - r)
+        FROM northward
+        WHERE symbol = 'O'
+    ),
+
+    output (r INT, line TEXT) AS (
+        SELECT r, string_agg(symbol, ' ' ORDER BY c)
+        FROM northward
+        GROUP BY r
+    ),
+
+    cells_delay(r INT, c INT, symbol TEXT) AS ( SELECT * FROM cells )
+
+SELECT * FROM part1;
+----
+146
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
+WITH MUTUALLY RECURSIVE
+
+    lines(r INT, line TEXT) AS (
+        SELECT r, regexp_split_to_array(input, '\n')[r] as block
+        FROM input, generate_series(1, array_length(regexp_split_to_array(input, '\n'), 1)) r
+    ),
+    cells(r INT, c INT, symbol TEXT) AS (
+        SELECT r, c, substring(line, c, 1)
+        FROM lines, generate_series(1, length(line)) c
+    ),
+
+    northward(r INT, c INT, symbol TEXT) AS (
+        SELECT * FROM northward
+        -- Anyone on the move does so
+        UNION  ALL SELECT r - 1, c, 'O' FROM north_move
+        EXCEPT ALL SELECT r - 1, c, '.' FROM north_move
+        UNION  ALL SELECT r, c, '.' FROM north_move
+        EXCEPT ALL SELECT r, c, 'O' FROM north_move
+        -- Initial state is cells, but not refreshed each round.
+        UNION  ALL SELECT * FROM cells
+        EXCEPT ALL SELECT * FROM cells_delay
+    ),
+
+    -- Each 'O' with a '.' to the north will move.
+    north_move(r INT, c INT) AS (
+        SELECT n1.r, n1.c
+        FROM northward n1, northward n2
+        WHERE n1.symbol = 'O'
+          AND n1.r = n2.r + 1
+          AND n1.c = n2.c
+          AND n2.symbol = '.'
+    ),
+
+    part1(part1 BIGINT) AS (
+        SELECT SUM(1 + (SELECT MAX(r) FROM lines) - r)
+        FROM northward
+        WHERE symbol = 'O'
+    ),
+
+    output (r INT, line TEXT) AS (
+        SELECT r, string_agg(symbol, ' ' ORDER BY c)
+        FROM northward
+        GROUP BY r
+    ),
+
+    cells_delay(r INT, c INT, symbol TEXT) AS ( SELECT * FROM cells )
+
+SELECT * FROM part1;
+----
+Explained Query:
+  With Mutually Recursive
+    cte l0 =
+      Project (#1, #2) // { arity: 2 }
+        Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1))) // { arity: 3 }
+          FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#0{input}) array_length 1), 1) // { arity: 2 }
+            ReadStorage materialize.public.input // { arity: 1 }
+    cte l1 =
+      Project (#0, #2, #3) // { arity: 3 }
+        Map (substr(#1, #2, 1)) // { arity: 4 }
+          FlatMap generate_series(1, char_length(#1), 1) // { arity: 3 }
+            Get l0 // { arity: 2 }
+    cte l2 =
+      Threshold // { arity: 3 }
+        Union // { arity: 3 }
+          Threshold // { arity: 3 }
+            Union // { arity: 3 }
+              Threshold // { arity: 3 }
+                Union // { arity: 3 }
+                  Get l2 // { arity: 3 }
+                  Project (#2, #1, #3) // { arity: 3 }
+                    Map ((#0 - 1), "O") // { arity: 4 }
+                      Get l4 // { arity: 2 }
+                  Negate // { arity: 3 }
+                    Project (#2, #1, #3) // { arity: 3 }
+                      Map ((#0 - 1), ".") // { arity: 4 }
+                        Get l4 // { arity: 2 }
+              Map (".") // { arity: 3 }
+                Get l4 // { arity: 2 }
+              Negate // { arity: 3 }
+                Map ("O") // { arity: 3 }
+                  Get l4 // { arity: 2 }
+          Get l1 // { arity: 3 }
+          Negate // { arity: 3 }
+            Get l8 // { arity: 3 }
+    cte l3 =
+      Project (#0, #1) // { arity: 2 }
+        Filter (#2 = "O") // { arity: 3 }
+          Get l2 // { arity: 3 }
+    cte l4 =
+      Project (#0, #1) // { arity: 2 }
+        Join on=(#0 = (#2 + 1) AND #1 = #3) type=differential // { arity: 4 }
+          implementation
+            %0:l3[#1, #0]KKef » %1:l2[#1, (#0 + 1)]KKef
+          ArrangeBy keys=[[#1, #0]] // { arity: 2 }
+            Get l3 // { arity: 2 }
+          ArrangeBy keys=[[#1, (#0 + 1)]] // { arity: 2 }
+            Project (#0, #1) // { arity: 2 }
+              Filter (#2 = ".") // { arity: 3 }
+                Get l2 // { arity: 3 }
+    cte l5 =
+      Reduce aggregates=[max(#0)] // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          Get l0 // { arity: 2 }
+    cte l6 =
+      Union // { arity: 1 }
+        Get l5 // { arity: 1 }
+        Map (null) // { arity: 1 }
+          Union // { arity: 0 }
+            Negate // { arity: 0 }
+              Project () // { arity: 0 }
+                Get l5 // { arity: 1 }
+            Constant // { arity: 0 }
+              - ()
+    cte l7 =
+      Reduce aggregates=[sum(((1 + #1{max}) - #0))] // { arity: 1 }
+        CrossJoin type=differential // { arity: 2 }
+          implementation
+            %1[×]U » %0:l3[×]ef
+          ArrangeBy keys=[[]] // { arity: 1 }
+            Project (#0) // { arity: 1 }
+              Get l3 // { arity: 2 }
+          ArrangeBy keys=[[]] // { arity: 1 }
+            Union // { arity: 1 }
+              Get l6 // { arity: 1 }
+              Map (null) // { arity: 1 }
+                Union // { arity: 0 }
+                  Negate // { arity: 0 }
+                    Project () // { arity: 0 }
+                      Get l6 // { arity: 1 }
+                  Constant // { arity: 0 }
+                    - ()
+    cte l8 =
+      Get l1 // { arity: 3 }
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Get l7 // { arity: 1 }
+      Map (null) // { arity: 1 }
+        Union // { arity: 0 }
+          Negate // { arity: 0 }
+            Project () // { arity: 0 }
+              Get l7 // { arity: 1 }
+          Constant // { arity: 0 }
+            - ()
+
+Source materialize.public.input
+
+Target cluster: quickstart
+
+EOF
+
+query I
+WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 142)
+
+    lines(r INT, line TEXT) AS (
+        SELECT r, regexp_split_to_array(input, '\n')[r] as block
+        FROM input, generate_series(1, array_length(regexp_split_to_array(input, '\n'), 1)) r
+    ),
+    cells(r INT, c INT, symbol TEXT) AS (
+        SELECT r, c, substring(line, c, 1)
+        FROM lines, generate_series(1, length(line)) c
+    ),
+
+    -- Where should we start each iteration from?
+    -- From `east`, once it exits, but initially `cells`.
+    round(r INT, c INT, symbol TEXT) AS (
+        SELECT * FROM east
+        UNION  ALL SELECT * FROM cells
+        EXCEPT ALL SELECT * FROM cells_delay
+    ),
+
+    north(r INT, c INT, symbol TEXT) AS (
+        WITH MUTUALLY RECURSIVE
+            start(r INT, c INT, symbol TEXT) AS (
+                SELECT * FROM round
+            ),
+            northward(r INT, c INT, symbol TEXT) AS (
+                SELECT * FROM northward
+                -- Anyone on the move does so
+                UNION  ALL SELECT r - 1, c, 'O' FROM north_move
+                EXCEPT ALL SELECT r - 1, c, '.' FROM north_move
+                UNION  ALL SELECT r, c, '.' FROM north_move
+                EXCEPT ALL SELECT r, c, 'O' FROM north_move
+                -- Second time around, the above cancels and `east` is non-empty.
+                UNION  ALL SELECT * FROM start
+                EXCEPT ALL SELECT * FROM start_delay
+            ),
+            -- Each 'O' with a '.' in front of them will move.
+            north_move(r INT, c INT) AS (
+                SELECT n1.r, n1.c
+                FROM northward n1, northward n2
+                WHERE n1.symbol = 'O'
+                AND n1.r = n2.r + 1
+                AND n1.c = n2.c
+                AND n2.symbol = '.'
+            ),
+            start_delay(r INT, c INT, symbol TEXT) AS ( SELECT * FROM start )
+
+        SELECT * FROM northward
+    ),
+
+     west(r INT, c INT, symbol TEXT) AS (
+        WITH MUTUALLY RECURSIVE
+            start(r INT, c INT, symbol TEXT) AS (
+                SELECT * FROM north
+            ),
+            westward(r INT, c INT, symbol TEXT) AS (
+                SELECT * FROM westward
+                -- Anyone on the move does so
+                UNION  ALL SELECT r, c - 1, 'O' FROM west_move
+                EXCEPT ALL SELECT r, c - 1, '.' FROM west_move
+                UNION  ALL SELECT r, c, '.' FROM west_move
+                EXCEPT ALL SELECT r, c, 'O' FROM west_move
+                -- Initial state is cells, but not refreshed each round.
+                UNION  ALL SELECT * FROM start
+                EXCEPT ALL SELECT * FROM start_delay
+            ),
+            -- Each 'O' with a '.' in front of them will move.
+            west_move(r INT, c INT) AS (
+                SELECT w1.r, w1.c
+                FROM westward w1, westward w2
+                WHERE w1.symbol = 'O'
+                AND w1.r = w2.r
+                AND w1.c = w2.c + 1
+                AND w2.symbol = '.'
+            ),
+            start_delay(r INT, c INT, symbol TEXT) AS ( SELECT * FROM start )
+
+        SELECT * FROM westward
+    ),
+
+    south(r INT, c INT, symbol TEXT) AS (
+        WITH MUTUALLY RECURSIVE
+            start(r INT, c INT, symbol TEXT) AS (
+                SELECT * FROM west
+            ),
+            southward(r INT, c INT, symbol TEXT) AS (
+                SELECT * FROM southward
+                -- Anyone on the move does so
+                UNION  ALL SELECT r + 1, c, 'O' FROM south_move
+                EXCEPT ALL SELECT r + 1, c, '.' FROM south_move
+                UNION  ALL SELECT r, c, '.' FROM south_move
+                EXCEPT ALL SELECT r, c, 'O' FROM south_move
+                -- Initial state is cells, but not refreshed each round.
+                UNION  ALL SELECT * FROM start
+                EXCEPT ALL SELECT * FROM start_delay
+            ),
+            -- Each 'O' with a '.' in front of them will move.
+            south_move(r INT, c INT) AS (
+                SELECT s1.r, s1.c
+                FROM southward s1, southward s2
+                WHERE s1.symbol = 'O'
+                AND s1.r = s2.r - 1
+                AND s1.c = s2.c
+                AND s2.symbol = '.'
+            ),
+            start_delay(r INT, c INT, symbol TEXT) AS ( SELECT * FROM start )
+        SELECT * FROM southward
+    ),
+
+    east(r INT, c INT, symbol TEXT) AS (
+        WITH MUTUALLY RECURSIVE
+            start(r INT, c INT, symbol TEXT) AS (
+                SELECT * FROM south
+            ),
+            eastward(r INT, c INT, symbol TEXT) AS (
+                SELECT * FROM eastward
+                -- Anyone on the move does so
+                UNION  ALL SELECT r, c + 1, 'O' FROM east_move
+                EXCEPT ALL SELECT r, c + 1, '.' FROM east_move
+                UNION  ALL SELECT r, c, '.' FROM east_move
+                EXCEPT ALL SELECT r, c, 'O' FROM east_move
+                -- Initial state is cells, but not refreshed each round.
+                UNION  ALL SELECT * FROM start
+                EXCEPT ALL SELECT * FROM start_delay
+            ),
+            -- Each 'O' with a '.' in front of them will move.
+            east_move(r INT, c INT) AS (
+                SELECT e1.r, e1.c
+                FROM eastward e1, eastward e2
+                WHERE e1.symbol = 'O'
+                AND e1.r = e2.r
+                AND e1.c = e2.c - 1
+                AND e2.symbol = '.'
+            ),
+            start_delay(r INT, c INT, symbol TEXT) AS ( SELECT * FROM start )
+        SELECT * FROM eastward
+    ),
+
+    output (r INT, line TEXT) AS (
+        SELECT r, string_agg(symbol, ' ' ORDER BY c)
+        FROM round
+        GROUP BY r
+    ),
+
+    transitions(source TEXT, target TEXT) AS (
+        SELECT
+            (SELECT string_agg(symbol, '' ORDER BY r, c) FROM round),
+            (SELECT string_agg(symbol, '' ORDER BY r, c) FROM east)
+        UNION ALL
+        SELECT * FROM transitions
+    ),
+
+    part2(part2 BIGINT) AS (
+        SELECT SUM(1 + (SELECT MAX(r) FROM lines) - r)
+        FROM east
+        WHERE symbol = 'O'
+    ),
+
+    cells_delay(r INT, c INT, symbol TEXT) AS ( SELECT * FROM cells )
+
+-- SELECT count, COUNT(*)
+-- FROM (
+--     SELECT source, target, COUNT(*) count
+--     FROM transitions
+--     GROUP BY source, target)
+-- GROUP BY count;
+
+-- SELECT * FROM output ORDER BY r;
+
+SELECT * FROM part2;
+----
+105
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
+WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 142)
+
+    lines(r INT, line TEXT) AS (
+        SELECT r, regexp_split_to_array(input, '\n')[r] as block
+        FROM input, generate_series(1, array_length(regexp_split_to_array(input, '\n'), 1)) r
+    ),
+    cells(r INT, c INT, symbol TEXT) AS (
+        SELECT r, c, substring(line, c, 1)
+        FROM lines, generate_series(1, length(line)) c
+    ),
+
+    -- Where should we start each iteration from?
+    -- From `east`, once it exits, but initially `cells`.
+    round(r INT, c INT, symbol TEXT) AS (
+        SELECT * FROM east
+        UNION  ALL SELECT * FROM cells
+        EXCEPT ALL SELECT * FROM cells_delay
+    ),
+
+    north(r INT, c INT, symbol TEXT) AS (
+        WITH MUTUALLY RECURSIVE
+            start(r INT, c INT, symbol TEXT) AS (
+                SELECT * FROM round
+            ),
+            northward(r INT, c INT, symbol TEXT) AS (
+                SELECT * FROM northward
+                -- Anyone on the move does so
+                UNION  ALL SELECT r - 1, c, 'O' FROM north_move
+                EXCEPT ALL SELECT r - 1, c, '.' FROM north_move
+                UNION  ALL SELECT r, c, '.' FROM north_move
+                EXCEPT ALL SELECT r, c, 'O' FROM north_move
+                -- Second time around, the above cancels and `east` is non-empty.
+                UNION  ALL SELECT * FROM start
+                EXCEPT ALL SELECT * FROM start_delay
+            ),
+            -- Each 'O' with a '.' in front of them will move.
+            north_move(r INT, c INT) AS (
+                SELECT n1.r, n1.c
+                FROM northward n1, northward n2
+                WHERE n1.symbol = 'O'
+                AND n1.r = n2.r + 1
+                AND n1.c = n2.c
+                AND n2.symbol = '.'
+            ),
+            start_delay(r INT, c INT, symbol TEXT) AS ( SELECT * FROM start )
+
+        SELECT * FROM northward
+    ),
+
+     west(r INT, c INT, symbol TEXT) AS (
+        WITH MUTUALLY RECURSIVE
+            start(r INT, c INT, symbol TEXT) AS (
+                SELECT * FROM north
+            ),
+            westward(r INT, c INT, symbol TEXT) AS (
+                SELECT * FROM westward
+                -- Anyone on the move does so
+                UNION  ALL SELECT r, c - 1, 'O' FROM west_move
+                EXCEPT ALL SELECT r, c - 1, '.' FROM west_move
+                UNION  ALL SELECT r, c, '.' FROM west_move
+                EXCEPT ALL SELECT r, c, 'O' FROM west_move
+                -- Initial state is cells, but not refreshed each round.
+                UNION  ALL SELECT * FROM start
+                EXCEPT ALL SELECT * FROM start_delay
+            ),
+            -- Each 'O' with a '.' in front of them will move.
+            west_move(r INT, c INT) AS (
+                SELECT w1.r, w1.c
+                FROM westward w1, westward w2
+                WHERE w1.symbol = 'O'
+                AND w1.r = w2.r
+                AND w1.c = w2.c + 1
+                AND w2.symbol = '.'
+            ),
+            start_delay(r INT, c INT, symbol TEXT) AS ( SELECT * FROM start )
+
+        SELECT * FROM westward
+    ),
+
+    south(r INT, c INT, symbol TEXT) AS (
+        WITH MUTUALLY RECURSIVE
+            start(r INT, c INT, symbol TEXT) AS (
+                SELECT * FROM west
+            ),
+            southward(r INT, c INT, symbol TEXT) AS (
+                SELECT * FROM southward
+                -- Anyone on the move does so
+                UNION  ALL SELECT r + 1, c, 'O' FROM south_move
+                EXCEPT ALL SELECT r + 1, c, '.' FROM south_move
+                UNION  ALL SELECT r, c, '.' FROM south_move
+                EXCEPT ALL SELECT r, c, 'O' FROM south_move
+                -- Initial state is cells, but not refreshed each round.
+                UNION  ALL SELECT * FROM start
+                EXCEPT ALL SELECT * FROM start_delay
+            ),
+            -- Each 'O' with a '.' in front of them will move.
+            south_move(r INT, c INT) AS (
+                SELECT s1.r, s1.c
+                FROM southward s1, southward s2
+                WHERE s1.symbol = 'O'
+                AND s1.r = s2.r - 1
+                AND s1.c = s2.c
+                AND s2.symbol = '.'
+            ),
+            start_delay(r INT, c INT, symbol TEXT) AS ( SELECT * FROM start )
+        SELECT * FROM southward
+    ),
+
+    east(r INT, c INT, symbol TEXT) AS (
+        WITH MUTUALLY RECURSIVE
+            start(r INT, c INT, symbol TEXT) AS (
+                SELECT * FROM south
+            ),
+            eastward(r INT, c INT, symbol TEXT) AS (
+                SELECT * FROM eastward
+                -- Anyone on the move does so
+                UNION  ALL SELECT r, c + 1, 'O' FROM east_move
+                EXCEPT ALL SELECT r, c + 1, '.' FROM east_move
+                UNION  ALL SELECT r, c, '.' FROM east_move
+                EXCEPT ALL SELECT r, c, 'O' FROM east_move
+                -- Initial state is cells, but not refreshed each round.
+                UNION  ALL SELECT * FROM start
+                EXCEPT ALL SELECT * FROM start_delay
+            ),
+            -- Each 'O' with a '.' in front of them will move.
+            east_move(r INT, c INT) AS (
+                SELECT e1.r, e1.c
+                FROM eastward e1, eastward e2
+                WHERE e1.symbol = 'O'
+                AND e1.r = e2.r
+                AND e1.c = e2.c - 1
+                AND e2.symbol = '.'
+            ),
+            start_delay(r INT, c INT, symbol TEXT) AS ( SELECT * FROM start )
+        SELECT * FROM eastward
+    ),
+
+    output (r INT, line TEXT) AS (
+        SELECT r, string_agg(symbol, ' ' ORDER BY c)
+        FROM round
+        GROUP BY r
+    ),
+
+    transitions(source TEXT, target TEXT) AS (
+        SELECT
+            (SELECT string_agg(symbol, '' ORDER BY r, c) FROM round),
+            (SELECT string_agg(symbol, '' ORDER BY r, c) FROM east)
+        UNION ALL
+        SELECT * FROM transitions
+    ),
+
+    part2(part2 BIGINT) AS (
+        SELECT SUM(1 + (SELECT MAX(r) FROM lines) - r)
+        FROM east
+        WHERE symbol = 'O'
+    ),
+
+    cells_delay(r INT, c INT, symbol TEXT) AS ( SELECT * FROM cells )
+
+-- SELECT count, COUNT(*)
+-- FROM (
+--     SELECT source, target, COUNT(*) count
+--     FROM transitions
+--     GROUP BY source, target)
+-- GROUP BY count;
+
+-- SELECT * FROM output ORDER BY r;
+
+SELECT * FROM part2;
+----
+Explained Query:
+  With Mutually Recursive
+    cte l0 =
+      Project (#1, #2) // { arity: 2 }
+        Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1))) // { arity: 3 }
+          FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#0{input}) array_length 1), 1) // { arity: 2 }
+            ReadStorage materialize.public.input // { arity: 1 }
+    cte l1 =
+      Project (#0, #2, #3) // { arity: 3 }
+        Map (substr(#1, #2, 1)) // { arity: 4 }
+          FlatMap generate_series(1, char_length(#1), 1) // { arity: 3 }
+            Get l0 // { arity: 2 }
+    cte [recursion_limit=142, return_at_limit] l2 =
+      Threshold // { arity: 3 }
+        Union // { arity: 3 }
+          Get l18 // { arity: 3 }
+          Get l1 // { arity: 3 }
+          Negate // { arity: 3 }
+            Get l22 // { arity: 3 }
+    cte l6 =
+      With Mutually Recursive
+        cte l3 =
+          Threshold // { arity: 3 }
+            Union // { arity: 3 }
+              Threshold // { arity: 3 }
+                Union // { arity: 3 }
+                  Threshold // { arity: 3 }
+                    Union // { arity: 3 }
+                      Get l3 // { arity: 3 }
+                      Project (#2, #1, #3) // { arity: 3 }
+                        Map ((#0 - 1), "O") // { arity: 4 }
+                          Get l4 // { arity: 2 }
+                      Negate // { arity: 3 }
+                        Project (#2, #1, #3) // { arity: 3 }
+                          Map ((#0 - 1), ".") // { arity: 4 }
+                            Get l4 // { arity: 2 }
+                  Map (".") // { arity: 3 }
+                    Get l4 // { arity: 2 }
+                  Negate // { arity: 3 }
+                    Map ("O") // { arity: 3 }
+                      Get l4 // { arity: 2 }
+              Get l2 // { arity: 3 }
+              Negate // { arity: 3 }
+                Get l5 // { arity: 3 }
+        cte l4 =
+          Project (#0, #1) // { arity: 2 }
+            Join on=(#0 = (#2 + 1) AND #1 = #3) type=differential // { arity: 4 }
+              implementation
+                %0:l3[#1, #0]KKef » %1:l3[#1, (#0 + 1)]KKef
+              ArrangeBy keys=[[#1, #0]] // { arity: 2 }
+                Project (#0, #1) // { arity: 2 }
+                  Filter (#2 = "O") // { arity: 3 }
+                    Get l3 // { arity: 3 }
+              ArrangeBy keys=[[#1, (#0 + 1)]] // { arity: 2 }
+                Project (#0, #1) // { arity: 2 }
+                  Filter (#2 = ".") // { arity: 3 }
+                    Get l3 // { arity: 3 }
+        cte l5 =
+          Get l2 // { arity: 3 }
+      Return // { arity: 3 }
+        Get l3 // { arity: 3 }
+    cte l10 =
+      With Mutually Recursive
+        cte l7 =
+          Threshold // { arity: 3 }
+            Union // { arity: 3 }
+              Threshold // { arity: 3 }
+                Union // { arity: 3 }
+                  Threshold // { arity: 3 }
+                    Union // { arity: 3 }
+                      Get l7 // { arity: 3 }
+                      Project (#0, #2, #3) // { arity: 3 }
+                        Map ((#1 - 1), "O") // { arity: 4 }
+                          Get l8 // { arity: 2 }
+                      Negate // { arity: 3 }
+                        Project (#0, #2, #3) // { arity: 3 }
+                          Map ((#1 - 1), ".") // { arity: 4 }
+                            Get l8 // { arity: 2 }
+                  Map (".") // { arity: 3 }
+                    Get l8 // { arity: 2 }
+                  Negate // { arity: 3 }
+                    Map ("O") // { arity: 3 }
+                      Get l8 // { arity: 2 }
+              Get l6 // { arity: 3 }
+              Negate // { arity: 3 }
+                Get l9 // { arity: 3 }
+        cte l8 =
+          Project (#0, #1) // { arity: 2 }
+            Join on=(#0 = #2 AND #1 = (#3 + 1)) type=differential // { arity: 4 }
+              implementation
+                %0:l7[#0, #1]KKef » %1:l7[#0, (#1 + 1)]KKef
+              ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+                Project (#0, #1) // { arity: 2 }
+                  Filter (#2 = "O") // { arity: 3 }
+                    Get l7 // { arity: 3 }
+              ArrangeBy keys=[[#0, (#1 + 1)]] // { arity: 2 }
+                Project (#0, #1) // { arity: 2 }
+                  Filter (#2 = ".") // { arity: 3 }
+                    Get l7 // { arity: 3 }
+        cte l9 =
+          Get l6 // { arity: 3 }
+      Return // { arity: 3 }
+        Get l7 // { arity: 3 }
+    cte l14 =
+      With Mutually Recursive
+        cte l11 =
+          Threshold // { arity: 3 }
+            Union // { arity: 3 }
+              Threshold // { arity: 3 }
+                Union // { arity: 3 }
+                  Threshold // { arity: 3 }
+                    Union // { arity: 3 }
+                      Get l11 // { arity: 3 }
+                      Project (#2, #1, #3) // { arity: 3 }
+                        Map ((#0 + 1), "O") // { arity: 4 }
+                          Get l12 // { arity: 2 }
+                      Negate // { arity: 3 }
+                        Project (#2, #1, #3) // { arity: 3 }
+                          Map ((#0 + 1), ".") // { arity: 4 }
+                            Get l12 // { arity: 2 }
+                  Map (".") // { arity: 3 }
+                    Get l12 // { arity: 2 }
+                  Negate // { arity: 3 }
+                    Map ("O") // { arity: 3 }
+                      Get l12 // { arity: 2 }
+              Get l10 // { arity: 3 }
+              Negate // { arity: 3 }
+                Get l13 // { arity: 3 }
+        cte l12 =
+          Project (#0, #1) // { arity: 2 }
+            Join on=(#0 = (#2 - 1) AND #1 = #3) type=differential // { arity: 4 }
+              implementation
+                %0:l11[#1, #0]KKef » %1:l11[#1, (#0 - 1)]KKef
+              ArrangeBy keys=[[#1, #0]] // { arity: 2 }
+                Project (#0, #1) // { arity: 2 }
+                  Filter (#2 = "O") // { arity: 3 }
+                    Get l11 // { arity: 3 }
+              ArrangeBy keys=[[#1, (#0 - 1)]] // { arity: 2 }
+                Project (#0, #1) // { arity: 2 }
+                  Filter (#2 = ".") // { arity: 3 }
+                    Get l11 // { arity: 3 }
+        cte l13 =
+          Get l10 // { arity: 3 }
+      Return // { arity: 3 }
+        Get l11 // { arity: 3 }
+    cte [recursion_limit=142, return_at_limit] l18 =
+      With Mutually Recursive
+        cte l15 =
+          Threshold // { arity: 3 }
+            Union // { arity: 3 }
+              Threshold // { arity: 3 }
+                Union // { arity: 3 }
+                  Threshold // { arity: 3 }
+                    Union // { arity: 3 }
+                      Get l15 // { arity: 3 }
+                      Project (#0, #2, #3) // { arity: 3 }
+                        Map ((#1 + 1), "O") // { arity: 4 }
+                          Get l16 // { arity: 2 }
+                      Negate // { arity: 3 }
+                        Project (#0, #2, #3) // { arity: 3 }
+                          Map ((#1 + 1), ".") // { arity: 4 }
+                            Get l16 // { arity: 2 }
+                  Map (".") // { arity: 3 }
+                    Get l16 // { arity: 2 }
+                  Negate // { arity: 3 }
+                    Map ("O") // { arity: 3 }
+                      Get l16 // { arity: 2 }
+              Get l14 // { arity: 3 }
+              Negate // { arity: 3 }
+                Get l17 // { arity: 3 }
+        cte l16 =
+          Project (#0, #1) // { arity: 2 }
+            Join on=(#0 = #2 AND #1 = (#3 - 1)) type=differential // { arity: 4 }
+              implementation
+                %0:l15[#0, #1]KKef » %1:l15[#0, (#1 - 1)]KKef
+              ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+                Project (#0, #1) // { arity: 2 }
+                  Filter (#2 = "O") // { arity: 3 }
+                    Get l15 // { arity: 3 }
+              ArrangeBy keys=[[#0, (#1 - 1)]] // { arity: 2 }
+                Project (#0, #1) // { arity: 2 }
+                  Filter (#2 = ".") // { arity: 3 }
+                    Get l15 // { arity: 3 }
+        cte l17 =
+          Get l14 // { arity: 3 }
+      Return // { arity: 3 }
+        Get l15 // { arity: 3 }
+    cte l19 =
+      Reduce aggregates=[max(#0)] // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          Get l0 // { arity: 2 }
+    cte l20 =
+      Union // { arity: 1 }
+        Get l19 // { arity: 1 }
+        Map (null) // { arity: 1 }
+          Union // { arity: 0 }
+            Negate // { arity: 0 }
+              Project () // { arity: 0 }
+                Get l19 // { arity: 1 }
+            Constant // { arity: 0 }
+              - ()
+    cte l21 =
+      Reduce aggregates=[sum(((1 + #1{max}) - #0))] // { arity: 1 }
+        CrossJoin type=differential // { arity: 2 }
+          implementation
+            %1[×]U » %0:l18[×]ef
+          ArrangeBy keys=[[]] // { arity: 1 }
+            Project (#0) // { arity: 1 }
+              Filter (#2 = "O") // { arity: 3 }
+                Get l18 // { arity: 3 }
+          ArrangeBy keys=[[]] // { arity: 1 }
+            Union // { arity: 1 }
+              Get l20 // { arity: 1 }
+              Map (null) // { arity: 1 }
+                Union // { arity: 0 }
+                  Negate // { arity: 0 }
+                    Project () // { arity: 0 }
+                      Get l20 // { arity: 1 }
+                  Constant // { arity: 0 }
+                    - ()
+    cte [recursion_limit=142, return_at_limit] l22 =
+      Get l1 // { arity: 3 }
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Get l21 // { arity: 1 }
+      Map (null) // { arity: 1 }
+        Union // { arity: 0 }
+          Negate // { arity: 0 }
+            Project () // { arity: 0 }
+              Get l21 // { arity: 1 }
+          Constant // { arity: 0 }
+            - ()
+
+Source materialize.public.input
+
+Target cluster: quickstart
+
+EOF

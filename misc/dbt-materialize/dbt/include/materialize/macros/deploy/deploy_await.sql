@@ -13,17 +13,20 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro deploy_await(poll_interval=15) %}
+{% macro deploy_await(poll_interval=15, lag_threshold='1s') %}
 {#
   Waits for all objects within the deployment clusters to be fully hydrated,
   polling the cluster's readiness status at a specified interval.
 
   ## Arguments
-  - `poll_interval` (integer): The interval, in seconds, between each readiness check.
+  - `poll_interval` (integer): The interval, in seconds, between each readiness
+    check.
+  - `lag_threshold` (string): The maximum lag threshold, which determines when
+    all objects in the environment are considered hydrated and it''s safe to
+    perform the cutover step.
 
-  ## Returns
-  None: This macro does not return a value but will halt execution until the specified
-  cluster's objects are fully hydrated.
+  ## Returns None: This macro does not return a value but will halt execution
+     until the specified cluster's objects are fully hydrated.
 #}
 
 {% set current_target_name = target.name %}
@@ -39,6 +42,6 @@
 
 {% for cluster in clusters %}
     {% set deploy_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=True) %}
-    {{ await_cluster_ready(deploy_cluster, poll_interval) }}
+    {{ await_cluster_ready(deploy_cluster, poll_interval, lag_threshold) }}
 {% endfor %}
 {% endmacro %}

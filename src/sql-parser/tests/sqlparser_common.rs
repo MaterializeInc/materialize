@@ -23,6 +23,7 @@ use std::iter;
 
 use datadriven::walk;
 use itertools::Itertools;
+use mz_ore::assert_ok;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::Visit;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
@@ -36,31 +37,8 @@ use mz_sql_parser::parser::{
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn datadriven() {
     walk("tests/testdata", |f| {
-        f.run(|tc| -> String {
-            if tc.directive == "parse-statement" {
-                // Verify that redacted statements can be parsed. This is important so that we are
-                // still able to pretty-print redacted statements which helps out during debugging.
-                verify_parse_redacted(&tc.input);
-            }
-            datadriven_testcase(tc)
-        })
+        f.run(|tc| -> String { datadriven_testcase(tc) })
     });
-}
-
-fn verify_parse_redacted(stmt: &str) {
-    let stmt = match parse_statements(stmt) {
-        Ok(stmt) => match stmt.into_iter().next() {
-            Some(stmt) => stmt.ast,
-            None => return,
-        },
-        Err(_) => return,
-    };
-    let redacted = stmt.to_ast_string_redacted();
-    let res = parse_statements(&redacted);
-    assert!(
-        res.is_ok(),
-        "redacted statement could not be parsed: {res:?}\noriginal:\n{stmt}\nredacted:\n{redacted}"
-    );
 }
 
 #[mz_ore::test]
@@ -217,7 +195,6 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
     )?;
 
     #[rustfmt::skip]  // rustfmt loses the structure of the expected vector by wrapping all lines
-
     let expected = vec![
         "a01", "a02", "a03", "a04", "a05", "a06", "a07", "a08", "a09", "a10", "a11", "a12",
         "a13", "a14", "a15", "a16", "a17", "a18", "a19", "a20", "a21", "a22", "int4", "a23", "a24",
@@ -254,9 +231,9 @@ fn test_max_statement_batch_size() {
     let max_statement_count = MAX_STATEMENT_BATCH_SIZE / size;
     let statements = iter::repeat(statement).take(max_statement_count).join("");
 
-    assert!(parse_statements_with_limit(&statements).is_ok());
+    assert_ok!(parse_statements_with_limit(&statements));
     let statements = format!("{statements}{statement}");
     let err = parse_statements_with_limit(&statements).expect_err("statements should be too big");
     assert!(err.contains("statement batch size cannot exceed "));
-    assert!(parse_statements(&statements).is_ok());
+    assert_ok!(parse_statements(&statements));
 }

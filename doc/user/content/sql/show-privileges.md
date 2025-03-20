@@ -12,18 +12,20 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-privileges.svg" >}}
+```mzsql
+SHOW PRIVILEGES [ ON <object_type> ] [ FOR <role_name> ]
+```
 
-Field                                               | Use
-----------------------------------------------------|--------------------------------------------------
-_object_name_                                       | Only shows privileges for a specific object type.
-_role_name_                                         | Only shows privileges granted directly or indirectly to _role_name_.
+Option                       | Description
+-----------------------------|--------------------------------------------------
+**ON** <object_type>         | If specified, only show privileges for the specified object type. Accepted object types: <div style="display: flex;"> <ul style="margin-right: 20px;"> <li><strong>CLUSTERS</strong></li> <li><strong>CONNECTION</strong></li> <li><strong>DATABASES</strong></li> <li><strong>SCHEMAS</strong></li> </ul> <ul> <li><strong>SECRETS</strong></li> <li><strong>SYSTEM</strong></li> <li><strong>TABLES</strong></li> <li><strong>TYPES</strong></li> </ul> </div>
+**FOR** <role_name>          | If specified, only show privileges for the specified role.
 
 [//]: # "TODO(morsapaes) Improve examples."
 
 ## Examples
 
-```sql
+```mzsql
 SHOW PRIVILEGES;
 ```
 
@@ -44,7 +46,7 @@ SHOW PRIVILEGES;
  mz_system | materialize |             |        |             | system      | CREATEROLE
 ```
 
-```sql
+```mzsql
 SHOW PRIVILEGES ON SCHEMAS;
 ```
 
@@ -56,7 +58,7 @@ SHOW PRIVILEGES ON SCHEMAS;
  mz_system | materialize | materialize |        | public | schema      | USAGE
 ```
 
-```sql
+```mzsql
 SHOW PRIVILEGES FOR materialize;
 ```
 

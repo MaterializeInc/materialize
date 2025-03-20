@@ -7,27 +7,42 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# Runs long, but can block a release
+priority: 40
+
+env:
+  CI_BAZEL_BUILD: 1
+  CI_BAZEL_REMOTE_CACHE: $BAZEL_REMOTE_CACHE
+
 steps:
   - group: Builds
     key: builds
     steps:
       - id: build-aarch64
-        label: Build aarch64
-        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
+        label: ":bazel: Build aarch64"
+        command: bin/ci-builder run min bin/pyactivate -m ci.test.build
+        inputs:
+          - "*"
+        artifact_paths: bazel-explain.log
         depends_on: []
         timeout_in_minutes: 60
         agents:
-          queue: builder-linux-aarch64
+          queue: builder-linux-aarch64-mem
         # Don't build for "trigger_job" source, which indicates that this release
         # qualification pipeline was triggered automatically by the tests pipeline
         # because there is a new tag on a v* branch. In this case we want to make
         # sure we use the exact same version for testing here as was tagged and
         # will be released, and don't build our own version just for the tests.
         if: build.source == "ui" || build.source == "schedule" || build.source == "api"
-      # TODO(def-) Get rid of this for PRs once we don't have any x86-64 tests remaining
+
       - id: build-x86_64
-        label: Build x86_64
-        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
+        label: ":bazel: Build x86_64"
+        env:
+          CI_BAZEL_BUILD: "1"
+        command: bin/ci-builder run min bin/pyactivate -m ci.test.build
+        inputs:
+          - "*"
+        artifact_paths: bazel-explain.log
         depends_on: []
         timeout_in_minutes: 60
         agents:
@@ -43,7 +58,7 @@ steps:
       # 48h
       timeout_in_minutes: 2880
       agents:
-        queue: builder-linux-aarch64
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -53,47 +68,50 @@ steps:
     - id: zippy-dataflows-large
       label: "Large Zippy w/ complex dataflows"
       depends_on: build-aarch64
-      # 48h
-      timeout_in_minutes: 2880
+      # 24h
+      timeout_in_minutes: 1440
       agents:
-        queue: linux-aarch64-large
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
-            args: [--scenario=DataflowsLarge, --actions=35000]
+            # OoM and out of disk
+            args: [--scenario=DataflowsLarge, --actions=8000]
 
     - id: zippy-pg-cdc-large
       label: "Large Zippy PostgresCdc"
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        queue: builder-linux-aarch64
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
-            args: [--scenario=PostgresCdcLarge, --actions=200000]
+            # Runs into upload size limits of Buildkite
+            # Runs into slowness with new source syntax after a while
+            args: [--scenario=PostgresCdcLarge, --actions=50000]
 
     - id: zippy-mysql-cdc-large
       label: "Large Zippy MySqlCdc"
       depends_on: build-aarch64
-      timeout_in_minutes: 2880
+      timeout_in_minutes: 1440
       agents:
-        queue: builder-linux-aarch64
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
-            args: [--scenario=MySqlCdcLarge, --actions=200000]
+            args: [--scenario=MySqlCdcLarge, --actions=100000, --max-execution-time=4h]
 
     - id: zippy-cluster-replicas-long
       label: "Longer Zippy ClusterReplicas"
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        queue: linux-aarch64-large
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
-            # Execution times longer than 4h are apparently not feasible at this time due to #17845
+            # Execution times longer than 4h are apparently not feasible at this time due to database-issues#5201
             args: [--scenario=ClusterReplicas, --actions=10000, --max-execution-time=4h]
 
     - id: zippy-user-tables-large
@@ -101,7 +119,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        queue: linux-aarch64-large
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -110,48 +128,68 @@ steps:
     - id: zippy-debezium-postgres-long
       label: "Longer Zippy Debezium Postgres"
       depends_on: build-aarch64
-      timeout_in_minutes: 2880
+      timeout_in_minutes: 1440
       agents:
-        queue: linux-aarch64-large
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
-            args: [--scenario=DebeziumPostgres, --actions=1000000]
+            # Runs into upload size limits of Buildkite
+            args: [--scenario=DebeziumPostgres, --actions=500000, --max-execution-time=4h]
 
     - id: zippy-backup-and-restore-large
       label: "Large-scale backup+restore"
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        queue: linux-aarch64
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
-            args: [--scenario=BackupAndRestoreLarge, --actions=1000000]
-
+            # Runs out of disk
+            args: [--scenario=BackupAndRestoreLarge, --actions=200000]
 
     - id: zippy-kafka-parallel-insert
       label: "Longer Zippy Kafka Parallel Insert"
       depends_on: build-aarch64
-      timeout_in_minutes: 2880
+      timeout_in_minutes: 1440
       agents:
-        queue: builder-linux-aarch64
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
-            args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=100000, --max-execution-time=8h]
+            # TODO(def-) Increase number of actions when database-issues#7257 is fixed
+            args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=50000, --max-execution-time=4h]
 
-  - id: feature-benchmark-scale-plus-one
-    label: "Feature benchmark against 'common-ancestor' with --scale=+1 %N"
-    depends_on: build-aarch64
-    timeout_in_minutes: 2880
-    parallelism: 8
-    agents:
-      queue: linux-aarch64-large
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: feature-benchmark
-          args: [--other-tag=common-ancestor, --scale=+1]
+  - group: Benchmarks
+    key: benchmark
+    steps:
+      - id: feature-benchmark-scale-plus-one
+        label: "Feature benchmark against 'common-ancestor' with --scale=+1"
+        depends_on: build-x86_64
+        timeout_in_minutes: 2880
+        parallelism: 8
+        agents:
+          queue: hetzner-x86-64-dedi-16cpu-64gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: feature-benchmark
+              args: [--other-tag=common-ancestor, --scale=+1]
+
+      - id: long-parallel-benchmark
+        label: "Long Parallel Benchmark"
+        depends_on: build-x86_64
+        timeout_in_minutes: 1200
+        agents:
+          queue: hetzner-x86-64-dedi-8cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-benchmark
+              args:
+                - --other-tag
+                - common-ancestor
+                - --load-phase-duration
+                - 1200
 
   - group: SQLsmith
     key: sqlsmith
@@ -161,24 +199,22 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 120
       agents:
-        queue: linux-aarch64
+        queue: hetzner-aarch64-8cpu-16gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: sqlsmith
             args: [--max-joins=2, --runtime=6000]
-      skip: "Reenable when #23451 is fixed"
 
     - id: sqlsmith-explain-long
       label: "Longer SQLsmith explain"
       depends_on: build-aarch64
       timeout_in_minutes: 120
       agents:
-        queue: linux-aarch64
+        queue: hetzner-aarch64-8cpu-16gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: sqlsmith
             args: [--max-joins=15, --explain-only, --runtime=6000]
-      skip: "Reenable when #23451 is fixed"
 
   - id: test-preflight-check-rollback
     label: Test with preflight check and rollback
@@ -205,83 +241,273 @@ steps:
   - group: "MySQL: other versions"
     key: mysql-versions
     steps:
-      - id: mysql-cdc-5_7_44
-        label: "MySQL CDC w/ 5.7.44"
+      - id: mysql-cdc-5_7
+        label: "MySQL CDC w/ 5.7"
         depends_on: build-x86_64
-        timeout_in_minutes: 30
+        timeout_in_minutes: 60
         agents:
           # no matching manifest of MySQL 5.7.x for linux/arm64/v8 in the manifest list entries
-          queue: linux-x86_64-small
+          # Increased memory usage following new source syntax
+          queue: hetzner-x86-64-dedi-16cpu-64gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc
               args: [ "--mysql-version=5.7.44" ]
-      - id: mysql-cdc-8_0_36
-        label: "MySQL CDC w/ 8.0.36"
+        skip: "Fails when restarted"
+
+      - id: mysql-cdc-8_0
+        label: "MySQL CDC w/ 8.0"
         depends_on: build-aarch64
-        timeout_in_minutes: 30
+        timeout_in_minutes: 60
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc
-              args: [ "--mysql-version=8.0.36" ]
+              args: [ "--mysql-version=8.0.40" ]
 
   - group: "Postgres: other versions"
     key: postgres-versions
     steps:
-      - id: pg-cdc-15_6
-        label: "Postgres CDC w/ 15.6"
+      - id: pg-cdc-16
+        label: "Postgres CDC w/ 16"
         depends_on: build-aarch64
-        timeout_in_minutes: 30
+        timeout_in_minutes: 60
         inputs: [test/pg-cdc]
         plugins:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc
-              args: [ "--pg-version=15.6" ]
+              args: [ "--pg-version=16.6" ]
         agents:
-          queue: linux-aarch64-small
-      - id: pg-cdc-14_11
-        label: "Postgres CDC w/ 14.11"
+          queue: hetzner-aarch64-4cpu-8gb
+      - id: pg-cdc-15
+        label: "Postgres CDC w/ 15"
         depends_on: build-aarch64
-        timeout_in_minutes: 30
+        timeout_in_minutes: 60
         inputs: [test/pg-cdc]
         plugins:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc
-              args: [ "--pg-version=14.11" ]
+              args: [ "--pg-version=15.10" ]
         agents:
-          queue: linux-aarch64-small
-      - id: pg-cdc-13_14
-        label: "Postgres CDC w/ 13.14"
+          queue: hetzner-aarch64-4cpu-8gb
+      - id: pg-cdc-14
+        label: "Postgres CDC w/ 14"
         depends_on: build-aarch64
-        timeout_in_minutes: 30
+        timeout_in_minutes: 60
         inputs: [test/pg-cdc]
         plugins:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc
-              args: [ "--pg-version=13.14" ]
+              args: [ "--pg-version=14.15" ]
         agents:
-          queue: linux-aarch64-small
-      - id: pg-cdc-12_18
-        label: "Postgres CDC w/ 12.18"
+          queue: hetzner-aarch64-4cpu-8gb
+      - id: pg-cdc-13
+        label: "Postgres CDC w/ 13"
         depends_on: build-aarch64
-        timeout_in_minutes: 30
+        timeout_in_minutes: 60
         inputs: [test/pg-cdc]
         plugins:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc
-              args: [ "--pg-version=12.18" ]
+              args: [ "--pg-version=13.18" ]
         agents:
-          queue: linux-aarch64-small
-      - id: pg-cdc-11_22
-        label: "Postgres CDC w/ 11.22"
+          queue: hetzner-aarch64-4cpu-8gb
+
+  - group: "Platform checks"
+    key: platform-checks
+    steps:
+      - id: checks-restart-cockroach
+        label: "Checks + restart Cockroach"
         depends_on: build-aarch64
-        timeout_in_minutes: 30
-        inputs: [test/pg-cdc]
+        timeout_in_minutes: 180
+        # Sometimes runs into query timeouts or entire test timeouts with parallelism 1, too much state, same in all other platform-checks
+        parallelism: 3
+        agents:
+          # A larger instance is needed due to frequent OOMs, same in all other platform-checks
+          queue: hetzner-aarch64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=RestartCockroach, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-backup-restore-before-manipulate
+        label: "Checks backup + restore between the two manipulate()"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        parallelism: 3
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=BackupAndRestoreBeforeManipulate, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-backup-restore-after-manipulate
+        label: "Checks backup + restore after manipulate()"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        parallelism: 3
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=BackupAndRestoreAfterManipulate, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-backup-multi
+        label: "Checks + multiple backups/restores"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        parallelism: 4
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=BackupAndRestoreMulti, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-preflight-check-continue
+        label: "Checks preflight-check and continue upgrade"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        parallelism: 3
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=PreflightCheckContinue, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-upgrade-clusterd-compute-first
+        label: "Platform checks upgrade, restarting compute clusterd first"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        parallelism: 3
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=UpgradeClusterdComputeFirst, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-upgrade-clusterd-compute-last
+        label: "Platform checks upgrade, restarting compute clusterd last"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        parallelism: 3
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=UpgradeClusterdComputeLast, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-kill-clusterd-storage
+        label: "Checks + kill storage clusterd"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        parallelism: 3
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=KillClusterdStorage, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-restart-source-postgres
+        label: "Checks + restart source Postgres"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=RestartSourcePostgres, --check=PgCdc, --check=PgCdcNoWait, --check=PgCdcMzNow, --check=SshPg]
+
+      - id: checks-restart-clusterd-compute
+        label: "Checks + restart clusterd compute"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        parallelism: 3
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=RestartClusterdCompute, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-drop-create-default-replica
+        label: "Checks + DROP/CREATE replica"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        parallelism: 3
+        agents:
+          # Seems to require more memory on aarch64
+          queue: hetzner-aarch64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=DropCreateDefaultReplica, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-0dt-restart-entire-mz
+        label: "Checks 0dt restart of the entire Mz"
+        depends_on: build-aarch64
+        timeout_in_minutes: 120
+        parallelism: 3
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=ZeroDowntimeRestartEntireMz, "--seed=$BUILDKITE_JOB_ID"]
+
+  - id: limits
+    label: "Product limits (finding new limits)"
+    depends_on: build-aarch64
+    agents:
+      queue: hetzner-aarch64-16cpu-32gb
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: limits
+          run: main
+          args: [--find-limit]
+    timeout_in_minutes: 3600
+    parallelism: 20
+
+  - group: Large Scale Ingestions
+    key: large-scale-ingestions
+    steps:
+      - id: mysql-cdc-large-scale
+        label: MySQL CDC large scale ingestion
+        depends_on: build-aarch64
+        timeout_in_minutes: 3600
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-cdc
+              run: large-scale
+        agents:
+          queue: hetzner-x86-64-dedi-48cpu-192gb # 1 TB disk
+
+      - id: pg-cdc-large-scale
+        label: Postgres CDC large scale ingestion
+        depends_on: build-aarch64
+        timeout_in_minutes: 3600
         plugins:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc
-              args: [ "--pg-version=11.22" ]
+              run: large-scale
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-x86-64-dedi-48cpu-192gb # 1 TB disk
+
+      - id: upsert-large-scale
+        label: Upsert large scale ingestion
+        depends_on: build-aarch64
+        timeout_in_minutes: 3600
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: upsert
+              run: large-scale
+        agents:
+          queue: hetzner-x86-64-dedi-48cpu-192gb # 1 TB disk

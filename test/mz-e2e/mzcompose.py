@@ -7,14 +7,17 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Tests the mz command line tool against a real Cloud instance
+"""
+
 import argparse
 import csv
 import json
 import os
-import ssl
 import time
 
-import pg8000
+import psycopg
 
 from materialize.mzcompose import (
     _wait_for_pg,
@@ -24,23 +27,24 @@ from materialize.mzcompose.composition import (
     WorkflowArgumentParser,
 )
 from materialize.mzcompose.services.mz import Mz
+from materialize.ui import UIError
 
 REGION = "aws/us-west-2"
 ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
 USERNAME = os.getenv("NIGHTLY_MZ_USERNAME", "infra+bot@materialize.com")
-APP_PASSWORD = os.environ["MZ_CLI_APP_PASSWORD"]
+APP_PASSWORD = os.getenv("MZ_CLI_APP_PASSWORD")
 
 # The DevEx account in the Confluent Cloud is used to provide Kafka services
 KAFKA_BOOTSTRAP_SERVER = "pkc-n00kk.us-east-1.aws.confluent.cloud:9092"
 # The actual values are stored in the i2 repository
-CONFLUENT_API_KEY = os.environ["CONFLUENT_CLOUD_DEVEX_KAFKA_USERNAME"]
-CONFLUENT_API_SECRET = os.environ["CONFLUENT_CLOUD_DEVEX_KAFKA_PASSWORD"]
+CONFLUENT_API_KEY = os.getenv("CONFLUENT_CLOUD_DEVEX_KAFKA_USERNAME")
+CONFLUENT_API_SECRET = os.getenv("CONFLUENT_CLOUD_DEVEX_KAFKA_PASSWORD")
 
 SERVICES = [
     Mz(
         region=REGION,
         environment=ENVIRONMENT,
-        app_password=APP_PASSWORD,
+        app_password=APP_PASSWORD or "",
     ),
 ]
 
@@ -85,12 +89,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         new_app_password = output.stdout.strip()
         assert "mzp_" in new_app_password
 
-        pg8000.connect(
+        psycopg.connect(
             host=c.cloud_hostname(),
             user=USERNAME,
             password=new_app_password,
             port=6875,
-            ssl_context=ssl.SSLContext(),
+            sslmode="require",
         )
 
         # Assert `mz app-password list`
@@ -167,7 +171,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         # Assert using force
         output = c.run(
-            "mz", "secret", "create", "CI_SECRET", "force", stdin=secret, capture=True
+            "mz", "secret", "create", "CI_SECRET", "--force", stdin=secret, capture=True
         )
         assert output.returncode == 0
 
@@ -241,7 +245,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 def disable_region(c: Composition) -> None:
     print(f"Shutting down region {REGION} ...")
 
-    c.run("mz", "region", "disable")
+    try:
+        c.run("mz", "region", "disable", "--hard")
+    except UIError:
+        # Can return: status 404 Not Found
+        pass
 
 
 def wait_for_cloud(c: Composition) -> None:
@@ -252,9 +260,9 @@ def wait_for_cloud(c: Composition) -> None:
         password=APP_PASSWORD,
         port=6875,
         query="SELECT 1",
-        expected=[[1]],
+        expected=[(1,)],
         timeout_secs=900,
         dbname="materialize",
-        ssl_context=ssl.SSLContext(),
+        sslmode="require",
         # print_result=True
     )

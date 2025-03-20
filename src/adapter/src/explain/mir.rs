@@ -12,8 +12,8 @@
 //! The specialized [`Explain`] implementation for an [`MirRelationExpr`]
 //! wrapped in an [`Explainable`] newtype struct allows us to interpret more
 //! [`mz_repr::explain::ExplainConfig`] options. This is the case because
-//! attribute derivation and let normalization are defined in [`mz_transform`]
-//! and conssequently are not available for the default [`Explain`]
+//! Analysis derivation and Let normalization are defined in [`mz_transform`]
+//! and consequently are not available for the default [`Explain`]
 //! implementation for [`MirRelationExpr`] in [`mz_expr`].
 
 use mz_compute_types::dataflows::DataflowDescription;
@@ -33,11 +33,20 @@ impl<'a> Explain<'a> for Explainable<'a, MirRelationExpr> {
 
     type Text = ExplainSinglePlan<'a, MirRelationExpr>;
 
+    type VerboseText = ExplainSinglePlan<'a, MirRelationExpr>;
+
     type Json = ExplainSinglePlan<'a, MirRelationExpr>;
 
     type Dot = UnsupportedFormat;
 
     fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
+        self.as_explain_single_plan(context)
+    }
+
+    fn explain_verbose_text(
+        &'a mut self,
+        context: &'a Self::Context,
+    ) -> Result<Self::VerboseText, ExplainError> {
         self.as_explain_single_plan(context)
     }
 
@@ -76,11 +85,20 @@ impl<'a> Explain<'a> for Explainable<'a, DataflowDescription<OptimizedMirRelatio
 
     type Text = ExplainMultiPlan<'a, MirRelationExpr>;
 
+    type VerboseText = ExplainMultiPlan<'a, MirRelationExpr>;
+
     type Json = ExplainMultiPlan<'a, MirRelationExpr>;
 
     type Dot = UnsupportedFormat;
 
     fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
+        self.as_explain_multi_plan(context)
+    }
+
+    fn explain_verbose_text(
+        &'a mut self,
+        context: &'a Self::Context,
+    ) -> Result<Self::VerboseText, ExplainError> {
         self.as_explain_multi_plan(context)
     }
 
@@ -133,7 +151,7 @@ impl<'a> Explainable<'a, DataflowDescription<OptimizedMirRelationExpr>> {
             .0
             .source_imports
             .iter_mut()
-            .map(|(id, (source_desc, _))| {
+            .map(|(id, (source_desc, _, _upper))| {
                 let op = source_desc.arguments.operators.as_ref();
                 ExplainSource::new(*id, op, context.config.filter_pushdown)
             })

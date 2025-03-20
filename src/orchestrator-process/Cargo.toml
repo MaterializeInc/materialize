@@ -10,28 +10,31 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.66"
+anyhow = "1.0.95"
 async-stream = "0.3.3"
-async-trait = "0.1.68"
-chrono = { version = "0.4.35", default_features = false, features = ["clock"] }
-futures = "0.3.25"
+async-trait = "0.1.83"
+chrono = { version = "0.4.39", default-features = false, features = ["clock"] }
+futures = "0.3.31"
 hex = "0.4.3"
-itertools = "0.10.5"
-libc = "0.2.138"
+itertools = "0.12.1"
+libc = "0.2.170"
 maplit = "1.0.2"
-mz-orchestrator = { path = "../orchestrator" }
-mz-ore = { path = "../ore", features = ["async"] }
-mz-repr = { path = "../repr" }
-mz-secrets = { path = "../secrets" }
+mz-orchestrator = { path = "../orchestrator", default-features = false }
+mz-ore = { path = "../ore", default-features = false, features = ["async", "network"] }
+mz-repr = { path = "../repr", default-features = false }
+mz-secrets = { path = "../secrets", default-features = false }
 nix = "0.26.1"
-serde = "1.0.147"
-serde_json = "1.0.89"
-scopeguard = "1.1.0"
+serde = "1.0.219"
+serde_json = "1.0.125"
+scopeguard = "1.2.0"
 sha1 = "0.10.5"
-sysinfo = "0.27.2"
-tokio = { version = "1.32.0", features = [ "fs", "process", "time" ] }
+sysinfo = "0.29.11"
+tokio = { version = "1.44.1", features = ["fs", "process", "time"] }
 tracing = "0.1.37"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[features]
+default = ["workspace-hack"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

@@ -11,7 +11,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use guppy::graph::PackageMetadata;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 use crate::targets::{AdditiveContent, RustTestSize};
 
@@ -94,7 +94,7 @@ impl CrateConfig {
         self.skip_generating
     }
 
-    pub fn additive_content(&self) -> Option<AdditiveContent<'_>> {
+    pub fn additive_content(&self) -> Option<AdditiveContent> {
         self.additive_content
             .as_ref()
             .map(|s| AdditiveContent::new(s.as_str()))
@@ -117,12 +117,12 @@ impl CrateConfig {
     }
 
     pub fn test(&self, name: &str) -> &TestConfig {
-        static EMPTY_TEST: Lazy<TestConfig> = Lazy::new(TestConfig::default);
+        static EMPTY_TEST: LazyLock<TestConfig> = LazyLock::new(TestConfig::default);
         self.tests.get(name).unwrap_or(&*EMPTY_TEST)
     }
 
     pub fn binary(&self, name: &str) -> &BinaryConfig {
-        static EMPTY_BINARY: Lazy<BinaryConfig> = Lazy::new(BinaryConfig::default);
+        static EMPTY_BINARY: LazyLock<BinaryConfig> = LazyLock::new(BinaryConfig::default);
         self.binaries.get(name).unwrap_or(&*EMPTY_BINARY)
     }
 }
@@ -144,6 +144,9 @@ pub struct LibraryConfig {
     /// Extra proc macro dependencies to include.
     #[serde(default)]
     extra_proc_macro_deps: Vec<String>,
+    /// Should we disable pipelined compilation for this library.
+    #[serde(default)]
+    disable_pipelining: Option<bool>,
 }
 
 impl LibraryConfig {
@@ -161,6 +164,10 @@ impl LibraryConfig {
 
     pub fn extra_proc_macro_deps(&self) -> &[String] {
         &self.extra_proc_macro_deps
+    }
+
+    pub fn disable_pipelining(&self) -> Option<bool> {
+        self.disable_pipelining
     }
 }
 

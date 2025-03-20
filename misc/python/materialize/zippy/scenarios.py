@@ -8,16 +8,17 @@
 # by the Apache License, Version 2.0.
 
 
-from materialize.zippy.all_actions import ValidateAll
+from materialize.zippy.all_actions import Action, ValidateAll  # noqa
 from materialize.zippy.backup_and_restore_actions import BackupAndRestore
 from materialize.zippy.balancerd_actions import (
     BalancerdRestart,
     BalancerdStart,
     BalancerdStop,
 )
+from materialize.zippy.blob_store_actions import BlobStoreRestart, BlobStoreStart
 from materialize.zippy.crdb_actions import CockroachRestart, CockroachStart
 from materialize.zippy.debezium_actions import CreateDebeziumSource, DebeziumStart
-from materialize.zippy.framework import ActionOrFactory
+from materialize.zippy.framework import ActionFactory, ActionOrFactory  # noqa
 from materialize.zippy.kafka_actions import (
     CreateTopicParameterized,
     Ingest,
@@ -25,7 +26,6 @@ from materialize.zippy.kafka_actions import (
     KafkaStart,
 )
 from materialize.zippy.kafka_capabilities import Envelope
-from materialize.zippy.minio_actions import MinioRestart, MinioStart
 from materialize.zippy.mysql_actions import (
     CreateMySqlTable,
     MySqlDML,
@@ -35,9 +35,9 @@ from materialize.zippy.mysql_actions import (
 from materialize.zippy.mysql_cdc_actions import CreateMySqlCdcTable
 from materialize.zippy.mz_actions import (
     KillClusterd,
+    Mz0dtDeploy,
     MzRestart,
     MzStart,
-    MzStartParameterized,
     MzStop,
 )
 from materialize.zippy.peek_actions import PeekCancellation
@@ -72,14 +72,14 @@ class Scenario:
         return [
             KafkaStart,
             CockroachStart,
-            MinioStart,
+            BlobStoreStart,
             MzStart,
             StoragedStart,
             BalancerdStart,
         ]
 
     def actions_with_weight(self) -> dict[ActionOrFactory, float]:
-        assert False
+        raise RuntimeError
 
     def finalization(self) -> list[ActionOrFactory]:
         return [
@@ -99,9 +99,11 @@ class KafkaSources(Scenario):
         return {
             MzStart: 5,
             MzStop: 1,
+            Mz0dtDeploy: 5,
             KillClusterd: 5,
-            StoragedKill: 5,
-            StoragedStart: 5,
+            # Disabled because a separate clusterd is not supported by Mz0dtDeploy yet
+            # StoragedKill: 5,
+            # StoragedStart: 5,
             CreateTopicParameterized(): 5,
             CreateSourceParameterized(): 5,
             CreateViewParameterized(max_inputs=2): 5,
@@ -119,9 +121,11 @@ class AlterConnectionWithKafkaSources(Scenario):
         return {
             MzStart: 5,
             MzStop: 1,
+            Mz0dtDeploy: 1,
             KillClusterd: 5,
-            StoragedKill: 5,
-            StoragedStart: 5,
+            # Disabled because a separate clusterd is not supported by Mz0dtDeploy yet
+            # StoragedKill: 5,
+            # StoragedStart: 5,
             CreateTopicParameterized(): 5,
             CreateSourceParameterized(): 5,
             CreateViewParameterized(max_inputs=2): 5,
@@ -141,11 +145,13 @@ class UserTables(Scenario):
             MzStart: 5,
             BalancerdStart: 1,
             MzStop: 10,
+            Mz0dtDeploy: 10,
             BalancerdStop: 1,
             BalancerdRestart: 1,
             BackupAndRestore: 1,
             KillClusterd: 10,
-            StoragedRestart: 5,
+            # Disabled because a separate clusterd is not supported by Mz0dtDeploy yet
+            # StoragedRestart: 5,
             CreateTableParameterized(): 10,
             CreateViewParameterized(): 10,
             CreateSinkParameterized(): 10,
@@ -153,31 +159,6 @@ class UserTables(Scenario):
             ValidateView: 20,
             DML: 30,
         }
-
-
-class UserTablesToggleTxnWal(Scenario):
-    """A Zippy test using user tables with toggling txn_wal."""
-
-    def actions_with_weight(self) -> dict[ActionOrFactory, float]:
-        workload: dict[ActionOrFactory, float] = {
-            MzStop: 10,
-            CreateTableParameterized(): 10,
-            CreateViewParameterized(): 10,
-            ValidateTable: 10,
-            ValidateView: 10,
-            DML: 50,
-        }
-
-        starts: dict[ActionOrFactory, float] = {}
-        for txn_wal in ["off", "eager", "lazy"]:
-            starts[
-                MzStartParameterized(
-                    additional_system_parameter_defaults={"persist_txn_tables": txn_wal}
-                )
-            ] = 1
-
-        workload.update(starts)
-        return workload
 
 
 class DebeziumPostgres(Scenario):
@@ -220,6 +201,16 @@ class PostgresCdc(Scenario):
             ValidateView: 20,
             PostgresDML: 100,
         }
+
+    def finalization(self) -> list[ActionOrFactory]:
+        # Postgres sources can't be backup up and restored since Postgres
+        # refuses to re-read previously confirmed LSNs
+        return [
+            MzStart,
+            BalancerdStart,
+            StoragedStart,
+            ValidateAll(),
+        ]
 
 
 class MySqlCdc(Scenario):
@@ -286,8 +277,8 @@ class KafkaParallelInsert(Scenario):
         }
 
 
-class CrdbMinioRestart(Scenario):
-    """A Zippy test that restarts CRDB and Minio."""
+class CrdbBlobStoreRestart(Scenario):
+    """A Zippy test that restarts CRDB and BlobStore."""
 
     def actions_with_weight(self) -> dict[ActionOrFactory, float]:
         return {
@@ -300,10 +291,12 @@ class CrdbMinioRestart(Scenario):
             DML: 50,
             ValidateView: 15,
             MzRestart: 5,
+            Mz0dtDeploy: 5,
             KillClusterd: 5,
-            StoragedRestart: 10,
+            # Disabled because a separate clusterd is not supported by Mz0dtDeploy yet
+            # StoragedRestart: 10,
             CockroachRestart: 15,
-            MinioRestart: 15,
+            BlobStoreRestart: 15,
         }
 
 
@@ -321,8 +314,10 @@ class CrdbRestart(Scenario):
             DML: 50,
             ValidateView: 15,
             MzRestart: 5,
+            Mz0dtDeploy: 5,
             KillClusterd: 5,
-            StoragedRestart: 10,
+            # Disabled because a separate clusterd is not supported by Mz0dtDeploy yet
+            # StoragedRestart: 10,
             CockroachRestart: 15,
         }
 
@@ -337,8 +332,7 @@ class KafkaSourcesLarge(Scenario):
             CreateViewParameterized(
                 max_views=50, expensive_aggregates=False, max_inputs=1
             ): 5,
-            # TODO(def-) Reenable when #26511 is fixed
-            # CreateSinkParameterized(max_sinks=25): 10,
+            CreateSinkParameterized(max_sinks=25): 10,
             ValidateView: 10,
             Ingest: 100,
             PeekCancellation: 5,
@@ -412,6 +406,16 @@ class PostgresCdcLarge(Scenario):
             ValidateView: 20,
             PostgresDML: 100,
         }
+
+    def finalization(self) -> list[ActionOrFactory]:
+        # Postgres sources can't be backup up and restored since Postgres
+        # refuses to re-read previously confirmed LSNs
+        return [
+            MzStart,
+            BalancerdStart,
+            StoragedStart,
+            ValidateAll(),
+        ]
 
 
 class MySqlCdcLarge(Scenario):

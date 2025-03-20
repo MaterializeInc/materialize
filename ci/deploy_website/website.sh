@@ -37,7 +37,12 @@ declare -A shortlinks=(
 )
 
 cd doc/user
-hugo --gc --baseURL /docs --destination public/docs
+if [[ "$BUILDKITE_ORGANIZATION_SLUG" == "materialize" ]] && [[ "$BUILDKITE_BRANCH" == self-managed-docs/* ]]; then
+    VERSION=${BUILDKITE_BRANCH#self-managed-docs/}
+    hugo --gc --baseURL "/docs/self-managed/$VERSION" --destination "public/docs/self-managed/$VERSION"
+else
+    hugo --gc --baseURL /docs --destination public/docs
+fi
 hugo deploy --maxDeletes -1
 
 touch empty
@@ -61,6 +66,7 @@ for slug in "${!shortlinks[@]}"; do
 done
 
 # Hugo's CloudFront invalidation feature doesn't do anything smarter than
-# invalidating the entire distribution, so we do it here to make it clear that
-# we're invalidating the shortlinks too.
+# invalidating the entire distribution (and has bugs fetching AWS credentials in
+# recent versions), so we just do it here to make it clear that we're
+# invalidating the shortlinks too.
 AWS_PAGER="" aws cloudfront create-invalidation --distribution-id E1F8Q2NUUC41QE --paths "/*"

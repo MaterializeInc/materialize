@@ -15,12 +15,16 @@ from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
-from materialize.output_consistency.operation.operation_param import OperationParam
+from materialize.output_consistency.generators.arg_context import ArgContext
+from materialize.output_consistency.operation.volatile_data_operation_param import (
+    VolatileDataOperationParam,
+)
+from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
 
 _INDEX_OF_NULL_VALUE = 0
 
 
-class EnumConstantOperationParam(OperationParam):
+class EnumConstantOperationParam(VolatileDataOperationParam):
     def __init__(
         self,
         values: list[str],
@@ -34,8 +38,6 @@ class EnumConstantOperationParam(OperationParam):
         super().__init__(
             DataTypeCategory.ENUM,
             optional=optional,
-            incompatibilities=None,
-            incompatibility_combinations=None,
         )
         assert len(values) == len(set(values)), f"Values contain duplicates {values}"
         self.values = values
@@ -47,17 +49,32 @@ class EnumConstantOperationParam(OperationParam):
             self.invalid_value = None
 
         self.add_null_value = add_null_value
+        null_value = "NULL"
         if add_null_value:
             # NULL value must be at the beginning
             self.values.insert(
                 _INDEX_OF_NULL_VALUE,
-                "NULL",
+                null_value,
             )
 
         self.add_quotes = add_quotes
-        self.characteristics_per_index: list[set[ExpressionCharacteristics]] = [
-            set() for _ in self.values
-        ]
+        self.characteristics_per_value: dict[str, set[ExpressionCharacteristics]] = (
+            dict()
+        )
+
+        for value in self.values:
+            self.characteristics_per_value[value] = set()
+
+        if add_invalid_value:
+            self.characteristics_per_value[invalid_value].add(
+                ExpressionCharacteristics.ENUM_INVALID
+            )
+
+        if add_null_value:
+            self.characteristics_per_value[null_value].add(
+                ExpressionCharacteristics.NULL
+            )
+
         self.tags = tags
 
     def supports_type(
@@ -70,7 +87,7 @@ class EnumConstantOperationParam(OperationParam):
             0 <= index < len(self.values)
         ), f"Index {index} out of range in list with {len(self.values)} values: {self.values}"
         value = self.values[index]
-        characteristics = self.characteristics_per_index[index]
+        characteristics = self.characteristics_per_value[value]
 
         quote_value = self.add_quotes
         if self.add_null_value and index == 0:
@@ -85,3 +102,9 @@ class EnumConstantOperationParam(OperationParam):
             if value != self.invalid_value
             and (index != _INDEX_OF_NULL_VALUE or not self.add_null_value)
         ]
+
+    def generate_expression(
+        self, arg_context: ArgContext, randomized_picker: RandomizedPicker
+    ) -> Expression:
+        enum_constant_index = randomized_picker.random_number(0, len(self.values) - 1)
+        return self.get_enum_constant(enum_constant_index)

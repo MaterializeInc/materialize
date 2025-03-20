@@ -134,10 +134,6 @@ With Mutually Recursive
           - (1, 42)
           - (2, 42)
 ----
-Return
-  Project (#0, #2, #1)
-    Map ((#0 + 42), 42)
-      Get l0
 With Mutually Recursive
   cte l0 =
     Distinct project=[#0]
@@ -147,6 +143,10 @@ With Mutually Recursive
         Constant
           - (1)
           - (2)
+Return
+  Project (#0, #2, #1)
+    Map ((#0 + 42), 42)
+      Get l0
 
 
 # Multiple bindings, value knowledge
@@ -173,9 +173,13 @@ With Mutually Recursive
         Map (17)
           Constant <empty> // { types: "()" }
 ----
-Return
-  Get l1
 With Mutually Recursive
+  cte l0 =
+    Distinct project=[]
+      Union
+        Constant
+          - ()
+        Constant <empty>
   cte l1 =
     Map (17)
       Distinct project=[#0, #1]
@@ -185,9 +189,5 @@ With Mutually Recursive
             Get l0
           Project (#0, #1)
             Get l1
-  cte l0 =
-    Distinct project=[]
-      Union
-        Constant
-          - ()
-        Constant <empty>
+Return
+  Get l1

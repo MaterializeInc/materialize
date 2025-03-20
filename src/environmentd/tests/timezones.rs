@@ -31,6 +31,7 @@ use std::fs;
 use std::path::Path;
 
 use mz_environmentd::test_util;
+use mz_ore::assert_none;
 use mz_pgrepr::Interval;
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
@@ -97,7 +98,7 @@ async fn test_pg_timezone_abbrevs() {
                 continue;
             }
             let key = line.split_once(',').unwrap().0;
-            assert!(pg_map.insert(key, line).is_none());
+            assert_none!(pg_map.insert(key, line));
         }
 
         client

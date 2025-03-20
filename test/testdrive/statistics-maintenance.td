@@ -8,8 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
-ALTER SYSTEM SET kafka_default_metadata_fetch_interval = 1000
+ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true
 ALTER SYSTEM SET storage_statistics_collection_interval = 1000
 ALTER SYSTEM SET storage_statistics_interval = 2000
 
@@ -40,9 +39,21 @@ one:two
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-upsert-${testdrive.seed}'
   )
+
+> CREATE TABLE upsert1_tbl FROM SOURCE upsert1 (REFERENCE "testdrive-upsert-${testdrive.seed}")
   KEY FORMAT BYTES
   VALUE FORMAT BYTES
   ENVELOPE UPSERT
+
+> SELECT * FROM upsert1_tbl
+one two
+
+# The `CREATE TABLE ... FROM SOURCE` commands caused a recreation of the
+# respective source dataflows, during which we might have lost the statistics
+# about committed updates from the snapshot. Ingest some more data to ensure we
+# see some `updates_committed`.
+$ kafka-ingest format=bytes topic=upsert key-format=bytes key-terminator=:
+two:three
 
 # Ensure we produce statistics
 > SELECT s.name, SUM(u.messages_staged), SUM(u.messages_committed), SUM(u.bytes_staged) > 0, SUM(bytes_staged) = SUM(bytes_committed)
@@ -54,12 +65,12 @@ sink1 1 1 true true
 
 > SELECT s.name,
   SUM(u.updates_committed) > 0,
-  SUM(u.messages_received)
+  SUM(u.messages_received) >= 2
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert1')
   GROUP BY s.id, s.name
-upsert1 true 1
+upsert1 true true
 
 # Shut down the cluster
 > ALTER CLUSTER cluster1 SET (REPLICATION FACTOR = 0)
@@ -74,19 +85,19 @@ sink1 1 1 true true
 
 > SELECT s.name,
   SUM(u.updates_committed) > 0,
-  SUM(u.messages_received)
+  SUM(u.messages_received) >= 2
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert1')
   GROUP BY s.id, s.name
-upsert1 true 1
+upsert1 true true
 
 # Ingest some more data, and ensure counters are maintained
 
 > ALTER CLUSTER cluster1 SET (REPLICATION FACTOR = 1)
 > INSERT INTO t VALUES ('key1', 'value')
 $ kafka-ingest format=bytes topic=upsert key-format=bytes key-terminator=:
-two:three
+three:four
 
 # Statistics should remain the same
 > SELECT s.name, SUM(u.messages_staged), SUM(u.messages_committed), SUM(u.bytes_staged) > 0, SUM(bytes_staged) = SUM(bytes_committed)
@@ -98,9 +109,9 @@ sink1 2 2 true true
 
 > SELECT s.name,
   SUM(u.updates_committed) > 0,
-  SUM(u.messages_received)
+  SUM(u.messages_received) >= 4
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert1')
   GROUP BY s.id, s.name
-upsert1 true 2
+upsert1 true true

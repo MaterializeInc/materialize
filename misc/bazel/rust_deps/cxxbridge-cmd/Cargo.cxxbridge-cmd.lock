@@ -1,5 +1,5 @@
 {
-  "checksum": "885ca203cab3aa22f784a9e9be93d3b3e14a157c80924700448eccc7360f2591",
+  "checksum": "b2b75eaba9abbc55071dcf7f2ded98069da446c19b24e7ac327c70bc8edf867e",
   "crates": {
     "anstyle 1.0.4": {
       "name": "anstyle",
@@ -17,7 +17,7 @@
             "crate_name": "anstyle",
             "crate_root": "src/lib.rs",
             "srcs": {
-              "allow_empty": false,
+              "allow_empty": true,
               "include": [
                 "**/*.rs"
               ]
@@ -47,45 +47,6 @@
       ],
       "license_file": "LICENSE-APACHE"
     },
-    "cc 1.0.99": {
-      "name": "cc",
-      "version": "1.0.99",
-      "package_url": "https://github.com/rust-lang/cc-rs",
-      "repository": {
-        "Http": {
-          "url": "https://static.crates.io/crates/cc/1.0.99/download",
-          "sha256": "96c51067fd44124faa7f870b4b1c969379ad32b2ba805aa959430ceaa384f695"
-        }
-      },
-      "targets": [
-        {
-          "Library": {
-            "crate_name": "cc",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": false,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "cc",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "edition": "2018",
-        "version": "1.0.99"
-      },
-      "license": "MIT OR Apache-2.0",
-      "license_ids": [
-        "Apache-2.0",
-        "MIT"
-      ],
-      "license_file": "LICENSE-APACHE"
-    },
     "clap 4.4.6": {
       "name": "clap",
       "version": "4.4.6",
@@ -102,7 +63,7 @@
             "crate_name": "clap",
             "crate_root": "src/lib.rs",
             "srcs": {
-              "allow_empty": false,
+              "allow_empty": true,
               "include": [
                 "**/*.rs"
               ]
@@ -160,7 +121,7 @@
             "crate_name": "clap_builder",
             "crate_root": "src/lib.rs",
             "srcs": {
-              "allow_empty": false,
+              "allow_empty": true,
               "include": [
                 "**/*.rs"
               ]
@@ -226,7 +187,7 @@
             "crate_name": "clap_lex",
             "crate_root": "src/lib.rs",
             "srcs": {
-              "allow_empty": false,
+              "allow_empty": true,
               "include": [
                 "**/*.rs"
               ]
@@ -265,7 +226,7 @@
             "crate_name": "codespan_reporting",
             "crate_root": "src/lib.rs",
             "srcs": {
-              "allow_empty": false,
+              "allow_empty": true,
               "include": [
                 "**/*.rs"
               ]
@@ -300,81 +261,6 @@
       ],
       "license_file": null
     },
-    "cxx 1.0.112": {
-      "name": "cxx",
-      "version": "1.0.112",
-      "package_url": "https://github.com/dtolnay/cxx",
-      "repository": {
-        "Http": {
-          "url": "https://static.crates.io/crates/cxx/1.0.112/download",
-          "sha256": "58ab30434ea0ff6aa640a08dda5284026a366d47565496fd40b6cbfbdd7e31a2"
-        }
-      },
-      "targets": [
-        {
-          "Library": {
-            "crate_name": "cxx",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": false,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "cxx",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "crate_features": {
-          "common": [
-            "alloc",
-            "default",
-            "std"
-          ],
-          "selects": {}
-        },
-        "deps": {
-          "common": [
-            {
-              "id": "link-cplusplus 1.0.9",
-              "target": "link_cplusplus"
-            }
-          ],
-          "selects": {}
-        },
-        "extra_deps": {
-          "common": [
-            ":cxx_cc"
-          ],
-          "selects": {}
-        },
-        "edition": "2021",
-        "proc_macro_deps": {
-          "common": [
-            {
-              "id": "cxxbridge-macro 1.0.112",
-              "target": "cxxbridge_macro"
-            }
-          ],
-          "selects": {}
-        },
-        "version": "1.0.112"
-      },
-      "license": "MIT OR Apache-2.0",
-      "license_ids": [
-        "Apache-2.0",
-        "MIT"
-      ],
-      "license_file": "LICENSE-APACHE",
-      "additive_build_file_content": "cc_library(\n    name = \"cxx_cc\",\n    srcs = [\"src/cxx.cc\"],\n    hdrs = [\"include/cxx.h\"],\n    include_prefix = \"rust\",\n    includes = [\"include\"],\n    linkstatic = True,\n    strip_include_prefix = \"include\",\n    visibility = [\"//visibility:public\"],\n)\n",
-      "extra_aliased_targets": {
-        "cxx_cc": "cxx_cc"
-      }
-    },
     "cxxbridge-cmd 1.0.109": {
       "name": "cxxbridge-cmd",
       "version": "1.0.109",
@@ -395,10 +281,6 @@
             {
               "id": "codespan-reporting 0.11.1",
               "target": "codespan_reporting"
-            },
-            {
-              "id": "cxx 1.0.112",
-              "target": "cxx"
             },
             {
               "id": "proc-macro2 1.0.69",
@@ -425,188 +307,6 @@
       ],
       "license_file": null
     },
-    "cxxbridge-flags 1.0.112": {
-      "name": "cxxbridge-flags",
-      "version": "1.0.112",
-      "package_url": "https://github.com/dtolnay/cxx",
-      "repository": {
-        "Http": {
-          "url": "https://static.crates.io/crates/cxxbridge-flags/1.0.112/download",
-          "sha256": "42281b20eba5218c539295c667c18e2f50211bb11902419194c6ed1ae808e547"
-        }
-      },
-      "targets": [
-        {
-          "Library": {
-            "crate_name": "cxxbridge_flags",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": false,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "cxxbridge_flags",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "crate_features": {
-          "common": [
-            "default"
-          ],
-          "selects": {}
-        },
-        "edition": "2021",
-        "version": "1.0.112"
-      },
-      "license": "MIT OR Apache-2.0",
-      "license_ids": [
-        "Apache-2.0",
-        "MIT"
-      ],
-      "license_file": "LICENSE-APACHE"
-    },
-    "cxxbridge-macro 1.0.112": {
-      "name": "cxxbridge-macro",
-      "version": "1.0.112",
-      "package_url": "https://github.com/dtolnay/cxx",
-      "repository": {
-        "Http": {
-          "url": "https://static.crates.io/crates/cxxbridge-macro/1.0.112/download",
-          "sha256": "b45506e3c66512b0a65d291a6b452128b7b1dd9841e20d1e151addbd2c00ea50"
-        }
-      },
-      "targets": [
-        {
-          "ProcMacro": {
-            "crate_name": "cxxbridge_macro",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": false,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "cxxbridge_macro",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "deps": {
-          "common": [
-            {
-              "id": "proc-macro2 1.0.69",
-              "target": "proc_macro2"
-            },
-            {
-              "id": "quote 1.0.33",
-              "target": "quote"
-            },
-            {
-              "id": "syn 2.0.38",
-              "target": "syn"
-            }
-          ],
-          "selects": {}
-        },
-        "edition": "2021",
-        "version": "1.0.112"
-      },
-      "license": "MIT OR Apache-2.0",
-      "license_ids": [
-        "Apache-2.0",
-        "MIT"
-      ],
-      "license_file": "LICENSE-APACHE"
-    },
-    "link-cplusplus 1.0.9": {
-      "name": "link-cplusplus",
-      "version": "1.0.9",
-      "package_url": "https://github.com/dtolnay/link-cplusplus",
-      "repository": {
-        "Http": {
-          "url": "https://static.crates.io/crates/link-cplusplus/1.0.9/download",
-          "sha256": "9d240c6f7e1ba3a28b0249f774e6a9dd0175054b52dfbb61b16eb8505c3785c9"
-        }
-      },
-      "targets": [
-        {
-          "Library": {
-            "crate_name": "link_cplusplus",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": false,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        },
-        {
-          "BuildScript": {
-            "crate_name": "build_script_build",
-            "crate_root": "build.rs",
-            "srcs": {
-              "allow_empty": false,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "link_cplusplus",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "crate_features": {
-          "common": [
-            "default"
-          ],
-          "selects": {}
-        },
-        "deps": {
-          "common": [
-            {
-              "id": "link-cplusplus 1.0.9",
-              "target": "build_script_build"
-            }
-          ],
-          "selects": {}
-        },
-        "edition": "2018",
-        "version": "1.0.9"
-      },
-      "build_script_attrs": {
-        "data_glob": [
-          "**"
-        ],
-        "deps": {
-          "common": [
-            {
-              "id": "cc 1.0.99",
-              "target": "cc"
-            }
-          ],
-          "selects": {}
-        },
-        "links": "cplusplus"
-      },
-      "license": "MIT OR Apache-2.0",
-      "license_ids": [
-        "Apache-2.0",
-        "MIT"
-      ],
-      "license_file": "LICENSE-APACHE"
-    },
     "proc-macro2 1.0.69": {
       "name": "proc-macro2",
       "version": "1.0.69",
@@ -623,7 +323,7 @@
             "crate_name": "proc_macro2",
             "crate_root": "src/lib.rs",
             "srcs": {
-              "allow_empty": false,
+              "allow_empty": true,
               "include": [
                 "**/*.rs"
               ]
@@ -635,7 +335,7 @@
             "crate_name": "build_script_build",
             "crate_root": "build.rs",
             "srcs": {
-              "allow_empty": false,
+              "allow_empty": true,
               "include": [
                 "**/*.rs"
               ]
@@ -650,8 +350,6 @@
         ],
         "crate_features": {
           "common": [
-            "default",
-            "proc-macro",
             "span-locations"
           ],
           "selects": {}
@@ -673,6 +371,9 @@
         "version": "1.0.69"
       },
       "build_script_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
         "data_glob": [
           "**"
         ]
@@ -700,7 +401,7 @@
             "crate_name": "quote",
             "crate_root": "src/lib.rs",
             "srcs": {
-              "allow_empty": false,
+              "allow_empty": true,
               "include": [
                 "**/*.rs"
               ]
@@ -713,13 +414,6 @@
         "compile_data_glob": [
           "**"
         ],
-        "crate_features": {
-          "common": [
-            "default",
-            "proc-macro"
-          ],
-          "selects": {}
-        },
         "deps": {
           "common": [
             {
@@ -755,7 +449,7 @@
             "crate_name": "strsim",
             "crate_root": "src/lib.rs",
             "srcs": {
-              "allow_empty": false,
+              "allow_empty": true,
               "include": [
                 "**/*.rs"
               ]
@@ -793,7 +487,7 @@
             "crate_name": "syn",
             "crate_root": "src/lib.rs",
             "srcs": {
-              "allow_empty": false,
+              "allow_empty": true,
               "include": [
                 "**/*.rs"
               ]
@@ -809,12 +503,9 @@
         "crate_features": {
           "common": [
             "clone-impls",
-            "default",
-            "derive",
             "full",
             "parsing",
             "printing",
-            "proc-macro",
             "quote"
           ],
           "selects": {}
@@ -862,7 +553,7 @@
             "crate_name": "termcolor",
             "crate_root": "src/lib.rs",
             "srcs": {
-              "allow_empty": false,
+              "allow_empty": true,
               "include": [
                 "**/*.rs"
               ]
@@ -912,7 +603,7 @@
             "crate_name": "unicode_ident",
             "crate_root": "src/lib.rs",
             "srcs": {
-              "allow_empty": false,
+              "allow_empty": true,
               "include": [
                 "**/*.rs"
               ]
@@ -952,7 +643,7 @@
             "crate_name": "unicode_width",
             "crate_root": "src/lib.rs",
             "srcs": {
-              "allow_empty": false,
+              "allow_empty": true,
               "include": [
                 "**/*.rs"
               ]
@@ -997,7 +688,7 @@
             "crate_name": "winapi",
             "crate_root": "src/lib.rs",
             "srcs": {
-              "allow_empty": false,
+              "allow_empty": true,
               "include": [
                 "**/*.rs"
               ]
@@ -1009,7 +700,7 @@
             "crate_name": "build_script_build",
             "crate_root": "build.rs",
             "srcs": {
-              "allow_empty": false,
+              "allow_empty": true,
               "include": [
                 "**/*.rs"
               ]
@@ -1022,22 +713,6 @@
         "compile_data_glob": [
           "**"
         ],
-        "crate_features": {
-          "common": [
-            "consoleapi",
-            "errhandlingapi",
-            "fileapi",
-            "minwindef",
-            "processenv",
-            "std",
-            "sysinfoapi",
-            "winbase",
-            "wincon",
-            "winerror",
-            "winnt"
-          ],
-          "selects": {}
-        },
         "deps": {
           "common": [
             {
@@ -1064,6 +739,9 @@
         "version": "0.3.9"
       },
       "build_script_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
         "data_glob": [
           "**"
         ]
@@ -1091,7 +769,7 @@
             "crate_name": "winapi_i686_pc_windows_gnu",
             "crate_root": "src/lib.rs",
             "srcs": {
-              "allow_empty": false,
+              "allow_empty": true,
               "include": [
                 "**/*.rs"
               ]
@@ -1103,7 +781,7 @@
             "crate_name": "build_script_build",
             "crate_root": "build.rs",
             "srcs": {
-              "allow_empty": false,
+              "allow_empty": true,
               "include": [
                 "**/*.rs"
               ]
@@ -1129,6 +807,9 @@
         "version": "0.4.0"
       },
       "build_script_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
         "data_glob": [
           "**"
         ]
@@ -1156,7 +837,7 @@
             "crate_name": "winapi_util",
             "crate_root": "src/lib.rs",
             "srcs": {
-              "allow_empty": false,
+              "allow_empty": true,
               "include": [
                 "**/*.rs"
               ]
@@ -1206,7 +887,7 @@
             "crate_name": "winapi_x86_64_pc_windows_gnu",
             "crate_root": "src/lib.rs",
             "srcs": {
-              "allow_empty": false,
+              "allow_empty": true,
               "include": [
                 "**/*.rs"
               ]
@@ -1218,7 +899,7 @@
             "crate_name": "build_script_build",
             "crate_root": "build.rs",
             "srcs": {
-              "allow_empty": false,
+              "allow_empty": true,
               "include": [
                 "**/*.rs"
               ]
@@ -1244,6 +925,9 @@
         "version": "0.4.0"
       },
       "build_script_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
         "data_glob": [
           "**"
         ]
@@ -1264,117 +948,25 @@
     "aarch64-apple-darwin": [
       "aarch64-apple-darwin"
     ],
-    "aarch64-apple-ios": [
-      "aarch64-apple-ios"
-    ],
-    "aarch64-apple-ios-sim": [
-      "aarch64-apple-ios-sim"
-    ],
-    "aarch64-fuchsia": [
-      "aarch64-fuchsia"
-    ],
-    "aarch64-linux-android": [
-      "aarch64-linux-android"
-    ],
-    "aarch64-pc-windows-msvc": [
-      "aarch64-pc-windows-msvc"
-    ],
     "aarch64-unknown-linux-gnu": [
       "aarch64-unknown-linux-gnu"
     ],
-    "aarch64-unknown-nixos-gnu": [
-      "aarch64-unknown-nixos-gnu"
-    ],
-    "aarch64-unknown-nto-qnx710": [
-      "aarch64-unknown-nto-qnx710"
-    ],
-    "arm-unknown-linux-gnueabi": [
-      "arm-unknown-linux-gnueabi"
-    ],
-    "armv7-linux-androideabi": [
-      "armv7-linux-androideabi"
-    ],
-    "armv7-unknown-linux-gnueabi": [
-      "armv7-unknown-linux-gnueabi"
-    ],
-    "cfg(windows)": [
-      "aarch64-pc-windows-msvc",
-      "i686-pc-windows-msvc",
-      "x86_64-pc-windows-msvc"
-    ],
-    "i686-apple-darwin": [
-      "i686-apple-darwin"
-    ],
-    "i686-linux-android": [
-      "i686-linux-android"
-    ],
+    "cfg(windows)": [],
     "i686-pc-windows-gnu": [],
-    "i686-pc-windows-msvc": [
-      "i686-pc-windows-msvc"
-    ],
-    "i686-unknown-freebsd": [
-      "i686-unknown-freebsd"
-    ],
-    "i686-unknown-linux-gnu": [
-      "i686-unknown-linux-gnu"
-    ],
-    "powerpc-unknown-linux-gnu": [
-      "powerpc-unknown-linux-gnu"
-    ],
-    "riscv32imc-unknown-none-elf": [
-      "riscv32imc-unknown-none-elf"
-    ],
-    "riscv64gc-unknown-none-elf": [
-      "riscv64gc-unknown-none-elf"
-    ],
-    "s390x-unknown-linux-gnu": [
-      "s390x-unknown-linux-gnu"
-    ],
-    "thumbv7em-none-eabi": [
-      "thumbv7em-none-eabi"
-    ],
-    "thumbv8m.main-none-eabi": [
-      "thumbv8m.main-none-eabi"
-    ],
     "wasm32-unknown-unknown": [
       "wasm32-unknown-unknown"
-    ],
-    "wasm32-wasi": [
-      "wasm32-wasi"
     ],
     "x86_64-apple-darwin": [
       "x86_64-apple-darwin"
     ],
-    "x86_64-apple-ios": [
-      "x86_64-apple-ios"
-    ],
-    "x86_64-fuchsia": [
-      "x86_64-fuchsia"
-    ],
-    "x86_64-linux-android": [
-      "x86_64-linux-android"
-    ],
     "x86_64-pc-windows-gnu": [],
-    "x86_64-pc-windows-msvc": [
-      "x86_64-pc-windows-msvc"
-    ],
-    "x86_64-unknown-freebsd": [
-      "x86_64-unknown-freebsd"
-    ],
     "x86_64-unknown-linux-gnu": [
       "x86_64-unknown-linux-gnu"
-    ],
-    "x86_64-unknown-nixos-gnu": [
-      "x86_64-unknown-nixos-gnu"
-    ],
-    "x86_64-unknown-none": [
-      "x86_64-unknown-none"
     ]
   },
   "direct_deps": [
     "clap 4.4.6",
     "codespan-reporting 0.11.1",
-    "cxx 1.0.112",
     "proc-macro2 1.0.69",
     "quote 1.0.33",
     "syn 2.0.38"

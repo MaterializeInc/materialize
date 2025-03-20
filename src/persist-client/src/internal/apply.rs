@@ -9,6 +9,7 @@
 
 //! Implementation of persist command application.
 
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::ops::ControlFlow::{self, Break, Continue};
 use std::sync::Arc;
@@ -16,9 +17,9 @@ use std::time::Instant;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_persist::location::{CaSResult, Indeterminate, SeqNo, VersionedData};
+use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
@@ -30,14 +31,15 @@ use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::{CmdMetrics, Metrics, ShardMetrics};
 use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::{
-    ExpiryMetrics, HollowBatch, Since, SnapshotErr, StateCollections, TypedState, Upper,
-    ROLLUP_THRESHOLD,
+    EncodedSchemas, ExpiryMetrics, HollowBatch, Since, SnapshotErr, StateCollections, TypedState,
+    Upper, ROLLUP_THRESHOLD,
 };
 use crate::internal::state_diff::StateDiff;
 use crate::internal::state_versions::{EncodedRollup, StateVersions};
 use crate::internal::trace::FueledMergeReq;
 use crate::internal::watch::StateWatch;
 use crate::rpc::{PubSubSender, PUBSUB_PUSH_DIFF_ENABLED};
+use crate::schema::SchemaCache;
 use crate::{Diagnostics, PersistConfig, ShardId};
 
 /// An applier of persist commands.
@@ -81,18 +83,11 @@ impl<K, V, T: Clone, D> Clone for Applier<K, V, T, D> {
     }
 }
 
-/// If set, we round-trip the spine structure through Proto.
-pub(crate) const ROUNDTRIP_SPINE: Config<bool> = Config::new(
-    "persist_roundtrip_spine",
-    false,
-    "Roundtrip the structure of Spine through Proto.",
-);
-
 impl<K, V, T, D> Applier<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64,
 {
     pub async fn new(
@@ -135,7 +130,8 @@ where
     }
 
     /// Fetches the latest state from Consensus and passes its `upper` to the provided closure.
-    pub async fn fetch_upper<R, F: FnMut(&Antichain<T>) -> R>(&mut self, mut f: F) -> R {
+    pub async fn fetch_upper<R, F: FnMut(&Antichain<T>) -> R>(&self, mut f: F) -> R {
+        self.metrics.cmds.fetch_upper_count.inc();
         self.fetch_and_update_state(None).await;
         self.upper(|_seqno, upper| f(upper))
     }
@@ -155,6 +151,20 @@ where
             .read_lock(&self.metrics.locks.applier_read_cacheable, move |state| {
                 f(state.seqno, state.upper())
             })
+    }
+
+    pub(crate) fn schemas<R>(
+        &self,
+        mut f: impl FnMut(SeqNo, &BTreeMap<SchemaId, EncodedSchemas>) -> R,
+    ) -> R {
+        self.state
+            .read_lock(&self.metrics.locks.applier_read_cacheable, move |state| {
+                f(state.seqno, &state.collections.schemas)
+            })
+    }
+
+    pub(crate) fn schema_cache(&self) -> SchemaCache<K, V, T, D> {
+        SchemaCache::new(self.state.schema_cache(), self.clone())
     }
 
     /// A point-in-time read of `since` from the current state.
@@ -210,6 +220,24 @@ where
             })
     }
 
+    /// See [crate::PersistClient::get_schema].
+    pub fn get_schema(&self, schema_id: SchemaId) -> Option<(K::Schema, V::Schema)> {
+        self.state
+            .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
+                let x = state.collections.schemas.get(&schema_id)?;
+                Some((K::decode_schema(&x.key), V::decode_schema(&x.val)))
+            })
+    }
+
+    /// See [crate::PersistClient::latest_schema].
+    pub fn latest_schema(&self) -> Option<(SchemaId, K::Schema, V::Schema)> {
+        self.state
+            .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
+                let (id, x) = state.collections.schemas.last_key_value()?;
+                Some((*id, K::decode_schema(&x.key), V::decode_schema(&x.val)))
+            })
+    }
+
     /// Returns whether the current's state `since` and `upper` are both empty.
     ///
     /// Due to sharing state with other handles, successive reads to this fn or any other may
@@ -252,7 +280,7 @@ where
                 state
                     .collections
                     .trace
-                    .fueled_merge_reqs_before_ms(u64::MAX)
+                    .fueled_merge_reqs_before_ms(u64::MAX, None)
                     .collect()
             })
     }
@@ -302,7 +330,7 @@ where
         E,
         WorkFn: FnMut(SeqNo, &PersistConfig, &mut StateCollections<T>) -> ControlFlow<E, R>,
     >(
-        &mut self,
+        &self,
         cmd: &CmdMetrics,
         mut work_fn: WorkFn,
     ) -> Result<(SeqNo, Result<R, E>, RoutineMaintenance), Indeterminate> {
@@ -460,7 +488,7 @@ where
             }
         };
         let expiry_metrics = new_state.expire_at((cfg.now)());
-        new_state.state.collections.trace.roundtrip_structure = ROUNDTRIP_SPINE.get(&cfg.configs);
+        new_state.state.collections.trace.roundtrip_structure = true;
 
         // Sanity check that all state transitions have special case for
         // being a tombstone. The ones that do will return a Break and
@@ -517,7 +545,7 @@ where
         })
     }
 
-    pub fn update_state(&mut self, new_state: TypedState<K, V, T, D>) {
+    pub fn update_state(&self, new_state: TypedState<K, V, T, D>) {
         let (seqno_before, seqno_after) =
             self.state
                 .write_lock(&self.metrics.locks.applier_write, |state| {

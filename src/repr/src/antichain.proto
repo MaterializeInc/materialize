@@ -12,5 +12,5 @@ syntax = "proto3";
 package mz_repr.antichain;
 
 message ProtoU64Antichain {
-    repeated uint64 elements = 1;
+  repeated uint64 elements = 1;
 }

@@ -12,12 +12,12 @@ syntax = "proto3";
 package mz_repr.adt.array;
 
 message ProtoInvalidArrayError {
-    message ProtoWrongCardinality {
-        uint64 actual = 1;
-        uint64 expected = 2;
-    }
-    oneof kind {
-        uint64 too_many_dimensions = 1;
-        ProtoWrongCardinality wrong_cardinality = 2;
-    }
+  message ProtoWrongCardinality {
+    uint64 actual = 1;
+    uint64 expected = 2;
+  }
+  oneof kind {
+    uint64 too_many_dimensions = 1;
+    ProtoWrongCardinality wrong_cardinality = 2;
+  }
 }

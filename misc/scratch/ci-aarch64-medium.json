@@ -1,0 +1,8 @@
+{
+    "name": "c7g.4xlarge as used by CI, when a medium box is needed (aarch64-medium)",
+    "launch_script": "true",
+    "instance_type": "c7g.4xlarge",
+    "ami": "ami-0568072f574d822a4",
+    "size_gb": 128,
+    "tags": {}
+}

@@ -107,6 +107,20 @@ In the second terminal, run testdrive:
 $ cargo run --bin testdrive --release -- test/testdrive/TESTFILE.td
 ```
 
+Note that mzcompose has a different default of system parameters in order to
+test more risky features of Materialize, see `get_default_system_parameters` in
+[https://github.com/MaterializeInc/materialize/blob/main/misc/python/materialize/mzcompose/__init__.py](mzcompose/__init__.py).
+On the command line specific system parameters can be set using the
+`MZSYSTEM_PARAMETER_DEFAULT` environment variable (`;`-separated).
+Alternatively `MZ_ALL_FEATURES=true` enables all available Materialize features.
+For example to run the `mz-arrangement-sharing.td` locally with a Debug build
+for fast turnaround times:
+
+```shell
+$ MZ_ALL_FEATURES=true bin/environmentd
+$ cargo run --bin testdrive -- test/testdrive/mz-arrangement-sharing.td
+```
+
 Many testdrive tests require Zookeeper, Kafka, and
 the Confluent Schema Registry. See the [unit tests docs for starting them](guide-testing.md#unitintegration-tests).
 
@@ -629,7 +643,7 @@ The output of the queries is not validated in any way. An error during execution
 
 ## Sleeping in the test
 
-#### `$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=N`
+#### `$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="Ns"`
 
 Sleeps for `N` seconds
 
@@ -923,11 +937,11 @@ SELECT mz_version_num() < 2601;
 ## Run an action/query conditionally on version
 
 ```
->[version>=5500] SELECT 1;
+>[version>=13000] SELECT 1;
 1
 ```
 
-The `[version>=5500]` property allows running the action or query only when we are connected to a Materialize instance with a compatible version. The supported comparison operators are `>`, `>=`, `=`, `<=` and `<`. The version number is the same as returned from [`mz_version_num()`](https://materialize.com/docs/sql/functions/#system-information-func) and has the same format `XXYYYZZ`, where `XX` is the major version, `YYY` is the minor version and `ZZ` is the patch version. So in the example we are only running the `SELECT 1` query if the Materialize instance is of version `v0.55.0` or higher. For lower versions no query is run and no comparison of results is performed subsequently.
+The `[version>=13000]` property allows running the action or query only when we are connected to a Materialize instance with a compatible version. The supported comparison operators are `>`, `>=`, `=`, `<=` and `<`. The version number is the same as returned from [`mz_version_num()`](https://materialize.com/docs/sql/functions/#system-information-func) and has the same format `XXXYYYZZ`, where `XX` is the major version, `YYY` is the minor version and `ZZ` is the patch version. So in the example we are only running the `SELECT 1` query if the Materialize instance is of version `v0.130.0` or higher. For lower versions no query is run and no comparison of results is performed subsequently.
 
 [confluent-arm]: https://github.com/confluentinc/common-docker/issues/117#issuecomment-948789717
 [aws-creds]: https://github.com/MaterializeInc/i2/blob/main/doc/aws-access.md

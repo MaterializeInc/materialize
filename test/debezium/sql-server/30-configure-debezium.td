@@ -26,8 +26,7 @@
 # the data from the initial snapshot to be replicated twice.
 #
 
-> SELECT mz_unsafe.mz_sleep(10)
-<null>
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="10s"
 
 $ http-request method=POST url=http://debezium:8083/connectors content-type=application/json
 {
@@ -56,5 +55,4 @@ $ http-request method=POST url=http://debezium:8083/connectors content-type=appl
 # Sleep for 10 seconds, as Debezium may fail to replicate any
 # statements that come immediately afterwards
 
-> SELECT mz_unsafe.mz_sleep(10)
-<null>
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="10s"

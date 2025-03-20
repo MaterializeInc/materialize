@@ -23,6 +23,7 @@ class ExpressionCharacteristics(Enum):
     LARGE_VALUE = 103
     MAX_VALUE = 104
     NAN = 105
+    INFINITY = 106
 
     OVERSIZE = 120
     NEGATIVE = 121
@@ -31,6 +32,8 @@ class ExpressionCharacteristics(Enum):
 
     INTERVAL_WITH_MONTHS = 130
     """time interval containing months or years"""
+    DATE_WITH_SHORT_YEAR = 131
+    INCOMPLETE_TIME_VALUE = 132
 
     STRING_EMPTY = 140
     STRING_WITH_SPECIAL_SPACE_CHARS = 141
@@ -41,8 +44,11 @@ class ExpressionCharacteristics(Enum):
 
     JSON_EMPTY = 150
     JSON_ARRAY = 151
+    JSON_WITH_GEO_DATA = 152
 
     COLLECTION_EMPTY = 160
     MAP_WITH_DUP_KEYS = 161
     LIST_WITH_DUP_ENTRIES = 162
     ARRAY_WITH_DUP_ENTRIES = 163
+
+    ENUM_INVALID = 170

@@ -10,15 +10,15 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-create-index.svg" >}}
+```sql
+SHOW CREATE INDEX <index_name>
+```
 
-Field | Use
-------|-----
-_index&lowbar;name_ | The index you want use. You can find available index names through [`SHOW INDEXES`](../show-indexes).
+For available index names, see [`SHOW INDEXES`](/sql/show-indexes).
 
 ## Examples
 
-```sql
+```mzsql
 SHOW INDEXES FROM my_view;
 ```
 
@@ -28,7 +28,7 @@ SHOW INDEXES FROM my_view;
  my_view_idx | t   | quickstart | {a, b}
 ```
 
-```sql
+```mzsql
 SHOW CREATE INDEX my_view_idx;
 ```
 

@@ -9,7 +9,7 @@
 
 $ set-arg-default single-replica-cluster=quickstart
 
-# Regression test for #7170, in which non-nullable fields of nullable records
+# Regression test for database-issues#2237, in which non-nullable fields of nullable records
 # were not correctly handled.
 
 $ set writer-schema={
@@ -41,9 +41,11 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
 > CREATE SOURCE basic
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+
+> CREATE TABLE basic_tbl FROM SOURCE basic (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${writer-schema}'
 
-> SELECT (b1.a).b, (b2.a).b FROM basic b1 LEFT JOIN basic b2 ON (b1.a).b = (b2.a).c
+> SELECT (b1.a).b, (b2.a).b FROM basic_tbl b1 LEFT JOIN basic_tbl b2 ON (b1.a).b = (b2.a).c
 1 1
 1 2
 2 <null>

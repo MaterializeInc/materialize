@@ -26,11 +26,13 @@ $ schema-registry-wait topic=postgres.public.boolean_type
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE boolean_type
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.boolean_type')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.boolean_type');
+
+> CREATE TABLE boolean_type_tbl FROM SOURCE boolean_type (REFERENCE "postgres.public.boolean_type")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT * FROM boolean_type;
+> SELECT * FROM boolean_type_tbl;
 true true
 false false
 
@@ -38,5 +40,5 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 UPDATE boolean_type SET nopk_col = NULL WHERE pk_col = TRUE;
 DELETE FROM boolean_type WHERE pk_col = FALSE;
 
-> SELECT * FROM boolean_type;
+> SELECT * FROM boolean_type_tbl;
 true <null>

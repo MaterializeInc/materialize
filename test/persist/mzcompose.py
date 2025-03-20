@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Maelstrom test against the Persist subsystem.
+"""
+
 import argparse
 
 from materialize.mzcompose.composition import (
@@ -62,7 +66,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         consensus_uri = (
             "postgres://root@cockroach:26257?options=--search_path=consensus"
         )
-        c.up("cockroach")
+        c.up(c.metadata_store())
     else:
         # empty consensus uri defaults to Maelstrom consensus implementation
         consensus_uri = ""

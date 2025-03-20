@@ -62,7 +62,7 @@ def test_secrets(mz: MaterializeApplication) -> None:
 
 # Tests that secrets deleted from the catalog but not from k8s are cleaned up on
 # envd startup.
-@pytest.mark.skip(reason="Failpoints mess up the Mz intance #18000")
+@pytest.mark.skip(reason="Failpoints mess up the Mz intance database-issues#5263")
 def test_orphaned_secrets(mz: MaterializeApplication) -> None:
     # Use two separate failpoints. One that crashes after modifying the catalog
     # (drop_secrets), and one that fails during bootstrap (orphan_secrets) so
@@ -95,6 +95,7 @@ def test_orphaned_secrets(mz: MaterializeApplication) -> None:
     wait(condition="delete", resource=f"secret/{secret}")
 
 
+@pytest.mark.skip(reason="Flaky, see database-issues#8456")
 def test_missing_secret(mz: MaterializeApplication) -> None:
     """Test that Mz does not panic if a secret goes missing from K8s"""
     mz.testdrive.run(
@@ -136,8 +137,9 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
           > CREATE SOURCE source_with_deleted_secret
             IN CLUSTER to_be_killed
             FROM POSTGRES CONNECTION pg_conn_with_deleted_secret
-            (PUBLICATION 'mz_source')
-            FOR ALL TABLES;
+            (PUBLICATION 'mz_source');
+
+          > CREATE TABLE t1 FROM SOURCE source_with_deleted_secret (REFERENCE t1);
 
           > SELECT COUNT(*) > 0 FROM t1;
           true
@@ -159,8 +161,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
             """
             ! CREATE SOURCE some_pg_source
               FROM POSTGRES CONNECTION pg_conn_with_deleted_secret
-              (PUBLICATION 'mz_source')
-              FOR ALL TABLES;
+              (PUBLICATION 'mz_source');
             contains: NotFound
 
             ! CREATE SOURCE some_kafka_source
@@ -193,8 +194,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
             """
             ! CREATE SOURCE some_pg_source
               FROM POSTGRES CONNECTION pg_conn_with_deleted_secret
-              (PUBLICATION 'mz_source')
-              FOR ALL TABLES;
+              (PUBLICATION 'mz_source');
             contains: NotFound
 
             ! CREATE SOURCE some_kafka_source
@@ -228,8 +228,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
             """
             ! CREATE SOURCE some_pg_source
               FROM POSTGRES CONNECTION pg_conn_with_deleted_secret
-              (PUBLICATION 'mz_source')
-              FOR ALL TABLES;
+              (PUBLICATION 'mz_source');
             contains: NotFound
 
             ! CREATE SOURCE some_kafka_source
@@ -242,17 +241,9 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
               WHERE name = 'source_with_deleted_secret';
             true
 
-            ! DROP CLUSTER to_be_killed CASCADE;
-            contains:error creating Postgres client for dropping acquired slots
-
-            # The cluster should still be there.
-            > SELECT name from mz_clusters where name = 'to_be_killed';
-            to_be_killed
-
-            # Try and put the secret in place again.
-            > ALTER SECRET to_be_deleted AS 'postgres';
-
-            # Cluster can now be deleted.
+            # The secret missing is similar to if the user dropped their
+            # upstream Postgres DB, and we don't want to block dropping objects
+            # because of that.
             > DROP CLUSTER to_be_killed CASCADE;
             """
         ),

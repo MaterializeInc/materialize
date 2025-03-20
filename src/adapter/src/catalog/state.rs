@@ -12,31 +12,27 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Debug;
-use std::net::Ipv4Addr;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::Instant;
 
+use ipnet::IpNet;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_sql::session::metadata::SessionMetadata;
-use once_cell::sync::Lazy;
-use serde::Serialize;
-use timely::progress::Antichain;
-use tokio::sync::mpsc;
-use tracing::warn;
-
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent};
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_catalog::builtin::{
     Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, BUILTINS,
 };
 use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
+use mz_catalog::expr_cache::LocalExpressions;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap, Connection, DataSourceDesc,
-    Database, DefaultPrivileges, Index, MaterializedView, Role, Schema, Secret, Sink, Source,
-    Table, Type, View,
+    CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap,
+    Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView,
+    NetworkPolicy, Role, Schema, Secret, Sink, Source, SourceReferences, Table, TableDataSource,
+    Type, View,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
@@ -44,7 +40,7 @@ use mz_controller::clusters::{
     UnmanagedReplicaLocation,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::MirScalarExpr;
+use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
 use mz_ore::soft_assert_no_log;
@@ -52,20 +48,25 @@ use mz_ore::str::StrExt;
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::{
-    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, MZ_UNSAFE_SCHEMA,
-    PG_CATALOG_SCHEMA,
+    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_CATALOG_UNSTABLE_SCHEMA, MZ_INTERNAL_SCHEMA,
+    MZ_INTROSPECTION_SCHEMA, MZ_TEMP_SCHEMA, MZ_UNSAFE_SCHEMA, PG_CATALOG_SCHEMA, SYSTEM_SCHEMAS,
+    UNSTABLE_SCHEMAS,
 };
+use mz_repr::network_policy_id::NetworkPolicyId;
+use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, RelationDesc};
+use mz_repr::{CatalogItemId, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector};
 use mz_secrets::InMemorySecretsController;
+use mz_sql::ast::Ident;
+use mz_sql::catalog::{BuiltinsConfig, CatalogConfig, EnvironmentId};
 use mz_sql::catalog::{
-    CatalogCluster, CatalogClusterReplica, CatalogConfig, CatalogDatabase,
-    CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogItemType,
-    CatalogRecordField, CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails, EnvironmentId,
-    IdReference, NameReference, SessionCatalog, SystemObjectType, TypeReference,
+    CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
+    CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRecordField, CatalogRole, CatalogSchema,
+    CatalogType, CatalogTypeDetails, IdReference, NameReference, SessionCatalog, SystemObjectType,
+    TypeReference,
 };
 use mz_sql::names::{
-    CommentObjectId, DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId,
+    CommentObjectId, DatabaseId, DependencyIds, FullItemName, FullSchemaName, ObjectId,
     PartialItemName, QualifiedItemName, QualifiedSchemaName, RawDatabaseSpecifier,
     ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId,
 };
@@ -75,6 +76,7 @@ use mz_sql::plan::{
     Plan, PlanContext,
 };
 use mz_sql::rbac;
+use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql::session::vars::{SystemVars, Var, VarInput, DEFAULT_DATABASE_NAME};
 use mz_sql_parser::ast::QualifiedReplica;
@@ -83,13 +85,16 @@ use mz_storage_types::connections::inline::{
     ConnectionResolver, InlinedConnection, IntoInlineConnection,
 };
 use mz_storage_types::connections::ConnectionContext;
+use serde::Serialize;
+use timely::progress::Antichain;
+use tokio::sync::mpsc;
+use tracing::{debug, warn};
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
-use crate::catalog::ConnCatalog;
+use crate::catalog::{Catalog, ConnCatalog};
 use crate::coord::ConnMeta;
-use crate::optimize::{self, Optimize};
+use crate::optimize::{self, Optimize, OptimizerCatalog};
 use crate::session::Session;
-use crate::util::index_sql;
 use crate::AdapterError;
 
 /// The in-memory representation of the Catalog. This struct is not directly used to persist
@@ -100,41 +105,148 @@ use crate::AdapterError;
 /// storing the contents of this struct on disk.
 #[derive(Debug, Clone, Serialize)]
 pub struct CatalogState {
+    // State derived from the durable catalog. These fields should only be mutated in `open.rs` or
+    // `apply.rs`. Some of these fields are not 100% derived from the durable catalog. Those
+    // include:
+    //  - Temporary items.
+    //  - Certain objects are partially derived from read-only state.
     pub(super) database_by_name: BTreeMap<String, DatabaseId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) database_by_id: BTreeMap<DatabaseId, Database>,
     #[serde(serialize_with = "skip_temp_items")]
-    pub(super) entry_by_id: BTreeMap<GlobalId, CatalogEntry>,
+    pub(super) entry_by_id: BTreeMap<CatalogItemId, CatalogEntry>,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    pub(super) entry_by_global_id: BTreeMap<GlobalId, CatalogItemId>,
     pub(super) ambient_schemas_by_name: BTreeMap<String, SchemaId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) ambient_schemas_by_id: BTreeMap<SchemaId, Schema>,
-    #[serde(skip)]
-    pub(super) temporary_schemas: BTreeMap<ConnectionId, Schema>,
+    pub(super) clusters_by_name: BTreeMap<String, ClusterId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) clusters_by_id: BTreeMap<ClusterId, Cluster>,
-    pub(super) clusters_by_name: BTreeMap<String, ClusterId>,
     pub(super) roles_by_name: BTreeMap<String, RoleId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) roles_by_id: BTreeMap<RoleId, Role>,
+    pub(super) network_policies_by_name: BTreeMap<String, NetworkPolicyId>,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    pub(super) network_policies_by_id: BTreeMap<NetworkPolicyId, NetworkPolicy>,
+
+    #[serde(skip)]
+    pub(super) system_configuration: SystemVars,
+    pub(super) default_privileges: DefaultPrivileges,
+    pub(super) system_privileges: PrivilegeMap,
+    pub(super) comments: CommentsMap,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    pub(super) source_references: BTreeMap<CatalogItemId, SourceReferences>,
+    pub(super) storage_metadata: StorageMetadata,
+
+    // Mutable state not derived from the durable catalog.
+    #[serde(skip)]
+    pub(super) temporary_schemas: BTreeMap<ConnectionId, Schema>,
+
+    // Read-only state not derived from the durable catalog.
     #[serde(skip)]
     pub(super) config: mz_sql::catalog::CatalogConfig,
     pub(super) cluster_replica_sizes: ClusterReplicaSizeMap,
     #[serde(skip)]
     pub(crate) availability_zones: Vec<String>,
+
+    // Read-only not derived from the durable catalog.
     #[serde(skip)]
-    pub(super) system_configuration: SystemVars,
-    pub(super) egress_ips: Vec<Ipv4Addr>,
+    pub(super) egress_addresses: Vec<IpNet>,
     pub(super) aws_principal_context: Option<AwsPrincipalContext>,
     pub(super) aws_privatelink_availability_zones: Option<BTreeSet<String>>,
     pub(super) http_host_name: Option<String>,
-    pub(super) default_privileges: DefaultPrivileges,
-    pub(super) system_privileges: PrivilegeMap,
-    pub(super) comments: CommentsMap,
-    pub(super) storage_metadata: StorageMetadata,
+}
+
+/// Keeps track of what expressions are cached or not during startup.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) enum LocalExpressionCache {
+    /// The cache is being used.
+    Open {
+        /// The local expressions that were cached in the expression cache.
+        cached_exprs: BTreeMap<GlobalId, LocalExpressions>,
+        /// The local expressions that were NOT cached in the expression cache.
+        uncached_exprs: BTreeMap<GlobalId, LocalExpressions>,
+    },
+    /// The cache is not being used.
+    Closed,
+}
+
+impl LocalExpressionCache {
+    pub(super) fn new(cached_exprs: BTreeMap<GlobalId, LocalExpressions>) -> Self {
+        Self::Open {
+            cached_exprs,
+            uncached_exprs: BTreeMap::new(),
+        }
+    }
+
+    pub(super) fn remove_cached_expression(&mut self, id: &GlobalId) -> Option<LocalExpressions> {
+        match self {
+            LocalExpressionCache::Open { cached_exprs, .. } => cached_exprs.remove(id),
+            LocalExpressionCache::Closed => None,
+        }
+    }
+
+    /// Insert an expression that was cached, back into the cache. This is generally needed when
+    /// parsing/planning an expression fails, but we don't want to lose the cached expression.
+    pub(super) fn insert_cached_expression(
+        &mut self,
+        id: GlobalId,
+        local_expressions: LocalExpressions,
+    ) {
+        match self {
+            LocalExpressionCache::Open { cached_exprs, .. } => {
+                cached_exprs.insert(id, local_expressions);
+            }
+            LocalExpressionCache::Closed => {}
+        }
+    }
+
+    /// Inform the cache that `id` was not found in the cache and that we should add it as
+    /// `local_mir` and `optimizer_features`.
+    pub(super) fn insert_uncached_expression(
+        &mut self,
+        id: GlobalId,
+        local_mir: OptimizedMirRelationExpr,
+        optimizer_features: OptimizerFeatures,
+    ) {
+        match self {
+            LocalExpressionCache::Open { uncached_exprs, .. } => {
+                let local_expr = LocalExpressions {
+                    local_mir,
+                    optimizer_features,
+                };
+                // If we are trying to cache the same item a second time, with a different
+                // expression, then we must be migrating the object or doing something else weird.
+                // Caching the unmigrated expression may cause us to incorrectly use the unmigrated
+                // version after a restart. Caching the migrated version may cause us to incorrectly
+                // think that the object has already been migrated. To simplify things, we cache
+                // neither.
+                let prev = uncached_exprs.remove(&id);
+                match prev {
+                    Some(prev) if prev == local_expr => {
+                        uncached_exprs.insert(id, local_expr);
+                    }
+                    None => {
+                        uncached_exprs.insert(id, local_expr);
+                    }
+                    Some(_) => {}
+                }
+            }
+            LocalExpressionCache::Closed => {}
+        }
+    }
+
+    pub(super) fn into_uncached_exprs(self) -> BTreeMap<GlobalId, LocalExpressions> {
+        match self {
+            LocalExpressionCache::Open { uncached_exprs, .. } => uncached_exprs,
+            LocalExpressionCache::Closed => BTreeMap::new(),
+        }
+    }
 }
 
 fn skip_temp_items<S>(
-    entries: &BTreeMap<GlobalId, CatalogEntry>,
+    entries: &BTreeMap<CatalogItemId, CatalogEntry>,
     serializer: S,
 ) -> Result<S::Ok, S::Error>
 where
@@ -147,18 +259,24 @@ where
 }
 
 impl CatalogState {
-    pub fn empty() -> Self {
+    /// Returns an empty [`CatalogState`] that can be used in tests.
+    // TODO: Ideally we'd mark this as `#[cfg(test)]`, but that doesn't work with the way
+    // tests are structured in this repository.
+    pub fn empty_test() -> Self {
         CatalogState {
             database_by_name: Default::default(),
             database_by_id: Default::default(),
             entry_by_id: Default::default(),
+            entry_by_global_id: Default::default(),
             ambient_schemas_by_name: Default::default(),
             ambient_schemas_by_id: Default::default(),
             temporary_schemas: Default::default(),
             clusters_by_id: Default::default(),
             clusters_by_name: Default::default(),
+            network_policies_by_name: Default::default(),
             roles_by_name: Default::default(),
             roles_by_id: Default::default(),
+            network_policies_by_id: Default::default(),
             config: CatalogConfig {
                 start_time: Default::default(),
                 start_instant: Instant::now(),
@@ -171,17 +289,22 @@ impl CatalogState {
                 connection_context: ConnectionContext::for_tests(Arc::new(
                     InMemorySecretsController::new(),
                 )),
+                builtins_cfg: BuiltinsConfig {
+                    include_continual_tasks: true,
+                },
+                helm_chart_version: None,
             },
-            cluster_replica_sizes: Default::default(),
+            cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
             availability_zones: Default::default(),
             system_configuration: Default::default(),
-            egress_ips: Default::default(),
+            egress_addresses: Default::default(),
             aws_principal_context: Default::default(),
             aws_privatelink_availability_zones: Default::default(),
             http_host_name: Default::default(),
             default_privileges: Default::default(),
             system_privileges: Default::default(),
             comments: Default::default(),
+            source_references: Default::default(),
             storage_metadata: Default::default(),
         }
     }
@@ -235,38 +358,18 @@ impl CatalogState {
         self.for_sessionless_user(MZ_SYSTEM_ROLE_ID)
     }
 
-    /// Computes the IDs of any indexes that transitively depend on this catalog
-    /// entry.
-    pub fn dependent_indexes(&self, id: GlobalId) -> Vec<GlobalId> {
-        let mut out = Vec::new();
-        self.dependent_indexes_inner(id, &mut out);
-        out
-    }
-
-    fn dependent_indexes_inner(&self, id: GlobalId, out: &mut Vec<GlobalId>) {
-        let entry = self.get_entry(&id);
-        match entry.item() {
-            CatalogItem::Index(_) => out.push(id),
-            _ => {
-                for id in entry.used_by() {
-                    self.dependent_indexes_inner(*id, out)
-                }
-            }
-        }
-    }
-
     /// Returns an iterator over the deduplicated identifiers of all
     /// objects this catalog entry transitively depends on (where
     /// "depends on" is meant in the sense of [`CatalogItem::uses`], rather than
     /// [`CatalogItem::references`]).
-    pub fn transitive_uses(&self, id: GlobalId) -> impl Iterator<Item = GlobalId> + '_ {
+    pub fn transitive_uses(&self, id: CatalogItemId) -> impl Iterator<Item = CatalogItemId> + '_ {
         struct I<'a> {
-            queue: VecDeque<GlobalId>,
-            seen: BTreeSet<GlobalId>,
+            queue: VecDeque<CatalogItemId>,
+            seen: BTreeSet<CatalogItemId>,
             this: &'a CatalogState,
         }
         impl<'a> Iterator for I<'a> {
-            type Item = GlobalId;
+            type Item = CatalogItemId;
             fn next(&mut self) -> Option<Self::Item> {
                 if let Some(next) = self.queue.pop_front() {
                     for child in self.this.get_entry(&next).item().uses() {
@@ -291,25 +394,32 @@ impl CatalogState {
 
     /// Computes the IDs of any log sources this catalog entry transitively
     /// depends on.
-    pub fn introspection_dependencies(&self, id: GlobalId) -> Vec<GlobalId> {
+    pub fn introspection_dependencies(&self, id: CatalogItemId) -> Vec<CatalogItemId> {
         let mut out = Vec::new();
         self.introspection_dependencies_inner(id, &mut out);
         out
     }
 
-    fn introspection_dependencies_inner(&self, id: GlobalId, out: &mut Vec<GlobalId>) {
+    fn introspection_dependencies_inner(&self, id: CatalogItemId, out: &mut Vec<CatalogItemId>) {
         match self.get_entry(&id).item() {
             CatalogItem::Log(_) => out.push(id),
             item @ (CatalogItem::View(_)
             | CatalogItem::MaterializedView(_)
-            | CatalogItem::Connection(_)) => {
+            | CatalogItem::Connection(_)
+            | CatalogItem::ContinualTask(_)) => {
                 // TODO(jkosh44) Unclear if this table wants to include all uses or only references.
-                for id in &item.references().0 {
-                    self.introspection_dependencies_inner(*id, out);
+                for item_id in item.references().items() {
+                    self.introspection_dependencies_inner(*item_id, out);
                 }
             }
-            CatalogItem::Sink(sink) => self.introspection_dependencies_inner(sink.from, out),
-            CatalogItem::Index(idx) => self.introspection_dependencies_inner(idx.on, out),
+            CatalogItem::Sink(sink) => {
+                let from_item_id = self.get_entry_by_global_id(&sink.from).id();
+                self.introspection_dependencies_inner(from_item_id, out)
+            }
+            CatalogItem::Index(idx) => {
+                let on_item_id = self.get_entry_by_global_id(&idx.on).id();
+                self.introspection_dependencies_inner(on_item_id, out)
+            }
             CatalogItem::Table(_)
             | CatalogItem::Source(_)
             | CatalogItem::Type(_)
@@ -321,7 +431,7 @@ impl CatalogState {
     /// Returns all the IDs of all objects that depend on `ids`, including `ids` themselves.
     ///
     /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
-    /// earlier in the list than the roots. This is particularly userful for the order to drop
+    /// earlier in the list than the roots. This is particularly useful for the order to drop
     /// objects.
     pub(super) fn object_dependents(
         &self,
@@ -349,6 +459,9 @@ impl CatalogState {
                         seen,
                     ));
                 }
+                ObjectId::NetworkPolicy(id) => {
+                    dependents.extend_from_slice(&self.network_policy_dependents(*id, seen));
+                }
                 id @ ObjectId::Role(_) => {
                     let unseen = seen.insert(id.clone());
                     if unseen {
@@ -367,7 +480,7 @@ impl CatalogState {
     /// itself.
     ///
     /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
-    /// earlier in the list than the roots. This is particularly userful for the order to drop
+    /// earlier in the list than the roots. This is particularly useful for the order to drop
     /// objects.
     fn cluster_dependents(
         &self,
@@ -398,7 +511,7 @@ impl CatalogState {
     /// itself.
     ///
     /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
-    /// earlier in the list than the roots. This is particularly userful for the order to drop
+    /// earlier in the list than the roots. This is particularly useful for the order to drop
     /// objects.
     pub(super) fn cluster_replica_dependents(
         &self,
@@ -419,7 +532,7 @@ impl CatalogState {
     /// itself.
     ///
     /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
-    /// earlier in the list than the roots. This is particularly userful for the order to drop
+    /// earlier in the list than the roots. This is particularly useful for the order to drop
     /// objects.
     fn database_dependents(
         &self,
@@ -449,7 +562,7 @@ impl CatalogState {
     /// itself.
     ///
     /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
-    /// earlier in the list than the roots. This is particularly userful for the order to drop
+    /// earlier in the list than the roots. This is particularly useful for the order to drop
     /// objects.
     fn schema_dependents(
         &self,
@@ -475,11 +588,11 @@ impl CatalogState {
     /// itself.
     ///
     /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
-    /// earlier in the list than the roots. This is particularly userful for the order to drop
+    /// earlier in the list than the roots. This is particularly useful for the order to drop
     /// objects.
     pub(super) fn item_dependents(
         &self,
-        item_id: GlobalId,
+        item_id: CatalogItemId,
         seen: &mut BTreeSet<ObjectId>,
     ) -> Vec<ObjectId> {
         let mut dependents = Vec::new();
@@ -501,26 +614,40 @@ impl CatalogState {
         dependents
     }
 
+    /// Returns all the IDs of all objects that depend on `network_policy_id`, including `network_policy_id`
+    /// itself.
+    ///
+    /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
+    /// earlier in the list than the roots. This is particularly useful for the order to drop
+    /// objects.
+    pub(super) fn network_policy_dependents(
+        &self,
+        network_policy_id: NetworkPolicyId,
+        _seen: &mut BTreeSet<ObjectId>,
+    ) -> Vec<ObjectId> {
+        let object_id = ObjectId::NetworkPolicy(network_policy_id);
+        // Currently network policies have no dependents
+        // when we add the ability for users or sources/sinks to have policies
+        // this method will need to be updated.
+        vec![object_id]
+    }
+
     /// Indicates whether the indicated item is considered stable or not.
     ///
     /// Only stable items can be used as dependencies of other catalog items.
-    fn is_stable(&self, id: GlobalId) -> bool {
-        let mz_internal_id = self.ambient_schemas_by_name[MZ_INTERNAL_SCHEMA];
-        match &self.get_entry(&id).name().qualifiers.schema_spec {
-            SchemaSpecifier::Temporary => true,
-            SchemaSpecifier::Id(id) => *id != mz_internal_id,
-        }
+    fn is_stable(&self, id: CatalogItemId) -> bool {
+        let spec = self.get_entry(&id).name().qualifiers.schema_spec;
+        !self.is_unstable_schema_specifier(spec)
     }
 
     pub(super) fn check_unstable_dependencies(&self, item: &CatalogItem) -> Result<(), Error> {
-        if self.system_config().enable_unstable_dependencies() {
+        if self.system_config().unsafe_enable_unstable_dependencies() {
             return Ok(());
         }
 
         let unstable_dependencies: Vec<_> = item
             .references()
-            .0
-            .iter()
+            .items()
             .filter(|id| !self.is_stable(**id))
             .map(|id| self.get_entry(id).name().item.clone())
             .collect();
@@ -583,16 +710,35 @@ impl CatalogState {
         }
     }
 
-    pub fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
+    pub fn get_entry(&self, id: &CatalogItemId) -> &CatalogEntry {
         self.entry_by_id
             .get(id)
-            .unwrap_or_else(|| panic!("catalog out of sync, missing id {id}"))
+            .unwrap_or_else(|| panic!("catalog out of sync, missing id {id:?}"))
     }
 
-    pub fn get_entry_mut(&mut self, id: &GlobalId) -> &mut CatalogEntry {
-        self.entry_by_id
-            .get_mut(id)
-            .unwrap_or_else(|| panic!("catalog out of sync, missing id {id}"))
+    pub fn get_entry_by_global_id(&self, id: &GlobalId) -> CatalogCollectionEntry {
+        let item_id = self
+            .entry_by_global_id
+            .get(id)
+            .unwrap_or_else(|| panic!("catalog out of sync, missing id {id:?}"));
+
+        let entry = self.get_entry(item_id).clone();
+        let version = match entry.item() {
+            CatalogItem::Table(table) => {
+                let (version, _) = table
+                    .collections
+                    .iter()
+                    .find(|(_verison, gid)| *gid == id)
+                    .expect("version to exist");
+                RelationVersionSelector::Specific(*version)
+            }
+            _ => RelationVersionSelector::Latest,
+        };
+        CatalogCollectionEntry { entry, version }
+    }
+
+    pub fn get_entries(&self) -> impl Iterator<Item = (&CatalogItemId, &CatalogEntry)> + '_ {
+        self.entry_by_id.iter()
     }
 
     pub fn get_temp_items(&self, conn: &ConnectionId) -> impl Iterator<Item = ObjectId> + '_ {
@@ -600,7 +746,7 @@ impl CatalogState {
             .temporary_schemas
             .get(conn)
             .unwrap_or_else(|| panic!("catalog out of sync, missing temporary schema for {conn}"));
-        schema.items.values().copied().map(ObjectId::Item)
+        schema.items.values().copied().map(ObjectId::from)
     }
 
     /// Gets a type named `name` from exactly one of the system schemas.
@@ -610,15 +756,8 @@ impl CatalogState {
     /// - If more than one system schema has an entry named `name`.
     pub(super) fn get_system_type(&self, name: &str) -> &CatalogEntry {
         let mut res = None;
-        for system_schema in &[
-            PG_CATALOG_SCHEMA,
-            INFORMATION_SCHEMA,
-            MZ_CATALOG_SCHEMA,
-            MZ_INTERNAL_SCHEMA,
-            MZ_UNSAFE_SCHEMA,
-        ] {
-            let schema_id = &self.ambient_schemas_by_name[*system_schema];
-            let schema = &self.ambient_schemas_by_id[schema_id];
+        for schema_id in self.system_schema_ids() {
+            let schema = &self.ambient_schemas_by_id[&schema_id];
             if let Some(global_id) = schema.types.get(name) {
                 match res {
                     None => res = Some(self.get_entry(global_id)),
@@ -674,8 +813,25 @@ impl CatalogState {
         name
     }
 
-    pub fn try_get_entry(&self, id: &GlobalId) -> Option<&CatalogEntry> {
+    pub fn try_get_entry(&self, id: &CatalogItemId) -> Option<&CatalogEntry> {
         self.entry_by_id.get(id)
+    }
+
+    pub fn try_get_entry_by_global_id(&self, id: &GlobalId) -> Option<&CatalogEntry> {
+        let item_id = self.entry_by_global_id.get(id)?;
+        self.try_get_entry(item_id)
+    }
+
+    /// Returns the [`RelationDesc`] for a [`GlobalId`], if the provided [`GlobalId`] refers to an
+    /// object that returns rows.
+    pub fn try_get_desc_by_global_id(&self, id: &GlobalId) -> Option<Cow<RelationDesc>> {
+        let entry = self.try_get_entry_by_global_id(id)?;
+        let desc = match entry.item() {
+            CatalogItem::Table(table) => Cow::Owned(table.desc_for(id)),
+            // TODO(alter_table): Support schema evolution on sources.
+            other => other.desc_opt(RelationVersionSelector::Latest)?,
+        };
+        Some(desc)
     }
 
     pub(crate) fn get_cluster(&self, cluster_id: ClusterId) -> &Cluster {
@@ -705,6 +861,15 @@ impl CatalogState {
             .map(|id| &self.roles_by_id[id])
     }
 
+    pub(super) fn try_get_network_policy_by_name(
+        &self,
+        policy_name: &str,
+    ) -> Option<&NetworkPolicy> {
+        self.network_policies_by_name
+            .get(policy_name)
+            .map(|id| &self.network_policies_by_id[id])
+    }
+
     pub(crate) fn collect_role_membership(&self, id: &RoleId) -> BTreeSet<RoleId> {
         let mut membership = BTreeSet::new();
         let mut queue = VecDeque::from(vec![id]);
@@ -723,11 +888,21 @@ impl CatalogState {
         membership
     }
 
+    pub fn get_network_policy(&self, id: &NetworkPolicyId) -> &NetworkPolicy {
+        self.network_policies_by_id
+            .get(id)
+            .expect("catalog out of sync")
+    }
+
+    pub fn get_network_policies(&self) -> impl Iterator<Item = &NetworkPolicyId> {
+        self.network_policies_by_id.keys()
+    }
+
     /// Returns the URL for POST-ing data to a webhook source, if `id` corresponds to a webhook
     /// source.
     ///
     /// Note: Identifiers for the source, e.g. item name, are URL encoded.
-    pub fn try_get_webhook_url(&self, id: &GlobalId) -> Option<url::Url> {
+    pub fn try_get_webhook_url(&self, id: &CatalogItemId) -> Option<url::Url> {
         let entry = self.try_get_entry(id)?;
         // Note: Webhook sources can never be created in the temporary schema, hence passing None.
         let name = self.resolve_full_name(entry.name(), None);
@@ -755,6 +930,9 @@ impl CatalogState {
     ///
     /// This function will temporarily enable all "enable_for_item_parsing" feature flags. See
     /// [`CatalogState::with_enable_for_item_parsing`] for more details.
+    ///
+    /// NOTE: While this method takes a `&mut self`, all mutations are temporary and restored to
+    /// their original state before the method returns.
     pub(crate) fn deserialize_plan_with_enable_for_item_parsing(
         // DO NOT add any additional mutations to this method. It would be fairly surprising to the
         // caller if this method changed the state of the catalog.
@@ -791,34 +969,168 @@ impl CatalogState {
     }
 
     /// Parses the given SQL string into a pair of [`CatalogItem`].
-    pub(crate) fn deserialize_item(&self, create_sql: &str) -> Result<CatalogItem, AdapterError> {
-        self.parse_item(create_sql, None, false, None)
+    pub(crate) fn deserialize_item(
+        &self,
+        global_id: GlobalId,
+        create_sql: &str,
+        extra_versions: &BTreeMap<RelationVersion, GlobalId>,
+        local_expression_cache: &mut LocalExpressionCache,
+        previous_item: Option<CatalogItem>,
+    ) -> Result<CatalogItem, AdapterError> {
+        self.parse_item(
+            global_id,
+            create_sql,
+            extra_versions,
+            None,
+            false,
+            None,
+            local_expression_cache,
+            previous_item,
+        )
     }
 
     /// Parses the given SQL string into a `CatalogItem`.
     #[mz_ore::instrument]
     pub(crate) fn parse_item(
         &self,
+        global_id: GlobalId,
         create_sql: &str,
+        extra_versions: &BTreeMap<RelationVersion, GlobalId>,
         pcx: Option<&PlanContext>,
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<CompactionWindow>,
+        local_expression_cache: &mut LocalExpressionCache,
+        previous_item: Option<CatalogItem>,
     ) -> Result<CatalogItem, AdapterError> {
+        let cached_expr = local_expression_cache.remove_cached_expression(&global_id);
+        match self.parse_item_inner(
+            global_id,
+            create_sql,
+            extra_versions,
+            pcx,
+            is_retained_metrics_object,
+            custom_logical_compaction_window,
+            cached_expr,
+            previous_item,
+        ) {
+            Ok((item, uncached_expr)) => {
+                if let Some((uncached_expr, optimizer_features)) = uncached_expr {
+                    local_expression_cache.insert_uncached_expression(
+                        global_id,
+                        uncached_expr,
+                        optimizer_features,
+                    );
+                }
+                Ok(item)
+            }
+            Err((err, cached_expr)) => {
+                if let Some(local_expr) = cached_expr {
+                    local_expression_cache.insert_cached_expression(global_id, local_expr);
+                }
+                Err(err)
+            }
+        }
+    }
+
+    /// Parses the given SQL string into a `CatalogItem`, using `cached_expr` if it's Some.
+    ///
+    /// On success returns the `CatalogItem` and an optimized expression iff the expression was
+    /// not cached.
+    ///
+    /// On failure returns an error and `cached_expr` so it can be used later.
+    #[mz_ore::instrument]
+    pub(crate) fn parse_item_inner(
+        &self,
+        global_id: GlobalId,
+        create_sql: &str,
+        extra_versions: &BTreeMap<RelationVersion, GlobalId>,
+        pcx: Option<&PlanContext>,
+        is_retained_metrics_object: bool,
+        custom_logical_compaction_window: Option<CompactionWindow>,
+        cached_expr: Option<LocalExpressions>,
+        previous_item: Option<CatalogItem>,
+    ) -> Result<
+        (
+            CatalogItem,
+            Option<(OptimizedMirRelationExpr, OptimizerFeatures)>,
+        ),
+        (AdapterError, Option<LocalExpressions>),
+    > {
         let session_catalog = self.for_system_session();
 
-        let (plan, resolved_ids) = Self::parse_plan(create_sql, pcx, &session_catalog)?;
+        let (plan, resolved_ids) = match Self::parse_plan(create_sql, pcx, &session_catalog) {
+            Ok((plan, resolved_ids)) => (plan, resolved_ids),
+            Err(err) => return Err((err, cached_expr)),
+        };
 
-        Ok(match plan {
-            Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
-                create_sql: Some(table.create_sql),
-                desc: table.desc,
-                defaults: table.defaults,
-                conn_id: None,
-                resolved_ids,
-                custom_logical_compaction_window: custom_logical_compaction_window
-                    .or(table.compaction_window),
-                is_retained_metrics_object,
-            }),
+        let mut uncached_expr = None;
+
+        let item = match plan {
+            Plan::CreateTable(CreateTablePlan { table, .. }) => {
+                let collections = extra_versions
+                    .iter()
+                    .map(|(version, gid)| (*version, *gid))
+                    .chain([(RelationVersion::root(), global_id)].into_iter())
+                    .collect();
+
+                CatalogItem::Table(Table {
+                    create_sql: Some(table.create_sql),
+                    desc: table.desc,
+                    collections,
+                    conn_id: None,
+                    resolved_ids,
+                    custom_logical_compaction_window: custom_logical_compaction_window
+                        .or(table.compaction_window),
+                    is_retained_metrics_object,
+                    data_source: match table.data_source {
+                        mz_sql::plan::TableDataSource::TableWrites { defaults } => {
+                            TableDataSource::TableWrites { defaults }
+                        }
+                        mz_sql::plan::TableDataSource::DataSource {
+                            desc: data_source_desc,
+                            timeline,
+                        } => match data_source_desc {
+                            mz_sql::plan::DataSourceDesc::IngestionExport {
+                                ingestion_id,
+                                external_reference,
+                                details,
+                                data_config,
+                            } => TableDataSource::DataSource {
+                                desc: DataSourceDesc::IngestionExport {
+                                    ingestion_id,
+                                    external_reference,
+                                    details,
+                                    data_config,
+                                },
+                                timeline,
+                            },
+                            mz_sql::plan::DataSourceDesc::Webhook {
+                                validate_using,
+                                body_format,
+                                headers,
+                                cluster_id,
+                            } => TableDataSource::DataSource {
+                                desc: DataSourceDesc::Webhook {
+                                    validate_using,
+                                    body_format,
+                                    headers,
+                                    cluster_id: cluster_id
+                                        .expect("Webhook Tables must have a cluster_id set"),
+                                },
+                                timeline,
+                            },
+                            _ => {
+                                return Err((
+                                    AdapterError::Unstructured(anyhow::anyhow!(
+                                        "unsupported data source for table"
+                                    )),
+                                    cached_expr,
+                                ))
+                            }
+                        },
+                    },
+                })
+            }
             Plan::CreateSource(CreateSourcePlan {
                 source,
                 timeline,
@@ -833,9 +1145,12 @@ impl CatalogState {
                             cluster_id: match in_cluster {
                                 Some(id) => id,
                                 None => {
-                                    return Err(AdapterError::Unstructured(anyhow::anyhow!(
-                                        "ingestion-based sources must have cluster specified"
-                                    )))
+                                    return Err((
+                                        AdapterError::Unstructured(anyhow::anyhow!(
+                                            "ingestion-based sources must have cluster specified"
+                                        )),
+                                        cached_expr,
+                                    ))
                                 }
                             },
                         }
@@ -843,24 +1158,36 @@ impl CatalogState {
                     mz_sql::plan::DataSourceDesc::IngestionExport {
                         ingestion_id,
                         external_reference,
+                        details,
+                        data_config,
                     } => DataSourceDesc::IngestionExport {
                         ingestion_id,
                         external_reference,
+                        details,
+                        data_config,
                     },
                     mz_sql::plan::DataSourceDesc::Progress => DataSourceDesc::Progress,
                     mz_sql::plan::DataSourceDesc::Webhook {
                         validate_using,
                         body_format,
                         headers,
-                    } => DataSourceDesc::Webhook {
-                        validate_using,
-                        body_format,
-                        headers,
-                        cluster_id: in_cluster
-                            .expect("webhook sources must use an existing cluster"),
-                    },
+                        cluster_id,
+                    } => {
+                        mz_ore::soft_assert_or_log!(
+                            cluster_id.is_none(),
+                            "cluster_id set at Source level for Webhooks"
+                        );
+                        DataSourceDesc::Webhook {
+                            validate_using,
+                            body_format,
+                            headers,
+                            cluster_id: in_cluster
+                                .expect("webhook sources must use an existing cluster"),
+                        }
+                    }
                 },
                 desc: source.desc,
+                global_id,
                 timeline,
                 resolved_ids,
                 custom_logical_compaction_window: source
@@ -872,21 +1199,56 @@ impl CatalogState {
                 // Collect optimizer parameters.
                 let optimizer_config =
                     optimize::OptimizerConfig::from(session_catalog.system_vars());
+                let previous_exprs = previous_item.map(|item| match item {
+                    CatalogItem::View(view) => (view.raw_expr, view.optimized_expr),
+                    item => unreachable!("expected view, found: {item:#?}"),
+                });
 
-                // Build an optimizer for this VIEW.
-                let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
+                let (raw_expr, optimized_expr) = match (cached_expr, previous_exprs) {
+                    (Some(local_expr), _)
+                        if local_expr.optimizer_features == optimizer_config.features =>
+                    {
+                        debug!("local expression cache hit for {global_id:?}");
+                        (Arc::new(view.expr), Arc::new(local_expr.local_mir))
+                    }
+                    // If the new expr is equivalent to the old expr, then we don't need to re-optimize.
+                    (_, Some((raw_expr, optimized_expr))) if *raw_expr == view.expr => {
+                        (Arc::clone(&raw_expr), Arc::clone(&optimized_expr))
+                    }
+                    (cached_expr, _) => {
+                        let optimizer_features = optimizer_config.features.clone();
+                        // Build an optimizer for this VIEW.
+                        let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
 
-                // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
-                let raw_expr = view.expr;
-                let optimized_expr = optimizer.optimize(raw_expr.clone())?;
+                        // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
+                        let raw_expr = view.expr;
+                        let optimized_expr = match optimizer.optimize(raw_expr.clone()) {
+                            Ok(optimzed_expr) => optimzed_expr,
+                            Err(err) => return Err((err.into(), cached_expr)),
+                        };
+
+                        uncached_expr = Some((optimized_expr.clone(), optimizer_features));
+
+                        (Arc::new(raw_expr), Arc::new(optimized_expr))
+                    }
+                };
+
+                // Resolve all item dependencies from the HIR expression.
+                let dependencies: BTreeSet<_> = raw_expr
+                    .depends_on()
+                    .into_iter()
+                    .map(|gid| self.get_entry_by_global_id(&gid).id())
+                    .collect();
 
                 CatalogItem::View(View {
                     create_sql: view.create_sql,
+                    global_id,
                     raw_expr,
                     desc: RelationDesc::new(optimized_expr.typ(), view.column_names),
                     optimized_expr,
                     conn_id: None,
                     resolved_ids,
+                    dependencies: DependencyIds(dependencies),
                 })
             }
             Plan::CreateMaterializedView(CreateMaterializedViewPlan {
@@ -895,28 +1257,68 @@ impl CatalogState {
                 // Collect optimizer parameters.
                 let optimizer_config =
                     optimize::OptimizerConfig::from(session_catalog.system_vars());
-                // Build an optimizer for this VIEW.
-                // TODO(aalexandrov): ideally this should be a materialized_view::Optimizer.
-                let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
+                let previous_exprs = previous_item.map(|item| match item {
+                    CatalogItem::MaterializedView(materialized_view) => {
+                        (materialized_view.raw_expr, materialized_view.optimized_expr)
+                    }
+                    item => unreachable!("expected materialized view, found: {item:#?}"),
+                });
 
-                let raw_expr = materialized_view.expr;
-                let optimized_expr = optimizer.optimize(raw_expr.clone())?;
+                let (raw_expr, optimized_expr) = match (cached_expr, previous_exprs) {
+                    (Some(local_expr), _)
+                        if local_expr.optimizer_features == optimizer_config.features =>
+                    {
+                        debug!("local expression cache hit for {global_id:?}");
+                        (
+                            Arc::new(materialized_view.expr),
+                            Arc::new(local_expr.local_mir),
+                        )
+                    }
+                    // If the new expr is equivalent to the old expr, then we don't need to re-optimize.
+                    (_, Some((raw_expr, optimized_expr)))
+                        if *raw_expr == materialized_view.expr =>
+                    {
+                        (Arc::clone(&raw_expr), Arc::clone(&optimized_expr))
+                    }
+                    (cached_expr, _) => {
+                        let optimizer_features = optimizer_config.features.clone();
+                        // TODO(aalexandrov): ideally this should be a materialized_view::Optimizer.
+                        let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
+
+                        let raw_expr = materialized_view.expr;
+                        let optimized_expr = match optimizer.optimize(raw_expr.clone()) {
+                            Ok(optimized_expr) => optimized_expr,
+                            Err(err) => return Err((err.into(), cached_expr)),
+                        };
+
+                        uncached_expr = Some((optimized_expr.clone(), optimizer_features));
+
+                        (Arc::new(raw_expr), Arc::new(optimized_expr))
+                    }
+                };
                 let mut typ = optimized_expr.typ();
                 for &i in &materialized_view.non_null_assertions {
                     typ.column_types[i].nullable = false;
                 }
                 let desc = RelationDesc::new(typ, materialized_view.column_names);
 
-                let initial_as_of = materialized_view
-                    .as_of
-                    .map(|time| Antichain::from_elem(time.into()));
+                let initial_as_of = materialized_view.as_of.map(Antichain::from_elem);
+
+                // Resolve all item dependencies from the HIR expression.
+                let dependencies = raw_expr
+                    .depends_on()
+                    .into_iter()
+                    .map(|gid| self.get_entry_by_global_id(&gid).id())
+                    .collect();
 
                 CatalogItem::MaterializedView(MaterializedView {
                     create_sql: materialized_view.create_sql,
+                    global_id,
                     raw_expr,
                     optimized_expr,
                     desc,
                     resolved_ids,
+                    dependencies,
                     cluster_id: materialized_view.cluster_id,
                     non_null_assertions: materialized_view.non_null_assertions,
                     custom_logical_compaction_window: materialized_view.compaction_window,
@@ -924,10 +1326,19 @@ impl CatalogState {
                     initial_as_of,
                 })
             }
+            Plan::CreateContinualTask(plan) => {
+                let ct =
+                    match crate::continual_task::ct_item_from_plan(plan, global_id, resolved_ids) {
+                        Ok(ct) => ct,
+                        Err(err) => return Err((err, cached_expr)),
+                    };
+                CatalogItem::ContinualTask(ct)
+            }
             Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {
                 create_sql: index.create_sql,
+                global_id,
                 on: index.on,
-                keys: index.keys,
+                keys: index.keys.into(),
                 conn_id: None,
                 resolved_ids,
                 cluster_id: index.cluster_id,
@@ -942,6 +1353,7 @@ impl CatalogState {
                 ..
             }) => CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
+                global_id,
                 from: sink.from,
                 connection: sink.connection,
                 envelope: sink.envelope,
@@ -950,38 +1362,52 @@ impl CatalogState {
                 resolved_ids,
                 cluster_id: in_cluster,
             }),
-            Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
-                create_sql: Some(typ.create_sql),
-                desc: typ.inner.desc(&session_catalog)?,
-                details: CatalogTypeDetails {
-                    array_id: None,
-                    typ: typ.inner,
-                    pg_metadata: None,
-                },
-                resolved_ids,
-            }),
+            Plan::CreateType(CreateTypePlan { typ, .. }) => {
+                let desc = match typ.inner.desc(&session_catalog) {
+                    Ok(desc) => desc,
+                    Err(err) => return Err((err.into(), cached_expr)),
+                };
+                CatalogItem::Type(Type {
+                    create_sql: Some(typ.create_sql),
+                    global_id,
+                    desc,
+                    details: CatalogTypeDetails {
+                        array_id: None,
+                        typ: typ.inner,
+                        pg_metadata: None,
+                    },
+                    resolved_ids,
+                })
+            }
             Plan::CreateSecret(CreateSecretPlan { secret, .. }) => CatalogItem::Secret(Secret {
                 create_sql: secret.create_sql,
+                global_id,
             }),
             Plan::CreateConnection(CreateConnectionPlan {
                 connection:
                     mz_sql::plan::Connection {
                         create_sql,
-                        connection,
+                        details,
                     },
                 ..
             }) => CatalogItem::Connection(Connection {
                 create_sql,
-                connection,
+                global_id,
+                details,
                 resolved_ids,
             }),
             _ => {
-                return Err(Error::new(ErrorKind::Corruption {
-                    detail: "catalog entry generated inappropriate plan".to_string(),
-                })
-                .into())
+                return Err((
+                    Error::new(ErrorKind::Corruption {
+                        detail: "catalog entry generated inappropriate plan".to_string(),
+                    })
+                    .into(),
+                    cached_expr,
+                ))
             }
-        })
+        };
+
+        Ok((item, uncached_expr))
     }
 
     /// Execute function `f` on `self`, with all "enable_for_item_parsing" feature flags enabled.
@@ -1007,8 +1433,7 @@ impl CatalogState {
         res
     }
 
-    /// Returns all indexes on the given object and cluster known in the
-    /// catalog.
+    /// Returns all indexes on the given object and cluster known in the catalog.
     pub fn get_indexes_on(
         &self,
         id: GlobalId,
@@ -1016,14 +1441,14 @@ impl CatalogState {
     ) -> impl Iterator<Item = (GlobalId, &Index)> {
         let index_matches = move |idx: &Index| idx.on == id && idx.cluster_id == cluster;
 
-        self.try_get_entry(&id)
+        self.try_get_entry_by_global_id(&id)
             .into_iter()
             .map(move |e| {
                 e.used_by()
                     .iter()
                     .filter_map(move |uses_id| match self.get_entry(uses_id).item() {
                         CatalogItem::Index(index) if index_matches(index) => {
-                            Some((*uses_id, index))
+                            Some((index.global_id(), index))
                         }
                         _ => None,
                     })
@@ -1031,193 +1456,8 @@ impl CatalogState {
             .flatten()
     }
 
-    /// Associates a name, `GlobalId`, and entry.
-    pub(super) fn insert_item(
-        &mut self,
-        id: GlobalId,
-        oid: u32,
-        name: QualifiedItemName,
-        item: CatalogItem,
-        owner_id: RoleId,
-        privileges: PrivilegeMap,
-    ) {
-        let entry = CatalogEntry {
-            item,
-            name,
-            id,
-            oid,
-            used_by: Vec::new(),
-            referenced_by: Vec::new(),
-            owner_id,
-            privileges,
-        };
-
-        self.insert_entry(entry);
-    }
-
-    /// Associates a name, `GlobalId`, and entry.
-    pub(super) fn insert_entry(&mut self, entry: CatalogEntry) {
-        if !entry.id.is_system() {
-            if let Some(cluster_id) = entry.item.cluster_id() {
-                self.clusters_by_id
-                    .get_mut(&cluster_id)
-                    .expect("catalog out of sync")
-                    .bound_objects
-                    .insert(entry.id);
-            };
-        }
-
-        for u in &entry.references().0 {
-            match self.entry_by_id.get_mut(u) {
-                Some(metadata) => metadata.referenced_by.push(entry.id()),
-                None => panic!(
-                    "Catalog: missing dependent catalog item {} while installing {}",
-                    &u,
-                    self.resolve_full_name(entry.name(), entry.conn_id())
-                ),
-            }
-        }
-        for u in entry.uses() {
-            match self.entry_by_id.get_mut(&u) {
-                Some(metadata) => metadata.used_by.push(entry.id()),
-                None => panic!(
-                    "Catalog: missing dependent catalog item {} while installing {}",
-                    &u,
-                    self.resolve_full_name(entry.name(), entry.conn_id())
-                ),
-            }
-        }
-        let conn_id = entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
-        let schema = self.get_schema_mut(
-            &entry.name().qualifiers.database_spec,
-            &entry.name().qualifiers.schema_spec,
-            conn_id,
-        );
-
-        let prev_id = match entry.item() {
-            CatalogItem::Func(_) => schema
-                .functions
-                .insert(entry.name().item.clone(), entry.id()),
-            CatalogItem::Type(_) => schema.types.insert(entry.name().item.clone(), entry.id()),
-            _ => schema.items.insert(entry.name().item.clone(), entry.id()),
-        };
-
-        assert!(
-            prev_id.is_none(),
-            "builtin name collision on {:?}",
-            entry.name().item.clone()
-        );
-
-        self.entry_by_id.insert(entry.id(), entry.clone());
-    }
-
-    #[mz_ore::instrument(level = "trace")]
-    pub(super) fn drop_item(&mut self, id: GlobalId) -> CatalogEntry {
-        let metadata = self.entry_by_id.remove(&id).expect("catalog out of sync");
-        for u in &metadata.references().0 {
-            if let Some(dep_metadata) = self.entry_by_id.get_mut(u) {
-                dep_metadata.referenced_by.retain(|u| *u != metadata.id())
-            }
-        }
-        for u in metadata.uses() {
-            if let Some(dep_metadata) = self.entry_by_id.get_mut(&u) {
-                dep_metadata.used_by.retain(|u| *u != metadata.id())
-            }
-        }
-
-        let conn_id = metadata.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
-        let schema = self.get_schema_mut(
-            &metadata.name().qualifiers.database_spec,
-            &metadata.name().qualifiers.schema_spec,
-            conn_id,
-        );
-        if metadata.item_type() == CatalogItemType::Type {
-            schema
-                .types
-                .remove(&metadata.name().item)
-                .expect("catalog out of sync");
-        } else {
-            // Functions would need special handling, but we don't yet support
-            // dropping functions.
-            assert_ne!(metadata.item_type(), CatalogItemType::Func);
-
-            schema
-                .items
-                .remove(&metadata.name().item)
-                .expect("catalog out of sync");
-        };
-
-        if !id.is_system() {
-            if let Some(cluster_id) = metadata.item().cluster_id() {
-                assert!(
-                    self.clusters_by_id
-                        .get_mut(&cluster_id)
-                        .expect("catalog out of sync")
-                        .bound_objects
-                        .remove(&id),
-                    "catalog out of sync"
-                );
-            }
-        }
-
-        metadata
-    }
-
     pub(super) fn get_database(&self, database_id: &DatabaseId) -> &Database {
         &self.database_by_id[database_id]
-    }
-
-    pub(super) fn insert_introspection_source_index(
-        &mut self,
-        cluster_id: ClusterId,
-        log: &'static BuiltinLog,
-        index_id: GlobalId,
-        oid: u32,
-    ) {
-        let source_name = FullItemName {
-            database: RawDatabaseSpecifier::Ambient,
-            schema: log.schema.into(),
-            item: log.name.into(),
-        };
-        let index_name = format!("{}_{}_primary_idx", log.name, cluster_id);
-        let mut index_name = QualifiedItemName {
-            qualifiers: ItemQualifiers {
-                database_spec: ResolvedDatabaseSpecifier::Ambient,
-                schema_spec: SchemaSpecifier::Id(self.get_mz_internal_schema_id().clone()),
-            },
-            item: index_name.clone(),
-        };
-        index_name = self.find_available_name(index_name, &SYSTEM_CONN_ID);
-        let index_item_name = index_name.item.clone();
-        let log_id = self.resolve_builtin_log(log);
-        self.insert_item(
-            index_id,
-            oid,
-            index_name,
-            CatalogItem::Index(Index {
-                on: log_id,
-                keys: log
-                    .variant
-                    .index_by()
-                    .into_iter()
-                    .map(MirScalarExpr::Column)
-                    .collect(),
-                create_sql: index_sql(
-                    index_item_name,
-                    cluster_id,
-                    source_name,
-                    &log.variant.desc(),
-                    &log.variant.index_by(),
-                ),
-                conn_id: None,
-                resolved_ids: ResolvedIds(BTreeSet::from_iter([log_id])),
-                cluster_id,
-                is_retained_metrics_object: false,
-                custom_logical_compaction_window: None,
-            }),
-            MZ_SYSTEM_ROLE_ID,
-            PrivilegeMap::default(),
-        );
     }
 
     /// Gets a reference to the specified replica of the specified cluster.
@@ -1245,30 +1485,22 @@ impl CatalogState {
             .unwrap_or_else(|| panic!("unknown cluster replica: {cluster_id}.{replica_id}"))
     }
 
+    pub(super) fn resolve_replica_in_cluster(
+        &self,
+        cluster_id: &ClusterId,
+        replica_name: &str,
+    ) -> Result<&ClusterReplica, SqlCatalogError> {
+        let cluster = self.get_cluster(*cluster_id);
+        let replica_id = cluster
+            .replica_id_by_name_
+            .get(replica_name)
+            .ok_or_else(|| SqlCatalogError::UnknownClusterReplica(replica_name.to_string()))?;
+        Ok(&cluster.replicas_by_id_[replica_id])
+    }
+
     /// Get system configuration `name`.
     pub fn get_system_configuration(&self, name: &str) -> Result<&dyn Var, Error> {
         Ok(self.system_configuration.get(name)?)
-    }
-
-    /// Set the default value for `name`, which is the value it will be reset to.
-    pub(super) fn set_system_configuration_default(
-        &mut self,
-        name: &str,
-        value: VarInput,
-    ) -> Result<(), Error> {
-        Ok(self.system_configuration.set_default(name, value)?)
-    }
-
-    /// Insert system configuration `name` with `value`.
-    ///
-    /// Return a `bool` value indicating whether the configuration was modified
-    /// by the call.
-    pub(super) fn insert_system_configuration(
-        &mut self,
-        name: &str,
-        value: VarInput,
-    ) -> Result<bool, Error> {
-        Ok(self.system_configuration.set(name, value)?)
     }
 
     /// Parse system configuration `name` with `value` int.
@@ -1281,14 +1513,6 @@ impl CatalogState {
     ) -> Result<String, Error> {
         let value = self.system_configuration.parse(name, value)?;
         Ok(value.format())
-    }
-
-    /// Reset system configuration `name`.
-    ///
-    /// Return a `bool` value indicating whether the configuration was modified
-    /// by the call.
-    pub(super) fn remove_system_configuration(&mut self, name: &str) -> Result<bool, Error> {
-        Ok(self.system_configuration.reset(name)?)
     }
 
     /// Gets the schema map for the database matching `database_spec`.
@@ -1339,35 +1563,6 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn get_schema_mut(
-        &mut self,
-        database_spec: &ResolvedDatabaseSpecifier,
-        schema_spec: &SchemaSpecifier,
-        conn_id: &ConnectionId,
-    ) -> &mut Schema {
-        // Keep in sync with `get_schemas`
-        match (database_spec, schema_spec) {
-            (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Temporary) => self
-                .temporary_schemas
-                .get_mut(conn_id)
-                .expect("catalog out of sync"),
-            (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Id(id)) => self
-                .ambient_schemas_by_id
-                .get_mut(id)
-                .expect("catalog out of sync"),
-            (ResolvedDatabaseSpecifier::Id(database_id), SchemaSpecifier::Id(schema_id)) => self
-                .database_by_id
-                .get_mut(database_id)
-                .expect("catalog out of sync")
-                .schemas_by_id
-                .get_mut(schema_id)
-                .expect("catalog out of sync"),
-            (ResolvedDatabaseSpecifier::Id(_), SchemaSpecifier::Temporary) => {
-                unreachable!("temporary schemas are in the ambient database")
-            }
-        }
-    }
-
     pub(super) fn find_non_temp_schema(&self, schema_id: &SchemaId) -> &Schema {
         self.database_by_id
             .values()
@@ -1377,46 +1572,65 @@ impl CatalogState {
             .into_first()
     }
 
-    pub fn get_mz_catalog_schema_id(&self) -> &SchemaId {
-        &self.ambient_schemas_by_name[MZ_CATALOG_SCHEMA]
+    pub fn get_mz_catalog_schema_id(&self) -> SchemaId {
+        self.ambient_schemas_by_name[MZ_CATALOG_SCHEMA]
     }
 
-    pub fn get_pg_catalog_schema_id(&self) -> &SchemaId {
-        &self.ambient_schemas_by_name[PG_CATALOG_SCHEMA]
+    pub fn get_mz_catalog_unstable_schema_id(&self) -> SchemaId {
+        self.ambient_schemas_by_name[MZ_CATALOG_UNSTABLE_SCHEMA]
     }
 
-    pub fn get_information_schema_id(&self) -> &SchemaId {
-        &self.ambient_schemas_by_name[INFORMATION_SCHEMA]
+    pub fn get_pg_catalog_schema_id(&self) -> SchemaId {
+        self.ambient_schemas_by_name[PG_CATALOG_SCHEMA]
     }
 
-    pub fn get_mz_internal_schema_id(&self) -> &SchemaId {
-        &self.ambient_schemas_by_name[MZ_INTERNAL_SCHEMA]
+    pub fn get_information_schema_id(&self) -> SchemaId {
+        self.ambient_schemas_by_name[INFORMATION_SCHEMA]
     }
 
-    pub fn get_mz_unsafe_schema_id(&self) -> &SchemaId {
-        &self.ambient_schemas_by_name[MZ_UNSAFE_SCHEMA]
+    pub fn get_mz_internal_schema_id(&self) -> SchemaId {
+        self.ambient_schemas_by_name[MZ_INTERNAL_SCHEMA]
     }
 
-    pub fn is_system_schema(&self, schema: &str) -> bool {
-        schema == MZ_CATALOG_SCHEMA
-            || schema == PG_CATALOG_SCHEMA
-            || schema == INFORMATION_SCHEMA
-            || schema == MZ_INTERNAL_SCHEMA
-            || schema == MZ_UNSAFE_SCHEMA
+    pub fn get_mz_introspection_schema_id(&self) -> SchemaId {
+        self.ambient_schemas_by_name[MZ_INTROSPECTION_SCHEMA]
     }
 
-    pub fn is_system_schema_id(&self, id: &SchemaId) -> bool {
-        id == self.get_mz_catalog_schema_id()
-            || id == self.get_pg_catalog_schema_id()
-            || id == self.get_information_schema_id()
-            || id == self.get_mz_internal_schema_id()
-            || id == self.get_mz_unsafe_schema_id()
+    pub fn get_mz_unsafe_schema_id(&self) -> SchemaId {
+        self.ambient_schemas_by_name[MZ_UNSAFE_SCHEMA]
     }
 
-    pub fn is_system_schema_specifier(&self, spec: &SchemaSpecifier) -> bool {
+    pub fn system_schema_ids(&self) -> impl Iterator<Item = SchemaId> + '_ {
+        SYSTEM_SCHEMAS
+            .iter()
+            .map(|name| self.ambient_schemas_by_name[*name])
+    }
+
+    pub fn is_system_schema_id(&self, id: SchemaId) -> bool {
+        self.system_schema_ids().contains(&id)
+    }
+
+    pub fn is_system_schema_specifier(&self, spec: SchemaSpecifier) -> bool {
         match spec {
             SchemaSpecifier::Temporary => false,
             SchemaSpecifier::Id(id) => self.is_system_schema_id(id),
+        }
+    }
+
+    pub fn unstable_schema_ids(&self) -> impl Iterator<Item = SchemaId> + '_ {
+        UNSTABLE_SCHEMAS
+            .iter()
+            .map(|name| self.ambient_schemas_by_name[*name])
+    }
+
+    pub fn is_unstable_schema_id(&self, id: SchemaId) -> bool {
+        self.unstable_schema_ids().contains(&id)
+    }
+
+    pub fn is_unstable_schema_specifier(&self, spec: SchemaSpecifier) -> bool {
+        match spec {
+            SchemaSpecifier::Temporary => false,
+            SchemaSpecifier::Id(id) => self.is_unstable_schema_id(id),
         }
     }
 
@@ -1454,36 +1668,60 @@ impl CatalogState {
         Ok(())
     }
 
+    /// Return all OIDs that are allocated to temporary objects.
+    pub(crate) fn get_temporary_oids(&self) -> impl Iterator<Item = u32> + '_ {
+        std::iter::empty()
+            .chain(self.ambient_schemas_by_id.values().filter_map(|schema| {
+                if schema.id.is_temporary() {
+                    Some(schema.oid)
+                } else {
+                    None
+                }
+            }))
+            .chain(self.entry_by_id.values().filter_map(|entry| {
+                if entry.item().is_temporary() {
+                    Some(entry.oid)
+                } else {
+                    None
+                }
+            }))
+    }
+
     /// Optimized lookup for a builtin table.
     ///
     /// Panics if the builtin table doesn't exist in the catalog.
-    pub fn resolve_builtin_table(&self, builtin: &'static BuiltinTable) -> GlobalId {
+    pub fn resolve_builtin_table(&self, builtin: &'static BuiltinTable) -> CatalogItemId {
         self.resolve_builtin_object(&Builtin::<IdReference>::Table(builtin))
     }
 
     /// Optimized lookup for a builtin log.
     ///
     /// Panics if the builtin log doesn't exist in the catalog.
-    pub fn resolve_builtin_log(&self, builtin: &'static BuiltinLog) -> GlobalId {
-        self.resolve_builtin_object(&Builtin::<IdReference>::Log(builtin))
+    pub fn resolve_builtin_log(&self, builtin: &'static BuiltinLog) -> (CatalogItemId, GlobalId) {
+        let item_id = self.resolve_builtin_object(&Builtin::<IdReference>::Log(builtin));
+        let log = match self.get_entry(&item_id).item() {
+            CatalogItem::Log(log) => log,
+            other => unreachable!("programming error, expected BuiltinLog, found {other:?}"),
+        };
+        (item_id, log.global_id)
     }
 
     /// Optimized lookup for a builtin storage collection.
     ///
     /// Panics if the builtin storage collection doesn't exist in the catalog.
-    pub fn resolve_builtin_source(&self, builtin: &'static BuiltinSource) -> GlobalId {
+    pub fn resolve_builtin_source(&self, builtin: &'static BuiltinSource) -> CatalogItemId {
         self.resolve_builtin_object(&Builtin::<IdReference>::Source(builtin))
     }
 
     /// Optimized lookup for a builtin object.
     ///
     /// Panics if the builtin object doesn't exist in the catalog.
-    pub fn resolve_builtin_object<T: TypeReference>(&self, builtin: &Builtin<T>) -> GlobalId {
+    pub fn resolve_builtin_object<T: TypeReference>(&self, builtin: &Builtin<T>) -> CatalogItemId {
         let schema_id = &self.ambient_schemas_by_name[builtin.schema()];
         let schema = &self.ambient_schemas_by_id[schema_id];
         match builtin.catalog_item_type() {
-            CatalogItemType::Type => schema.types[builtin.name()].clone(),
-            CatalogItemType::Func => schema.functions[builtin.name()].clone(),
+            CatalogItemType::Type => schema.types[builtin.name()],
+            CatalogItemType::Func => schema.functions[builtin.name()],
             CatalogItemType::Table
             | CatalogItemType::Source
             | CatalogItemType::Sink
@@ -1491,7 +1729,8 @@ impl CatalogState {
             | CatalogItemType::MaterializedView
             | CatalogItemType::Index
             | CatalogItemType::Secret
-            | CatalogItemType::Connection => schema.items[builtin.name()].clone(),
+            | CatalogItemType::Connection
+            | CatalogItemType::ContinualTask => schema.items[builtin.name()],
         }
     }
 
@@ -1634,7 +1873,7 @@ impl CatalogState {
     /// Optimized lookup for a system schema.
     ///
     /// Panics if the system schema doesn't exist in the catalog.
-    pub fn resolve_system_schema(&self, name: &str) -> SchemaId {
+    pub fn resolve_system_schema(&self, name: &'static str) -> SchemaId {
         self.ambient_schemas_by_name[name]
     }
 
@@ -1675,11 +1914,11 @@ impl CatalogState {
         let default_schemas = [
             (
                 ResolvedDatabaseSpecifier::Ambient,
-                SchemaSpecifier::Id(self.get_mz_catalog_schema_id().clone()),
+                SchemaSpecifier::Id(self.get_mz_catalog_schema_id()),
             ),
             (
                 ResolvedDatabaseSpecifier::Ambient,
-                SchemaSpecifier::Id(self.get_pg_catalog_schema_id().clone()),
+                SchemaSpecifier::Id(self.get_pg_catalog_schema_id()),
             ),
         ];
         for schema in default_schemas.into_iter() {
@@ -1729,7 +1968,7 @@ impl CatalogState {
     #[allow(clippy::useless_let_if_seq)]
     pub fn resolve(
         &self,
-        get_schema_entries: fn(&Schema) -> &BTreeMap<String, GlobalId>,
+        get_schema_entries: fn(&Schema) -> &BTreeMap<String, CatalogItemId>,
         current_database: Option<&DatabaseId>,
         search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
         name: &PartialItemName,
@@ -1766,13 +2005,40 @@ impl CatalogState {
             },
         };
 
-        for (database_spec, schema_spec) in schemas {
-            let schema = self.get_schema(&database_spec, &schema_spec, conn_id);
+        for (database_spec, schema_spec) in &schemas {
+            let schema = self.get_schema(database_spec, schema_spec, conn_id);
 
             if let Some(id) = get_schema_entries(schema).get(&name.item) {
                 return Ok(&self.entry_by_id[id]);
             }
         }
+
+        // Some relations that have previously lived in the `mz_internal` schema have been moved to
+        // `mz_catalog_unstable` or `mz_introspection`. To simplify the transition for users, we
+        // automatically let uses of the old schema resolve to the new ones as well.
+        // TODO(database-issues#8173) remove this after sufficient time has passed
+        let mz_internal_schema = SchemaSpecifier::Id(self.get_mz_internal_schema_id());
+        if schemas.iter().any(|(_, spec)| *spec == mz_internal_schema) {
+            for schema_id in [
+                self.get_mz_catalog_unstable_schema_id(),
+                self.get_mz_introspection_schema_id(),
+            ] {
+                let schema = self.get_schema(
+                    &ResolvedDatabaseSpecifier::Ambient,
+                    &SchemaSpecifier::Id(schema_id),
+                    conn_id,
+                );
+
+                if let Some(id) = get_schema_entries(schema).get(&name.item) {
+                    debug!(
+                        github_27831 = true,
+                        "encountered use of outdated schema `mz_internal` for relation: {name}",
+                    );
+                    return Ok(&self.entry_by_id[id]);
+                }
+            }
+        }
+
         Err(err_gen(name.to_string()))
     }
 
@@ -1823,9 +2089,9 @@ impl CatalogState {
         name: &PartialItemName,
         conn_id: &ConnectionId,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
-        static NON_PG_CATALOG_TYPES: Lazy<
+        static NON_PG_CATALOG_TYPES: LazyLock<
             BTreeMap<&'static str, &'static BuiltinType<NameReference>>,
-        > = Lazy::new(|| {
+        > = LazyLock::new(|| {
             BUILTINS::types()
                 .filter(|typ| typ.schema != PG_CATALOG_SCHEMA)
                 .map(|typ| (typ.name, typ))
@@ -1859,21 +2125,20 @@ impl CatalogState {
     /// For an [`ObjectId`] gets the corresponding [`CommentObjectId`].
     pub(super) fn get_comment_id(&self, object_id: ObjectId) -> CommentObjectId {
         match object_id {
-            ObjectId::Item(global_id) => {
-                let entry = self.get_entry(&global_id);
+            ObjectId::Item(item_id) => {
+                let entry = self.get_entry(&item_id);
                 match entry.item_type() {
-                    CatalogItemType::Table => CommentObjectId::Table(global_id),
-                    CatalogItemType::Source => CommentObjectId::Source(global_id),
-                    CatalogItemType::Sink => CommentObjectId::Sink(global_id),
-                    CatalogItemType::View => CommentObjectId::View(global_id),
-                    CatalogItemType::MaterializedView => {
-                        CommentObjectId::MaterializedView(global_id)
-                    }
-                    CatalogItemType::Index => CommentObjectId::Index(global_id),
-                    CatalogItemType::Func => CommentObjectId::Func(global_id),
-                    CatalogItemType::Connection => CommentObjectId::Connection(global_id),
-                    CatalogItemType::Type => CommentObjectId::Type(global_id),
-                    CatalogItemType::Secret => CommentObjectId::Secret(global_id),
+                    CatalogItemType::Table => CommentObjectId::Table(item_id),
+                    CatalogItemType::Source => CommentObjectId::Source(item_id),
+                    CatalogItemType::Sink => CommentObjectId::Sink(item_id),
+                    CatalogItemType::View => CommentObjectId::View(item_id),
+                    CatalogItemType::MaterializedView => CommentObjectId::MaterializedView(item_id),
+                    CatalogItemType::Index => CommentObjectId::Index(item_id),
+                    CatalogItemType::Func => CommentObjectId::Func(item_id),
+                    CatalogItemType::Connection => CommentObjectId::Connection(item_id),
+                    CatalogItemType::Type => CommentObjectId::Type(item_id),
+                    CatalogItemType::Secret => CommentObjectId::Secret(item_id),
+                    CatalogItemType::ContinualTask => CommentObjectId::ContinualTask(item_id),
                 }
             }
             ObjectId::Role(role_id) => CommentObjectId::Role(role_id),
@@ -1883,12 +2148,20 @@ impl CatalogState {
             ObjectId::ClusterReplica(cluster_replica_id) => {
                 CommentObjectId::ClusterReplica(cluster_replica_id)
             }
+            ObjectId::NetworkPolicy(network_policy_id) => {
+                CommentObjectId::NetworkPolicy(network_policy_id)
+            }
         }
     }
 
     /// Return current system configuration.
     pub fn system_config(&self) -> &SystemVars {
         &self.system_configuration
+    }
+
+    /// Return a mutable reference to the current system configuration.
+    pub fn system_config_mut(&mut self) -> &mut SystemVars {
+        &mut self.system_configuration
     }
 
     /// Serializes the catalog's in-memory state.
@@ -1928,6 +2201,26 @@ impl CatalogState {
                     "unfinalized_shards".into(),
                     serde_json::json!(unfinalized_shards),
                 );
+        }
+        // Remove GlobalIds for temporary objects from the mapping.
+        //
+        // Post-test consistency checks with the durable catalog don't know about temporary items
+        // since they're kept entirely in memory.
+        let temporary_gids: Vec<_> = self
+            .entry_by_global_id
+            .iter()
+            .filter(|(_gid, item_id)| self.get_entry(item_id).conn_id().is_some())
+            .map(|(gid, _item_id)| *gid)
+            .collect();
+        if !temporary_gids.is_empty() {
+            let gids = dump_obj
+                .get_mut("entry_by_global_id")
+                .expect("known_to_exist")
+                .as_object_mut()
+                .expect("entry_by_global_id is an object");
+            for gid in temporary_gids {
+                gids.remove(&gid.to_string());
+            }
         }
 
         // Emit as pretty-printed JSON.
@@ -1974,12 +2267,12 @@ impl CatalogState {
                 disk,
                 billed_as,
                 internal,
+                pending,
             } => {
                 if allowed_availability_zones.is_some() && availability_zone.is_some() {
+                    let message = "tried concretize managed replica with specific availability zones and availability zone";
                     return Err(Error {
-                        kind: ErrorKind::Internal(
-                            "tried concretize managed replica with specific availability zones and availability zone".to_string(),
-                        ),
+                        kind: ErrorKind::Internal(message.to_string()),
                     });
                 }
                 self.ensure_valid_replica_size(allowed_sizes, &size)?;
@@ -2005,6 +2298,7 @@ impl CatalogState {
                     disk,
                     billed_as,
                     internal,
+                    pending,
                 })
             }
         };
@@ -2056,6 +2350,20 @@ impl CatalogState {
             let role = self.get_role(role_id);
             Err(Error::new(ErrorKind::ReservedRoleName(
                 role.name().to_string(),
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn ensure_not_reserved_network_policy(
+        &self,
+        network_policy_id: &NetworkPolicyId,
+    ) -> Result<(), Error> {
+        if network_policy_id.is_builtin() {
+            let policy = self.get_network_policy(network_policy_id);
+            Err(Error::new(ErrorKind::ReservedNetworkPolicyName(
+                policy.name.clone(),
             )))
         } else {
             Ok(())
@@ -2137,6 +2445,7 @@ impl CatalogState {
             ),
             ObjectId::Item(id) => Some(*self.get_entry(id).owner_id()),
             ObjectId::Role(_) => None,
+            ObjectId::NetworkPolicy(id) => Some(self.get_network_policy(id).owner_id.clone()),
         }
     }
 
@@ -2148,6 +2457,7 @@ impl CatalogState {
             ObjectId::Schema(_) => mz_sql::catalog::ObjectType::Schema,
             ObjectId::Role(_) => mz_sql::catalog::ObjectType::Role,
             ObjectId::Item(id) => self.get_entry(id).item_type().into(),
+            ObjectId::NetworkPolicy(_) => mz_sql::catalog::ObjectType::NetworkPolicy,
         }
     }
 
@@ -2172,65 +2482,153 @@ impl CatalogState {
 
     /// For the Sources ids in `ids`, return the compaction windows for all `ids` and additional ids
     /// that propagate from them. Specifically, if `ids` contains a source, it and all of its
-    /// subsources will be added to the result.
+    /// source exports will be added to the result.
     pub fn source_compaction_windows(
         &self,
-        ids: impl IntoIterator<Item = GlobalId>,
-    ) -> BTreeMap<CompactionWindow, BTreeSet<GlobalId>> {
-        let mut cws: BTreeMap<CompactionWindow, BTreeSet<GlobalId>> = BTreeMap::new();
+        ids: impl IntoIterator<Item = CatalogItemId>,
+    ) -> BTreeMap<CompactionWindow, BTreeSet<CatalogItemId>> {
+        let mut cws: BTreeMap<CompactionWindow, BTreeSet<CatalogItemId>> = BTreeMap::new();
         let mut ids = VecDeque::from_iter(ids);
         let mut seen = BTreeSet::new();
-        while let Some(id) = ids.pop_front() {
-            if !seen.insert(id) {
+        while let Some(item_id) = ids.pop_front() {
+            if !seen.insert(item_id) {
                 continue;
             }
-            let entry = self.get_entry(&id);
-            let Some(source) = entry.source() else {
-                // Views could depend on sources, so ignore them if added by used_by below.
-                continue;
-            };
-            let source_cw = source.custom_logical_compaction_window.unwrap_or_default();
-            match source.data_source {
-                DataSourceDesc::Ingestion { .. } => {
-                    // For sources, look up each dependent subsource and propagate.
-                    cws.entry(source_cw).or_default().insert(id);
-                    ids.extend(entry.used_by());
+            let entry = self.get_entry(&item_id);
+            match entry.item() {
+                CatalogItem::Source(source) => {
+                    let source_cw = source.custom_logical_compaction_window.unwrap_or_default();
+                    match source.data_source {
+                        DataSourceDesc::Ingestion { .. } => {
+                            // For sources, look up each dependent source export and propagate.
+                            cws.entry(source_cw).or_default().insert(item_id);
+                            ids.extend(entry.used_by());
+                        }
+                        DataSourceDesc::IngestionExport { ingestion_id, .. } => {
+                            // For subsources, look up the parent source and propagate the compaction
+                            // window.
+                            let ingestion = self
+                                .get_entry(&ingestion_id)
+                                .source()
+                                .expect("must be source");
+                            let cw = ingestion
+                                .custom_logical_compaction_window
+                                .unwrap_or(source_cw);
+                            cws.entry(cw).or_default().insert(item_id);
+                        }
+                        DataSourceDesc::Introspection(_)
+                        | DataSourceDesc::Progress
+                        | DataSourceDesc::Webhook { .. } => {
+                            cws.entry(source_cw).or_default().insert(item_id);
+                        }
+                    }
                 }
-                DataSourceDesc::IngestionExport { ingestion_id, .. } => {
-                    // For subsources, look up the parent source and propagate the compaction
-                    // window.
-                    let ingestion = self
-                        .get_entry(&ingestion_id)
-                        .source()
-                        .expect("must be source");
-                    let cw = ingestion
-                        .custom_logical_compaction_window
-                        .unwrap_or(source_cw);
-                    cws.entry(cw).or_default().insert(id);
-                }
-                DataSourceDesc::Introspection(_)
-                | DataSourceDesc::Progress
-                | DataSourceDesc::Webhook { .. } => {
-                    cws.entry(source_cw).or_default().insert(id);
+                CatalogItem::Table(table) => match &table.data_source {
+                    TableDataSource::DataSource {
+                        desc: DataSourceDesc::IngestionExport { ingestion_id, .. },
+                        timeline: _,
+                    } => {
+                        let table_cw = table.custom_logical_compaction_window.unwrap_or_default();
+                        let ingestion = self
+                            .get_entry(ingestion_id)
+                            .source()
+                            .expect("must be source");
+                        let cw = ingestion
+                            .custom_logical_compaction_window
+                            .unwrap_or(table_cw);
+                        cws.entry(cw).or_default().insert(item_id);
+                    }
+                    _ => {}
+                },
+                _ => {
+                    // Views could depend on sources, so ignore them if added by used_by above.
+                    continue;
                 }
             }
         }
         cws
+    }
+
+    pub fn comment_id_to_item_id(id: &CommentObjectId) -> Option<CatalogItemId> {
+        match id {
+            CommentObjectId::Table(id)
+            | CommentObjectId::View(id)
+            | CommentObjectId::MaterializedView(id)
+            | CommentObjectId::Source(id)
+            | CommentObjectId::Sink(id)
+            | CommentObjectId::Index(id)
+            | CommentObjectId::Func(id)
+            | CommentObjectId::Connection(id)
+            | CommentObjectId::Type(id)
+            | CommentObjectId::Secret(id)
+            | CommentObjectId::ContinualTask(id) => Some(*id),
+            CommentObjectId::Role(_)
+            | CommentObjectId::Database(_)
+            | CommentObjectId::Schema(_)
+            | CommentObjectId::Cluster(_)
+            | CommentObjectId::ClusterReplica(_)
+            | CommentObjectId::NetworkPolicy(_) => None,
+        }
+    }
+
+    pub fn get_comment_id_entry(&self, id: &CommentObjectId) -> Option<&CatalogEntry> {
+        Self::comment_id_to_item_id(id).map(|id| self.get_entry(&id))
+    }
+
+    pub fn comment_id_to_audit_log_name(
+        &self,
+        id: CommentObjectId,
+        conn_id: &ConnectionId,
+    ) -> String {
+        match id {
+            CommentObjectId::Table(id)
+            | CommentObjectId::View(id)
+            | CommentObjectId::MaterializedView(id)
+            | CommentObjectId::Source(id)
+            | CommentObjectId::Sink(id)
+            | CommentObjectId::Index(id)
+            | CommentObjectId::Func(id)
+            | CommentObjectId::Connection(id)
+            | CommentObjectId::Type(id)
+            | CommentObjectId::Secret(id)
+            | CommentObjectId::ContinualTask(id) => {
+                let item = self.get_entry(&id);
+                let name = self.resolve_full_name(item.name(), Some(conn_id));
+                name.to_string()
+            }
+            CommentObjectId::Role(id) => self.get_role(&id).name.clone(),
+            CommentObjectId::Database(id) => self.get_database(&id).name.clone(),
+            CommentObjectId::Schema((spec, schema_id)) => {
+                let schema = self.get_schema(&spec, &schema_id, conn_id);
+                self.resolve_full_schema_name(&schema.name).to_string()
+            }
+            CommentObjectId::Cluster(id) => self.get_cluster(id).name.clone(),
+            CommentObjectId::ClusterReplica((cluster_id, replica_id)) => {
+                let cluster = self.get_cluster(cluster_id);
+                let replica = self.get_cluster_replica(cluster_id, replica_id);
+                QualifiedReplica {
+                    cluster: Ident::new_unchecked(cluster.name.clone()),
+                    replica: Ident::new_unchecked(replica.name.clone()),
+                }
+                .to_string()
+            }
+            CommentObjectId::NetworkPolicy(id) => self.get_network_policy(&id).name.clone(),
+        }
     }
 }
 
 impl ConnectionResolver for CatalogState {
     fn resolve_connection(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
     ) -> mz_storage_types::connections::Connection<InlinedConnection> {
         use mz_storage_types::connections::Connection::*;
         match self
             .get_entry(&id)
             .connection()
             .expect("catalog out of sync")
-            .connection
-            .clone()
+            .details
+            .to_connection()
         {
             Kafka(conn) => Kafka(conn.into_inline_connection(self)),
             Postgres(conn) => Postgres(conn.into_inline_connection(self)),
@@ -2240,5 +2638,60 @@ impl ConnectionResolver for CatalogState {
             AwsPrivatelink(conn) => AwsPrivatelink(conn),
             MySql(conn) => MySql(conn.into_inline_connection(self)),
         }
+    }
+}
+
+impl OptimizerCatalog for CatalogState {
+    fn get_entry(&self, id: &GlobalId) -> CatalogCollectionEntry {
+        CatalogState::get_entry_by_global_id(self, id)
+    }
+    fn get_entry_by_item_id(&self, id: &CatalogItemId) -> &CatalogEntry {
+        CatalogState::get_entry(self, id)
+    }
+    fn resolve_full_name(
+        &self,
+        name: &QualifiedItemName,
+        conn_id: Option<&ConnectionId>,
+    ) -> FullItemName {
+        CatalogState::resolve_full_name(self, name, conn_id)
+    }
+    fn get_indexes_on(
+        &self,
+        id: GlobalId,
+        cluster: ClusterId,
+    ) -> Box<dyn Iterator<Item = (GlobalId, &Index)> + '_> {
+        Box::new(CatalogState::get_indexes_on(self, id, cluster))
+    }
+}
+
+impl OptimizerCatalog for Catalog {
+    fn get_entry(&self, id: &GlobalId) -> CatalogCollectionEntry {
+        self.state.get_entry_by_global_id(id)
+    }
+
+    fn get_entry_by_item_id(&self, id: &CatalogItemId) -> &CatalogEntry {
+        self.state.get_entry(id)
+    }
+
+    fn resolve_full_name(
+        &self,
+        name: &QualifiedItemName,
+        conn_id: Option<&ConnectionId>,
+    ) -> FullItemName {
+        self.state.resolve_full_name(name, conn_id)
+    }
+
+    fn get_indexes_on(
+        &self,
+        id: GlobalId,
+        cluster: ClusterId,
+    ) -> Box<dyn Iterator<Item = (GlobalId, &Index)> + '_> {
+        Box::new(self.state.get_indexes_on(id, cluster))
+    }
+}
+
+impl Catalog {
+    pub fn as_optimizer_catalog(self: Arc<Self>) -> Arc<dyn OptimizerCatalog> {
+        self
     }
 }

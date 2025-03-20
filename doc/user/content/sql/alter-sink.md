@@ -30,6 +30,10 @@ the contents of the new upstream relation are known. Attempting to `ALTER` an
 unhealthy sink that can't make progress will result in the command timing out.
 {{</ note >}}
 
+A sink cannot be created directly on a catalog object. As a workaround you can
+create a materialized view on a catalog object and create a sink on the
+materialized view.
+
 ### Valid schema changes
 
 For `ALTER SINK` to be successful, the newly specified relation must lead to a
@@ -94,7 +98,7 @@ keyspaces.
 To alter a sink originally created to use `matview_1` as the upstream relation,
 and start sinking the contents to `matview_2` instead:
 
-```sql
+```mzsql
 CREATE SINK avro_sink
   FROM matview_1
   INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_avro_topic')
@@ -103,7 +107,7 @@ CREATE SINK avro_sink
   ENVELOPE UPSERT;
 ```
 
-```sql
+```mzsql
 ALTER SINK foo SET FROM matview_2;
 ```
 

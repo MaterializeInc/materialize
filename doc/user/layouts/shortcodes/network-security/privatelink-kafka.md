@@ -50,22 +50,58 @@ and retrieve the AWS principal needed to configure the AWS PrivateLink service.
     Note the **service name** that is generated for the endpoint service.
 
 1. #### Create an AWS PrivateLink connection
-     In Materialize, create an [AWS PrivateLink connection](/sql/create-connection/#aws-privatelink) that references the endpoint service that you created in the previous step.
 
-     ```sql
-    CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
+    In Materialize, create an [AWS PrivateLink connection](/sql/create-connection/#aws-privatelink)
+    that references the endpoint service that you created in the previous step.
+
+    ↕️ **In-region connections**
+
+    To connect to an AWS PrivateLink endpoint service in the **same region** as your
+    Materialize environment:
+
+      ```mzsql
+      CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
         SERVICE NAME 'com.amazonaws.vpce.<region_id>.vpce-svc-<endpoint_service_id>',
-        AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az3')
-    );
-    ```
+        AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az4')
+      );
+      ```
 
-    Update the list of the availability zones to match the ones in your AWS account.
+    - Replace the `SERVICE NAME` value with the service name you noted earlier.
+
+    - Replace the `AVAILABILITY ZONES` list with the IDs of the availability
+      zones in your AWS account. For in-region connections the availability
+      zones of the NLB and the consumer VPC **must match**.
+
+      To find your availability zone IDs, select your database in the RDS
+      Console and click the subnets under **Connectivity & security**. For each
+      subnet, look for **Availability Zone ID** (e.g., `use1-az6`),
+      not **Availability Zone** (e.g., `us-east-1d`).
+
+    ↔️ **Cross-region connections**
+
+    To connect to an AWS PrivateLink endpoint service in a **different region** to
+    the one where your Materialize environment is deployed:
+
+      ```mzsql
+      CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
+        SERVICE NAME 'com.amazonaws.vpce.us-west-1.vpce-svc-<endpoint_service_id>',
+        -- For now, the AVAILABILITY ZONES clause **is** required, but will be
+        -- made optional in a future release.
+        AVAILABILITY ZONES ()
+      );
+      ```
+
+    - Replace the `SERVICE NAME` value with the service name you noted earlier.
+
+    - The service name region refers to where the endpoint service was created.
+      You **do not need** to specify `AVAILABILITY ZONES` manually — these will
+      be optimally auto-assigned when none are provided.
 
 ## Configure the AWS PrivateLink service
 
 1. Retrieve the AWS principal for the AWS PrivateLink connection you just created:
 
-    ```sql
+    ```mzsql
     SELECT principal
     FROM mz_aws_privatelink_connections plc
     JOIN mz_connections c ON plc.id = c.id
@@ -73,9 +109,9 @@ and retrieve the AWS principal needed to configure the AWS PrivateLink service.
     ```
 
     ```
-       id   |                                 principal
-    --------+---------------------------------------------------------------------------
-     u1     | arn:aws:iam::664411391173:role/mz_20273b7c-2bbe-42b8-8c36-8cc179e9bbc3_u1
+                                     principal
+    ---------------------------------------------------------------------------
+     arn:aws:iam::664411391173:role/mz_20273b7c-2bbe-42b8-8c36-8cc179e9bbc3_u1
     ```
 
     Follow the instructions in the [AWS PrivateLink documentation](https://docs.aws.amazon.com/vpc/latest/privatelink/add-endpoint-service-permissions.html)
@@ -90,7 +126,7 @@ and retrieve the AWS principal needed to configure the AWS PrivateLink service.
 
 Validate the AWS PrivateLink connection you created using the [`VALIDATE CONNECTION`](/sql/validate-connection) command:
 
-```sql
+```mzsql
 VALIDATE CONNECTION privatelink_svc;
 ```
 
@@ -98,14 +134,17 @@ If no validation error is returned, move to the next step.
 
 ## Create a source connection
 
-In Materialize, create a source connection that uses the AWS PrivateLink connection you just configured:
+In Materialize, create a source connection that uses the AWS PrivateLink
+connection you just configured:
 
-```sql
+```mzsql
 CREATE CONNECTION kafka_connection TO KAFKA (
     BROKERS (
+        -- The port **must exactly match** the port assigned to the broker in
+        -- the TCP listerner of the NLB.
         'b-1.hostname-1:9096' USING AWS PRIVATELINK privatelink_svc (PORT 9001, AVAILABILITY ZONE 'use1-az2'),
         'b-2.hostname-2:9096' USING AWS PRIVATELINK privatelink_svc (PORT 9002, AVAILABILITY ZONE 'use1-az1'),
-        'b-3.hostname-3:9096' USING AWS PRIVATELINK privatelink_svc (PORT 9003, AVAILABILITY ZONE 'use1-az3')
+        'b-3.hostname-3:9096' USING AWS PRIVATELINK privatelink_svc (PORT 9003, AVAILABILITY ZONE 'use1-az4')
     ),
     -- Authentication details
     -- Depending on the authentication method the Kafka cluster is using
@@ -115,4 +154,14 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 );
 ```
 
-The `(PORT <port_number>)` value must match the port that you used when creating the **TCP listener** in the Network Load Balancer. Be sure to specify the correct availability zone for each broker.
+### Troubleshooting
+
+If you run into connectivity issues during source creation, make sure that:
+
+* The `(PORT <port_number>)` value **exactly matches** the port assigned to the
+  corresponding broker in the **TCP listener** of the Network Load Balancer.
+  Misalignment between ports and broker addresses is the most common cause for
+  connectivity issues.
+
+* For **in-region connections**, the correct availability zone is specified for
+  each broker.

@@ -7,43 +7,43 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::str::FromStr;
+use std::collections::BTreeMap;
 
-use futures::future::BoxFuture;
 use maplit::btreeset;
-use mz_catalog::durable::{Item, Transaction};
-use mz_catalog::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
+use mz_catalog::builtin::BuiltinTable;
+use mz_catalog::durable::Transaction;
+use mz_catalog::memory::objects::{BootstrapStateUpdateKind, StateUpdate};
 use mz_ore::collections::CollectionExt;
-use mz_ore::now::{EpochMillis, NowFn};
-use mz_repr::{GlobalId, Timestamp};
+use mz_ore::now::NowFn;
+use mz_persist_types::ShardId;
+use mz_repr::{CatalogItemId, Timestamp};
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::visit_mut::VisitMut;
-use mz_sql::ast::{CreateSubsourceOption, CreateSubsourceOptionName, UnresolvedItemName};
-use mz_sql::catalog::SessionCatalog;
-use mz_sql_parser::ast::{Raw, Statement};
-use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::sources::GenericSourceConnection;
+use mz_sql::ast::CreateSinkOptionName;
+use mz_sql::names::FullItemName;
+use mz_sql_parser::ast::{IdentError, Raw, Statement};
+use mz_storage_client::controller::StorageTxn;
 use semver::Version;
 use tracing::info;
+use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
-use crate::catalog::{CatalogState, ConnCatalog};
+use crate::catalog::open::into_consolidatable_updates_startup;
+use crate::catalog::state::LocalExpressionCache;
+use crate::catalog::{BuiltinTableUpdate, CatalogState, ConnCatalog};
 
-async fn rewrite_ast_items<F>(tx: &mut Transaction<'_>, mut f: F) -> Result<(), anyhow::Error>
+fn rewrite_ast_items<F>(tx: &mut Transaction<'_>, mut f: F) -> Result<(), anyhow::Error>
 where
     F: for<'a> FnMut(
         &'a mut Transaction<'_>,
-        GlobalId,
+        CatalogItemId,
         &'a mut Statement<Raw>,
-    ) -> BoxFuture<'a, Result<(), anyhow::Error>>,
+    ) -> Result<(), anyhow::Error>,
 {
     let mut updated_items = BTreeMap::new();
-    let items = tx.get_items();
-    for mut item in items {
-        let mut stmt = mz_sql::parse::parse(&item.create_sql)?.into_element().ast;
 
-        f(tx, item.id, &mut stmt).await?;
+    for mut item in tx.get_items() {
+        let mut stmt = mz_sql::parse::parse(&item.create_sql)?.into_element().ast;
+        f(tx, item.id, &mut stmt)?;
 
         item.create_sql = stmt.to_ast_string_stable();
 
@@ -53,7 +53,7 @@ where
     Ok(())
 }
 
-async fn rewrite_items<F>(
+fn rewrite_items<F>(
     tx: &mut Transaction<'_>,
     cat: &ConnCatalog<'_>,
     mut f: F,
@@ -62,16 +62,16 @@ where
     F: for<'a> FnMut(
         &'a mut Transaction<'_>,
         &'a &ConnCatalog<'_>,
-        GlobalId,
+        CatalogItemId,
         &'a mut Statement<Raw>,
-    ) -> BoxFuture<'a, Result<(), anyhow::Error>>,
+    ) -> Result<(), anyhow::Error>,
 {
     let mut updated_items = BTreeMap::new();
     let items = tx.get_items();
     for mut item in items {
         let mut stmt = mz_sql::parse::parse(&item.create_sql)?.into_element().ast;
 
-        f(tx, &cat, item.id, &mut stmt).await?;
+        f(tx, &cat, item.id, &mut stmt)?;
 
         item.create_sql = stmt.to_ast_string_stable();
 
@@ -81,16 +81,25 @@ where
     Ok(())
 }
 
+pub(crate) struct MigrateResult {
+    pub(crate) builtin_table_updates: Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
+    pub(crate) post_item_updates: Vec<(BootstrapStateUpdateKind, Timestamp, i64)>,
+}
+
+/// Migrates all user items and loads them into `state`.
+///
+/// Returns the builtin updates corresponding to all user items.
 pub(crate) async fn migrate(
-    state: &CatalogState,
+    state: &mut CatalogState,
     tx: &mut Transaction<'_>,
+    local_expr_cache: &mut LocalExpressionCache,
+    item_updates: Vec<StateUpdate>,
     now: NowFn,
-    boot_ts: Timestamp,
-    _connection_context: &ConnectionContext,
-) -> Result<(), anyhow::Error> {
+    _boot_ts: Timestamp,
+) -> Result<MigrateResult, anyhow::Error> {
     let catalog_version = tx.get_catalog_content_version();
     let catalog_version = match catalog_version {
-        Some(v) => Version::parse(&v)?,
+        Some(v) => Version::parse(v)?,
         None => Version::new(0, 0, 0),
     };
 
@@ -99,313 +108,727 @@ pub(crate) async fn migrate(
         catalog_version
     );
 
-    rewrite_ast_items(tx, |_tx, _id, _stmt| {
-        let _catalog_version = catalog_version.clone();
-        Box::pin(async move {
-            // Add per-item AST migrations below.
-            //
-            // Each migration should be a function that takes `item` (the AST
-            // representing the creation SQL for the item) as input. Any
-            // mutations to `item` will be staged for commit to the catalog.
-            //
-            // Migration functions may also take `tx` as input to stage
-            // arbitrary changes to the catalog.
-            Ok(())
-        })
-    })
-    .await?;
+    // Special block for `ast_rewrite_sources_to_tables` migration
+    // since it requires a feature flag needs to update multiple AST items at once.
+    if state.system_config().force_source_table_syntax() {
+        ast_rewrite_sources_to_tables(tx, now)?;
+    }
 
-    // Load up a temporary catalog.
-    let mut state = state.clone();
-    let item_updates = tx
-        .get_items()
-        .map(|item| StateUpdate {
-            kind: StateUpdateKind::Item(item),
-            ts: boot_ts,
-            diff: StateDiff::Addition,
+    rewrite_ast_items(tx, |_tx, _id, stmt| {
+        // Add per-item AST migrations below.
+        //
+        // Each migration should be a function that takes `stmt` (the AST
+        // representing the creation SQL for the item) as input. Any
+        // mutations to `stmt` will be staged for commit to the catalog.
+        //
+        // Migration functions may also take `tx` as input to stage
+        // arbitrary changes to the catalog.
+        ast_rewrite_create_sink_partition_strategy(stmt)?;
+        Ok(())
+    })?;
+
+    // Load items into catalog. We make sure to consolidate the old updates with the new updates to
+    // avoid trying to apply unmigrated items.
+    let commit_ts = tx.upper();
+    let mut item_updates = into_consolidatable_updates_startup(item_updates, commit_ts);
+    let op_item_updates = tx.get_and_commit_op_updates();
+    let op_item_updates = into_consolidatable_updates_startup(op_item_updates, commit_ts);
+    item_updates.extend(op_item_updates);
+    differential_dataflow::consolidation::consolidate_updates(&mut item_updates);
+
+    // Since some migrations might introduce non-item 'post-item' updates, we sequester those
+    // so they can be applied with other post-item updates after migrations to avoid
+    // accumulating negative diffs.
+    let (post_item_updates, item_updates): (Vec<_>, Vec<_>) = item_updates
+        .into_iter()
+        // The only post-item update kind we currently generate is to
+        // update storage collection metadata.
+        .partition(|(kind, _, _)| {
+            matches!(kind, BootstrapStateUpdateKind::StorageCollectionMetadata(_))
+        });
+
+    let item_updates = item_updates
+        .into_iter()
+        .map(|(kind, ts, diff)| StateUpdate {
+            kind: kind.into(),
+            ts,
+            diff: diff.try_into().expect("valid diff"),
         })
         .collect();
-    // The catalog is temporary, so we can throw out the builtin updates.
-    let _ = state.apply_updates_for_bootstrap(item_updates).await;
+    let mut ast_builtin_table_updates = state
+        .apply_updates_for_bootstrap(item_updates, local_expr_cache)
+        .await;
 
     info!("migrating from catalog version {:?}", catalog_version);
 
     let conn_cat = state.for_system_session();
 
-    rewrite_items(tx, &conn_cat, |_tx, conn_cat, _id, stmt| {
+    rewrite_items(tx, &conn_cat, |_tx, _conn_cat, _id, _stmt| {
         let _catalog_version = catalog_version.clone();
-        Box::pin(async move {
-            // Add per-item, post-planning AST migrations below. Most
-            // migrations should be in the above `rewrite_ast_items` block.
-            //
-            // Each migration should be a function that takes `item` (the AST
-            // representing the creation SQL for the item) as input. Any
-            // mutations to `item` will be staged for commit to the catalog.
-            //
-            // Be careful if you reference `conn_cat`. Doing so is *weird*,
-            // as you'll be rewriting the catalog while looking at it. If
-            // possible, make your migration independent of `conn_cat`, and only
-            // consider a single item at a time.
-            //
-            // Migration functions may also take `tx` as input to stage
-            // arbitrary changes to the catalog.
-            ast_rewrite_create_source_pg_database_details(conn_cat, stmt)?;
-            Ok(())
-        })
-    })
-    .await?;
+        // Add per-item, post-planning AST migrations below. Most
+        // migrations should be in the above `rewrite_ast_items` block.
+        //
+        // Each migration should be a function that takes `item` (the AST
+        // representing the creation SQL for the item) as input. Any
+        // mutations to `item` will be staged for commit to the catalog.
+        //
+        // Be careful if you reference `conn_cat`. Doing so is *weird*,
+        // as you'll be rewriting the catalog while looking at it. If
+        // possible, make your migration independent of `conn_cat`, and only
+        // consider a single item at a time.
+        //
+        // Migration functions may also take `tx` as input to stage
+        // arbitrary changes to the catalog.
+        Ok(())
+    })?;
 
     // Add whole-catalog migrations below.
     //
     // Each migration should be a function that takes `tx` and `conn_cat` as
     // input and stages arbitrary transformations to the catalog on `tx`.
-    mysql_subsources_remove_unnecessary_db_name(tx, &conn_cat)?;
-    fix_dependency_order_0_99_2(tx, &conn_cat, now)?;
+
+    let op_item_updates = tx.get_and_commit_op_updates();
+    let item_builtin_table_updates = state
+        .apply_updates_for_bootstrap(op_item_updates, local_expr_cache)
+        .await;
+
+    ast_builtin_table_updates.extend(item_builtin_table_updates);
 
     info!(
         "migration from catalog version {:?} complete",
         catalog_version
     );
+    Ok(MigrateResult {
+        builtin_table_updates: ast_builtin_table_updates,
+        post_item_updates,
+    })
+}
+
+// Add new migrations below their appropriate heading, and precede them with a
+// short summary of the migration's purpose and optional additional commentary
+// about safety or approach.
+//
+// The convention is to name the migration function using snake case:
+// > <category>_<description>_<version>
+//
+// Please include the adapter team on any code reviews that add or edit
+// migrations.
+
+/// Migrates all sources to use the new sources as tables model
+///
+/// First we migrate existing `CREATE SUBSOURCE` statements, turning them into
+/// `CREATE TABLE .. FROM SOURCE` statements. This covers existing Postgres,
+/// MySQL, and multi-output (tpch, auction, marketing) load-generator subsources.
+///
+/// Second we migrate existing `CREATE SOURCE` statements for these multi-output
+/// sources to remove any subsource-specific options (e.g. TEXT COLUMNS).
+///
+/// Third we migrate existing single-output `CREATE SOURCE` statements.
+/// This includes existing Kafka and single-output load-generator
+/// subsources. This will generate an additional `CREATE TABLE .. FROM SOURCE`
+/// statement that copies over all the export-specific options. This table will use
+/// to the existing source statement's persist shard but use a new GlobalID.
+/// The original source statement will be updated to remove the export-specific options,
+/// renamed to `<original_name>_source`, and use a new empty shard while keeping its
+/// same GlobalId.
+///
+fn ast_rewrite_sources_to_tables(
+    tx: &mut Transaction<'_>,
+    now: NowFn,
+) -> Result<(), anyhow::Error> {
+    use maplit::btreemap;
+    use maplit::btreeset;
+    use mz_persist_types::ShardId;
+    use mz_proto::RustType;
+    use mz_sql::ast::{
+        CreateSourceConnection, CreateSourceStatement, CreateSubsourceOptionName,
+        CreateSubsourceStatement, CreateTableFromSourceStatement, Ident,
+        KafkaSourceConfigOptionName, LoadGenerator, MySqlConfigOptionName, PgConfigOptionName,
+        RawItemName, TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName,
+        UnresolvedItemName, Value, WithOptionValue,
+    };
+    use mz_storage_client::controller::StorageTxn;
+    use mz_storage_types::sources::load_generator::LoadGeneratorOutput;
+    use mz_storage_types::sources::SourceExportStatementDetails;
+    use prost::Message;
+
+    let items_with_statements = tx
+        .get_items()
+        .map(|item| {
+            let stmt = mz_sql::parse::parse(&item.create_sql)?.into_element().ast;
+            Ok((item, stmt))
+        })
+        .collect::<Result<Vec<_>, anyhow::Error>>()?;
+    let items_with_statements_copied = items_with_statements.clone();
+
+    let item_names_per_schema = items_with_statements_copied
+        .iter()
+        .map(|(item, _)| (item.schema_id.clone(), &item.name))
+        .fold(BTreeMap::new(), |mut acc, (schema_id, name)| {
+            acc.entry(schema_id)
+                .or_insert_with(|| btreeset! {})
+                .insert(name);
+            acc
+        });
+
+    // Any CatalogItemId that should be changed to a new CatalogItemId in any statements that
+    // reference it. This is necessary for ensuring downstream statements (e.g.
+    // mat views, indexes) that reference a single-output source (e.g. kafka)
+    // will now reference the corresponding new table, with the same data, instead.
+    let mut changed_ids = BTreeMap::new();
+
+    for (mut item, stmt) in items_with_statements {
+        match stmt {
+            // Migrate each `CREATE SUBSOURCE` statement to an equivalent
+            // `CREATE TABLE ... FROM SOURCE` statement.
+            Statement::CreateSubsource(CreateSubsourceStatement {
+                name,
+                columns,
+                constraints,
+                of_source,
+                if_not_exists,
+                mut with_options,
+            }) => {
+                let raw_source_name = match of_source {
+                    // If `of_source` is None then this is a `progress` subsource which we
+                    // are not migrating as they are not currently relevant to the new table model.
+                    None => continue,
+                    Some(name) => name,
+                };
+                let source = match raw_source_name {
+                    // Some legacy subsources have named-only references to their `of_source`
+                    // so we ensure we always use an ID-based reference in the stored
+                    // `CREATE TABLE ... FROM SOURCE` statements.
+                    RawItemName::Name(name) => {
+                        // Convert the name reference to an ID reference.
+                        let (source_item, _) = items_with_statements_copied
+                            .iter()
+                            .find(|(_, statement)| match statement {
+                                Statement::CreateSource(stmt) => stmt.name == name,
+                                _ => false,
+                            })
+                            .expect("source must exist");
+                        RawItemName::Id(source_item.id.to_string(), name, None)
+                    }
+                    RawItemName::Id(..) => raw_source_name,
+                };
+
+                // The external reference is a `with_option` on subsource statements but is a
+                // separate field on table statements.
+                let external_reference = match with_options
+                    .iter()
+                    .position(|opt| opt.name == CreateSubsourceOptionName::ExternalReference)
+                {
+                    Some(i) => match with_options.remove(i).value {
+                        Some(WithOptionValue::UnresolvedItemName(name)) => name,
+                        _ => unreachable!("external reference must be an unresolved item name"),
+                    },
+                    None => panic!("subsource must have an external reference"),
+                };
+
+                let with_options = with_options
+                    .into_iter()
+                    .map(|option| {
+                        match option.name {
+                            CreateSubsourceOptionName::Details => TableFromSourceOption {
+                                name: TableFromSourceOptionName::Details,
+                                // The `details` option on both subsources and tables is identical, using the same
+                                // ProtoSourceExportStatementDetails serialized value.
+                                value: option.value,
+                            },
+                            CreateSubsourceOptionName::TextColumns => TableFromSourceOption {
+                                name: TableFromSourceOptionName::TextColumns,
+                                value: option.value,
+                            },
+                            CreateSubsourceOptionName::ExcludeColumns => TableFromSourceOption {
+                                name: TableFromSourceOptionName::ExcludeColumns,
+                                value: option.value,
+                            },
+                            CreateSubsourceOptionName::Progress => {
+                                panic!("progress option should not exist on this subsource")
+                            }
+                            CreateSubsourceOptionName::ExternalReference => {
+                                unreachable!("This option is handled separately above.")
+                            }
+                        }
+                    })
+                    .collect::<Vec<_>>();
+
+                let table = CreateTableFromSourceStatement {
+                    name,
+                    constraints,
+                    columns: mz_sql::ast::TableFromSourceColumns::Defined(columns),
+                    if_not_exists,
+                    source,
+                    external_reference: Some(external_reference.clone()),
+                    with_options,
+                    // Subsources don't have `envelope`, `include_metadata`, or `format` options.
+                    envelope: None,
+                    include_metadata: vec![],
+                    format: None,
+                };
+
+                info!(
+                    "migrate: converted subsource {} to table {}",
+                    item.create_sql, table
+                );
+                item.create_sql = Statement::CreateTableFromSource(table).to_ast_string_stable();
+                tx.update_item(item.id, item)?;
+            }
+
+            // Postgres sources are multi-output sources whose subsources are
+            // migrated above. All we need to do is remove the subsource-related
+            // options from this statement since they are no longer relevant.
+            Statement::CreateSource(CreateSourceStatement {
+                connection:
+                    mut conn @ (CreateSourceConnection::Postgres { .. }
+                    | CreateSourceConnection::Yugabyte { .. }),
+                name,
+                if_not_exists,
+                in_cluster,
+                include_metadata,
+                format,
+                envelope,
+                col_names,
+                with_options,
+                key_constraint,
+                external_references,
+                progress_subsource,
+            }) => {
+                let options = match &mut conn {
+                    CreateSourceConnection::Postgres { options, .. } => options,
+                    CreateSourceConnection::Yugabyte { options, .. } => options,
+                    _ => unreachable!("match determined above"),
+                };
+                // This option storing text columns on the primary source statement is redundant
+                // with the option on subsource statements so can just be removed.
+                // This was kept for round-tripping of `CREATE SOURCE` statements that automatically
+                // generated subsources, which is no longer necessary.
+                if options
+                    .iter()
+                    .any(|o| matches!(o.name, PgConfigOptionName::TextColumns))
+                {
+                    options.retain(|o| !matches!(o.name, PgConfigOptionName::TextColumns));
+                    let stmt = Statement::CreateSource(CreateSourceStatement {
+                        connection: conn,
+                        name,
+                        if_not_exists,
+                        in_cluster,
+                        include_metadata,
+                        format,
+                        envelope,
+                        col_names,
+                        with_options,
+                        key_constraint,
+                        external_references,
+                        progress_subsource,
+                    });
+                    item.create_sql = stmt.to_ast_string_stable();
+                    tx.update_item(item.id, item)?;
+                    info!("migrate: converted postgres source {stmt} to remove subsource options");
+                }
+            }
+            // MySQL sources are multi-output sources whose subsources are
+            // migrated above. All we need to do is remove the subsource-related
+            // options from this statement since they are no longer relevant.
+            Statement::CreateSource(CreateSourceStatement {
+                connection: mut conn @ CreateSourceConnection::MySql { .. },
+                name,
+                if_not_exists,
+                in_cluster,
+                include_metadata,
+                format,
+                envelope,
+                col_names,
+                with_options,
+                key_constraint,
+                external_references,
+                progress_subsource,
+                ..
+            }) => {
+                let options = match &mut conn {
+                    CreateSourceConnection::MySql { options, .. } => options,
+                    _ => unreachable!("match determined above"),
+                };
+                // These options storing text and exclude columns on the primary source statement
+                // are redundant with the options on subsource statements so can just be removed.
+                // They was kept for round-tripping of `CREATE SOURCE` statements that automatically
+                // generated subsources, which is no longer necessary.
+                if options.iter().any(|o| {
+                    matches!(
+                        o.name,
+                        MySqlConfigOptionName::TextColumns | MySqlConfigOptionName::ExcludeColumns
+                    )
+                }) {
+                    options.retain(|o| {
+                        !matches!(
+                            o.name,
+                            MySqlConfigOptionName::TextColumns
+                                | MySqlConfigOptionName::ExcludeColumns
+                        )
+                    });
+                    let stmt = Statement::CreateSource(CreateSourceStatement {
+                        connection: conn,
+                        name,
+                        if_not_exists,
+                        in_cluster,
+                        include_metadata,
+                        format,
+                        envelope,
+                        col_names,
+                        with_options,
+                        key_constraint,
+                        external_references,
+                        progress_subsource,
+                    });
+                    item.create_sql = stmt.to_ast_string_stable();
+                    tx.update_item(item.id, item)?;
+                    info!("migrate: converted mysql source {stmt} to remove subsource options");
+                }
+            }
+            // Multi-output load generator sources whose subsources are already
+            // migrated above. There is no need to remove any options from this
+            // statement since they are not export-specific.
+            Statement::CreateSource(CreateSourceStatement {
+                connection:
+                    CreateSourceConnection::LoadGenerator {
+                        generator:
+                            LoadGenerator::Auction | LoadGenerator::Marketing | LoadGenerator::Tpch,
+                        ..
+                    },
+                ..
+            }) => {}
+            // Single-output sources that need to be migrated to tables. These sources currently output
+            // data to the primary collection of the source statement. We will create a new table
+            // statement for them and move all export-specific options over from the source statement,
+            // while moving the `CREATE SOURCE` statement to a new name and moving its shard to the
+            // new table statement.
+            Statement::CreateSource(CreateSourceStatement {
+                connection:
+                    conn @ (CreateSourceConnection::Kafka { .. }
+                    | CreateSourceConnection::LoadGenerator {
+                        generator:
+                            LoadGenerator::Clock
+                            | LoadGenerator::Datums
+                            | LoadGenerator::Counter
+                            | LoadGenerator::KeyValue,
+                        ..
+                    }),
+                name,
+                col_names,
+                include_metadata,
+                format,
+                envelope,
+                with_options,
+                if_not_exists,
+                in_cluster,
+                progress_subsource,
+                external_references,
+                key_constraint,
+            }) => {
+                // To check if this is a source that has already been migrated we use a basic
+                // heuristic: if there is at least one existing table for the source, and if
+                // the envelope/format/include_metadata options are empty, we assume it's
+                // already been migrated.
+                let tables_for_source =
+                    items_with_statements_copied
+                        .iter()
+                        .any(|(_, statement)| match statement {
+                            Statement::CreateTableFromSource(stmt) => {
+                                let source: CatalogItemId = match &stmt.source {
+                                    RawItemName::Name(_) => {
+                                        unreachable!("tables store source as ID")
+                                    }
+                                    RawItemName::Id(source_id, _, _) => {
+                                        source_id.parse().expect("valid id")
+                                    }
+                                };
+                                source == item.id
+                            }
+                            _ => false,
+                        });
+                if tables_for_source
+                    && envelope.is_none()
+                    && format.is_none()
+                    && include_metadata.is_empty()
+                {
+                    info!("migrate: skipping already migrated source: {}", name);
+                    continue;
+                }
+
+                // Use the current source name as the new table name, and rename the source to
+                // `<source_name>_source`. This is intended to allow users to continue using
+                // queries that reference the source name, since they will now need to query the
+                // table instead.
+
+                assert_eq!(
+                    item.name,
+                    name.0.last().expect("at least one ident").to_string()
+                );
+                // First find an unused name within the same schema to avoid conflicts.
+                let is_valid = |new_source_ident: &Ident| {
+                    if item_names_per_schema
+                        .get(&item.schema_id)
+                        .expect("schema must exist")
+                        .contains(&new_source_ident.to_string())
+                    {
+                        Ok::<_, IdentError>(false)
+                    } else {
+                        Ok(true)
+                    }
+                };
+                let new_source_ident =
+                    Ident::try_generate_name(item.name.clone(), "_source", is_valid)?;
+
+                // We will use the original item name for the new table item.
+                let table_item_name = item.name.clone();
+
+                // Update the source item/statement to use the new name.
+                let mut new_source_name = name.clone();
+                *new_source_name.0.last_mut().expect("at least one ident") =
+                    new_source_ident.clone();
+                item.name = new_source_ident.to_string();
+
+                // A reference to the source that will be included in the table statement
+                let source_ref =
+                    RawItemName::Id(item.id.to_string(), new_source_name.clone(), None);
+
+                let columns = if col_names.is_empty() {
+                    TableFromSourceColumns::NotSpecified
+                } else {
+                    TableFromSourceColumns::Named(col_names)
+                };
+
+                // All source tables must have a `details` option, which is a serialized proto
+                // describing any source-specific details for this table statement.
+                let details = match &conn {
+                    // For kafka sources this proto is currently empty.
+                    CreateSourceConnection::Kafka { .. } => SourceExportStatementDetails::Kafka {},
+                    CreateSourceConnection::LoadGenerator { .. } => {
+                        // Since these load generators are single-output we use the default output.
+                        SourceExportStatementDetails::LoadGenerator {
+                            output: LoadGeneratorOutput::Default,
+                        }
+                    }
+                    _ => unreachable!("match determined above"),
+                };
+                let table_with_options = vec![TableFromSourceOption {
+                    name: TableFromSourceOptionName::Details,
+                    value: Some(WithOptionValue::Value(Value::String(hex::encode(
+                        details.into_proto().encode_to_vec(),
+                    )))),
+                }];
+
+                // Generate the same external-reference that would have been generated
+                // during purification for single-output sources.
+                let external_reference = match &conn {
+                    CreateSourceConnection::Kafka { options, .. } => {
+                        let topic_option = options
+                            .iter()
+                            .find(|o| matches!(o.name, KafkaSourceConfigOptionName::Topic))
+                            .expect("kafka sources must have a topic");
+                        let topic = match &topic_option.value {
+                            Some(WithOptionValue::Value(Value::String(topic))) => topic,
+                            _ => unreachable!("topic must be a string"),
+                        };
+
+                        Some(UnresolvedItemName::qualified(&[Ident::new(topic)?]))
+                    }
+                    CreateSourceConnection::LoadGenerator { generator, .. } => {
+                        // Since these load generators are single-output the external reference
+                        // uses the schema-name for both namespace and name.
+                        let name = FullItemName {
+                                database: mz_sql::names::RawDatabaseSpecifier::Name(
+                                    mz_storage_types::sources::load_generator::LOAD_GENERATOR_DATABASE_NAME
+                                        .to_owned(),
+                                ),
+                                schema: generator.schema_name().to_string(),
+                                item: generator.schema_name().to_string(),
+                            };
+                        Some(UnresolvedItemName::from(name))
+                    }
+                    _ => unreachable!("match determined above"),
+                };
+
+                // The new table statement, stealing the name and the export-specific fields from
+                // the create source statement.
+                let table = CreateTableFromSourceStatement {
+                    name,
+                    constraints: vec![],
+                    columns,
+                    if_not_exists: false,
+                    source: source_ref,
+                    external_reference,
+                    with_options: table_with_options,
+                    envelope,
+                    include_metadata,
+                    format,
+                };
+
+                // The source statement with a new name and many of its fields emptied
+                let source = CreateSourceStatement {
+                    connection: conn,
+                    name: new_source_name,
+                    if_not_exists,
+                    in_cluster,
+                    include_metadata: vec![],
+                    format: None,
+                    envelope: None,
+                    col_names: vec![],
+                    with_options,
+                    key_constraint,
+                    external_references,
+                    progress_subsource,
+                };
+
+                let source_id = item.id;
+                let source_global_id = item.global_id;
+                let schema_id = item.schema_id.clone();
+                let schema = tx.get_schema(&item.schema_id).expect("schema must exist");
+
+                let owner_id = item.owner_id.clone();
+                let privileges = item.privileges.clone();
+                let extra_versions = item.extra_versions.clone();
+
+                // Update the source statement in the catalog first, since the name will
+                // otherwise conflict with the new table statement.
+                info!("migrate: updated source {} to {source}", item.create_sql);
+                item.create_sql = Statement::CreateSource(source).to_ast_string_stable();
+                tx.update_item(item.id, item)?;
+
+                // Insert the new table statement into the catalog with a new id.
+                let ids = tx.allocate_user_item_ids(1)?;
+                let (new_table_id, new_table_global_id) = ids[0];
+                info!("migrate: added table {new_table_id}: {table}");
+                tx.insert_user_item(
+                    new_table_id,
+                    new_table_global_id,
+                    schema_id,
+                    &table_item_name,
+                    table.to_ast_string_stable(),
+                    owner_id,
+                    privileges,
+                    &Default::default(),
+                    extra_versions,
+                )?;
+                // We need to move the shard currently attached to the source statement to the
+                // table statement such that the existing data in the shard is preserved and can
+                // be queried on the new table statement. However, we need to keep the GlobalId of
+                // the source the same, to preserve existing references to that statement in
+                // external tools such as DBT and Terraform. We will insert a new shard for the source
+                // statement which will be automatically created after the migration is complete.
+                let new_source_shard = ShardId::new();
+                let (source_global_id, existing_source_shard) = tx
+                    .delete_collection_metadata(btreeset! {source_global_id})
+                    .pop()
+                    .expect("shard should exist");
+                tx.insert_collection_metadata(btreemap! {
+                    new_table_global_id => existing_source_shard,
+                    source_global_id => new_source_shard
+                })?;
+
+                add_to_audit_log(
+                    tx,
+                    mz_audit_log::EventType::Create,
+                    mz_audit_log::ObjectType::Table,
+                    mz_audit_log::EventDetails::IdFullNameV1(mz_audit_log::IdFullNameV1 {
+                        id: new_table_id.to_string(),
+                        name: mz_audit_log::FullNameV1 {
+                            database: schema
+                                .database_id
+                                .map(|d| d.to_string())
+                                .unwrap_or_default(),
+                            schema: schema.name,
+                            item: table_item_name,
+                        },
+                    }),
+                    now(),
+                )?;
+
+                // We also need to update any other statements that reference the source to use the new
+                // table id/name instead.
+                changed_ids.insert(source_id, new_table_id);
+            }
+
+            // TODO(sql_server1): Consider how to migrate SQL Server subsources
+            // to the source table world.
+            Statement::CreateSource(CreateSourceStatement {
+                connection: CreateSourceConnection::SqlServer { .. },
+                ..
+            }) => (),
+
+            #[expect(unreachable_patterns)]
+            Statement::CreateSource(_) => {}
+            _ => (),
+        }
+    }
+
+    let mut updated_items = BTreeMap::new();
+    for (mut item, mut statement) in items_with_statements_copied {
+        match &statement {
+            // Don’t rewrite any of the statements we just migrated.
+            Statement::CreateSource(_) => {}
+            Statement::CreateSubsource(_) => {}
+            Statement::CreateTableFromSource(_) => {}
+            // We need to rewrite any statements that reference a source id to use the new
+            // table id instead, since any contained data in the source will now be in the table.
+            // This assumes the table has stolen the source's name, which is the case
+            // for all sources that were migrated.
+            _ => {
+                if mz_sql::names::modify_dependency_item_ids(&mut statement, &changed_ids) {
+                    info!("migrate: updated dependency reference in statement {statement}");
+                    item.create_sql = statement.to_ast_string_stable();
+                    updated_items.insert(item.id, item);
+                }
+            }
+        }
+    }
+    if !updated_items.is_empty() {
+        tx.update_items(updated_items)?;
+    }
+
     Ok(())
 }
 
-/// Assigns new `GlobalId`s to the items in `needs_new_id`.
-///
-/// The IDs will be assigned in relative order to `needs_new_id`. For example,
-/// the first element of `needs_new_id` will have the smallest ID and the last
-/// element will have the greatest.
-///
-/// # Notes
-/// This function:
-/// - Does not analyze dependencies. Callers must provide all items whose
-///   `GlobalId`s they wish to reassign to `needs_new_id`.
-/// - Assumes all items in `needs_new_id` are present in `conn_catalog` and that
-///   their types do not change.
-fn assign_new_user_global_ids(
-    tx: &mut Transaction<'_>,
-    conn_catalog: &ConnCatalog,
-    now: NowFn,
-    needs_new_id: Vec<GlobalId>,
+// Durable migrations
+
+/// Migrations that run only on the durable catalog before any data is loaded into memory.
+pub(crate) fn durable_migrate(
+    tx: &mut Transaction,
+    _organization_id: Uuid,
+    _boot_ts: Timestamp,
 ) -> Result<(), anyhow::Error> {
-    use itertools::Itertools;
-    use mz_audit_log::{FromPreviousIdV1, ToNewIdV1};
-    use mz_ore::cast::CastFrom;
-    use mz_sql::names::CommentObjectId;
-    use mz_sql_parser::ast::RawItemName;
-    use mz_storage_client::controller::StorageTxn;
-
-    // !WARNING!
-    //
-    // double-check that using this fn doesn't interfer with any other
-    // migrations
-
-    // Convert the IDs we need into a set with constant-time lookup.
-    let news_new_id_set: BTreeSet<_> = needs_new_id
-        .iter()
-        .map(|id| {
-            assert!(id.is_user(), "cannot assign new ID to non-user ID {:?}", id);
-            id
-        })
-        .cloned()
-        .collect();
-
-    // Create a catalog of the items we're updating.
-    let mut update_items: BTreeMap<_, _> = tx
-        .get_items()
-        .into_iter()
-        .filter_map(|item| match news_new_id_set.contains(&item.id) {
-            true => Some((item.id, item)),
-            false => None,
-        })
-        .collect();
-
-    // Allocate the new IDs.
-    let new_ids = tx.allocate_user_item_ids(u64::cast_from(needs_new_id.len()))?;
-
-    // Before updating the item by inserting its new state, ensure we remove its
-    // old state.
-    tx.remove_items(&news_new_id_set)?;
-
-    // Delete the storage metadata alongside removing the item––this will return
-    // the metadata for the deleted entries, which we'll re-associate with the
-    // new IDs.
-    let mut deleted_metadata: BTreeMap<_, _> = tx
-        .delete_collection_metadata(news_new_id_set)
-        .into_iter()
-        .collect();
-
-    // Collect all storage metadata we need to update.
-    let mut updated_storage_collection_metadata = BTreeMap::new();
-    // Track old and new IDs
-    let mut new_id_mapping = BTreeMap::new();
-
-    let occurred_at = now();
-
-    // We know that we've allocated as many new IDs as we have items that need
-    // new IDs, so `zip_eq` is appropriate.
-    for (old_id, new_id) in needs_new_id.into_iter().zip_eq(new_ids.into_iter()) {
-        let item = update_items.remove(&old_id).expect("known to be an entry");
-
-        new_id_mapping.insert(item.id, new_id);
-
-        let entry = conn_catalog.get_item(&item.id);
-
-        tracing::info!("reassigning {} to {}", item.id, new_id);
-        tx.insert_item(
-            new_id,
-            item.oid,
-            item.schema_id,
-            &item.name,
-            item.create_sql,
-            item.owner_id,
-            item.privileges,
+    // Migrate the expression cache to a new shard. We're updating the keys to use the explicit
+    // binary version instead of the deploy generation.
+    const EXPR_CACHE_MIGRATION_KEY: &str = "expr_cache_migration";
+    const EXPR_CACHE_MIGRATION_DONE: u64 = 1;
+    if tx.get_config(EXPR_CACHE_MIGRATION_KEY.to_string()) != Some(EXPR_CACHE_MIGRATION_DONE) {
+        if let Some(shard_id) = tx.get_expression_cache_shard() {
+            tx.mark_shards_as_finalized(btreeset! {shard_id});
+            tx.set_expression_cache_shard(ShardId::new())?;
+        }
+        tx.set_config(
+            EXPR_CACHE_MIGRATION_KEY.to_string(),
+            Some(EXPR_CACHE_MIGRATION_DONE),
         )?;
+    }
 
-        let object_type = entry.item_type().into();
-
-        add_to_audit_log(
-            tx,
-            mz_audit_log::EventType::Create,
-            object_type,
-            mz_audit_log::EventDetails::FromPreviousIdV1(FromPreviousIdV1 {
-                previous_id: item.id.to_string(),
-                id: new_id.to_string(),
-            }),
-            occurred_at,
+    // Migrate the builtin migration shard to a new shard. We're updating the keys to use the explicit
+    // binary version instead of the deploy generation.
+    const BUILTIN_MIGRATION_SHARD_MIGRATION_KEY: &str = "migration_shard_migration";
+    const BUILTIN_MIGRATION_SHARD_MIGRATION_DONE: u64 = 1;
+    if tx.get_config(BUILTIN_MIGRATION_SHARD_MIGRATION_KEY.to_string())
+        != Some(BUILTIN_MIGRATION_SHARD_MIGRATION_DONE)
+    {
+        if let Some(shard_id) = tx.get_builtin_migration_shard() {
+            tx.mark_shards_as_finalized(btreeset! {shard_id});
+            tx.set_builtin_migration_shard(ShardId::new())?;
+        }
+        tx.set_config(
+            BUILTIN_MIGRATION_SHARD_MIGRATION_KEY.to_string(),
+            Some(BUILTIN_MIGRATION_SHARD_MIGRATION_DONE),
         )?;
-
-        add_to_audit_log(
-            tx,
-            mz_audit_log::EventType::Drop,
-            object_type,
-            mz_audit_log::EventDetails::ToNewIdV1(ToNewIdV1 {
-                id: item.id.to_string(),
-                new_id: new_id.to_string(),
-            }),
-            occurred_at,
-        )?;
-
-        if let Some(metadata) = deleted_metadata.remove(&item.id) {
-            tracing::info!(
-                "reassigning {}'s storage metadata to {}: {}",
-                item.id,
-                new_id,
-                metadata
-            );
-            updated_storage_collection_metadata.insert(new_id, metadata);
-        }
     }
-
-    // Provisionally save new storage metadata.
-    tx.insert_collection_metadata(updated_storage_collection_metadata)?;
-
-    // Check for comments which will need to be updated.
-    for (old_id, new_id) in new_id_mapping.iter() {
-        if conn_catalog.get_item_comments(old_id).is_some() {
-            tracing::info!("reassigning {}'s comments to {}", old_id, new_id);
-
-            let mut comment_id = conn_catalog
-                .state()
-                .get_comment_id(mz_sql::names::ObjectId::Item(*old_id));
-            let curr_id = comment_id.clone();
-            match &mut comment_id {
-                CommentObjectId::Table(id)
-                | CommentObjectId::View(id)
-                | CommentObjectId::MaterializedView(id)
-                | CommentObjectId::Source(id)
-                | CommentObjectId::Sink(id)
-                | CommentObjectId::Index(id)
-                | CommentObjectId::Func(id)
-                | CommentObjectId::Connection(id)
-                | CommentObjectId::Type(id)
-                | CommentObjectId::Secret(id) => *id = *new_id,
-                // These comments do not use `GlobalId`s.
-                id @ (CommentObjectId::Role(_)
-                | CommentObjectId::Database(_)
-                | CommentObjectId::Schema(_)
-                | CommentObjectId::Cluster(_)
-                | CommentObjectId::ClusterReplica(_)) => {
-                    anyhow::bail!("unexpected comment ID {:?}", id)
-                }
-            };
-
-            let comments = tx.drop_comments(&btreeset! { curr_id })?;
-            for (_id, subcomponent, comment) in comments {
-                tx.update_comment(comment_id, subcomponent, Some(comment))?;
-            }
-        }
-    }
-
-    /// Struct to update any referenced IDs.
-    struct IdUpdater<'a> {
-        new_id_mapping: &'a BTreeMap<GlobalId, GlobalId>,
-        err: Result<(), anyhow::Error>,
-    }
-
-    let mut id_updater = IdUpdater {
-        new_id_mapping: &new_id_mapping,
-        err: Ok(()),
-    };
-
-    impl<'a> VisitMut<'_, Raw> for IdUpdater<'a> {
-        fn visit_item_name_mut(&mut self, node: &'_ mut <Raw as mz_sql::ast::AstInfo>::ItemName) {
-            if let RawItemName::Id(id, _) = node {
-                match GlobalId::from_str(id.as_str()) {
-                    Ok(curr_id) => {
-                        if let Some(new_id) = self.new_id_mapping.get(&curr_id) {
-                            *id = new_id.to_string();
-                        }
-                    }
-                    Err(e) => {
-                        if self.err.is_ok() {
-                            self.err = Err(e);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Collect all items whose serialized AST strings have changed.
-    let mut updated_items = BTreeMap::new();
-    for item in tx.get_items() {
-        let mut stmt = mz_sql_parser::parser::parse_statements(&item.create_sql)
-            .expect("parsing persisted create_sql must succeed")
-            .into_element()
-            .ast;
-
-        let original_redacted_sql = stmt.to_ast_string_redacted();
-
-        id_updater.visit_statement_mut(&mut stmt);
-
-        if id_updater.err.is_err() {
-            return id_updater.err;
-        }
-
-        let new_ast_string = stmt.to_ast_string_stable();
-        if item.create_sql != new_ast_string {
-            tracing::info!(
-                "{}'s `create_sql` string changed because of updated GlobalId\nwas: {}\n\nnow: {}",
-                item.id,
-                original_redacted_sql,
-                stmt.to_ast_string_redacted()
-            );
-            updated_items.insert(
-                item.id,
-                Item {
-                    id: item.id,
-                    oid: item.oid,
-                    schema_id: item.schema_id,
-                    name: item.name,
-                    create_sql: new_ast_string,
-                    owner_id: item.owner_id,
-                    privileges: item.privileges,
-                },
-            );
-        }
-    }
-    tx.update_items(updated_items)?;
-
     Ok(())
 }
 
@@ -424,7 +847,7 @@ fn add_to_audit_log(
     event_type: mz_audit_log::EventType,
     object_type: mz_audit_log::ObjectType,
     details: mz_audit_log::EventDetails,
-    occurred_at: EpochMillis,
+    occurred_at: mz_ore::now::EpochMillis,
 ) -> Result<(), anyhow::Error> {
     let id = tx.get_and_increment_id(mz_catalog::durable::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
     let event =
@@ -433,375 +856,14 @@ fn add_to_audit_log(
     Ok(())
 }
 
-fn ast_rewrite_create_source_pg_database_details(
-    cat: &ConnCatalog<'_>,
+// Remove PARTITION STRATEGY from CREATE SINK statements.
+fn ast_rewrite_create_sink_partition_strategy(
     stmt: &mut Statement<Raw>,
 ) -> Result<(), anyhow::Error> {
-    use mz_sql::ast::{
-        CreateSourceConnection, CreateSourceStatement, PgConfigOptionName, RawItemName, Value,
-        WithOptionValue,
-    };
-    use mz_storage_types::sources::postgres::ProtoPostgresSourcePublicationDetails;
-    use prost::Message;
-
-    struct Rewriter<'a> {
-        cat: &'a ConnCatalog<'a>,
-    }
-
-    impl<'ast> VisitMut<'ast, Raw> for Rewriter<'_> {
-        fn visit_create_source_statement_mut(
-            &mut self,
-            node: &'ast mut CreateSourceStatement<Raw>,
-        ) {
-            match &mut node.connection {
-                CreateSourceConnection::Postgres {
-                    connection,
-                    options,
-                } => {
-                    let details = options
-                        .iter_mut()
-                        .find(|o| o.name == PgConfigOptionName::Details)
-                        .expect("PG sources must have details");
-
-                    let details_val = match &mut details.value {
-                        Some(WithOptionValue::Value(Value::String(details))) => details,
-                        _ => unreachable!("PG source details' value must be a string"),
-                    };
-
-                    let details = hex::decode(details_val.clone())
-                        .expect("PG source details must be a hex-encoded string");
-                    let mut details = ProtoPostgresSourcePublicationDetails::decode(&*details)
-                        .expect("PG source details must be a hex-encoded protobuf");
-
-                    let conn = match connection {
-                        RawItemName::Name(connection) => {
-                            let connection =
-                                mz_sql::normalize::unresolved_item_name(connection.clone())
-                                    .expect("PG source connection name must be valid");
-                            self.cat
-                                .resolve_item(&connection)
-                                .expect("PG source connection must exist")
-                        }
-                        RawItemName::Id(id, _) => {
-                            let gid = id
-                                .parse()
-                                .expect("RawItenName::Id must be uncorrupted GlobalId");
-                            self.cat.state().get_entry(&gid)
-                        }
-                    };
-
-                    let conn = conn
-                        .connection()
-                        .expect("PG source connection must reference a connection");
-
-                    match &conn {
-                        mz_storage_types::connections::Connection::Postgres(pg) => {
-                            // Store the connection's database in the details.
-                            details.database.clone_from(&pg.database);
-                        }
-                        _ => unreachable!("PG sources must use PG connections"),
-                    };
-
-                    *details_val = hex::encode(details.encode_to_vec());
-                }
-                _ => {}
-            }
-        }
-    }
-
-    Rewriter { cat }.visit_statement_mut(stmt);
-
-    Ok(())
-}
-
-fn mysql_subsources_remove_unnecessary_db_name(
-    tx: &mut Transaction<'_>,
-    conn_catalog: &ConnCatalog,
-) -> Result<(), anyhow::Error> {
-    let items = conn_catalog.get_items();
-    let mysql_subsources_to_update: Vec<_> = items
-        .into_iter()
-        .filter_map(|item| match item.subsource_details() {
-            Some((ingestion_id, external_reference)) => {
-                match conn_catalog
-                    .state()
-                    .get_entry(&ingestion_id)
-                    .source_desc()
-                    .expect("exports refer to ingestions")
-                    .expect("exports refer to ingestions")
-                    .connection
-                {
-                    GenericSourceConnection::MySql(_) => {
-                        let mut updated_reference = external_reference.0.clone();
-                        if updated_reference.len() == 3 {
-                            let fake_database_name = updated_reference.remove(0);
-                            if fake_database_name.as_str() != "mysql" {
-                                return Some(Err(anyhow::anyhow!("MySQL subsource's left-most qualification should have been 'mysql' but was {}", fake_database_name)));
-                            }
-
-                            Some(Ok((item, updated_reference)))
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                }
-            }
-            None => None,
-        }).collect::<Result<Vec<_>, _>>()?;
-
-    let mut updated_items = BTreeMap::new();
-    for (item, updated_reference) in mysql_subsources_to_update {
-        let mut subsource_stmt = mz_sql_parser::parser::parse_statements(item.create_sql())
-            .expect("parsing persisted create_sql must succeed")
-            .into_element()
-            .ast;
-
-        match &mut subsource_stmt {
-            Statement::CreateSubsource(create_subsource_stmt) => {
-                create_subsource_stmt
-                    .with_options
-                    .retain(|o| o.name != CreateSubsourceOptionName::ExternalReference);
-
-                create_subsource_stmt
-                    .with_options
-                    .push(CreateSubsourceOption {
-                        name: CreateSubsourceOptionName::ExternalReference,
-                        value: Some(mz_sql::ast::WithOptionValue::UnresolvedItemName(
-                            UnresolvedItemName(updated_reference),
-                        )),
-                    });
-            }
-            _ => unreachable!("must be subsource"),
-        }
-
-        updated_items.insert(item.id(), subsource_stmt.to_ast_string_stable());
-    }
-
-    let updated_items: BTreeMap<_, _> = tx
-        .get_items()
-        .filter_map(|item| {
-            updated_items.remove(&item.id).map(|new_create_sql| {
-                (
-                    item.id,
-                    Item {
-                        id: item.id,
-                        oid: item.oid,
-                        schema_id: item.schema_id,
-                        name: item.name,
-                        create_sql: new_create_sql,
-                        owner_id: item.owner_id,
-                        privileges: item.privileges,
-                    },
-                )
-            })
-        })
-        .collect();
-
-    tx.update_items(updated_items)?;
-
-    Ok(())
-}
-
-/// In v0.98.x, we inverted the dependency order of sources + subsources and
-/// migrated those items, as well as their dependencies, to new IDs.
-/// Unfortunately, because of a bug, this did not place items in the correct
-/// order and it was possible that some items depend on items with IDs less than
-/// its own.
-///
-/// This PR goes back and fixes any IDs with that broken relationship.
-fn fix_dependency_order_0_99_2(
-    tx: &mut Transaction<'_>,
-    conn_catalog: &ConnCatalog,
-    now: NowFn,
-) -> Result<(), anyhow::Error> {
-    // A vector in the _new_ dependency order. Because the `vec` doesn't have
-    // any built-in de-duplication, we will need to deduplicate these values
-    // elsewhere.
-    let mut needs_new_id = vec![];
-
-    for item in conn_catalog
-        .get_items()
-        .into_iter()
-        // Only consider user items
-        .filter(|item| item.id().is_user())
-    {
-        for dependent_id in item.used_by() {
-            // If an item has a dependent with an ID less than its own, that
-            // dependent needs an ID that will be pushed forward ahead of this
-            // ID.
-            if *dependent_id < item.id() {
-                needs_new_id.push(*dependent_id);
-            }
-        }
-    }
-
-    let mut remaining_updates = std::collections::VecDeque::from_iter(needs_new_id.drain(..));
-
-    let state = conn_catalog.state();
-
-    // If this item's ID must be moved forward, so too must every item that
-    // depends on it except for its primary source ID.
-    while let Some(id) = remaining_updates.pop_front() {
-        needs_new_id.push(id);
-        // If we push this item forward, we must all push forward all IDs that
-        // refer to this ID (i.e. we need to ensure that all of an item's
-        // dependents have IDs greater than its own).
-        remaining_updates.extend(state.get_entry(&id).used_by().iter().cloned());
-    }
-
-    // Ensure that each ID is present only once and that it is in the greatest
-    // position.
-    let mut id_dedup = BTreeSet::new();
-    needs_new_id = needs_new_id
-        .into_iter()
-        .rev()
-        .filter(|id| id_dedup.insert(*id))
-        .collect();
-
-    // Flip this back around in the right order.
-    needs_new_id = needs_new_id.into_iter().rev().collect();
-
-    assign_new_user_global_ids(tx, conn_catalog, now, needs_new_id)?;
-
-    Ok(())
-}
-
-// Durable migrations
-
-/// Migrations that run only on the durable catalog before any data is loaded into memory.
-pub(crate) fn durable_migrate(
-    tx: &mut Transaction,
-    boot_ts: Timestamp,
-) -> Result<(), anyhow::Error> {
-    let boot_ts = boot_ts.into();
-    catalog_fix_system_cluster_replica_ids_v_0_95_0(tx, boot_ts)?;
-    catalog_rename_mz_introspection_cluster_v_0_103_0(tx, boot_ts)?;
-    Ok(())
-}
-
-// Add new migrations below their appropriate heading, and precede them with a
-// short summary of the migration's purpose and optional additional commentary
-// about safety or approach.
-//
-// The convention is to name the migration function using snake case:
-// > <category>_<description>_<version>
-//
-// Please include the adapter team on any code reviews that add or edit
-// migrations.
-
-fn catalog_fix_system_cluster_replica_ids_v_0_95_0(
-    tx: &mut Transaction,
-    boot_ts: EpochMillis,
-) -> Result<(), anyhow::Error> {
-    use mz_audit_log::{
-        CreateClusterReplicaV1, DropClusterReplicaV1, EventDetails, EventType, ObjectType,
-        VersionedEvent,
-    };
-    use mz_catalog::durable::ReplicaLocation;
-
-    let updated_replicas: Vec<_> = tx
-        .get_cluster_replicas()
-        .filter(|replica| replica.cluster_id.is_system() && replica.replica_id.is_user())
-        .map(|replica| (replica.replica_id, replica))
-        .collect();
-    for (replica_id, mut updated_replica) in updated_replicas {
-        let sys_id = tx.allocate_system_replica_id()?;
-        updated_replica.replica_id = sys_id;
-        tx.remove_cluster_replica(replica_id)?;
-        tx.insert_cluster_replica(
-            updated_replica.cluster_id,
-            updated_replica.replica_id,
-            &updated_replica.name,
-            updated_replica.config.clone(),
-            updated_replica.owner_id,
-        )?;
-
-        // Update audit log.
-        if let ReplicaLocation::Managed {
-            size,
-            disk,
-            billed_as,
-            internal,
-            ..
-        } = &updated_replica.config.location
-        {
-            let cluster = tx
-                .get_clusters()
-                .filter(|cluster| cluster.id == updated_replica.cluster_id)
-                .next()
-                .expect("missing cluster");
-            let drop_audit_id = tx.allocate_audit_log_id()?;
-            let remove_event = VersionedEvent::new(
-                drop_audit_id,
-                EventType::Drop,
-                ObjectType::ClusterReplica,
-                EventDetails::DropClusterReplicaV1(DropClusterReplicaV1 {
-                    cluster_id: updated_replica.cluster_id.to_string(),
-                    cluster_name: cluster.name.clone(),
-                    replica_id: Some(replica_id.to_string()),
-                    replica_name: updated_replica.name.clone(),
-                }),
-                None,
-                boot_ts,
-            );
-            let create_audit_id = tx.allocate_audit_log_id()?;
-            let create_event = VersionedEvent::new(
-                create_audit_id,
-                EventType::Create,
-                ObjectType::ClusterReplica,
-                EventDetails::CreateClusterReplicaV1(CreateClusterReplicaV1 {
-                    cluster_id: updated_replica.cluster_id.to_string(),
-                    cluster_name: cluster.name.clone(),
-                    replica_id: Some(updated_replica.replica_id.to_string()),
-                    replica_name: updated_replica.name,
-                    logical_size: size.clone(),
-                    disk: *disk,
-                    billed_as: billed_as.clone(),
-                    internal: *internal,
-                }),
-                None,
-                boot_ts,
-            );
-            tx.insert_audit_log_events([remove_event, create_event]);
-        }
-    }
-    Ok(())
-}
-
-/// This migration applies the rename of the built-in `mz_introspection` cluster to
-/// `mz_catalog_server` to the durable catalog state.
-fn catalog_rename_mz_introspection_cluster_v_0_103_0(
-    tx: &mut Transaction,
-    boot_ts: EpochMillis,
-) -> Result<(), anyhow::Error> {
-    use mz_audit_log::{EventDetails, EventType, ObjectType, RenameClusterV1, VersionedEvent};
-
-    let found_cluster_id = tx
-        .get_clusters()
-        .find(|cluster| cluster.id.is_system() && cluster.name == "mz_introspection")
-        .map(|cluster| cluster.id);
-    let Some(cluster_id) = found_cluster_id else {
+    let Statement::CreateSink(stmt) = stmt else {
         return Ok(());
     };
-
-    tx.rename_cluster(cluster_id, "mz_introspection", "mz_catalog_server")?;
-
-    // Update audit log.
-    let audit_id = tx.allocate_audit_log_id()?;
-    let rename_event = VersionedEvent::new(
-        audit_id,
-        EventType::Alter,
-        ObjectType::Cluster,
-        EventDetails::RenameClusterV1(RenameClusterV1 {
-            id: cluster_id.to_string(),
-            old_name: "mz_introspection".into(),
-            new_name: "mz_catalog_server".into(),
-        }),
-        None,
-        boot_ts,
-    );
-    tx.insert_audit_log_event(rename_event);
-
+    stmt.with_options
+        .retain(|op| op.name != CreateSinkOptionName::PartitionStrategy);
     Ok(())
 }

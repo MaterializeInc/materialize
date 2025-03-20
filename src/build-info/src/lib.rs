@@ -19,8 +19,6 @@ pub struct BuildInfo {
     pub version: &'static str,
     /// The 40-character SHA-1 hash identifying the Git commit of the build.
     pub sha: &'static str,
-    /// The time of the build in UTC as an ISO 8601-compliant string.
-    pub time: &'static str,
 }
 
 /// Dummy build information.
@@ -30,7 +28,6 @@ pub struct BuildInfo {
 pub const DUMMY_BUILD_INFO: BuildInfo = BuildInfo {
     version: "0.0.0+dummy",
     sha: "0000000000000000000000000000000000000000",
-    time: "",
 };
 
 /// The target triple of the platform.
@@ -38,8 +35,17 @@ pub const TARGET_TRIPLE: &str = env!("TARGET_TRIPLE");
 
 impl BuildInfo {
     /// Constructs a human-readable version string.
-    pub fn human_version(&self) -> String {
-        format!("v{} ({})", self.version, &self.sha[..9])
+    pub fn human_version(&self, helm_chart_version: Option<String>) -> String {
+        if let Some(ref helm_chart_version) = helm_chart_version {
+            format!(
+                "v{} ({}, helm chart: {})",
+                self.version,
+                &self.sha[..9],
+                helm_chart_version
+            )
+        } else {
+            format!("v{} ({})", self.version, &self.sha[..9])
+        }
     }
 
     /// Returns the version as a rich [semantic version][semver].
@@ -58,6 +64,18 @@ impl BuildInfo {
             .expect("build version is not valid semver")
     }
 
+    /// The same as [`Self::semver_version`], but includes build metadata in the returned version,
+    /// if build metadata is available on the compiled platform.
+    #[cfg(feature = "semver")]
+    pub fn semver_version_build(&self) -> Option<semver::Version> {
+        let build_id = buildid::build_id()?;
+        let build_id = hex::encode(build_id);
+        let version = format!("{}+{}", self.version, build_id)
+            .parse()
+            .expect("build version is not valid semver");
+        Some(version)
+    }
+
     /// Returns the version as an integer along the lines of Pg's server_version_num
     #[cfg(feature = "semver")]
     pub fn version_num(&self) -> i32 {
@@ -70,6 +88,11 @@ impl BuildInfo {
             semver.major, semver.minor, semver.patch
         );
         ver_string.parse::<i32>().unwrap()
+    }
+
+    /// Returns whether the version is a development version
+    pub fn is_dev(&self) -> bool {
+        self.version.contains("dev")
     }
 }
 
@@ -85,16 +108,35 @@ macro_rules! build_info {
         $crate::BuildInfo {
             version: env!("CARGO_PKG_VERSION"),
             sha: $crate::__git_sha_internal!(),
-            time: $crate::__build_time_internal!(),
         }
     };
 }
 
-#[cfg(bazel)]
+#[cfg(all(bazel, stamped))]
 #[macro_export]
 macro_rules! __git_sha_internal {
     () => {
         $crate::private::bazel_variables::GIT_COMMIT_HASH
+    };
+}
+
+// To improve the effectiveness of remote caching we only stamp "release" builds
+// and otherwise side-channel git status through a known file.
+//
+// See: <https://github.com/bazelbuild/bazel/issues/10075>
+#[cfg(all(bazel, not(stamped)))]
+#[macro_export]
+macro_rules! __git_sha_internal {
+    () => {
+        $crate::private::run_command_str!(
+            "sh",
+            "-c",
+            r#"if [ -f /tmp/mz_git_hash.txt ]; then
+                    cat /tmp/mz_git_hash.txt
+                else
+                    echo "0000000000000000000000000000000000000000"
+                fi"#
+        )
     };
 }
 
@@ -125,22 +167,6 @@ macro_rules! __git_sha_internal {
     }
 }
 
-#[cfg(bazel)]
-#[macro_export]
-macro_rules! __build_time_internal {
-    () => {
-        $crate::private::bazel_variables::MZ_BUILD_TIME
-    };
-}
-
-#[cfg(not(bazel))]
-#[macro_export]
-macro_rules! __build_time_internal {
-    () => {
-        $crate::private::run_command_str!("date", "-u", "+%Y-%m-%dT%H:%M:%SZ")
-    };
-}
-
 #[doc(hidden)]
 pub mod private {
     pub use compile_time_run::run_command_str;
@@ -148,7 +174,7 @@ pub mod private {
     // Bazel has a "workspace status" feature that allows us to collect info from
     // the workspace (e.g. git hash) at build time. These values get incleded via
     // a generated file.
-    #[cfg(bazel)]
+    #[cfg(all(bazel, stamped))]
     #[allow(unused)]
     pub mod bazel_variables {
         include!(std::env!("BAZEL_GEN_BUILD_INFO"));
@@ -162,6 +188,5 @@ mod test {
         let build_info = crate::build_info!();
 
         assert_eq!(build_info.sha.len(), 40);
-        assert_eq!(build_info.time.len(), 20);
     }
 }

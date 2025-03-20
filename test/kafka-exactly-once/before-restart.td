@@ -93,9 +93,13 @@ $ kafka-create-topic topic=input
 
 > CREATE SOURCE input
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-${testdrive.seed}')
+
+> CREATE TABLE input_tbl FROM SOURCE input (REFERENCE "testdrive-input-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
-> CREATE SINK output FROM input
+> CREATE SINK output
+  IN CLUSTER singlereplica
+  FROM input_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -129,5 +133,5 @@ $ kafka-verify-data headers=materialize-timestamp format=avro sink=materialize.p
 # get correct results even with compaction, which re-timestamps earlier data
 # at later timestamps upon restarting.
 
-> SELECT mz_unsafe.mz_sleep(5);
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="5s"
 <null>

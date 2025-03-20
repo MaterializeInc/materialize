@@ -240,7 +240,7 @@ CREATE TABLE date_trunc_timestamps (
 )
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT date_trunc('day', ts) FROM date_trunc_timestamps
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT date_trunc('day', ts) FROM date_trunc_timestamps
 ----
 Explained Query:
   Project (#1) // { arity: 1 }
@@ -254,7 +254,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT date_trunc(field, ts) FROM date_trunc_fields, date_trunc_timestamps
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT date_trunc(field, ts) FROM date_trunc_fields, date_trunc_timestamps
 ----
 Explained Query:
   Project (#2) // { arity: 1 }
@@ -481,7 +481,7 @@ SELECT coalesce('abcde',null::char(1),'abc');
 ----
 abcde
 
-# TODO(#11469)
+# TODO(database-issues#3339)
 query error coalesce could not convert type record
 SELECT coalesce(row(1, 2), row(3), row(4, 5));
 
@@ -568,7 +568,7 @@ SELECT greatest(row(row(2, 4), 5), row(row(0, 10), 10), row(row(4, 3), 4));
 ----
 ("(4,3)",4)
 
-# TODO(#11469)
+# TODO(database-issues#3339)
 query error greatest could not convert type record
 SELECT greatest(row(1, 2), row(3), row(4, 5));
 
@@ -629,7 +629,7 @@ SELECT least(row(row(2, 4), 5), row(row(0, 10), 10), row(row(4, 3), 4));
 ----
 ("(0,10)",10)
 
-# TODO(#11469)
+# TODO(database-issues#3339)
 query error least could not convert type record
 SELECT least(row(1, 2), row(3), row(4, 5));
 
@@ -644,7 +644,7 @@ SELECT least(row(1), row(1)::custom_composite)
 query error least types integer and text cannot be matched
 SELECT least(1::int, 2::text)
 
-# Tests issue #2355, that type information for Maps are correctly constructed
+# Tests issue database-issues#827, that type information for Maps are correctly constructed
 # before being passed to expressions for optimization.
 statement ok
 CREATE VIEW bytes AS SELECT null::bytea AS data
@@ -747,7 +747,7 @@ CREATE TABLE t (
 )
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a IS NULL FROM t
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT a IS NULL FROM t
 ----
 Explained Query:
   Project (#2) // { arity: 1 }
@@ -761,7 +761,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a + a + a + a + a IS NULL FROM t
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT a + a + a + a + a IS NULL FROM t
 ----
 Explained Query:
   Project (#2) // { arity: 1 }
@@ -775,7 +775,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a + b IS NULL FROM t
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT a + b IS NULL FROM t
 ----
 Explained Query:
   Project (#2) // { arity: 1 }
@@ -793,7 +793,7 @@ EOF
 # exist, but we do not support them yet. Similarly for OR.
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT (a::bool AND b::bool) IS NULL FROM t
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT (a::bool AND b::bool) IS NULL FROM t
 ----
 Explained Query:
   Project (#2) // { arity: 1 }
@@ -991,7 +991,7 @@ NULL
 query error could not determine polymorphic type because input has type unknown
 SELECT array_length(NULL, 1);
 
-# Test strange collapsing behavior of nested empty arrays. See #5545.
+# Test strange collapsing behavior of nested empty arrays. See database-issues#1709.
 
 query TIII
 SELECT arr, array_lower(arr, 1), array_upper(arr, 1), array_length(arr, 1) FROM
@@ -1617,6 +1617,21 @@ SELECT mz_unsafe.mz_error_if_null(1, '')
 ----
 1
 
+# Confirm that `mz_error_if_null` can be seen to be non-null.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT mz_unsafe.mz_error_if_null(t, '') IS NULL FROM ts_size;
+----
+Explained Query:
+  Project (#1)
+    Map (false)
+      ReadStorage materialize.public.ts_size
+
+Source materialize.public.ts_size
+
+Target cluster: quickstart
+
+EOF
+
 query error unexpected NULL
 SELECT mz_unsafe.mz_error_if_null(NULL, NULL)
 
@@ -1668,7 +1683,7 @@ SELECT pg_stat_get_numscans('pg_views'::regclass::oid)
 # mz_unsafe functions can't be executed with the enable_unsafe_functions flag turned off
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_unsafe_functions = false
+ALTER SYSTEM SET unsafe_enable_unsafe_functions = false
 ----
 COMPLETE 0
 
@@ -1703,7 +1718,7 @@ statement ok
 SELECT mz_internal.mz_resolve_object_name('regclass', 't');
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_unsafe_functions = true
+ALTER SYSTEM SET unsafe_enable_unsafe_functions = true
 ----
 COMPLETE 0
 

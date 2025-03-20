@@ -1,0 +1,28 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# Regression test for
+# https://github.com/MaterializeInc/database-issues/issues/6388.
+
+statement ok
+CREATE TABLE r(x bool);
+
+statement ok
+CREATE VIEW v AS SELECT nullif(to_jsonb(true), to_jsonb(x)) as y FROM r;
+
+
+# When the bug is present, the type of `y` is wrongly computed as `boolean` when
+# the `(true, _)` simplification of the `case` statement resulting from the
+# desugared `nullif` is triggered in `MirScalarExpr::reduce`.
+query TTTT
+SHOW COLUMNS from v;
+----
+y  true  jsonb (empty)

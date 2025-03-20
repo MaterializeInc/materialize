@@ -96,6 +96,25 @@ FROM KAFKA CONNECTION kafka_connection (TOPIC 'testdrive-test-source-1')
 FORMAT BYTES
 """
 
+test_source_table = """
+{{ config(
+    materialized='source_table',
+    database='materialize'
+) }}
+FROM SOURCE {{ ref('test_subsources') }}
+(REFERENCE "bids")
+"""
+
+test_source_table_index = """
+{{ config(
+    materialized='source_table',
+    database='materialize',
+    indexes=[{'columns': ['amount']}]
+) }}
+FROM SOURCE {{ ref('test_subsources') }}
+(REFERENCE "bids")
+"""
+
 test_subsources = """
 {{ config(
     materialized='source',
@@ -165,6 +184,7 @@ test_source_index,1,1,,test_source_index_data_idx
 test_view_index,1,1,,test_view_index_primary_idx
 test_table_index,1,1,,test_table_index_a_idx
 test_table_index,2,,pg_catalog.length(a),test_table_index_a_idx
+test_source_table_index,1,4,,test_source_table_index_amount_idx
 """.lstrip()
 
 not_null = """
@@ -341,4 +361,43 @@ test_pseudo_types = """
 {{ config(materialized='view') }}
 
     SELECT '{a=>1, b=>2}'::map[text=>int] AS a, ROW(1, 2) AS b, LIST[[1,2],[3]] AS c
+"""
+
+cross_database_reference_schema_yml = """
+version: 2
+
+sources:
+  - name: test_database_1
+    database: test_database_1
+    schema: public
+    tables:
+      - name: table1
+
+  - name: test_database_2
+    database: test_database_2
+    schema: public
+    tables:
+      - name: table2
+
+models:
+    - name: cross_db_reference
+      description: "A model that references tables from two different databases"
+      columns:
+          - name: id
+            description: "The ID from test_database_1.table1 that matches test_database_2.table2"
+"""
+
+cross_database_reference_sql = """
+{{ config(materialized='materialized_view', schema='public') }}
+    WITH db1_data AS (
+        SELECT id
+        FROM {{ source('test_database_1', 'table1') }}
+    ),
+    db2_data AS (
+        SELECT id
+        FROM {{ source('test_database_2', 'table2') }}
+    )
+    SELECT db1_data.id
+    FROM db1_data
+    JOIN db2_data ON db1_data.id = db2_data.id
 """

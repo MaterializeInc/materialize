@@ -12,72 +12,85 @@
 //! Persistent metadata storage for the coordinator.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::convert;
 use std::sync::Arc;
 
-use futures::Future;
+use futures::future::BoxFuture;
+use futures::{Future, FutureExt};
 use itertools::Itertools;
+use mz_adapter_types::bootstrap_builtin_cluster_config::{
+    BootstrapBuiltinClusterConfig, ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+};
 use mz_adapter_types::connection::ConnectionId;
-use mz_audit_log::{EventType, FullNameV1, ObjectType};
-use mz_build_info::DUMMY_BUILD_INFO;
+use mz_audit_log::{EventType, FullNameV1, ObjectType, VersionedStorageUsage};
+use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_catalog::builtin::{
-    BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BUILTINS, BUILTIN_PREFIXES,
+    BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BUILTIN_PREFIXES,
     MZ_CATALOG_SERVER_CLUSTER,
 };
-use mz_catalog::config::{ClusterReplicaSizeMap, Config, StateConfig};
-use mz_catalog::durable::{test_bootstrap_args, DurableCatalogState};
+use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, Config, StateConfig};
+#[cfg(test)]
+use mz_catalog::durable::CatalogError;
+use mz_catalog::durable::{
+    test_bootstrap_args, BootstrapArgs, DurableCatalogState, TestCatalogStateBuilder,
+};
+use mz_catalog::expr_cache::{ExpressionCacheHandle, GlobalExpressions, LocalExpressions};
 use mz_catalog::memory::error::{Error, ErrorKind};
-use mz_catalog::memory::objects::{CatalogEntry, Cluster, ClusterReplica, Database, Role, Schema};
+use mz_catalog::memory::objects::{
+    CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database,
+    NetworkPolicy, Role, Schema,
+};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::OptimizedMirRelationExpr;
+use mz_ore::collections::HashSet;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
-use mz_ore::option::FallibleMapExt;
 use mz_ore::result::ResultExt as _;
-use mz_ore::soft_panic_or_log;
+use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log};
 use mz_persist_client::PersistClient;
 use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
-use mz_repr::global_id::TransientIdGen;
 use mz_repr::namespaces::MZ_TEMP_SCHEMA;
+use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId, ScalarType};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersionSelector, ScalarType};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
-    CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogRole,
-    CatalogSchema, DefaultPrivilegeAclItem, DefaultPrivilegeObject, EnvironmentId, SessionCatalog,
-    SystemObjectType,
+    CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogItemType,
+    CatalogNetworkPolicy, CatalogRole, CatalogSchema, DefaultPrivilegeAclItem,
+    DefaultPrivilegeObject, EnvironmentId, SessionCatalog, SystemObjectType,
 };
 use mz_sql::names::{
-    DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId, PartialItemName,
-    QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId,
-    SchemaSpecifier, SystemObjectId, PUBLIC_ROLE_NAME,
+    CommentObjectId, DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId,
+    PartialItemName, QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier,
+    ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId, PUBLIC_ROLE_NAME,
 };
 use mz_sql::plan::{Plan, PlanNotice, StatementDesc};
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
-use mz_sql::session::vars::{ConnectionCounter, SystemVars};
+use mz_sql::session::vars::SystemVars;
 use mz_sql_parser::ast::QualifiedReplica;
-use mz_storage_client::controller::StorageController;
 use mz_storage_types::connections::inline::{ConnectionResolver, InlinedConnection};
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::TxnWalTablesImpl;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 use smallvec::SmallVec;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::MutexGuard;
+use tracing::error;
 use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
-pub use crate::catalog::open::BuiltinMigrationMetadata;
+pub use crate::catalog::open::{InitializeStateResult, OpenCatalogResult};
 pub use crate::catalog::state::CatalogState;
 pub use crate::catalog::transact::{
     DropObjectInfo, Op, ReplicaCreateDropReason, TransactionResult,
@@ -123,6 +136,7 @@ mod transact;
 pub struct Catalog {
     state: CatalogState,
     plans: CatalogPlans,
+    expr_cache_handle: Option<ExpressionCacheHandle>,
     storage: Arc<tokio::sync::Mutex<Box<dyn mz_catalog::durable::DurableCatalogState>>>,
     transient_revision: u64,
 }
@@ -134,6 +148,7 @@ impl Clone for Catalog {
         Self {
             state: self.state.clone(),
             plans: self.plans.clone(),
+            expr_cache_handle: self.expr_cache_handle.clone(),
             storage: Arc::clone(&self.storage),
             transient_revision: self.transient_revision,
         }
@@ -142,100 +157,13 @@ impl Clone for Catalog {
 
 #[derive(Default, Debug, Clone)]
 pub struct CatalogPlans {
-    optimized_plan_by_id: BTreeMap<GlobalId, DataflowDescription<OptimizedMirRelationExpr>>,
-    physical_plan_by_id: BTreeMap<GlobalId, DataflowDescription<mz_compute_types::plan::Plan>>,
+    optimized_plan_by_id: BTreeMap<GlobalId, Arc<DataflowDescription<OptimizedMirRelationExpr>>>,
+    physical_plan_by_id: BTreeMap<GlobalId, Arc<DataflowDescription<mz_compute_types::plan::Plan>>>,
     dataflow_metainfos: BTreeMap<GlobalId, DataflowMetainfo<Arc<OptimizerNotice>>>,
     notices_by_dep_id: BTreeMap<GlobalId, SmallVec<[Arc<OptimizerNotice>; 4]>>,
 }
 
 impl Catalog {
-    /// Initializes the `storage_controller` to understand all shards that
-    /// `self` expects to exist.
-    ///
-    /// Note that this must be done before creating/rendering collections
-    /// because the storage controller might not be aware of new system
-    /// collections created between versions.
-    async fn initialize_storage_controller_state(
-        &mut self,
-        storage_controller: &mut dyn StorageController<Timestamp = mz_repr::Timestamp>,
-        builtin_migration_metadata: BuiltinMigrationMetadata,
-    ) -> Result<(), mz_catalog::durable::CatalogError> {
-        let collections = self
-            .entries()
-            .filter(|entry| entry.item().is_storage_collection())
-            .map(|entry| entry.id())
-            .collect();
-
-        // Clone the state so that any errors that occur do not leak any
-        // transformations on error.
-        let mut state = self.state.clone();
-
-        let mut storage = self.storage().await;
-        let mut txn = storage.transaction().await?;
-
-        storage_controller
-            .initialize_state(
-                &mut txn,
-                collections,
-                builtin_migration_metadata.previous_storage_collection_ids,
-            )
-            .await
-            .map_err(mz_catalog::durable::DurableCatalogError::from)?;
-
-        let updates = txn.get_op_updates().collect();
-        let builtin_updates = state.apply_updates(updates);
-        assert_eq!(builtin_updates, Vec::new());
-        txn.commit().await?;
-        drop(storage);
-
-        // Save updated state.
-        self.state = state;
-        Ok(())
-    }
-
-    /// [`mz_controller::Controller`] depends on durable catalog state to boot,
-    /// so make it available and initialize the controller.
-    pub async fn initialize_controller(
-        &mut self,
-        config: mz_controller::ControllerConfig,
-        envd_epoch: core::num::NonZeroI64,
-        read_only: bool,
-        transient_id_gen: Arc<TransientIdGen>,
-        builtin_migration_metadata: BuiltinMigrationMetadata,
-        // Whether to use the new txn-wal tables implementation or the
-        // legacy one.
-        txn_wal_tables: TxnWalTablesImpl,
-    ) -> Result<mz_controller::Controller<mz_repr::Timestamp>, mz_catalog::durable::CatalogError>
-    {
-        let mut controller = {
-            let mut storage = self.storage().await;
-            let mut tx = storage.transaction().await?;
-            mz_controller::prepare_initialization(&mut tx)
-                .map_err(mz_catalog::durable::DurableCatalogError::from)?;
-            tx.commit().await?;
-
-            let read_only_tx = storage.transaction().await?;
-
-            mz_controller::Controller::new(
-                config,
-                envd_epoch,
-                read_only,
-                transient_id_gen,
-                txn_wal_tables,
-                &read_only_tx,
-            )
-            .await
-        };
-
-        self.initialize_storage_controller_state(
-            &mut *controller.storage,
-            builtin_migration_metadata,
-        )
-        .await?;
-
-        Ok(controller)
-    }
-
     /// Set the optimized plan for the item identified by `id`.
     #[mz_ore::instrument(level = "trace")]
     pub fn set_optimized_plan(
@@ -243,17 +171,17 @@ impl Catalog {
         id: GlobalId,
         plan: DataflowDescription<OptimizedMirRelationExpr>,
     ) {
-        self.plans.optimized_plan_by_id.insert(id, plan);
+        self.plans.optimized_plan_by_id.insert(id, plan.into());
     }
 
-    /// Set the optimized plan for the item identified by `id`.
+    /// Set the physical plan for the item identified by `id`.
     #[mz_ore::instrument(level = "trace")]
     pub fn set_physical_plan(
         &mut self,
         id: GlobalId,
         plan: DataflowDescription<mz_compute_types::plan::Plan>,
     ) {
-        self.plans.physical_plan_by_id.insert(id, plan);
+        self.plans.physical_plan_by_id.insert(id, plan.into());
     }
 
     /// Try to get the optimized plan for the item identified by `id`.
@@ -262,16 +190,16 @@ impl Catalog {
         &self,
         id: &GlobalId,
     ) -> Option<&DataflowDescription<OptimizedMirRelationExpr>> {
-        self.plans.optimized_plan_by_id.get(id)
+        self.plans.optimized_plan_by_id.get(id).map(AsRef::as_ref)
     }
 
-    /// Try to get the optimized plan for the item identified by `id`.
+    /// Try to get the physical plan for the item identified by `id`.
     #[mz_ore::instrument(level = "trace")]
     pub fn try_get_physical_plan(
         &self,
         id: &GlobalId,
     ) -> Option<&DataflowDescription<mz_compute_types::plan::Plan>> {
-        self.plans.physical_plan_by_id.get(id)
+        self.plans.physical_plan_by_id.get(id).map(AsRef::as_ref)
     }
 
     /// Set the `DataflowMetainfo` for the item identified by `id`.
@@ -286,6 +214,13 @@ impl Catalog {
             for dep_id in notice.dependencies.iter() {
                 let entry = self.plans.notices_by_dep_id.entry(*dep_id).or_default();
                 entry.push(Arc::clone(notice))
+            }
+            if let Some(item_id) = notice.item_id {
+                soft_assert_eq_or_log!(
+                    item_id,
+                    id,
+                    "notice.item_id should match the id for whom we are saving the notice"
+                );
             }
         }
         // Add the dataflow with the scoped entries.
@@ -322,10 +257,18 @@ impl Catalog {
             self.plans.optimized_plan_by_id.remove(id);
             self.plans.physical_plan_by_id.remove(id);
             if let Some(mut metainfo) = self.plans.dataflow_metainfos.remove(id) {
+                soft_assert_or_log!(
+                    metainfo.optimizer_notices.iter().all_unique(),
+                    "should have been pushed there by `push_optimizer_notice_dedup`"
+                );
                 for n in metainfo.optimizer_notices.drain(..) {
                     // Remove the corresponding notices_by_dep_id entries.
                     for dep_id in n.dependencies.iter() {
                         if let Some(notices) = self.plans.notices_by_dep_id.get_mut(dep_id) {
+                            soft_assert_or_log!(
+                                notices.iter().any(|x| &n == x),
+                                "corrupt notices_by_dep_id"
+                            );
                             notices.retain(|x| &n != x)
                         }
                     }
@@ -341,7 +284,12 @@ impl Catalog {
                     // Remove the corresponding metainfo.optimizer_notices entries.
                     if let Some(item_id) = n.item_id.as_ref() {
                         if let Some(metainfo) = self.plans.dataflow_metainfos.get_mut(item_id) {
-                            metainfo.optimizer_notices.retain(|x| &n != x)
+                            metainfo.optimizer_notices.iter().for_each(|n2| {
+                                if let Some(item_id_2) = n2.item_id {
+                                    soft_assert_eq_or_log!(item_id_2, *item_id, "a notice's item_id should match the id for whom we have saved the notice");
+                                }
+                            });
+                            metainfo.optimizer_notices.retain(|x| &n != x);
                         }
                     }
                     dropped_notices.insert(n);
@@ -371,40 +319,110 @@ impl Catalog {
             use mz_ore::str::{bracketed, separated};
             let bad_notices = dropped_notices.iter().filter(|n| Arc::strong_count(n) != 1);
             let bad_notices = bad_notices.map(|n| {
+                // Try to find where the bad reference is.
+                // Maybe in `dataflow_metainfos`?
+                let mut dataflow_metainfo_occurrences = Vec::new();
+                for (id, meta_info) in self.plans.dataflow_metainfos.iter() {
+                    if meta_info.optimizer_notices.contains(n) {
+                        dataflow_metainfo_occurrences.push(id);
+                    }
+                }
+                // Or `notices_by_dep_id`?
+                let mut notices_by_dep_id_occurrences = Vec::new();
+                for (id, notices) in self.plans.notices_by_dep_id.iter() {
+                    if notices.iter().contains(n) {
+                        notices_by_dep_id_occurrences.push(id);
+                    }
+                }
                 format!(
-                    "(id = {}, kind = {:?}, deps = {:?}, strong_count = {})",
+                    "(id = {}, kind = {:?}, deps = {:?}, strong_count = {}, \
+                    dataflow_metainfo_occurrences = {:?}, notices_by_dep_id_occurrences = {:?})",
                     n.id,
                     n.kind,
                     n.dependencies,
-                    Arc::strong_count(n)
+                    Arc::strong_count(n),
+                    dataflow_metainfo_occurrences,
+                    notices_by_dep_id_occurrences
                 )
             });
             let bad_notices = bracketed("{", "}", separated(", ", bad_notices));
-            soft_panic_or_log!(
-                "all dropped_notices entries have `Arc::strong_count(_) == 1`; \
+            error!(
+                "all dropped_notices entries should have `Arc::strong_count(_) == 1`; \
                  bad_notices = {bad_notices}; \
                  drop_ids = {drop_ids:?}"
             );
         }
 
-        return dropped_notices;
+        dropped_notices
     }
 
     /// For the Sources ids in `ids`, return the read policies for all `ids` and additional ids that
-    /// propagate from them. Specifically, `ids` contains a source, it and all of its subsources
+    /// propagate from them. Specifically, if `ids` contains a source, it and all of its source exports
     /// will be added to the result.
     pub fn source_read_policies(
         &self,
-        id: GlobalId,
-    ) -> Vec<(GlobalId, ReadPolicy<mz_repr::Timestamp>)> {
+        id: CatalogItemId,
+    ) -> Vec<(CatalogItemId, ReadPolicy<mz_repr::Timestamp>)> {
         let mut policies = Vec::new();
         let cws = self.state.source_compaction_windows([id]);
-        for (cw, ids) in cws {
-            for id in ids {
+        for (cw, items) in cws {
+            for id in items {
                 policies.push((id, cw.into()));
             }
         }
         policies
+    }
+
+    /// Return a set of [`GlobalId`]s for items that need to have their cache entries invalidated
+    /// as a result of creating new indexes on the items in `ons`.
+    ///
+    /// When creating and inserting a new index, we need to invalidate some entries that may
+    /// optimize to new expressions. When creating index `i` on object `o`, we need to invalidate
+    /// the following objects:
+    ///
+    ///   - `o`.
+    ///   - All compute objects that depend directly on `o`.
+    ///   - All compute objects that would directly depend on `o`, if all views were inlined.
+    pub(crate) fn invalidate_for_index(
+        &self,
+        ons: impl Iterator<Item = GlobalId>,
+    ) -> BTreeSet<GlobalId> {
+        let mut dependencies = BTreeSet::new();
+        let mut queue = VecDeque::new();
+        let mut seen = HashSet::new();
+        for on in ons {
+            let entry = self.get_entry_by_global_id(&on);
+            dependencies.insert(on);
+            seen.insert(entry.id);
+            let uses = entry.uses();
+            queue.extend(uses.clone());
+        }
+
+        while let Some(cur) = queue.pop_front() {
+            let entry = self.get_entry(&cur);
+            if seen.insert(cur) {
+                let global_ids = entry.global_ids();
+                match entry.item_type() {
+                    CatalogItemType::Table
+                    | CatalogItemType::Source
+                    | CatalogItemType::MaterializedView
+                    | CatalogItemType::Sink
+                    | CatalogItemType::Index
+                    | CatalogItemType::Type
+                    | CatalogItemType::Func
+                    | CatalogItemType::Secret
+                    | CatalogItemType::Connection
+                    | CatalogItemType::ContinualTask => {
+                        dependencies.extend(global_ids);
+                    }
+                    CatalogItemType::View => {
+                        dependencies.extend(global_ids);
+                        queue.extend(entry.uses());
+                    }
+                }
+            }
+        }
+        dependencies
     }
 }
 
@@ -420,7 +438,7 @@ pub struct ConnCatalog<'a> {
     ///
     /// Note that uses of this field should be used by short-lived
     /// catalogs.
-    unresolvable_ids: BTreeSet<GlobalId>,
+    unresolvable_ids: BTreeSet<CatalogItemId>,
     conn_id: ConnectionId,
     cluster: String,
     database: Option<DatabaseId>,
@@ -448,7 +466,7 @@ impl ConnCatalog<'_> {
     ///
     /// # Panics
     /// If the catalog's role ID is not [`MZ_SYSTEM_ROLE_ID`].
-    pub fn mark_id_unresolvable_for_replanning(&mut self, id: GlobalId) {
+    pub fn mark_id_unresolvable_for_replanning(&mut self, id: CatalogItemId) {
         assert_eq!(
             self.role_id, MZ_SYSTEM_ROLE_ID,
             "only the system role can mark IDs unresolvable",
@@ -473,7 +491,7 @@ impl ConnCatalog<'_> {
 impl ConnectionResolver for ConnCatalog<'_> {
     fn resolve_connection(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
     ) -> mz_storage_types::connections::Connection<InlinedConnection> {
         self.state().resolve_connection(id)
     }
@@ -504,13 +522,49 @@ impl Catalog {
         Fut: Future<Output = T>,
     {
         let persist_client = PersistClient::new_for_tests().await;
-        let environmentd_id = Uuid::new_v4();
-        let catalog = match Self::open_debug_catalog(persist_client, environmentd_id).await {
-            Ok(catalog) => catalog,
-            Err(err) => {
-                panic!("unable to open debug stash: {err}");
-            }
-        };
+        let organization_id = Uuid::new_v4();
+        let bootstrap_args = test_bootstrap_args();
+        let catalog = Self::open_debug_catalog(persist_client, organization_id, &bootstrap_args)
+            .await
+            .expect("can open debug catalog");
+        f(catalog).await
+    }
+
+    /// Like [`Catalog::with_debug`], but the catalog created believes that bootstrap is still
+    /// in progress.
+    pub async fn with_debug_in_bootstrap<F, Fut, T>(f: F) -> T
+    where
+        F: FnOnce(Catalog) -> Fut,
+        Fut: Future<Output = T>,
+    {
+        let persist_client = PersistClient::new_for_tests().await;
+        let organization_id = Uuid::new_v4();
+        let bootstrap_args = test_bootstrap_args();
+        let mut catalog =
+            Self::open_debug_catalog(persist_client.clone(), organization_id, &bootstrap_args)
+                .await
+                .expect("can open debug catalog");
+
+        // Replace `storage` in `catalog` with one that doesn't think bootstrap is over.
+        let now = SYSTEM_TIME.clone();
+        let openable_storage = TestCatalogStateBuilder::new(persist_client)
+            .with_organization_id(organization_id)
+            .with_default_deploy_generation()
+            .build()
+            .await
+            .expect("can create durable catalog");
+        let mut storage = openable_storage
+            .open(now().into(), &bootstrap_args)
+            .await
+            .expect("can open durable catalog")
+            .0;
+        // Drain updates.
+        let _ = storage
+            .sync_to_current_updates()
+            .await
+            .expect("can sync to current updates");
+        catalog.storage = Arc::new(tokio::sync::Mutex::new(storage));
+
         f(catalog).await
     }
 
@@ -520,25 +574,60 @@ impl Catalog {
     pub async fn open_debug_catalog(
         persist_client: PersistClient,
         organization_id: Uuid,
+        bootstrap_args: &BootstrapArgs,
     ) -> Result<Catalog, anyhow::Error> {
         let now = SYSTEM_TIME.clone();
-        let deploy_generation = 0;
-        let epoch_lower_bound = None;
         let environment_id = None;
-        let openable_storage =
-            mz_catalog::durable::test_persist_backed_catalog_state(persist_client, organization_id)
-                .await;
+        let openable_storage = TestCatalogStateBuilder::new(persist_client.clone())
+            .with_organization_id(organization_id)
+            .with_default_deploy_generation()
+            .build()
+            .await?;
+        let storage = openable_storage.open(now().into(), bootstrap_args).await?.0;
+        let system_parameter_defaults = BTreeMap::default();
+        Self::open_debug_catalog_inner(
+            persist_client,
+            storage,
+            now,
+            environment_id,
+            &DUMMY_BUILD_INFO,
+            system_parameter_defaults,
+            bootstrap_args,
+            None,
+        )
+        .await
+    }
+
+    /// Opens a read only debug persist backed catalog defined by `persist_client` and
+    /// `organization_id`.
+    ///
+    /// See [`Catalog::with_debug`].
+    pub async fn open_debug_read_only_catalog(
+        persist_client: PersistClient,
+        organization_id: Uuid,
+        bootstrap_args: &BootstrapArgs,
+    ) -> Result<Catalog, anyhow::Error> {
+        let now = SYSTEM_TIME.clone();
+        let environment_id = None;
+        let openable_storage = TestCatalogStateBuilder::new(persist_client.clone())
+            .with_organization_id(organization_id)
+            .build()
+            .await?;
         let storage = openable_storage
-            .open(
-                now(),
-                &test_bootstrap_args(),
-                deploy_generation,
-                epoch_lower_bound,
-            )
+            .open_read_only(&test_bootstrap_args())
             .await?;
         let system_parameter_defaults = BTreeMap::default();
-        Self::open_debug_catalog_inner(storage, now, environment_id, system_parameter_defaults)
-            .await
+        Self::open_debug_catalog_inner(
+            persist_client,
+            storage,
+            now,
+            environment_id,
+            &DUMMY_BUILD_INFO,
+            system_parameter_defaults,
+            bootstrap_args,
+            None,
+        )
+        .await
     }
 
     /// Opens a read only debug persist backed catalog defined by `persist_client` and
@@ -550,68 +639,110 @@ impl Catalog {
         now: NowFn,
         environment_id: EnvironmentId,
         system_parameter_defaults: BTreeMap<String, String>,
+        build_info: &'static BuildInfo,
+        bootstrap_args: &BootstrapArgs,
+        enable_expression_cache_override: Option<bool>,
     ) -> Result<Catalog, anyhow::Error> {
-        let openable_storage = mz_catalog::durable::test_persist_backed_catalog_state(
-            persist_client,
-            environment_id.organization_id(),
-        )
-        .await;
-        let storage = openable_storage
-            .open_read_only(&test_bootstrap_args())
+        let openable_storage = TestCatalogStateBuilder::new(persist_client.clone())
+            .with_organization_id(environment_id.organization_id())
+            .with_version(
+                build_info
+                    .version
+                    .parse()
+                    .expect("build version is parseable"),
+            )
+            .build()
             .await?;
+        let storage = openable_storage.open_read_only(bootstrap_args).await?;
         Self::open_debug_catalog_inner(
+            persist_client,
             storage,
             now,
             Some(environment_id),
+            build_info,
             system_parameter_defaults,
+            bootstrap_args,
+            enable_expression_cache_override,
         )
         .await
     }
 
     async fn open_debug_catalog_inner(
+        persist_client: PersistClient,
         storage: Box<dyn DurableCatalogState>,
         now: NowFn,
         environment_id: Option<EnvironmentId>,
+        build_info: &'static BuildInfo,
         system_parameter_defaults: BTreeMap<String, String>,
+        bootstrap_args: &BootstrapArgs,
+        enable_expression_cache_override: Option<bool>,
     ) -> Result<Catalog, anyhow::Error> {
         let metrics_registry = &MetricsRegistry::new();
-        let active_connection_count = Arc::new(std::sync::Mutex::new(ConnectionCounter::new(0, 0)));
         let secrets_reader = Arc::new(InMemorySecretsController::new());
         // Used as a lower boundary of the boot_ts, but it's ok to use now() for
         // debugging/testing.
         let previous_ts = now().into();
-        let (catalog, _, _, _) = Catalog::open(
-            Config {
-                storage,
-                metrics_registry,
-                // when debugging, no reaping
-                storage_usage_retention_period: None,
-                state: StateConfig {
-                    unsafe_mode: true,
-                    all_features: false,
-                    build_info: &DUMMY_BUILD_INFO,
-                    environment_id: environment_id.unwrap_or(EnvironmentId::for_tests()),
-                    now,
-                    boot_ts: previous_ts,
-                    skip_migrations: true,
-                    cluster_replica_sizes: Default::default(),
-                    builtin_system_cluster_replica_size: "1".into(),
-                    builtin_catalog_server_cluster_replica_size: "1".into(),
-                    builtin_probe_cluster_replica_size: "1".into(),
-                    builtin_support_cluster_replica_size: "1".into(),
-                    system_parameter_defaults,
-                    remote_system_parameters: None,
-                    availability_zones: vec![],
-                    egress_ips: vec![],
-                    aws_principal_context: None,
-                    aws_privatelink_availability_zones: None,
-                    http_host_name: None,
-                    connection_context: ConnectionContext::for_tests(secrets_reader),
-                    active_connection_count,
+        let replica_size = &bootstrap_args.default_cluster_replica_size;
+        let read_only = false;
+
+        let OpenCatalogResult {
+            catalog,
+            migrated_storage_collections_0dt: _,
+            new_builtin_collections: _,
+            builtin_table_updates: _,
+            cached_global_exprs: _,
+            uncached_local_exprs: _,
+        } = Catalog::open(Config {
+            storage,
+            metrics_registry,
+            state: StateConfig {
+                unsafe_mode: true,
+                all_features: false,
+                build_info,
+                environment_id: environment_id.unwrap_or(EnvironmentId::for_tests()),
+                read_only,
+                now,
+                boot_ts: previous_ts,
+                skip_migrations: true,
+                cluster_replica_sizes: bootstrap_args.cluster_replica_size_map.clone(),
+                builtin_system_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: replica_size.clone(),
+                    replication_factor: SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
                 },
+                builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: replica_size.clone(),
+                    replication_factor: CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                },
+                builtin_probe_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: replica_size.clone(),
+                    replication_factor: PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                },
+                builtin_support_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: replica_size.clone(),
+                    replication_factor: SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                },
+                builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: replica_size.clone(),
+                    replication_factor: ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                },
+                system_parameter_defaults,
+                remote_system_parameters: None,
+                availability_zones: vec![],
+                egress_addresses: vec![],
+                aws_principal_context: None,
+                aws_privatelink_availability_zones: None,
+                http_host_name: None,
+                connection_context: ConnectionContext::for_tests(secrets_reader),
+                builtin_item_migration_config: BuiltinItemMigrationConfig {
+                    persist_client: persist_client.clone(),
+                    read_only,
+                },
+                persist_client,
+                enable_expression_cache_override,
+                enable_0dt_deployment: true,
+                helm_chart_version: None,
             },
-            previous_ts,
-        )
+        })
         .await?;
         Ok(catalog)
     }
@@ -634,43 +765,88 @@ impl Catalog {
         self.storage.lock().await
     }
 
-    pub async fn allocate_user_id(&self) -> Result<GlobalId, Error> {
+    pub async fn current_upper(&self) -> mz_repr::Timestamp {
+        self.storage().await.current_upper().await
+    }
+
+    pub async fn allocate_user_id(
+        &self,
+        commit_ts: mz_repr::Timestamp,
+    ) -> Result<(CatalogItemId, GlobalId), Error> {
         self.storage()
             .await
-            .allocate_user_id()
+            .allocate_user_id(commit_ts)
             .await
             .maybe_terminate("allocating user ids")
             .err_into()
     }
 
-    #[cfg(test)]
-    pub async fn allocate_system_id(&self) -> Result<GlobalId, Error> {
-        use mz_ore::collections::CollectionExt;
+    /// Allocate `amount` many user IDs. See [`DurableCatalogState::allocate_user_ids`].
+    pub async fn allocate_user_ids(
+        &self,
+        amount: u64,
+        commit_ts: mz_repr::Timestamp,
+    ) -> Result<Vec<(CatalogItemId, GlobalId)>, Error> {
         self.storage()
             .await
-            .allocate_system_ids(1)
+            .allocate_user_ids(amount, commit_ts)
             .await
-            .maybe_terminate("allocating system ids")
-            .map(|ids| ids.into_element())
+            .maybe_terminate("allocating user ids")
             .err_into()
     }
 
-    pub async fn allocate_user_cluster_id(&self) -> Result<ClusterId, Error> {
+    pub async fn allocate_user_id_for_test(&self) -> Result<(CatalogItemId, GlobalId), Error> {
+        let commit_ts = self.storage().await.current_upper().await;
+        self.allocate_user_id(commit_ts).await
+    }
+
+    /// Get the next user item ID without allocating it.
+    pub async fn get_next_user_item_id(&self) -> Result<u64, Error> {
         self.storage()
             .await
-            .allocate_user_cluster_id()
+            .get_next_user_item_id()
+            .await
+            .err_into()
+    }
+
+    #[cfg(test)]
+    pub async fn allocate_system_id(
+        &self,
+        commit_ts: mz_repr::Timestamp,
+    ) -> Result<(CatalogItemId, GlobalId), Error> {
+        use mz_ore::collections::CollectionExt;
+
+        let mut storage = self.storage().await;
+        let mut txn = storage.transaction().await?;
+        let id = txn
+            .allocate_system_item_ids(1)
+            .maybe_terminate("allocating system ids")?
+            .into_element();
+        // Drain transaction.
+        let _ = txn.get_and_commit_op_updates();
+        txn.commit(commit_ts).await?;
+        Ok(id)
+    }
+
+    /// Get the next system item ID without allocating it.
+    pub async fn get_next_system_item_id(&self) -> Result<u64, Error> {
+        self.storage()
+            .await
+            .get_next_system_item_id()
+            .await
+            .err_into()
+    }
+
+    pub async fn allocate_user_cluster_id(
+        &self,
+        commit_ts: mz_repr::Timestamp,
+    ) -> Result<ClusterId, Error> {
+        self.storage()
+            .await
+            .allocate_user_cluster_id(commit_ts)
             .await
             .maybe_terminate("allocating user cluster ids")
             .err_into()
-    }
-
-    pub async fn allocate_replica_id(&self, cluster_id: &ClusterId) -> Result<ReplicaId, Error> {
-        let mut storage = self.storage().await;
-        let id = match cluster_id {
-            ClusterId::User(_) => storage.allocate_user_replica_id().await,
-            ClusterId::System(_) => storage.allocate_system_replica_id().await,
-        };
-        id.maybe_terminate("allocating replica ids").err_into()
     }
 
     /// Get the next system replica id without allocating it.
@@ -716,6 +892,19 @@ impl Catalog {
             .resolve_schema_in_database(database_spec, schema_name, conn_id)
     }
 
+    pub fn resolve_replica_in_cluster(
+        &self,
+        cluster_id: &ClusterId,
+        replica_name: &str,
+    ) -> Result<&ClusterReplica, SqlCatalogError> {
+        self.state
+            .resolve_replica_in_cluster(cluster_id, replica_name)
+    }
+
+    pub fn resolve_system_schema(&self, name: &'static str) -> SchemaId {
+        self.state.resolve_system_schema(name)
+    }
+
     pub fn resolve_search_path(
         &self,
         session: &Session,
@@ -736,17 +925,20 @@ impl Catalog {
     }
 
     /// Resolves a `BuiltinTable`.
-    pub fn resolve_builtin_table(&self, builtin: &'static BuiltinTable) -> GlobalId {
+    pub fn resolve_builtin_table(&self, builtin: &'static BuiltinTable) -> CatalogItemId {
         self.state.resolve_builtin_table(builtin)
     }
 
     /// Resolves a `BuiltinLog`.
-    pub fn resolve_builtin_log(&self, builtin: &'static BuiltinLog) -> GlobalId {
-        self.state.resolve_builtin_log(builtin)
+    pub fn resolve_builtin_log(&self, builtin: &'static BuiltinLog) -> CatalogItemId {
+        self.state.resolve_builtin_log(builtin).0
     }
 
     /// Resolves a `BuiltinSource`.
-    pub fn resolve_builtin_storage_collection(&self, builtin: &'static BuiltinSource) -> GlobalId {
+    pub fn resolve_builtin_storage_collection(
+        &self,
+        builtin: &'static BuiltinSource,
+    ) -> CatalogItemId {
         self.state.resolve_builtin_source(builtin)
     }
 
@@ -837,12 +1029,33 @@ impl Catalog {
         self.state.resolve_full_name(name, conn_id)
     }
 
-    pub fn try_get_entry(&self, id: &GlobalId) -> Option<&CatalogEntry> {
+    pub fn try_get_entry(&self, id: &CatalogItemId) -> Option<&CatalogEntry> {
         self.state.try_get_entry(id)
     }
 
-    pub fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
+    pub fn try_get_entry_by_global_id(&self, id: &GlobalId) -> Option<&CatalogEntry> {
+        self.state.try_get_entry_by_global_id(id)
+    }
+
+    pub fn get_entry(&self, id: &CatalogItemId) -> &CatalogEntry {
         self.state.get_entry(id)
+    }
+
+    pub fn get_entry_by_global_id(&self, id: &GlobalId) -> CatalogCollectionEntry {
+        self.state.get_entry_by_global_id(id)
+    }
+
+    pub fn get_global_ids(&self, id: &CatalogItemId) -> impl Iterator<Item = GlobalId> + '_ {
+        self.get_entry(id).global_ids()
+    }
+
+    pub fn resolve_item_id(&self, id: &GlobalId) -> CatalogItemId {
+        self.get_entry_by_global_id(id).id()
+    }
+
+    pub fn try_resolve_item_id(&self, id: &GlobalId) -> Option<CatalogItemId> {
+        let item = self.try_get_entry_by_global_id(id)?;
+        Some(item.id())
     }
 
     pub fn get_schema(
@@ -854,24 +1067,32 @@ impl Catalog {
         self.state.get_schema(database_spec, schema_spec, conn_id)
     }
 
-    pub fn get_mz_catalog_schema_id(&self) -> &SchemaId {
+    pub fn get_mz_catalog_schema_id(&self) -> SchemaId {
         self.state.get_mz_catalog_schema_id()
     }
 
-    pub fn get_pg_catalog_schema_id(&self) -> &SchemaId {
+    pub fn get_pg_catalog_schema_id(&self) -> SchemaId {
         self.state.get_pg_catalog_schema_id()
     }
 
-    pub fn get_information_schema_id(&self) -> &SchemaId {
+    pub fn get_information_schema_id(&self) -> SchemaId {
         self.state.get_information_schema_id()
     }
 
-    pub fn get_mz_internal_schema_id(&self) -> &SchemaId {
+    pub fn get_mz_internal_schema_id(&self) -> SchemaId {
         self.state.get_mz_internal_schema_id()
     }
 
-    pub fn get_mz_unsafe_schema_id(&self) -> &SchemaId {
+    pub fn get_mz_introspection_schema_id(&self) -> SchemaId {
+        self.state.get_mz_introspection_schema_id()
+    }
+
+    pub fn get_mz_unsafe_schema_id(&self) -> SchemaId {
         self.state.get_mz_unsafe_schema_id()
+    }
+
+    pub fn system_schema_ids(&self) -> impl Iterator<Item = SchemaId> + '_ {
+        self.state.system_schema_ids()
     }
 
     pub fn get_database(&self, id: &DatabaseId) -> &Database {
@@ -946,14 +1167,14 @@ impl Catalog {
     }
 
     pub fn get_role_allowed_cluster_sizes(&self, role_id: &Option<RoleId>) -> Vec<String> {
-        return if role_id == &Some(MZ_SYSTEM_ROLE_ID) {
+        if role_id == &Some(MZ_SYSTEM_ROLE_ID) {
             self.cluster_replica_sizes()
                 .enabled_allocations()
                 .map(|a| a.0.to_owned())
                 .collect::<Vec<_>>()
         } else {
             self.system_config().allowed_cluster_replica_sizes()
-        };
+        }
     }
 
     pub fn concretize_replica_location(
@@ -994,6 +1215,7 @@ impl Catalog {
                 ),
                 ObjectId::Item(id) => Some(self.get_entry(id).privileges()),
                 ObjectId::ClusterReplica(_) | ObjectId::Role(_) => None,
+                ObjectId::NetworkPolicy(id) => Some(self.get_network_policy(*id).privileges()),
             },
             SystemObjectId::System => Some(&self.state.system_privileges),
         }
@@ -1005,7 +1227,7 @@ impl Catalog {
     }
 
     /// Return the ids of all log sources the given object depends on.
-    pub fn introspection_dependencies(&self, id: GlobalId) -> Vec<GlobalId> {
+    pub fn introspection_dependencies(&self, id: CatalogItemId) -> Vec<CatalogItemId> {
         self.state.introspection_dependencies(id)
     }
 
@@ -1067,6 +1289,14 @@ impl Catalog {
             .filter(|entry| entry.is_secret() && entry.id().is_user())
     }
 
+    pub fn get_network_policy(&self, network_policy_id: NetworkPolicyId) -> &NetworkPolicy {
+        self.state.get_network_policy(&network_policy_id)
+    }
+
+    pub fn get_network_policy_by_name(&self, name: &str) -> Option<&NetworkPolicy> {
+        self.state.try_get_network_policy_by_name(name)
+    }
+
     pub fn clusters(&self) -> impl Iterator<Item = &Cluster> {
         self.state.clusters_by_id.values()
     }
@@ -1100,7 +1330,8 @@ impl Catalog {
     }
 
     pub fn user_cluster_replicas(&self) -> impl Iterator<Item = &ClusterReplica> {
-        self.user_clusters().flat_map(|cluster| cluster.replicas())
+        self.user_clusters()
+            .flat_map(|cluster| cluster.user_replicas())
     }
 
     pub fn databases(&self) -> impl Iterator<Item = &Database> {
@@ -1112,6 +1343,11 @@ impl Catalog {
             .roles_by_id
             .values()
             .filter(|role| role.is_user())
+    }
+
+    pub fn user_continual_tasks(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.entries()
+            .filter(|entry| entry.is_continual_task() && entry.id().is_user())
     }
 
     pub fn system_privileges(&self) -> &PrivilegeMap {
@@ -1129,29 +1365,26 @@ impl Catalog {
         self.state.default_privileges.iter()
     }
 
-    /// Allocate ids for introspection sources. Called once per cluster creation.
-    pub async fn allocate_introspection_sources(&self) -> Vec<(&'static BuiltinLog, GlobalId)> {
-        let log_amount = BUILTINS::logs().count();
-        let system_ids = self
-            .storage()
-            .await
-            .allocate_system_ids(
-                log_amount
-                    .try_into()
-                    .expect("builtin logs should fit into u64"),
-            )
-            .await
-            .unwrap_or_terminate("cannot fail to allocate system ids");
-        BUILTINS::logs().zip(system_ids.into_iter()).collect()
-    }
-
-    pub fn pack_item_update(&self, id: GlobalId, diff: Diff) -> Vec<BuiltinTableUpdate> {
+    pub fn pack_item_update(&self, id: CatalogItemId, diff: Diff) -> Vec<BuiltinTableUpdate> {
         self.state
             .resolve_builtin_table_updates(self.state.pack_item_update(id, diff))
     }
 
+    pub fn pack_storage_usage_update(
+        &self,
+        event: VersionedStorageUsage,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
+        self.state
+            .resolve_builtin_table_update(self.state.pack_storage_usage_update(event, diff))
+    }
+
     pub fn system_config(&self) -> &SystemVars {
         self.state.system_config()
+    }
+
+    pub fn system_config_mut(&mut self) -> &mut SystemVars {
+        self.state.system_config_mut()
     }
 
     pub fn ensure_not_reserved_role(&self, role_id: &RoleId) -> Result<(), Error> {
@@ -1168,6 +1401,14 @@ impl Catalog {
 
     pub fn ensure_not_predefined_role(&self, role_id: &RoleId) -> Result<(), Error> {
         self.state.ensure_not_predefined_role(role_id)
+    }
+
+    pub fn ensure_not_reserved_network_policy(
+        &self,
+        network_policy_id: &NetworkPolicyId,
+    ) -> Result<(), Error> {
+        self.state
+            .ensure_not_reserved_network_policy(network_policy_id)
     }
 
     pub fn ensure_not_reserved_object(
@@ -1226,6 +1467,9 @@ impl Catalog {
                     Ok(())
                 }
             }
+            ObjectId::NetworkPolicy(network_policy_id) => {
+                self.ensure_not_reserved_network_policy(network_policy_id)
+            }
         }
     }
 
@@ -1237,6 +1481,43 @@ impl Catalog {
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
         self.state
             .deserialize_plan_with_enable_for_item_parsing(create_sql, force_if_exists_skip)
+    }
+
+    pub(crate) fn update_expression_cache<'a, 'b>(
+        &'a self,
+        new_local_expressions: Vec<(GlobalId, LocalExpressions)>,
+        new_global_expressions: Vec<(GlobalId, GlobalExpressions)>,
+    ) -> BoxFuture<'b, ()> {
+        if let Some(expr_cache) = &self.expr_cache_handle {
+            let ons = new_local_expressions
+                .iter()
+                .map(|(id, _)| id)
+                .chain(new_global_expressions.iter().map(|(id, _)| id))
+                .map(|id| self.get_entry_by_global_id(id))
+                .filter_map(|entry| entry.index().map(|index| index.on));
+            let invalidate_ids = self.invalidate_for_index(ons);
+            expr_cache
+                .update(
+                    new_local_expressions,
+                    new_global_expressions,
+                    invalidate_ids,
+                )
+                .boxed()
+        } else {
+            async {}.boxed()
+        }
+    }
+
+    /// Listen for and apply all unconsumed updates to the durable catalog state.
+    // TODO(jkosh44) When this method is actually used outside of a test we can remove the
+    // `#[cfg(test)]` annotation.
+    #[cfg(test)]
+    async fn sync_to_current_updates(
+        &mut self,
+    ) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, CatalogError> {
+        let updates = self.storage().await.sync_to_current_updates().await?;
+        let builtin_table_updates = self.state.apply_updates(updates)?;
+        Ok(builtin_table_updates)
     }
 }
 
@@ -1256,6 +1537,28 @@ pub fn is_public_role(name: &str) -> bool {
 
 pub(crate) fn catalog_type_to_audit_object_type(sql_type: SqlCatalogItemType) -> ObjectType {
     object_type_to_audit_object_type(sql_type.into())
+}
+
+pub(crate) fn comment_id_to_audit_object_type(id: CommentObjectId) -> ObjectType {
+    match id {
+        CommentObjectId::Table(_) => ObjectType::Table,
+        CommentObjectId::View(_) => ObjectType::View,
+        CommentObjectId::MaterializedView(_) => ObjectType::MaterializedView,
+        CommentObjectId::Source(_) => ObjectType::Source,
+        CommentObjectId::Sink(_) => ObjectType::Sink,
+        CommentObjectId::Index(_) => ObjectType::Index,
+        CommentObjectId::Func(_) => ObjectType::Func,
+        CommentObjectId::Connection(_) => ObjectType::Connection,
+        CommentObjectId::Type(_) => ObjectType::Type,
+        CommentObjectId::Secret(_) => ObjectType::Secret,
+        CommentObjectId::Role(_) => ObjectType::Role,
+        CommentObjectId::Database(_) => ObjectType::Database,
+        CommentObjectId::Schema(_) => ObjectType::Schema,
+        CommentObjectId::Cluster(_) => ObjectType::Cluster,
+        CommentObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
+        CommentObjectId::ContinualTask(_) => ObjectType::ContinualTask,
+        CommentObjectId::NetworkPolicy(_) => ObjectType::NetworkPolicy,
+    }
 }
 
 pub(crate) fn object_type_to_audit_object_type(
@@ -1284,6 +1587,8 @@ pub(crate) fn system_object_type_to_audit_object_type(
             mz_sql::catalog::ObjectType::Database => ObjectType::Database,
             mz_sql::catalog::ObjectType::Schema => ObjectType::Schema,
             mz_sql::catalog::ObjectType::Func => ObjectType::Func,
+            mz_sql::catalog::ObjectType::ContinualTask => ObjectType::ContinualTask,
+            mz_sql::catalog::ObjectType::NetworkPolicy => ObjectType::NetworkPolicy,
         },
         SystemObjectType::System => ObjectType::System,
     }
@@ -1338,75 +1643,80 @@ impl ConnCatalog<'_> {
 
 impl ExprHumanizer for ConnCatalog<'_> {
     fn humanize_id(&self, id: GlobalId) -> Option<String> {
-        self.state
-            .entry_by_id
-            .get(&id)
-            .map(|entry| entry.name())
-            .map(|name| self.resolve_full_name(name).to_string())
+        let entry = self.state.try_get_entry_by_global_id(&id)?;
+        Some(self.resolve_full_name(entry.name()).to_string())
     }
 
     fn humanize_id_unqualified(&self, id: GlobalId) -> Option<String> {
-        self.state
-            .entry_by_id
-            .get(&id)
-            .map(|entry| entry.name())
-            .map(|name| name.item.clone())
+        let entry = self.state.try_get_entry_by_global_id(&id)?;
+        Some(entry.name().item.clone())
     }
 
     fn humanize_id_parts(&self, id: GlobalId) -> Option<Vec<String>> {
-        self.state
-            .entry_by_id
-            .get(&id)
-            .map(|entry| entry.name())
-            .map(|name| self.resolve_full_name(name).into_parts())
+        let entry = self.state.try_get_entry_by_global_id(&id)?;
+        Some(self.resolve_full_name(entry.name()).into_parts())
     }
 
-    fn humanize_scalar_type(&self, typ: &ScalarType) -> String {
+    fn humanize_scalar_type(&self, typ: &ScalarType, postgres_compat: bool) -> String {
         use ScalarType::*;
 
         match typ {
-            Array(t) => format!("{}[]", self.humanize_scalar_type(t)),
+            Array(t) => format!("{}[]", self.humanize_scalar_type(t, postgres_compat)),
             List {
-                custom_id: Some(global_id),
+                custom_id: Some(item_id),
                 ..
             }
             | Map {
-                custom_id: Some(global_id),
+                custom_id: Some(item_id),
                 ..
             } => {
-                let item = self.get_item(global_id);
+                let item = self.get_item(item_id);
                 self.minimal_qualification(item.name()).to_string()
             }
             List { element_type, .. } => {
-                format!("{} list", self.humanize_scalar_type(element_type))
+                format!(
+                    "{} list",
+                    self.humanize_scalar_type(element_type, postgres_compat)
+                )
             }
             Map { value_type, .. } => format!(
                 "map[{}=>{}]",
-                self.humanize_scalar_type(&ScalarType::String),
-                self.humanize_scalar_type(value_type)
+                self.humanize_scalar_type(&ScalarType::String, postgres_compat),
+                self.humanize_scalar_type(value_type, postgres_compat)
             ),
             Record {
-                custom_id: Some(id),
+                custom_id: Some(item_id),
                 ..
             } => {
-                let item = self.get_item(id);
+                let item = self.get_item(item_id);
                 self.minimal_qualification(item.name()).to_string()
             }
             Record { fields, .. } => format!(
                 "record({})",
                 fields
                     .iter()
-                    .map(|f| format!("{}: {}", f.0, self.humanize_column_type(&f.1)))
+                    .map(|f| format!(
+                        "{}: {}",
+                        f.0,
+                        self.humanize_column_type(&f.1, postgres_compat)
+                    ))
                     .join(",")
             ),
             PgLegacyChar => "\"char\"".into(),
+            Char { length } if !postgres_compat => match length {
+                None => "char".into(),
+                Some(length) => format!("char({})", length.into_u32()),
+            },
+            VarChar { max_length } if !postgres_compat => match max_length {
+                None => "varchar".into(),
+                Some(length) => format!("varchar({})", length.into_u32()),
+            },
             UInt16 => "uint2".into(),
             UInt32 => "uint4".into(),
             UInt64 => "uint8".into(),
             ty => {
                 let pgrepr_type = mz_pgrepr::Type::from(ty);
-                let pg_catalog_schema =
-                    SchemaSpecifier::Id(self.state.get_pg_catalog_schema_id().clone());
+                let pg_catalog_schema = SchemaSpecifier::Id(self.state.get_pg_catalog_schema_id());
 
                 let res = if self
                     .effective_search_path(true)
@@ -1432,19 +1742,11 @@ impl ExprHumanizer for ConnCatalog<'_> {
     }
 
     fn column_names_for_id(&self, id: GlobalId) -> Option<Vec<String>> {
-        let Some(entry) = self.state.entry_by_id.get(&id) else {
-            return None;
-        };
+        let entry = self.state.try_get_entry_by_global_id(&id)?;
 
         match entry.index() {
             Some(index) => {
-                let Some(on_entry) = self.state.entry_by_id.get(&index.on) else {
-                    return None;
-                };
-                let Ok(on_desc) = on_entry.desc(&self.resolve_full_name(on_entry.name())) else {
-                    return None;
-                };
-
+                let on_desc = self.state.try_get_desc_by_global_id(&index.on)?;
                 let mut on_names = on_desc
                     .iter_names()
                     .map(|col_name| col_name.to_string())
@@ -1455,11 +1757,11 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 // Init ix_names with unknown column names. Unknown columns are
                 // represented as an empty String and rendered as `#c` by the
                 // Display::fmt implementation for HumanizedExpr<'a, usize, M>.
-                let ix_arity = p.values().cloned().max().map(|m| m + 1).unwrap_or(0);
+                let ix_arity = p.iter().map(|x| *x + 1).max().unwrap_or(0);
                 let mut ix_names = vec![String::new(); ix_arity];
 
                 // Apply the permutation by swapping on_names with ix_names.
-                for (on_pos, ix_pos) in p.into_iter() {
+                for (on_pos, ix_pos) in p.into_iter().enumerate() {
                     let on_name = on_names.get_mut(on_pos).expect("on_name");
                     let ix_name = ix_names.get_mut(ix_pos).expect("ix_name");
                     std::mem::swap(on_name, ix_name);
@@ -1468,10 +1770,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 Some(ix_names) // Return the updated ix_names vector.
             }
             None => {
-                let Ok(desc) = entry.desc(&self.resolve_full_name(entry.name())) else {
-                    return None;
-                };
-
+                let desc = self.state.try_get_desc_by_global_id(&id)?;
                 let column_names = desc
                     .iter_names()
                     .map(|col_name| col_name.to_string())
@@ -1483,19 +1782,12 @@ impl ExprHumanizer for ConnCatalog<'_> {
     }
 
     fn humanize_column(&self, id: GlobalId, column: usize) -> Option<String> {
-        self.state
-            .entry_by_id
-            .get(&id)
-            .try_map(|entry| {
-                let desc = entry.desc(&self.resolve_full_name(entry.name()))?;
-                let column_name = desc.get_name(column);
-                Ok::<_, SqlCatalogError>(column_name.to_string())
-            })
-            .unwrap_or(None)
+        let desc = self.state.try_get_desc_by_global_id(&id)?;
+        Some(desc.get_name(column).to_string())
     }
 
     fn id_exists(&self, id: GlobalId) -> bool {
-        self.state.entry_by_id.contains_key(&id)
+        self.state.entry_by_global_id.contains_key(&id)
     }
 }
 
@@ -1595,23 +1887,16 @@ impl SessionCatalog for ConnCatalog<'_> {
             .collect()
     }
 
-    fn get_mz_internal_schema_id(&self) -> &SchemaId {
+    fn get_mz_internal_schema_id(&self) -> SchemaId {
         self.state().get_mz_internal_schema_id()
     }
 
-    fn get_mz_unsafe_schema_id(&self) -> &SchemaId {
+    fn get_mz_unsafe_schema_id(&self) -> SchemaId {
         self.state().get_mz_unsafe_schema_id()
     }
 
-    fn is_system_schema(&self, schema: &str) -> bool {
-        self.state.is_system_schema(schema)
-    }
-
-    fn is_system_schema_specifier(&self, schema: &SchemaSpecifier) -> bool {
-        match schema {
-            SchemaSpecifier::Temporary => false,
-            SchemaSpecifier::Id(id) => self.state.is_system_schema_id(id),
-        }
+    fn is_system_schema_specifier(&self, schema: SchemaSpecifier) -> bool {
+        self.state.is_system_schema_specifier(schema)
     }
 
     fn resolve_role(
@@ -1621,6 +1906,16 @@ impl SessionCatalog for ConnCatalog<'_> {
         match self.state.try_get_role_by_name(role_name) {
             Some(role) => Ok(role),
             None => Err(SqlCatalogError::UnknownRole(role_name.into())),
+        }
+    }
+
+    fn resolve_network_policy(
+        &self,
+        policy_name: &str,
+    ) -> Result<&dyn mz_sql::catalog::CatalogNetworkPolicy, SqlCatalogError> {
+        match self.state.try_get_network_policy_by_name(policy_name) {
+            Some(policy) => Ok(policy),
+            None => Err(SqlCatalogError::UnknownNetworkPolicy(policy_name.into())),
         }
     }
 
@@ -1648,6 +1943,23 @@ impl SessionCatalog for ConnCatalog<'_> {
 
     fn collect_role_membership(&self, id: &RoleId) -> BTreeSet<RoleId> {
         self.state.collect_role_membership(id)
+    }
+
+    fn get_network_policy(
+        &self,
+        id: &NetworkPolicyId,
+    ) -> &dyn mz_sql::catalog::CatalogNetworkPolicy {
+        self.state.get_network_policy(id)
+    }
+
+    fn get_network_policies(&self) -> Vec<&dyn mz_sql::catalog::CatalogNetworkPolicy> {
+        // `as` is ok to use to cast to a trait object.
+        #[allow(clippy::as_conversions)]
+        self.state
+            .network_policies_by_id
+            .values()
+            .map(|policy| policy as &dyn CatalogNetworkPolicy)
+            .collect()
     }
 
     fn resolve_cluster(
@@ -1728,12 +2040,50 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state.get_system_type(name)
     }
 
-    fn try_get_item(&self, id: &GlobalId) -> Option<&dyn mz_sql::catalog::CatalogItem> {
+    fn try_get_item(&self, id: &CatalogItemId) -> Option<&dyn mz_sql::catalog::CatalogItem> {
         Some(self.state.try_get_entry(id)?)
     }
 
-    fn get_item(&self, id: &GlobalId) -> &dyn mz_sql::catalog::CatalogItem {
+    fn try_get_item_by_global_id(
+        &self,
+        id: &GlobalId,
+    ) -> Option<Box<dyn mz_sql::catalog::CatalogCollectionItem>> {
+        let entry = self.state.try_get_entry_by_global_id(id)?;
+        let entry = match &entry.item {
+            CatalogItem::Table(table) => {
+                let (version, _gid) = table
+                    .collections
+                    .iter()
+                    .find(|(_version, gid)| *gid == id)
+                    .expect("catalog out of sync, mismatched GlobalId");
+                entry.at_version(RelationVersionSelector::Specific(*version))
+            }
+            _ => entry.at_version(RelationVersionSelector::Latest),
+        };
+        Some(entry)
+    }
+
+    fn get_item(&self, id: &CatalogItemId) -> &dyn mz_sql::catalog::CatalogItem {
         self.state.get_entry(id)
+    }
+
+    fn get_item_by_global_id(
+        &self,
+        id: &GlobalId,
+    ) -> Box<dyn mz_sql::catalog::CatalogCollectionItem> {
+        let entry = self.state.get_entry_by_global_id(id);
+        let entry = match &entry.item {
+            CatalogItem::Table(table) => {
+                let (version, _gid) = table
+                    .collections
+                    .iter()
+                    .find(|(_version, gid)| *gid == id)
+                    .expect("catalog out of sync, mismatched GlobalId");
+                entry.at_version(RelationVersionSelector::Specific(*version))
+            }
+            _ => entry.at_version(RelationVersionSelector::Latest),
+        };
+        entry
     }
 
     fn get_items(&self) -> Vec<&dyn mz_sql::catalog::CatalogItem> {
@@ -1810,6 +2160,21 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state.resolve_full_schema_name(name)
     }
 
+    fn resolve_item_id(&self, global_id: &GlobalId) -> CatalogItemId {
+        self.state.get_entry_by_global_id(global_id).id()
+    }
+
+    fn resolve_global_id(
+        &self,
+        item_id: &CatalogItemId,
+        version: RelationVersionSelector,
+    ) -> GlobalId {
+        self.state
+            .get_entry(item_id)
+            .at_version(version)
+            .global_id()
+    }
+
     fn config(&self) -> &mz_sql::catalog::CatalogConfig {
         self.state.config()
     }
@@ -1847,6 +2212,9 @@ impl SessionCatalog for ConnCatalog<'_> {
                 Some(self.get_schema(database_spec, schema_spec).privileges())
             }
             SystemObjectId::Object(ObjectId::Item(id)) => Some(self.get_item(id).privileges()),
+            SystemObjectId::Object(ObjectId::NetworkPolicy(id)) => {
+                Some(self.get_network_policy(id).privileges())
+            }
             SystemObjectId::Object(ObjectId::ClusterReplica(_))
             | SystemObjectId::Object(ObjectId::Role(_)) => None,
         }
@@ -1857,7 +2225,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state.object_dependents(ids, &self.conn_id, &mut seen)
     }
 
-    fn item_dependents(&self, id: GlobalId) -> Vec<ObjectId> {
+    fn item_dependents(&self, id: CatalogItemId) -> Vec<ObjectId> {
         let mut seen = BTreeSet::new();
         self.state.item_dependents(id, &mut seen)
     }
@@ -1933,9 +2301,17 @@ impl SessionCatalog for ConnCatalog<'_> {
         let _ = self.notices_tx.send(notice.into());
     }
 
-    fn get_item_comments(&self, id: &GlobalId) -> Option<&BTreeMap<Option<usize>, String>> {
+    fn get_item_comments(&self, id: &CatalogItemId) -> Option<&BTreeMap<Option<usize>, String>> {
         let comment_id = self.state.get_comment_id(ObjectId::Item(*id));
         self.state.comments.get_object_comments(comment_id)
+    }
+
+    fn is_cluster_size_cc(&self, size: &str) -> bool {
+        self.state
+            .cluster_replica_sizes
+            .0
+            .get(size)
+            .map_or(false, |a| a.is_cc)
     }
 }
 
@@ -1951,21 +2327,22 @@ mod tests {
     use tokio_postgres::NoTls;
     use uuid::Uuid;
 
-    use mz_catalog::builtin::{
-        Builtin, BuiltinType, BUILTINS,
-        REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_VIEW_FINGERPRINT_WHITESPACE,
-    };
+    use mz_catalog::builtin::{Builtin, BuiltinType, BUILTINS};
+    use mz_catalog::durable::{test_bootstrap_args, CatalogError, DurableCatalogError, FenceError};
     use mz_catalog::SYSTEM_CONN_ID;
     use mz_controller_types::{ClusterId, ReplicaId};
     use mz_expr::MirScalarExpr;
-    use mz_ore::now::{to_datetime, SYSTEM_TIME};
-    use mz_ore::task;
+    use mz_ore::now::to_datetime;
+    use mz_ore::{assert_err, assert_ok, task};
     use mz_persist_client::PersistClient;
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID, FIRST_USER_OID};
     use mz_repr::namespaces::{INFORMATION_SCHEMA, PG_CATALOG_SCHEMA};
     use mz_repr::role_id::RoleId;
-    use mz_repr::{Datum, GlobalId, RelationType, RowArena, ScalarType, Timestamp};
-    use mz_sql::catalog::{CatalogSchema, CatalogType, SessionCatalog};
+    use mz_repr::{
+        CatalogItemId, Datum, GlobalId, RelationType, RelationVersionSelector, RowArena,
+        ScalarType, Timestamp,
+    };
+    use mz_sql::catalog::{BuiltinsConfig, CatalogSchema, CatalogType, SessionCatalog};
     use mz_sql::func::{Func, FuncImpl, Operation, OP_IMPLS};
     use mz_sql::names::{
         self, DatabaseId, ItemQualifiers, ObjectId, PartialItemName, QualifiedItemName,
@@ -1976,8 +2353,9 @@ mod tests {
         Scope, StatementContext,
     };
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
-    use mz_sql::session::vars::VarInput;
+    use mz_sql::session::vars::{SystemVars, VarInput};
 
+    use crate::catalog::state::LocalExpressionCache;
     use crate::catalog::{Catalog, Op};
     use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
     use crate::session::Session;
@@ -2003,9 +2381,7 @@ mod tests {
                     input: QualifiedItemName {
                         qualifiers: ItemQualifiers {
                             database_spec: ResolvedDatabaseSpecifier::Ambient,
-                            schema_spec: SchemaSpecifier::Id(
-                                catalog.get_pg_catalog_schema_id().clone(),
-                            ),
+                            schema_spec: SchemaSpecifier::Id(catalog.get_pg_catalog_schema_id()),
                         },
                         item: "numeric".to_string(),
                     },
@@ -2024,9 +2400,7 @@ mod tests {
                     input: QualifiedItemName {
                         qualifiers: ItemQualifiers {
                             database_spec: ResolvedDatabaseSpecifier::Ambient,
-                            schema_spec: SchemaSpecifier::Id(
-                                catalog.get_mz_catalog_schema_id().clone(),
-                            ),
+                            schema_spec: SchemaSpecifier::Id(catalog.get_mz_catalog_schema_id()),
                         },
                         item: "mz_array_types".to_string(),
                     },
@@ -2067,16 +2441,21 @@ mod tests {
     async fn test_catalog_revision() {
         let persist_client = PersistClient::new_for_tests().await;
         let organization_id = Uuid::new_v4();
+        let bootstrap_args = test_bootstrap_args();
         {
-            let mut catalog =
-                Catalog::open_debug_catalog(persist_client.clone(), organization_id.clone())
-                    .await
-                    .expect("unable to open debug catalog");
+            let mut catalog = Catalog::open_debug_catalog(
+                persist_client.clone(),
+                organization_id.clone(),
+                &bootstrap_args,
+            )
+            .await
+            .expect("unable to open debug catalog");
             assert_eq!(catalog.transient_revision(), 1);
+            let commit_ts = catalog.current_upper().await;
             catalog
                 .transact(
                     None,
-                    mz_repr::Timestamp::MIN,
+                    commit_ts,
                     None,
                     vec![Op::CreateDatabase {
                         name: "test".to_string(),
@@ -2089,9 +2468,10 @@ mod tests {
             catalog.expire().await;
         }
         {
-            let catalog = Catalog::open_debug_catalog(persist_client, organization_id)
-                .await
-                .expect("unable to open debug catalog");
+            let catalog =
+                Catalog::open_debug_catalog(persist_client, organization_id, &bootstrap_args)
+                    .await
+                    .expect("unable to open debug catalog");
             // Re-opening the same catalog resets the transient_revision to 1.
             assert_eq!(catalog.transient_revision(), 1);
             catalog.expire().await;
@@ -2104,11 +2484,11 @@ mod tests {
         Catalog::with_debug(|catalog| async move {
             let mz_catalog_schema = (
                 ResolvedDatabaseSpecifier::Ambient,
-                SchemaSpecifier::Id(catalog.state().get_mz_catalog_schema_id().clone()),
+                SchemaSpecifier::Id(catalog.state().get_mz_catalog_schema_id()),
             );
             let pg_catalog_schema = (
                 ResolvedDatabaseSpecifier::Ambient,
-                SchemaSpecifier::Id(catalog.state().get_pg_catalog_schema_id().clone()),
+                SchemaSpecifier::Id(catalog.state().get_pg_catalog_schema_id()),
             );
             let mz_temp_schema = (
                 ResolvedDatabaseSpecifier::Ambient,
@@ -2149,7 +2529,7 @@ mod tests {
             session
                 .vars_mut()
                 .set(
-                    None,
+                    &SystemVars::new(),
                     "search_path",
                     VarInput::Flat(mz_repr::namespaces::PG_CATALOG_SCHEMA),
                     false,
@@ -2181,7 +2561,7 @@ mod tests {
             session
                 .vars_mut()
                 .set(
-                    None,
+                    &SystemVars::new(),
                     "search_path",
                     VarInput::Flat(mz_repr::namespaces::MZ_CATALOG_SCHEMA),
                     false,
@@ -2213,7 +2593,7 @@ mod tests {
             session
                 .vars_mut()
                 .set(
-                    None,
+                    &SystemVars::new(),
                     "search_path",
                     VarInput::Flat(mz_repr::namespaces::MZ_TEMP_SCHEMA),
                     false,
@@ -2285,25 +2665,39 @@ mod tests {
         let columns = iter::repeat(column).take(column_count).join("");
         let create_sql = format!("{view_def}{columns})");
         let create_sql_check = create_sql.clone();
-        assert!(mz_sql_parser::parser::parse_statements(&create_sql).is_ok());
-        assert!(mz_sql_parser::parser::parse_statements_with_limit(&create_sql).is_err());
+        assert_ok!(mz_sql_parser::parser::parse_statements(&create_sql));
+        assert_err!(mz_sql_parser::parser::parse_statements_with_limit(
+            &create_sql
+        ));
 
         let persist_client = PersistClient::new_for_tests().await;
         let organization_id = Uuid::new_v4();
-        let id = GlobalId::User(1);
+        let id = CatalogItemId::User(1);
+        let gid = GlobalId::User(1);
+        let bootstrap_args = test_bootstrap_args();
         {
-            let mut catalog =
-                Catalog::open_debug_catalog(persist_client.clone(), organization_id.clone())
-                    .await
-                    .expect("unable to open debug catalog");
+            let mut catalog = Catalog::open_debug_catalog(
+                persist_client.clone(),
+                organization_id.clone(),
+                &bootstrap_args,
+            )
+            .await
+            .expect("unable to open debug catalog");
             let item = catalog
                 .state()
-                .deserialize_item(&create_sql)
+                .deserialize_item(
+                    gid,
+                    &create_sql,
+                    &BTreeMap::new(),
+                    &mut LocalExpressionCache::Closed,
+                    None,
+                )
                 .expect("unable to parse view");
+            let commit_ts = catalog.current_upper().await;
             catalog
                 .transact(
                     None,
-                    SYSTEM_TIME().into(),
+                    commit_ts,
                     None,
                     vec![Op::CreateItem {
                         item,
@@ -2323,9 +2717,10 @@ mod tests {
             catalog.expire().await;
         }
         {
-            let catalog = Catalog::open_debug_catalog(persist_client, organization_id)
-                .await
-                .expect("unable to open debug catalog");
+            let catalog =
+                Catalog::open_debug_catalog(persist_client, organization_id, &bootstrap_args)
+                    .await
+                    .expect("unable to open debug catalog");
             let view = catalog.get_entry(&id);
             assert_eq!("v", view.name.item);
             match &view.item {
@@ -2345,7 +2740,7 @@ mod tests {
             assert_eq!(
                 mz_sql::catalog::ObjectType::ClusterReplica,
                 conn_catalog.get_object_type(&ObjectId::ClusterReplica((
-                    ClusterId::User(1),
+                    ClusterId::user(1).expect("1 is a valid ID"),
                     ReplicaId::User(1)
                 )))
             );
@@ -2367,7 +2762,7 @@ mod tests {
             assert_eq!(
                 None,
                 conn_catalog.get_privileges(&SystemObjectId::Object(ObjectId::ClusterReplica((
-                    ClusterId::User(1),
+                    ClusterId::user(1).expect("1 is a valid ID"),
                     ReplicaId::User(1),
                 ))))
             );
@@ -2534,7 +2929,10 @@ mod tests {
                 a == b
             };
 
-            for builtin in BUILTINS::iter() {
+            let builtins_cfg = BuiltinsConfig {
+                include_continual_tasks: true,
+            };
+            for builtin in BUILTINS::iter(&builtins_cfg) {
                 match builtin {
                     Builtin::Type(ty) => {
                         assert!(all_oids.insert(ty.oid), "{} reused oid {}", ty.name, ty.oid);
@@ -2590,7 +2988,7 @@ mod tests {
                         // Ensure the type matches.
                         match &ty.details.typ {
                             CatalogType::Array { element_reference } => {
-                                let elem_ty = BUILTINS::iter()
+                                let elem_ty = BUILTINS::iter(&builtins_cfg)
                                     .filter_map(|builtin| match builtin {
                                         Builtin::Type(ty @ BuiltinType { name, .. })
                                             if element_reference == name =>
@@ -3074,7 +3472,9 @@ mod tests {
                         schema: Some(view.schema.to_string()),
                         item: view.name.to_string(),
                     })
-                    .expect("unable to resolve view");
+                    .expect("unable to resolve view")
+                    // TODO(alter_table)
+                    .at_version(RelationVersionSelector::Latest);
                 let full_name = conn_catalog.resolve_full_name(item.name());
                 for col_type in item
                     .desc(&full_name)
@@ -3128,46 +3528,120 @@ mod tests {
         .await
     }
 
+    // Make sure objects reside in the `mz_introspection` schema iff they depend on per-replica
+    // introspection relations.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn test_mz_introspection_builtins() {
+        Catalog::with_debug(|catalog| async move {
+            let conn_catalog = catalog.for_system_session();
+
+            let introspection_schema_id = catalog.get_mz_introspection_schema_id();
+            let introspection_schema_spec = SchemaSpecifier::Id(introspection_schema_id);
+
+            for entry in catalog.entries() {
+                let schema_spec = entry.name().qualifiers.schema_spec;
+                let introspection_deps = catalog.introspection_dependencies(entry.id);
+                if introspection_deps.is_empty() {
+                    assert!(
+                        schema_spec != introspection_schema_spec,
+                        "entry does not depend on introspection sources but is in \
+                         `mz_introspection`: {}",
+                        conn_catalog.resolve_full_name(entry.name()),
+                    );
+                } else {
+                    assert!(
+                        schema_spec == introspection_schema_spec,
+                        "entry depends on introspection sources but is not in \
+                         `mz_introspection`: {}",
+                        conn_catalog.resolve_full_name(entry.name()),
+                    );
+                }
+            }
+        })
+        .await
+    }
+
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-    async fn test_builtin_migrations() {
+    async fn test_multi_subscriber_catalog() {
         let persist_client = PersistClient::new_for_tests().await;
+        let bootstrap_args = test_bootstrap_args();
         let organization_id = Uuid::new_v4();
-        let id = {
-            let catalog =
-                Catalog::open_debug_catalog(persist_client.clone(), organization_id.clone())
-                    .await
-                    .expect("unable to open debug catalog");
-            let id = catalog
-                .entries()
-                .find(|entry| &entry.name.item == "mz_objects" && entry.is_view())
-                .expect("mz_objects doesn't exist")
-                .id();
-            catalog.expire().await;
-            id
-        };
-        // Forcibly migrate all views.
-        {
-            let mut guard =
-                REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_VIEW_FINGERPRINT_WHITESPACE
-                    .lock()
-                    .expect("lock poisoned");
-            *guard = Some("\n".to_string());
-        }
-        {
-            let catalog = Catalog::open_debug_catalog(persist_client, organization_id)
+        let db_name = "DB";
+
+        let mut writer_catalog = Catalog::open_debug_catalog(
+            persist_client.clone(),
+            organization_id.clone(),
+            &bootstrap_args,
+        )
+        .await
+        .expect("open_debug_catalog");
+        let mut read_only_catalog = Catalog::open_debug_read_only_catalog(
+            persist_client.clone(),
+            organization_id.clone(),
+            &bootstrap_args,
+        )
+        .await
+        .expect("open_debug_read_only_catalog");
+        assert_err!(writer_catalog.resolve_database(db_name));
+        assert_err!(read_only_catalog.resolve_database(db_name));
+
+        let commit_ts = writer_catalog.current_upper().await;
+        writer_catalog
+            .transact(
+                None,
+                commit_ts,
+                None,
+                vec![Op::CreateDatabase {
+                    name: db_name.to_string(),
+                    owner_id: MZ_SYSTEM_ROLE_ID,
+                }],
+            )
+            .await
+            .expect("failed to transact");
+
+        let write_db = writer_catalog
+            .resolve_database(db_name)
+            .expect("resolve_database");
+        read_only_catalog
+            .sync_to_current_updates()
+            .await
+            .expect("sync_to_current_updates");
+        let read_db = read_only_catalog
+            .resolve_database(db_name)
+            .expect("resolve_database");
+
+        assert_eq!(write_db, read_db);
+
+        let writer_catalog_fencer =
+            Catalog::open_debug_catalog(persist_client, organization_id, &bootstrap_args)
                 .await
-                .expect("unable to open debug catalog");
+                .expect("open_debug_catalog for fencer");
+        let fencer_db = writer_catalog_fencer
+            .resolve_database(db_name)
+            .expect("resolve_database for fencer");
+        assert_eq!(fencer_db, read_db);
 
-            let new_id = catalog
-                .entries()
-                .find(|entry| &entry.name.item == "mz_objects" && entry.is_view())
-                .expect("mz_objects doesn't exist")
-                .id();
-            // Assert that the view was migrated and got a new ID.
-            assert_ne!(new_id, id);
+        let write_fence_err = writer_catalog
+            .sync_to_current_updates()
+            .await
+            .expect_err("sync_to_current_updates for fencer");
+        assert!(matches!(
+            write_fence_err,
+            CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
+        ));
+        let read_fence_err = read_only_catalog
+            .sync_to_current_updates()
+            .await
+            .expect_err("sync_to_current_updates after fencer");
+        assert!(matches!(
+            read_fence_err,
+            CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
+        ));
 
-            catalog.expire().await;
-        }
+        writer_catalog.expire().await;
+        read_only_catalog.expire().await;
+        writer_catalog_fencer.expire().await;
     }
 }

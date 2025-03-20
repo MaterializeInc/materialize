@@ -16,10 +16,9 @@
 //! The [bytes] crate but backed by [lgalloc].
 
 use std::fmt::Debug;
-use std::sync::Arc;
 use std::time::Instant;
 
-use bytes::Buf;
+use bytes::Bytes;
 use lgalloc::AllocError;
 use prometheus::{Counter, CounterVec, Histogram, IntCounter, IntCounterVec};
 use tracing::debug;
@@ -29,11 +28,12 @@ use crate::metric;
 use crate::metrics::MetricsRegistry;
 use crate::region::Region;
 
-/// [bytes::Bytes] but backed by [lgalloc].
-#[derive(Clone, Debug)]
-pub struct LgBytes {
-    offset: usize,
-    region: Arc<MetricsRegion<u8>>,
+impl From<MetricsRegion<u8>> for Bytes {
+    fn from(bytes: MetricsRegion<u8>) -> Bytes {
+        // This will handle the drop correctly when the refcount goes to 0...
+        // see the rustdoc on this method for more details.
+        Bytes::from_owner(bytes)
+    }
 }
 
 /// A [Region] wrapper that increments metrics when it is dropped.
@@ -55,6 +55,15 @@ impl<T: Copy + Debug> Debug for MetricsRegion<T> {
 impl<T: Copy> MetricsRegion<T> {
     fn capacity_bytes(&self) -> usize {
         self.buf.capacity() * std::mem::size_of::<T>()
+    }
+
+    /// Copy all of the elements from `slice` into the [`Region`].
+    ///
+    /// # Panics
+    ///
+    /// * If the [`Region`] does not have enough capacity.
+    pub fn extend_from_slice(&mut self, slice: &[T]) {
+        self.buf.extend_from_slice(slice);
     }
 }
 
@@ -80,101 +89,18 @@ impl<T: Copy> AsRef<[T]> for MetricsRegion<T> {
     }
 }
 
-impl From<Arc<MetricsRegion<u8>>> for LgBytes {
-    fn from(region: Arc<MetricsRegion<u8>>) -> Self {
-        LgBytes { offset: 0, region }
-    }
-}
-
-impl AsRef<[u8]> for LgBytes {
-    fn as_ref(&self) -> &[u8] {
-        // This implementation of [bytes::Buf] chooses to panic instead of
-        // allowing the offset to advance past remaining, which means this
-        // invariant should always hold and we shouldn't need the std::cmp::min.
-        // Be defensive anyway.
-        debug_assert!(self.offset <= self.region.buf.len());
-        let offset = std::cmp::min(self.offset, self.region.buf.len());
-        &self.region.buf[offset..]
-    }
-}
-
-impl std::ops::Deref for LgBytes {
-    type Target = [u8];
-    fn deref(&self) -> &Self::Target {
-        self.as_ref()
-    }
-}
-
-impl Buf for LgBytes {
-    /// Returns the number of bytes between the current position and the end of
-    /// the buffer.
-    ///
-    /// This value is greater than or equal to the length of the slice returned
-    /// by `chunk()`.
-    ///
-    /// # Implementer notes
-    ///
-    /// Implementations of `remaining` should ensure that the return value does
-    /// not change unless a call is made to `advance` or any other function that
-    /// is documented to change the `Buf`'s current position.
-    fn remaining(&self) -> usize {
-        self.as_ref().len()
-    }
-
-    /// Returns a slice starting at the current position and of length between 0
-    /// and `Buf::remaining()`. Note that this *can* return shorter slice (this
-    /// allows non-continuous internal representation).
-    ///
-    /// This is a lower level function. Most operations are done with other
-    /// functions.
-    ///
-    /// # Implementer notes
-    ///
-    /// This function should never panic. Once the end of the buffer is reached,
-    /// i.e., `Buf::remaining` returns 0, calls to `chunk()` should return an
-    /// empty slice.
-    fn chunk(&self) -> &[u8] {
-        self.as_ref()
-    }
-
-    /// Advance the internal cursor of the Buf
-    ///
-    /// The next call to `chunk()` will return a slice starting `cnt` bytes
-    /// further into the underlying buffer.
-    ///
-    /// # Panics
-    ///
-    /// This function panics if `cnt > self.remaining()`.
-    ///
-    /// # Implementer notes
-    ///
-    /// It is recommended for implementations of `advance` to panic if `cnt >
-    /// self.remaining()`. If the implementation does not panic, the call must
-    /// behave as if `cnt == self.remaining()`.
-    ///
-    /// A call with `cnt == 0` should never panic and be a no-op.
-    fn advance(&mut self, cnt: usize) {
-        if cnt > self.remaining() {
-            panic!(
-                "cannot advance by {} only {} remaining",
-                cnt,
-                self.remaining()
-            )
-        };
-        self.offset += cnt;
-    }
-}
-
-/// Metrics for [LgBytes].
+/// Metrics for lgalloc'd bytes..
 #[derive(Debug, Clone)]
 pub struct LgBytesMetrics {
-    /// Metrics for the "persist_s3" usage of [LgBytes].
+    /// Metrics for the "persist_s3" usage of lgalloc bytes.
     pub persist_s3: LgBytesOpMetrics,
-    /// Metrics for the "persist_arrow" usage of [LgBytes].
+    /// Metrics for the "persist_azure" usage of lgalloc bytes.
+    pub persist_azure: LgBytesOpMetrics,
+    /// Metrics for the "persist_arrow" usage of lgalloc bytes.
     pub persist_arrow: LgBytesOpMetrics,
 }
 
-/// Metrics for an individual usage of [LgBytes].
+/// Metrics for an individual usage of lgalloc bytes.
 #[derive(Clone)]
 pub struct LgBytesOpMetrics {
     heap: LgBytesRegionMetrics,
@@ -263,22 +189,50 @@ impl LgBytesMetrics {
         };
         LgBytesMetrics {
             persist_s3: op("persist_s3"),
+            persist_azure: op("persist_azure"),
             persist_arrow: op("persist_arrow"),
         }
     }
 }
 
 impl LgBytesOpMetrics {
-    /// Attempts to copy the given buf into an lgalloc managed file-based mapped
-    /// region, falling back to a heap allocation.
-    pub fn try_mmap<T: AsRef<[u8]>>(&self, buf: T) -> LgBytes {
-        let region = self.try_mmap_region(buf);
-        LgBytes::from(Arc::new(region))
+    /// Returns a new empty [`MetricsRegion`] to hold at least `T` elements.
+    pub fn new_region<T: Copy>(&self, capacity: usize) -> MetricsRegion<T> {
+        let start = Instant::now();
+
+        // Round the capacity up to the minimum lgalloc mmap size.
+        let capacity = std::cmp::max(capacity, 1 << lgalloc::VALID_SIZE_CLASS.start);
+        let region = match Region::new_mmap(capacity) {
+            Ok(region) => region,
+            Err(err) => {
+                if let AllocError::Disabled = err {
+                    self.mmap_disabled_count.inc()
+                } else {
+                    debug!("failed to mmap allocate: {}", err);
+                    self.mmap_error_count.inc();
+                }
+                Region::new_heap(capacity)
+            }
+        };
+        let region = self.metrics_region(region);
+        self.alloc_seconds.inc_by(start.elapsed().as_secs_f64());
+
+        region
     }
 
-    /// Attempts to copy the given buf into an lgalloc managed file-based mapped
-    /// region, falling back to a heap allocation.
-    pub fn try_mmap_region<T: Copy>(&self, buf: impl AsRef<[T]>) -> MetricsRegion<T> {
+    /// Attempts to copy the given bytes into an lgalloc-managed file-based mapped
+    /// region. If that fails, we return the original bytes.
+    pub fn try_mmap_bytes(&self, buf: Bytes) -> Bytes {
+        self.try_mmap_region(buf.as_ref())
+            .map(Bytes::from)
+            .unwrap_or(buf)
+    }
+
+    /// Attempts to copy the given buf into an lgalloc managed file-based mapped region.
+    pub fn try_mmap_region<T: Copy>(
+        &self,
+        buf: impl AsRef<[T]>,
+    ) -> Result<MetricsRegion<T>, AllocError> {
         let start = Instant::now();
         let buf = buf.as_ref();
         // Round the capacity up to the minimum lgalloc mmap size.
@@ -286,22 +240,22 @@ impl LgBytesOpMetrics {
         let buf = match Region::new_mmap(capacity) {
             Ok(mut region) => {
                 region.extend_from_slice(buf);
-                region
+                Ok(region)
             }
             Err(err) => {
-                match err {
+                match &err {
                     AllocError::Disabled => self.mmap_disabled_count.inc(),
                     err => {
                         debug!("failed to mmap allocate: {}", err);
                         self.mmap_error_count.inc();
                     }
                 };
-                Region::Heap(buf.to_owned())
+                Err(err)
             }
-        };
+        }?;
         let region = self.metrics_region(buf);
         self.alloc_seconds.inc_by(start.elapsed().as_secs_f64());
-        region
+        Ok(region)
     }
 
     /// Wraps the already owned buf into a [Region::Heap] with metrics.

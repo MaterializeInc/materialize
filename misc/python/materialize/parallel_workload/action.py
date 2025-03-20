@@ -16,24 +16,31 @@ import urllib.parse
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-import pg8000
+import psycopg
 import requests
 import websocket
-from pg8000 import Connection
-from pg8000.exceptions import InterfaceError
 from pg8000.native import identifier
+from psycopg import Connection
+from psycopg.errors import OperationalError
 
 import materialize.parallel_workload.database
 from materialize.data_ingest.data_type import NUMBER_TYPES, Text, TextTextMap
 from materialize.data_ingest.query_error import QueryError
 from materialize.data_ingest.row import Operation
+from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition
-from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.materialized import (
+    LEADER_STATUS_HEALTHCHECK,
+    DeploymentStatus,
+    Materialized,
+)
 from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.parallel_workload.database import (
+    DATA_TYPES,
     DB,
     MAX_CLUSTER_REPLICAS,
     MAX_CLUSTERS,
+    MAX_COLUMNS,
     MAX_DBS,
     MAX_INDEXES,
     MAX_KAFKA_SINKS,
@@ -48,6 +55,7 @@ from materialize.parallel_workload.database import (
     MAX_WEBHOOK_SOURCES,
     Cluster,
     ClusterReplica,
+    Column,
     Database,
     DBObject,
     Index,
@@ -92,18 +100,19 @@ def ws_connect(ws: websocket.WebSocket, host, port, user: str) -> tuple[int, int
     ws_ready = False
     while True:
         result = json.loads(ws.recv())
-        if result["type"] == "ParameterStatus":
+        result_type = result["type"]
+        if result_type == "ParameterStatus":
             continue
-        elif result["type"] == "BackendKeyData":
+        elif result_type == "BackendKeyData":
             ws_conn_id = result["payload"]["conn_id"]
             ws_secret_key = result["payload"]["secret_key"]
-        elif result["type"] == "ReadyForQuery":
+        elif result_type == "ReadyForQuery":
             ws_ready = True
-        elif result["type"] == "Notice":
+        elif result_type == "Notice":
             assert "connected to Materialize" in result["payload"]["message"], result
             break
         else:
-            assert False, result
+            raise RuntimeError(f"Unexpected result type: {result_type} in: {result}")
     assert ws_ready
     return (ws_conn_id, ws_secret_key)
 
@@ -124,7 +133,6 @@ class Action:
         result = [
             "permission denied for",
             "must be owner of",
-            "network error",  # TODO: Remove when #21954 is fixed
             "HTTP read timeout",
             "result exceeds max size of",
         ]
@@ -134,12 +142,14 @@ class Action:
                     "query could not complete",
                     "cached plan must not change result type",
                     "violates not-null constraint",
-                    "unknown catalog item",  # Expected, see #20381
+                    "unknown catalog item",  # Expected, see database-issues#6124
                     "was concurrently dropped",  # role was dropped
                     "unknown cluster",  # cluster was dropped
                     "unknown schema",  # schema was dropped
                     "the transaction's active cluster has been dropped",  # cluster was dropped
-                    "was removed",  # dependency was removed, started with moving optimization off main thread, see #24367
+                    "was removed",  # dependency was removed, started with moving optimization off main thread, see database-issues#7285
+                    "real-time source dropped before ingesting the upstream system's visible frontier",  # Expected, see https://buildkite.com/materialize/nightly/builds/9399#0191be17-1f4c-4321-9b51-edc4b08b71c5
+                    "object state changed while transaction was in progress",
                 ]
             )
         if exe.db.scenario == Scenario.Cancel:
@@ -148,25 +158,38 @@ class Action:
                     "canceling statement due to user request",
                 ]
             )
+        if exe.db.scenario == Scenario.ZeroDowntimeDeploy:
+            result.extend(
+                [
+                    "cannot write in read-only mode",
+                    "500: internal storage failure! ReadOnly",
+                ]
+            )
         if exe.db.scenario in (
             Scenario.Kill,
-            Scenario.ToggleTxnWal,
             Scenario.BackupRestore,
+            Scenario.ZeroDowntimeDeploy,
         ):
             result.extend(
                 [
-                    # pg8000
-                    "network error",
+                    # psycopg
+                    "server closed the connection unexpectedly",
                     "Can't create a connection to host",
                     "Connection refused",
+                    "Cursor closed",
                     # websockets
                     "Connection to remote host was lost.",
                     "socket is already closed.",
                     "Broken pipe",
+                    "WS connect",
+                    # http
+                    "Remote end closed connection without response",
+                    "Connection aborted",
+                    "Connection refused",
                 ]
             )
-        if exe.db.scenario in (Scenario.Kill, Scenario.ToggleTxnWal):
-            # Expected, see #20465
+        if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
+            # Expected, see database-issues#6156
             result.extend(["unknown catalog item", "unknown schema"])
         if exe.db.scenario == Scenario.Rename:
             result.extend(["unknown schema", "ambiguous reference to schema name"])
@@ -180,7 +203,7 @@ class FetchAction(Action):
         result = super().errors_to_ignore(exe)
         result.extend(
             [
-                "is not of expected type",  # TODO(def-) Remove when #26549 is fixed
+                "is not of expected type",  # TODO(def-) Remove when database-issues#7857 is fixed
             ]
         )
         if exe.db.complexity == Complexity.DDL:
@@ -195,7 +218,7 @@ class FetchAction(Action):
     def run(self, exe: Executor) -> bool:
         obj = self.rng.choice(exe.db.db_objects())
         # Unsupported via this API
-        # See https://github.com/MaterializeInc/materialize/issues/20474
+        # See https://github.com/MaterializeInc/database-issues/issues/6159
         (
             exe.rollback(http=Http.NO)
             if self.rng.choice([True, False])
@@ -362,8 +385,8 @@ class SQLsmithAction(Action):
         except:
             if exe.db.scenario not in (
                 Scenario.Kill,
-                Scenario.ToggleTxnWal,
                 Scenario.BackupRestore,
+                Scenario.ZeroDowntimeDeploy,
             ):
                 raise
         finally:
@@ -694,6 +717,37 @@ class RenameTableAction(Action):
         return True
 
 
+class AlterTableAddColumnAction(Action):
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            if not exe.db.tables:
+                return False
+            if exe.db.flags.get("enable_alter_table_add_column", "FALSE") != "TRUE":
+                return False
+            table = self.rng.choice(exe.db.tables)
+        with table.lock:
+            # Allow adding more a few more columns than the max for additional coverage.
+            if len(table.columns) >= MAX_COLUMNS + 3:
+                return False
+
+            # TODO(alter_table): Support adding non-nullable columns with a default value.
+            new_column = Column(
+                self.rng, len(table.columns), self.rng.choice(DATA_TYPES), table
+            )
+            new_column.raw_name = f"{new_column.raw_name}-altered"
+            new_column.nullable = True
+            new_column.default = None
+
+            try:
+                exe.execute(
+                    f"ALTER TABLE {str(table)} ADD COLUMN {new_column.create()}"
+                )
+            except:
+                raise
+            table.columns.append(new_column)
+        return True
+
+
 class RenameViewAction(Action):
     def run(self, exe: Executor) -> bool:
         if exe.db.scenario != Scenario.Rename:
@@ -740,6 +794,64 @@ class RenameSinkAction(Action):
                 )
             except:
                 sink.rename -= 1
+                raise
+        return True
+
+
+class AlterKafkaSinkFromAction(Action):
+    def run(self, exe: Executor) -> bool:
+        if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
+            # Does not work reliably with kills, see database-issues#8421
+            return False
+        with exe.db.lock:
+            if not exe.db.kafka_sinks:
+                return False
+            sink = self.rng.choice(exe.db.kafka_sinks)
+        with sink.lock, sink.base_object.lock:
+            if sink not in exe.db.kafka_sinks:
+                return False
+
+            old_object = sink.base_object
+            if sink.key != "":
+                # key requires same column names, low chance of even having that
+                return False
+            elif sink.format in ["FORMAT BYTES", "FORMAT TEXT"]:
+                # single column formats
+                objs = [
+                    o
+                    for o in exe.db.db_objects_without_views()
+                    if len(o.columns) == 1
+                    and o.columns[0].data_type == old_object.columns[0].data_type
+                ]
+            elif sink.format in ["FORMAT JSON"]:
+                # We should be able to format all data types as JSON, and they have no
+                # particular backwards-compatiblility requirements.
+                objs = [o for o in exe.db.db_objects_without_views()]
+            else:
+                # Avro schema migration checking can be quite strict, and we need to be not only
+                # compatible with the latest object's schema but all previous schemas.
+                # Only allow a conservative case for now: where all types and names match.
+                objs = []
+                old_cols = {c.name(True): c.data_type for c in old_object.columns}
+                for o in exe.db.db_objects_without_views():
+                    if isinstance(old_object, WebhookSource):
+                        continue
+                    if isinstance(o, WebhookSource):
+                        continue
+                    new_cols = {c.name(True): c.data_type for c in o.columns}
+                    if old_cols == new_cols:
+                        objs.append(o)
+            if not objs:
+                return False
+            sink.base_object = self.rng.choice(objs)
+
+            try:
+                exe.execute(
+                    f"ALTER SINK {sink} SET FROM {sink.base_object}",
+                    # http=Http.RANDOM,  # Fails
+                )
+            except:
+                sink.base_object = old_object
                 raise
         return True
 
@@ -857,7 +969,9 @@ class SwapSchemaAction(Action):
             ]
             if len(schemas) < 2:
                 return False
-            schema1, schema2 = self.rng.sample(schemas, 2)
+            schema_ids = sorted(self.rng.sample(range(0, len(schemas)), 2))
+            schema1 = schemas[schema_ids[0]]
+            schema2 = schemas[schema_ids[1]]
         with schema1.lock, schema2.lock:
             if schema1 not in exe.db.schemas:
                 return False
@@ -868,8 +982,8 @@ class SwapSchemaAction(Action):
                     f"ALTER SCHEMA {schema1} SWAP WITH {identifier(schema2.name())}"
                 )
             else:
+                exe.cur.connection.autocommit = False
                 try:
-                    exe.cur._c.autocommit = False
                     exe.execute(f"ALTER SCHEMA {schema1} RENAME TO tmp_schema")
                     exe.execute(
                         f"ALTER SCHEMA {schema2} RENAME TO {identifier(schema1.name())}"
@@ -879,7 +993,10 @@ class SwapSchemaAction(Action):
                     )
                     exe.commit()
                 finally:
-                    exe.cur._c.autocommit = True
+                    try:
+                        exe.cur.connection.autocommit = True
+                    except:
+                        exe.reconnect_next = True
             schema1.schema_id, schema2.schema_id = schema2.schema_id, schema1.schema_id
             schema1.rename, schema2.rename = schema2.rename, schema1.rename
         return True
@@ -916,26 +1033,67 @@ class FlipFlagsAction(Action):
         BOOLEAN_FLAG_VALUES = ["TRUE", "FALSE"]
 
         self.flags_with_values: dict[str, list[str]] = dict()
-        for flag in ["catalog", "snapshot", "txn"]:
+        self.flags_with_values["persist_blob_target_size"] = (
+            # 1 MiB, 16 MiB, 128 MiB
+            ["1048576", "16777216", "134217728"]
+        )
+        for flag in ["catalog", "source", "snapshot", "txn"]:
             self.flags_with_values[f"persist_use_critical_since_{flag}"] = (
                 BOOLEAN_FLAG_VALUES
             )
-        self.flags_with_values["persist_roundtrip_spine"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["persist_claim_unclaimed_compactions"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["persist_optimize_ignored_data_fetch"] = (
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["persist_optimize_ignored_data_decode"] = (
             BOOLEAN_FLAG_VALUES
         )
-        self.flags_with_values["persist_write_diffs_sum"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_variadic_left_join_lowering"] = (
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["enable_eager_delta_joins"] = BOOLEAN_FLAG_VALUES
-        self.flags_with_values["persist_batch_columnar_format"] = ["row", "both"]
+        self.flags_with_values["persist_batch_columnar_format"] = [
+            "row",
+            "both_v2",
+            "structured",
+        ]
+        self.flags_with_values["persist_batch_structured_order"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["persist_batch_builder_structured"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["persist_batch_structured_key_lower_len"] = [
+            "0",
+            "1",
+            "512",
+            "1000",
+            "50000",
+        ]
+        self.flags_with_values["persist_batch_max_run_len"] = [
+            "2",
+            "3",
+            "4",
+            "16",
+            "1000",
+        ]
+        self.flags_with_values["persist_part_decode_format"] = [
+            "row_with_validate",
+            "arrow",
+        ]
+        self.flags_with_values["persist_encoding_enable_dictionary"] = (
+            BOOLEAN_FLAG_VALUES
+        )
+        self.flags_with_values["compute_apply_column_demands"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_alter_table_add_column"] = BOOLEAN_FLAG_VALUES
 
     def run(self, exe: Executor) -> bool:
         flag_name = self.rng.choice(list(self.flags_with_values.keys()))
+
+        # TODO: Remove when database-issues#8352 is fixed
+        if exe.db.scenario == Scenario.ZeroDowntimeDeploy and flag_name.startswith(
+            "persist_use_critical_since_"
+        ):
+            return False
+
         flag_value = self.rng.choice(self.flags_with_values[flag_name])
 
         conn = None
@@ -943,23 +1101,28 @@ class FlipFlagsAction(Action):
         try:
             conn = self.create_system_connection(exe)
             self.flip_flag(conn, flag_name, flag_value)
+            exe.db.flags[flag_name] = flag_value
             return True
-        except InterfaceError:
+        except OperationalError:
             if conn is not None:
                 conn.close()
 
             # ignore it
             return False
+        except Exception as e:
+            raise QueryError(str(e), "FlipFlags")
 
     def create_system_connection(
         self, exe: Executor, num_attempts: int = 10
     ) -> Connection:
         try:
-            conn = pg8000.connect(
+            conn = psycopg.connect(
                 host=exe.db.host,
-                port=exe.db.ports["mz_system"],
+                port=exe.db.ports[
+                    "mz_system" if exe.mz_service == "materialized" else "mz_system2"
+                ],
                 user="mz_system",
-                database="materialize",
+                dbname="materialize",
             )
             conn.autocommit = True
             return conn
@@ -973,7 +1136,7 @@ class FlipFlagsAction(Action):
     def flip_flag(self, conn: Connection, flag_name: str, flag_value: str) -> None:
         with conn.cursor() as cur:
             cur.execute(
-                f"ALTER SYSTEM SET {flag_name} = {flag_value};",
+                f"ALTER SYSTEM SET {flag_name} = {flag_value};".encode(),
             )
 
 
@@ -1067,9 +1230,9 @@ class DropRoleAction(Action):
             try:
                 exe.execute(query, http=Http.RANDOM)
             except QueryError as e:
-                # expected, see #20465
+                # expected, see database-issues#6156
                 if (
-                    exe.db.scenario not in (Scenario.Kill, Scenario.ToggleTxnWal)
+                    exe.db.scenario not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
                     or "unknown role" not in e.msg
                 ):
                     raise e
@@ -1119,9 +1282,9 @@ class DropClusterAction(Action):
             try:
                 exe.execute(query, http=Http.RANDOM)
             except QueryError as e:
-                # expected, see #20465
+                # expected, see database-issues#6156
                 if (
-                    exe.db.scenario not in (Scenario.Kill, Scenario.ToggleTxnWal)
+                    exe.db.scenario not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
                     or "unknown cluster" not in e.msg
                 ):
                     raise e
@@ -1141,7 +1304,9 @@ class SwapClusterAction(Action):
         with exe.db.lock:
             if len(exe.db.clusters) < 2:
                 return False
-            cluster1, cluster2 = self.rng.sample(exe.db.clusters, 2)
+            cluster_ids = sorted(self.rng.sample(range(0, len(exe.db.clusters)), 2))
+            cluster1 = exe.db.clusters[cluster_ids[0]]
+            cluster2 = exe.db.clusters[cluster_ids[1]]
         with cluster1.lock, cluster2.lock:
             if cluster1 not in exe.db.clusters:
                 return False
@@ -1154,8 +1319,8 @@ class SwapClusterAction(Action):
                     # http=Http.RANDOM,  # Fails, see https://buildkite.com/materialize/nightly/builds/7362#018ecc56-787f-4cc2-ac54-1c8437af164b
                 )
             else:
+                exe.cur.connection.autocommit = False
                 try:
-                    exe.cur._c.autocommit = False
                     exe.execute(f"ALTER SCHEMA {cluster1} RENAME TO tmp_cluster")
                     exe.execute(
                         f"ALTER SCHEMA {cluster2} RENAME TO {identifier(cluster1.name())}"
@@ -1165,7 +1330,10 @@ class SwapClusterAction(Action):
                     )
                     exe.commit()
                 finally:
-                    exe.cur._c.autocommit = True
+                    try:
+                        exe.cur.connection.autocommit = True
+                    except:
+                        exe.reconnect_next = True
             cluster1.cluster_id, cluster2.cluster_id = (
                 cluster2.cluster_id,
                 cluster1.cluster_id,
@@ -1249,9 +1417,9 @@ class DropClusterReplicaAction(Action):
             try:
                 exe.execute(query, http=Http.RANDOM)
             except QueryError as e:
-                # expected, see #20465
+                # expected, see database-issues#6156
                 if (
-                    exe.db.scenario not in (Scenario.Kill, Scenario.ToggleTxnWal)
+                    exe.db.scenario not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
                     or "has no CLUSTER REPLICA named" not in e.msg
                 ):
                     raise e
@@ -1278,9 +1446,9 @@ class GrantPrivilegesAction(Action):
             try:
                 exe.execute(query, http=Http.RANDOM)
             except QueryError as e:
-                # expected, see #20465
+                # expected, see database-issues#6156
                 if (
-                    exe.db.scenario not in (Scenario.Kill, Scenario.ToggleTxnWal)
+                    exe.db.scenario not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
                     or "unknown role" not in e.msg
                 ):
                     raise e
@@ -1307,9 +1475,9 @@ class RevokePrivilegesAction(Action):
             try:
                 exe.execute(query, http=Http.RANDOM)
             except QueryError as e:
-                # expected, see #20465
+                # expected, see database-issues#6156
                 if (
-                    exe.db.scenario not in (Scenario.Kill, Scenario.ToggleTxnWal)
+                    exe.db.scenario not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
                     or "unknown role" not in e.msg
                 ):
                     raise e
@@ -1329,9 +1497,10 @@ class ReconnectAction(Action):
         self.random_role = random_role
 
     def run(self, exe: Executor) -> bool:
-        autocommit = exe.cur._c.autocommit
+        exe.mz_service = "materialized"
+        exe.log("reconnecting")
         host = exe.db.host
-        port = exe.db.ports["materialized"]
+        port = exe.db.ports[exe.mz_service]
         with exe.db.lock:
             if self.random_role and exe.db.roles:
                 user = self.rng.choice(
@@ -1339,7 +1508,7 @@ class ReconnectAction(Action):
                 )
             else:
                 user = "materialize"
-            conn = exe.cur._c
+            conn = exe.cur.connection
 
         if exe.ws and exe.use_ws:
             try:
@@ -1359,13 +1528,29 @@ class ReconnectAction(Action):
         NUM_ATTEMPTS = 20
         if exe.ws:
             threading.current_thread().getName()
-            for i in range(NUM_ATTEMPTS):
+            for i in range(
+                NUM_ATTEMPTS
+                if exe.db.scenario != Scenario.ZeroDowntimeDeploy
+                else 1000000
+            ):
                 exe.ws = websocket.WebSocket()
                 try:
                     ws_conn_id, ws_secret_key = ws_connect(
-                        exe.ws, host, exe.db.ports["http"], user
+                        exe.ws,
+                        host,
+                        exe.db.ports[
+                            "http" if exe.mz_service == "materialized" else "http2"
+                        ],
+                        user,
                     )
                 except Exception as e:
+                    if exe.db.scenario == Scenario.ZeroDowntimeDeploy:
+                        exe.mz_service = (
+                            "materialized2"
+                            if exe.mz_service == "materialized"
+                            else "materialized"
+                        )
+                        continue
                     if i < NUM_ATTEMPTS - 1:
                         time.sleep(1)
                         continue
@@ -1374,12 +1559,14 @@ class ReconnectAction(Action):
                     exe.pg_pid = ws_conn_id
                 break
 
-        for i in range(NUM_ATTEMPTS):
+        for i in range(
+            NUM_ATTEMPTS if exe.db.scenario != Scenario.ZeroDowntimeDeploy else 1000000
+        ):
             try:
-                conn = pg8000.connect(
-                    host=host, port=port, user=user, database="materialize"
+                conn = psycopg.connect(
+                    host=host, port=port, user=user, dbname="materialize"
                 )
-                conn.autocommit = autocommit
+                conn.autocommit = exe.autocommit
                 cur = conn.cursor()
                 exe.cur = cur
                 exe.set_isolation("SERIALIZABLE")
@@ -1387,8 +1574,15 @@ class ReconnectAction(Action):
                 if not exe.use_ws:
                     exe.pg_pid = cur.fetchall()[0][0]
             except Exception as e:
+                if exe.db.scenario == Scenario.ZeroDowntimeDeploy:
+                    exe.mz_service = (
+                        "materialized2"
+                        if exe.mz_service == "materialized"
+                        else "materialized"
+                    )
+                    continue
                 if i < NUM_ATTEMPTS - 1 and (
-                    "network error" in str(e)
+                    "server closed the connection unexpectedly" in str(e)
                     or "Can't create a connection to host" in str(e)
                     or "Connection refused" in str(e)
                 ):
@@ -1433,7 +1627,7 @@ class CancelAction(Action):
             extra_info=f"Canceling {worker}",
             http=Http.RANDOM,
         )
-        # Sleep less often to work around #22228 / #2392
+        # Sleep less often to work around materialize#22228 / database-issues#835
         time.sleep(self.rng.uniform(1, 10))
         return True
 
@@ -1443,36 +1637,97 @@ class KillAction(Action):
         self,
         rng: random.Random,
         composition: Composition | None,
+        azurite: bool,
         sanity_restart: bool,
         system_param_fn: Callable[[dict[str, str]], dict[str, str]] = lambda x: x,
     ):
         super().__init__(rng, composition)
         self.system_param_fn = system_param_fn
         self.system_parameters = {}
+        self.azurite = azurite
         self.sanity_restart = sanity_restart
 
     def run(self, exe: Executor) -> bool:
         assert self.composition
         self.composition.kill("materialized")
-        # Otherwise getting failure on "up" locally
-        time.sleep(1)
         self.system_parameters = self.system_param_fn(self.system_parameters)
         with self.composition.override(
             Materialized(
                 restart="on-failure",
-                external_minio="toxiproxy",
-                external_cockroach="toxiproxy",
+                # TODO: Retry with toxiproxy on azurite
+                external_blob_store=True,
+                blob_store_is_azure=self.azurite,
+                external_metadata_store="toxiproxy",
                 ports=["6975:6875", "6976:6876", "6977:6877"],
                 sanity_restart=self.sanity_restart,
                 additional_system_parameter_defaults=self.system_parameters,
+                metadata_store="cockroach",
             )
         ):
             self.composition.up("materialized", detach=True)
-        time.sleep(self.rng.uniform(120, 240))
+        time.sleep(self.rng.uniform(60, 120))
         return True
 
 
-# TODO: Don't restore immediately, keep copy Database objects
+class ZeroDowntimeDeployAction(Action):
+    def __init__(
+        self,
+        rng: random.Random,
+        composition: Composition | None,
+        azurite: bool,
+        sanity_restart: bool,
+    ):
+        super().__init__(rng, composition)
+        self.azurite = azurite
+        self.sanity_restart = sanity_restart
+        self.deploy_generation = 0
+
+    def run(self, exe: Executor) -> bool:
+        assert self.composition
+
+        self.deploy_generation += 1
+
+        if self.deploy_generation % 2 == 0:
+            mz_service = "materialized"
+            ports = ["6975:6875", "6976:6876", "6977:6877"]
+        else:
+            mz_service = "materialized2"
+            ports = ["7075:6875", "7076:6876", "7077:6877"]
+
+        print(f"Deploying generation {self.deploy_generation} on {mz_service}")
+
+        with self.composition.override(
+            Materialized(
+                name=mz_service,
+                # TODO: Retry with toxiproxy on azurite
+                external_blob_store=True,
+                blob_store_is_azure=self.azurite,
+                external_metadata_store="toxiproxy",
+                ports=ports,
+                sanity_restart=self.sanity_restart,
+                deploy_generation=self.deploy_generation,
+                system_parameter_defaults=get_default_system_parameters(
+                    zero_downtime=True
+                ),
+                restart="on-failure",
+                healthcheck=LEADER_STATUS_HEALTHCHECK,
+                metadata_store="cockroach",
+            ),
+        ):
+            self.composition.up(mz_service, detach=True)
+            self.composition.await_mz_deployment_status(
+                DeploymentStatus.READY_TO_PROMOTE, mz_service
+            )
+            self.composition.promote_mz(mz_service)
+            self.composition.await_mz_deployment_status(
+                DeploymentStatus.IS_LEADER, mz_service
+            )
+
+        time.sleep(self.rng.uniform(60, 120))
+        return True
+
+
+# TODO: Don't restore immediately, keep copy of Database objects
 class BackupRestoreAction(Action):
     composition: Composition
     db: Database
@@ -1535,7 +1790,7 @@ class BackupRestoreAction(Action):
 class CreateWebhookSourceAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
-        if exe.db.scenario in (Scenario.Kill, Scenario.ToggleTxnWal):
+        if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
             result.extend(
                 ["cannot create source in cluster with more than one replica"]
             )
@@ -1547,8 +1802,7 @@ class CreateWebhookSourceAction(Action):
                 return False
             webhook_source_id = exe.db.webhook_source_id
             exe.db.webhook_source_id += 1
-            potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
-            cluster = self.rng.choice(potential_clusters)
+            cluster = self.rng.choice(exe.db.clusters)
             schema = self.rng.choice(exe.db.schemas)
         with schema.lock, cluster.lock:
             if schema not in exe.db.schemas:
@@ -1587,7 +1841,7 @@ class DropWebhookSourceAction(Action):
 class CreateKafkaSourceAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
-        if exe.db.scenario in (Scenario.Kill, Scenario.ToggleTxnWal):
+        if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
             result.extend(
                 ["cannot create source in cluster with more than one replica"]
             )
@@ -1599,8 +1853,7 @@ class CreateKafkaSourceAction(Action):
                 return False
             source_id = exe.db.kafka_source_id
             exe.db.kafka_source_id += 1
-            potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
-            cluster = self.rng.choice(potential_clusters)
+            cluster = self.rng.choice(exe.db.clusters)
             schema = self.rng.choice(exe.db.schemas)
         with schema.lock, cluster.lock:
             if schema not in exe.db.schemas:
@@ -1619,7 +1872,10 @@ class CreateKafkaSourceAction(Action):
                 source.create(exe)
                 exe.db.kafka_sources.append(source)
             except:
-                if exe.db.scenario not in (Scenario.Kill, Scenario.ToggleTxnWal):
+                if exe.db.scenario not in (
+                    Scenario.Kill,
+                    Scenario.ZeroDowntimeDeploy,
+                ):
                     raise
         return True
 
@@ -1650,14 +1906,14 @@ class DropKafkaSourceAction(Action):
 class CreateMySqlSourceAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
-        if exe.db.scenario in (Scenario.Kill, Scenario.ToggleTxnWal):
+        if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
             result.extend(
                 ["cannot create source in cluster with more than one replica"]
             )
         return result
 
     def run(self, exe: Executor) -> bool:
-        # TODO: Reenable when #22770 is fixed
+        # TODO: Reenable when database-issues#6881 is fixed
         if exe.db.scenario == Scenario.BackupRestore:
             return False
 
@@ -1666,9 +1922,8 @@ class CreateMySqlSourceAction(Action):
                 return False
             source_id = exe.db.mysql_source_id
             exe.db.mysql_source_id += 1
-            potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
             schema = self.rng.choice(exe.db.schemas)
-            cluster = self.rng.choice(potential_clusters)
+            cluster = self.rng.choice(exe.db.clusters)
         with schema.lock, cluster.lock:
             if schema not in exe.db.schemas:
                 return False
@@ -1686,7 +1941,10 @@ class CreateMySqlSourceAction(Action):
                 source.create(exe)
                 exe.db.mysql_sources.append(source)
             except:
-                if exe.db.scenario not in (Scenario.Kill, Scenario.ToggleTxnWal):
+                if exe.db.scenario not in (
+                    Scenario.Kill,
+                    Scenario.ZeroDowntimeDeploy,
+                ):
                     raise
         return True
 
@@ -1717,14 +1975,14 @@ class DropMySqlSourceAction(Action):
 class CreatePostgresSourceAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
-        if exe.db.scenario in (Scenario.Kill, Scenario.ToggleTxnWal):
+        if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
             result.extend(
                 ["cannot create source in cluster with more than one replica"]
             )
         return result
 
     def run(self, exe: Executor) -> bool:
-        # TODO: Reenable when #22770 is fixed
+        # TODO: Reenable when database-issues#6881 is fixed
         if exe.db.scenario == Scenario.BackupRestore:
             return False
 
@@ -1733,8 +1991,10 @@ class CreatePostgresSourceAction(Action):
                 return False
             source_id = exe.db.postgres_source_id
             exe.db.postgres_source_id += 1
-            potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
             schema = self.rng.choice(exe.db.schemas)
+            potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
+            if not potential_clusters:
+                return False
             cluster = self.rng.choice(potential_clusters)
         with schema.lock, cluster.lock:
             if schema not in exe.db.schemas:
@@ -1753,7 +2013,10 @@ class CreatePostgresSourceAction(Action):
                 source.create(exe)
                 exe.db.postgres_sources.append(source)
             except:
-                if exe.db.scenario not in (Scenario.Kill, Scenario.ToggleTxnWal):
+                if exe.db.scenario not in (
+                    Scenario.Kill,
+                    Scenario.ZeroDowntimeDeploy,
+                ):
                     raise
         return True
 
@@ -1786,6 +2049,7 @@ class CreateKafkaSinkAction(Action):
         return [
             # Another replica can be created in parallel
             "cannot create sink in cluster with more than one replica",
+            "BYTES format with non-encodable type",
         ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> bool:
@@ -1795,6 +2059,8 @@ class CreateKafkaSinkAction(Action):
             sink_id = exe.db.kafka_sink_id
             exe.db.kafka_sink_id += 1
             potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
+            if not potential_clusters:
+                return False
             cluster = self.rng.choice(potential_clusters)
             schema = self.rng.choice(exe.db.schemas)
         with schema.lock, cluster.lock:
@@ -1862,7 +2128,7 @@ class HttpPostAction(Action):
             if source not in exe.db.webhook_sources:
                 return False
 
-            url = f"http://{exe.db.host}:{exe.db.ports['http']}/api/webhook/{urllib.parse.quote(source.schema.db.name(), safe='')}/{urllib.parse.quote(source.schema.name(), safe='')}/{urllib.parse.quote(source.name(), safe='')}"
+            url = f"http://{exe.db.host}:{exe.db.ports['http' if exe.mz_service == 'materialized' else 'http2']}/api/webhook/{urllib.parse.quote(source.schema.db.name(), safe='')}/{urllib.parse.quote(source.schema.name(), safe='')}/{urllib.parse.quote(source.name(), safe='')}"
 
             payload = source.body_format.to_data_type().random_value(self.rng)
 
@@ -1884,24 +2150,22 @@ class HttpPostAction(Action):
             exe.log(log)
             try:
                 source.num_rows += 1
-                result = requests.post(
-                    url, data=payload.encode("utf-8"), headers=headers
-                )
+                result = requests.post(url, data=payload.encode(), headers=headers)
                 if result.status_code != 200:
                     raise QueryError(f"{result.status_code}: {result.text}", log)
             except requests.exceptions.ConnectionError:
                 # Expected when Mz is killed
                 if exe.db.scenario not in (
                     Scenario.Kill,
-                    Scenario.ToggleTxnWal,
                     Scenario.BackupRestore,
+                    Scenario.ZeroDowntimeDeploy,
                 ):
                     raise
             except QueryError as e:
-                # expected, see #20465
+                # expected, see database-issues#6156
                 if exe.db.scenario not in (
                     Scenario.Kill,
-                    Scenario.ToggleTxnWal,
+                    Scenario.ZeroDowntimeDeploy,
                 ) or ("404: no object was found at the path" not in e.msg):
                     raise e
         return True
@@ -1967,10 +2231,10 @@ write_action_list = ActionList(
         (InsertAction, 50),
         (SelectOneAction, 1),  # can be mixed with writes
         # (SetClusterAction, 1),  # SET cluster cannot be called in an active transaction
-        (HttpPostAction, 50),
+        (HttpPostAction, 5),
         (CommitRollbackAction, 10),
         (ReconnectAction, 1),
-        (SourceInsertAction, 50),
+        (SourceInsertAction, 5),
         (FlipFlagsAction, 2),
     ],
     autocommit=False,
@@ -1993,29 +2257,30 @@ dml_nontrans_action_list = ActionList(
 ddl_action_list = ActionList(
     [
         (CreateIndexAction, 2),
-        (DropIndexAction, 1),
+        (DropIndexAction, 2),
         (CreateTableAction, 2),
-        (DropTableAction, 1),
+        (DropTableAction, 2),
         (CreateViewAction, 8),
-        (DropViewAction, 4),
+        (DropViewAction, 8),
         (CreateRoleAction, 2),
-        (DropRoleAction, 1),
+        (DropRoleAction, 2),
         (CreateClusterAction, 2),
-        (DropClusterAction, 1),
+        (DropClusterAction, 2),
         (SwapClusterAction, 10),
         (CreateClusterReplicaAction, 4),
-        (DropClusterReplicaAction, 2),
+        (DropClusterReplicaAction, 4),
         (SetClusterAction, 1),
         (CreateWebhookSourceAction, 2),
-        (DropWebhookSourceAction, 1),
+        (DropWebhookSourceAction, 2),
         (CreateKafkaSinkAction, 4),
-        (DropKafkaSinkAction, 1),
+        (DropKafkaSinkAction, 4),
         (CreateKafkaSourceAction, 4),
-        (DropKafkaSourceAction, 1),
-        (CreateMySqlSourceAction, 4),
-        (DropMySqlSourceAction, 1),
+        (DropKafkaSourceAction, 4),
+        # TODO: Reenable when database-issues#8237 is fixed
+        # (CreateMySqlSourceAction, 4),
+        # (DropMySqlSourceAction, 4),
         (CreatePostgresSourceAction, 4),
-        (DropPostgresSourceAction, 1),
+        (DropPostgresSourceAction, 4),
         (GrantPrivilegesAction, 4),
         (RevokePrivilegesAction, 1),
         (ReconnectAction, 1),
@@ -2029,6 +2294,9 @@ ddl_action_list = ActionList(
         (RenameSinkAction, 10),
         (SwapSchemaAction, 10),
         (FlipFlagsAction, 2),
+        # TODO: Reenable when database-issues#8813 is fixed.
+        # (AlterTableAddColumnAction, 10),
+        (AlterKafkaSinkFromAction, 8),
         # (TransactionIsolationAction, 1),
     ],
     autocommit=True,

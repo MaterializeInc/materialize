@@ -12,28 +12,31 @@
 
 use differential_dataflow::lattice::Lattice;
 use mz_adapter_types::dyncfgs::ALLOW_USER_SESSIONS;
+use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
 use mz_sql::session::metadata::SessionMetadata;
 use std::collections::{BTreeMap, BTreeSet};
+use std::net::IpAddr;
 use std::sync::Arc;
 
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
-use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source};
+use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source, Table, TableDataSource};
 use mz_catalog::SYSTEM_CONN_ID;
-use mz_ore::instrument;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_ore::{instrument, soft_panic_or_log};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ScalarType, Timestamp};
 use mz_sql::ast::{
-    AlterSourceAction, ConstantVisitor, CopyRelation, CopyStatement, CreateSourceOptionName, Raw,
-    Statement, SubscribeStatement,
+    AlterConnectionAction, AlterConnectionStatement, AlterSourceAction, AstInfo, ConstantVisitor,
+    CopyRelation, CopyStatement, CreateSourceOptionName, Raw, Statement, SubscribeStatement,
 };
 use mz_sql::catalog::RoleAttributes;
 use mz_sql::names::{Aug, PartialItemName, ResolvedIds};
 use mz_sql::plan::{
-    AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, Params, Plan, TransactionType,
+    AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, Params, Plan,
+    StatementClassification, TransactionType,
 };
 use mz_sql::pure::{
     materialized_view_option_contains_temporal, purify_create_materialized_view_options,
@@ -42,7 +45,7 @@ use mz_sql::rbac;
 use mz_sql::rbac::CREATE_ITEM_USAGE;
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{
-    EndTransactionAction, OwnedVarInput, Value, Var, STATEMENT_LOGGING_SAMPLE_RATE,
+    EndTransactionAction, OwnedVarInput, Value, Var, NETWORK_POLICY, STATEMENT_LOGGING_SAMPLE_RATE,
 };
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
@@ -52,15 +55,14 @@ use mz_sql_parser::ast::{
 use mz_storage_types::sources::Timeline;
 use opentelemetry::trace::TraceContextExt;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug_span, warn, Instrument};
+use tracing::{debug_span, info, warn, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::command::{
-    CatalogSnapshot, Command, ExecuteResponse, GetVariablesResponse, StartupResponse,
-};
-use crate::coord::appends::{Deferred, PendingWriteTxn};
+use crate::command::{CatalogSnapshot, Command, ExecuteResponse, StartupResponse};
+use crate::coord::appends::PendingWriteTxn;
 use crate::coord::{
-    ConnMeta, Coordinator, Message, PendingTxn, PlanValidity, PurifiedStatementReady,
+    validate_ip_with_policy_rules, ConnMeta, Coordinator, DeferredPlanStatement, Message,
+    PendingTxn, PlanStatement, PlanValidity, PurifiedStatementReady,
 };
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
@@ -77,7 +79,7 @@ impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 58KB. This would
     /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
     /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
-    pub(crate) fn handle_command<'a>(&'a mut self, mut cmd: Command) -> LocalBoxFuture<'a, ()> {
+    pub(crate) fn handle_command(&mut self, mut cmd: Command) -> LocalBoxFuture<()> {
         async move {
             if let Some(session) = cmd.session_mut() {
                 session.apply_external_metadata_updates();
@@ -89,6 +91,7 @@ impl Coordinator {
                     conn_id,
                     secret_key,
                     uuid,
+                    client_ip,
                     application_name,
                     notice_tx,
                 } => {
@@ -100,6 +103,7 @@ impl Coordinator {
                         conn_id,
                         secret_key,
                         uuid,
+                        client_ip,
                         application_name,
                         notice_tx,
                     )
@@ -140,15 +144,8 @@ impl Coordinator {
                     self.handle_get_webhook(database, schema, name, tx);
                 }
 
-                Command::GetSystemVars { conn_id, tx } => {
-                    let conn = &self.active_conns[&conn_id];
-                    let vars = GetVariablesResponse::new(
-                        self.catalog.system_config().iter().filter(|var| {
-                            var.visible(conn.user(), Some(self.catalog.system_config()))
-                                .is_ok()
-                        }),
-                    );
-                    let _ = tx.send(Ok(vars));
+                Command::GetSystemVars { tx } => {
+                    let _ = tx.send(self.catalog.system_config().clone());
                 }
 
                 Command::SetSystemVars { vars, conn_id, tx } => {
@@ -156,9 +153,11 @@ impl Coordinator {
                     let conn = &self.active_conns[&conn_id];
 
                     for (name, value) in vars {
-                        if let Err(e) = self.catalog().system_config().get(&name).and_then(|var| {
-                            var.visible(conn.user(), Some(self.catalog.system_config()))
-                        }) {
+                        if let Err(e) =
+                            self.catalog().system_config().get(&name).and_then(|var| {
+                                var.visible(conn.user(), self.catalog.system_config())
+                            })
+                        {
                             let _ = tx.send(Err(e.into()));
                             return;
                         }
@@ -211,8 +210,11 @@ impl Coordinator {
                         }
                     };
 
-                    self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
-                        .await;
+                    let conn_id = ctx.session().conn_id().clone();
+                    self.sequence_plan(ctx, plan, ResolvedIds::empty()).await;
+                    // Part of the Command::Commit contract is that the Coordinator guarantees that
+                    // it has cleared its transaction state for the connection.
+                    self.clear_connection(&conn_id).await;
                 }
 
                 Command::CatalogSnapshot { tx } => {
@@ -226,12 +228,7 @@ impl Coordinator {
                 }
 
                 Command::Dump { tx } => {
-                    let _ = tx.send(self.dump());
-                }
-
-                Command::ControllerAllowWrites { tx } => {
-                    self.controller.allow_writes();
-                    let _ = tx.send(Ok(true));
+                    let _ = tx.send(self.dump().await);
                 }
             }
         }
@@ -247,39 +244,13 @@ impl Coordinator {
         conn_id: ConnectionId,
         secret_key: u32,
         uuid: uuid::Uuid,
+        client_ip: Option<IpAddr>,
         application_name: String,
         notice_tx: mpsc::UnboundedSender<AdapterNotice>,
     ) {
         // Early return if successful, otherwise cleanup any possible state.
-        match self.handle_startup_inner(&user, &conn_id).await {
-            Ok(role_id) => {
-                let mut session_defaults = BTreeMap::new();
-                let system_config = self.catalog().state().system_config();
-
-                // Override the session with any system defaults.
-                session_defaults.extend(
-                    system_config
-                        .iter_session()
-                        .map(|v| (v.name().to_string(), OwnedVarInput::Flat(v.value()))),
-                );
-
-                // Special case.
-                let statement_logging_default = system_config
-                    .statement_logging_default_sample_rate()
-                    .format();
-                session_defaults.insert(
-                    STATEMENT_LOGGING_SAMPLE_RATE.name().to_string(),
-                    OwnedVarInput::Flat(statement_logging_default),
-                );
-
-                // Override system defaults with role defaults.
-                session_defaults.extend(
-                    self.catalog()
-                        .get_role(&role_id)
-                        .vars()
-                        .map(|(name, val)| (name.to_string(), val.clone())),
-                );
-
+        match self.handle_startup_inner(&user, &conn_id, &client_ip).await {
+            Ok((role_id, session_defaults)) => {
                 let session_type = metrics::session_type_label_value(&user);
                 self.metrics
                     .active_sessions
@@ -289,25 +260,56 @@ impl Coordinator {
                     secret_key,
                     notice_tx,
                     drop_sinks: BTreeSet::new(),
+                    pending_cluster_alters: BTreeSet::new(),
                     connected_at: self.now(),
                     user,
                     application_name,
                     uuid,
+                    client_ip,
                     conn_id: conn_id.clone(),
                     authenticated_role: role_id,
+                    deferred_lock: None,
                 };
                 let update = self.catalog().state().pack_session_update(&conn, 1);
                 let update = self.catalog().state().resolve_builtin_table_update(update);
                 self.begin_session_for_statement_logging(&conn);
                 self.active_conns.insert(conn_id.clone(), conn);
 
-                // Note: Do NOT await the notify here, we pass this back to whatever requested the
-                // startup to prevent blocking the Coordinator on a builtin table update.
-                let notify = self.builtin_table_update().defer(vec![update]);
+                // Note: Do NOT await the notify here, we pass this back to
+                // whatever requested the startup to prevent blocking startup
+                // and the Coordinator on a builtin table update.
+                let updates = vec![update];
+                // It's not a hard error if our list is missing a builtin table, but we want to
+                // make sure these two things stay in-sync.
+                if mz_ore::assert::soft_assertions_enabled() {
+                    let required_tables: BTreeSet<_> = super::appends::REQUIRED_BUILTIN_TABLES
+                        .iter()
+                        .map(|table| self.catalog().resolve_builtin_table(*table))
+                        .collect();
+                    let updates_tracked = updates
+                        .iter()
+                        .all(|update| required_tables.contains(&update.id));
+                    let all_mz_internal = super::appends::REQUIRED_BUILTIN_TABLES
+                        .iter()
+                        .all(|table| table.schema == MZ_INTERNAL_SCHEMA);
+                    mz_ore::soft_assert_or_log!(
+                        updates_tracked,
+                        "not tracking all required builtin table updates!"
+                    );
+                    // TODO(parkmycar): When checking if a query depends on these builtin table
+                    // writes we do not check the transitive dependencies of the query, because
+                    // we don't support creating views on mz_internal objects. If one of these
+                    // tables is promoted out of mz_internal then we'll need to add this check.
+                    mz_ore::soft_assert_or_log!(
+                        all_mz_internal,
+                        "not all builtin tables are in mz_internal! need to check transitive depends",
+                    )
+                }
+                let notify = self.builtin_table_update().background(updates);
 
                 let resp = Ok(StartupResponse {
                     role_id,
-                    write_notify: Box::pin(notify),
+                    write_notify: notify,
                     session_defaults,
                     catalog: self.owned_catalog(),
                 });
@@ -338,7 +340,8 @@ impl Coordinator {
         &mut self,
         user: &User,
         conn_id: &ConnectionId,
-    ) -> Result<RoleId, AdapterError> {
+        client_ip: &Option<IpAddr>,
+    ) -> Result<(RoleId, BTreeMap<String, OwnedVarInput>), AdapterError> {
         if self.catalog().try_get_role_by_name(&user.name).is_none() {
             // If the user has made it to this point, that means they have been fully authenticated.
             // This includes preventing any user, except a pre-defined set of system users, from
@@ -361,9 +364,87 @@ impl Coordinator {
             return Err(AdapterError::UserSessionsDisallowed);
         }
 
+        // Initialize the default session variables for this role.
+        let mut session_defaults = BTreeMap::new();
+        let system_config = self.catalog().state().system_config();
+
+        // Override the session with any system defaults.
+        session_defaults.extend(
+            system_config
+                .iter_session()
+                .map(|v| (v.name().to_string(), OwnedVarInput::Flat(v.value()))),
+        );
+        // Special case.
+        let statement_logging_default = system_config
+            .statement_logging_default_sample_rate()
+            .format();
+        session_defaults.insert(
+            STATEMENT_LOGGING_SAMPLE_RATE.name().to_string(),
+            OwnedVarInput::Flat(statement_logging_default),
+        );
+        // Override system defaults with role defaults.
+        session_defaults.extend(
+            self.catalog()
+                .get_role(&role_id)
+                .vars()
+                .map(|(name, val)| (name.to_string(), val.clone())),
+        );
+
+        // Validate network policies for external users. Internal users can only connect on the
+        // internal interfaces (internal HTTP/ pgwire). It is up to the person deploying the system
+        // to ensure these internal interfaces are well secured.
+        //
+        // HACKY(parkmycar): We don't have a fully formed session yet for this role, but we want
+        // the default network policy for this role, so we read directly out of what the session
+        // will get initialized with.
+        if !user.is_internal() {
+            let network_policy_name = session_defaults
+                .get(NETWORK_POLICY.name())
+                .and_then(|value| match value {
+                    OwnedVarInput::Flat(name) => Some(name.clone()),
+                    OwnedVarInput::SqlSet(names) => {
+                        tracing::error!(?names, "found multiple network policies");
+                        None
+                    }
+                })
+                .unwrap_or(system_config.default_network_policy_name());
+            let maybe_network_policy = self
+                .catalog()
+                .get_network_policy_by_name(&network_policy_name);
+
+            let Some(network_policy) = maybe_network_policy else {
+                // We should prevent dropping the default network policy, or setting the policy
+                // to something that doesn't exist, so complain loudly if this occurs.
+                tracing::error!(
+                    network_policy_name,
+                    "default network policy does not exist. All user traffic will be blocked"
+                );
+                let reason = match client_ip {
+                    Some(ip) => super::NetworkPolicyError::AddressDenied(ip.clone()),
+                    None => super::NetworkPolicyError::MissingIp,
+                };
+                return Err(AdapterError::NetworkPolicyDenied(reason));
+            };
+
+            if let Some(ip) = client_ip {
+                match validate_ip_with_policy_rules(ip, &network_policy.rules) {
+                    Ok(_) => {}
+                    Err(e) => return Err(AdapterError::NetworkPolicyDenied(e)),
+                }
+            } else {
+                // Only temporary and internal representation of a session
+                // should be missing a client_ip. These sessions should not be
+                // making requests or going through handle_startup.
+                return Err(AdapterError::NetworkPolicyDenied(
+                    super::NetworkPolicyError::MissingIp,
+                ));
+            }
+        }
+
         self.catalog_mut()
             .create_temporary_schema(conn_id, role_id)?;
-        Ok(role_id)
+
+        Ok((role_id, session_defaults))
     }
 
     /// Handles an execute command.
@@ -429,8 +510,7 @@ impl Coordinator {
                 extra
             } else {
                 // This is a new statement, log it and return the context
-                let maybe_uuid =
-                    self.begin_statement_execution(&mut session, params.clone(), &logging);
+                let maybe_uuid = self.begin_statement_execution(&mut session, &params, &logging);
 
                 ExecuteContextExtra::new(maybe_uuid)
             };
@@ -476,6 +556,51 @@ impl Coordinator {
         params: Params,
         mut ctx: ExecuteContext,
     ) {
+        // This comment describes the various ways DDL can execute (the ordered operations: name
+        // resolve, purify, plan, sequence), all of which are managed by this function. DDL has
+        // three notable properties that all partially interact.
+        //
+        // 1. Most DDL statements (and a few others) support single-statement transaction delayed
+        //    execution. This occurs when a session executes `BEGIN`, a single DDL, then `COMMIT`.
+        //    We announce success of the single DDL when it is executed, but do not attempt to plan
+        //    or sequence it until `COMMIT`, which is able to error if needed while sequencing the
+        //    DDL (this behavior is Postgres-compatible). The purpose of this is because some
+        //    drivers or tools wrap all statements in `BEGIN` and `COMMIT` and we would like them to
+        //    work. When the single DDL is announced as successful we also put the session's
+        //    transaction ops into `SingleStatement` which will produce an error if any other
+        //    statement is run in the transaction except `COMMIT`. Additionally, this will cause
+        //    `handle_execute_inner` to stop further processing (no planning, etc.) of the
+        //    statement.
+        // 2. A few other DDL statements (`ALTER .. RENAME/SWAP`) enter the `DDL` ops which allows
+        //    any number of only these DDL statements to be executed in a transaction. At sequencing
+        //    these generate the `Op::TransactionDryRun` catalog op. When applied with
+        //    `catalog_transact`, that op will always produce the `TransactionDryRun` error. The
+        //    `catalog_transact_with_ddl_transaction` function intercepts that error and reports
+        //    success to the user, but nothing is yet committed to the real catalog. At `COMMIT` all
+        //    of the ops but without dry run are applied. The purpose of this is to allow multiple,
+        //    atomic renames in the same transaction.
+        // 3. Some DDLs do off-thread work during purification or sequencing that is expensive or
+        //    makes network calls (interfacing with secrets, optimization of views/indexes, source
+        //    purification). These must guarantee correctness when they return to the main
+        //    coordinator thread because the catalog state could have changed while they were doing
+        //    the off-thread work. Previously we would use `PlanValidity::Checks` to specify a bunch
+        //    of IDs that we needed to exist. We discovered the way we were doing that was not
+        //    always correct. Instead of attempting to get that completely right, we have opted to
+        //    serialize DDL. Getting this right is difficult because catalog changes can affect name
+        //    resolution, planning, sequencing, and optimization. Correctly writing logic that is
+        //    aware of all possible catalog changes that would affect any of those parts is not
+        //    something our current code has been designed to be helpful at. Even if a DDL statement
+        //    is doing off-thread work, another DDL must not yet execute at all. Executing these
+        //    serially will guarantee that no off-thread work has affected the state of the catalog.
+        //    This is done by adding a VecDeque of deferred statements and a lock to the
+        //    Coordinator. When a DDL is run in `handle_execute_inner` (after applying whatever
+        //    transaction ops are needed to the session as described above), it attempts to own the
+        //    lock (a tokio Mutex). If acquired, it stashes the lock in the connection`s `ConnMeta`
+        //    struct in `active_conns` and proceeds. The lock is dropped at transaction end in
+        //    `clear_transaction` and a message sent to the Coordinator to execute the next queued
+        //    DDL. If the lock could not be acquired, the DDL is put into the VecDeque where it
+        //    awaits dequeuing caused by the lock being released.
+
         // Verify that this statement type can be executed in the current
         // transaction state.
         match ctx.session().transaction() {
@@ -550,6 +675,7 @@ impl Coordinator {
                         // any cluster (no RETURNING) is always safe.
                     }
 
+                    // These statements must be kept in-sync with `must_serialize_ddl()`.
                     Statement::AlterObjectRename(_) | Statement::AlterObjectSwap(_) => {
                         let state = self.catalog().for_session(ctx.session()).state().clone();
                         let revision = self.catalog().transient_revision();
@@ -581,12 +707,15 @@ impl Coordinator {
                     | Statement::AlterSystemReset(_)
                     | Statement::AlterSystemResetAll(_)
                     | Statement::AlterSystemSet(_)
+                    | Statement::AlterTableAddColumn(_)
+                    | Statement::AlterNetworkPolicy(_)
                     | Statement::CreateCluster(_)
                     | Statement::CreateClusterReplica(_)
                     | Statement::CreateConnection(_)
                     | Statement::CreateDatabase(_)
                     | Statement::CreateIndex(_)
                     | Statement::CreateMaterializedView(_)
+                    | Statement::CreateContinualTask(_)
                     | Statement::CreateRole(_)
                     | Statement::CreateSchema(_)
                     | Statement::CreateSecret(_)
@@ -594,9 +723,11 @@ impl Coordinator {
                     | Statement::CreateSource(_)
                     | Statement::CreateSubsource(_)
                     | Statement::CreateTable(_)
+                    | Statement::CreateTableFromSource(_)
                     | Statement::CreateType(_)
                     | Statement::CreateView(_)
                     | Statement::CreateWebhookSource(_)
+                    | Statement::CreateNetworkPolicy(_)
                     | Statement::Delete(_)
                     | Statement::DropObjects(_)
                     | Statement::DropOwned(_)
@@ -635,6 +766,58 @@ impl Coordinator {
                         )));
                     }
                 }
+            }
+        }
+
+        // DDLs must be planned and sequenced serially. We do not rely on PlanValidity checking
+        // various IDs because we have incorrectly done that in the past. Attempt to acquire the
+        // ddl lock. The lock is stashed in the ConnMeta which is dropped at transaction end. If
+        // acquired, proceed with sequencing. If not, enqueue and return. This logic assumes that
+        // Coordinator::clear_transaction is correctly called when session transactions are ended
+        // because that function will release the held lock from active_conns.
+        if Self::must_serialize_ddl(&stmt, &ctx) {
+            if let Ok(guard) = self.serialized_ddl.try_lock_owned() {
+                let prev = self
+                    .active_conns
+                    .get_mut(ctx.session().conn_id())
+                    .expect("connection must exist")
+                    .deferred_lock
+                    .replace(guard);
+                assert!(
+                    prev.is_none(),
+                    "connections should have at most one lock guard"
+                );
+            } else {
+                if self
+                    .active_conns
+                    .get(ctx.session().conn_id())
+                    .expect("connection must exist")
+                    .deferred_lock
+                    .is_some()
+                {
+                    // This session *already* has the lock, and incorrectly tried to execute another
+                    // DDL while still holding the lock, violating the assumption documented above.
+                    // This is an internal error, probably in some AdapterClient user (pgwire or
+                    // http). Because the session is now in some unexpected state, return an error
+                    // which should cause the AdapterClient user to fail the transaction.
+                    // (Terminating the connection is maybe what we would prefer to do, but is not
+                    // currently a thing we can do from the coordinator: calling handle_terminate
+                    // cleans up Coordinator state for the session but doesn't inform the
+                    // AdapterClient that the session should terminate.)
+                    soft_panic_or_log!(
+                        "session {} attempted to get ddl lock while already owning it",
+                        ctx.session().conn_id()
+                    );
+                    ctx.retire(Err(AdapterError::Internal(
+                        "session attempted to get ddl lock while already owning it".to_string(),
+                    )));
+                    return;
+                }
+                self.serialized_ddl.push_back(DeferredPlanStatement {
+                    ctx,
+                    ps: PlanStatement::Statement { stmt, params },
+                });
+                return;
             }
         }
 
@@ -686,13 +869,14 @@ impl Coordinator {
                     )
                     .await;
                     let result = result.map_err(|e| e.into());
-                    let plan_validity = PlanValidity {
+                    let dependency_ids = resolved_ids.items().copied().collect();
+                    let plan_validity = PlanValidity::new(
                         transient_revision,
-                        dependency_ids: resolved_ids.0,
+                        dependency_ids,
                         cluster_id,
-                        replica_id: None,
-                        role_metadata: ctx.session().role_metadata().clone(),
-                    };
+                        None,
+                        ctx.session().role_metadata().clone(),
+                    );
                     // It is not an error for purification to complete after `internal_cmd_rx` is dropped.
                     let result = internal_cmd_tx.send(Message::PurifiedStatementReady(
                         PurifiedStatementReady {
@@ -818,13 +1002,67 @@ impl Coordinator {
         }
     }
 
+    /// Whether the statement must be serialized and is DDL.
+    fn must_serialize_ddl(stmt: &Statement<Raw>, ctx: &ExecuteContext) -> bool {
+        // Non-DDL is not serialized here.
+        if !StatementClassification::from(&*stmt).is_ddl() {
+            return false;
+        }
+        // Off-thread, pre-planning purification can perform arbitrarily slow network calls so must
+        // not be serialized. These all use PlanValidity for their checking, and we must ensure
+        // those checks are sufficient.
+        if Self::must_spawn_purification(stmt) {
+            return false;
+        }
+
+        // Statements that support multiple DDLs in a single transaction aren't serialized here.
+        // Their operations are serialized when applied to the catalog, guaranteeing that any
+        // off-thread DDLs concurrent with a multiple DDL transaction will have a serial order.
+        if ctx.session.transaction().is_ddl() {
+            return false;
+        }
+
+        // Some DDL is exempt. It is not great that we are matching on Statements here because
+        // different plans can be produced from the same top-level statement type (i.e., `ALTER
+        // CONNECTION ROTATE KEYS`). But the whole point of this is to prevent things from being
+        // planned in the first place, so we accept the abstraction leak.
+        match stmt {
+            // Secrets have a small and understood set of dependencies, and their off-thread work
+            // interacts with k8s.
+            Statement::AlterSecret(_) => false,
+            Statement::CreateSecret(_) => false,
+            Statement::AlterConnection(AlterConnectionStatement { actions, .. })
+                if actions
+                    .iter()
+                    .all(|action| matches!(action, AlterConnectionAction::RotateKeys)) =>
+            {
+                false
+            }
+
+            // The off-thread work that altering a cluster may do (waiting for replicas to spin-up),
+            // does not affect its catalog names or ids and so is safe to not serialize. This could
+            // change the set of replicas that exist. For queries that name replicas or use the
+            // current_replica session var, the `replica_id` field of `PlanValidity` serves to
+            // ensure that those replicas exist during the query finish stage. Additionally, that
+            // work can take hours (configured by the user), so would also be a bad experience for
+            // users.
+            Statement::AlterCluster(_) => false,
+
+            // Everything else must be serialized.
+            _ => true,
+        }
+    }
+
     /// Whether the statement must be purified off of the Coordinator thread.
-    fn must_spawn_purification(stmt: &Statement<Aug>) -> bool {
+    fn must_spawn_purification<A: AstInfo>(stmt: &Statement<A>) -> bool {
         // `CREATE` and `ALTER` `SOURCE` and `SINK` statements must be purified off the main
         // coordinator thread.
         if !matches!(
             stmt,
-            Statement::CreateSource(_) | Statement::AlterSource(_) | Statement::CreateSink(_)
+            Statement::CreateSource(_)
+                | Statement::AlterSource(_)
+                | Statement::CreateSink(_)
+                | Statement::CreateTableFromSource(_)
         ) {
             return false;
         }
@@ -860,11 +1098,11 @@ impl Coordinator {
     ///
     /// (Note that the chosen timestamp won't be the same timestamp as the system table inserts,
     /// unfortunately.)
-    async fn resolve_mz_now_for_create_materialized_view<'a>(
+    async fn resolve_mz_now_for_create_materialized_view(
         &mut self,
         cmvs: &CreateMaterializedViewStatement<Aug>,
         resolved_ids: &ResolvedIds,
-        session: &mut Session,
+        session: &Session,
         acquire_read_holds: bool,
     ) -> Result<Option<Timestamp>, AdapterError> {
         if cmvs
@@ -876,7 +1114,7 @@ impl Coordinator {
             let cluster = mz_sql::plan::resolve_cluster_for_materialized_view(&catalog, cmvs)?;
             let ids = self
                 .index_oracle(cluster)
-                .sufficient_collections(resolved_ids.0.iter());
+                .sufficient_collections(resolved_ids.collections().copied());
 
             // If there is any REFRESH option, then acquire read holds. (Strictly speaking, we'd
             // need this only if there is a `REFRESH AT`, not for `REFRESH EVERY`, because later
@@ -895,7 +1133,8 @@ impl Coordinator {
                 .iter()
                 .any(materialized_view_option_contains_temporal)
             {
-                let timeline_context = self.validate_timeline_context(resolved_ids.0.clone())?;
+                let timeline_context =
+                    self.validate_timeline_context(resolved_ids.collections().copied())?;
 
                 // We default to EpochMilliseconds, similarly to `determine_timestamp_for`,
                 // but even in the TimestampIndependent case.
@@ -915,10 +1154,10 @@ impl Coordinator {
                 // If we didn't do this, then there would be a danger of missing the first refresh,
                 // which might cause the materialized view to be unreadable for hours. This might
                 // be what was happening here:
-                // https://github.com/MaterializeInc/materialize/issues/24288#issuecomment-1931856361
+                // https://github.com/MaterializeInc/database-issues/issues/7265#issuecomment-1931856361
                 //
                 // In the long term, it would be good to actually block the MV creation statement
-                // until `least_valid_read`. https://github.com/MaterializeInc/materialize/issues/25127
+                // until `least_valid_read`. https://github.com/MaterializeInc/database-issues/issues/7504
                 // Without blocking, we have the problem that a REFRESH AT CREATION is not linearized
                 // with the CREATE MATERIALIZED VIEW statement, in the sense that a query from the MV
                 // after its creation might see input changes that happened after the CRATE MATERIALIZED
@@ -931,6 +1170,7 @@ impl Coordinator {
                     warn!(%cmvs.name, %oracle_timestamp, %timestamp, "REFRESH MV's inputs are not readable at the oracle read ts");
                 }
 
+                info!("Resolved `mz_now()` to {timestamp} for REFRESH MV");
                 Ok(Some(timestamp))
             } else {
                 Ok(None)
@@ -975,8 +1215,9 @@ impl Coordinator {
     /// interactive work for the named `conn_id`.
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn handle_privileged_cancel(&mut self, conn_id: ConnectionId) {
-        // Cancel pending writes. There is at most one pending write per session.
         let mut maybe_ctx = None;
+
+        // Cancel pending writes. There is at most one pending write per session.
         if let Some(idx) = self.pending_writes.iter().position(|pending_write_txn| {
             matches!(pending_write_txn, PendingWriteTxn::User {
                 pending_txn: PendingTxn { ctx, .. },
@@ -992,16 +1233,22 @@ impl Coordinator {
             }
         }
 
-        // Cancel deferred writes. There is at most one deferred write per session.
+        // Cancel deferred writes.
+        if let Some(write_op) = self.deferred_write_ops.remove(&conn_id) {
+            maybe_ctx = Some(write_op.into_ctx());
+        }
+
+        // Cancel deferred statements.
         if let Some(idx) = self
-            .write_lock_wait_group
+            .serialized_ddl
             .iter()
-            .position(|ready| matches!(ready, Deferred::Plan(ready) if *ready.ctx.session().conn_id() == conn_id))
+            .position(|deferred| *deferred.ctx.session().conn_id() == conn_id)
         {
-            let ready = self.write_lock_wait_group.remove(idx).expect("known to exist from call to `position` above");
-            if let Deferred::Plan(ready) = ready {
-                maybe_ctx = Some(ready.ctx);
-            }
+            let deferred = self
+                .serialized_ddl
+                .remove(idx)
+                .expect("known to exist from call to `position` above");
+            maybe_ctx = Some(deferred.ctx);
         }
 
         // Cancel reads waiting on being linearized. There is at most one linearized read per
@@ -1018,6 +1265,9 @@ impl Coordinator {
         self.cancel_pending_peeks(&conn_id);
         self.cancel_pending_watchsets(&conn_id);
         self.cancel_compute_sinks_for_conn(&conn_id).await;
+        self.cancel_cluster_reconfigurations_for_conn(&conn_id)
+            .await;
+        self.cancel_pending_copy(&conn_id);
         if let Some((tx, _rx)) = self.staged_cancellation.get_mut(&conn_id) {
             let _ = tx.send(true);
         }
@@ -1032,7 +1282,7 @@ impl Coordinator {
             // If the session doesn't exist in `active_conns`, then this method will panic later on.
             // Instead we explicitly panic here while dumping the entire Coord to the logs to help
             // debug. This panic is very infrequent so we want as much information as possible.
-            // See https://github.com/MaterializeInc/materialize/issues/18996.
+            // See https://github.com/MaterializeInc/database-issues/issues/5627.
             panic!("unknown connection: {conn_id:?}\n\n{self:?}")
         }
 
@@ -1052,6 +1302,7 @@ impl Coordinator {
             .dec();
         self.cancel_pending_peeks(conn.conn_id());
         self.cancel_pending_watchsets(&conn_id);
+        self.cancel_pending_copy(&conn_id);
         self.end_session_for_statement_logging(conn.uuid());
 
         // Queue the builtin table update, but do not wait for it to complete. We explicitly do
@@ -1059,6 +1310,7 @@ impl Coordinator {
         // closed at once, which occurs regularly in some workflows.
         let update = self.catalog().state().pack_session_update(&conn, -1);
         let update = self.catalog().state().resolve_builtin_table_update(update);
+
         let _builtin_update_notify = self.builtin_table_update().defer(vec![update]);
     }
 
@@ -1095,60 +1347,76 @@ impl Coordinator {
                 return Err(name);
             };
 
-            let (body_format, header_tys, validator) = match entry.item() {
+            // Webhooks can be created with `CREATE SOURCE` or `CREATE TABLE`.
+            let (data_source, desc, global_id) = match entry.item() {
                 CatalogItem::Source(Source {
-                    data_source:
-                        DataSourceDesc::Webhook {
-                            validate_using,
-                            body_format,
-                            headers,
-                            ..
-                        },
+                    data_source: data_source @ DataSourceDesc::Webhook { .. },
                     desc,
+                    global_id,
                     ..
-                }) => {
-                    // Assert we have one column for the body, and how ever many are required for
-                    // the headers.
-                    let num_columns = headers.num_columns() + 1;
-                    mz_ore::soft_assert_or_log!(
-                        desc.arity() <= num_columns,
-                        "expected at most {} columns, but got {}",
-                        num_columns,
-                        desc.arity()
-                    );
-
-                    // Double check that the body column of the webhook source matches the type
-                    // we're about to deserialize as.
-                    let body_column = desc
-                        .get_by_name(&"body".into())
-                        .map(|(_idx, ty)| ty.clone())
-                        .ok_or(name.clone())?;
-                    assert!(!body_column.nullable, "webhook body column is nullable!?");
-                    assert_eq!(body_column.scalar_type, ScalarType::from(*body_format));
-
-                    // Create a validator that can be called to validate a webhook request.
-                    let validator = validate_using.as_ref().map(|v| {
-                        let validation = v.clone();
-                        AppendWebhookValidator::new(
-                            validation,
-                            coord.caching_secrets_reader.clone(),
-                        )
-                    });
-                    (*body_format, headers.clone(), validator)
-                }
+                }) => (data_source, desc.clone(), *global_id),
+                CatalogItem::Table(
+                    table @ Table {
+                        desc,
+                        data_source:
+                            TableDataSource::DataSource {
+                                desc: data_source @ DataSourceDesc::Webhook { .. },
+                                ..
+                            },
+                        ..
+                    },
+                ) => (data_source, desc.latest(), table.global_id_writes()),
                 _ => return Err(name),
             };
+
+            let DataSourceDesc::Webhook {
+                validate_using,
+                body_format,
+                headers,
+                ..
+            } = data_source
+            else {
+                mz_ore::soft_panic_or_log!("programming error! checked above for webhook");
+                return Err(name);
+            };
+            let body_format = body_format.clone();
+            let header_tys = headers.clone();
+
+            // Assert we have one column for the body, and how ever many are required for
+            // the headers.
+            let num_columns = headers.num_columns() + 1;
+            mz_ore::soft_assert_or_log!(
+                desc.arity() <= num_columns,
+                "expected at most {} columns, but got {}",
+                num_columns,
+                desc.arity()
+            );
+
+            // Double check that the body column of the webhook source matches the type
+            // we're about to deserialize as.
+            let body_column = desc
+                .get_by_name(&"body".into())
+                .map(|(_idx, ty)| ty.clone())
+                .ok_or(name.clone())?;
+            assert!(!body_column.nullable, "webhook body column is nullable!?");
+            assert_eq!(body_column.scalar_type, ScalarType::from(body_format));
+
+            // Create a validator that can be called to validate a webhook request.
+            let validator = validate_using.as_ref().map(|v| {
+                let validation = v.clone();
+                AppendWebhookValidator::new(validation, coord.caching_secrets_reader.clone())
+            });
 
             // Get a channel so we can queue updates to be written.
             let row_tx = coord
                 .controller
                 .storage
-                .monotonic_appender(entry.id())
+                .monotonic_appender(global_id)
                 .map_err(|_| name.clone())?;
             let stats = coord
                 .controller
                 .storage
-                .webhook_statistics(entry.id())
+                .webhook_statistics(global_id)
                 .map_err(|_| name)?;
             let invalidator = coord
                 .active_webhooks

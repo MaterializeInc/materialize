@@ -50,7 +50,7 @@ _src_name_  | The name for the source.
 **BATCH SIZE**              | Valid for [`KEY VALUE` generator](#key-value).
 **FOR ALL TABLES** | Creates subsources for all tables in the load generator.
 **EXPOSE PROGRESS AS** _progress_subsource_name_ | The name of the progress subsource for the source. If this is not specified, the subsource will be named `<src_name>_progress`. For more information, see [Monitoring source progress](#monitoring-source-progress).
-**RETAIN HISTORY FOR** <br>_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data for performing [time travel queries](/transform-data/patterns/time-travel-queries). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+**RETAIN HISTORY FOR** <br>_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
 
 ## Description
 
@@ -117,6 +117,21 @@ create the following subsources:
 The organizations, users, and accounts are fixed at the time the source
 is created. Each tick interval, either a new auction is started, or a new bid
 is placed in the currently ongoing auction.
+
+### Clock
+
+{{< private-preview />}}
+
+The clock load generator tracks the system clock time, and can be used in
+contexts where the [`now()` function cannot](/sql/functions/now_and_mz_now/#limitations).
+On each tick interval, the source emits the system clock time. For example,
+configuring this load generator with `TICK INTERVAL '1 minute'` will cause the
+source to update every minute.
+
+Field | Type                         | Description
+----  | ---------------------------- | -------------
+time  | `timestamp with time zone`   | The system clock time.
+
 
 ### Marketing
 
@@ -228,7 +243,7 @@ Field          | Type        | Meaning
 
 And can be queried using:
 
-```sql
+```mzsql
 SELECT "offset"
 FROM <src_name>_progress;
 ```
@@ -244,7 +259,7 @@ issues, see [Troubleshooting](/ops/troubleshooting/).
 To create a load generator source that emits the next number in the sequence every
 500 milliseconds:
 
-```sql
+```mzsql
 CREATE SOURCE counter
   FROM LOAD GENERATOR COUNTER
   (TICK INTERVAL '500ms');
@@ -252,7 +267,7 @@ CREATE SOURCE counter
 
 To examine the counter:
 
-```sql
+```mzsql
 SELECT * FROM counter;
 ```
 ```nofmt
@@ -267,7 +282,7 @@ SELECT * FROM counter;
 
 To create a load generator source that simulates an auction house and emits new data every second:
 
-```sql
+```mzsql
 CREATE SOURCE auction_house
   FROM LOAD GENERATOR AUCTION
   (TICK INTERVAL '1s')
@@ -276,24 +291,24 @@ CREATE SOURCE auction_house
 
 To display the created subsources:
 
-```sql
+```mzsql
 SHOW SOURCES;
 ```
 ```nofmt
-          name          |      type      |  size
-------------------------+----------------+---------
- accounts               | subsource      |
- auction_house          | load-generator | 25cc
- auction_house_progress | progress       |
- auctions               | subsource      |
- bids                   | subsource      |
- organizations          | subsource      |
- users                  | subsource      |
+          name          |      type
+------------------------+----------------
+ accounts               | subsource
+ auction_house          | load-generator
+ auction_house_progress | progress
+ auctions               | subsource
+ bids                   | subsource
+ organizations          | subsource
+ users                  | subsource
 ```
 
 To examine the simulated bids:
 
-```sql
+```mzsql
 SELECT * from bids;
 ```
 ```nofmt
@@ -304,11 +319,48 @@ SELECT * from bids;
  12 |  3338 |          1 |     97 | 2022-09-16 23:24:09.332+00
 ```
 
+### Creating a clock load generator
+
+{{< private-preview />}}
+
+To create a load generator source that ticks over to a new time every second:
+
+```mzsql
+CREATE SOURCE clock
+  FROM LOAD GENERATOR CLOCK
+  (TICK INTERVAL '1s');
+```
+
+To display the created source:
+
+```mzsql
+SHOW SOURCES;
+```
+
+```nofmt
+      name      |      type      | size |  cluster
+----------------+----------------+------+-----------
+ clock          | load-generator | 1    | mz_system
+ clock_progress | progress       |      |
+```
+
+To check the current clock time:
+
+```mzsql
+SELECT * FROM clock;
+```
+
+```nofmt
+          time
+------------------------
+ 2024-07-02 16:25:06+00
+```
+
 ### Creating a marketing load generator
 
 To create a load generator source that simulates an online marketing campaign:
 
-```sql
+```mzsql
 CREATE SOURCE marketing
   FROM LOAD GENERATOR MARKETING
   FOR ALL TABLES;
@@ -316,26 +368,26 @@ CREATE SOURCE marketing
 
 To display the created subsources:
 
-```sql
+```mzsql
 SHOW SOURCES;
 ```
 
 ```nofmt
-          name          |      type      | size
-------------------------+----------------+------
- clicks                 | subsource      |
- conversion_predictions | subsource      |
- coupons                | subsource      |
- customers              | subsource      |
- impressions            | subsource      |
- leads                  | subsource      |
- marketing              | load-generator | 25cc
- marketing_progress     | progress       |
+          name          |      type
+------------------------+---------------
+ clicks                 | subsource
+ conversion_predictions | subsource
+ coupons                | subsource
+ customers              | subsource
+ impressions            | subsource
+ leads                  | subsource
+ marketing              | load-generator
+ marketing_progress     | progress
 ```
 
 To find all impressions and clicks associated with a campaign over the last 30 days:
 
-```sql
+```mzsql
 WITH
     click_rollup AS
     (
@@ -384,7 +436,7 @@ GROUP BY campaign_id;
 
 To create the load generator source and its associated subsources:
 
-```sql
+```mzsql
 CREATE SOURCE tpch
   FROM LOAD GENERATOR TPCH (SCALE FACTOR 1)
   FOR ALL TABLES;
@@ -392,28 +444,28 @@ CREATE SOURCE tpch
 
 To display the created subsources:
 
-```sql
+```mzsql
 SHOW SOURCES;
 ```
 ```nofmt
-      name     |      type      |  size
----------------+----------------+---------
- tpch          | load-generator | 50cc
- tpch_progress | progress       |
- supplier      | subsource      |
- region        | subsource      |
- partsupp      | subsource      |
- part          | subsource      |
- orders        | subsource      |
- nation        | subsource      |
- lineitem      | subsource      |
- customer      | subsource      |
+      name     |      type
+---------------+---------------
+ tpch          | load-generator
+ tpch_progress | progress
+ supplier      | subsource
+ region        | subsource
+ partsupp      | subsource
+ part          | subsource
+ orders        | subsource
+ nation        | subsource
+ lineitem      | subsource
+ customer      | subsource
 ```
 
 To run the Pricing Summary Report Query (Q1), which reports the amount of
 billed, shipped, and returned items:
 
-```sql
+```mzsql
 SELECT
     l_returnflag,
     l_linestatus,
@@ -456,4 +508,4 @@ ORDER BY
 [`interval`]: /sql/types/interval
 [`uint8`]: /sql/types/uint/#uint8-info
 [`timestamp with time zone`]: /sql/types/timestamp
-[feature request]: https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml
+[feature request]: https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests

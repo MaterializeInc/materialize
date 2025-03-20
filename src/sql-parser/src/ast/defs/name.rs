@@ -429,6 +429,7 @@ pub enum UnresolvedObjectName {
     Schema(UnresolvedSchemaName),
     Role(Ident),
     Item(UnresolvedItemName),
+    NetworkPolicy(Ident),
 }
 
 impl AstDisplay for UnresolvedObjectName {
@@ -440,6 +441,7 @@ impl AstDisplay for UnresolvedObjectName {
             UnresolvedObjectName::Schema(n) => f.write_node(n),
             UnresolvedObjectName::Role(n) => f.write_node(n),
             UnresolvedObjectName::Item(n) => f.write_node(n),
+            UnresolvedObjectName::NetworkPolicy(n) => f.write_node(n),
         }
     }
 }

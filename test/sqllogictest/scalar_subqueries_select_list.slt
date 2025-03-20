@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# Test that multiple scalar subqueries are properly flattened by #8582 whenever possible.
+# Test that multiple scalar subqueries are properly flattened by materialize#8582 whenever possible.
 #
 # For eligible queries:
 # - a (number_of_subqueries + 1)-way join is expected at the bottom of the plan
@@ -46,9 +46,19 @@ INSERT INTO t3 VALUES (1), (2), (3)
 #
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT (SELECT * FROM t1), (SELECT * FROM t1) FROM t2
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT (SELECT * FROM t1), (SELECT * FROM t1) FROM t2
 ----
 Explained Query:
+  With
+    cte l0 =
+      Union // { arity: 1 }
+        ReadStorage materialize.public.t1 // { arity: 1 }
+        Map (error("more than one record produced in subquery")) // { arity: 1 }
+          Project () // { arity: 0 }
+            Filter (#0 > 1) // { arity: 1 }
+              Reduce aggregates=[count(*)] // { arity: 1 }
+                Project () // { arity: 0 }
+                  ReadStorage materialize.public.t1 // { arity: 1 }
   Return // { arity: 2 }
     Project (#0, #0) // { arity: 2 }
       CrossJoin type=differential // { arity: 1 }
@@ -68,16 +78,6 @@ Explained Query:
                       Get l0 // { arity: 1 }
                 Constant // { arity: 0 }
                   - ()
-  With
-    cte l0 =
-      Union // { arity: 1 }
-        ReadStorage materialize.public.t1 // { arity: 1 }
-        Map (error("more than one record produced in subquery")) // { arity: 1 }
-          Project () // { arity: 0 }
-            Filter (#0 > 1) // { arity: 1 }
-              Reduce aggregates=[count(*)] // { arity: 1 }
-                Project () // { arity: 0 }
-                  ReadStorage materialize.public.t1 // { arity: 1 }
 
 Source materialize.public.t1
 Source materialize.public.t2
@@ -91,9 +91,32 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1) , (SELECT * FROM t1 WHERE t1.f1 = t2.f1) FROM t2
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1) , (SELECT * FROM t1 WHERE t1.f1 = t2.f1) FROM t2
 ----
 Explained Query:
+  With
+    cte l0 =
+      Distinct project=[#0] // { arity: 1 }
+        ReadStorage materialize.public.t2 // { arity: 1 }
+    cte l1 =
+      Project (#0) // { arity: 1 }
+        Join on=(#0 = #1) type=differential // { arity: 2 }
+          implementation
+            %0:l0[#0]UKA » %1:t1[#0]K
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Get l0 // { arity: 1 }
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Filter (#0) IS NOT NULL // { arity: 1 }
+              ReadStorage materialize.public.t1 // { arity: 1 }
+    cte l2 =
+      Union // { arity: 2 }
+        Project (#0, #0) // { arity: 2 }
+          Get l1 // { arity: 1 }
+        Map (error("more than one record produced in subquery")) // { arity: 2 }
+          Project (#0) // { arity: 1 }
+            Filter (#1 > 1) // { arity: 2 }
+              Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+                Get l1 // { arity: 1 }
   Return // { arity: 2 }
     Project (#2, #2) // { arity: 2 }
       Join on=(#0 = #1) type=differential // { arity: 3 }
@@ -111,30 +134,6 @@ Explained Query:
                     Project (#0) // { arity: 1 }
                       Get l2 // { arity: 2 }
                 Get l0 // { arity: 1 }
-  With
-    cte l2 =
-      Union // { arity: 2 }
-        Project (#0, #0) // { arity: 2 }
-          Get l1 // { arity: 1 }
-        Map (error("more than one record produced in subquery")) // { arity: 2 }
-          Project (#0) // { arity: 1 }
-            Filter (#1 > 1) // { arity: 2 }
-              Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
-                Get l1 // { arity: 1 }
-    cte l1 =
-      Project (#0) // { arity: 1 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
-          Join on=(#0 = #1) type=differential // { arity: 2 }
-            implementation
-              %0:l0[#0]UKA » %1:t1[#0]K
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Get l0 // { arity: 1 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 1 }
-                ReadStorage materialize.public.t1 // { arity: 1 }
-    cte l0 =
-      Distinct project=[#0] // { arity: 1 }
-        ReadStorage materialize.public.t2 // { arity: 1 }
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
@@ -157,9 +156,43 @@ SELECT COUNT(*) FROM (SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1) , (SELECT * 
 3
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 1 UNION ALL SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 2) , (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 1 UNION ALL SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 2) FROM t2
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 1 UNION ALL SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 2) , (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 1 UNION ALL SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 2) FROM t2
 ----
 Explained Query:
+  With
+    cte l0 =
+      Distinct project=[#0] // { arity: 1 }
+        ReadStorage materialize.public.t2 // { arity: 1 }
+    cte l1 =
+      Filter (#0) IS NOT NULL // { arity: 1 }
+        Get l0 // { arity: 1 }
+    cte l2 =
+      ArrangeBy keys=[[#0]] // { arity: 1 }
+        Filter (#0) IS NOT NULL // { arity: 1 }
+          ReadStorage materialize.public.t1 // { arity: 1 }
+    cte l3 =
+      Union // { arity: 2 }
+        Join on=(#1 = (#0 + 1)) type=differential // { arity: 2 }
+          implementation
+            %0:l1[(#0 + 1)]K » %1:l2[#0]K
+          ArrangeBy keys=[[(#0 + 1)]] // { arity: 1 }
+            Get l1 // { arity: 1 }
+          Get l2 // { arity: 1 }
+        Join on=(#1 = (#0 + 2)) type=differential // { arity: 2 }
+          implementation
+            %0:l1[(#0 + 2)]K » %1:l2[#0]K
+          ArrangeBy keys=[[(#0 + 2)]] // { arity: 1 }
+            Get l1 // { arity: 1 }
+          Get l2 // { arity: 1 }
+    cte l4 =
+      Union // { arity: 2 }
+        Get l3 // { arity: 2 }
+        Map (error("more than one record produced in subquery")) // { arity: 2 }
+          Project (#0) // { arity: 1 }
+            Filter (#1 > 1) // { arity: 2 }
+              Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+                Project (#0) // { arity: 1 }
+                  Get l3 // { arity: 2 }
   Return // { arity: 2 }
     Project (#2, #2) // { arity: 2 }
       Join on=(#0 = #1) type=differential // { arity: 3 }
@@ -177,40 +210,6 @@ Explained Query:
                     Project (#0) // { arity: 1 }
                       Get l4 // { arity: 2 }
                 Get l0 // { arity: 1 }
-  With
-    cte l4 =
-      Union // { arity: 2 }
-        Get l3 // { arity: 2 }
-        Map (error("more than one record produced in subquery")) // { arity: 2 }
-          Project (#0) // { arity: 1 }
-            Filter (#1 > 1) // { arity: 2 }
-              Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
-                Project (#0) // { arity: 1 }
-                  Get l3 // { arity: 2 }
-    cte l3 =
-      Union // { arity: 2 }
-        Join on=(#1 = (#0 + 1)) type=differential // { arity: 2 }
-          implementation
-            %0:l1[(#0 + 1)]K » %1:l2[#0]K
-          ArrangeBy keys=[[(#0 + 1)]] // { arity: 1 }
-            Get l1 // { arity: 1 }
-          Get l2 // { arity: 1 }
-        Join on=(#1 = (#0 + 2)) type=differential // { arity: 2 }
-          implementation
-            %0:l1[(#0 + 2)]K » %1:l2[#0]K
-          ArrangeBy keys=[[(#0 + 2)]] // { arity: 1 }
-            Get l1 // { arity: 1 }
-          Get l2 // { arity: 1 }
-    cte l2 =
-      ArrangeBy keys=[[#0]] // { arity: 1 }
-        Filter (#0) IS NOT NULL // { arity: 1 }
-          ReadStorage materialize.public.t1 // { arity: 1 }
-    cte l1 =
-      Filter (#0) IS NOT NULL // { arity: 1 }
-        Get l0 // { arity: 1 }
-    cte l0 =
-      Distinct project=[#0] // { arity: 1 }
-        ReadStorage materialize.public.t2 // { arity: 1 }
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
@@ -225,9 +224,52 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 1) , (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 2) FROM t2
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 1) , (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 2) FROM t2
 ----
 Explained Query:
+  With
+    cte l0 =
+      Distinct project=[#0] // { arity: 1 }
+        ReadStorage materialize.public.t2 // { arity: 1 }
+    cte l1 =
+      Filter (#0) IS NOT NULL // { arity: 1 }
+        Get l0 // { arity: 1 }
+    cte l2 =
+      ArrangeBy keys=[[#0]] // { arity: 1 }
+        Filter (#0) IS NOT NULL // { arity: 1 }
+          ReadStorage materialize.public.t1 // { arity: 1 }
+    cte l3 =
+      Join on=(#1 = (#0 + 1)) type=differential // { arity: 2 }
+        implementation
+          %0:l1[(#0 + 1)]K » %1:l2[#0]K
+        ArrangeBy keys=[[(#0 + 1)]] // { arity: 1 }
+          Get l1 // { arity: 1 }
+        Get l2 // { arity: 1 }
+    cte l4 =
+      Union // { arity: 2 }
+        Get l3 // { arity: 2 }
+        Map (error("more than one record produced in subquery")) // { arity: 2 }
+          Project (#0) // { arity: 1 }
+            Filter (#1 > 1) // { arity: 2 }
+              Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+                Project (#0) // { arity: 1 }
+                  Get l3 // { arity: 2 }
+    cte l5 =
+      Join on=(#1 = (#0 + 2)) type=differential // { arity: 2 }
+        implementation
+          %0:l1[(#0 + 2)]K » %1:l2[#0]K
+        ArrangeBy keys=[[(#0 + 2)]] // { arity: 1 }
+          Get l1 // { arity: 1 }
+        Get l2 // { arity: 1 }
+    cte l6 =
+      Union // { arity: 2 }
+        Get l5 // { arity: 2 }
+        Map (error("more than one record produced in subquery")) // { arity: 2 }
+          Project (#0) // { arity: 1 }
+            Filter (#1 > 1) // { arity: 2 }
+              Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+                Project (#0) // { arity: 1 }
+                  Get l5 // { arity: 2 }
   Return // { arity: 2 }
     Project (#2, #4) // { arity: 2 }
       Join on=(#0 = #1 = #3) type=delta // { arity: 5 }
@@ -257,49 +299,6 @@ Explained Query:
                     Project (#0) // { arity: 1 }
                       Get l6 // { arity: 2 }
                 Get l0 // { arity: 1 }
-  With
-    cte l6 =
-      Union // { arity: 2 }
-        Get l5 // { arity: 2 }
-        Map (error("more than one record produced in subquery")) // { arity: 2 }
-          Project (#0) // { arity: 1 }
-            Filter (#1 > 1) // { arity: 2 }
-              Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
-                Project (#0) // { arity: 1 }
-                  Get l5 // { arity: 2 }
-    cte l5 =
-      Join on=(#1 = (#0 + 2)) type=differential // { arity: 2 }
-        implementation
-          %0:l1[(#0 + 2)]K » %1:l2[#0]K
-        ArrangeBy keys=[[(#0 + 2)]] // { arity: 1 }
-          Get l1 // { arity: 1 }
-        Get l2 // { arity: 1 }
-    cte l4 =
-      Union // { arity: 2 }
-        Get l3 // { arity: 2 }
-        Map (error("more than one record produced in subquery")) // { arity: 2 }
-          Project (#0) // { arity: 1 }
-            Filter (#1 > 1) // { arity: 2 }
-              Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
-                Project (#0) // { arity: 1 }
-                  Get l3 // { arity: 2 }
-    cte l3 =
-      Join on=(#1 = (#0 + 1)) type=differential // { arity: 2 }
-        implementation
-          %0:l1[(#0 + 1)]K » %1:l2[#0]K
-        ArrangeBy keys=[[(#0 + 1)]] // { arity: 1 }
-          Get l1 // { arity: 1 }
-        Get l2 // { arity: 1 }
-    cte l2 =
-      ArrangeBy keys=[[#0]] // { arity: 1 }
-        Filter (#0) IS NOT NULL // { arity: 1 }
-          ReadStorage materialize.public.t1 // { arity: 1 }
-    cte l1 =
-      Filter (#0) IS NOT NULL // { arity: 1 }
-        Get l0 // { arity: 1 }
-    cte l0 =
-      Distinct project=[#0] // { arity: 1 }
-        ReadStorage materialize.public.t2 // { arity: 1 }
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
@@ -321,9 +320,39 @@ NULL NULL
 #
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT (SELECT f1 + 1 FROM t1 WHERE t1.f1 = t2.f1) , (SELECT f1 + 2 FROM t1 WHERE t1.f1 = t2.f1) FROM t2
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT (SELECT f1 + 1 FROM t1 WHERE t1.f1 = t2.f1) , (SELECT f1 + 2 FROM t1 WHERE t1.f1 = t2.f1) FROM t2
 ----
 Explained Query:
+  With
+    cte l0 =
+      Distinct project=[#0] // { arity: 1 }
+        ReadStorage materialize.public.t2 // { arity: 1 }
+    cte l1 =
+      Project (#0) // { arity: 1 }
+        Join on=(#0 = #1) type=differential // { arity: 2 }
+          implementation
+            %0:l0[#0]UKA » %1:t1[#0]K
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Get l0 // { arity: 1 }
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Filter (#0) IS NOT NULL // { arity: 1 }
+              ReadStorage materialize.public.t1 // { arity: 1 }
+    cte l2 =
+      Map (error("more than one record produced in subquery")) // { arity: 2 }
+        Project (#0) // { arity: 1 }
+          Filter (#1 > 1) // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+              Get l1 // { arity: 1 }
+    cte l3 =
+      Union // { arity: 2 }
+        Map ((#0 + 1)) // { arity: 2 }
+          Get l1 // { arity: 1 }
+        Get l2 // { arity: 2 }
+    cte l4 =
+      Union // { arity: 2 }
+        Map ((#0 + 2)) // { arity: 2 }
+          Get l1 // { arity: 1 }
+        Get l2 // { arity: 2 }
   Return // { arity: 2 }
     Project (#2, #4) // { arity: 2 }
       Join on=(#0 = #1 = #3) type=delta // { arity: 5 }
@@ -353,37 +382,6 @@ Explained Query:
                     Project (#0) // { arity: 1 }
                       Get l4 // { arity: 2 }
                 Get l0 // { arity: 1 }
-  With
-    cte l4 =
-      Union // { arity: 2 }
-        Map ((#0 + 2)) // { arity: 2 }
-          Get l1 // { arity: 1 }
-        Get l2 // { arity: 2 }
-    cte l3 =
-      Union // { arity: 2 }
-        Map ((#0 + 1)) // { arity: 2 }
-          Get l1 // { arity: 1 }
-        Get l2 // { arity: 2 }
-    cte l2 =
-      Map (error("more than one record produced in subquery")) // { arity: 2 }
-        Project (#0) // { arity: 1 }
-          Filter (#1 > 1) // { arity: 2 }
-            Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
-              Get l1 // { arity: 1 }
-    cte l1 =
-      Project (#0) // { arity: 1 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
-          Join on=(#0 = #1) type=differential // { arity: 2 }
-            implementation
-              %0:l0[#0]UKA » %1:t1[#0]K
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Get l0 // { arity: 1 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 1 }
-                ReadStorage materialize.public.t1 // { arity: 1 }
-    cte l0 =
-      Distinct project=[#0] // { arity: 1 }
-        ReadStorage materialize.public.t2 // { arity: 1 }
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
@@ -401,9 +399,47 @@ SELECT (SELECT f1 + 1 FROM t1 WHERE t1.f1 = t2.f1) , (SELECT f1 + 2 FROM t1 WHER
 4 5
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT (SELECT MIN(f1) FROM t1 WHERE t1.f1 = t2.f1) , (SELECT MAX(f1) FROM t1 WHERE t1.f1 = t2.f1) FROM t2
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT (SELECT MIN(f1) FROM t1 WHERE t1.f1 = t2.f1) , (SELECT MAX(f1) FROM t1 WHERE t1.f1 = t2.f1) FROM t2
 ----
 Explained Query:
+  With
+    cte l0 =
+      Distinct project=[#0] // { arity: 1 }
+        ReadStorage materialize.public.t2 // { arity: 1 }
+    cte l1 =
+      Project (#0) // { arity: 1 }
+        Join on=(#0 = #1) type=differential // { arity: 2 }
+          implementation
+            %0:l0[#0]UKA » %1:t1[#0]K
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Get l0 // { arity: 1 }
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Filter (#0) IS NOT NULL // { arity: 1 }
+              ReadStorage materialize.public.t1 // { arity: 1 }
+    cte l2 =
+      Reduce group_by=[#0] aggregates=[min(#0)] // { arity: 2 }
+        Get l1 // { arity: 1 }
+    cte l3 =
+      Union // { arity: 2 }
+        Get l2 // { arity: 2 }
+        Map (null) // { arity: 2 }
+          Union // { arity: 1 }
+            Negate // { arity: 1 }
+              Project (#0) // { arity: 1 }
+                Get l2 // { arity: 2 }
+            Get l0 // { arity: 1 }
+    cte l4 =
+      Reduce group_by=[#0] aggregates=[max(#0)] // { arity: 2 }
+        Get l1 // { arity: 1 }
+    cte l5 =
+      Union // { arity: 2 }
+        Get l4 // { arity: 2 }
+        Map (null) // { arity: 2 }
+          Union // { arity: 1 }
+            Negate // { arity: 1 }
+              Project (#0) // { arity: 1 }
+                Get l4 // { arity: 2 }
+            Get l0 // { arity: 1 }
   Return // { arity: 2 }
     Project (#2, #4) // { arity: 2 }
       Join on=(#0 = #1 = #3) type=delta // { arity: 5 }
@@ -431,45 +467,6 @@ Explained Query:
                   Project (#0) // { arity: 1 }
                     Get l5 // { arity: 2 }
                 Get l0 // { arity: 1 }
-  With
-    cte l5 =
-      Union // { arity: 2 }
-        Get l4 // { arity: 2 }
-        Map (null) // { arity: 2 }
-          Union // { arity: 1 }
-            Negate // { arity: 1 }
-              Project (#0) // { arity: 1 }
-                Get l4 // { arity: 2 }
-            Get l0 // { arity: 1 }
-    cte l4 =
-      Reduce group_by=[#0] aggregates=[max(#0)] // { arity: 2 }
-        Get l1 // { arity: 1 }
-    cte l3 =
-      Union // { arity: 2 }
-        Get l2 // { arity: 2 }
-        Map (null) // { arity: 2 }
-          Union // { arity: 1 }
-            Negate // { arity: 1 }
-              Project (#0) // { arity: 1 }
-                Get l2 // { arity: 2 }
-            Get l0 // { arity: 1 }
-    cte l2 =
-      Reduce group_by=[#0] aggregates=[min(#0)] // { arity: 2 }
-        Get l1 // { arity: 1 }
-    cte l1 =
-      Project (#0) // { arity: 1 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
-          Join on=(#0 = #1) type=differential // { arity: 2 }
-            implementation
-              %0:l0[#0]UKA » %1:t1[#0]K
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Get l0 // { arity: 1 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 1 }
-                ReadStorage materialize.public.t1 // { arity: 1 }
-    cte l0 =
-      Distinct project=[#0] // { arity: 1 }
-        ReadStorage materialize.public.t2 // { arity: 1 }
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
@@ -491,36 +488,45 @@ SELECT (SELECT MIN(f1) FROM t1 WHERE t1.f1 = t2.f1) , (SELECT MAX(f1) FROM t1 WH
 #
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT (SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1) FROM t2 WHERE t2.f1 = t3.f1) FROM t3
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT (SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1) FROM t2 WHERE t2.f1 = t3.f1) FROM t3
 ----
 Explained Query:
-  Return // { arity: 1 }
-    Project (#2) // { arity: 1 }
-      Join on=(#0 = #1) type=differential // { arity: 3 }
-        implementation
-          %0:t3[#0]K » %1[#0]K
-        ArrangeBy keys=[[#0]] // { arity: 1 }
-          ReadStorage materialize.public.t3 // { arity: 1 }
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Union // { arity: 2 }
-            Get l6 // { arity: 2 }
-            Map (null) // { arity: 2 }
-              Union // { arity: 1 }
-                Negate // { arity: 1 }
-                  Distinct project=[#0] // { arity: 1 }
-                    Project (#0) // { arity: 1 }
-                      Get l6 // { arity: 2 }
-                Get l0 // { arity: 1 }
   With
-    cte l6 =
+    cte l0 =
+      Distinct project=[#0] // { arity: 1 }
+        ReadStorage materialize.public.t3 // { arity: 1 }
+    cte l1 =
+      Project (#0) // { arity: 1 }
+        Join on=(#0 = #1) type=differential // { arity: 2 }
+          implementation
+            %0:l0[#0]UKA » %1:t2[#0]K
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Get l0 // { arity: 1 }
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Filter (#0) IS NOT NULL // { arity: 1 }
+              ReadStorage materialize.public.t2 // { arity: 1 }
+    cte l2 =
+      Distinct project=[#0] // { arity: 1 }
+        Get l1 // { arity: 1 }
+    cte l3 =
+      Project (#0) // { arity: 1 }
+        Join on=(#0 = #1) type=differential // { arity: 2 }
+          implementation
+            %0:l2[#0]UKA » %1:t1[#0]K
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Get l2 // { arity: 1 }
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Filter (#0) IS NOT NULL // { arity: 1 }
+              ReadStorage materialize.public.t1 // { arity: 1 }
+    cte l4 =
       Union // { arity: 2 }
-        Get l5 // { arity: 2 }
+        Project (#0, #0) // { arity: 2 }
+          Get l3 // { arity: 1 }
         Map (error("more than one record produced in subquery")) // { arity: 2 }
           Project (#0) // { arity: 1 }
             Filter (#1 > 1) // { arity: 2 }
               Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
-                Project (#0) // { arity: 1 }
-                  Get l5 // { arity: 2 }
+                Get l3 // { arity: 1 }
     cte l5 =
       Project (#0, #2) // { arity: 2 }
         Join on=(#0 = #1) type=differential // { arity: 3 }
@@ -538,42 +544,32 @@ Explained Query:
                       Project (#0) // { arity: 1 }
                         Get l4 // { arity: 2 }
                   Get l2 // { arity: 1 }
-    cte l4 =
+    cte l6 =
       Union // { arity: 2 }
-        Project (#0, #0) // { arity: 2 }
-          Get l3 // { arity: 1 }
+        Get l5 // { arity: 2 }
         Map (error("more than one record produced in subquery")) // { arity: 2 }
           Project (#0) // { arity: 1 }
             Filter (#1 > 1) // { arity: 2 }
               Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
-                Get l3 // { arity: 1 }
-    cte l3 =
-      Project (#0) // { arity: 1 }
-        Join on=(#0 = #1) type=differential // { arity: 2 }
-          implementation
-            %0:l2[#0]UKA » %1:t1[#0]K
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Get l2 // { arity: 1 }
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Filter (#0) IS NOT NULL // { arity: 1 }
-              ReadStorage materialize.public.t1 // { arity: 1 }
-    cte l2 =
-      Distinct project=[#0] // { arity: 1 }
-        Get l1 // { arity: 1 }
-    cte l1 =
-      Project (#0) // { arity: 1 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
-          Join on=(#0 = #1) type=differential // { arity: 2 }
-            implementation
-              %0:l0[#0]UKA » %1:t2[#0]K
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Get l0 // { arity: 1 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 1 }
-                ReadStorage materialize.public.t2 // { arity: 1 }
-    cte l0 =
-      Distinct project=[#0] // { arity: 1 }
-        ReadStorage materialize.public.t3 // { arity: 1 }
+                Project (#0) // { arity: 1 }
+                  Get l5 // { arity: 2 }
+  Return // { arity: 1 }
+    Project (#2) // { arity: 1 }
+      Join on=(#0 = #1) type=differential // { arity: 3 }
+        implementation
+          %0:t3[#0]K » %1[#0]K
+        ArrangeBy keys=[[#0]] // { arity: 1 }
+          ReadStorage materialize.public.t3 // { arity: 1 }
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Union // { arity: 2 }
+            Get l6 // { arity: 2 }
+            Map (null) // { arity: 2 }
+              Union // { arity: 1 }
+                Negate // { arity: 1 }
+                  Distinct project=[#0] // { arity: 1 }
+                    Project (#0) // { arity: 1 }
+                      Get l6 // { arity: 2 }
+                Get l0 // { arity: 1 }
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
@@ -597,20 +593,72 @@ SELECT (SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1) FROM t2 WHERE t2.f1 = t3.f
 #
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT MIN((SELECT f1 FROM t1 WHERE t1.f1 = t2.f1)), MAX((SELECT f1 FROM t1 WHERE t1.f1 = t2.f1)) FROM t2;
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT MIN((SELECT f1 FROM t1 WHERE t1.f1 = t2.f1)), MAX((SELECT f1 FROM t1 WHERE t1.f1 = t2.f1)) FROM t2;
 ----
 Explained Query:
-  Return // { arity: 2 }
-    Union // { arity: 2 }
-      Get l8 // { arity: 2 }
-      Map (null, null) // { arity: 2 }
-        Union // { arity: 0 }
-          Negate // { arity: 0 }
-            Project () // { arity: 0 }
-              Get l8 // { arity: 2 }
-          Constant // { arity: 0 }
-            - ()
   With
+    cte l0 =
+      Distinct project=[#0] // { arity: 1 }
+        ReadStorage materialize.public.t2 // { arity: 1 }
+    cte l1 =
+      ArrangeBy keys=[[#0]] // { arity: 1 }
+        Filter (#0) IS NOT NULL // { arity: 1 }
+          ReadStorage materialize.public.t1 // { arity: 1 }
+    cte l2 =
+      Project (#0) // { arity: 1 }
+        Join on=(#0 = #1) type=differential // { arity: 2 }
+          implementation
+            %0:l0[#0]UKA » %1:l1[#0]K
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Get l0 // { arity: 1 }
+          Get l1 // { arity: 1 }
+    cte l3 =
+      Union // { arity: 2 }
+        Project (#0, #0) // { arity: 2 }
+          Get l2 // { arity: 1 }
+        Map (error("more than one record produced in subquery")) // { arity: 2 }
+          Project (#0) // { arity: 1 }
+            Filter (#1 > 1) // { arity: 2 }
+              Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+                Get l2 // { arity: 1 }
+    cte l4 =
+      Project (#0, #2) // { arity: 2 }
+        Join on=(#0 = #1) type=differential // { arity: 3 }
+          implementation
+            %0:t2[#0]K » %1[#0]K
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            ReadStorage materialize.public.t2 // { arity: 1 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Union // { arity: 2 }
+              Get l3 // { arity: 2 }
+              Map (null) // { arity: 2 }
+                Union // { arity: 1 }
+                  Negate // { arity: 1 }
+                    Distinct project=[#0] // { arity: 1 }
+                      Project (#0) // { arity: 1 }
+                        Get l3 // { arity: 2 }
+                  Get l0 // { arity: 1 }
+    cte l5 =
+      Distinct project=[#0] // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          Get l4 // { arity: 2 }
+    cte l6 =
+      Project (#0) // { arity: 1 }
+        Join on=(#0 = #1) type=differential // { arity: 2 }
+          implementation
+            %0:l5[#0]UKA » %1:l1[#0]K
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Get l5 // { arity: 1 }
+          Get l1 // { arity: 1 }
+    cte l7 =
+      Union // { arity: 2 }
+        Project (#0, #0) // { arity: 2 }
+          Get l6 // { arity: 1 }
+        Map (error("more than one record produced in subquery")) // { arity: 2 }
+          Project (#0) // { arity: 1 }
+            Filter (#1 > 1) // { arity: 2 }
+              Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+                Get l6 // { arity: 1 }
     cte l8 =
       Reduce aggregates=[min(#0), max(#1)] // { arity: 2 }
         Project (#1, #3) // { arity: 2 }
@@ -629,70 +677,16 @@ Explained Query:
                         Project (#0) // { arity: 1 }
                           Get l7 // { arity: 2 }
                     Get l5 // { arity: 1 }
-    cte l7 =
-      Union // { arity: 2 }
-        Project (#0, #0) // { arity: 2 }
-          Get l6 // { arity: 1 }
-        Map (error("more than one record produced in subquery")) // { arity: 2 }
-          Project (#0) // { arity: 1 }
-            Filter (#1 > 1) // { arity: 2 }
-              Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
-                Get l6 // { arity: 1 }
-    cte l6 =
-      Project (#0) // { arity: 1 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
-          Join on=(#0 = #1) type=differential // { arity: 2 }
-            implementation
-              %0:l5[#0]UKA » %1:l1[#0]K
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Get l5 // { arity: 1 }
-            Get l1 // { arity: 1 }
-    cte l5 =
-      Distinct project=[#0] // { arity: 1 }
-        Project (#0) // { arity: 1 }
-          Get l4 // { arity: 2 }
-    cte l4 =
-      Project (#0, #2) // { arity: 2 }
-        Join on=(#0 = #1) type=differential // { arity: 3 }
-          implementation
-            %0:t2[#0]K » %1[#0]K
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            ReadStorage materialize.public.t2 // { arity: 1 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Union // { arity: 2 }
-              Get l3 // { arity: 2 }
-              Map (null) // { arity: 2 }
-                Union // { arity: 1 }
-                  Negate // { arity: 1 }
-                    Distinct project=[#0] // { arity: 1 }
-                      Project (#0) // { arity: 1 }
-                        Get l3 // { arity: 2 }
-                  Get l0 // { arity: 1 }
-    cte l3 =
-      Union // { arity: 2 }
-        Project (#0, #0) // { arity: 2 }
-          Get l2 // { arity: 1 }
-        Map (error("more than one record produced in subquery")) // { arity: 2 }
-          Project (#0) // { arity: 1 }
-            Filter (#1 > 1) // { arity: 2 }
-              Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
-                Get l2 // { arity: 1 }
-    cte l2 =
-      Project (#0) // { arity: 1 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
-          Join on=(#0 = #1) type=differential // { arity: 2 }
-            implementation
-              %0:l0[#0]UKA » %1:l1[#0]K
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Get l0 // { arity: 1 }
-            Get l1 // { arity: 1 }
-    cte l1 =
-      ArrangeBy keys=[[#0]] // { arity: 1 }
-        Filter (#0) IS NOT NULL // { arity: 1 }
-          ReadStorage materialize.public.t1 // { arity: 1 }
-    cte l0 =
-      Distinct project=[#0] // { arity: 1 }
-        ReadStorage materialize.public.t2 // { arity: 1 }
+  Return // { arity: 2 }
+    Union // { arity: 2 }
+      Get l8 // { arity: 2 }
+      Map (null, null) // { arity: 2 }
+        Union // { arity: 0 }
+          Negate // { arity: 0 }
+            Project () // { arity: 0 }
+              Get l8 // { arity: 2 }
+          Constant // { arity: 0 }
+            - ()
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
@@ -713,12 +707,40 @@ SELECT MIN((SELECT f1 FROM t1 WHERE t1.f1 = t2.f1)), MAX((SELECT f1 FROM t1 WHER
 #
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT
 	(SELECT t1.f1 FROM t1, t2 WHERE t1.f1 = t3.f1 AND t2.f1 = t3.f1),
 	(SELECT t1.f1 FROM t1, t2 WHERE t1.f1 = t3.f1 AND t2.f1 = t3.f1)
 FROM t3
 ----
 Explained Query:
+  With
+    cte l0 =
+      Distinct project=[#0] // { arity: 1 }
+        ReadStorage materialize.public.t3 // { arity: 1 }
+    cte l1 =
+      Project (#0) // { arity: 1 }
+        Join on=(#0 = #1 = #2) type=delta // { arity: 3 }
+          implementation
+            %0:l0 » %1:t1[#0]K » %2:t2[#0]K
+            %1:t1 » %0:l0[#0]UKA » %2:t2[#0]K
+            %2:t2 » %0:l0[#0]UKA » %1:t1[#0]K
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Get l0 // { arity: 1 }
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Filter (#0) IS NOT NULL // { arity: 1 }
+              ReadStorage materialize.public.t1 // { arity: 1 }
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Filter (#0) IS NOT NULL // { arity: 1 }
+              ReadStorage materialize.public.t2 // { arity: 1 }
+    cte l2 =
+      Union // { arity: 2 }
+        Project (#0, #0) // { arity: 2 }
+          Get l1 // { arity: 1 }
+        Map (error("more than one record produced in subquery")) // { arity: 2 }
+          Project (#0) // { arity: 1 }
+            Filter (#1 > 1) // { arity: 2 }
+              Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+                Get l1 // { arity: 1 }
   Return // { arity: 2 }
     Project (#2, #2) // { arity: 2 }
       Join on=(#0 = #1) type=differential // { arity: 3 }
@@ -736,35 +758,6 @@ Explained Query:
                     Project (#0) // { arity: 1 }
                       Get l2 // { arity: 2 }
                 Get l0 // { arity: 1 }
-  With
-    cte l2 =
-      Union // { arity: 2 }
-        Project (#0, #0) // { arity: 2 }
-          Get l1 // { arity: 1 }
-        Map (error("more than one record produced in subquery")) // { arity: 2 }
-          Project (#0) // { arity: 1 }
-            Filter (#1 > 1) // { arity: 2 }
-              Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
-                Get l1 // { arity: 1 }
-    cte l1 =
-      Project (#0) // { arity: 1 }
-        Filter (#0) IS NOT NULL // { arity: 3 }
-          Join on=(#0 = #1 = #2) type=delta // { arity: 3 }
-            implementation
-              %0:l0 » %1:t1[#0]K » %2:t2[#0]K
-              %1:t1 » %0:l0[#0]UKA » %2:t2[#0]K
-              %2:t2 » %0:l0[#0]UKA » %1:t1[#0]K
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Get l0 // { arity: 1 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 1 }
-                ReadStorage materialize.public.t1 // { arity: 1 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 1 }
-                ReadStorage materialize.public.t2 // { arity: 1 }
-    cte l0 =
-      Distinct project=[#0] // { arity: 1 }
-        ReadStorage materialize.public.t3 // { arity: 1 }
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
@@ -792,12 +785,44 @@ FROM t3
 #
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT
 	(SELECT * FROM t1 WHERE t1.f1 = t2.f1 AND t1.f1 = t3.f1),
 	(SELECT * FROM t1 WHERE t1.f1 = t2.f1 AND t1.f1 = t3.f1)
 FROM t2, t3
 ----
 Explained Query:
+  With
+    cte l0 =
+      CrossJoin type=differential // { arity: 2 }
+        implementation
+          %0:t2[×] » %1:t3[×]
+        ArrangeBy keys=[[]] // { arity: 1 }
+          ReadStorage materialize.public.t2 // { arity: 1 }
+        ArrangeBy keys=[[]] // { arity: 1 }
+          ReadStorage materialize.public.t3 // { arity: 1 }
+    cte l1 =
+      Distinct project=[#0, #1] // { arity: 2 }
+        Get l0 // { arity: 2 }
+    cte l2 =
+      Project (#0, #1) // { arity: 2 }
+        Join on=(#0 = #2) type=differential // { arity: 3 }
+          implementation
+            %0:l1[#0]UKf » %1:t1[#0]Kf
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Filter (#0 = #1) // { arity: 2 }
+              Get l1 // { arity: 2 }
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Filter (#0) IS NOT NULL // { arity: 1 }
+              ReadStorage materialize.public.t1 // { arity: 1 }
+    cte l3 =
+      Union // { arity: 3 }
+        Project (#0, #1, #0) // { arity: 3 }
+          Get l2 // { arity: 2 }
+        Map (error("more than one record produced in subquery")) // { arity: 3 }
+          Project (#0, #1) // { arity: 2 }
+            Filter (#2 > 1) // { arity: 3 }
+              Reduce group_by=[#0, #1] aggregates=[count(*)] // { arity: 3 }
+                Get l2 // { arity: 2 }
   Return // { arity: 2 }
     Project (#4, #4) // { arity: 2 }
       Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 5 }
@@ -815,38 +840,6 @@ Explained Query:
                     Project (#0, #1) // { arity: 2 }
                       Get l3 // { arity: 3 }
                 Get l1 // { arity: 2 }
-  With
-    cte l3 =
-      Union // { arity: 3 }
-        Project (#0, #1, #0) // { arity: 3 }
-          Get l2 // { arity: 2 }
-        Map (error("more than one record produced in subquery")) // { arity: 3 }
-          Project (#0, #1) // { arity: 2 }
-            Filter (#2 > 1) // { arity: 3 }
-              Reduce group_by=[#0, #1] aggregates=[count(*)] // { arity: 3 }
-                Get l2 // { arity: 2 }
-    cte l2 =
-      Project (#0, #1) // { arity: 2 }
-        Join on=(#0 = #2) type=differential // { arity: 3 }
-          implementation
-            %0:l1[#0]UKf » %1:t1[#0]Kf
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Filter (#0 = #1) // { arity: 2 }
-              Get l1 // { arity: 2 }
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Filter (#0) IS NOT NULL // { arity: 1 }
-              ReadStorage materialize.public.t1 // { arity: 1 }
-    cte l1 =
-      Distinct project=[#0, #1] // { arity: 2 }
-        Get l0 // { arity: 2 }
-    cte l0 =
-      CrossJoin type=differential // { arity: 2 }
-        implementation
-          %0:t2[×] » %1:t3[×]
-        ArrangeBy keys=[[]] // { arity: 1 }
-          ReadStorage materialize.public.t2 // { arity: 1 }
-        ArrangeBy keys=[[]] // { arity: 1 }
-          ReadStorage materialize.public.t3 // { arity: 1 }
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
@@ -876,15 +869,15 @@ NULL  NULL
 query T multiline
 EXPLAIN RAW PLAN WITH(types) FOR SELECT CASE (SELECT 1) WHEN 1 THEN 0 ELSE 2 END, 'TEXT';
 ----
+With
+  cte [l1 as subquery-1] =
+    Map (1)
+      Constant
+        - ()
 Return
   Map (case when (select(Get l1) = 1) then 0 else 2 end, "TEXT")
     Constant
       - ()
-With
-  cte l1 =
-    Map (1)
-      Constant
-        - ()
 
 Target cluster: quickstart
 
@@ -893,6 +886,20 @@ EOF
 query T multiline
 EXPLAIN DECORRELATED PLAN WITH(arity, types) FOR SELECT CASE (SELECT 1) WHEN 1 THEN 0 ELSE 2 END, 'TEXT';
 ----
+With
+  cte l0 =
+    Project (#0) // { arity: 1, types: "(integer)" }
+      Map (1) // { arity: 1, types: "(integer)" }
+        Constant // { arity: 0, types: "()" }
+          - ()
+  cte l1 =
+    Union // { arity: 1, types: "(integer)" }
+      Get l0 // { arity: 1, types: "(integer)" }
+      Map (error("more than one record produced in subquery")) // { arity: 1, types: "(integer)" }
+        Project () // { arity: 0, types: "()" }
+          Filter (#0 > 1) // { arity: 1, types: "(bigint)" }
+            Reduce aggregates=[count(*)] // { arity: 1, types: "(bigint)" }
+              Get l0 // { arity: 1, types: "(integer)" }
 Return // { arity: 2, types: "(integer, text)" }
   Project (#1, #2) // { arity: 2, types: "(integer, text)" }
     Map (case when (#0 = 1) then 0 else 2 end, "TEXT") // { arity: 3, types: "(integer?, integer, text)" }
@@ -916,20 +923,6 @@ Return // { arity: 2, types: "(integer, text)" }
                     - ()
               Constant // { arity: 1, types: "(integer?)" }
                 - (null)
-With
-  cte l1 =
-    Union // { arity: 1, types: "(integer)" }
-      Get l0 // { arity: 1, types: "(integer)" }
-      Map (error("more than one record produced in subquery")) // { arity: 1, types: "(integer)" }
-        Project () // { arity: 0, types: "()" }
-          Filter (#0 > 1) // { arity: 1, types: "(bigint)" }
-            Reduce aggregates=[count(*)] // { arity: 1, types: "(bigint)" }
-              Get l0 // { arity: 1, types: "(integer)" }
-  cte l0 =
-    Project (#0) // { arity: 1, types: "(integer)" }
-      Map (1) // { arity: 1, types: "(integer)" }
-        Constant // { arity: 0, types: "()" }
-          - ()
 
 Target cluster: quickstart
 

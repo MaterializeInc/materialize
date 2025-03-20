@@ -108,7 +108,7 @@ write-rollup output=v6_last_b0_b1_reference
 state=v6 diffs=[v4, v7)
 
 # compact and merge b0 and b1 into b0_1
-compact output=b0_1 inputs=(b0,b1) lower=0 upper=2 since=0 writer_id=w11111111-1111-1111-1111-111111111111
+compact output=b0_1 inputs=(b0,b1) lower=0 upper=2 since=0
 ----
 parts=1 len=3
 

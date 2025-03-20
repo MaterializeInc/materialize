@@ -14,6 +14,8 @@
 //!
 //! [1]: https://www.postgresql.org/docs/11/protocol-message-formats.html
 
+use std::net::IpAddr;
+
 use async_trait::async_trait;
 use bytes::{Buf, BufMut, BytesMut};
 use bytesize::ByteSize;
@@ -36,6 +38,7 @@ use crate::message::{BackendMessage, BackendMessageKind};
 /// A connection that manages the encoding and decoding of pgwire frames.
 pub struct FramedConn<A> {
     conn_id: ConnectionId,
+    peer_addr: Option<IpAddr>,
     inner: sink::Buffer<Framed<Conn<A>, Codec>, BackendMessage>,
 }
 
@@ -51,9 +54,10 @@ where
     ///
     /// The supplied `conn_id` is used to identify the connection in logging
     /// messages.
-    pub fn new(conn_id: ConnectionId, inner: Conn<A>) -> FramedConn<A> {
+    pub fn new(conn_id: ConnectionId, peer_addr: Option<IpAddr>, inner: Conn<A>) -> FramedConn<A> {
         FramedConn {
             conn_id,
+            peer_addr,
             inner: Framed::new(inner, Codec::new()).buffer(32),
         }
     }
@@ -172,6 +176,11 @@ where
     /// Returns the ID associated with this connection.
     pub fn conn_id(&self) -> &ConnectionId {
         &self.conn_id
+    }
+
+    /// Returns the peer address of the connection.
+    pub fn peer_addr(&self) -> &Option<IpAddr> {
+        &self.peer_addr
     }
 }
 

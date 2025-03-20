@@ -30,18 +30,12 @@
 
 use std::sync::Arc;
 
-use mz_ore::channel::{
-    instrumented_unbounded_channel, InstrumentedUnboundedReceiver, InstrumentedUnboundedSender,
-};
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, GaugeVecExt};
 use mz_repr::GlobalId;
-use prometheus::core::AtomicU64;
 
 use crate::statistics::{SinkStatisticsMetricDefs, SourceStatisticsMetricDefs};
 use mz_storage_operators::metrics::BackpressureMetrics;
 
-pub mod channel;
 pub mod decode;
 pub mod sink;
 pub mod source;
@@ -93,17 +87,17 @@ impl StorageMetrics {
             emitted_bytes: Arc::new(
                 self.upsert_backpressure_defs
                     .emitted_bytes
-                    .get_delete_on_drop_counter(vec![id.to_string(), index.to_string()]),
+                    .get_delete_on_drop_metric(vec![id.to_string(), index.to_string()]),
             ),
             last_backpressured_bytes: Arc::new(
                 self.upsert_backpressure_defs
                     .last_backpressured_bytes
-                    .get_delete_on_drop_gauge(vec![id.to_string(), index.to_string()]),
+                    .get_delete_on_drop_metric(vec![id.to_string(), index.to_string()]),
             ),
             retired_bytes: Arc::new(
                 self.upsert_backpressure_defs
                     .retired_bytes
-                    .get_delete_on_drop_counter(vec![id.to_string(), index.to_string()]),
+                    .get_delete_on_drop_metric(vec![id.to_string(), index.to_string()]),
             ),
         }
     }
@@ -125,7 +119,6 @@ impl StorageMetrics {
         primary_source_id: GlobalId,
         worker_id: usize,
         data_shard: &mz_persist_client::ShardId,
-        output_index: usize,
     ) -> source::SourcePersistSinkMetrics {
         source::SourcePersistSinkMetrics::new(
             &self.source_defs.source_defs,
@@ -133,18 +126,16 @@ impl StorageMetrics {
             primary_source_id,
             worker_id,
             data_shard,
-            output_index,
         )
     }
 
     /// Get a `SourceMetrics` for the given id and worker id.
     pub(crate) fn get_source_metrics(
         &self,
-        name: &str,
         id: GlobalId,
         worker_id: usize,
     ) -> source::SourceMetrics {
-        source::SourceMetrics::new(&self.source_defs.source_defs, name, id, worker_id)
+        source::SourceMetrics::new(&self.source_defs.source_defs, id, worker_id)
     }
 
     /// Get a `PgMetrics` for the given id.
@@ -189,40 +180,5 @@ impl StorageMetrics {
         sink_id: GlobalId,
     ) -> sink::kafka::KafkaSinkMetrics {
         sink::kafka::KafkaSinkMetrics::new(&self.sink_defs.kafka_defs, sink_id)
-    }
-
-    /// Produce an instrumented channel for use in the source pipeline.
-    pub(crate) fn get_instrumented_source_channel<T>(
-        &self,
-        id: GlobalId,
-        worker_id: usize,
-        worker_count: usize,
-        location: &str,
-    ) -> (
-        InstrumentedUnboundedSender<T, DeleteOnDropCounter<'static, AtomicU64, Vec<String>>>,
-        InstrumentedUnboundedReceiver<T, DeleteOnDropCounter<'static, AtomicU64, Vec<String>>>,
-    ) {
-        let sender_metric = self
-            .source_defs
-            .channel_metric_defs
-            .sends
-            .get_delete_on_drop_counter(vec![
-                id.to_string(),
-                worker_id.to_string(),
-                worker_count.to_string(),
-                location.to_string(),
-            ]);
-        let recv_metric = self
-            .source_defs
-            .channel_metric_defs
-            .recvs
-            .get_delete_on_drop_counter(vec![
-                id.to_string(),
-                worker_id.to_string(),
-                worker_count.to_string(),
-                location.to_string(),
-            ]);
-
-        instrumented_unbounded_channel(sender_metric, recv_metric)
     }
 }

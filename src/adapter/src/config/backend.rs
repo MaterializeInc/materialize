@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 
 use mz_sql::session::user::SYSTEM_USER;
 use tracing::{error, info};
+use uuid::Uuid;
 
 use crate::config::SynchronizedParameters;
 use crate::session::SessionConfig;
@@ -29,8 +30,11 @@ impl SystemParameterBackend {
         let conn_id = client.new_conn_id()?;
         let session = client.new_session(SessionConfig {
             conn_id,
+            uuid: Uuid::new_v4(),
             user: SYSTEM_USER.name.clone(),
+            client_ip: None,
             external_metadata_rx: None,
+            helm_chart_version: None,
         });
         let session_client = client.startup(session).await?;
         Ok(Self { session_client })
@@ -42,35 +46,39 @@ impl SystemParameterBackend {
     pub async fn push(&mut self, params: &mut SynchronizedParameters) {
         for param in params.modified() {
             let mut vars = BTreeMap::new();
+            info!(name = param.name, value = param.value, "updating parameter");
             vars.insert(param.name.clone(), param.value.clone());
             match self.session_client.set_system_vars(vars).await {
                 Ok(()) => {
-                    info!(name = param.name, value = param.value, "sync parameter");
+                    info!(name = param.name, value = param.value, "update success");
                 }
-                Err(error) => {
-                    error!(
-                        name = param.name,
-                        value = param.value,
-                        "cannot update system variable: {}",
-                        error
-                    );
-                }
+                Err(error) => match error {
+                    AdapterError::ReadOnly => {
+                        info!(
+                            name = param.name,
+                            value = param.value,
+                            "cannot update system variable in read-only mode",
+                        );
+                    }
+                    error => {
+                        error!(
+                            name = param.name,
+                            value = param.value,
+                            "cannot update system variable: {}",
+                            error
+                        );
+                    }
+                },
             }
         }
     }
 
     /// Pull the current values for all [SynchronizedParameters] from the
     /// [SystemParameterBackend].
-    pub async fn pull(&mut self, params: &mut SynchronizedParameters) {
-        match self.session_client.get_system_vars().await {
-            Ok(vars) => {
-                for (name, value) in vars {
-                    params.modify(&name, &value);
-                }
-            }
-            Err(error) => {
-                error!("cannot execute `SHOW ALL` query: {}", error)
-            }
+    pub async fn pull(&self, params: &mut SynchronizedParameters) {
+        let vars = self.session_client.get_system_vars().await;
+        for var in vars.iter() {
+            params.modify(var.name(), &var.value());
         }
     }
 }

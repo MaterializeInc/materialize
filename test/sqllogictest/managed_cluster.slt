@@ -53,13 +53,15 @@ SELECT id, name, managed, replication_factor, size FROM mz_clusters
 s1  mz_system  true  1  2
 s2  mz_catalog_server  true  1  2
 s3  mz_probe  true  1  2
-s4  mz_support  true  1  2
+s4  mz_support  true  0  2
+s5  mz_analytics  true  0  2
 u1  quickstart  true  1  2
 
 
 query T rowsort
 SELECT name FROM (SHOW CLUSTERS)
 ----
+mz_analytics
 mz_system
 mz_support
 mz_probe
@@ -233,9 +235,6 @@ u5  foo  true  1  1
 statement ok
 ALTER CLUSTER foo SET (REPLICATION FACTOR 2)
 
-statement error cannot create source in cluster with more than one replica
-CREATE SOURCE loadgen IN CLUSTER foo FROM LOAD GENERATOR COUNTER
-
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
@@ -397,7 +396,7 @@ CREATE CLUSTER foo SIZE '1', replication factor 1
 statement ok
 CREATE SOURCE loadgen IN CLUSTER foo FROM LOAD GENERATOR COUNTER
 
-statement error cannot create more than one replica of a cluster containing sources or sinks
+statement ok
 ALTER CLUSTER foo SET (REPLICATION FACTOR 2)
 
 statement ok
@@ -409,7 +408,7 @@ DROP CLUSTER foo CASCADE
 statement error db error: ERROR: unknown cluster replica size invalid_size
 CREATE CLUSTER foo SIZE invalid_size, REPLICATION FACTOR 0
 
-# Test for #20195 . Without the fix, this query will hang indefinitely
+# Test for database-issues#6046 . Without the fix, this query will hang indefinitely
 statement error db error: ERROR: creating cluster replica would violate max_replicas_per_cluster limit \(desired: 9999999, limit: 5, current: 0\)
 CREATE CLUSTER foo SIZE '1', replication factor 9999999;
 
@@ -444,6 +443,24 @@ ALTER CLUSTER foo SET (MANAGED, SIZE '1', DISK)
 
 statement ok
 DROP CLUSTER foo
+
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_graceful_cluster_reconfiguration = true;
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER foo (SIZE '1')
+
+statement ok
+ALTER CLUSTER foo set (SIZE '2') WITH (WAIT FOR '0s')
+
+statement ok
+ALTER CLUSTER foo set (SIZE '4') WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT') )
+
+statement ok
+ALTER CLUSTER foo set (SIZE '4') WITH (WAIT UNTIL READY (TIMEOUT '10ms', ON TIMEOUT 'ROLLBACK') )
 
 # Restore pristine server state
 reset-server

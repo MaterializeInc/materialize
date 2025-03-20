@@ -12,26 +12,23 @@
 use std::io::Write;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Schema};
-use arrow::record_batch::RecordBatch;
 use differential_dataflow::trace::Description;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
+use mz_persist_types::parquet::EncodingConfig;
 use mz_persist_types::Codec64;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ParquetRecordBatchReaderBuilder};
 use parquet::arrow::ArrowWriter;
-use parquet::basic::{Compression, Encoding};
+use parquet::basic::Encoding;
 use parquet::file::metadata::KeyValue;
 use parquet::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
 use timely::progress::{Antichain, Timestamp};
+use tracing::warn;
 
 use crate::error::Error;
 use crate::gen::persist::proto_batch_part_inline::FormatMetadata as ProtoFormatMetadata;
 use crate::gen::persist::ProtoBatchFormat;
-use crate::indexed::columnar::arrow::{
-    decode_arrow_batch_kvtd, decode_arrow_batch_kvtd_ks_vs, encode_arrow_batch_kvtd,
-    encode_arrow_batch_kvtd_ks_vs, SCHEMA_ARROW_RS_KVTD,
-};
+use crate::indexed::columnar::arrow::{decode_arrow_batch, encode_arrow_batch};
 use crate::indexed::encoding::{
     decode_trace_inline_meta, encode_trace_inline_meta, BlobTraceBatchPart, BlobTraceUpdates,
 };
@@ -44,12 +41,13 @@ pub fn encode_trace_parquet<W: Write + Send, T: Timestamp + Codec64>(
     w: &mut W,
     batch: &BlobTraceBatchPart<T>,
     metrics: &ColumnarMetrics,
+    cfg: &EncodingConfig,
 ) -> Result<(), Error> {
     // Better to error now than write out an invalid batch.
     batch.validate()?;
 
     let inline_meta = encode_trace_inline_meta(batch);
-    encode_parquet_kvtd(w, inline_meta, &batch.updates, metrics)
+    encode_parquet_kvtd(w, inline_meta, &batch.updates, metrics, cfg)
 }
 
 /// Decodes a BlobTraceBatchPart from the Parquet format.
@@ -107,47 +105,32 @@ pub fn encode_parquet_kvtd<W: Write + Send>(
     inline_base64: String,
     updates: &BlobTraceUpdates,
     metrics: &ColumnarMetrics,
+    cfg: &EncodingConfig,
 ) -> Result<(), Error> {
     let metadata = KeyValue::new(INLINE_METADATA_KEY.to_string(), inline_base64);
 
-    // We configure our writer to match the defaults from `arrow2` so our blobs
-    // can roundtrip. Eventually we should tune these settings.
+    // Note: most of these settings are the defaults from `arrow2` which we
+    // previously used and maintain until we tune with benchmarking.
     let properties = WriterProperties::builder()
-        .set_dictionary_enabled(false)
+        .set_dictionary_enabled(cfg.use_dictionary)
         .set_encoding(Encoding::PLAIN)
         .set_statistics_enabled(EnabledStatistics::None)
-        .set_compression(Compression::UNCOMPRESSED)
+        .set_compression(cfg.compression.into())
         .set_writer_version(WriterVersion::PARQUET_2_0)
         .set_data_page_size_limit(1024 * 1024)
         .set_max_row_group_size(usize::MAX)
         .set_key_value_metadata(Some(vec![metadata]))
         .build();
 
-    let (iter, schema, format): (Box<dyn Iterator<Item = _>>, _, _) = match updates {
-        BlobTraceUpdates::Row(updates) => {
-            let iter = updates.into_iter().map(encode_arrow_batch_kvtd);
-            (
-                Box::new(iter),
-                Arc::clone(&*SCHEMA_ARROW_RS_KVTD),
-                "k,v,t,d",
-            )
-        }
-        BlobTraceUpdates::Both(codec_updates, structured_updates) => {
-            let (fields, arrays) = encode_arrow_batch_kvtd_ks_vs(codec_updates, structured_updates);
-            let schema = Schema::new(fields);
-            (
-                Box::new(std::iter::once(arrays)),
-                Arc::new(schema),
-                "k,v,t,d,k_s,v_s",
-            )
-        }
+    let batch = encode_arrow_batch(updates);
+    let format = match updates {
+        BlobTraceUpdates::Row(_) => "k,v,t,d",
+        BlobTraceUpdates::Both(_, _) => "k,v,t,d,k_s,v_s",
+        BlobTraceUpdates::Structured { .. } => "t,d,k_s,v_s",
     };
 
-    let mut writer = ArrowWriter::try_new(w, Arc::clone(&schema), Some(properties))?;
-    for chunk in iter {
-        let batch = RecordBatch::try_new(Arc::clone(&schema), chunk)?;
-        writer.write(&batch)?
-    }
+    let mut writer = ArrowWriter::try_new(w, batch.schema(), Some(properties))?;
+    writer.write(&batch)?;
 
     writer.flush()?;
     let bytes_written = writer.bytes_written();
@@ -180,26 +163,20 @@ pub fn decode_parquet_file_kvtd(
 
     match format_metadata {
         None => {
-            // Make sure we have all of the expected columns.
-            if SCHEMA_ARROW_RS_KVTD.fields() != schema.fields() {
-                return Err(format!("found invalid schema {:?}", schema).into());
-            }
-
             let mut ret = Vec::new();
             for batch in reader {
                 let batch = batch.map_err(|e| Error::String(e.to_string()))?;
-                ret.push(decode_arrow_batch_kvtd(batch.columns(), metrics)?);
+                ret.push(batch);
             }
-            Ok(BlobTraceUpdates::Row(ret))
+            if ret.len() != 1 {
+                warn!("unexpected number of row groups: {}", ret.len());
+            }
+            let batch = ::arrow::compute::concat_batches(&schema, &ret)?;
+            let updates = decode_arrow_batch(&batch, metrics).map_err(|e| e.to_string())?;
+            Ok(updates)
         }
-        Some(ProtoFormatMetadata::StructuredMigration(1)) => {
-            if schema.fields().len() > 6 {
-                return Err(
-                    format!("expected at most 6 columns, got {}", schema.fields().len()).into(),
-                );
-            }
-
-            let batch = reader
+        Some(ProtoFormatMetadata::StructuredMigration(v @ 1..=3)) => {
+            let mut batch = reader
                 .next()
                 .ok_or_else(|| Error::String("found empty batch".to_string()))??;
 
@@ -207,45 +184,14 @@ pub fn decode_parquet_file_kvtd(
             if reader.next().is_some() {
                 return Err(Error::String("found more than one RowGroup".to_string()));
             }
-            let columns = batch.columns();
 
-            // The first 4 columns are our primary (K, V, T, D) and optionally
-            // we also have K_S and/or V_S if we wrote structured data.
-            let primary_columns = &columns[..4];
-            let k_s_column = schema
-                .fields()
-                .iter()
-                .position(|field| field.name() == "k_s")
-                .map(|idx| columns[idx].as_ref());
-            let v_s_column = schema
-                .fields()
-                .iter()
-                .position(|field| field.name() == "v_s")
-                .map(|idx| columns[idx].as_ref());
-
-            if let Some(k_s) = k_s_column.as_ref() {
-                if !matches!(k_s.data_type(), DataType::Struct(_)) {
-                    return Err(
-                        format!("k_s should be a Struct, found {:?}", k_s.data_type()).into(),
-                    );
-                }
-            }
-            if let Some(v_s) = v_s_column.as_ref() {
-                if !matches!(v_s.data_type(), DataType::Struct(_)) {
-                    return Err(
-                        format!("v_s should be a Struct, found {:?}", v_s.data_type()).into(),
-                    );
-                }
-            }
-            if k_s_column.is_none() && v_s_column.is_none() {
-                return Err(
-                    format!("at least one of k_s or v_s should exist, found {schema:?}").into(),
-                );
+            // Version 1 is a deprecated format so we just ignored the k_s and v_s columns.
+            if *v == 1 && batch.num_columns() > 4 {
+                batch = batch.project(&[0, 1, 2, 3])?;
             }
 
-            let (records, structured_ext) =
-                decode_arrow_batch_kvtd_ks_vs(primary_columns, k_s_column, v_s_column, metrics)?;
-            Ok(BlobTraceUpdates::Both(records, structured_ext))
+            let updates = decode_arrow_batch(&batch, metrics).map_err(|e| e.to_string())?;
+            Ok(updates)
         }
         unknown => Err(format!("unkown ProtoFormatMetadata, {unknown:?}"))?,
     }

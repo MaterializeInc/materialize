@@ -13,15 +13,20 @@ use std::cmp::{max, Ordering};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fmt::{Display, Formatter};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::num::NonZeroU64;
+use std::time::Instant;
 
 use bytesize::ByteSize;
+use differential_dataflow::containers::{Columnation, CopyRegion};
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdGen;
+use mz_ore::metrics::Histogram;
 use mz_ore::num::NonNeg;
+use mz_ore::soft_assert_no_log;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::Indent;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -31,15 +36,17 @@ use mz_repr::explain::{
     DummyHumanizer, ExplainConfig, ExprHumanizer, IndexUsageType, PlanRenderingContext,
 };
 use mz_repr::{
-    ColumnName, ColumnType, Datum, Diff, GlobalId, IntoRowIterator, RelationType, Row,
-    RowCollection, RowIterator, RowRef, ScalarType, SortedRowCollectionIter,
+    ColumnName, ColumnType, Datum, Diff, GlobalId, IntoRowIterator, RelationType, Row, RowIterator,
+    ScalarType,
 };
+use proptest::prelude::{any, Arbitrary, BoxedStrategy};
+use proptest::strategy::{Strategy, Union};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-use timely::container::columnation::{Columnation, CopyRegion};
 
 use crate::explain::{HumanizedExpr, HumanizerMode};
 use crate::relation::func::{AggregateFunc, LagLeadType, TableFunc};
+use crate::row::{RowCollection, SortedRowCollectionIter};
 use crate::visit::{Visit, VisitChildren};
 use crate::Id::Local;
 use crate::{
@@ -84,7 +91,14 @@ pub trait CollectionPlan {
 ///
 /// The AST is meant to reflect the capabilities of the `differential_dataflow::Collection` type,
 /// written generically enough to avoid run-time compilation work.
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
+///
+/// `derived_hash_with_manual_eq` was complaining for the wrong reason: This lint exists because
+/// it's bad when `Eq` doesn't agree with `Hash`, which is often quite likely if one of them is
+/// implemented manually. However, our manual implementation of `Eq` _will_ agree with the derived
+/// one. This is because the reason for the manual implementation is not to change the semantics
+/// from the derived one, but to avoid stack overflows.
+#[allow(clippy::derived_hash_with_manual_eq)]
+#[derive(Clone, Debug, Ord, PartialOrd, Serialize, Deserialize, MzReflect, Hash)]
 pub enum MirRelationExpr {
     /// A constant relation containing specified rows.
     ///
@@ -150,7 +164,7 @@ pub enum MirRelationExpr {
         /// The collections to be bound to each `id`.
         values: Vec<MirRelationExpr>,
         /// Maximum number of iterations, after which we should artificially force a fixpoint.
-        /// (We don't error when reaching the limit, just return the current state as final result.)
+        /// (Whether we error or just stop is configured by `LetRecLimit::return_at_limit`.)
         /// The per-`LetRec` limit that the user specified is initially copied to each binding to
         /// accommodate slicing and merging of `LetRec`s in MIR transforms (e.g., `NormalizeLets`).
         #[mzreflect(ignore)]
@@ -302,6 +316,200 @@ pub enum MirRelationExpr {
     },
 }
 
+impl PartialEq for MirRelationExpr {
+    fn eq(&self, other: &Self) -> bool {
+        // Capture the result and test it wrt `Ord` implementation in test environments.
+        let result = structured_diff::MreDiff::new(self, other).next().is_none();
+        mz_ore::soft_assert_eq_no_log!(result, self.cmp(other) == Ordering::Equal);
+        result
+    }
+}
+impl Eq for MirRelationExpr {}
+
+impl Arbitrary for MirRelationExpr {
+    type Parameters = ();
+
+    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
+        const VEC_LEN: usize = 2;
+
+        // A strategy for generating the leaf cases.
+        let leaf = Union::new([
+            (
+                any::<Result<Vec<(Row, Diff)>, EvalError>>(),
+                any::<RelationType>(),
+            )
+                .prop_map(|(rows, typ)| MirRelationExpr::Constant { rows, typ })
+                .boxed(),
+            (any::<Id>(), any::<RelationType>(), any::<AccessStrategy>())
+                .prop_map(|(id, typ, access_strategy)| MirRelationExpr::Get {
+                    id,
+                    typ,
+                    access_strategy,
+                })
+                .boxed(),
+        ])
+        .boxed();
+
+        leaf.prop_recursive(2, 2, 2, |inner| {
+            Union::new([
+                // Let
+                (any::<LocalId>(), inner.clone(), inner.clone())
+                    .prop_map(|(id, value, body)| MirRelationExpr::Let {
+                        id,
+                        value: Box::new(value),
+                        body: Box::new(body),
+                    })
+                    .boxed(),
+                // LetRec
+                (
+                    any::<Vec<LocalId>>(),
+                    proptest::collection::vec(inner.clone(), 1..VEC_LEN),
+                    any::<Vec<Option<LetRecLimit>>>(),
+                    inner.clone(),
+                )
+                    .prop_map(|(ids, values, limits, body)| MirRelationExpr::LetRec {
+                        ids,
+                        values,
+                        limits,
+                        body: Box::new(body),
+                    })
+                    .boxed(),
+                // Project
+                (inner.clone(), any::<Vec<usize>>())
+                    .prop_map(|(input, outputs)| MirRelationExpr::Project {
+                        input: Box::new(input),
+                        outputs,
+                    })
+                    .boxed(),
+                // Map
+                (inner.clone(), any::<Vec<MirScalarExpr>>())
+                    .prop_map(|(input, scalars)| MirRelationExpr::Map {
+                        input: Box::new(input),
+                        scalars,
+                    })
+                    .boxed(),
+                // FlatMap
+                (
+                    inner.clone(),
+                    any::<TableFunc>(),
+                    any::<Vec<MirScalarExpr>>(),
+                )
+                    .prop_map(|(input, func, exprs)| MirRelationExpr::FlatMap {
+                        input: Box::new(input),
+                        func,
+                        exprs,
+                    })
+                    .boxed(),
+                // Filter
+                (inner.clone(), any::<Vec<MirScalarExpr>>())
+                    .prop_map(|(input, predicates)| MirRelationExpr::Filter {
+                        input: Box::new(input),
+                        predicates,
+                    })
+                    .boxed(),
+                // Join
+                (
+                    proptest::collection::vec(inner.clone(), 1..VEC_LEN),
+                    any::<Vec<Vec<MirScalarExpr>>>(),
+                    any::<JoinImplementation>(),
+                )
+                    .prop_map(
+                        |(inputs, equivalences, implementation)| MirRelationExpr::Join {
+                            inputs,
+                            equivalences,
+                            implementation,
+                        },
+                    )
+                    .boxed(),
+                // Reduce
+                (
+                    inner.clone(),
+                    any::<Vec<MirScalarExpr>>(),
+                    any::<Vec<AggregateExpr>>(),
+                    any::<bool>(),
+                    any::<Option<u64>>(),
+                )
+                    .prop_map(
+                        |(input, group_key, aggregates, monotonic, expected_group_size)| {
+                            MirRelationExpr::Reduce {
+                                input: Box::new(input),
+                                group_key,
+                                aggregates,
+                                monotonic,
+                                expected_group_size,
+                            }
+                        },
+                    )
+                    .boxed(),
+                // TopK
+                (
+                    inner.clone(),
+                    any::<Vec<usize>>(),
+                    any::<Vec<ColumnOrder>>(),
+                    any::<Option<MirScalarExpr>>(),
+                    any::<usize>(),
+                    any::<bool>(),
+                    any::<Option<u64>>(),
+                )
+                    .prop_map(
+                        |(
+                            input,
+                            group_key,
+                            order_key,
+                            limit,
+                            offset,
+                            monotonic,
+                            expected_group_size,
+                        )| MirRelationExpr::TopK {
+                            input: Box::new(input),
+                            group_key,
+                            order_key,
+                            limit,
+                            offset,
+                            monotonic,
+                            expected_group_size,
+                        },
+                    )
+                    .boxed(),
+                // Negate
+                inner
+                    .clone()
+                    .prop_map(|input| MirRelationExpr::Negate {
+                        input: Box::new(input),
+                    })
+                    .boxed(),
+                // Threshold
+                inner
+                    .clone()
+                    .prop_map(|input| MirRelationExpr::Threshold {
+                        input: Box::new(input),
+                    })
+                    .boxed(),
+                // Union
+                (
+                    inner.clone(),
+                    proptest::collection::vec(inner.clone(), 1..VEC_LEN),
+                )
+                    .prop_map(|(base, inputs)| MirRelationExpr::Union {
+                        base: Box::new(base),
+                        inputs,
+                    })
+                    .boxed(),
+                // ArrangeBy
+                (inner.clone(), any::<Vec<Vec<MirScalarExpr>>>())
+                    .prop_map(|(input, keys)| MirRelationExpr::ArrangeBy {
+                        input: Box::new(input),
+                        keys,
+                    })
+                    .boxed(),
+            ])
+        })
+        .boxed()
+    }
+
+    type Strategy = BoxedStrategy<Self>;
+}
+
 impl MirRelationExpr {
     /// Reports the schema of the relation.
     ///
@@ -385,7 +593,7 @@ impl MirRelationExpr {
     /// Reports the column types of the relation given the column types of the
     /// input relations.
     ///
-    /// This method delegates to `try_col_with_input_cols`, panicing if an `Err`
+    /// This method delegates to `try_col_with_input_cols`, panicking if an `Err`
     /// variant is returned.
     pub fn col_with_input_cols<'a, I>(&self, input_types: I) -> Vec<ColumnType>
     where
@@ -900,13 +1108,18 @@ impl MirRelationExpr {
                                         {
                                             if first_id == second_id {
                                                 result.extend(
-                                                    inputs[0].typ().keys.drain(..).filter(|key| {
-                                                        key.iter().all(|c| {
-                                                            outputs.get(*c) == Some(c)
-                                                                && base_projection.get(*c)
-                                                                    == Some(c)
+                                                    input_keys
+                                                        .next()
+                                                        .unwrap()
+                                                        .into_iter()
+                                                        .filter(|key| {
+                                                            key.iter().all(|c| {
+                                                                outputs.get(*c) == Some(c)
+                                                                    && base_projection.get(*c)
+                                                                        == Some(c)
+                                                            })
                                                         })
-                                                    }),
+                                                        .cloned(),
                                                 );
                                             }
                                         }
@@ -1192,6 +1405,7 @@ impl MirRelationExpr {
         };
         // Normalize collection of predicates.
         new_predicates.extend(predicates);
+        new_predicates.retain(|p| !p.is_literal_true());
         new_predicates.sort();
         new_predicates.dedup();
         // Introduce a `Filter` only if we have predicates.
@@ -1281,9 +1495,12 @@ impl MirRelationExpr {
 
     /// Constructs a join operator from inputs and required-equal scalar expressions.
     pub fn join_scalars(
-        inputs: Vec<MirRelationExpr>,
+        mut inputs: Vec<MirRelationExpr>,
         equivalences: Vec<Vec<MirScalarExpr>>,
     ) -> Self {
+        // Remove all constant inputs that are the identity for join.
+        // They neither introduce nor modify any column references.
+        inputs.retain(|i| !i.is_constant_singleton());
         MirRelationExpr::Join {
             inputs,
             equivalences,
@@ -1476,9 +1693,27 @@ impl MirRelationExpr {
         })
     }
 
-    /// Take ownership of `self`, leaving an empty `MirRelationExpr::Constant` with the correct type.
-    pub fn take_safely(&mut self) -> MirRelationExpr {
-        let typ = self.typ();
+    /// Take ownership of `self`, leaving an empty `MirRelationExpr::Constant` with the optionally
+    /// given scalar types. The given scalar types should be `base_eq` with the types that `typ()`
+    /// would find. Keys and nullability are ignored in the given `RelationType`, and instead we set
+    /// the best possible key and nullability, since we are making an empty collection.
+    ///
+    /// If `typ` is not given, then this calls `.typ()` (which is possibly expensive) to determine
+    /// the correct type.
+    pub fn take_safely(&mut self, typ: Option<RelationType>) -> MirRelationExpr {
+        if let Some(typ) = &typ {
+            soft_assert_no_log!(self
+                .typ()
+                .column_types
+                .iter()
+                .zip_eq(typ.column_types.iter())
+                .all(|(t1, t2)| t1.scalar_type.base_eq(&t2.scalar_type)));
+        }
+        let mut typ = typ.unwrap_or_else(|| self.typ());
+        typ.keys = vec![vec![]];
+        for ct in typ.column_types.iter_mut() {
+            ct.nullable = false;
+        }
         std::mem::replace(
             self,
             MirRelationExpr::Constant {
@@ -1487,6 +1722,14 @@ impl MirRelationExpr {
             },
         )
     }
+
+    /// Take ownership of `self`, leaving an empty `MirRelationExpr::Constant` with the given scalar
+    /// types. Nullability is ignored in the given `ColumnType`s, and instead we set the best
+    /// possible nullability, since we are making an empty collection.
+    pub fn take_safely_with_col_types(&mut self, typ: Vec<ColumnType>) -> MirRelationExpr {
+        self.take_safely(Some(RelationType::new(typ)))
+    }
+
     /// Take ownership of `self`, leaving an empty `MirRelationExpr::Constant` with an **incorrect** type.
     ///
     /// This should only be used if `self` is about to be dropped or otherwise overwritten.
@@ -1511,36 +1754,8 @@ impl MirRelationExpr {
         *self = logic(expr);
     }
 
-    /// Store `self` in a `Let` and pass the corresponding `Get` to `body`
-    pub fn let_in<Body>(self, id_gen: &mut IdGen, body: Body) -> MirRelationExpr
-    where
-        Body: FnOnce(&mut IdGen, MirRelationExpr) -> MirRelationExpr,
-    {
-        if let MirRelationExpr::Get { .. } = self {
-            // already done
-            body(id_gen, self)
-        } else {
-            let id = LocalId::new(id_gen.allocate_id());
-            let get = MirRelationExpr::Get {
-                id: Id::Local(id),
-                typ: self.typ(),
-                access_strategy: AccessStrategy::UnknownOrLocal,
-            };
-            let body = (body)(id_gen, get);
-            MirRelationExpr::Let {
-                id,
-                value: Box::new(self),
-                body: Box::new(body),
-            }
-        }
-    }
-
-    /// Like [MirRelationExpr::let_in], but with a fallible return type.
-    pub fn let_in_fallible<Body, E>(
-        self,
-        id_gen: &mut IdGen,
-        body: Body,
-    ) -> Result<MirRelationExpr, E>
+    /// Store `self` in a `Let` and pass the corresponding `Get` to `body`.
+    pub fn let_in<Body, E>(self, id_gen: &mut IdGen, body: Body) -> Result<MirRelationExpr, E>
     where
         Body: FnOnce(&mut IdGen, MirRelationExpr) -> Result<MirRelationExpr, E>,
     {
@@ -1565,34 +1780,33 @@ impl MirRelationExpr {
 
     /// Return every row in `self` that does not have a matching row in the first columns of `keys_and_values`, using `default` to fill in the remaining columns
     /// (If `default` is a row of nulls, this is the 'outer' part of LEFT OUTER JOIN)
-    pub fn anti_lookup(
+    pub fn anti_lookup<E>(
         self,
         id_gen: &mut IdGen,
         keys_and_values: MirRelationExpr,
         default: Vec<(Datum, ScalarType)>,
-    ) -> MirRelationExpr {
+    ) -> Result<MirRelationExpr, E> {
         let (data, column_types): (Vec<_>, Vec<_>) = default
             .into_iter()
             .map(|(datum, scalar_type)| (datum, scalar_type.nullable(datum.is_null())))
             .unzip();
         assert_eq!(keys_and_values.arity() - self.arity(), data.len());
         self.let_in(id_gen, |_id_gen, get_keys| {
-            MirRelationExpr::join(
+            let get_keys_arity = get_keys.arity();
+            Ok(MirRelationExpr::join(
                 vec![
                     // all the missing keys (with count 1)
                     keys_and_values
-                        .distinct_by((0..get_keys.arity()).collect())
+                        .distinct_by((0..get_keys_arity).collect())
                         .negate()
                         .union(get_keys.clone().distinct()),
                     // join with keys to get the correct counts
                     get_keys.clone(),
                 ],
-                (0..get_keys.arity())
-                    .map(|i| vec![(0, i), (1, i)])
-                    .collect(),
+                (0..get_keys_arity).map(|i| vec![(0, i), (1, i)]).collect(),
             )
             // get rid of the extra copies of columns from keys
-            .project((0..get_keys.arity()).collect())
+            .project((0..get_keys_arity).collect())
             // This join is logically equivalent to
             // `.map(<default_expr>)`, but using a join allows for
             // potential predicate pushdown and elision in the
@@ -1600,28 +1814,29 @@ impl MirRelationExpr {
             .product(MirRelationExpr::constant(
                 vec![data],
                 RelationType::new(column_types),
-            ))
+            )))
         })
     }
 
     /// Return:
     /// * every row in keys_and_values
-    /// * every row in `self` that does not have a matching row in the first columns of `keys_and_values`, using `default` to fill in the remaining columns
+    /// * every row in `self` that does not have a matching row in the first columns of
+    ///   `keys_and_values`, using `default` to fill in the remaining columns
     /// (This is LEFT OUTER JOIN if:
     /// 1) `default` is a row of null
     /// 2) matching rows in `keys_and_values` and `self` have the same multiplicity.)
-    pub fn lookup(
+    pub fn lookup<E>(
         self,
         id_gen: &mut IdGen,
         keys_and_values: MirRelationExpr,
         default: Vec<(Datum<'static>, ScalarType)>,
-    ) -> MirRelationExpr {
+    ) -> Result<MirRelationExpr, E> {
         keys_and_values.let_in(id_gen, |id_gen, get_keys_and_values| {
-            get_keys_and_values.clone().union(self.anti_lookup(
+            Ok(get_keys_and_values.clone().union(self.anti_lookup(
                 id_gen,
                 get_keys_and_values,
                 default,
-            ))
+            )?))
         })
     }
 
@@ -1657,9 +1872,9 @@ impl MirRelationExpr {
                 }
             }
             Join {
+                inputs: _,
                 equivalences,
                 implementation,
-                ..
             } => {
                 for equivalence in equivalences {
                     for expr in equivalence {
@@ -1668,7 +1883,7 @@ impl MirRelationExpr {
                 }
                 match implementation {
                     JoinImplementation::Differential((_, start_key, _), order) => {
-                        for start_key in start_key {
+                        if let Some(start_key) = start_key {
                             for k in start_key {
                                 f(k)?;
                             }
@@ -1732,9 +1947,11 @@ impl MirRelationExpr {
         Ok(())
     }
 
-    /// Fallible mutable visitor for the [`MirScalarExpr`]s in the [`MirRelationExpr`] subtree rooted at `self`.
+    /// Fallible mutable visitor for the [`MirScalarExpr`]s in the [`MirRelationExpr`] subtree
+    /// rooted at `self`.
     ///
-    /// Note that this does not recurse into [`MirRelationExpr`] subtrees within [`MirScalarExpr`] nodes.
+    /// Note that this does not recurse into [`MirRelationExpr`] subtrees within [`MirScalarExpr`]
+    /// nodes.
     pub fn try_visit_scalars_mut<F, E>(&mut self, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&mut MirScalarExpr) -> Result<(), E>,
@@ -1743,9 +1960,11 @@ impl MirRelationExpr {
         self.try_visit_mut_post(&mut |expr| expr.try_visit_scalars_mut1(f))
     }
 
-    /// Infallible mutable visitor for the [`MirScalarExpr`]s in the [`MirRelationExpr`] subtree rooted at at `self`.
+    /// Infallible mutable visitor for the [`MirScalarExpr`]s in the [`MirRelationExpr`] subtree
+    /// rooted at `self`.
     ///
-    /// Note that this does not recurse into [`MirRelationExpr`] subtrees within [`MirScalarExpr`] nodes.
+    /// Note that this does not recurse into [`MirRelationExpr`] subtrees within [`MirScalarExpr`]
+    /// nodes.
     pub fn visit_scalars_mut<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut MirScalarExpr),
@@ -1781,11 +2000,44 @@ impl MirRelationExpr {
                     f(expr)?;
                 }
             }
-            Join { equivalences, .. } => {
+            Join {
+                inputs: _,
+                equivalences,
+                implementation,
+            } => {
                 for equivalence in equivalences {
                     for expr in equivalence {
                         f(expr)?;
                     }
+                }
+                match implementation {
+                    JoinImplementation::Differential((_, start_key, _), order) => {
+                        if let Some(start_key) = start_key {
+                            for k in start_key {
+                                f(k)?;
+                            }
+                        }
+                        for (_, lookup_key, _) in order {
+                            for k in lookup_key {
+                                f(k)?;
+                            }
+                        }
+                    }
+                    JoinImplementation::DeltaQuery(paths) => {
+                        for path in paths {
+                            for (_, lookup_key, _) in path {
+                                for k in lookup_key {
+                                    f(k)?;
+                                }
+                            }
+                        }
+                    }
+                    JoinImplementation::IndexedFilter(_coll_id, _idx_id, index_key, _) => {
+                        for k in index_key {
+                            f(k)?;
+                        }
+                    }
+                    JoinImplementation::Unimplemented => {} // No scalar exprs
                 }
             }
             ArrangeBy { keys, .. } => {
@@ -1824,9 +2076,11 @@ impl MirRelationExpr {
         Ok(())
     }
 
-    /// Fallible immutable visitor for the [`MirScalarExpr`]s in the [`MirRelationExpr`] subtree rooted at `self`.
+    /// Fallible immutable visitor for the [`MirScalarExpr`]s in the [`MirRelationExpr`] subtree
+    /// rooted at `self`.
     ///
-    /// Note that this does not recurse into [`MirRelationExpr`] subtrees within [`MirScalarExpr`] nodes.
+    /// Note that this does not recurse into [`MirRelationExpr`] subtrees within [`MirScalarExpr`]
+    /// nodes.
     pub fn try_visit_scalars<F, E>(&self, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&MirScalarExpr) -> Result<(), E>,
@@ -1835,9 +2089,11 @@ impl MirRelationExpr {
         self.try_visit_post(&mut |expr| expr.try_visit_scalars_1(f))
     }
 
-    /// Infallible immutable visitor for the [`MirScalarExpr`]s in the [`MirRelationExpr`] subtree rooted at at `self`.
+    /// Infallible immutable visitor for the [`MirScalarExpr`]s in the [`MirRelationExpr`] subtree
+    /// rooted at `self`.
     ///
-    /// Note that this does not recurse into [`MirRelationExpr`] subtrees within [`MirScalarExpr`] nodes.
+    /// Note that this does not recurse into [`MirRelationExpr`] subtrees within [`MirScalarExpr`]
+    /// nodes.
     pub fn visit_scalars<F>(&self, f: &mut F)
     where
         F: FnMut(&MirScalarExpr),
@@ -1906,6 +2162,14 @@ impl MirRelationExpr {
             result |= matches!(e, FlatMap { .. } | Reduce { .. });
         });
         result
+    }
+
+    /// Hash to an u64 using Rust's default Hasher. (Which is a somewhat slower, but better Hasher
+    /// than what `Hashable::hashed` would give us.)
+    pub fn hash_to_u64(&self) -> u64 {
+        let mut h = DefaultHasher::new();
+        self.hash(&mut h);
+        h.finish()
     }
 }
 
@@ -2000,11 +2264,13 @@ impl MirRelationExpr {
                     value.visit_pre_mut(|e| {
                         if let MirRelationExpr::Get {
                             id: crate::Id::Local(id),
+                            typ,
                             ..
                         } = e
                         {
+                            let typ = typ.clone();
                             if deadlist.contains(id) {
-                                e.take_safely();
+                                e.take_safely(Some(typ));
                             }
                         }
                     });
@@ -2443,7 +2709,9 @@ impl AggregateExpr {
         }
     }
 
-    /// Extracts unique input from aggregate type
+    /// Returns an expression that computes `self` on a group that has exactly one row.
+    /// Instead of performing a `Reduce` with `self`, one can perform a `Map` with the expression
+    /// returned by `on_unique`, which is cheaper. (See `ReduceElision`.)
     pub fn on_unique(&self, input_type: &[ColumnType]) -> MirScalarExpr {
         match &self.func {
             // Count is one if non-null, and zero if null.
@@ -2558,7 +2826,7 @@ impl AggregateExpr {
                 self.on_unique_ranking_window_funcs(input_type, "?dense_rank?")
             }
 
-            // The input type for LagLead is a ((OriginalRow, (InputValue, Offset, Default)), OrderByExprs...)
+            // The input type for LagLead is ((OriginalRow, (InputValue, Offset, Default)), OrderByExprs...)
             AggregateFunc::LagLead { lag_lead, .. } => {
                 let tuple = self
                     .expr
@@ -2566,65 +2834,40 @@ impl AggregateExpr {
                     .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
 
                 // Get the overall return type
-                let return_type = self
+                let return_type_with_orig_row = self
                     .typ(input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
-                let lag_lead_return_type = return_type.unwrap_record_element_type()[0].clone();
+                let lag_lead_return_type =
+                    return_type_with_orig_row.unwrap_record_element_type()[0].clone();
 
                 // Extract the original row
                 let original_row = tuple
                     .clone()
                     .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
 
-                let column_name = match lag_lead {
-                    LagLeadType::Lag => "?lag?",
-                    LagLeadType::Lead => "?lead?",
-                };
-
                 // Extract the encoded args
                 let encoded_args =
                     tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
-                let expr = encoded_args
-                    .clone()
-                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
-                let offset = encoded_args
-                    .clone()
-                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
-                let default_value =
-                    encoded_args.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(2)));
 
-                // In this case, the window always has only one element, so if the offset is not null and
-                // not zero, the default value should be returned instead.
-                let value = offset
-                    .clone()
-                    .call_binary(
-                        MirScalarExpr::literal_ok(Datum::Int32(0), ScalarType::Int32),
-                        crate::BinaryFunc::Eq,
-                    )
-                    .if_then_else(expr, default_value);
-                let null_offset_check = offset
-                    .call_unary(crate::UnaryFunc::IsNull(crate::func::IsNull))
-                    .if_then_else(MirScalarExpr::literal_null(lag_lead_return_type), value);
+                let (result_expr, column_name) =
+                    Self::on_unique_lag_lead(lag_lead, encoded_args, lag_lead_return_type.clone());
 
                 MirScalarExpr::CallVariadic {
                     func: VariadicFunc::ListCreate {
-                        elem_type: return_type,
+                        elem_type: return_type_with_orig_row,
                     },
                     exprs: vec![MirScalarExpr::CallVariadic {
                         func: VariadicFunc::RecordCreate {
-                            field_names: vec![
-                                ColumnName::from(column_name),
-                                ColumnName::from("?record?"),
-                            ],
+                            field_names: vec![column_name, ColumnName::from("?record?")],
                         },
-                        exprs: vec![null_offset_check, original_row],
+                        exprs: vec![result_expr, original_row],
                     }],
                 }
             }
 
-            // The input type for FirstValue is a ((OriginalRow, InputValue), OrderByExprs...)
+            // The input type for FirstValue is ((OriginalRow, InputValue), OrderByExprs...)
             AggregateFunc::FirstValue { window_frame, .. } => {
                 let tuple = self
                     .expr
@@ -2632,12 +2875,13 @@ impl AggregateExpr {
                     .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
 
                 // Get the overall return type
-                let return_type = self
+                let return_type_with_orig_row = self
                     .typ(input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
-                let first_value_return_type = return_type.unwrap_record_element_type()[0].clone();
+                let first_value_return_type =
+                    return_type_with_orig_row.unwrap_record_element_type()[0].clone();
 
                 // Extract the original row
                 let original_row = tuple
@@ -2645,32 +2889,28 @@ impl AggregateExpr {
                     .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
 
                 // Extract the input value
-                let expr = tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
+                let arg = tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
 
-                // If the window frame includes the current (single) row, return its value, null otherwise
-                let value = if window_frame.includes_current_row() {
-                    expr
-                } else {
-                    MirScalarExpr::literal_null(first_value_return_type)
-                };
+                let (result_expr, column_name) = Self::on_unique_first_value_last_value(
+                    window_frame,
+                    arg,
+                    first_value_return_type,
+                );
 
                 MirScalarExpr::CallVariadic {
                     func: VariadicFunc::ListCreate {
-                        elem_type: return_type,
+                        elem_type: return_type_with_orig_row,
                     },
                     exprs: vec![MirScalarExpr::CallVariadic {
                         func: VariadicFunc::RecordCreate {
-                            field_names: vec![
-                                ColumnName::from("?first_value?"),
-                                ColumnName::from("?record?"),
-                            ],
+                            field_names: vec![column_name, ColumnName::from("?record?")],
                         },
-                        exprs: vec![value, original_row],
+                        exprs: vec![result_expr, original_row],
                     }],
                 }
             }
 
-            // The input type for LastValue is a ((OriginalRow, InputValue), OrderByExprs...)
+            // The input type for LastValue is ((OriginalRow, InputValue), OrderByExprs...)
             AggregateFunc::LastValue { window_frame, .. } => {
                 let tuple = self
                     .expr
@@ -2678,12 +2918,13 @@ impl AggregateExpr {
                     .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
 
                 // Get the overall return type
-                let return_type = self
+                let return_type_with_orig_row = self
                     .typ(input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
-                let last_value_return_type = return_type.unwrap_record_element_type()[0].clone();
+                let last_value_return_type =
+                    return_type_with_orig_row.unwrap_record_element_type()[0].clone();
 
                 // Extract the original row
                 let original_row = tuple
@@ -2691,37 +2932,33 @@ impl AggregateExpr {
                     .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
 
                 // Extract the input value
-                let expr = tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
+                let arg = tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
 
-                // If the window frame includes the current (single) row, return its value, null otherwise
-                let value = if window_frame.includes_current_row() {
-                    expr
-                } else {
-                    MirScalarExpr::literal_null(last_value_return_type)
-                };
+                let (result_expr, column_name) = Self::on_unique_first_value_last_value(
+                    window_frame,
+                    arg,
+                    last_value_return_type,
+                );
 
                 MirScalarExpr::CallVariadic {
                     func: VariadicFunc::ListCreate {
-                        elem_type: return_type,
+                        elem_type: return_type_with_orig_row,
                     },
                     exprs: vec![MirScalarExpr::CallVariadic {
                         func: VariadicFunc::RecordCreate {
-                            field_names: vec![
-                                ColumnName::from("?last_value?"),
-                                ColumnName::from("?record?"),
-                            ],
+                            field_names: vec![column_name, ColumnName::from("?record?")],
                         },
-                        exprs: vec![value, original_row],
+                        exprs: vec![result_expr, original_row],
                     }],
                 }
             }
 
-            // The input type for window aggs is a ((OriginalRow, InputValue), OrderByExprs...)
+            // The input type for window aggs is ((OriginalRow, InputValue), OrderByExprs...)
             // See an example MIR in `window_func_applied_to`.
             AggregateFunc::WindowAggregate {
                 wrapped_aggregate,
                 window_frame,
-                ..
+                order_by: _,
             } => {
                 // TODO: deduplicate code between the various window function cases.
 
@@ -2744,20 +2981,15 @@ impl AggregateExpr {
                     .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
 
                 // Extract the input value
-                let expr = tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
+                let arg_expr = tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
 
-                // If the window frame includes the current (single) row, evaluate the aggregate on
-                // that row. Otherwise, return the default value for the aggregate.
-                let value = if window_frame.includes_current_row() {
-                    AggregateExpr {
-                        func: (**wrapped_aggregate).clone(),
-                        expr,
-                        distinct: false, // We have just one input element; DISTINCT doesn't matter.
-                    }
-                    .on_unique(input_type)
-                } else {
-                    MirScalarExpr::literal_ok(wrapped_aggregate.default(), window_agg_return_type)
-                };
+                let (result, column_name) = Self::on_unique_window_agg(
+                    window_frame,
+                    arg_expr,
+                    input_type,
+                    window_agg_return_type,
+                    wrapped_aggregate,
+                );
 
                 MirScalarExpr::CallVariadic {
                     func: VariadicFunc::ListCreate {
@@ -2765,12 +2997,177 @@ impl AggregateExpr {
                     },
                     exprs: vec![MirScalarExpr::CallVariadic {
                         func: VariadicFunc::RecordCreate {
+                            field_names: vec![column_name, ColumnName::from("?record?")],
+                        },
+                        exprs: vec![result, original_row],
+                    }],
+                }
+            }
+
+            // The input type is ((OriginalRow, (Arg1, Arg2, ...)), OrderByExprs...)
+            AggregateFunc::FusedWindowAggregate {
+                wrapped_aggregates,
+                order_by: _,
+                window_frame,
+            } => {
+                // Throw away OrderByExprs
+                let tuple = self
+                    .expr
+                    .clone()
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
+
+                // Extract the original row
+                let original_row = tuple
+                    .clone()
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
+
+                // Extract the args of the fused call
+                let all_args = tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
+
+                let return_type_with_orig_row = self
+                    .typ(input_type)
+                    .scalar_type
+                    .unwrap_list_element_type()
+                    .clone();
+
+                let all_func_return_types =
+                    return_type_with_orig_row.unwrap_record_element_type()[0].clone();
+                let mut func_result_exprs = Vec::new();
+                let mut col_names = Vec::new();
+                for (idx, wrapped_aggr) in wrapped_aggregates.iter().enumerate() {
+                    let arg = all_args
+                        .clone()
+                        .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(idx)));
+                    let return_type =
+                        all_func_return_types.unwrap_record_element_type()[idx].clone();
+                    let (result, column_name) = Self::on_unique_window_agg(
+                        window_frame,
+                        arg,
+                        input_type,
+                        return_type,
+                        wrapped_aggr,
+                    );
+                    func_result_exprs.push(result);
+                    col_names.push(column_name);
+                }
+
+                MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::ListCreate {
+                        elem_type: return_type_with_orig_row,
+                    },
+                    exprs: vec![MirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
                             field_names: vec![
-                                ColumnName::from("?window_agg?"),
+                                ColumnName::from("?fused_window_aggr?"),
                                 ColumnName::from("?record?"),
                             ],
                         },
-                        exprs: vec![value, original_row],
+                        exprs: vec![
+                            MirScalarExpr::CallVariadic {
+                                func: VariadicFunc::RecordCreate {
+                                    field_names: col_names,
+                                },
+                                exprs: func_result_exprs,
+                            },
+                            original_row,
+                        ],
+                    }],
+                }
+            }
+
+            // The input type is ((OriginalRow, (Args1, Args2, ...)), OrderByExprs...)
+            AggregateFunc::FusedValueWindowFunc {
+                funcs,
+                order_by: outer_order_by,
+            } => {
+                // Throw away OrderByExprs
+                let tuple = self
+                    .expr
+                    .clone()
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
+
+                // Extract the original row
+                let original_row = tuple
+                    .clone()
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
+
+                // Extract the encoded args of the fused call
+                let all_encoded_args =
+                    tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
+
+                let return_type_with_orig_row = self
+                    .typ(input_type)
+                    .scalar_type
+                    .unwrap_list_element_type()
+                    .clone();
+
+                let all_func_return_types =
+                    return_type_with_orig_row.unwrap_record_element_type()[0].clone();
+                let mut func_result_exprs = Vec::new();
+                let mut col_names = Vec::new();
+                for (idx, func) in funcs.iter().enumerate() {
+                    let args_for_func = all_encoded_args
+                        .clone()
+                        .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(idx)));
+                    let return_type_for_func =
+                        all_func_return_types.unwrap_record_element_type()[idx].clone();
+                    let (result, column_name) = match func {
+                        AggregateFunc::LagLead {
+                            lag_lead,
+                            order_by,
+                            ignore_nulls: _,
+                        } => {
+                            assert_eq!(order_by, outer_order_by);
+                            Self::on_unique_lag_lead(lag_lead, args_for_func, return_type_for_func)
+                        }
+                        AggregateFunc::FirstValue {
+                            window_frame,
+                            order_by,
+                        } => {
+                            assert_eq!(order_by, outer_order_by);
+                            Self::on_unique_first_value_last_value(
+                                window_frame,
+                                args_for_func,
+                                return_type_for_func,
+                            )
+                        }
+                        AggregateFunc::LastValue {
+                            window_frame,
+                            order_by,
+                        } => {
+                            assert_eq!(order_by, outer_order_by);
+                            Self::on_unique_first_value_last_value(
+                                window_frame,
+                                args_for_func,
+                                return_type_for_func,
+                            )
+                        }
+                        _ => panic!("unknown function in FusedValueWindowFunc"),
+                    };
+                    func_result_exprs.push(result);
+                    col_names.push(column_name);
+                }
+
+                MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::ListCreate {
+                        elem_type: return_type_with_orig_row,
+                    },
+                    exprs: vec![MirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
+                            field_names: vec![
+                                ColumnName::from("?fused_value_window_func?"),
+                                ColumnName::from("?record?"),
+                            ],
+                        },
+                        exprs: vec![
+                            MirScalarExpr::CallVariadic {
+                                func: VariadicFunc::RecordCreate {
+                                    field_names: col_names,
+                                },
+                                exprs: func_result_exprs,
+                            },
+                            original_row,
+                        ],
                     }],
                 }
             }
@@ -2820,7 +3217,7 @@ impl AggregateExpr {
     }
 
     /// `on_unique` for ROW_NUMBER, RANK, DENSE_RANK
-    pub fn on_unique_ranking_window_funcs(
+    fn on_unique_ranking_window_funcs(
         &self,
         input_type: &[ColumnType],
         col_name: &str,
@@ -2860,32 +3257,96 @@ impl AggregateExpr {
         }
     }
 
+    /// `on_unique` for `lag` and `lead`
+    fn on_unique_lag_lead(
+        lag_lead: &LagLeadType,
+        encoded_args: MirScalarExpr,
+        return_type: ScalarType,
+    ) -> (MirScalarExpr, ColumnName) {
+        let expr = encoded_args
+            .clone()
+            .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
+        let offset = encoded_args
+            .clone()
+            .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
+        let default_value =
+            encoded_args.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(2)));
+
+        // In this case, the window always has only one element, so if the offset is not null and
+        // not zero, the default value should be returned instead.
+        let value = offset
+            .clone()
+            .call_binary(
+                MirScalarExpr::literal_ok(Datum::Int32(0), ScalarType::Int32),
+                crate::BinaryFunc::Eq,
+            )
+            .if_then_else(expr, default_value);
+        let result_expr = offset
+            .call_unary(UnaryFunc::IsNull(crate::func::IsNull))
+            .if_then_else(MirScalarExpr::literal_null(return_type), value);
+
+        let column_name = ColumnName::from(match lag_lead {
+            LagLeadType::Lag => "?lag?",
+            LagLeadType::Lead => "?lead?",
+        });
+
+        (result_expr, column_name)
+    }
+
+    /// `on_unique` for `first_value` and `last_value`
+    fn on_unique_first_value_last_value(
+        window_frame: &WindowFrame,
+        arg: MirScalarExpr,
+        return_type: ScalarType,
+    ) -> (MirScalarExpr, ColumnName) {
+        // If the window frame includes the current (single) row, return its value, null otherwise
+        let result_expr = if window_frame.includes_current_row() {
+            arg
+        } else {
+            MirScalarExpr::literal_null(return_type)
+        };
+        (result_expr, ColumnName::from("?first_value?"))
+    }
+
+    /// `on_unique` for window aggregations
+    fn on_unique_window_agg(
+        window_frame: &WindowFrame,
+        arg_expr: MirScalarExpr,
+        input_type: &[ColumnType],
+        return_type: ScalarType,
+        wrapped_aggr: &AggregateFunc,
+    ) -> (MirScalarExpr, ColumnName) {
+        // If the window frame includes the current (single) row, evaluate the wrapped aggregate on
+        // that row. Otherwise, return the default value for the aggregate.
+        let result_expr = if window_frame.includes_current_row() {
+            AggregateExpr {
+                func: wrapped_aggr.clone(),
+                expr: arg_expr,
+                distinct: false, // We have just one input element; DISTINCT doesn't matter.
+            }
+            .on_unique(input_type)
+        } else {
+            MirScalarExpr::literal_ok(wrapped_aggr.default(), return_type)
+        };
+        (result_expr, ColumnName::from("?window_agg?"))
+    }
+
     /// Returns whether the expression is COUNT(*) or not.  Note that
     /// when we define the count builtin in sql::func, we convert
     /// COUNT(*) to COUNT(true), making it indistinguishable from
     /// literal COUNT(true), but we prefer to consider this as the
     /// former.
+    ///
+    /// (HIR has the same `is_count_asterisk`.)
     pub fn is_count_asterisk(&self) -> bool {
-        match self {
-            AggregateExpr {
-                func: AggregateFunc::Count,
-                expr:
-                    MirScalarExpr::Literal(
-                        Ok(row),
-                        mz_repr::ColumnType {
-                            scalar_type: mz_repr::ScalarType::Bool,
-                            nullable: false,
-                        },
-                    ),
-                ..
-            } => row.unpack_first() == mz_repr::Datum::True,
-            _ => false,
-        }
+        self.func == AggregateFunc::Count && self.expr.is_literal_true() && !self.distinct
     }
 }
 
 /// Describe a join implementation in dataflow.
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect, Arbitrary,
+)]
 pub enum JoinImplementation {
     /// Perform a sequence of binary differential dataflow joins.
     ///
@@ -2962,11 +3423,154 @@ impl JoinImplementation {
 ///
 /// A candidate is described by a collection and a key, and may have various liabilities.
 /// Primarily, the candidate may risk substantial inflation of records, which is something
-/// that concerns us greatly. Additionally the candidate may be unarranged, and we would
+/// that concerns us greatly. Additionally, the candidate may be unarranged, and we would
 /// prefer candidates that do not require additional memory. Finally, we prefer lower id
-/// collections in the interest of consistent tie-breaking.
-#[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect)]
-pub struct JoinInputCharacteristics {
+/// collections in the interest of consistent tie-breaking. For more characteristics, see
+/// comments on individual fields.
+///
+/// This has more than one version. `new` instantiates the appropriate version based on a
+/// feature flag.
+#[derive(
+    Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect, Arbitrary,
+)]
+pub enum JoinInputCharacteristics {
+    /// Old version, with `enable_join_prioritize_arranged` turned off.
+    V1(JoinInputCharacteristicsV1),
+    /// Newer version, with `enable_join_prioritize_arranged` turned on.
+    V2(JoinInputCharacteristicsV2),
+}
+
+impl JoinInputCharacteristics {
+    /// Creates a new instance with the given characteristics.
+    pub fn new(
+        unique_key: bool,
+        key_length: usize,
+        arranged: bool,
+        cardinality: Option<usize>,
+        filters: FilterCharacteristics,
+        input: usize,
+        enable_join_prioritize_arranged: bool,
+    ) -> Self {
+        if enable_join_prioritize_arranged {
+            Self::V2(JoinInputCharacteristicsV2::new(
+                unique_key,
+                key_length,
+                arranged,
+                cardinality,
+                filters,
+                input,
+            ))
+        } else {
+            Self::V1(JoinInputCharacteristicsV1::new(
+                unique_key,
+                key_length,
+                arranged,
+                cardinality,
+                filters,
+                input,
+            ))
+        }
+    }
+
+    /// Turns the instance into a String to be printed in EXPLAIN.
+    pub fn explain(&self) -> String {
+        match self {
+            Self::V1(jic) => jic.explain(),
+            Self::V2(jic) => jic.explain(),
+        }
+    }
+
+    /// Whether the join input described by `self` is arranged.
+    pub fn arranged(&self) -> bool {
+        match self {
+            Self::V1(jic) => jic.arranged,
+            Self::V2(jic) => jic.arranged,
+        }
+    }
+
+    /// Returns the `FilterCharacteristics` for the join input described by `self`.
+    pub fn filters(&mut self) -> &mut FilterCharacteristics {
+        match self {
+            Self::V1(jic) => &mut jic.filters,
+            Self::V2(jic) => &mut jic.filters,
+        }
+    }
+}
+
+/// Newer version of `JoinInputCharacteristics`, with `enable_join_prioritize_arranged` turned on.
+#[derive(
+    Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect, Arbitrary,
+)]
+pub struct JoinInputCharacteristicsV2 {
+    /// An excellent indication that record count will not increase.
+    pub unique_key: bool,
+    /// Cross joins are bad.
+    /// (`key_length > 0` also implies that it is not a cross join. However, we need to note cross
+    /// joins in a separate field, because not being a cross join is more important than `arranged`,
+    /// but otherwise `key_length` is less important than `arranged`.)
+    pub not_cross: bool,
+    /// Indicates that there will be no additional in-memory footprint.
+    pub arranged: bool,
+    /// A weaker signal that record count will not increase.
+    pub key_length: usize,
+    /// Estimated cardinality (lower is better)
+    pub cardinality: Option<std::cmp::Reverse<usize>>,
+    /// Characteristics of the filter that is applied at this input.
+    pub filters: FilterCharacteristics,
+    /// We want to prefer input earlier in the input list, for stability of ordering.
+    pub input: std::cmp::Reverse<usize>,
+}
+
+impl JoinInputCharacteristicsV2 {
+    /// Creates a new instance with the given characteristics.
+    pub fn new(
+        unique_key: bool,
+        key_length: usize,
+        arranged: bool,
+        cardinality: Option<usize>,
+        filters: FilterCharacteristics,
+        input: usize,
+    ) -> Self {
+        Self {
+            unique_key,
+            not_cross: key_length > 0,
+            arranged,
+            key_length,
+            cardinality: cardinality.map(std::cmp::Reverse),
+            filters,
+            input: std::cmp::Reverse(input),
+        }
+    }
+
+    /// Turns the instance into a String to be printed in EXPLAIN.
+    pub fn explain(&self) -> String {
+        let mut e = "".to_owned();
+        if self.unique_key {
+            e.push_str("U");
+        }
+        // Don't need to print `not_cross`, because that is visible in the printed key.
+        // if !self.not_cross {
+        //     e.push_str("C");
+        // }
+        for _ in 0..self.key_length {
+            e.push_str("K");
+        }
+        if self.arranged {
+            e.push_str("A");
+        }
+        if let Some(std::cmp::Reverse(cardinality)) = self.cardinality {
+            e.push_str(&format!("|{cardinality}|"));
+        }
+        e.push_str(&self.filters.explain());
+        e
+    }
+}
+
+/// Old version of `JoinInputCharacteristics`, with `enable_join_prioritize_arranged` turned off.
+#[derive(
+    Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect, Arbitrary,
+)]
+pub struct JoinInputCharacteristicsV1 {
     /// An excellent indication that record count will not increase.
     pub unique_key: bool,
     /// A weaker signal that record count will not increase.
@@ -2981,7 +3585,7 @@ pub struct JoinInputCharacteristics {
     pub input: std::cmp::Reverse<usize>,
 }
 
-impl JoinInputCharacteristics {
+impl JoinInputCharacteristicsV1 {
     /// Creates a new instance with the given characteristics.
     pub fn new(
         unique_key: bool,
@@ -3080,15 +3684,33 @@ impl<L> RowSetFinishing<L> {
 }
 
 impl RowSetFinishing {
-    /// Applies finishing actions to a [`RowCollection`].
+    /// Applies finishing actions to a [`RowCollection`], and reports the total
+    /// time it took to run.
     ///
-    ///
+    /// Returns a [`SortedRowCollectionIter`] that contains all of the response data, as
+    /// well as the size of the response in bytes.
     pub fn finish(
         &self,
         rows: RowCollection,
         max_result_size: u64,
         max_returned_query_size: Option<u64>,
-    ) -> Result<SortedRowCollectionIter, String> {
+        duration_histogram: &Histogram,
+    ) -> Result<(SortedRowCollectionIter, usize), String> {
+        let now = Instant::now();
+        let result = self.finish_inner(rows, max_result_size, max_returned_query_size);
+        let duration = now.elapsed();
+        duration_histogram.observe(duration.as_secs_f64());
+
+        result
+    }
+
+    /// Implementation for [`RowSetFinishing::finish`].
+    fn finish_inner(
+        &self,
+        rows: RowCollection,
+        max_result_size: u64,
+        max_returned_query_size: Option<u64>,
+    ) -> Result<(SortedRowCollectionIter, usize), String> {
         // How much additional memory is required to make a sorted view.
         let sorted_view_mem = rows.entries().saturating_mul(std::mem::size_of::<usize>());
         let required_memory = rows.byte_len().saturating_add(sorted_view_mem);
@@ -3099,17 +3721,7 @@ impl RowSetFinishing {
             return Err(format!("result exceeds max size of {max_bytes}",));
         }
 
-        let mut left_datum_vec = mz_repr::DatumVec::new();
-        let mut right_datum_vec = mz_repr::DatumVec::new();
-
-        let sort_by = |left: &RowRef, right: &RowRef| {
-            let left_datums = left_datum_vec.borrow_with(left);
-            let right_datums = right_datum_vec.borrow_with(right);
-            compare_columns(&self.order_by, &left_datums, &right_datums, || {
-                left.cmp(right)
-            })
-        };
-        let sorted_view = rows.sorted_view(sort_by);
+        let sorted_view = rows.sorted_view(&self.order_by);
         let mut iter = sorted_view
             .into_row_iter()
             .apply_offset(self.offset)
@@ -3121,19 +3733,24 @@ impl RowSetFinishing {
             iter = iter.with_limit(limit);
         };
 
+        // TODO(parkmycar): Re-think how we can calculate the total response size without
+        // having to iterate through the entire collection of Rows, while still
+        // respecting the LIMIT, OFFSET, and projections.
+        //
+        // Note: It feels a bit bad always calculating the response size, but we almost
+        // always need it to either check the `max_returned_query_size`, or for reporting
+        // in the query history.
+        let response_size: usize = iter.clone().map(|row| row.data().len()).sum();
+
         // Bail if we would end up returning more data to the client than they can support.
         if let Some(max) = max_returned_query_size {
-            // TODO(parkmycar): Re-implement out LIMIT and OFFSET logic so we can calculate
-            // the remaining bytes via `(Row, Diff)` tuples.
-            let remaining_bytes: usize = iter.clone().map(|row| row.data().len()).sum();
-
-            if remaining_bytes > usize::cast_from(max) {
+            if response_size > usize::cast_from(max) {
                 let max_bytes = ByteSize::b(max);
                 return Err(format!("result exceeds max size of {max_bytes}"));
             }
         }
 
-        Ok(iter)
+        Ok((iter, response_size))
     }
 }
 
@@ -3406,7 +4023,9 @@ impl RustType<proto_window_frame::ProtoWindowFrameBound> for WindowFrameBound {
 }
 
 /// Maximum iterations for a LetRec.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Arbitrary,
+)]
 pub struct LetRecLimit {
     /// Maximum number of iterations to evaluate.
     pub max_iters: NonZeroU64,
@@ -3441,7 +4060,7 @@ impl Display for LetRecLimit {
 
 /// For a global Get, this indicates whether we are going to read from Persist or from an index.
 /// (See comment in MirRelationExpr::Get.)
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, Arbitrary)]
 pub enum AccessStrategy {
     /// It's either a local Get (a CTE), or unknown at the time.
     /// `prune_and_annotate_dataflow_index_imports` decides it for global Gets, and thus switches to
@@ -3458,6 +4077,7 @@ pub enum AccessStrategy {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
     use mz_repr::explain::text::text_string_at;
     use proptest::prelude::*;
@@ -3470,7 +4090,7 @@ mod tests {
         #[mz_ore::test]
         fn column_order_protobuf_roundtrip(expect in any::<ColumnOrder>()) {
             let actual = protobuf_roundtrip::<_, ProtoColumnOrder>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }
@@ -3480,7 +4100,7 @@ mod tests {
         #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn aggregate_expr_protobuf_roundtrip(expect in any::<AggregateExpr>()) {
             let actual = protobuf_roundtrip::<_, ProtoAggregateExpr>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }
@@ -3489,7 +4109,7 @@ mod tests {
         #[mz_ore::test]
         fn window_frame_units_protobuf_roundtrip(expect in any::<WindowFrameUnits>()) {
             let actual = protobuf_roundtrip::<_, proto_window_frame::ProtoWindowFrameUnits>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }
@@ -3498,7 +4118,7 @@ mod tests {
         #[mz_ore::test]
         fn window_frame_bound_protobuf_roundtrip(expect in any::<WindowFrameBound>()) {
             let actual = protobuf_roundtrip::<_, proto_window_frame::ProtoWindowFrameBound>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }
@@ -3507,7 +4127,7 @@ mod tests {
         #[mz_ore::test]
         fn window_frame_protobuf_roundtrip(expect in any::<WindowFrame>()) {
             let actual = protobuf_roundtrip::<_, ProtoWindowFrame>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }
@@ -3542,5 +4162,300 @@ mod tests {
         };
 
         assert_eq!(act, exp);
+    }
+}
+
+/// An iterator over AST structures, which calls out nodes in difference.
+///
+/// The iterators visit two ASTs in tandem, continuing as long as the AST node data matches,
+/// and yielding an output pair as soon as the AST nodes do not match. Their intent is to call
+/// attention to the moments in the ASTs where they differ, and incidentally a stack-free way
+/// to compare two ASTs.
+mod structured_diff {
+
+    use super::MirRelationExpr;
+
+    ///  An iterator over structured differences between two `MirRelationExpr` instances.
+    pub struct MreDiff<'a> {
+        /// Pairs of expressions that must still be compared.
+        todo: Vec<(&'a MirRelationExpr, &'a MirRelationExpr)>,
+    }
+
+    impl<'a> MreDiff<'a> {
+        /// Create a new `MirRelationExpr` structured difference.
+        pub fn new(expr1: &'a MirRelationExpr, expr2: &'a MirRelationExpr) -> Self {
+            MreDiff {
+                todo: vec![(expr1, expr2)],
+            }
+        }
+    }
+
+    impl<'a> Iterator for MreDiff<'a> {
+        // Pairs of expressions that do not match.
+        type Item = (&'a MirRelationExpr, &'a MirRelationExpr);
+
+        fn next(&mut self) -> Option<Self::Item> {
+            while let Some((expr1, expr2)) = self.todo.pop() {
+                match (expr1, expr2) {
+                    (
+                        MirRelationExpr::Constant {
+                            rows: rows1,
+                            typ: typ1,
+                        },
+                        MirRelationExpr::Constant {
+                            rows: rows2,
+                            typ: typ2,
+                        },
+                    ) => {
+                        if rows1 != rows2 || typ1 != typ2 {
+                            return Some((expr1, expr2));
+                        }
+                    }
+                    (
+                        MirRelationExpr::Get {
+                            id: id1,
+                            typ: typ1,
+                            access_strategy: as1,
+                        },
+                        MirRelationExpr::Get {
+                            id: id2,
+                            typ: typ2,
+                            access_strategy: as2,
+                        },
+                    ) => {
+                        if id1 != id2 || typ1 != typ2 || as1 != as2 {
+                            return Some((expr1, expr2));
+                        }
+                    }
+                    (
+                        MirRelationExpr::Let {
+                            id: id1,
+                            body: body1,
+                            value: value1,
+                        },
+                        MirRelationExpr::Let {
+                            id: id2,
+                            body: body2,
+                            value: value2,
+                        },
+                    ) => {
+                        if id1 != id2 {
+                            return Some((expr1, expr2));
+                        } else {
+                            self.todo.push((body1, body2));
+                            self.todo.push((value1, value2));
+                        }
+                    }
+                    (
+                        MirRelationExpr::LetRec {
+                            ids: ids1,
+                            body: body1,
+                            values: values1,
+                            limits: limits1,
+                        },
+                        MirRelationExpr::LetRec {
+                            ids: ids2,
+                            body: body2,
+                            values: values2,
+                            limits: limits2,
+                        },
+                    ) => {
+                        if ids1 != ids2 || values1.len() != values2.len() || limits1 != limits2 {
+                            return Some((expr1, expr2));
+                        } else {
+                            self.todo.push((body1, body2));
+                            self.todo.extend(values1.iter().zip(values2.iter()));
+                        }
+                    }
+                    (
+                        MirRelationExpr::Project {
+                            outputs: outputs1,
+                            input: input1,
+                        },
+                        MirRelationExpr::Project {
+                            outputs: outputs2,
+                            input: input2,
+                        },
+                    ) => {
+                        if outputs1 != outputs2 {
+                            return Some((expr1, expr2));
+                        } else {
+                            self.todo.push((input1, input2));
+                        }
+                    }
+                    (
+                        MirRelationExpr::Map {
+                            scalars: scalars1,
+                            input: input1,
+                        },
+                        MirRelationExpr::Map {
+                            scalars: scalars2,
+                            input: input2,
+                        },
+                    ) => {
+                        if scalars1 != scalars2 {
+                            return Some((expr1, expr2));
+                        } else {
+                            self.todo.push((input1, input2));
+                        }
+                    }
+                    (
+                        MirRelationExpr::Filter {
+                            predicates: predicates1,
+                            input: input1,
+                        },
+                        MirRelationExpr::Filter {
+                            predicates: predicates2,
+                            input: input2,
+                        },
+                    ) => {
+                        if predicates1 != predicates2 {
+                            return Some((expr1, expr2));
+                        } else {
+                            self.todo.push((input1, input2));
+                        }
+                    }
+                    (
+                        MirRelationExpr::FlatMap {
+                            input: input1,
+                            func: func1,
+                            exprs: exprs1,
+                        },
+                        MirRelationExpr::FlatMap {
+                            input: input2,
+                            func: func2,
+                            exprs: exprs2,
+                        },
+                    ) => {
+                        if func1 != func2 || exprs1 != exprs2 {
+                            return Some((expr1, expr2));
+                        } else {
+                            self.todo.push((input1, input2));
+                        }
+                    }
+                    (
+                        MirRelationExpr::Join {
+                            inputs: inputs1,
+                            equivalences: eq1,
+                            implementation: impl1,
+                        },
+                        MirRelationExpr::Join {
+                            inputs: inputs2,
+                            equivalences: eq2,
+                            implementation: impl2,
+                        },
+                    ) => {
+                        if inputs1.len() != inputs2.len() || eq1 != eq2 || impl1 != impl2 {
+                            return Some((expr1, expr2));
+                        } else {
+                            self.todo.extend(inputs1.iter().zip(inputs2.iter()));
+                        }
+                    }
+                    (
+                        MirRelationExpr::Reduce {
+                            aggregates: aggregates1,
+                            input: inputs1,
+                            group_key: gk1,
+                            monotonic: m1,
+                            expected_group_size: egs1,
+                        },
+                        MirRelationExpr::Reduce {
+                            aggregates: aggregates2,
+                            input: inputs2,
+                            group_key: gk2,
+                            monotonic: m2,
+                            expected_group_size: egs2,
+                        },
+                    ) => {
+                        if aggregates1 != aggregates2 || gk1 != gk2 || m1 != m2 || egs1 != egs2 {
+                            return Some((expr1, expr2));
+                        } else {
+                            self.todo.push((inputs1, inputs2));
+                        }
+                    }
+                    (
+                        MirRelationExpr::TopK {
+                            group_key: gk1,
+                            order_key: order1,
+                            input: input1,
+                            limit: l1,
+                            offset: o1,
+                            monotonic: m1,
+                            expected_group_size: egs1,
+                        },
+                        MirRelationExpr::TopK {
+                            group_key: gk2,
+                            order_key: order2,
+                            input: input2,
+                            limit: l2,
+                            offset: o2,
+                            monotonic: m2,
+                            expected_group_size: egs2,
+                        },
+                    ) => {
+                        if order1 != order2
+                            || gk1 != gk2
+                            || l1 != l2
+                            || o1 != o2
+                            || m1 != m2
+                            || egs1 != egs2
+                        {
+                            return Some((expr1, expr2));
+                        } else {
+                            self.todo.push((input1, input2));
+                        }
+                    }
+                    (
+                        MirRelationExpr::Negate { input: input1 },
+                        MirRelationExpr::Negate { input: input2 },
+                    ) => {
+                        self.todo.push((input1, input2));
+                    }
+                    (
+                        MirRelationExpr::Threshold { input: input1 },
+                        MirRelationExpr::Threshold { input: input2 },
+                    ) => {
+                        self.todo.push((input1, input2));
+                    }
+                    (
+                        MirRelationExpr::Union {
+                            base: base1,
+                            inputs: inputs1,
+                        },
+                        MirRelationExpr::Union {
+                            base: base2,
+                            inputs: inputs2,
+                        },
+                    ) => {
+                        if inputs1.len() != inputs2.len() {
+                            return Some((expr1, expr2));
+                        } else {
+                            self.todo.push((base1, base2));
+                            self.todo.extend(inputs1.iter().zip(inputs2.iter()));
+                        }
+                    }
+                    (
+                        MirRelationExpr::ArrangeBy {
+                            keys: keys1,
+                            input: input1,
+                        },
+                        MirRelationExpr::ArrangeBy {
+                            keys: keys2,
+                            input: input2,
+                        },
+                    ) => {
+                        if keys1 != keys2 {
+                            return Some((expr1, expr2));
+                        } else {
+                            self.todo.push((input1, input2));
+                        }
+                    }
+                    _ => {
+                        return Some((expr1, expr2));
+                    }
+                }
+            }
+            None
+        }
     }
 }

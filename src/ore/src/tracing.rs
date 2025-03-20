@@ -27,8 +27,10 @@
 
 use std::collections::BTreeMap;
 use std::io;
+use std::io::IsTerminal;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::LazyLock;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -36,11 +38,11 @@ use std::time::Duration;
 use console_subscriber::ConsoleLayer;
 use derivative::Derivative;
 use http::HeaderMap;
-use hyper::client::HttpConnector;
 use hyper_tls::HttpsConnector;
-use once_cell::sync::Lazy;
+use hyper_util::client::legacy::connect::HttpConnector;
 use opentelemetry::global::Error;
 use opentelemetry::propagation::{Extractor, Injector};
+use opentelemetry::trace::TracerProvider;
 use opentelemetry::{global, KeyValue};
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::{trace, Resource};
@@ -93,8 +95,6 @@ pub struct TracingConfig<F> {
     pub build_version: &'static str,
     /// The commit SHA of this build of the service.
     pub build_sha: &'static str,
-    /// The time of this build of the service.
-    pub build_time: &'static str,
     /// Registry for prometheus metrics.
     pub registry: MetricsRegistry,
 }
@@ -270,25 +270,38 @@ impl std::fmt::Debug for TracingGuard {
 ///
 /// Note: folks should feel free to add more crates here if we find more
 /// with long lived Spans.
-pub static LOGGING_DEFAULTS: Lazy<Vec<Directive>> = Lazy::new(|| {
-    vec![Directive::from_str("kube_client::client::builder=off").expect("valid directive")]
+pub const LOGGING_DEFAULTS_STR: [&str; 1] = ["kube_client::client::builder=off"];
+/// Same as [`LOGGING_DEFAULTS_STR`], but structured as [`Directive`]s.
+pub static LOGGING_DEFAULTS: LazyLock<Vec<Directive>> = LazyLock::new(|| {
+    LOGGING_DEFAULTS_STR
+        .into_iter()
+        .map(|directive| Directive::from_str(directive).expect("valid directive"))
+        .collect()
 });
 /// By default we turn off tracing from the following crates, because they
 /// have long-lived Spans, which OpenTelemetry does not handle well.
 ///
 /// Note: folks should feel free to add more crates here if we find more
 /// with long lived Spans.
-pub static OPENTELEMETRY_DEFAULTS: Lazy<Vec<Directive>> = Lazy::new(|| {
-    vec![
-        Directive::from_str("h2=off").expect("valid directive"),
-        Directive::from_str("hyper=off").expect("valid directive"),
-    ]
+pub const OPENTELEMETRY_DEFAULTS_STR: [&str; 2] = ["h2=off", "hyper=off"];
+/// Same as [`OPENTELEMETRY_DEFAULTS_STR`], but structured as [`Directive`]s.
+pub static OPENTELEMETRY_DEFAULTS: LazyLock<Vec<Directive>> = LazyLock::new(|| {
+    OPENTELEMETRY_DEFAULTS_STR
+        .into_iter()
+        .map(|directive| Directive::from_str(directive).expect("valid directive"))
+        .collect()
 });
 
 /// By default we turn off tracing from the following crates, because they
 /// have error spans which are noisy.
-pub static SENTRY_DEFAULTS: Lazy<Vec<Directive>> = Lazy::new(|| {
-    vec![Directive::from_str("kube_client::client::builder=off").expect("valid directive")]
+pub const SENTRY_DEFAULTS_STR: [&str; 2] =
+    ["kube_client::client::builder=off", "mysql_async::conn=off"];
+/// Same as [`SENTRY_DEFAULTS_STR`], but structured as [`Directive`]s.
+pub static SENTRY_DEFAULTS: LazyLock<Vec<Directive>> = LazyLock::new(|| {
+    SENTRY_DEFAULTS_STR
+        .into_iter()
+        .map(|directive| Directive::from_str(directive).expect("valid directive"))
+        .collect()
 });
 
 /// The [`GLOBAL_SUBSCRIBER`] type.
@@ -336,7 +349,7 @@ where
                         inner: format(),
                         prefix,
                     })
-                    .with_ansi(!no_color && atty::is(atty::Stream::Stderr)),
+                    .with_ansi(!no_color && io::stderr().is_terminal()),
             )
         }
         StderrLogFormat::Json => Box::new(
@@ -391,16 +404,17 @@ where
             .tonic()
             .with_channel(channel)
             .with_metadata(MetadataMap::from_headers(otel_config.headers));
-        let batch_config = opentelemetry_sdk::trace::BatchConfig::default()
+        let batch_config = opentelemetry_sdk::trace::BatchConfigBuilder::default()
             .with_max_queue_size(otel_config.max_batch_queue_size)
             .with_max_export_batch_size(otel_config.max_export_batch_size)
             .with_max_concurrent_exports(otel_config.max_concurrent_exports)
             .with_scheduled_delay(otel_config.batch_scheduled_delay)
-            .with_max_export_timeout(otel_config.max_export_timeout);
+            .with_max_export_timeout(otel_config.max_export_timeout)
+            .build();
         let tracer = opentelemetry_otlp::new_pipeline()
             .tracing()
             .with_trace_config(
-                trace::config().with_resource(
+                trace::Config::default().with_resource(
                     // The latter resources win, so if the user specifies
                     // `service.name` in the configuration, it will override the
                     // `service.name` value we configure here.
@@ -414,7 +428,8 @@ where
             .with_exporter(exporter)
             .with_batch_config(batch_config)
             .install_batch(opentelemetry_sdk::runtime::Tokio)
-            .unwrap();
+            .unwrap()
+            .tracer(config.service_name);
 
         // Create our own error handler to:
         //   1. Rate limit the number of error logs. By default the OTel library will emit
@@ -516,7 +531,7 @@ where
                 sentry_config.dsn,
                 sentry::ClientOptions {
                     attach_stacktrace: true,
-                    release: Some(config.build_version.into()),
+                    release: Some(format!("materialize@{0}", config.build_version).into()),
                     environment: sentry_config.environment.map(Into::into),
                     integrations: vec![Arc::new(DebugImagesIntegration::new())],
                     ..Default::default()
@@ -526,7 +541,6 @@ where
             sentry::configure_scope(|scope| {
                 scope.set_tag("service_name", config.service_name);
                 scope.set_tag("build_sha", config.build_sha.to_string());
-                scope.set_tag("build_time", config.build_time.to_string());
                 for (k, v) in sentry_config.tags {
                     scope.set_tag(&k, v);
                 }
@@ -556,7 +570,7 @@ where
                 // that the sentry layer would specifically communicating that it wants to see
                 // everything. This bug appears to be related to the presence of a `reload::Layer`
                 // _around a filter, not a layer_, and guswynn is tracking investigating it here:
-                // <https://github.com/MaterializeInc/materialize/issues/16556>. Because we don't
+                // <https://github.com/MaterializeInc/database-issues/issues/4794>. Because we don't
                 // enable a reload-able filter in CI/locally, but DO in production (the otel layer), it
                 // was once possible to trigger and rely on the fast path in CI, but not notice that it
                 // was disabled in production.
@@ -718,7 +732,7 @@ impl OpenTelemetryContext {
     /// If there is not enough information in this `OpenTelemetryContext`
     /// to create a context, then the current thread's `Context` is used
     /// defaulting to the default `Context`.
-    pub fn attach_as_parent_to(&self, span: &mut Span) {
+    pub fn attach_as_parent_to(&self, span: &Span) {
         let parent_cx = global::get_text_map_propagator(|prop| prop.extract(self));
         span.set_parent(parent_cx);
     }

@@ -9,8 +9,8 @@
 
 mode cockroach
 
-query error cannot show create for system object mz_internal.mz_dataflow_channels
-SHOW CREATE SOURCE mz_internal.mz_dataflow_channels
+query error cannot show create for system object mz_introspection.mz_dataflow_channels
+SHOW CREATE SOURCE mz_introspection.mz_dataflow_channels
 
-query error mz_internal.mz_dataflow_channels is a view not a source
-ALTER SOURCE mz_internal.mz_dataflow_channels RENAME TO foo;
+query error mz_introspection.mz_dataflow_channels is a view not a source
+ALTER SOURCE mz_introspection.mz_dataflow_channels RENAME TO foo;

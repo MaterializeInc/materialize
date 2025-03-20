@@ -25,11 +25,13 @@ $ kafka-create-topic topic=topic partitions=1
   FROM KAFKA CONNECTION conn (
     TOPIC 'testdrive-topic-${testdrive.seed}'
   )
+
+> CREATE TABLE topic_tbl FROM SOURCE topic (REFERENCE "testdrive-topic-${testdrive.seed}")
   FORMAT BYTES
 
 > SELECT
     ks.topic
   FROM mz_sources s
-  JOIN mz_internal.mz_kafka_sources ks ON s.id = ks.id
+  JOIN mz_catalog.mz_kafka_sources ks ON s.id = ks.id
   WHERE s.name = 'topic'
 testdrive-topic-${testdrive.seed}

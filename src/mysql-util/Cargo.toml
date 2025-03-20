@@ -10,37 +10,50 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.66"
-chrono = { version = "0.4.35", default-features = false, features = ["std"] }
+anyhow = "1.0.95"
+aws-config = { version = "1.2.0", default-features = false, features = ["sso"] }
+aws-credential-types = { version = "1.2.1" }
+aws-sigv4 = { version = "1.2.0" }
+aws-types = "1.1.1"
+chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
-itertools = "0.10.5"
+itertools = "0.12.1"
+maplit = "1.0.2"
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-ore = { path = "../ore", features = ["async"] }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-ssh-util = { path = "../ssh-util" }
-mysql_common = { version = "0.32.4", default-features = false, features = ["chrono"] }
-mysql_async = { version = "0.34.1", default-features = false, features = ["minimal", "tracing"] }
-once_cell = "1.16.0"
-prost = { version = "0.11.3", features = ["no-recursion-limit"] }
-proptest = { version = "1.0.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.3.0", features = ["boxed_union"]}
-fancy-regex = "0.11.0"
-regex = "1.7.0"
-serde = { version = "1.0.152", features = ["derive"] }
-serde_json = { version = "1.0.89" }
-thiserror = "1.0.37"
+mysql_common = { version = "0.34.1", default-features = false, features = [
+    "chrono",
+] }
+mysql_async = { version = "0.35.1", default-features = false, features = [
+    "minimal",
+    "tracing",
+] }
+prost = { version = "0.13.5", features = ["no-recursion-limit"] }
+proptest = { version = "1.6.0", default-features = false, features = ["std"] }
+proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
+fancy-regex = "0.14.0"
+regex = "1.10.6"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = { version = "1.0.125" }
+thiserror = "2.0.12"
 tracing = "0.1.37"
-uuid = { version = "1.7.0", features = ["v4"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+url = "2.3.1"
+uuid = { version = "1.16.0", features = ["v4"] }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.11.2"
-tonic-build = "0.9.2"
+prost-build = "0.13.4"
+tonic-build = "0.12.3"
 
 [features]
-default = ["mz-build-tools/default"]
+default = ["mz-build-tools/default", "workspace-hack"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
+
+[dev-dependencies]
+tokio = { version = "1.44.1", features = ["test-util"] }

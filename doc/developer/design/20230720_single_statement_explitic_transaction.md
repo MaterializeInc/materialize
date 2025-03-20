@@ -1,6 +1,6 @@
 # Single-Statement Explicit Transactions
 
-- Associated: https://github.com/MaterializeInc/materialize/issues/20426
+- Associated: https://github.com/MaterializeInc/database-issues/issues/6143
 
 ## Context
 

@@ -10,18 +10,18 @@
 //! A parser for sqllogictest.
 
 use std::borrow::ToOwned;
+use std::sync::LazyLock;
 
 use anyhow::{anyhow, bail};
 use mz_repr::ColumnName;
-use once_cell::sync::Lazy;
 use regex::Regex;
 
 use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};
 
-static QUERY_OUTPUT_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\r?\n----").unwrap());
-static DOUBLE_LINE_REGEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(\n|\r\n|$)(\n|\r\n|$)").unwrap());
-static EOF_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(\n|\r\n)EOF(\n|\r\n)").unwrap());
+static QUERY_OUTPUT_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\r?\n----").unwrap());
+static DOUBLE_LINE_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(\n|\r\n|$)(\n|\r\n|$)").unwrap());
+static EOF_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\n|\r\n)EOF(\n|\r\n)").unwrap());
 
 #[derive(Debug, Clone)]
 pub struct Parser<'a> {
@@ -79,8 +79,8 @@ impl<'a> Parser<'a> {
 
         let line_number = self.curline;
 
-        static COMMENT_AND_LINE_REGEX: Lazy<Regex> =
-            Lazy::new(|| Regex::new("(#[^\n]*)?\r?(\n|$)").unwrap());
+        static COMMENT_AND_LINE_REGEX: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new("(#[^\n]*)?\r?(\n|$)").unwrap());
         let first_line = self.split_at(&COMMENT_AND_LINE_REGEX)?.trim();
 
         if first_line.is_empty() {
@@ -248,17 +248,31 @@ impl<'a> Parser<'a> {
             bail!("multiline option is incompatible with all other options");
         }
         let label = words.next();
-        static LINE_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new("\r?(\n|$)").unwrap());
-        static HASH_REGEX: Lazy<Regex> =
-            Lazy::new(|| Regex::new(r"(\S+) values hashing to (\S+)").unwrap());
+        static LINE_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new("\r?(\n|$)").unwrap());
+        static HASH_REGEX: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"(\S+) values hashing to (\S+)").unwrap());
         let sql = self.split_at(&QUERY_OUTPUT_REGEX)?;
-        let mut output_str = self
-            .split_at(if multiline {
-                &EOF_REGEX
-            } else {
-                &DOUBLE_LINE_REGEX
-            })?
-            .trim_start();
+        let mut output_str = self.split_at(if multiline {
+            &EOF_REGEX
+        } else {
+            &DOUBLE_LINE_REGEX
+        })?;
+
+        // The `split_at(&QUERY_OUTPUT_REGEX)` stopped at the end of `----`, so `output_str` usually
+        // starts with a newline, which is not actually part of the expected output. Strip off this
+        // newline.
+        output_str = if let Some(output_str_stripped) = regexp_strip_prefix(output_str, &LINE_REGEX)
+        {
+            output_str_stripped
+        } else {
+            // There should always be a newline after `----`, because we have a lint that there is
+            // always a newline at the end of a file. However, we can still get here, when
+            // the expected output is empty, in which case the EOF_REGEX or DOUBLE_LINE_REGEX eats
+            // the newline at the end of the `----`.
+            assert!(output_str.is_empty());
+            output_str
+        };
+
         // We don't want to advance the expected output past the column names so rewriting works,
         // but need to be able to parse past them, so remember the position before possible column
         // names.
@@ -414,8 +428,8 @@ fn parse_types(input: &str) -> Result<Vec<Type>, anyhow::Error> {
 }
 
 fn parse_expected_error(line: &str) -> &str {
-    static PGCODE_RE: Lazy<Regex> =
-        Lazy::new(|| Regex::new("(statement|query) error( pgcode [a-zA-Z0-9]{5})? ?").unwrap());
+    static PGCODE_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new("(statement|query) error( pgcode [a-zA-Z0-9]{5})? ?").unwrap());
     // TODO(benesch): one day this should record the expected pgcode, if
     // specified.
     let pos = PGCODE_RE.find(line).unwrap().end();
@@ -432,5 +446,18 @@ pub(crate) fn split_cols(line: &str, expected_columns: usize) -> Vec<&str> {
         vec![line.trim()]
     } else {
         line.split_whitespace().collect()
+    }
+}
+
+pub fn regexp_strip_prefix<'a>(text: &'a str, regexp: &Regex) -> Option<&'a str> {
+    match regexp.find(text) {
+        Some(found) => {
+            if found.start() == 0 {
+                Some(&text[found.end()..])
+            } else {
+                None
+            }
+        }
+        None => None,
     }
 }

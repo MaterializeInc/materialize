@@ -1,0 +1,39 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for database-issues#7467.
+
+# The schema is a simplified version of
+# https://github.com/MaterializeInc/RQG/blob/main/conf/mz/simple.sql
+
+statement ok
+CREATE TABLE t1 (f1 INT, f2 INT NOT NULL);
+
+statement ok
+INSERT INTO t1 VALUES (2, 2), (2, 2), (3, 3);
+
+statement ok
+CREATE TABLE t2 (f1 INT, f2 INT NOT NULL);
+
+statement ok
+INSERT INTO t2 VALUES (NULL, 0);
+
+# Prior to the bugfix for database-issues#7467 this query was (wrongly) returning a single
+# row.
+query II
+SELECT DISTINCT
+  (a1.f1) AS c1,
+  (a1.f2) AS c2
+FROM
+  t1 AS a1
+  JOIN (VALUES(1, 2)) AS a2(f1, f2) ON (a2.f2 = a1.f1)
+WHERE
+  a1.f2 + a2.f2 > (SELECT DISTINCT 0 c2 FROM t2 AS a1) AND a2.f2 IS NULL
+  OR NULLIF (a2.f2, a2.f1) = a1.f2 + a1.f2;
+----

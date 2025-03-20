@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Test that `CREATE SECRET` and using secrets works using a local file for storage.
+"""
+
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.testdrive import Testdrive

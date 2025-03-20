@@ -17,7 +17,9 @@ from materialize.feature_benchmark.scenario import Scenario
 class SubscribeParallel(Scenario):
     """Feature benchmarks related to SUBSCRIBE"""
 
-    SCALE = 2  # So 100 concurrent SUBSCRIBEs by default, limited by #18261
+    SCALE = (
+        2  # So 100 concurrent SUBSCRIBEs by default, limited by database-issues#5376
+    )
     FIXED_SCALE = True
 
     def benchmark(self) -> MeasurementSource:
@@ -29,7 +31,7 @@ class SubscribeParallel(Scenario):
                         f"""
                         $ postgres-connect name=conn{i} url=postgres://materialize:materialize@${{testdrive.materialize-sql-addr}}
                         $ postgres-execute connection=conn{i}
-                        # STRICT SERIALIZABLE is affected by #18353
+                        # STRICT SERIALIZABLE is affected by database-issues#5407
                         START TRANSACTION ISOLATION LEVEL SERIALIZABLE;
                         DECLARE c{i} CURSOR FOR SUBSCRIBE s1
                         """
@@ -68,10 +70,10 @@ class SubscribeParallel(Scenario):
         )
 
     def create_subscribe_source(self) -> str:
-        assert False, "Scenario needs to provide a source/table definition"
+        raise NotImplementedError
 
     def insert(self) -> str:
-        assert False, "Scenario needs to provide insert()"
+        raise NotImplementedError
 
 
 class SubscribeParallelTable(SubscribeParallel):
@@ -112,17 +114,18 @@ class SubscribeParallelKafka(SubscribeParallel):
              # Separate topic for each Mz instance
              $ kafka-create-topic topic=subscribe-kafka-{self._unique_topic_id}
 
-             >[version<7800]  CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
-             >[version>=7800] CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+             > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
              > DROP CLUSTER IF EXISTS source_cluster CASCADE;
              > CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
 
              > DROP SOURCE IF EXISTS s1 CASCADE;
 
-             > CREATE SOURCE s1
+             > CREATE SOURCE s1_source
                IN CLUSTER source_cluster
-               FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-subscribe-kafka-{self._unique_topic_id}-${{testdrive.seed}}')
+               FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-subscribe-kafka-{self._unique_topic_id}-${{testdrive.seed}}');
+
+             > CREATE TABLE s1 FROM SOURCE s1_source (REFERENCE "testdrive-subscribe-kafka-{self._unique_topic_id}-${{testdrive.seed}}")
                FORMAT BYTES ENVELOPE NONE;
 
              > CREATE DEFAULT INDEX ON s1;

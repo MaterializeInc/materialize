@@ -42,7 +42,6 @@ use mz_txn_wal::txns::{Tidy, TxnsHandle};
 use timely::progress::Timestamp;
 use tokio::sync::Mutex;
 use tracing::{debug, info};
-use url::Url;
 
 use crate::maelstrom::api::{Body, MaelstromError, NodeId, ReqTxnOp, ResTxnOp};
 use crate::maelstrom::node::{Handle, Service};
@@ -72,10 +71,9 @@ impl Transactor {
         let txns = TxnsHandle::open(
             init_ts,
             client.clone(),
+            mz_txn_wal::all_dyncfgs(client.dyncfgs().clone()),
             Arc::new(TxnMetrics::new(&MetricsRegistry::new())),
             txns_id,
-            Arc::new(StringSchema),
-            Arc::new(UnitSchema),
         )
         .await;
         oracle.apply_write(init_ts.into()).await;
@@ -384,7 +382,7 @@ impl Service for TransactorService {
                     blob_uri,
                     Box::new(config.clone()),
                     metrics.s3_blob.clone(),
-                    config.configs.clone(),
+                    Arc::clone(&config.configs),
                 )
                 .await
                 .expect("blob_uri should be valid");
@@ -454,19 +452,18 @@ impl Service for TransactorService {
         )?;
         // It's an annoying refactor to add an oracle_uri cli flag, so for now,
         // piggy-back on --consensus_uri.
-        let oracle_uri = args.consensus_uri.as_ref().map(|x| {
-            Url::parse(x).unwrap_or_else(|err| panic!("failed to parse oracle_uri {}: {}", x, err))
-        });
+        let oracle_uri = args.consensus_uri.clone();
         let oracle_scheme = oracle_uri.as_ref().map(|x| (x.scheme(), x));
         let oracle: Box<dyn TimestampOracle<mz_repr::Timestamp> + Send> = match oracle_scheme {
             Some(("postgres", uri)) | Some(("postgresql", uri)) => {
-                let cfg = PostgresTimestampOracleConfig::new(uri.as_str(), &metrics_registry);
+                let cfg = PostgresTimestampOracleConfig::new(uri, &metrics_registry);
                 Box::new(
                     PostgresTimestampOracle::open(
                         cfg,
                         "maelstrom".to_owned(),
                         mz_repr::Timestamp::minimum(),
                         NOW_ZERO.clone(),
+                        false, /* read-only */
                     )
                     .await,
                 )

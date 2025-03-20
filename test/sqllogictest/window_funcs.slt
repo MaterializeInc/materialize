@@ -12,15 +12,30 @@
 
 mode cockroach
 
+statement ok
+CREATE TABLE t(x string);
+
+statement ok
+INSERT INTO t VALUES ('a'), ('b'), ('c');
+
 statement error db error: ERROR: window function pg_catalog\.row_number requires an OVER clause
-WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
-SELECT row_number() FROM t
+SELECT row_number()
+FROM t;
+
+statement error db error: ERROR: window function pg_catalog\.row_number requires an OVER clause
+SELECT *
+FROM t
+ORDER BY row_number();
+
+statement error db error: ERROR: window function pg_catalog\.row_number requires an OVER clause
+SELECT *
+FROM t
+QUALIFY row_number();
 
 statement error db error: ERROR: OVER clause not allowed on pg_catalog\.int8range\. The OVER clause can only be used with window functions \(including aggregations\)\.
 SELECT int8range(1, 1, '') OVER (PARTITION BY 1 ORDER BY 1);
 
 query IT
-WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
 SELECT row_number() OVER (ORDER BY x), x FROM t
 ORDER BY row_number
 ----
@@ -29,7 +44,6 @@ ORDER BY row_number
 3  c
 
 query IT
-WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
 SELECT row_number() OVER (ORDER BY x DESC), x FROM t
 ORDER BY row_number
 ----
@@ -37,8 +51,16 @@ ORDER BY row_number
 2  b
 3  a
 
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t(x string, y int);
+
+statement ok
+INSERT INTO t VALUES ('a', 98), ('b', 99), ('c', 98);
+
 query IT
-WITH t (x, y) AS (VALUES ('a', 98), ('b', 99), ('c', 98))
 SELECT row_number() OVER (PARTITION BY y ORDER BY x), x FROM t
 ORDER BY row_number, x
 ----
@@ -46,8 +68,16 @@ ORDER BY row_number, x
 1  b
 2  c
 
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t(x string, y int);
+
+statement ok
+INSERT INTO t VALUES ('a', 1), ('b', 2), ('c', 1);
+
 query IT
-WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
 SELECT row_number() OVER (PARTITION BY y ORDER BY x DESC), x FROM t
 ORDER BY row_number, x
 ----
@@ -56,7 +86,6 @@ ORDER BY row_number, x
 2  a
 
 query IT
-WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
 SELECT row_number() OVER (PARTITION BY x ORDER BY x), x FROM t
 ORDER BY row_number, x
 ----
@@ -65,7 +94,6 @@ ORDER BY row_number, x
 1  c
 
 query IT
-WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
 SELECT row_number() OVER (PARTITION BY NULL ORDER BY 10000) AS q, a1.x
 FROM t AS a1, t AS a2
 ORDER BY q DESC
@@ -80,43 +108,56 @@ ORDER BY q DESC
 2  a
 1  a
 
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t(x string);
+
+statement ok
+INSERT INTO t VALUES ('a');
+
 # Make sure a non-column expression following the window function is correctly
 # handled.
 query ITT
-WITH t (x) AS (VALUES ('a'))
 SELECT row_number() OVER (PARTITION BY NULL) AS q, x, 'b'
 FROM t
 ----
 1 a b
 
-# Blocked on #8963
-#query II
-#SELECT row_number() OVER (), row_number() OVER ()
-#----
-#1 1
+# Regression test for database-issues#2730
+query II
+SELECT row_number() OVER (), row_number() OVER ()
+----
+1 1
 
-# Blocked on #8963
-#query II
-#WITH t (x) AS (VALUES ('a'), ('b'))
-#SELECT row_number() OVER (), row_number() OVER () from t
-#----
-#1 1
-#2 2
+statement ok
+INSERT INTO t VALUES ('b');
+
+query II
+SELECT row_number() OVER (), row_number() OVER () from t
+----
+1 1
+2 2
+
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t(x string, y int);
+
+statement ok
+INSERT INTO t VALUES ('a', 1), ('b', 2), ('c', 1);
 
 query T multiline
 EXPLAIN RAW PLAN FOR
-WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
 SELECT row_number() OVER (PARTITION BY x ORDER BY x), x FROM t
 ORDER BY row_number, x
 ----
 Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0, #1]
   Project (#2, #0)
-    Return
-      Map (row_number() over (partition by [#0] order by [#0 asc nulls_last]))
-        Get l0
-    With
-      cte l0 =
-        CallTable wrap2("a", 1, "b", 2, "c", 1)
+    Map (row_number() over (partition by [#0] order by [#0 asc nulls_last]))
+      Get materialize.public.t
 
 Target cluster: quickstart
 
@@ -124,28 +165,27 @@ EOF
 
 query T multiline
 EXPLAIN DECORRELATED PLAN WITH(arity) FOR
-WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
 SELECT row_number() OVER (PARTITION BY x ORDER BY x), x FROM t
 ORDER BY row_number, x
 ----
 Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0, #1]
-  Project (#2, #0) // { arity: 2 }
-    Project (#0, #1, #3) // { arity: 3 }
-      Map (#2) // { arity: 4 }
-        Project (#3..=#5) // { arity: 3 }
-          Map (record_get[0](record_get[1](#2)), record_get[1](record_get[1](#2)), record_get[0](#2)) // { arity: 6 }
-            FlatMap unnest_list(#1) // { arity: 3 }
-              Reduce group_by=[#0] aggregates=[row_number[order_by=[#0 asc nulls_last]](row(list[row(#0, #1)], #0))] // { arity: 2 }
-                FlatMap wrap2("a", 1, "b", 2, "c", 1) // { arity: 2 }
-                  Constant // { arity: 0 }
-                    - ()
+  Project (#3, #0) // { arity: 2 }
+    Map (#2) // { arity: 4 }
+      Project (#3..=#5) // { arity: 3 }
+        Map (record_get[0](record_get[1](#2)), record_get[1](record_get[1](#2)), record_get[0](#2)) // { arity: 6 }
+          FlatMap unnest_list(#1) // { arity: 3 }
+            Reduce group_by=[#0] aggregates=[row_number[order_by=[#0 asc nulls_last]](row(list[row(#0, #1)], #0))] // { arity: 2 }
+              CrossJoin // { arity: 2 }
+                Constant // { arity: 0 }
+                  - ()
+                Get materialize.public.t // { arity: 2 }
 
 Target cluster: quickstart
 
 EOF
 
 #
-# Regression test for #9077
+# Regression test for database-issues#2760
 #
 
 statement ok
@@ -175,6 +215,28 @@ query T multiline
 EXPLAIN DECORRELATED PLAN WITH(arity) FOR SELECT f1 FROM t1
 WHERE f1 IN (SELECT ROW_NUMBER() OVER () FROM t2);
 ----
+With
+  cte l0 =
+    CrossJoin // { arity: 2 }
+      Constant // { arity: 0 }
+        - ()
+      Get materialize.public.t1 // { arity: 2 }
+  cte l1 =
+    Distinct project=[#0] // { arity: 1 }
+      Get l0 // { arity: 2 }
+  cte l2 =
+    Map (true) // { arity: 2 }
+      Distinct project=[#0] // { arity: 1 }
+        Filter (integer_to_bigint(#0) = #1) // { arity: 2 }
+          Project (#0, #4) // { arity: 2 }
+            Map (#3) // { arity: 5 }
+              Project (#3..=#6) // { arity: 4 }
+                Map (record_get[0](record_get[1](#2)), record_get[1](record_get[1](#2)), record_get[2](record_get[1](#2)), record_get[0](#2)) // { arity: 7 }
+                  FlatMap unnest_list(#1) // { arity: 3 }
+                    Reduce group_by=[#0] aggregates=[row_number[order_by=[]](row(list[row(#0, #1, #2)]))] // { arity: 2 }
+                      CrossJoin // { arity: 3 }
+                        Get l1 // { arity: 1 }
+                        Get materialize.public.t2 // { arity: 2 }
 Return // { arity: 1 }
   Project (#0) // { arity: 1 }
     Filter #2 // { arity: 3 }
@@ -195,39 +257,20 @@ Return // { arity: 1 }
                   Get l1 // { arity: 1 }
               Constant // { arity: 1 }
                 - (false)
-With
-  cte l2 =
-    Map (true) // { arity: 2 }
-      Distinct project=[#0] // { arity: 1 }
-        Filter (integer_to_bigint(#0) = #1) // { arity: 2 }
-          Project (#0, #4) // { arity: 2 }
-            Map (#3) // { arity: 5 }
-              Project (#3..=#6) // { arity: 4 }
-                Map (record_get[0](record_get[1](#2)), record_get[1](record_get[1](#2)), record_get[2](record_get[1](#2)), record_get[0](#2)) // { arity: 7 }
-                  FlatMap unnest_list(#1) // { arity: 3 }
-                    Reduce group_by=[#0] aggregates=[row_number[order_by=[]](row(list[row(#0, #1, #2)]))] // { arity: 2 }
-                      CrossJoin // { arity: 3 }
-                        Get l1 // { arity: 1 }
-                        Get materialize.public.t2 // { arity: 2 }
-  cte l1 =
-    Distinct project=[#0] // { arity: 1 }
-      Get l0 // { arity: 2 }
-  cte l0 =
-    Filter true // { arity: 2 }
-      CrossJoin // { arity: 2 }
-        Constant // { arity: 0 }
-          - ()
-        Get materialize.public.t1 // { arity: 2 }
 
 Target cluster: quickstart
 
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT f1 FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT f1 FROM t1
 WHERE f1 IN (SELECT ROW_NUMBER() OVER () FROM t2);
 ----
 Explained Query:
+  With
+    cte l0 =
+      Project (#0) // { arity: 1 }
+        ReadStorage materialize.public.t1 // { arity: 2 }
   Return // { arity: 1 }
     Project (#0) // { arity: 1 }
       Join on=(#0 = #1) type=differential // { arity: 2 }
@@ -250,10 +293,6 @@ Explained Query:
                             Get l0 // { arity: 1 }
                         ArrangeBy keys=[[]] // { arity: 2 }
                           ReadStorage materialize.public.t2 // { arity: 2 }
-  With
-    cte l0 =
-      Project (#0) // { arity: 1 }
-        ReadStorage materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1
 Source materialize.public.t2
@@ -307,28 +346,27 @@ SELECT * FROM t2, LATERAL(SELECT t1.*, ROW_NUMBER() OVER() FROM t1 WHERE t1.f2 =
 query T multiline
 EXPLAIN DECORRELATED PLAN WITH(arity) FOR SELECT * FROM t2, LATERAL(SELECT t1.*, ROW_NUMBER() OVER() FROM t1 WHERE t1.f2 = t2.f2) AS foo;
 ----
-Return // { arity: 5 }
-  Filter true // { arity: 5 }
-    Project (#0, #1, #3..=#5) // { arity: 5 }
-      Join on=(#1 = #2) // { arity: 6 }
-        Get l0 // { arity: 2 }
-        Project (#0..=#2, #4) // { arity: 4 }
-          Map (#3) // { arity: 5 }
-            Project (#3..=#6) // { arity: 4 }
-              Map (record_get[0](record_get[1](#2)), record_get[1](record_get[1](#2)), record_get[2](record_get[1](#2)), record_get[0](#2)) // { arity: 7 }
-                FlatMap unnest_list(#1) // { arity: 3 }
-                  Reduce group_by=[#0] aggregates=[row_number[order_by=[]](row(list[row(#0, #1, #2)]))] // { arity: 2 }
-                    Filter (#2 = #0) // { arity: 3 }
-                      CrossJoin // { arity: 3 }
-                        Distinct project=[#1] // { arity: 1 }
-                          Get l0 // { arity: 2 }
-                        Get materialize.public.t1 // { arity: 2 }
 With
   cte l0 =
     CrossJoin // { arity: 2 }
       Constant // { arity: 0 }
         - ()
       Get materialize.public.t2 // { arity: 2 }
+Return // { arity: 5 }
+  Project (#0, #1, #3..=#5) // { arity: 5 }
+    Join on=(#1 = #2) // { arity: 6 }
+      Get l0 // { arity: 2 }
+      Project (#0..=#2, #4) // { arity: 4 }
+        Map (#3) // { arity: 5 }
+          Project (#3..=#6) // { arity: 4 }
+            Map (record_get[0](record_get[1](#2)), record_get[1](record_get[1](#2)), record_get[2](record_get[1](#2)), record_get[0](#2)) // { arity: 7 }
+              FlatMap unnest_list(#1) // { arity: 3 }
+                Reduce group_by=[#0] aggregates=[row_number[order_by=[]](row(list[row(#0, #1, #2)]))] // { arity: 2 }
+                  Filter (#2 = #0) // { arity: 3 }
+                    CrossJoin // { arity: 3 }
+                      Distinct project=[#1] // { arity: 1 }
+                        Get l0 // { arity: 2 }
+                      Get materialize.public.t1 // { arity: 2 }
 
 Target cluster: quickstart
 
@@ -337,40 +375,46 @@ EOF
 query T multiline
 EXPLAIN DECORRELATED PLAN WITH(arity) FOR SELECT * FROM t2, LATERAL(SELECT t1.*, ROW_NUMBER() OVER(PARTITION BY f1) FROM t1 WHERE t1.f2 = t2.f2) AS foo;
 ----
-Return // { arity: 5 }
-  Filter true // { arity: 5 }
-    Project (#0, #1, #3..=#5) // { arity: 5 }
-      Join on=(#1 = #2) // { arity: 6 }
-        Get l0 // { arity: 2 }
-        Project (#0..=#2, #4) // { arity: 4 }
-          Map (#3) // { arity: 5 }
-            Project (#4..=#7) // { arity: 4 }
-              Map (record_get[0](record_get[1](#3)), record_get[1](record_get[1](#3)), record_get[2](record_get[1](#3)), record_get[0](#3)) // { arity: 8 }
-                FlatMap unnest_list(#2) // { arity: 4 }
-                  Reduce group_by=[#0, #1] aggregates=[row_number[order_by=[]](row(list[row(#0, #1, #2)]))] // { arity: 3 }
-                    Filter (#2 = #0) // { arity: 3 }
-                      CrossJoin // { arity: 3 }
-                        Distinct project=[#1] // { arity: 1 }
-                          Get l0 // { arity: 2 }
-                        Get materialize.public.t1 // { arity: 2 }
 With
   cte l0 =
     CrossJoin // { arity: 2 }
       Constant // { arity: 0 }
         - ()
       Get materialize.public.t2 // { arity: 2 }
+Return // { arity: 5 }
+  Project (#0, #1, #3..=#5) // { arity: 5 }
+    Join on=(#1 = #2) // { arity: 6 }
+      Get l0 // { arity: 2 }
+      Project (#0..=#2, #4) // { arity: 4 }
+        Map (#3) // { arity: 5 }
+          Project (#4..=#7) // { arity: 4 }
+            Map (record_get[0](record_get[1](#3)), record_get[1](record_get[1](#3)), record_get[2](record_get[1](#3)), record_get[0](#3)) // { arity: 8 }
+              FlatMap unnest_list(#2) // { arity: 4 }
+                Reduce group_by=[#0, #1] aggregates=[row_number[order_by=[]](row(list[row(#0, #1, #2)]))] // { arity: 3 }
+                  Filter (#2 = #0) // { arity: 3 }
+                    CrossJoin // { arity: 3 }
+                      Distinct project=[#1] // { arity: 1 }
+                        Get l0 // { arity: 2 }
+                      Get materialize.public.t1 // { arity: 2 }
 
 Target cluster: quickstart
 
 EOF
 
-# Regression for #9749
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t(x string);
+
+statement ok
+INSERT INTO t VALUES ('a'), ('b'), ('c');
+
+# Regression for database-issues#2962
 query error window functions are not allowed in ON
-WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
 SELECT * FROM t AS v JOIN t ON row_number() over () > 1;
 
 query error window functions are not allowed in WHERE
-WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
 SELECT * FROM t
 WHERE row_number() over () > 1;
 
@@ -406,7 +450,6 @@ query error window functions are not allowed in HAVING
 SELECT 1 FROM not_allowed_tests GROUP BY 1 HAVING sum(1) OVER (PARTITION BY 1) > 1;
 
 query T
-WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
 SELECT DISTINCT ON (row_number() OVER ()) *
 FROM t
 ORDER BY row_number() OVER ()
@@ -418,42 +461,67 @@ c
 # rank and dense_rank
 
 query error db error: ERROR: function rank has 0 parameters, but was called with 1
-WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
 SELECT rank(x) OVER (ORDER BY x), dense_rank() OVER (ORDER BY x), x FROM t
 ORDER BY dense_rank;
 
-query IIT
-WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
-SELECT rank() OVER (ORDER BY x), dense_rank() OVER (ORDER BY x), x FROM t
+query IT
+SELECT dense_rank() OVER (ORDER BY x), x FROM t
 ORDER BY dense_rank
+----
+1  a
+2  b
+3  c
+
+statement ok
+INSERT INTO t VALUES ('b');
+
+query IT
+SELECT dense_rank() OVER (ORDER BY x), x FROM t
+ORDER BY dense_rank
+----
+1  a
+2  b
+2  b
+3  c
+
+statement ok
+INSERT INTO t VALUES ('c');
+
+query IT
+SELECT dense_rank() OVER (ORDER BY x), x FROM t
+ORDER BY dense_rank
+----
+1  a
+2  b
+2  b
+3  c
+3  c
+
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t(x string);
+
+statement ok
+INSERT INTO t VALUES ('a'), ('b'), ('c');
+
+query IT
+SELECT dense_rank() OVER (ORDER BY x DESC), x FROM t
+ORDER BY dense_rank
+----
+1  c
+2  b
+3  a
+
+query IIT
+SELECT rank() OVER (ORDER BY x), dense_rank() OVER (ORDER BY x), x FROM t
 ----
 1  1  a
 2  2  b
 3  3  c
 
 query IIT
-WITH t (x) AS (VALUES ('a'), ('b'), ('b'), ('c'))
-SELECT rank() OVER (ORDER BY x), dense_rank() OVER (ORDER BY x), x FROM t
-ORDER BY dense_rank
-----
-1  1  a
-2  2  b
-2  2  b
-4  3  c
-
-query IIT
-WITH t (x) AS (VALUES ('a'), ('b'), ('b'), ('c'), ('c'))
-SELECT rank() OVER (ORDER BY x), dense_rank() OVER (ORDER BY x), x FROM t
-ORDER BY dense_rank
-----
-1  1  a
-2  2  b
-2  2  b
-4  3  c
-4  3  c
-
-query IIT
-WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
 SELECT rank() OVER (ORDER BY x DESC), dense_rank() OVER (ORDER BY x DESC), x FROM t
 ORDER BY dense_rank
 ----
@@ -461,8 +529,27 @@ ORDER BY dense_rank
 2  2  b
 3  3  a
 
+statement ok
+INSERT INTO t VALUES ('b');
+
+query IT
+SELECT dense_rank() OVER (ORDER BY x DESC), x FROM t
+ORDER BY dense_rank
+----
+1  c
+2  b
+2  b
+3  a
+
 query IIT
-WITH t (x) AS (VALUES ('a'), ('b'), ('b'), ('c'))
+SELECT rank() OVER (ORDER BY x), dense_rank() OVER (ORDER BY x), x FROM t
+----
+1  1  a
+2  2  b
+2  2  b
+4  3  c
+
+query IIT
 SELECT rank() OVER (ORDER BY x DESC), dense_rank() OVER (ORDER BY x DESC), x FROM t
 ORDER BY dense_rank
 ----
@@ -471,8 +558,20 @@ ORDER BY dense_rank
 2  2  b
 4  3  a
 
+statement ok
+INSERT INTO t VALUES ('c');
+
+query IT
+SELECT dense_rank() OVER (ORDER BY x DESC), x FROM t
+ORDER BY dense_rank
+----
+1  c
+1  c
+2  b
+2  b
+3  a
+
 query IIT
-WITH t (x) AS (VALUES ('a'), ('b'), ('b'), ('c'), ('c'))
 SELECT rank() OVER (ORDER BY x DESC), dense_rank() OVER (ORDER BY x DESC), x FROM t
 ORDER BY dense_rank
 ----
@@ -482,19 +581,35 @@ ORDER BY dense_rank
 3  2  b
 5  3  a
 
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t(x string, y int);
+
+statement ok
+INSERT INTO t VALUES ('a', 98), ('b', 99), ('c', 98);
+
 query IIT
-WITH t (x, y) AS (VALUES ('a', 98), ('b', 99), ('c', 98))
-SELECT rank() OVER (PARTITION BY y ORDER BY x), dense_rank() OVER (PARTITION BY y ORDER BY x), x FROM t
-ORDER BY dense_rank, x
+SELECT rank() OVER (PARTITION BY y ORDER BY x), dense_rank() OVER (PARTITION BY y ORDER BY x), x FROM t;
 ----
 1  1  a
 1  1  b
 2  2  c
 
+query IT
+SELECT dense_rank() OVER (PARTITION BY y ORDER BY x), x FROM t
+ORDER BY dense_rank, x;
+----
+1  a
+1  b
+2  c
+
+statement ok
+INSERT INTO t VALUES ('a', 98), ('a', 99);
+
 query IIT
-WITH t (x, y) AS (VALUES ('a', 98), ('b', 99), ('c', 98), ('a', 98), ('a', 99))
-SELECT rank() OVER (PARTITION BY y ORDER BY x), dense_rank() OVER (PARTITION BY y ORDER BY x), x FROM t
-ORDER BY dense_rank, x
+SELECT rank() OVER (PARTITION BY y ORDER BY x), dense_rank() OVER (PARTITION BY y ORDER BY x), x FROM t;
 ----
 1  1  a
 1  1  a
@@ -502,89 +617,190 @@ ORDER BY dense_rank, x
 2  2  b
 3  2  c
 
+query IT
+SELECT dense_rank() OVER (PARTITION BY y ORDER BY x), x FROM t
+ORDER BY dense_rank, x;
+----
+1  a
+1  a
+1  a
+2  b
+2  c
+
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t(x string, y int);
+
+statement ok
+INSERT INTO t VALUES ('a', 1), ('b', 2), ('c', 1);
+
 query IIT
-WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
-SELECT rank() OVER (PARTITION BY y ORDER BY x DESC), dense_rank() OVER (PARTITION BY y ORDER BY x DESC), x FROM t
-ORDER BY dense_rank, x
+SELECT rank() OVER (PARTITION BY y ORDER BY x DESC), dense_rank() OVER (PARTITION BY y ORDER BY x DESC), x FROM t;
 ----
 1  1  b
 1  1  c
 2  2  a
 
+query IT
+SELECT dense_rank() OVER (PARTITION BY y ORDER BY x DESC), x FROM t
+ORDER BY dense_rank, x;
+----
+1  b
+1  c
+2  a
+
 query IIT
-WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
-SELECT rank() OVER (PARTITION BY x ORDER BY x), dense_rank() OVER (PARTITION BY x ORDER BY x), x FROM t
-ORDER BY dense_rank, x
+SELECT rank() OVER (PARTITION BY x ORDER BY x), dense_rank() OVER (PARTITION BY x ORDER BY x), x FROM t;
 ----
 1  1  a
 1  1  b
 1  1  c
 
-query IIT
-WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
-SELECT rank() OVER (PARTITION BY NULL ORDER BY 10000), dense_rank() OVER (PARTITION BY NULL ORDER BY 10000) AS q, a1.x
-FROM t AS a1, t AS a2
-ORDER BY q DESC, a1.x DESC
+query IT
+SELECT dense_rank() OVER (PARTITION BY x ORDER BY x), x FROM t
+ORDER BY dense_rank, x;
 ----
-1  1  c
-1  1  c
-1  1  c
-1  1  b
-1  1  b
-1  1  b
+1  a
+1  b
+1  c
+
+query IIT
+SELECT rank() OVER (PARTITION BY NULL ORDER BY 10000), dense_rank() OVER (PARTITION BY NULL ORDER BY 10000) AS q, a1.x
+FROM t AS a1, t AS a2;
+----
 1  1  a
 1  1  a
 1  1  a
+1  1  b
+1  1  b
+1  1  b
+1  1  c
+1  1  c
+1  1  c
+
+query IT
+SELECT dense_rank() OVER (PARTITION BY NULL ORDER BY 10000) AS q, a1.x
+FROM t AS a1, t AS a2
+ORDER BY q DESC, a1.x DESC;
+----
+1  c
+1  c
+1  c
+1  b
+1  b
+1  b
+1  a
+1  a
+1  a
+
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t(x string);
+
+statement ok
+INSERT INTO t VALUES ('a');
 
 # Make sure a non-column expression following the window function is correctly
 # handled.
 query IITT
-WITH t (x) AS (VALUES ('a'))
 SELECT rank() OVER (PARTITION BY NULL), dense_rank() OVER (PARTITION BY NULL) AS q, x, 'b'
-FROM t
+FROM t;
 ----
 1  1  a  b
 
+query ITT
+SELECT dense_rank() OVER (PARTITION BY NULL) AS q, x, 'b'
+FROM t;
+----
+1  a  b
+
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t(x int, y string, z numeric);
+
+statement ok
+INSERT INTO t VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0);
 
 query IIITT
-WITH t (x, y, z) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0))
 SELECT rank() OVER (PARTITION BY y ORDER BY x DESC, z), dense_rank() OVER (PARTITION BY y ORDER BY x DESC, z), x, y, z
-FROM t
-ORDER BY y, x DESC, z
+FROM t;
 ----
 1  1  3  a  1
-2  2  2  a  1
-2  2  2  a  1
-4  3  1  a  1
-1  1  4  b  0
-2  2  4  b  1
 1  1  3  c  1
+1  1  4  b  0
+2  2  2  a  1
+2  2  2  a  1
 2  2  2  c  NaN
+2  2  4  b  1
 3  3  1  c  NaN
+4  3  1  a  1
+
+query IITT
+SELECT dense_rank() OVER (PARTITION BY y ORDER BY x DESC, z), x, y, z
+FROM t
+ORDER BY y, x DESC, z;
+----
+1  3  a  1
+2  2  a  1
+2  2  a  1
+3  1  a  1
+1  4  b  0
+2  4  b  1
+1  3  c  1
+2  2  c  NaN
+3  1  c  NaN
 
 
 # NaNs have the same rank
 query IIITT
 WITH t (x, y, z) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0))
 SELECT rank() OVER (PARTITION BY y ORDER BY z DESC), dense_rank() OVER (PARTITION BY y ORDER BY z DESC), x, y, z
-FROM t
-ORDER BY y, z DESC, x
+FROM t;
 ----
 1  1  1  a  1
+1  1  1  c  NaN
 1  1  2  a  1
 1  1  2  a  1
+1  1  2  c  NaN
 1  1  3  a  1
 1  1  4  b  1
 2  2  4  b  0
-1  1  1  c  NaN
-1  1  2  c  NaN
 3  2  3  c  1
+
+query IITT
+SELECT dense_rank() OVER (PARTITION BY y ORDER BY z DESC), x, y, z
+FROM t
+ORDER BY y, z DESC, x;
+----
+1  1  a  1
+1  2  a  1
+1  2  a  1
+1  3  a  1
+1  4  b  1
+2  4  b  0
+1  1  c  NaN
+1  2  c  NaN
+2  3  c  1
 
 ## lag
 
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t(x string);
+
+statement ok
+INSERT INTO t VALUES ('a'), ('b'), ('c');
+
 # Simple cases
 query TT
-WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
 SELECT lag(x) OVER (ORDER BY x), x FROM t
 ORDER BY x, lag
 ----
@@ -592,8 +808,10 @@ NULL  a
 a     b
 b     c
 
+statement ok
+INSERT INTO t VALUES ('b');
+
 query TT
-WITH t (x) AS (VALUES ('a'), ('b'), ('b'), ('c'))
 SELECT lag(x) OVER (ORDER BY x), x FROM t
 ORDER BY x, lag
 ----
@@ -602,8 +820,10 @@ a     b
 b     b
 b     c
 
+statement ok
+INSERT INTO t VALUES ('c');
+
 query TT
-WITH t (x) AS (VALUES ('a'), ('b'), ('b'), ('c'), ('c'))
 SELECT lag(x) OVER (ORDER BY x), x FROM t
 ORDER BY x, lag
 ----
@@ -613,8 +833,16 @@ b     b
 b     c
 c     c
 
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t(x string);
+
+statement ok
+INSERT INTO t VALUES ('a'), ('b'), ('c');
+
 query TT
-WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
 SELECT lag(x) OVER (ORDER BY x DESC), x FROM t
 ORDER BY x, lag
 ----
@@ -622,8 +850,10 @@ b     a
 c     b
 NULL  c
 
+statement ok
+INSERT INTO t VALUES ('b');
+
 query TT
-WITH t (x) AS (VALUES ('a'), ('b'), ('b'), ('c'))
 SELECT lag(x) OVER (ORDER BY x DESC), x FROM t
 ORDER BY x, lag
 ----
@@ -632,8 +862,10 @@ b     b
 c     b
 NULL  c
 
+statement ok
+INSERT INTO t VALUES ('c');
+
 query TT
-WITH t (x) AS (VALUES ('a'), ('b'), ('b'), ('c'), ('c'))
 SELECT lag(x) OVER (ORDER BY x DESC), x FROM t
 ORDER BY x, lag
 ----
@@ -643,8 +875,16 @@ c     b
 c     c
 NULL  c
 
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t(x string, y int);
+
+statement ok
+INSERT INTO t VALUES ('a', 98), ('b', 99), ('c', 98);
+
 query TT
-WITH t (x, y) AS (VALUES ('a', 98), ('b', 99), ('c', 98))
 SELECT lag(x) OVER (PARTITION BY y ORDER BY x), x FROM t
 ORDER BY x, lag
 ----
@@ -652,8 +892,10 @@ NULL  a
 NULL  b
 a     c
 
+statement ok
+INSERT INTO t VALUES ('a', 98), ('a', 99);
+
 query TT
-WITH t (x, y) AS (VALUES ('a', 98), ('b', 99), ('c', 98), ('a', 98), ('a', 99))
 SELECT lag(x) OVER (PARTITION BY y ORDER BY x), x FROM t
 ORDER BY x, lag
 ----
@@ -663,8 +905,16 @@ NULL  a
 a     b
 a     c
 
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t(x string, y int);
+
+statement ok
+INSERT INTO t VALUES ('a', 1), ('b', 2), ('c', 1);
+
 query TT
-WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
 SELECT lag(x) OVER (PARTITION BY y ORDER BY x DESC), x FROM t
 ORDER BY x, lag
 ----
@@ -673,7 +923,6 @@ NULL  b
 NULL  c
 
 query TT
-WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
 SELECT lag(x) OVER (PARTITION BY x ORDER BY x), x FROM t
 ORDER BY x, lag
 ----
@@ -682,7 +931,6 @@ NULL  b
 NULL  c
 
 query TT
-WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
 SELECT lag(a1.x) OVER (PARTITION BY NULL ORDER BY 10000) AS q, a1.x
 FROM t AS a1, t AS a2
 ORDER BY q DESC, a1.x DESC
@@ -697,8 +945,16 @@ a     b
 a     a
 a     a
 
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t(f1 int, f2 string, f3 numeric);
+
+statement ok
+INSERT INTO t VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0);
+
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lag(f1) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lag
@@ -715,7 +971,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lag
 3  a  1  2
 
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lag(f1, 1) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lag
@@ -732,7 +987,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lag
 3  a  1  2
 
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lag(f1, 1, NULL) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lag
@@ -751,7 +1005,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lag
 
 # With default value
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lag(f1, 1, -1) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lag
@@ -769,7 +1022,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lag
 
 # Complex expressions
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lag(f1 + coalesce(nullif(f3, 'NaN'), -10)) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lag
@@ -787,7 +1039,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lag
 
 # Nulls in the first argument
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lag(NULL::int) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lag
@@ -804,7 +1055,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lag
 3  a  1  NULL
 
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lag(nullif(f1, 4)) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lag
@@ -822,7 +1072,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lag
 
 # Nulls in the first argument with a default value in the third argument
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lag(NULL::int, 0) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lag
@@ -841,7 +1090,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lag
 
 # Zero offset
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lag(f1, 0) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lag
@@ -858,7 +1106,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lag
 3  a  1  3
 
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lag(f1 + f3, 0) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lag
@@ -876,7 +1123,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lag
 
 # Positive offsets
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lag(f1, 2) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lag
@@ -893,7 +1139,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lag
 3  a  1  2
 
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lag(f1 + f3, 2) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lag
@@ -912,7 +1157,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lag
 # Out of range positive offsets
 
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lag(f1, 10) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lag
@@ -929,7 +1173,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lag
 3  a  1  NULL
 
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lag(f1 + f3, 10) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lag
@@ -946,7 +1189,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lag
 3  a  1  NULL
 
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lag(f1 + f3, 10, 0) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lag
@@ -964,7 +1206,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lag
 
 # Negative offsets
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lag(f1, -1) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lag
@@ -981,7 +1222,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lag
 3  a  1  NULL
 
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lag(f1 + f3, -1) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lag
@@ -998,7 +1238,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lag
 3  a  1  NULL
 
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lag(f1 + f3, -2) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lag
@@ -1016,7 +1255,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lag
 
 # Out of range negative offsets
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lag(f1, -10) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lag
@@ -1033,7 +1271,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lag
 3  a  1  NULL
 
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lag(f1 + f3, -10) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lag
@@ -1050,7 +1287,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lag
 3  a  1  NULL
 
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lag(f1, -10, 0) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lag
@@ -1068,7 +1304,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lag
 
 # Variable per row offsets
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lag(f1, f1) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lag
@@ -1085,7 +1320,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lag
 3  a  1  1
 
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lag(f1, f1 - 1) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lag
@@ -1104,7 +1338,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lag
 
 # Null offsets
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lag(f1, NULL) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lag
@@ -1121,7 +1354,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lag
 3  a  1  NULL
 
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lag(f1, nullif(f1, 1)) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lag
@@ -1139,7 +1371,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lag
 
 # Null offset with default value
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lag(f1, NULL, -10) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lag
@@ -1157,7 +1388,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lag
 
 # Variable per row default value
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lag(f1, 1, f3) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lag
@@ -1173,10 +1403,18 @@ ORDER BY f2 DESC, f3 DESC, f1, lag
 2  a  1  2
 3  a  1  2
 
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t(f1 int, f2 int);
+
+statement ok
+INSERT INTO t VALUES (1, 2), (1, 2), (3, 4);
+
 # reduce_elision code path
 # Default offset
 query II
-WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
 SELECT f1, lag(f1) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
 ----
@@ -1184,7 +1422,6 @@ FROM (SELECT DISTINCT f1, f2 FROM t) q
 3  NULL
 
 query II
-WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
 SELECT f1, lag(f1, 1) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
 ----
@@ -1193,7 +1430,6 @@ FROM (SELECT DISTINCT f1, f2 FROM t) q
 
 # Zero offset
 query II
-WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
 SELECT f1, lag(f1, 0) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
 ----
@@ -1202,7 +1438,6 @@ FROM (SELECT DISTINCT f1, f2 FROM t) q
 
 # Negative offset
 query II
-WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
 SELECT f1, lag(f1, -1) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
 ----
@@ -1211,7 +1446,6 @@ FROM (SELECT DISTINCT f1, f2 FROM t) q
 
 # Default value with offset 1
 query II
-WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
 SELECT f1, lag(f1, 1, 10) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
 ----
@@ -1220,7 +1454,6 @@ FROM (SELECT DISTINCT f1, f2 FROM t) q
 
 # Default value with offset 0
 query II
-WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
 SELECT f1, lag(f1, 0, 10) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
 ----
@@ -1229,7 +1462,6 @@ FROM (SELECT DISTINCT f1, f2 FROM t) q
 
 # Complex expression
 query II
-WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
 SELECT f1, lag(f1 * f2, 0, 10) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
 ----
@@ -1237,7 +1469,6 @@ FROM (SELECT DISTINCT f1, f2 FROM t) q
 3  12
 
 query II
-WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
 SELECT f1, lag(f1 * f2, 1, f1 * f2 + 1) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
 ----
@@ -1246,7 +1477,6 @@ FROM (SELECT DISTINCT f1, f2 FROM t) q
 
 # Complex offset
 query II
-WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
 SELECT f1, lag(f1 * f2, f1 - f1) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
 ----
@@ -1254,7 +1484,6 @@ FROM (SELECT DISTINCT f1, f2 FROM t) q
 3  12
 
 query II
-WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
 SELECT f1, lag(f1 * f2, f1 - 1) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
 ----
@@ -1262,7 +1491,6 @@ FROM (SELECT DISTINCT f1, f2 FROM t) q
 1  2
 
 query II
-WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
 SELECT f1, lag(f1 * f2, f2 - 2 * f1, f2) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
 ----
@@ -1271,7 +1499,6 @@ FROM (SELECT DISTINCT f1, f2 FROM t) q
 
 # Complex default value
 query II
-WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
 SELECT f1, lag(f1, 0, f1 * f2) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
 ----
@@ -1279,7 +1506,6 @@ FROM (SELECT DISTINCT f1, f2 FROM t) q
 3  3
 
 query II
-WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
 SELECT f1, lag(f1, 1, f1 * f2) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
 ----
@@ -1303,9 +1529,17 @@ NULL NULL
 
 ## lead
 
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t(x string);
+
+statement ok
+INSERT INTO t VALUES ('a'), ('b'), ('c');
+
 # Simple cases
 query TT
-WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
 SELECT lead(x) OVER (ORDER BY x), x FROM t
 ORDER BY x, lead
 ----
@@ -1313,8 +1547,10 @@ b     a
 c     b
 NULL  c
 
+statement ok
+INSERT INTO t VALUES ('b');
+
 query TT
-WITH t (x) AS (VALUES ('a'), ('b'), ('b'), ('c'))
 SELECT lead(x) OVER (ORDER BY x), x FROM t
 ORDER BY x, lead
 ----
@@ -1323,8 +1559,10 @@ b     b
 c     b
 NULL  c
 
+statement ok
+INSERT INTO t VALUES ('c');
+
 query TT
-WITH t (x) AS (VALUES ('a'), ('b'), ('b'), ('c'), ('c'))
 SELECT lead(x) OVER (ORDER BY x), x FROM t
 ORDER BY x, lead
 ----
@@ -1334,8 +1572,16 @@ c     b
 c     c
 NULL  c
 
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t(x string);
+
+statement ok
+INSERT INTO t VALUES ('a'), ('b'), ('c');
+
 query TT
-WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
 SELECT lead(x) OVER (ORDER BY x DESC), x FROM t
 ORDER BY x, lead
 ----
@@ -1343,8 +1589,10 @@ NULL  a
 a     b
 b     c
 
+statement ok
+INSERT INTO t VALUES ('b');
+
 query TT
-WITH t (x) AS (VALUES ('a'), ('b'), ('b'), ('c'))
 SELECT lead(x) OVER (ORDER BY x DESC), x FROM t
 ORDER BY x, lead
 ----
@@ -1353,8 +1601,10 @@ a     b
 b     b
 b     c
 
+statement ok
+INSERT INTO t VALUES ('c');
+
 query TT
-WITH t (x) AS (VALUES ('a'), ('b'), ('b'), ('c'), ('c'))
 SELECT lead(x) OVER (ORDER BY x DESC), x FROM t
 ORDER BY x, lead
 ----
@@ -1364,8 +1614,16 @@ b     b
 b     c
 c     c
 
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t(x string, y int);
+
+statement ok
+INSERT INTO t VALUES ('a', 98), ('b', 99), ('c', 98);
+
 query TT
-WITH t (x, y) AS (VALUES ('a', 98), ('b', 99), ('c', 98))
 SELECT lead(x) OVER (PARTITION BY y ORDER BY x), x FROM t
 ORDER BY x, lead
 ----
@@ -1373,8 +1631,10 @@ c     a
 NULL  b
 NULL  c
 
+statement ok
+INSERT INTO t VALUES ('a', 98), ('a', 99);
+
 query TT
-WITH t (x, y) AS (VALUES ('a', 98), ('b', 99), ('c', 98), ('a', 98), ('a', 99))
 SELECT lead(x) OVER (PARTITION BY y ORDER BY x), x FROM t
 ORDER BY x, lead
 ----
@@ -1384,8 +1644,16 @@ c  a
 NULL  b
 NULL  c
 
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t(x string, y int);
+
+statement ok
+INSERT INTO t VALUES ('a', 1), ('b', 2), ('c', 1);
+
 query TT
-WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
 SELECT lead(x) OVER (PARTITION BY y ORDER BY x DESC), x FROM t
 ORDER BY x, lead
 ----
@@ -1394,7 +1662,6 @@ NULL  b
 a     c
 
 query TT
-WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
 SELECT lead(x) OVER (PARTITION BY x ORDER BY x), x FROM t
 ORDER BY x, lead
 ----
@@ -1403,7 +1670,6 @@ NULL  b
 NULL  c
 
 query TT
-WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
 SELECT lead(a1.x) OVER (PARTITION BY NULL ORDER BY 10000) AS q, a1.x
 FROM t AS a1, t AS a2
 ORDER BY q DESC, a1.x DESC
@@ -1418,8 +1684,16 @@ b     a
 a     a
 a     a
 
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t(f1 int, f2 string, f3 numeric);
+
+statement ok
+INSERT INTO t VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0);
+
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lead(f1) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lead
@@ -1436,7 +1710,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lead
 3  a  1    NULL
 
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lead(f1, 1) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lead
@@ -1453,7 +1726,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lead
 3  a  1    NULL
 
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lead(f1, 1, NULL) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lead
@@ -1472,7 +1744,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lead
 
 # With default value
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lead(f1, 1, -1) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lead
@@ -1490,7 +1761,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lead
 
 # Complex expressions
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lead(f1 + coalesce(nullif(f3, 'NaN'), -10)) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lead
@@ -1508,7 +1778,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lead
 
 # Nulls in the first argument
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lead(NULL::int) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lead
@@ -1525,7 +1794,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lead
 3  a  1    NULL
 
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lead(nullif(f1, 4)) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lead
@@ -1543,7 +1811,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lead
 
 # Nulls in the first argument with a default value in the third argument
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lead(NULL::int, 0) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lead
@@ -1562,7 +1829,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lead
 
 # Zero offset
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lead(f1, 0) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lead
@@ -1579,7 +1845,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lead
 3  a  1    3
 
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lead(f1 + f3, 0) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lead
@@ -1597,7 +1862,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lead
 
 # Positive offsets
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lead(f1, 2) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lead
@@ -1614,7 +1878,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lead
 3  a  1    NULL
 
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lead(f1 + f3, 2) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lead
@@ -1633,7 +1896,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lead
 # Out of range positive offsets
 
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lead(f1, 10) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lead
@@ -1650,7 +1912,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lead
 3  a  1    NULL
 
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lead(f1 + f3, 10) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lead
@@ -1667,7 +1928,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lead
 3  a  1    NULL
 
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lead(f1 + f3, 10, 0) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lead
@@ -1685,7 +1945,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lead
 
 # Negative offsets
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lead(f1, -1) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lead
@@ -1702,7 +1961,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lead
 3  a  1  2
 
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lead(f1 + f3, -1) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lead
@@ -1719,7 +1977,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lead
 3  a  1  3
 
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lead(f1 + f3, -2) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lead
@@ -1737,7 +1994,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lead
 
 # Out of range negative offsets
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lead(f1, -10) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lead
@@ -1754,7 +2010,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lead
 3  a  1  NULL
 
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lead(f1 + f3, -10) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lead
@@ -1771,7 +2026,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lead
 3  a  1  NULL
 
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lead(f1, -10, 0) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lead
@@ -1789,7 +2043,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lead
 
 # Variable per row offsets
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lead(f1, f1) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lead
@@ -1806,7 +2059,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lead
 3  a  1  NULL
 
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lead(f1, f1 - 1) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lead
@@ -1825,7 +2077,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lead
 
 # Null offsets
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lead(f1, NULL) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lead
@@ -1842,7 +2093,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lead
 3  a  1  NULL
 
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lead(f1, nullif(f1, 1)) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lead
@@ -1860,7 +2110,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lead
 
 # Null offset with default value
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lead(f1, NULL, -10) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lead
@@ -1878,7 +2127,6 @@ ORDER BY f2 DESC, f3 DESC, f1, lead
 
 # Variable per row default value
 query ITTT
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0), (7, 'd', -5.0))
 SELECT f1, f2, f3, lead(f1, 1, f3) OVER (PARTITION BY f2 ORDER BY f3 DESC, f1)
 FROM t
 ORDER BY f2 DESC, f3 DESC, f1, lead
@@ -1894,10 +2142,18 @@ ORDER BY f2 DESC, f3 DESC, f1, lead
 2  a  1  3
 3  a  1  1
 
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t(f1 int, f2 int);
+
+statement ok
+INSERT INTO t VALUES (1, 2), (1, 2), (3, 4);
+
 # reduce_elision code path
 # Default offset
 query II
-WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
 SELECT f1, lead(f1) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
 ORDER BY 1, 2
@@ -1906,7 +2162,6 @@ ORDER BY 1, 2
 3  NULL
 
 query II
-WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
 SELECT f1, lead(f1, 1) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
 ORDER BY 1, 2
@@ -1916,7 +2171,6 @@ ORDER BY 1, 2
 
 # Zero offset
 query II
-WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
 SELECT f1, lead(f1, 0) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
 ORDER BY 1, 2
@@ -1926,7 +2180,6 @@ ORDER BY 1, 2
 
 # Negative offset
 query II
-WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
 SELECT f1, lead(f1, -1) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
 ORDER BY 1, 2
@@ -1936,7 +2189,6 @@ ORDER BY 1, 2
 
 # Default value with offset 1
 query II
-WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
 SELECT f1, lead(f1, 1, 10) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
 ORDER BY 1, 2
@@ -1946,7 +2198,6 @@ ORDER BY 1, 2
 
 # Default value with offset 0
 query II
-WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
 SELECT f1, lead(f1, 0, 10) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
 ORDER BY 1, 2
@@ -1956,7 +2207,6 @@ ORDER BY 1, 2
 
 # Complex expression
 query II
-WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
 SELECT f1, lead(f1 * f2, 0, 10) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
 ORDER BY 1, 2
@@ -1965,7 +2215,6 @@ ORDER BY 1, 2
 3  12
 
 query II
-WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
 SELECT f1, lead(f1 * f2, 1, f1 * f2 + 1) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
 ORDER BY 1, 2
@@ -1975,7 +2224,6 @@ ORDER BY 1, 2
 
 # Complex offset
 query II
-WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
 SELECT f1, lead(f1 * f2, f1 - f1) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
 ORDER BY 1, 2
@@ -1984,7 +2232,6 @@ ORDER BY 1, 2
 3  12
 
 query II
-WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
 SELECT f1, lead(f1 * f2, f1 - 1) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
 ORDER BY 1, 2
@@ -1993,7 +2240,6 @@ ORDER BY 1, 2
 3  NULL
 
 query II
-WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
 SELECT f1, lead(f1 * f2, f2 - 2 * f1, f2) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
 ORDER BY 1, 2
@@ -2003,7 +2249,6 @@ ORDER BY 1, 2
 
 # Complex default value
 query II
-WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
 SELECT f1, lead(f1, 0, f1 * f2) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
 ORDER BY 1, 2
@@ -2012,7 +2257,6 @@ ORDER BY 1, 2
 3  3
 
 query II
-WITH t (f1, f2) AS (VALUES (1, 2), (1, 2), (3, 4))
 SELECT f1, lead(f1, 1, f1 * f2) OVER (PARTITION BY f1, f2)
 FROM (SELECT DISTINCT f1, f2 FROM t) q
 ORDER BY 1, 2
@@ -2043,7 +2287,7 @@ create table t6(x int, y int);
 statement ok
 insert into t6 values (1,2), (3,null), (5,6), (7,8), (9, null), (11, null), (13, 14), (15, 16), (17, 18);
 
-query IIIIIIIIIIIIIII
+query IIIIIIIIIIIIIIIIIIII
 select
   x,
   y,
@@ -2059,23 +2303,28 @@ select
   lag(y, 2, -1) ignore nulls over (order by x) as lag2_ign_def,
   lead(y, 2, -1) ignore nulls over (order by x) as lead2_ign_def,
   lag(y, 2, 16) ignore nulls over (order by x) as lag2_ign_def16,
-  lead(y, 2, 16) ignore nulls over (order by x) as lead2_ign_def16
+  lead(y, 2, 16) ignore nulls over (order by x) as lead2_ign_def16,
+  lag(y, -1, 100) ignore nulls over (order by x) as lag_neg_offset,
+  lead(y, -2, 100) ignore nulls over (order by x) as lead_neg_offset,
+  lag(y, y/5+1) ignore nulls over (order by x) as lag_dynamic_offset,
+  lead(y, y/5+1) ignore nulls over (order by x) as lead_dynamic_offset,
+  lag(y, null) ignore nulls over (order by x) as lag_literal_null_offset
 from t6
 order by x;
 ----
-1  2  NULL  NULL  NULL  NULL  6  NULL  NULL  6  8  -1  8  16  8
-3  NULL  2  2  2  6  6  NULL  NULL  8  8  -1  8  16  8
-5  6  NULL  NULL  2  8  8  2  NULL  NULL  14  -1  14  16  14
-7  8  6  6  6  NULL  14  NULL  2  NULL  16  2  16  2  16
-9  NULL  8  8  8  NULL  14  6  6  14  16  6  16  6  16
-11  NULL  NULL  NULL  8  14  14  8  6  16  16  6  16  6  16
-13  14  NULL  NULL  8  16  16  NULL  6  18  18  6  18  6  18
-15  16  14  14  14  18  18  NULL  8  NULL  NULL  8  -1  8  16
-17  18  16  16  16  NULL  NULL  14  14  NULL  NULL  14  -1  14  16
+1  2  NULL  NULL  NULL  NULL  6  NULL  NULL  6  8  -1  8  16  8  6  100  NULL  6  NULL
+3  NULL  2  2  2  6  6  NULL  NULL  8  8  -1  8  16  8  6  100  NULL  NULL  NULL
+5  6  NULL  NULL  2  8  8  2  NULL  NULL  14  -1  14  16  14  8  100  NULL  14  NULL
+7  8  6  6  6  NULL  14  NULL  2  NULL  16  2  16  2  16  14  2  2  16  NULL
+9  NULL  8  8  8  NULL  14  6  6  14  16  6  16  6  16  14  6  NULL  NULL  NULL
+11  NULL  NULL  NULL  8  14  14  8  6  16  16  6  16  6  16  14  6  NULL  NULL  NULL
+13  14  NULL  NULL  8  16  16  NULL  6  18  18  6  18  6  18  16  6  2  NULL  NULL
+15  16  14  14  14  18  18  NULL  8  NULL  NULL  8  -1  8  16  18  8  2  NULL  NULL
+17  18  16  16  16  NULL  NULL  14  14  NULL  NULL  14  -1  14  16  100  14  6  NULL  NULL
 
 # Same as above, but with a `partition by`
 
-query IIIIIIIIIIIIIII
+query IIIIIIIIIIIIIIIIIIII
 select
   x,
   y,
@@ -2091,19 +2340,87 @@ select
   lag(y, 2, -1) ignore nulls over (partition by x%4 order by x) as lag2_ign_def,
   lead(y, 2, -1) ignore nulls over (partition by x%4 order by x) as lead2_ign_def,
   lag(y, 2, 16) ignore nulls over (partition by x%4 order by x) as lag2_ign_def16,
-  lead(y, 2, 16) ignore nulls over (partition by x%4 order by x) as lead2_ign_def16
+  lead(y, 2, 16) ignore nulls over (partition by x%4 order by x) as lead2_ign_def16,
+  lag(y, -1, 100) ignore nulls over (partition by x%4 order by x) as lag_neg_offset,
+  lead(y, -2, 100) ignore nulls over (partition by x%4 order by x) as lead_neg_offset,
+  lag(y, y/5+1) ignore nulls over (partition by x%4 order by x) as lag_dynamic_offset,
+  lead(y, y/5+1) ignore nulls over (partition by x%4 order by x) as lead_dynamic_offset,
+  lag(y, null) ignore nulls over (partition by x%4 order by x) as lag_literal_null_offset
 from t6
 order by x%4, x;
 ----
-1  2  NULL  NULL  NULL  6  6  NULL  NULL  NULL  14  -1  14  16  14
-5  6  2  2  2  NULL  14  NULL  NULL  14  18  -1  18  16  18
-9  NULL  6  6  6  14  14  2  2  18  18  2  18  2  18
-13  14  NULL  NULL  6  18  18  6  2  NULL  NULL  2  -1  2  16
-17  18  14  14  14  NULL  NULL  NULL  6  NULL  NULL  6  -1  6  16
-3  NULL  NULL  NULL  NULL  8  8  NULL  NULL  NULL  16  -1  16  16  16
-7  8  NULL  NULL  NULL  NULL  16  NULL  NULL  16  NULL  -1  -1  16  16
-11  NULL  8  8  8  16  16  NULL  NULL  NULL  NULL  -1  -1  16  16
-15  16  NULL  NULL  8  NULL  NULL  8  NULL  NULL  NULL  -1  -1  16  16
+1  2  NULL  NULL  NULL  6  6  NULL  NULL  NULL  14  -1  14  16  14  6  100  NULL  6  NULL
+5  6  2  2  2  NULL  14  NULL  NULL  14  18  -1  18  16  18  14  100  NULL  18  NULL
+9  NULL  6  6  6  14  14  2  2  18  18  2  18  2  18  14  2  NULL  NULL  NULL
+13  14  NULL  NULL  6  18  18  6  2  NULL  NULL  2  -1  2  16  18  2  NULL  NULL  NULL
+17  18  14  14  14  NULL  NULL  NULL  6  NULL  NULL  6  -1  6  16  100  6  NULL  NULL  NULL
+3  NULL  NULL  NULL  NULL  8  8  NULL  NULL  NULL  16  -1  16  16  16  8  100  NULL  NULL  NULL
+7  8  NULL  NULL  NULL  NULL  16  NULL  NULL  16  NULL  -1  -1  16  16  16  100  NULL  NULL  NULL
+11  NULL  8  8  8  16  16  NULL  NULL  NULL  NULL  -1  -1  16  16  16  100  NULL  NULL  NULL
+15  16  NULL  NULL  8  NULL  NULL  8  NULL  NULL  NULL  -1  -1  16  16  100  100  NULL  NULL  NULL
+
+statement ok
+CREATE VIEW t6_more_nulls AS
+SELECT
+  x,
+  CASE WHEN y < 15 AND y > 7 THEN null ELSE y END AS y
+FROM t6;
+
+query IIIIIIII
+select
+  x,
+  y,
+  lag(y) ignore nulls over (order by x) as lag1,
+  lag(y,2) ignore nulls over (order by x) as lag2,
+  lag(y,3) ignore nulls over (order by x) as lag3,
+  lead(y) ignore nulls over (order by x) as lead1,
+  lead(y,2) ignore nulls over (order by x) as lead2,
+  lead(y,3) ignore nulls over (order by x) as lead3
+from t6_more_nulls
+order by x;
+----
+1  2  NULL  NULL  NULL  6  16  18
+3  NULL  2  NULL  NULL  6  16  18
+5  6  2  NULL  NULL  16  18  NULL
+7  NULL  6  2  NULL  16  18  NULL
+9  NULL  6  2  NULL  16  18  NULL
+11  NULL  6  2  NULL  16  18  NULL
+13  NULL  6  2  NULL  16  18  NULL
+15  16  6  2  NULL  18  NULL  NULL
+17  18  16  6  2  NULL  NULL  NULL
+
+# Test the `offset = 0` code path. This currently doesn't work with nulls if IGNORE NULLS is specified,
+# so we just filter out nulls for now.
+# See https://materializeinc.slack.com/archives/C063H5S7NKE/p1724962369706729
+# Also tests negative dynamic offsets.
+statement ok
+CREATE VIEW t6_no_nulls AS
+SELECT
+  x,
+  COALESCE(y,-11) AS y
+FROM t6;
+
+query IIIIIII
+SELECT
+  x,
+  y,
+  y/10,
+  lag(y, y/10) OVER (ORDER BY x),
+  lag(y, y/10) IGNORE NULLS OVER (ORDER BY x),
+  lead(y, y/10) OVER (ORDER BY x),
+  lead(y, y/10) IGNORE NULLS OVER (ORDER BY x)
+FROM t6_no_nulls
+ORDER BY x;
+----
+1  2  0  2  2  2  2
+3  -11  -1  6  6  2  2
+5  6  0  6  6  6  6
+7  8  0  8  8  8  8
+9  -11  -1  -11  -11  8  8
+11  -11  -1  14  14  -11  -11
+13  14  1  -11  -11  16  16
+15  16  1  14  14  18  18
+17  18  1  16  16  NULL  NULL
 
 query error db error: ERROR: IGNORE NULLS and RESPECT NULLS options for functions other than LAG and LEAD not yet supported
 select first_value(x) ignore nulls over() from t6;
@@ -2249,9 +2566,17 @@ SELECT row_number() OVER (GROUPS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING)
 
 ## first_value
 
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t(f1 int, f2 string, f3 int);
+
+statement ok
+INSERT INTO t VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10);
+
 # Default frame (RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2269,7 +2594,6 @@ ORDER BY f2, f3, f1, first_value
 
 # ROWS BETWEEN UNBOUNDED PRECEDING AND x PRECEDING
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN UNBOUNDED PRECEDING AND 0 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2286,7 +2610,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2303,7 +2626,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  NULL
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN UNBOUNDED PRECEDING AND 2 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2320,7 +2642,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  NULL
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN UNBOUNDED PRECEDING AND 10 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2338,7 +2659,6 @@ ORDER BY f2, f3, f1, first_value
 
 # ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2356,7 +2676,6 @@ ORDER BY f2, f3, f1, first_value
 
 # ROWS BETWEEN UNBOUNDED PRECEDING AND x FOLLOWING
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN UNBOUNDED PRECEDING AND 0 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2373,7 +2692,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2390,7 +2708,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN UNBOUNDED PRECEDING AND 2 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2407,7 +2724,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN UNBOUNDED PRECEDING AND 10 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2425,7 +2741,6 @@ ORDER BY f2, f3, f1, first_value
 
 # ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2443,7 +2758,6 @@ ORDER BY f2, f3, f1, first_value
 
 # ROWS BETWEEN 0 PRECEDING AND x PRECEDING
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 0 PRECEDING AND 1 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2460,7 +2774,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  NULL
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 0 PRECEDING AND 2 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2477,7 +2790,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  NULL
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 0 PRECEDING AND 10 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2495,7 +2807,6 @@ ORDER BY f2, f3, f1, first_value
 
 # ROWS BETWEEN x PRECEDING AND 0 PRECEDING
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 1 PRECEDING AND 0 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2512,7 +2823,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 2 PRECEDING AND 0 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2529,7 +2839,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 10 PRECEDING AND 0 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2547,7 +2856,6 @@ ORDER BY f2, f3, f1, first_value
 
 # ROWS BETWEEN x PRECEDING AND y PRECEDING, where x < y
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 0 PRECEDING AND 1 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2564,7 +2872,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  NULL
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 1 PRECEDING AND 2 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2582,7 +2889,6 @@ ORDER BY f2, f3, f1, first_value
 
 # ROWS BETWEEN x PRECEDING AND y PRECEDING, where x > y
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 1 PRECEDING AND 0 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2599,7 +2905,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2617,7 +2922,6 @@ ORDER BY f2, f3, f1, first_value
 
 # ROWS BETWEEN x PRECEDING AND y PRECEDING, where x == y
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 0 PRECEDING AND 0 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2634,7 +2938,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2651,7 +2954,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  NULL
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 2 PRECEDING AND 2 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2668,7 +2970,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  NULL
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 10 PRECEDING AND 10 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2686,7 +2987,6 @@ ORDER BY f2, f3, f1, first_value
 
 # ROWS BETWEEN x PRECEDING AND CURRENT ROW
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 0 PRECEDING AND CURRENT ROW)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2703,7 +3003,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2720,7 +3019,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2737,7 +3035,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 10 PRECEDING AND CURRENT ROW)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2756,7 +3053,6 @@ ORDER BY f2, f3, f1, first_value
 # ROWS BETWEEN x PRECEDING AND x FOLLOWING
 # Equivalent to ROWS BETWEEN x PRECEDING AND CURRENT ROW for first_value
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 0 PRECEDING AND 1 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2773,7 +3069,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2790,7 +3085,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2807,7 +3101,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 10 PRECEDING AND 1 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2826,7 +3119,6 @@ ORDER BY f2, f3, f1, first_value
 # ROWS BETWEEN x PRECEDING AND UNBOUNDED FOLLOWING
 # Equivalent to ROWS BETWEEN x PRECEDING AND CURRENT ROW for first_value
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 0 PRECEDING AND UNBOUNDED FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2843,7 +3135,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2860,7 +3151,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 2 PRECEDING AND UNBOUNDED FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2877,7 +3167,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 10 PRECEDING AND UNBOUNDED FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2896,7 +3185,6 @@ ORDER BY f2, f3, f1, first_value
 # ROWS BETWEEN CURRENT ROW AND CURRENT ROW
 # Always returns current row
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN CURRENT ROW AND CURRENT ROW)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2915,7 +3203,6 @@ ORDER BY f2, f3, f1, first_value
 # ROWS BETWEEN CURRENT ROW AND x FOLLOWING
 # Always returns current row
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN CURRENT ROW AND 0 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2932,7 +3219,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2949,7 +3235,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN CURRENT ROW AND 2 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2966,7 +3251,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN CURRENT ROW AND 10 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -2985,7 +3269,6 @@ ORDER BY f2, f3, f1, first_value
 # ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
 # Always returns current row
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -3003,7 +3286,6 @@ ORDER BY f2, f3, f1, first_value
 
 # ROWS BETWEEN 0 FOLLOWING AND x FOLLOWING
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 0 FOLLOWING AND 1 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -3020,7 +3302,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 0 FOLLOWING AND 2 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -3037,7 +3318,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 0 FOLLOWING AND 10 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -3055,7 +3335,6 @@ ORDER BY f2, f3, f1, first_value
 
 # ROWS BETWEEN x FOLLOWING AND 0 FOLLOWING
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 1 FOLLOWING AND 0 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -3072,7 +3351,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  NULL
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 2 FOLLOWING AND 0 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -3089,7 +3367,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  NULL
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 10 FOLLOWING AND 0 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -3107,7 +3384,6 @@ ORDER BY f2, f3, f1, first_value
 
 # ROWS BETWEEN x FOLLOWING AND y FOLLOWING, where x < y
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 0 FOLLOWING AND 1 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -3124,7 +3400,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 1 FOLLOWING AND 2 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -3142,7 +3417,6 @@ ORDER BY f2, f3, f1, first_value
 
 # ROWS BETWEEN x FOLLOWING AND y FOLLOWING, where x > y
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 1 FOLLOWING AND 0 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -3159,7 +3433,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  NULL
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 2 FOLLOWING AND 1 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -3177,7 +3450,6 @@ ORDER BY f2, f3, f1, first_value
 
 # ROWS BETWEEN x FOLLOWING AND y FOLLOWING, where x == y
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 0 FOLLOWING AND 0 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -3194,7 +3466,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 1 FOLLOWING AND 1 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -3211,7 +3482,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  NULL
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 2 FOLLOWING AND 2 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -3228,7 +3498,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  NULL
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 10 FOLLOWING AND 10 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -3246,7 +3515,6 @@ ORDER BY f2, f3, f1, first_value
 
 # ROWS BETWEEN x FOLLOWING AND UNBOUNDED FOLLOWING
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 0 FOLLOWING AND UNBOUNDED FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -3263,7 +3531,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -3280,7 +3547,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  NULL
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 2 FOLLOWING AND UNBOUNDED FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -3297,7 +3563,6 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  NULL
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 10 FOLLOWING AND UNBOUNDED FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -3315,22 +3580,70 @@ ORDER BY f2, f3, f1, first_value
 
 # Test offset limits
 query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 100 FOLLOWING AND 1000001 FOLLOWING)
+
+# Test near-overflow behavior on offsets
+# u64::MAX FOLLOWING
+query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 18446744073709551615 FOLLOWING AND 18446744073709551615 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
 
 query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1000001 PRECEDING AND 100 FOLLOWING)
+
+query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 18446744073709551614 FOLLOWING AND 18446744073709551615 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
 
 query error Expected literal unsigned integer, found operator "\-"
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 10 PRECEDING AND -1 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
+
+# u64::MAX PRECEDING
+query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 18446744073709551615 PRECEDING AND 18446744073709551615 PRECEDING)
+FROM t
+ORDER BY f2, f3, f1, first_value
+
+query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 18446744073709551615 PRECEDING AND 18446744073709551614 PRECEDING)
+FROM t
+ORDER BY f2, f3, f1, first_value
+
+query ITII
+SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 1000 PRECEDING AND 1000 PRECEDING)
+FROM t
+ORDER BY f2, f3, f1, first_value
+----
+1  a  1  NULL
+2  a  2  NULL
+2  a  3  NULL
+3  a  4  NULL
+4  b  5  NULL
+4  b  6  NULL
+1  c  7  NULL
+2  c  8  NULL
+3  c  9  NULL
+7  d  10  NULL
+
+query ITII
+SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 1000 PRECEDING AND 999 PRECEDING)
+FROM t
+ORDER BY f2, f3, f1, first_value
+----
+1  a  1  NULL
+2  a  2  NULL
+2  a  3  NULL
+3  a  4  NULL
+4  b  5  NULL
+4  b  6  NULL
+1  c  7  NULL
+2  c  8  NULL
+3  c  9  NULL
+7  d  10  NULL
 
 # reduce_elision code path
 statement ok
@@ -3555,7 +3868,6 @@ GROUP BY f1
 
 # Default frame (RANGE BETWEEN UNBOUNDED FOLLOWING AND CURRENT ROW)
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -3572,9 +3884,10 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  7
 
 # Default frame with large peer group
-# Warning: there are multiple valid results of this query
+# Note: there are multiple valid results of this query (because the default frame is up through the current row's last
+# ORDER BY peer, and the ordering among ORDER BY peers is unspecified), but we make the result stable by internally
+# always adding all remaining columns into our orderings.
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f3) OVER (PARTITION BY f2 ORDER BY f1)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -3592,7 +3905,6 @@ ORDER BY f2, f3, f1, last_value
 
 # ROWS BETWEEN x FOLLOWING AND UNBOUNDED FOLLOWING
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 0 FOLLOWING AND UNBOUNDED FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -3609,7 +3921,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -3626,7 +3937,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  NULL
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 2 FOLLOWING AND UNBOUNDED FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -3643,7 +3953,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  NULL
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 10 FOLLOWING AND UNBOUNDED FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -3661,7 +3970,6 @@ ORDER BY f2, f3, f1, last_value
 
 # ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -3679,7 +3987,6 @@ ORDER BY f2, f3, f1, last_value
 
 # ROWS BETWEEN x PRECEDING AND UNBOUNDED FOLLOWING
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 0 PRECEDING AND UNBOUNDED FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -3696,7 +4003,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -3713,7 +4019,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 2 PRECEDING AND UNBOUNDED FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -3730,7 +4035,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 10 PRECEDING AND UNBOUNDED FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -3748,7 +4052,6 @@ ORDER BY f2, f3, f1, last_value
 
 # ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -3766,7 +4069,6 @@ ORDER BY f2, f3, f1, last_value
 
 # ROWS BETWEEN x FOLLOWING AND 0 FOLLOWING
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 FOLLOWING AND 0 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -3783,7 +4085,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  NULL
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 2 FOLLOWING AND 0 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -3800,7 +4101,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  NULL
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 10 FOLLOWING AND 0 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -3818,7 +4118,6 @@ ORDER BY f2, f3, f1, last_value
 
 # ROWS BETWEEN 0 FOLLOWING AND x FOLLOWING
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 0 FOLLOWING AND 1 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -3835,7 +4134,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 0 FOLLOWING AND 2 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -3852,7 +4150,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 0 FOLLOWING AND 10 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -3870,7 +4167,6 @@ ORDER BY f2, f3, f1, last_value
 
 # ROWS BETWEEN y FOLLOWING AND x FOLLOWING, where x < y
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 FOLLOWING AND 0 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -3887,7 +4183,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  NULL
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 2 FOLLOWING AND 1 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -3905,7 +4200,6 @@ ORDER BY f2, f3, f1, last_value
 
 # ROWS BETWEEN y FOLLOWING AND x FOLLOWING, where x > y
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 0 FOLLOWING AND 1 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -3922,7 +4216,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 FOLLOWING AND 2 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -3940,7 +4233,6 @@ ORDER BY f2, f3, f1, last_value
 
 # ROWS BETWEEN x FOLLOWING AND y FOLLOWING, where x == y
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 0 FOLLOWING AND 0 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -3957,7 +4249,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 FOLLOWING AND 1 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -3974,7 +4265,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  NULL
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 2 FOLLOWING AND 2 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -3991,7 +4281,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  NULL
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 10 FOLLOWING AND 10 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4009,7 +4298,6 @@ ORDER BY f2, f3, f1, last_value
 
 # ROWS BETWEEN CURRENT ROW AND x FOLLOWING
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN CURRENT ROW AND 0 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4026,7 +4314,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4043,7 +4330,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN CURRENT ROW AND 2 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4060,7 +4346,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN CURRENT ROW AND 10 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4079,7 +4364,6 @@ ORDER BY f2, f3, f1, last_value
 # ROWS BETWEEN x PRECEDING AND x FOLLOWING
 # Equivalent to ROWS BETWEEN CURRENT ROW AND x FOLLOWING for last_value
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 PRECEDING AND 0 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4096,7 +4380,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4113,7 +4396,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 PRECEDING AND 2 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4130,7 +4412,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 PRECEDING AND 10 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4149,7 +4430,6 @@ ORDER BY f2, f3, f1, last_value
 # ROWS BETWEEN UNBOUNDED PRECEDING AND x FOLLOWING
 # Equivalent to ROWS BETWEEN CURRENT ROW AND x FOLLOWING for last_value
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN UNBOUNDED PRECEDING AND 0 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4166,7 +4446,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4183,7 +4462,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN UNBOUNDED PRECEDING AND 2 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4200,7 +4478,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN UNBOUNDED PRECEDING AND 10 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4219,7 +4496,6 @@ ORDER BY f2, f3, f1, last_value
 # ROWS BETWEEN CURRENT ROW AND CURRENT ROW
 # Always returns current row
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN CURRENT ROW AND CURRENT ROW)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4238,7 +4514,6 @@ ORDER BY f2, f3, f1, last_value
 # ROWS BETWEEN x PRECEDING AND CURRENT ROW
 # Always returns current row
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 0 PRECEDING AND CURRENT ROW)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4255,7 +4530,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4272,7 +4546,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4289,7 +4562,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 10 PRECEDING AND CURRENT ROW)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4308,7 +4580,6 @@ ORDER BY f2, f3, f1, last_value
 # ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
 # Always returns current row
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4326,7 +4597,6 @@ ORDER BY f2, f3, f1, last_value
 
 # ROWS BETWEEN x PRECEDING AND 0 PRECEDING
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 PRECEDING AND 0 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4343,7 +4613,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 2 PRECEDING AND 0 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4360,7 +4629,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 10 PRECEDING AND 0 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4378,7 +4646,6 @@ ORDER BY f2, f3, f1, last_value
 
 # ROWS BETWEEN 0 PRECEDING AND x PRECEDING
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 0 PRECEDING AND 1 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4395,7 +4662,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  NULL
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 0 PRECEDING AND 2 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4412,7 +4678,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  NULL
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 0 PRECEDING AND 10 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4430,7 +4695,6 @@ ORDER BY f2, f3, f1, last_value
 
 # ROWS BETWEEN y PRECEDING AND x PRECEDING, where x < y
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 PRECEDING AND 0 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4447,7 +4711,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4465,7 +4728,6 @@ ORDER BY f2, f3, f1, last_value
 
 # ROWS BETWEEN y PRECEDING AND x PRECEDING, where x > y
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 0 PRECEDING AND 1 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4482,7 +4744,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  NULL
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 PRECEDING AND 2 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4500,7 +4761,6 @@ ORDER BY f2, f3, f1, last_value
 
 # ROWS BETWEEN y PRECEDING AND x PRECEDING, where x == y
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 0 PRECEDING AND 0 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4517,7 +4777,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4534,7 +4793,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  NULL
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 2 PRECEDING AND 2 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4551,7 +4809,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  NULL
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 10 PRECEDING AND 10 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4569,7 +4826,6 @@ ORDER BY f2, f3, f1, last_value
 
 # ROWS BETWEEN UNBOUNDED PRECEDING AND x PRECEDING
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN UNBOUNDED PRECEDING AND 0 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4586,7 +4842,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  7
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4603,7 +4858,6 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  NULL
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN UNBOUNDED PRECEDING AND 2 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -4620,8 +4874,53 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  NULL
 
 query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN UNBOUNDED PRECEDING AND 10 PRECEDING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  NULL
+2  a  2  NULL
+2  a  3  NULL
+3  a  4  NULL
+4  b  5  NULL
+4  b  6  NULL
+1  c  7  NULL
+2  c  8  NULL
+3  c  9  NULL
+7  d  10  NULL
+
+# Test near-overflow behavior on offsets
+# u64::MAX FOLLOWING
+
+# u64::MAX PRECEDING
+query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 18446744073709551615 FOLLOWING AND 18446744073709551615 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+
+query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 18446744073709551614 FOLLOWING AND 18446744073709551615 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+
+query ITII
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1000 FOLLOWING AND 1000 FOLLOWING)
+FROM t
+ORDER BY f2, f3, f1, last_value
+----
+1  a  1  NULL
+2  a  2  NULL
+2  a  3  NULL
+3  a  4  NULL
+4  b  5  NULL
+4  b  6  NULL
+1  c  7  NULL
+2  c  8  NULL
+3  c  9  NULL
+7  d  10  NULL
+
+query ITII
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1000 FOLLOWING AND 1001 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
 ----
@@ -5204,7 +5503,7 @@ ORDER BY a;
 3  three  2
 
 # Window function inside CASE WHEN
-# Regression test for https://github.com/MaterializeInc/materialize/issues/20746
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/6250
 
 statement ok
 CREATE TABLE bools(cond bool, x int);
@@ -5670,6 +5969,12 @@ FROM (
 ORDER BY outer_a, outer_b;
 ----
 Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#2]
+  With
+    cte [l1 as subquery-1] =
+      Reduce aggregates=[sum(#0)]
+        Project (#3)
+          Map (lead(row(#0, 1, null)) over (partition by [((4 * #0) / (#^0 + char_length(#^1)))] order by [#0 asc nulls_last]), (3 + #2))
+            Get materialize.public.foo
   Return
     Map (select(Get l1))
       Distinct
@@ -5683,12 +5988,6 @@ Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#2]
           Project (#2, #1)
             Map ((#0 + 5))
               Get materialize.public.foo
-  With
-    cte l1 =
-      Reduce aggregates=[sum(#0)]
-        Project (#3)
-          Map (lead(row(#0, 1, null)) over (partition by [((4 * #0) / (#^0 + char_length(#^1)))] order by [#0 asc nulls_last]), (3 + #2))
-            Get materialize.public.foo
 
 Target cluster: quickstart
 
@@ -5727,7 +6026,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT
   sum(y-3) OVER (PARTITION BY 2*x, 3*y ORDER BY x+1, y+2 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
 FROM t7
@@ -5854,7 +6153,7 @@ FROM (SELECT DISTINCT ON(x) * FROM t7);
 # - count's null handling
 # - count(*)
 # - FILTER clause
-# - Aggregations functions that are transformed away by `transform_ast.rs`: bool_and, bool_or.
+# - Aggregation functions that are transformed away by `transform_ast.rs`: bool_and, bool_or.
 # These are all supported by Postgres, and the output should be identical.
 query IIIIIITIIIITT
 SELECT
@@ -5940,7 +6239,7 @@ NULL  3  NULL  {9,3,11}  {6,18,22}  18
 NULL  9  NULL  {9,11}  {18,22}  22
 NULL  11  NULL  {11}  {22}  NULL
 
-# https://github.com/MaterializeInc/materialize/issues/22015
+# https://github.com/MaterializeInc/database-issues/issues/6626
 query error db error: ERROR: DISTINCT in window aggregates not yet supported
 SELECT
   x-y,
@@ -6043,15 +6342,15 @@ ORDER BY x;
 ----
 1  2  2  2  2  {2}
 3  NULL  2  2  2  {2,NULL}
-5  6  8  6  2  {2,NULL,6}
-7  8  16  8  2  {2,NULL,6,8}
-9  NULL  16  8  2  {2,NULL,6,8,NULL}
-10  -50  -34  8  -50  {2,NULL,6,8,NULL,-50}
-10  -40  -74  8  -50  {2,NULL,6,8,NULL,-50,-40}
-11  NULL  -74  8  -50  {2,NULL,6,8,NULL,-50,-40,NULL}
-13  14  -60  14  -50  {2,NULL,6,8,NULL,-50,-40,NULL,14}
-15  16  -44  16  -50  {2,NULL,6,8,NULL,-50,-40,NULL,14,16}
-17  18  -26  18  -50  {2,NULL,6,8,NULL,-50,-40,NULL,14,16,18}
+5  6  8  6  2  {2,6,NULL}
+7  8  16  8  2  {2,6,8,NULL}
+9  NULL  16  8  2  {2,6,8,NULL,NULL}
+10  -50  -34  8  -50  {-50,2,6,8,NULL,NULL}
+10  -40  -74  8  -50  {-50,-40,2,6,8,NULL,NULL}
+11  NULL  -74  8  -50  {-50,-40,2,6,8,NULL,NULL,NULL}
+13  14  -60  14  -50  {-50,-40,2,6,8,14,NULL,NULL,NULL}
+15  16  -44  16  -50  {-50,-40,2,6,8,14,16,NULL,NULL,NULL}
+17  18  -26  18  -50  {-50,-40,2,6,8,14,16,18,NULL,NULL,NULL}
 
 statement ok
 CREATE TABLE t8(o1 INT, o2 INT, v INT);
@@ -6075,14 +6374,14 @@ ORDER BY o1, o2;
 ----
 1  1  -3  -5  -2  -3  {-3,-2}
 1  1  -2  -5  -2  -3  {-3,-2}
-1  2  -4  -9  -2  -4  {-3,-2,-4}
-1  3  -8  -24  -2  -8  {-3,-2,-4,-8,-7}
-1  3  -7  -24  -2  -8  {-3,-2,-4,-8,-7}
-2  1  -10  -34  -2  -10  {-3,-2,-4,-8,-7,-10}
-2  2  -1000  -3034  -2  -1000  {-3,-2,-4,-8,-7,-10,-1000,-1000,-1000}
-2  2  -1000  -3034  -2  -1000  {-3,-2,-4,-8,-7,-10,-1000,-1000,-1000}
-2  2  -1000  -3034  -2  -1000  {-3,-2,-4,-8,-7,-10,-1000,-1000,-1000}
-3  0  -100  -3134  -2  -1000  {-3,-2,-4,-8,-7,-10,-1000,-1000,-1000,-100}
+1  2  -4  -9  -2  -4  {-4,-3,-2}
+1  3  -8  -24  -2  -8  {-8,-7,-4,-3,-2}
+1  3  -7  -24  -2  -8  {-8,-7,-4,-3,-2}
+2  1  -10  -34  -2  -10  {-10,-8,-7,-4,-3,-2}
+2  2  -1000  -3034  -2  -1000  {-1000,-1000,-1000,-10,-8,-7,-4,-3,-2}
+2  2  -1000  -3034  -2  -1000  {-1000,-1000,-1000,-10,-8,-7,-4,-3,-2}
+2  2  -1000  -3034  -2  -1000  {-1000,-1000,-1000,-10,-8,-7,-4,-3,-2}
+3  0  -100  -3134  -2  -1000  {-1000,-1000,-1000,-100,-10,-8,-7,-4,-3,-2}
 
 query IIIIIIT
 SELECT
@@ -6098,13 +6397,13 @@ ORDER BY o1, o2;
 ----
 1  1  -3  -5  -2  -3  {-3,-2}
 1  1  -2  -5  -2  -3  {-3,-2}
-1  2  -4  -9  -2  -4  {-3,-2,-4}
-1  3  -8  -24  -2  -8  {-3,-2,-4,-8,-7}
-1  3  -7  -24  -2  -8  {-3,-2,-4,-8,-7}
+1  2  -4  -9  -2  -4  {-4,-3,-2}
+1  3  -8  -24  -2  -8  {-8,-7,-4,-3,-2}
+1  3  -7  -24  -2  -8  {-8,-7,-4,-3,-2}
 2  1  -10  -10  -10  -10  {-10}
-2  2  -1000  -3010  -10  -1000  {-10,-1000,-1000,-1000}
-2  2  -1000  -3010  -10  -1000  {-10,-1000,-1000,-1000}
-2  2  -1000  -3010  -10  -1000  {-10,-1000,-1000,-1000}
+2  2  -1000  -3010  -10  -1000  {-1000,-1000,-1000,-10}
+2  2  -1000  -3010  -10  -1000  {-1000,-1000,-1000,-10}
+2  2  -1000  -3010  -10  -1000  {-1000,-1000,-1000,-10}
 3  0  -100  -100  -100  -100  {-100}
 
 # ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
@@ -6121,14 +6420,14 @@ SELECT
 FROM t7
 ORDER BY x;
 ----
-1  2  -26  18  -50  {2,NULL,6,8,NULL,-50,-40,NULL,14,16,18}
-3  NULL  -28  18  -50  {NULL,6,8,NULL,-50,-40,NULL,14,16,18}
-5  6  -28  18  -50  {6,8,NULL,-50,-40,NULL,14,16,18}
-7  8  -34  18  -50  {8,NULL,-50,-40,NULL,14,16,18}
-9  NULL  -42  18  -50  {NULL,-50,-40,NULL,14,16,18}
-10  -40  -42  18  -50  {-40,NULL,14,16,18}
-10  -50  -2  18  -50  {-50,-40,NULL,14,16,18}
-11  NULL  48  18  14  {NULL,14,16,18}
+1  2  -26  18  -50  {-50,-40,2,6,8,14,16,18,NULL,NULL,NULL}
+3  NULL  -28  18  -50  {-50,-40,6,8,14,16,18,NULL,NULL,NULL}
+5  6  -28  18  -50  {-50,-40,6,8,14,16,18,NULL,NULL}
+7  8  -34  18  -50  {-50,-40,8,14,16,18,NULL,NULL}
+9  NULL  -42  18  -50  {-50,-40,14,16,18,NULL,NULL}
+10  -40  8  18  -40  {-40,14,16,18,NULL}
+10  -50  -42  18  -50  {-50,-40,14,16,18,NULL}
+11  NULL  48  18  14  {14,16,18,NULL}
 13  14  48  18  14  {14,16,18}
 15  16  34  18  16  {16,18}
 17  18  18  18  18  {18}
@@ -6223,13 +6522,13 @@ FROM t7
 ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END;
 ----
 10  -50  20  10  10  {10,10}
-10  -40  21  10  1  {10,10,1}
-1  2  24  10  1  {10,10,1,3}
-3  NULL  23  10  1  {10,1,3,9}
+10  -40  21  10  1  {1,10,10}
+1  2  24  10  1  {1,3,10,10}
+3  NULL  23  10  1  {1,3,9,10}
 9  NULL  24  11  1  {1,3,9,11}
-11  NULL  28  11  3  {3,9,11,5}
-5  6  32  11  5  {9,11,5,7}
-7  8  36  13  5  {11,5,7,13}
+11  NULL  28  11  3  {3,5,9,11}
+5  6  32  11  5  {5,7,9,11}
+7  8  36  13  5  {5,7,11,13}
 13  14  40  15  5  {5,7,13,15}
 15  16  52  17  7  {7,13,15,17}
 17  18  45  17  13  {13,15,17}
@@ -6246,11 +6545,11 @@ FROM t7
 ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END;
 ----
 10  -50  20  10  10  {10,10}
-10  -40  11  10  1  {10,1}
+10  -40  11  10  1  {1,10}
 1  2  4  3  1  {1,3}
 3  NULL  12  9  3  {3,9}
 9  NULL  20  11  9  {9,11}
-11  NULL  16  11  5  {11,5}
+11  NULL  16  11  5  {5,11}
 5  6  12  7  5  {5,7}
 7  8  20  13  7  {7,13}
 13  14  28  15  13  {13,15}
@@ -6322,12 +6621,12 @@ ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END;
 10  -50  NULL  NULL  NULL  NULL
 10  -40  10  10  10  {10}
 1  2  20  10  10  {10,10}
-3  NULL  21  10  1  {10,10,1}
-9  NULL  14  10  1  {10,1,3}
+3  NULL  21  10  1  {1,10,10}
+9  NULL  14  10  1  {1,3,10}
 11  NULL  13  9  1  {1,3,9}
 5  6  23  11  3  {3,9,11}
-7  8  25  11  5  {9,11,5}
-13  14  23  11  5  {11,5,7}
+7  8  25  11  5  {5,9,11}
+13  14  23  11  5  {5,7,11}
 15  16  25  13  5  {5,7,13}
 17  18  35  15  7  {7,13,15}
 
@@ -6345,8 +6644,8 @@ ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END;
 ----
 10  -50  13  9  1  {1,3,9}
 10  -40  23  11  3  {3,9,11}
-1  2  25  11  5  {9,11,5}
-3  NULL  23  11  5  {11,5,7}
+1  2  25  11  5  {5,9,11}
+3  NULL  23  11  5  {5,7,11}
 9  NULL  25  13  5  {5,7,13}
 11  NULL  35  15  7  {7,13,15}
 5  6  45  17  13  {13,15,17}
@@ -6577,12 +6876,17 @@ NULL  11  NULL  22  22  22  {22}
 # TODO: Add an optimization that eliminates a Map-FlatMap pair where the Map is just creating a 1-element list on which
 # the FlatMap is immediately calling `unnest_list`.
 query T multiline
-EXPLAIN WITH(keys)
+EXPLAIN OPTIMIZED PLAN WITH(keys) AS VERBOSE TEXT FOR
 SELECT
   sum(sum(x)) OVER ()
 FROM t7;
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[sum(#0)] // { keys: "([])" }
+        Project (#0) // { keys: "()" }
+          ReadStorage materialize.public.t7 // { keys: "()" }
   Return // { keys: "()" }
     Project (#2) // { keys: "()" }
       Map (record_get[0](#1)) // { keys: "()" }
@@ -6598,11 +6902,6 @@ Explained Query:
                         Get l0 // { keys: "([])" }
                     Constant // { keys: "([])" }
                       - ()
-  With
-    cte l0 =
-      Reduce aggregates=[sum(#0)] // { keys: "([])" }
-        Project (#0) // { keys: "()" }
-          ReadStorage materialize.public.t7 // { keys: "()" }
 
 Source materialize.public.t7
 
@@ -6632,7 +6931,7 @@ FROM t7;
 1
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_table_keys = true
+ALTER SYSTEM SET unsafe_enable_table_keys = true
 ----
 COMPLETE 0
 
@@ -6645,7 +6944,7 @@ INSERT INTO t9 VALUES (1,2), (3,null), (5,6), (7,8), (9, null), (11, null), (13,
 # Still testing `AggregateExpr::on_unique`. Here, the uniqueness constraint on the table makes `ReduceElision` call
 # `on_unique`. There should be 0 Reduce operations in the plan.
 query T multiline
-EXPLAIN WITH(keys)
+EXPLAIN OPTIMIZED PLAN WITH(keys) AS VERBOSE TEXT FOR
 SELECT
   sum(y) OVER (PARTITION BY x)
 FROM t9
@@ -6796,6 +7095,23 @@ NULL
 NULL
 NULL
 
+query II
+SELECT
+  count(y) OVER (PARTITION BY x ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING),
+  sum(y)   OVER (PARTITION BY x ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING)
+FROM t9
+ORDER BY x;
+----
+0 NULL
+0 NULL
+0 NULL
+0 NULL
+0 NULL
+0 NULL
+0 NULL
+0 NULL
+0 NULL
+
 query T
 SELECT
   array_agg(y) OVER (PARTITION BY x ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING)
@@ -6828,7 +7144,112 @@ NULL
 NULL
 NULL
 
-# Complex tests with array_agg and then unnesting the array
+# Test `on_unique` for lag/lead
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT
+  lag(x,y,100) OVER (PARTITION BY x ORDER BY y+y)
+FROM t9;
+----
+Explained Query:
+  Project (#2)
+    Map (record_get[0](#1))
+      FlatMap unnest_list(#0)
+        Project (#2)
+          Map (list[row(case when (#1) IS NULL then null else case when (#1 = 0) then #0 else 100 end end, row(#0, #1))])
+            ReadStorage materialize.public.t9
+
+Source materialize.public.t9
+
+Target cluster: quickstart
+
+EOF
+
+query I
+SELECT
+  lag(x,y,100) OVER (PARTITION BY x ORDER BY y+y)
+FROM t9;
+----
+NULL
+NULL
+NULL
+100
+100
+100
+100
+100
+100
+
+query I
+SELECT
+  lead(x,y-2,120) OVER (PARTITION BY x ORDER BY x)
+FROM t9;
+----
+NULL
+NULL
+NULL
+1
+120
+120
+120
+120
+120
+
+# Test `on_unique` for `FusedValueWindowFunc`. There should be NO window function call in the following plan.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT
+  x,
+  y,
+  lag(x,y,100)    OVER (PARTITION BY x ORDER BY y+y),
+  lag(x,y,110)    OVER (PARTITION BY x ORDER BY y+y),
+  lag(x,y,100)    OVER (PARTITION BY x ORDER BY y+y),
+  first_value(y)  OVER (PARTITION BY x ORDER BY y+y),
+  last_value(y)   OVER (PARTITION BY x ORDER BY y+y),
+  lead(x,y-2,120) OVER (PARTITION BY x ORDER BY y+y)
+FROM t9
+ORDER BY x;
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last] output=[#0..=#7]
+    Project (#3, #4, #9, #10, #9, #8, #7, #6)
+      Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[0](#1), record_get[0](#5), record_get[1](#5), record_get[2](#5), record_get[3](#5), record_get[4](#5))
+        FlatMap unnest_list(#0)
+          Project (#3)
+            Map ((#1) IS NULL, list[row(row(case when #2 then null else case when (0 = (#1 - 2)) then #0 else 120 end end, #1, #1, case when #2 then null else case when (#1 = 0) then #0 else 100 end end, case when #2 then null else case when (#1 = 0) then #0 else 110 end end), row(#0, #1))])
+              ReadStorage materialize.public.t9
+
+Source materialize.public.t9
+
+Target cluster: quickstart
+
+EOF
+
+query IIIIIIII
+SELECT
+  x,
+  y,
+  lag(x,y,100)    OVER (PARTITION BY x ORDER BY y+y),
+  lag(x,y,110)    OVER (PARTITION BY x ORDER BY y+y),
+  lag(x,y,100)    OVER (PARTITION BY x ORDER BY y+y),
+  first_value(y)  OVER (PARTITION BY x ORDER BY y+y),
+  last_value(y)   OVER (PARTITION BY x ORDER BY y+y),
+  lead(x,y-2,120) OVER (PARTITION BY x ORDER BY y+y)
+FROM t9
+ORDER BY x;
+----
+1  2  100  110  100  2  2  1
+3  NULL  NULL  NULL  NULL  NULL  NULL  NULL
+5  6  100  110  100  6  6  120
+7  8  100  110  100  8  8  120
+9  NULL  NULL  NULL  NULL  NULL  NULL  NULL
+11  NULL  NULL  NULL  NULL  NULL  NULL  NULL
+13  14  100  110  100  14  14  120
+15  16  100  110  100  16  16  120
+17  18  100  110  100  18  18  120
+
+
+## Complex tests with array_agg and then unnesting the array
 
 query R
 SELECT avg(u)
@@ -6984,15 +7405,15 @@ where (case when (((select "collection_timestamp" from mz_internal.mz_storage_us
           ) < ((select pg_catalog.min("occurred_at") from mz_internal.mz_source_status_history)
           ))
       and ((case when subq_3."c0" is NULL then TIMESTAMPTZ '2023-01-01 01:23:45+06' else TIMESTAMPTZ '2023-01-01 01:23:45+06' end
-          ) <> (pg_catalog.now())) then case when (((select pg_catalog.sum("id") from mz_internal.mz_sessions)
-            ) - (0::uint8)) >= ((select "worker_id" from mz_internal.mz_arrangement_sharing_per_worker limit 1 offset 3)
+          ) <> (pg_catalog.now())) then case when (((select pg_catalog.sum("connection_id") from mz_internal.mz_sessions)
+            ) - (0::uint8)) >= ((select "worker_id" from mz_introspection.mz_arrangement_sharing_per_worker limit 1 offset 3)
           ) then numrange(0,0) else numrange(0,0) end
-       else case when (((select pg_catalog.sum("id") from mz_internal.mz_sessions)
-            ) - (0::uint8)) >= ((select "worker_id" from mz_internal.mz_arrangement_sharing_per_worker limit 1 offset 3)
+       else case when (((select pg_catalog.sum("connection_id") from mz_internal.mz_sessions)
+            ) - (0::uint8)) >= ((select "worker_id" from mz_introspection.mz_arrangement_sharing_per_worker limit 1 offset 3)
           ) then numrange(0,0) else numrange(0,0) end
        end
     ) >= (case when (0::uint4) > (pg_catalog.mod(
-        CAST((select "session_id" from mz_internal.mz_subscriptions limit 1 offset 2)
+        CAST((select 1 from mz_internal.mz_subscriptions limit 1 offset 2)
            as uint4),
         CAST((4294967295::uint4) * (2::uint4) as uint4))) then case when (mz_catalog.map_length(
           mz_internal.mz_role_oid_memberships())) = ((select pg_catalog.min("rolconnlimit") from pg_catalog.pg_roles)
@@ -7006,3 +7427,585 @@ where (case when (((select "collection_timestamp" from mz_internal.mz_storage_us
          end
        end
     );
+
+## Tests for window function fusion
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT
+  *,
+  lag(x)          OVER (ORDER BY x),
+  first_value(x)  OVER (ORDER BY x),
+  last_value(x)   OVER (ORDER BY x),
+  x*y,
+  lag(y)          OVER (ORDER BY x),
+  lag(x+x,1,null) OVER (PARTITION BY x ORDER BY y),
+  lead(x,2,null)  OVER (PARTITION BY x ORDER BY -y NULLS FIRST),
+  lead(x,2,null)  OVER (PARTITION BY x ORDER BY -y NULLS LAST),
+  x+y,
+  lag(x+x,2,null) OVER (PARTITION BY x ORDER BY y),
+  sum(x)          OVER (ORDER BY x),
+  min(x)          OVER (ORDER BY x),
+  max(x)          OVER (ORDER BY y)
+FROM t7
+ORDER BY x,y;
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#14]
+    Project (#3, #4, #16, #15, #14, #17, #13, #9, #11, #10, #18, #8, #7, #6, #5)
+      Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[2](#2), record_get[4](#2), record_get[5](#2), record_get[7](#2), record_get[8](#2), record_get[10](#2), record_get[12](#2), record_get[0](#1), record_get[0](#12), record_get[1](#12), record_get[2](#12), record_get[3](#12), (#3 * #4), (#3 + #4))
+        FlatMap unnest_list(#0)
+          Reduce aggregates=[fused_value_window_func[lag[order_by=[#0 asc nulls_last]], last_value[order_by=[#0 asc nulls_last]], first_value[order_by=[#0 asc nulls_last]], lag[order_by=[#0 asc nulls_last]] order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[2](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[4](record_get[1](#0)), record_get[5](record_get[1](#0)), record_get[6](record_get[1](#0)), record_get[7](record_get[1](#0)), record_get[8](record_get[1](#0)), record_get[9](record_get[1](#0)), record_get[10](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), row(row(record_get[1](record_get[1](#0)), 1, null), record_get[0](record_get[1](#0)), record_get[0](record_get[1](#0)), row(record_get[0](record_get[1](#0)), 1, null))), record_get[0](record_get[1](#0))))]
+            Project (#1)
+              FlatMap unnest_list(#0)
+                Project (#1)
+                  Reduce group_by=[record_get[0](record_get[1](#0))] aggregates=[lead[order_by=[#0 asc nulls_first]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[2](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[4](record_get[1](#0)), record_get[5](record_get[1](#0)), record_get[6](record_get[1](#0)), record_get[7](record_get[1](#0)), record_get[8](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), row(record_get[0](record_get[1](#0)), 2, null)), -(record_get[1](record_get[1](#0)))))]
+                    Project (#1)
+                      FlatMap unnest_list(#0)
+                        Project (#1)
+                          Reduce group_by=[record_get[0](record_get[1](#0))] aggregates=[lead[order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[2](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[4](record_get[1](#0)), record_get[5](record_get[1](#0)), record_get[0](#0), record_get[0](record_get[0](#0)), record_get[1](record_get[0](#0))), row(record_get[0](record_get[1](#0)), 2, null)), -(record_get[1](record_get[1](#0)))))]
+                            Project (#1)
+                              FlatMap unnest_list(#0)
+                                Project (#1)
+                                  Reduce group_by=[record_get[0](record_get[1](#0))] aggregates=[fused_value_window_func[lag[order_by=[#0 asc nulls_last]], lag[order_by=[#0 asc nulls_last]] order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[0](#0), record_get[0](record_get[0](#0)), record_get[1](record_get[0](#0))), row(row((record_get[0](record_get[1](#0)) + record_get[0](record_get[1](#0))), 2, null), row((record_get[0](record_get[1](#0)) + record_get[0](record_get[1](#0))), 1, null))), record_get[1](record_get[1](#0))))]
+                                    Project (#1)
+                                      FlatMap unnest_list(#0)
+                                        Reduce aggregates=[fused_window_agg(row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), row(record_get[0](record_get[1](#0)), record_get[0](record_get[1](#0)))), record_get[0](record_get[1](#0))))]
+                                          Project (#1)
+                                            FlatMap unnest_list(#0)
+                                              Reduce aggregates=[window_agg[max order_by=[#0 asc nulls_last]](row(row(row(#0, #1), #0), #1))]
+                                                ReadStorage materialize.public.t7
+
+Source materialize.public.t7
+
+Target cluster: quickstart
+
+EOF
+
+query IIIIIIIIIIIIIII
+SELECT
+  *,
+  lag(x)          OVER (ORDER BY x),
+  first_value(x)  OVER (ORDER BY x),
+  last_value(x)   OVER (ORDER BY x),
+  x*y,
+  lag(y)          OVER (ORDER BY x),
+  lag(x+x,1,null) OVER (PARTITION BY x ORDER BY y),
+  lead(x,2,null)  OVER (PARTITION BY x ORDER BY -y NULLS FIRST),
+  lead(x,2,null)  OVER (PARTITION BY x ORDER BY -y NULLS LAST),
+  x+y,
+  lag(x+x,2,null) OVER (PARTITION BY x ORDER BY y),
+  sum(x)          OVER (ORDER BY x),
+  min(x)          OVER (ORDER BY x),
+  max(x)          OVER (ORDER BY y)
+FROM t7
+ORDER BY x,y;
+----
+1  2  NULL  1  1  2  NULL  NULL  NULL  NULL  3  NULL  1  1  10
+3  NULL  1  1  3  NULL  2  NULL  NULL  NULL  NULL  NULL  4  1  17
+5  6  3  1  5  30  NULL  NULL  NULL  NULL  11  NULL  9  1  10
+7  8  5  1  7  56  6  NULL  NULL  NULL  15  NULL  16  1  10
+9  NULL  7  1  9  NULL  8  NULL  NULL  NULL  NULL  NULL  25  1  17
+10  -50  9  1  10  -500  NULL  NULL  NULL  NULL  -40  NULL  45  1  10
+10  -40  10  1  10  -400  -50  20  NULL  NULL  -30  NULL  45  1  10
+11  NULL  10  1  11  NULL  -40  NULL  NULL  NULL  NULL  NULL  56  1  17
+13  14  11  1  13  182  NULL  NULL  NULL  NULL  27  NULL  69  1  13
+15  16  13  1  15  240  14  NULL  NULL  NULL  31  NULL  84  1  15
+17  18  15  1  17  306  16  NULL  NULL  NULL  35  NULL  101  1  17
+
+# In the following query, currently we only fuse the two inner `lag`s.
+# In theory, we could also fuse the two `last_value`s.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT
+  *,
+  first_value(
+    lag(x*x,y,1111) OVER (PARTITION BY x ORDER BY y)
+  ) OVER (PARTITION BY x ORDER BY y),
+  x*y,
+  last_value(
+    lag(x*x,y,2222) OVER (PARTITION BY x ORDER BY y)
+  ) OVER (PARTITION BY x ORDER BY y+y),
+  last_value(x+y) OVER (PARTITION BY x ORDER BY y+y),
+  lag(y)          OVER (ORDER BY x),
+  x+y
+FROM t7
+ORDER BY x,y;
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#7]
+    Project (#3, #4, #8, #9, #7, #6, #5, #10)
+      Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[2](#2), record_get[3](#2), record_get[8](#2), record_get[0](#1), (#3 * #4), (#3 + #4))
+        FlatMap unnest_list(#0)
+          Project (#1)
+            Reduce group_by=[record_get[0](record_get[1](#0))] aggregates=[first_value[order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[2](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[4](record_get[1](#0)), record_get[5](record_get[1](#0)), record_get[6](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), record_get[6](record_get[1](#0))), record_get[1](record_get[1](#0))))]
+              Project (#1)
+                FlatMap unnest_list(#0)
+                  Project (#1)
+                    Reduce group_by=[record_get[0](record_get[1](#0))] aggregates=[last_value[order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[5](record_get[1](#0)), record_get[0](#0), record_get[0](record_get[0](#0)), record_get[1](record_get[0](#0))), record_get[0](record_get[0](#0))), (record_get[1](record_get[1](#0)) + record_get[1](record_get[1](#0)))))]
+                      Project (#1)
+                        FlatMap unnest_list(#0)
+                          Project (#1)
+                            Reduce group_by=[record_get[0](record_get[1](#0))] aggregates=[fused_value_window_func[lag[order_by=[#0 asc nulls_last]], lag[order_by=[#0 asc nulls_last]] order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[2](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), row(row((record_get[0](record_get[1](#0)) * record_get[0](record_get[1](#0))), record_get[1](record_get[1](#0)), 2222), row((record_get[0](record_get[1](#0)) * record_get[0](record_get[1](#0))), record_get[1](record_get[1](#0)), 1111))), record_get[1](record_get[1](#0))))]
+                              Project (#1)
+                                FlatMap unnest_list(#0)
+                                  Project (#1)
+                                    Reduce group_by=[record_get[0](record_get[1](#0))] aggregates=[last_value[order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), (record_get[0](record_get[1](#0)) + record_get[1](record_get[1](#0)))), (record_get[1](record_get[1](#0)) + record_get[1](record_get[1](#0)))))]
+                                      Project (#1)
+                                        FlatMap unnest_list(#0)
+                                          Reduce aggregates=[lag[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#1, 1, null)), #0))]
+                                            ReadStorage materialize.public.t7
+
+Source materialize.public.t7
+
+Target cluster: quickstart
+
+EOF
+
+query IIIIIIII
+SELECT
+  *,
+  first_value(
+    lag(x*x,y,1111) OVER (PARTITION BY x ORDER BY y)
+  ) OVER (PARTITION BY x ORDER BY y),
+  x*y,
+  last_value(
+    lag(x*x,y,2222) OVER (PARTITION BY x ORDER BY y)
+  ) OVER (PARTITION BY x ORDER BY y+y),
+  last_value(x+y) OVER (PARTITION BY x ORDER BY y+y),
+  lag(y)          OVER (ORDER BY x),
+  x+y
+FROM t7
+ORDER BY x,y;
+----
+1  2  1111  2  2222  3  NULL  3
+3  NULL  NULL  NULL  NULL  NULL  2  NULL
+5  6  1111  30  2222  11  NULL  11
+7  8  1111  56  2222  15  6  15
+9  NULL  NULL  NULL  NULL  NULL  8  NULL
+10  -50  1111  -500  2222  -40  NULL  -40
+10  -40  1111  -400  2222  -30  -50  -30
+11  NULL  NULL  NULL  NULL  NULL  -40  NULL
+13  14  1111  182  2222  27  NULL  27
+15  16  1111  240  2222  31  14  31
+17  18  1111  306  2222  35  16  35
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT
+  *,
+  lag(x) OVER (),
+  lag(y) OVER (),
+  sum(x) OVER (),
+  min(x) OVER ()
+FROM t7
+ORDER BY x,y;
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#5]
+    Project (#3, #4, #9, #8, #6, #5)
+      Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[3](#2), record_get[4](#2), record_get[0](#1), record_get[0](#7), record_get[1](#7))
+        FlatMap unnest_list(#0)
+          Reduce aggregates=[fused_value_window_func[lag[order_by=[]], lag[order_by=[]] order_by=[]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[0](#0), record_get[0](record_get[0](#0)), record_get[1](record_get[0](#0))), row(row(record_get[1](record_get[1](#0)), 1, null), row(record_get[0](record_get[1](#0)), 1, null)))))]
+            Project (#1)
+              FlatMap unnest_list(#0)
+                Reduce aggregates=[fused_window_agg(row(row(row(#0, #1), row(#0, #0))))]
+                  ReadStorage materialize.public.t7
+
+Source materialize.public.t7
+
+Target cluster: quickstart
+
+EOF
+
+# Test the situation when the MFP above is fused into the Reduce, and the MFP can error.
+query III
+SELECT *
+FROM (
+  SELECT *, lag(x) OVER (ORDER BY x) AS l
+  FROM t7
+)
+WHERE l/2 < 7
+ORDER BY x,y,l;
+----
+3  NULL  1
+5  6  3
+7  8  5
+9  NULL  7
+10  -50  9
+10  -40  10
+11  NULL  10
+13  14  11
+15  16  13
+
+# Test the situation when the MFP above is fused into the Reduce, but the MFP can't error.
+query III
+SELECT *
+FROM (
+  SELECT *, lag(x) OVER (ORDER BY x) AS l
+  FROM t7
+)
+WHERE l < 14
+ORDER BY x,y,l;
+----
+3  NULL  1
+5  6  3
+7  8  5
+9  NULL  7
+10  -50  9
+10  -40  10
+11  NULL  10
+13  14  11
+15  16  13
+
+## Check some LIR plans that the optimization of fusing `Reduce` with `FlatMap UnnestList` happens.
+## https://github.com/MaterializeInc/materialize/pull/29554
+## These should show `fused_unnest_list=true`.
+
+# Simple situation
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR
+SELECT
+  lead(x,y-2,120) OVER (ORDER BY x)
+FROM t9;
+----
+Explained Query:
+  Mfp
+    project=(#1)
+    map=(record_get[0](#0))
+    input_key=
+    Reduce::Basic
+      aggr=(0, lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0)), fused_unnest_list=true)
+      val_plan
+        project=(#2)
+        map=(row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0))
+      key_plan
+        project=()
+      Get::PassArrangements materialize.public.t9
+        raw=true
+
+Source materialize.public.t9
+
+Target cluster: quickstart
+
+EOF
+
+# PARTITION BY
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR
+SELECT
+  lead(x,y-2,120) OVER (PARTITION BY x/2 ORDER BY x)
+FROM t9;
+----
+Explained Query:
+  Mfp
+    project=(#2)
+    map=(record_get[0](#1))
+    input_key=#0
+    Reduce::Basic
+      aggr=(0, lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0)), fused_unnest_list=true)
+      val_plan
+        project=(#2)
+        map=(row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0))
+      key_plan
+        project=(#2)
+        map=((#0 / 2))
+      Get::PassArrangements materialize.public.t9
+        raw=true
+
+Source materialize.public.t9
+
+Target cluster: quickstart
+
+EOF
+
+# PARTITION BY multiple columns
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR
+SELECT
+  lead(x,y-2,120) OVER (PARTITION BY x/2, y ORDER BY x)
+FROM t9;
+----
+Explained Query:
+  Mfp
+    project=(#3)
+    map=(record_get[0](#2))
+    input_key=#0, #1
+    Reduce::Basic
+      aggr=(0, lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0)), fused_unnest_list=true)
+      val_plan
+        project=(#2)
+        map=(row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0))
+      key_plan
+        project=(#2, #1)
+        map=((#0 / 2))
+      Get::PassArrangements materialize.public.t9
+        raw=true
+
+Source materialize.public.t9
+
+Target cluster: quickstart
+
+EOF
+
+# row_number()
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR
+SELECT
+  row_number() OVER (ORDER BY x),
+  x
+FROM t7
+ORDER BY row_number
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last] output=[#0, #1]
+    Mfp
+      project=(#2, #1)
+      map=(record_get[0](record_get[1](#0)), record_get[0](#0))
+      input_key=
+      Reduce::Basic
+        aggr=(0, row_number[order_by=[#0 asc nulls_last]](row(list[row(#0, #1)], #0)), fused_unnest_list=true)
+        val_plan
+          project=(#2)
+          map=(row(list[row(#0, #1)], #0))
+        key_plan
+          project=()
+        Get::PassArrangements materialize.public.t7
+          raw=true
+
+Source materialize.public.t7
+
+Target cluster: quickstart
+
+EOF
+
+# MFP after is fused into the Reduce
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR
+SELECT *
+FROM (
+  SELECT *, lag(x) OVER (ORDER BY x) AS l
+  FROM t7
+)
+WHERE l < 14
+ORDER BY x,y,l;
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last, #1 asc nulls_last, #2 asc nulls_last] output=[#0..=#2]
+    Mfp
+      project=(#3, #4, #1)
+      map=(record_get[0](#0), record_get[1](#0), record_get[0](#2), record_get[1](#2))
+      input_key=
+      Reduce::Basic
+        aggr=(0, lag[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0, 1, null)), #0)), fused_unnest_list=true)
+        val_plan
+          project=(#2)
+          map=(row(row(row(#0, #1), row(#0, 1, null)), #0))
+        key_plan
+          project=()
+        mfp_after
+          filter=((record_get[0](#0) < 14))
+        Get::PassArrangements materialize.public.t7
+          raw=true
+
+Source materialize.public.t7
+
+Target cluster: quickstart
+
+EOF
+
+# Two lags fused with each other + Reduce-FlatMap fusion.
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR
+SELECT
+  *,
+  lag(x) OVER (),
+  lag(y) OVER ()
+FROM t7
+ORDER BY x,y;
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#3]
+    Mfp
+      project=(#2, #3, #6, #5)
+      map=(record_get[1](#0), record_get[0](#1), record_get[1](#1), record_get[0](#0), record_get[0](#4), record_get[1](#4))
+      input_key=
+      Reduce::Basic
+        aggr=(0, fused_value_window_func[lag[order_by=[]], lag[order_by=[]] order_by=[]](row(row(row(#0, #1), row(row(#1, 1, null), row(#0, 1, null))))), fused_unnest_list=true)
+        val_plan
+          project=(#2)
+          map=(row(row(row(#0, #1), row(row(#1, 1, null), row(#0, 1, null)))))
+        key_plan
+          project=()
+        Get::PassArrangements materialize.public.t7
+          raw=true
+
+Source materialize.public.t7
+
+Target cluster: quickstart
+
+EOF
+
+## Window functions on big relations.
+
+statement ok
+CREATE TABLE t10(t timestamptz, d1 int, d2 text, d3 int, d4 uint8, d5 int, d6 text);
+
+statement ok
+INSERT INTO t10
+SELECT generate_series(1,1000)::mz_timestamp::timestamptz, 5, 'aaa', 7, 8, 9, 'bbb';
+
+statement ok
+CREATE VIEW v1 AS
+SELECT t, d1, d2, EXTRACT(MILLISECOND FROM t) * 91 % 1223 AS d3, d4, d5, d6
+FROM t10;
+
+statement ok
+CREATE MATERIALIZED VIEW mv1 AS
+SELECT t, d1, d2, d3, d4, d6, lag(d1) OVER (ORDER BY t) - d1 AS r
+FROM v1;
+
+query I
+SELECT sum(r)
+FROM mv1;
+----
+0
+
+statement ok
+CREATE MATERIALIZED VIEW mv2 AS
+SELECT *, row_number() OVER (ORDER BY t) AS rn
+FROM mv1;
+
+query I
+SELECT sum(r)
+FROM (
+  SELECT rn - lag(rn) OVER (ORDER BY t) AS r
+  FROM mv2
+);
+----
+999
+
+query I
+SELECT sum(lv)
+FROM (
+  SELECT last_value(rn) OVER () AS lv
+  FROM mv2
+);
+----
+1000000
+
+statement ok
+DELETE FROM t10
+
+statement ok
+INSERT INTO t10
+SELECT generate_series(1,70000)::mz_timestamp::timestamptz, 5, 'aaa', 7, 8, 9, 'bbb';
+
+query I
+SELECT sum(r)
+FROM mv1;
+----
+0
+
+query I
+SELECT sum(r)
+FROM (
+  SELECT rn - lag(rn) OVER (ORDER BY t) AS r
+  FROM mv2
+);
+----
+69999
+
+## QUALIFY
+query II
+SELECT *
+FROM t6
+QUALIFY row_number() OVER (PARTITION BY x%3 ORDER BY y) = 1;
+----
+1  2
+5  6
+15  16
+
+query IIII
+SELECT *, x%3, row_number() OVER (PARTITION BY x%3 ORDER BY y)
+FROM t6
+QUALIFY row_number() OVER (PARTITION BY x%3 ORDER BY y) = 1;
+----
+15  16  0  1
+1  2  1  1
+5  6  2  1
+
+query II
+SELECT *
+FROM t6
+QUALIFY sum(x) OVER (ORDER BY y) = 26;
+----
+13  14
+
+query II
+SELECT *
+FROM (SELECT * FROM t6 UNION ALL SELECT * FROM t6)
+QUALIFY sum(x) OVER (ORDER BY y) = 26;
+----
+7  8
+7  8
+
+query I
+SELECT avg(u)
+FROM (
+  SELECT x, unnest(l) AS u
+  FROM (
+    SELECT x, array_agg(y) OVER (PARTITION BY x%5) AS l
+    FROM t7
+  ) AS ff1
+) AS ff2
+GROUP BY x%5
+QUALIFY sum(avg(u)) OVER (ORDER BY x%5) = -15
+ORDER BY x%5;
+----
+2
+
+query II
+SELECT *
+FROM (
+  SELECT x, unnest(l) AS u
+  FROM (
+    SELECT x, array_agg(y) OVER (PARTITION BY x%5) AS l
+    FROM t7
+  ) AS ff1
+)
+QUALIFY x-lag(x) OVER (ORDER BY x) = 0 AND lag(x) OVER (ORDER BY x) - lag(lag(x) OVER (ORDER BY x)) OVER (ORDER BY x) = 0
+ORDER BY x,u;
+----
+5  6
+5  16
+10  -40
+10  -40
+10  6
+10  6
+10  16
+10  16
+15  6
+15  16
+
+query III
+SELECT *, sum(x-9) OVER (ORDER BY x, u)
+FROM
+(
+  SELECT DISTINCT *
+  FROM (
+    SELECT x, unnest(l) AS u
+    FROM (
+      SELECT x, array_agg(y) OVER (PARTITION BY x%5) AS l
+      FROM t7
+    ) AS ff1
+  )
+  QUALIFY x-lag(x) OVER (ORDER BY x) = 0 AND lag(x) OVER (ORDER BY x) - lag(lag(x) OVER (ORDER BY x)) OVER (ORDER BY x) = 0
+)
+QUALIFY sum(x-9) OVER (ORDER BY x, u) > -6
+ORDER BY x,u;
+----
+5  6  -4
+10  16  -5
+15  6  1
+15  16  7

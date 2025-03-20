@@ -18,9 +18,11 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
+use mz_dyncfg::Config;
 use mz_ore::instrument;
 use mz_ore::task::RuntimeExt;
 use mz_persist::location::Blob;
+use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType};
 use proptest_derive::Arbitrary;
@@ -34,16 +36,24 @@ use uuid::Uuid;
 
 use crate::batch::{
     validate_truncate_batch, Added, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
-    ProtoBatch, BATCH_DELETE_ENABLED,
+    BatchParts, ProtoBatch, BATCH_DELETE_ENABLED,
 };
 use crate::error::{InvalidUsage, UpperMismatch};
-use crate::internal::compact::Compactor;
+use crate::fetch::{EncodedPart, FetchBatchFilter, FetchedPart, PartDecodeFormat};
+use crate::internal::compact::{CompactConfig, Compactor};
 use crate::internal::encoding::{check_data_version, Schemas};
-use crate::internal::machine::{CompareAndAppendRes, Machine};
+use crate::internal::machine::{CompareAndAppendRes, ExpireFn, Machine};
 use crate::internal::metrics::Metrics;
-use crate::internal::state::{HandleDebugState, HollowBatch};
+use crate::internal::state::{BatchPart, HandleDebugState, HollowBatch, RunOrder, RunPart};
 use crate::read::ReadHandle;
+use crate::schema::PartMigration;
 use crate::{parse_id, GarbageCollector, IsolatedRuntime, PersistConfig, ShardId};
+
+pub(crate) const COMBINE_INLINE_WRITES: Config<bool> = Config::new(
+    "persist_write_combine_inline_writes",
+    true,
+    "If set, re-encode inline writes if they don't fit into the batch metadata limits.",
+);
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
 #[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -106,14 +116,7 @@ impl WriterId {
 /// # };
 /// ```
 #[derive(Debug)]
-pub struct WriteHandle<K, V, T, D>
-where
-    T: Timestamp + Lattice + Codec64,
-    // These are only here so we can use them in the auto-expiring `Drop` impl.
-    K: Debug + Codec,
-    V: Debug + Codec,
-    D: Semigroup + Codec64 + Send + Sync,
-{
+pub struct WriteHandle<K: Codec, V: Codec, T, D> {
     pub(crate) cfg: PersistConfig,
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) machine: Machine<K, V, T, D>,
@@ -123,17 +126,17 @@ where
     pub(crate) isolated_runtime: Arc<IsolatedRuntime>,
     pub(crate) writer_id: WriterId,
     pub(crate) debug_state: HandleDebugState,
-    pub(crate) schemas: Schemas<K, V>,
+    pub(crate) write_schemas: Schemas<K, V>,
 
     pub(crate) upper: Antichain<T>,
-    explicitly_expired: bool,
+    expire_fn: Option<ExpireFn>,
 }
 
 impl<K, V, T, D> WriteHandle<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Ord + Codec64 + Send + Sync,
 {
     pub(crate) fn new(
@@ -144,16 +147,14 @@ where
         blob: Arc<dyn Blob>,
         writer_id: WriterId,
         purpose: &str,
-        schemas: Schemas<K, V>,
+        write_schemas: Schemas<K, V>,
     ) -> Self {
         let isolated_runtime = Arc::clone(&machine.isolated_runtime);
         let compact = cfg.compaction_enabled.then(|| {
             Compactor::new(
                 cfg.clone(),
                 Arc::clone(&metrics),
-                Arc::clone(&isolated_runtime),
-                writer_id.clone(),
-                schemas.clone(),
+                write_schemas.clone(),
                 gc.clone(),
             )
         });
@@ -162,6 +163,7 @@ where
             purpose: purpose.to_owned(),
         };
         let upper = machine.applier.clone_upper();
+        let expire_fn = Self::expire_fn(machine.clone(), gc.clone(), writer_id.clone());
         WriteHandle {
             cfg,
             metrics,
@@ -172,9 +174,9 @@ where
             isolated_runtime,
             writer_id,
             debug_state,
-            schemas,
+            write_schemas,
             upper,
-            explicitly_expired: false,
+            expire_fn: Some(expire_fn),
         }
     }
 
@@ -189,13 +191,18 @@ where
             Arc::clone(&read.blob),
             WriterId::new(),
             purpose,
-            read.schemas.clone(),
+            read.read_schemas.clone(),
         )
     }
 
     /// This handle's shard id.
     pub fn shard_id(&self) -> ShardId {
         self.machine.shard_id()
+    }
+
+    /// Returns the schema of this writer.
+    pub fn schema_id(&self) -> Option<SchemaId> {
+        self.write_schemas.id
     }
 
     /// A cached version of the shard-global `upper` frontier.
@@ -481,29 +488,136 @@ where
         let desc = Description::new(lower, upper, since);
 
         let mut received_inline_backpressure = false;
+        // Every hollow part must belong to some batch, so we can clean it up when the batch is dropped...
+        // but if we need to merge all our inline parts to a single run in S3, it's not correct to
+        // associate that with any of our individual input batches.
+        // At first, we'll try and put all the inline parts we receive into state... but if we
+        // get backpressured, we retry with this builder set to `Some`, put all our inline data into
+        // it, and ensure it's flushed out to S3 before including it in the batch.
+        let mut inline_batch_builder: Option<(_, BatchBuilder<K, V, T, D>)> = None;
         let maintenance = loop {
             let any_batch_rewrite = batches
                 .iter()
                 .any(|x| x.batch.parts.iter().any(|x| x.ts_rewrite().is_some()));
-            let (mut parts, mut num_updates, mut runs) = (vec![], 0, vec![]);
+            let (mut parts, mut num_updates, mut run_splits, mut run_metas) =
+                (vec![], 0, vec![], vec![]);
+            let mut key_storage = None;
+            let mut val_storage = None;
             for batch in batches.iter() {
                 let () = validate_truncate_batch(&batch.batch, &desc, any_batch_rewrite)?;
-                for run in batch.batch.runs() {
-                    // Mark the boundary if this is not the first run in the batch.
+                for (run_meta, run) in batch.batch.runs() {
                     let start_index = parts.len();
-                    if start_index != 0 {
-                        runs.push(start_index);
+                    for part in run {
+                        if let (
+                            RunPart::Single(BatchPart::Inline {
+                                updates,
+                                ts_rewrite,
+                                schema_id,
+                                deprecated_schema_id: _,
+                            }),
+                            Some((schema_cache, builder)),
+                        ) = (part, &mut inline_batch_builder)
+                        {
+                            let schema_migration = PartMigration::new(
+                                *schema_id,
+                                self.write_schemas.clone(),
+                                schema_cache,
+                            )
+                            .await
+                            .expect("schemas for inline user part");
+
+                            let encoded_part = EncodedPart::from_inline(
+                                &*self.metrics,
+                                self.metrics.read.compaction.clone(),
+                                desc.clone(),
+                                updates,
+                                ts_rewrite.as_ref(),
+                            );
+                            let mut fetched_part = FetchedPart::new(
+                                Arc::clone(&self.metrics),
+                                encoded_part,
+                                schema_migration,
+                                FetchBatchFilter::Compaction {
+                                    since: desc.since().clone(),
+                                },
+                                false,
+                                PartDecodeFormat::Arrow,
+                                None,
+                            );
+
+                            while let Some(((k, v), t, d)) = fetched_part.next_with_storage(
+                                &mut key_storage,
+                                &mut val_storage,
+                                None,
+                            ) {
+                                builder
+                                    .add(
+                                        &k.expect("decoded just-encoded key data"),
+                                        &v.expect("decoded just-encoded val data"),
+                                        &t,
+                                        &d,
+                                    )
+                                    .await
+                                    .expect("re-encoding just-decoded data");
+                            }
+                        } else {
+                            parts.push(part.clone())
+                        }
                     }
-                    parts.extend_from_slice(run);
+
+                    let end_index = parts.len();
+
+                    if start_index == end_index {
+                        continue;
+                    }
+
+                    // Mark the boundary if this is not the first run in the batch.
+                    if start_index != 0 {
+                        run_splits.push(start_index);
+                    }
+                    run_metas.push(run_meta.clone());
                 }
                 num_updates += batch.batch.len;
             }
 
+            let mut flushed_inline_batch = if let Some((_, builder)) = inline_batch_builder.take() {
+                let mut finished = builder
+                    .finish(desc.upper().clone())
+                    .await
+                    .expect("invalid usage");
+                let cfg = BatchBuilderConfig::new(&self.cfg, self.shard_id());
+                finished
+                    .flush_to_blob(
+                        &cfg,
+                        &self.metrics.inline.backpressure,
+                        &self.isolated_runtime,
+                        &self.write_schemas,
+                    )
+                    .await;
+                Some(finished)
+            } else {
+                None
+            };
+
+            if let Some(batch) = &flushed_inline_batch {
+                for (run_meta, run) in batch.batch.runs() {
+                    assert!(run.len() > 0);
+                    let start_index = parts.len();
+                    if start_index != 0 {
+                        run_splits.push(start_index);
+                    }
+                    run_metas.push(run_meta.clone());
+                    parts.extend(run.iter().cloned())
+                }
+            }
+
+            let combined_batch =
+                HollowBatch::new(desc.clone(), parts, num_updates, run_metas, run_splits);
             let heartbeat_timestamp = (self.cfg.now)();
             let res = self
                 .machine
                 .compare_and_append(
-                    &HollowBatch::new(desc.clone(), parts, num_updates, runs),
+                    &combined_batch,
                     &self.writer_id,
                     &self.debug_state,
                     heartbeat_timestamp,
@@ -516,10 +630,21 @@ where
                     for batch in batches.iter_mut() {
                         batch.mark_consumed();
                     }
+                    if let Some(batch) = &mut flushed_inline_batch {
+                        batch.mark_consumed();
+                    }
                     break maintenance;
                 }
-                CompareAndAppendRes::InvalidUsage(invalid_usage) => return Err(invalid_usage),
+                CompareAndAppendRes::InvalidUsage(invalid_usage) => {
+                    if let Some(batch) = flushed_inline_batch.take() {
+                        batch.delete().await;
+                    }
+                    return Err(invalid_usage);
+                }
                 CompareAndAppendRes::UpperMismatch(_seqno, current_upper) => {
+                    if let Some(batch) = flushed_inline_batch.take() {
+                        batch.delete().await;
+                    }
                     // We tried to to a compare_and_append with the wrong expected upper, that
                     // won't work. Update the cached upper to the current upper.
                     self.upper.clone_from(&current_upper);
@@ -533,8 +658,15 @@ where
                     // too much in state. Flush it out to s3 and try again.
                     assert_eq!(received_inline_backpressure, false);
                     received_inline_backpressure = true;
+                    if COMBINE_INLINE_WRITES.get(&self.cfg) {
+                        inline_batch_builder = Some((
+                            self.machine.applier.schema_cache(),
+                            self.builder(desc.lower().clone()),
+                        ));
+                        continue;
+                    }
 
-                    let cfg = BatchBuilderConfig::new(&self.cfg, &self.writer_id);
+                    let cfg = BatchBuilderConfig::new(&self.cfg, self.shard_id());
                     // We could have a large number of inline parts (imagine the
                     // sharded persist_sink), do this flushing concurrently.
                     let flush_batches = batches
@@ -545,7 +677,7 @@ where
                                     &cfg,
                                     &self.metrics.inline.backpressure,
                                     &self.isolated_runtime,
-                                    &self.schemas,
+                                    &self.write_schemas,
                                 )
                                 .await
                         })
@@ -603,26 +735,51 @@ where
     /// updates is very large. Individual records, however, should be small
     /// enough that we can reasonably chunk them up: O(KB) is definitely fine,
     /// O(MB) come talk to us.
-    pub fn builder(&mut self, lower: Antichain<T>) -> BatchBuilder<K, V, T, D> {
+    pub fn builder(&self, lower: Antichain<T>) -> BatchBuilder<K, V, T, D> {
+        let cfg = CompactConfig::new(&self.cfg, self.shard_id());
+        let parts = if let Some(max_runs) = cfg.batch.max_runs {
+            BatchParts::new_compacting::<K, V, D>(
+                cfg,
+                Description::new(
+                    lower.clone(),
+                    Antichain::new(),
+                    Antichain::from_elem(T::minimum()),
+                ),
+                max_runs,
+                Arc::clone(&self.metrics),
+                Arc::clone(&self.machine.applier.shard_metrics),
+                self.shard_id(),
+                Arc::clone(&self.blob),
+                Arc::clone(&self.isolated_runtime),
+                &self.metrics.user,
+                self.write_schemas.clone(),
+            )
+        } else {
+            BatchParts::new_ordered(
+                cfg.batch,
+                RunOrder::Unordered,
+                Arc::clone(&self.metrics),
+                Arc::clone(&self.machine.applier.shard_metrics),
+                self.shard_id(),
+                Arc::clone(&self.blob),
+                Arc::clone(&self.isolated_runtime),
+                &self.metrics.user,
+            )
+        };
         let builder = BatchBuilderInternal::new(
-            BatchBuilderConfig::new(&self.cfg, &self.writer_id),
+            BatchBuilderConfig::new(&self.cfg, self.shard_id()),
+            parts,
             Arc::clone(&self.metrics),
-            Arc::clone(&self.machine.applier.shard_metrics),
-            self.schemas.clone(),
-            self.metrics.user.clone(),
-            lower,
+            self.write_schemas.clone(),
             Arc::clone(&self.blob),
-            Arc::clone(&self.isolated_runtime),
             self.machine.shard_id().clone(),
             self.cfg.build_version.clone(),
-            Antichain::from_elem(T::minimum()),
-            None,
-            false,
         );
-        BatchBuilder {
+        BatchBuilder::new(
             builder,
-            stats_schemas: self.schemas.clone(),
-        }
+            Description::new(lower, Antichain::new(), Antichain::from_elem(T::minimum())),
+            Arc::clone(&self.metrics),
+        )
     }
 
     /// Uploads the given `updates` as one `Batch` to the blob store and returns
@@ -681,9 +838,23 @@ where
     /// happens.
     #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn expire(mut self) {
-        let (_, maintenance) = self.machine.expire_writer(&self.writer_id).await;
-        maintenance.start_performing(&self.machine, &self.gc);
-        self.explicitly_expired = true;
+        let Some(expire_fn) = self.expire_fn.take() else {
+            return;
+        };
+        expire_fn.0().await;
+    }
+
+    fn expire_fn(
+        machine: Machine<K, V, T, D>,
+        gc: GarbageCollector<K, V, T, D>,
+        writer_id: WriterId,
+    ) -> ExpireFn {
+        ExpireFn(Box::new(move || {
+            Box::pin(async move {
+                let (_, maintenance) = machine.expire_writer(&writer_id).await;
+                maintenance.start_performing(&machine, &gc);
+            })
+        }))
     }
 
     /// Test helper for an [Self::append] call that is expected to succeed.
@@ -762,17 +933,11 @@ where
     }
 }
 
-impl<K, V, T, D> Drop for WriteHandle<K, V, T, D>
-where
-    T: Timestamp + Lattice + Codec64,
-    K: Debug + Codec,
-    V: Debug + Codec,
-    D: Semigroup + Codec64 + Send + Sync,
-{
+impl<K: Codec, V: Codec, T, D> Drop for WriteHandle<K, V, T, D> {
     fn drop(&mut self) {
-        if self.explicitly_expired {
+        let Some(expire_fn) = self.expire_fn.take() else {
             return;
-        }
+        };
         let handle = match Handle::try_current() {
             Ok(x) => x,
             Err(_) => {
@@ -780,9 +945,6 @@ where
                 return;
             }
         };
-        let mut machine = self.machine.clone();
-        let gc = self.gc.clone();
-        let writer_id = self.writer_id.clone();
         // Spawn a best-effort task to expire this write handle. It's fine if
         // this doesn't run to completion, we'd just have to wait out the lease
         // before the shard-global since is unblocked.
@@ -791,11 +953,7 @@ where
         let expire_span = debug_span!("drop::expire");
         handle.spawn_named(
             || format!("WriteHandle::expire ({})", self.writer_id),
-            async move {
-                let (_, maintenance) = machine.expire_writer(&writer_id).await;
-                maintenance.start_performing(&machine, &gc);
-            }
-            .instrument(expire_span),
+            expire_fn.0().instrument(expire_span),
         );
     }
 }

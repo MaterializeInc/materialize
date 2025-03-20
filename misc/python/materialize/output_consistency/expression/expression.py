@@ -12,6 +12,9 @@ from collections.abc import Callable
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.data_value.source_column_identifier import (
+    SourceColumnIdentifier,
+)
 from materialize.output_consistency.execution.sql_dialect_adjuster import (
     SqlDialectAdjuster,
 )
@@ -22,10 +25,12 @@ from materialize.output_consistency.expression.expression_characteristics import
     ExpressionCharacteristics,
 )
 from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
-from materialize.output_consistency.selection.selection import (
+from materialize.output_consistency.query.data_source import DataSource
+from materialize.output_consistency.selection.row_selection import (
     ALL_ROWS_SELECTION,
     DataRowSelection,
 )
+from materialize.util import stable_int_hash
 
 
 class Expression:
@@ -43,8 +48,17 @@ class Expression:
         self.storage_layout = storage_layout
         self.is_aggregate = is_aggregate
         self.is_expect_error = is_expect_error
+        self.is_shared = False
 
-    def to_sql(self, sql_adjuster: SqlDialectAdjuster, is_root_level: bool) -> str:
+    def to_sql(
+        self, sql_adjuster: SqlDialectAdjuster, include_alias: bool, is_root_level: bool
+    ) -> str:
+        raise NotImplementedError
+
+    def hash(self) -> int:
+        """
+        The primary purpose of this method is to allow conditional breakpoints when debugging.
+        """
         raise NotImplementedError
 
     def resolve_return_type_spec(self) -> ReturnTypeSpec:
@@ -77,6 +91,18 @@ class Expression:
         raise NotImplementedError
 
     def collect_leaves(self) -> list[LeafExpression]:
+        raise NotImplementedError
+
+    def collect_data_sources(self) -> list[DataSource]:
+        data_sources = []
+        for leaf in self.collect_leaves():
+            data_source = leaf.get_data_source()
+            if data_source is not None:
+                data_sources.append(data_source)
+
+        return data_sources
+
+    def collect_vertical_table_indices(self) -> set[int]:
         raise NotImplementedError
 
     def __str__(self) -> str:
@@ -134,6 +160,13 @@ class Expression:
     ) -> bool:
         return self.matches(predicate, check_recursively)
 
+    def recursively_mark_as_shared(self) -> None:
+        """
+        Mark that this expression is used multiple times within a query.
+        All instances will use the same data source.
+        """
+        self.is_shared = True
+
 
 class LeafExpression(Expression):
     def __init__(
@@ -142,12 +175,17 @@ class LeafExpression(Expression):
         data_type: DataType,
         characteristics: set[ExpressionCharacteristics],
         storage_layout: ValueStorageLayout,
+        data_source: DataSource | None,
         is_aggregate: bool = False,
         is_expect_error: bool = False,
     ):
         super().__init__(characteristics, storage_layout, is_aggregate, is_expect_error)
         self.column_name = column_name
         self.data_type = data_type
+        self.data_source = data_source
+
+    def hash(self) -> int:
+        return stable_int_hash(self.column_name)
 
     def resolve_data_type_category(self) -> DataTypeCategory:
         return self.data_type.category
@@ -155,14 +193,24 @@ class LeafExpression(Expression):
     def try_resolve_exact_data_type(self) -> DataType | None:
         return self.data_type
 
-    def to_sql(self, sql_adjuster: SqlDialectAdjuster, is_root_level: bool) -> str:
-        return self.to_sql_as_column(sql_adjuster)
+    def to_sql(
+        self, sql_adjuster: SqlDialectAdjuster, include_alias: bool, is_root_level: bool
+    ) -> str:
+        return self.to_sql_as_column(
+            sql_adjuster, include_alias, self.column_name, self.get_data_source()
+        )
 
     def to_sql_as_column(
         self,
         sql_adjuster: SqlDialectAdjuster,
+        include_alias: bool,
+        column_name: str,
+        data_source: DataSource | None,
     ) -> str:
-        return self.column_name
+        if include_alias:
+            assert data_source is not None, "data source is None"
+            return f"{data_source.alias()}.{column_name}"
+        return column_name
 
     def collect_leaves(self) -> list[LeafExpression]:
         return [self]
@@ -178,3 +226,17 @@ class LeafExpression(Expression):
         self, row_selection: DataRowSelection
     ) -> set[ExpressionCharacteristics]:
         return self.own_characteristics
+
+    def get_data_source(self) -> DataSource | None:
+        return self.data_source
+
+    def get_source_column_identifier(self) -> SourceColumnIdentifier | None:
+        data_source = self.get_data_source()
+
+        if data_source is None:
+            return None
+
+        return SourceColumnIdentifier(
+            data_source_alias=data_source.alias(),
+            column_name=self.column_name,
+        )

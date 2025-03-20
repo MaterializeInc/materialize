@@ -12,7 +12,7 @@ cat
 ----
 ok
 
-# Regression test for #5520
+# Regression test for materialize#5520
 build apply=NonNullRequirements
 (filter
   (flat_map

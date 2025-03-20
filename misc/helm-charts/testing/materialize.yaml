@@ -1,0 +1,48 @@
+# Source: materialize-environmentd/templates/secret.yaml
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: materialize-environment
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: materialize-backend
+  namespace: materialize-environment
+stringData:
+  metadata_backend_url: "postgres://materialize_user:materialize_pass@postgres.materialize.svc.cluster.local:5432/materialize_db?sslmode=disable"
+  persist_backend_url: "s3://minio:minio123@bucket/12345678-1234-1234-1234-123456789012?endpoint=http%3A%2F%2Fminio.materialize.svc.cluster.local%3A9000&region=minio"
+---
+apiVersion: materialize.cloud/v1alpha1
+kind: Materialize
+metadata:
+  name: 12345678-1234-1234-1234-123456789012
+  namespace: materialize-environment
+spec:
+  environmentdImageRef: materialize/environmentd:v0.138.0-dev.0
+  backendSecretName: materialize-backend
+  #balancerdExternalCertificateSpec:
+  #  dnsNames:
+  #    - balancerd
+  #  issuerRef:
+  #    name: dns01
+  #    kind: ClusterIssuer
+  #consoleExternalCertificateSpec:
+  #  dnsNames:
+  #    - console
+  #  issuerRef:
+  #    name: dns01
+  #    kind: ClusterIssuer
+  #internalCertificateSpec:
+  #  issuerRef:
+  #    name: intermediate-ca
+  #    kind: Issuer

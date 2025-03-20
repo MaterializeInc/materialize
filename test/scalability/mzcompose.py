@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Benchmark for how various queries scale, compares against old Materialize versions.
+"""
+
 import argparse
 import sys
 from pathlib import Path
@@ -16,19 +20,19 @@ from jupyter_core.command import main as jupyter_core_command_main
 from matplotlib import pyplot as plt
 
 from materialize import buildkite, git
+from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.balancerd import Balancerd
+from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.test_result import FailedTestExecutionError
-from materialize.scalability.benchmark_config import BenchmarkConfiguration
-from materialize.scalability.benchmark_executor import BenchmarkExecutor
-from materialize.scalability.benchmark_result import BenchmarkResult
-from materialize.scalability.comparison_outcome import ComparisonOutcome
+from materialize.scalability.config.benchmark_config import BenchmarkConfiguration
 from materialize.scalability.df import df_totals_cols
 from materialize.scalability.df.df_totals import DfTotalsExtended
-from materialize.scalability.endpoint import Endpoint
-from materialize.scalability.endpoints import (
+from materialize.scalability.endpoint.endpoint import Endpoint
+from materialize.scalability.endpoint.endpoints import (
     TARGET_HEAD,
     TARGET_MATERIALIZE_LOCAL,
     TARGET_MATERIALIZE_REMOTE,
@@ -39,25 +43,25 @@ from materialize.scalability.endpoints import (
     PostgresContainer,
     endpoint_name_to_description,
 )
+from materialize.scalability.executor.benchmark_executor import BenchmarkExecutor
 from materialize.scalability.io import paths
 from materialize.scalability.plot.plot import (
     plot_duration_by_connections_for_workload,
     plot_duration_by_endpoints_for_workload,
     plot_tps_per_connections,
 )
-from materialize.scalability.regression_assessment import RegressionAssessment
-from materialize.scalability.result_analyzer import ResultAnalyzer
-from materialize.scalability.result_analyzers import DefaultResultAnalyzer
-from materialize.scalability.scalability_versioning import SCALABILITY_FRAMEWORK_VERSION
-from materialize.scalability.schema import Schema, TransactionIsolation
-from materialize.scalability.workload import (
-    Workload,
-)
-from materialize.scalability.workload_markers import WorkloadMarker
-from materialize.scalability.workloads.connection_workloads import *  # noqa: F401 F403
-from materialize.scalability.workloads.ddl_workloads import *  # noqa: F401 F403
-from materialize.scalability.workloads.dml_dql_workloads import *  # noqa: F401 F403
-from materialize.scalability.workloads.self_test_workloads import *  # noqa: F401 F403
+from materialize.scalability.result.comparison_outcome import ComparisonOutcome
+from materialize.scalability.result.regression_assessment import RegressionAssessment
+from materialize.scalability.result.result_analyzer import ResultAnalyzer
+from materialize.scalability.result.result_analyzers import DefaultResultAnalyzer
+from materialize.scalability.result.scalability_result import BenchmarkResult
+from materialize.scalability.schema.schema import Schema, TransactionIsolation
+from materialize.scalability.workload.workload import Workload
+from materialize.scalability.workload.workload_markers import WorkloadMarker
+from materialize.scalability.workload.workloads.connection_workloads import *  # noqa: F401 F403
+from materialize.scalability.workload.workloads.ddl_workloads import *  # noqa: F401 F403
+from materialize.scalability.workload.workloads.dml_dql_workloads import *  # noqa: F401 F403
+from materialize.scalability.workload.workloads.self_test_workloads import *  # noqa: F401 F403
 from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config,
 )
@@ -74,15 +78,21 @@ from materialize.version_list import (
 )
 
 SERVICES = [
+    Cockroach(setup_materialize=True),
     Materialized(
         image="materialize/materialized:latest",
         sanity_restart=False,
+        additional_system_parameter_defaults=ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS,
+        external_metadata_store=True,
+        metadata_store="cockroach",
     ),
     Postgres(),
     Balancerd(),
+    Mz(app_password=""),
 ]
 
 DEFAULT_REGRESSION_THRESHOLD = 0.2
+SCALABILITY_FRAMEWORK_VERSION = "1.5.0"
 
 INCLUDE_ZERO_IN_Y_AXIS = True
 
@@ -280,7 +290,7 @@ def validate_and_adjust_targets(
     args: argparse.Namespace, regression_against_target: str
 ) -> None:
     if args.materialize_url is not None and "remote" not in args.target:
-        assert False, "--materialize_url requires --target=remote"
+        raise RuntimeError("--materialize_url requires --target=remote")
 
     if len(args.target) == 0:
         args.target = ["HEAD"]
@@ -557,50 +567,49 @@ def upload_results_to_test_analytics(
     if not buildkite.is_in_buildkite():
         return
 
-    try:
-        head_target_endpoint = _get_head_target_endpoint(endpoints)
+    head_target_endpoint = _get_head_target_endpoint(endpoints)
 
-        if head_target_endpoint is None:
-            print(
-                "Not uploading results because not HEAD version included in endpoints"
-            )
-            return
+    if head_target_endpoint is None:
+        print("Not uploading results because not HEAD version included in endpoints")
+        return
 
-        endpoint_version_info = head_target_endpoint.try_load_version()
-        results_of_endpoint = benchmark_result.df_total_by_endpoint_name_and_workload[
-            endpoint_version_info
-        ]
+    endpoint_version_info = head_target_endpoint.try_load_version()
+    results_of_endpoint = benchmark_result.df_total_by_endpoint_name_and_workload[
+        endpoint_version_info
+    ]
 
-        test_analytics = TestAnalyticsDb(create_test_analytics_config(c))
-        test_analytics.builds.insert_build_job(was_successful=was_successful)
+    test_analytics = TestAnalyticsDb(create_test_analytics_config(c))
+    test_analytics.builds.add_build_job(was_successful=was_successful)
 
-        result_entries = []
+    result_entries = []
 
-        for workload_name, result in results_of_endpoint.items():
-            workload_version = benchmark_result.workload_version_by_name[workload_name]
-            workload_group = benchmark_result.workload_group_by_name[workload_name]
+    for workload_name, result in results_of_endpoint.items():
+        workload_version = benchmark_result.workload_version_by_name[workload_name]
+        workload_group = benchmark_result.workload_group_by_name[workload_name]
 
-            for index, row in result.data.iterrows():
-                result_entries.append(
-                    scalability_framework_result_storage.ScalabilityFrameworkResultEntry(
-                        workload_name=workload_name,
-                        workload_group=workload_group,
-                        workload_version=str(workload_version),
-                        concurrency=row[df_totals_cols.CONCURRENCY],
-                        count=row[df_totals_cols.COUNT],
-                        tps=row[df_totals_cols.TPS],
-                    )
+        for index, row in result.data.iterrows():
+            result_entries.append(
+                scalability_framework_result_storage.ScalabilityFrameworkResultEntry(
+                    workload_name=workload_name,
+                    workload_group=workload_group,
+                    workload_version=str(workload_version),
+                    concurrency=row[df_totals_cols.CONCURRENCY],
+                    count=row[df_totals_cols.COUNT],
+                    tps=row[df_totals_cols.TPS],
                 )
+            )
 
-        test_analytics.scalability_results.insert_result(
-            framework_version=SCALABILITY_FRAMEWORK_VERSION,
-            results=result_entries,
-        )
+    test_analytics.scalability_results.add_result(
+        framework_version=SCALABILITY_FRAMEWORK_VERSION,
+        results=result_entries,
+    )
 
+    try:
+        test_analytics.submit_updates()
         print("Uploaded results.")
     except Exception as e:
         # An error during an upload must never cause the build to fail
-        print(f"Uploading results failed! {e}")
+        test_analytics.on_upload_failed(e)
 
 
 def _get_head_target_endpoint(endpoints: list[Endpoint]) -> Endpoint | None:

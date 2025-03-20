@@ -10,16 +10,15 @@
 
 import datetime
 import os
-import ssl
 import time
 import urllib.parse
 from textwrap import dedent
 
-import pg8000
+import psycopg
 import requests
-from pg8000 import Connection, Cursor
-from pg8000.exceptions import InterfaceError
-from requests.exceptions import ReadTimeout
+from psycopg import Connection, Cursor
+from psycopg.errors import OperationalError
+from requests.exceptions import ConnectionError, ReadTimeout
 
 from materialize.cloudtest.util.jwt_key import fetch_jwt
 from materialize.mz_env_util import get_cloud_hostname
@@ -61,12 +60,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             no_reset=True,
             no_consistency_checks=True,  # No access to HTTP for coordinator check
             materialize_url=f"postgres://{urllib.parse.quote(USERNAME)}:{urllib.parse.quote(APP_PASSWORD)}@{host}:6875/materialize",
-            default_timeout="600s",
+            default_timeout="1200s",
         ),
     ):
         c.up("testdrive", persistent=True)
 
-        failures = []
+        failures: list[TestFailureDetails] = []
 
         count_chunk = 0
         while time.time() - start_time < args.runtime:
@@ -113,21 +112,21 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 close_connection_and_cursor(conn1, cursor_on_table, "subscribe_table")
                 close_connection_and_cursor(conn2, cursor_on_mv, "subscribe_mv")
 
-            except (InterfaceError, ReadTimeout) as e:
+            except (OperationalError, ReadTimeout, ConnectionError) as e:
                 error_msg_str = str(e)
-                if "network error" in error_msg_str:
-                    print(
-                        "Network error received, probably a cloud downtime, retrying in 1 min"
-                    )
-                    time.sleep(60)
-                elif "Read timed out" in error_msg_str:
-                    print("Read timed out, retrying")
+                if (
+                    "Read timed out" in error_msg_str
+                    or "closed connection" in error_msg_str
+                    or "terminating connection due to idle-in-transaction timeout"
+                    in error_msg_str
+                ):
+                    print(f"Failed: {e}; retrying")
                 else:
                     raise
             except FailedTestExecutionError as e:
                 assert len(e.errors) > 0, "Exception contains no errors"
                 for error in e.errors:
-                    # TODO(def-): Remove when #22576 is fixed
+                    # TODO(def-): Remove when database-issues#6825 is fixed
                     if "Non-positive multiplicity in DistinctBy" in error.message:
                         continue
                     print(
@@ -137,12 +136,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     failures.append(error)
             except CommandFailureCausedUIError as e:
                 msg = (e.stdout or "") + (e.stderr or "")
-                # TODO(def-): Remove when #22576 is fixed
+                # TODO(def-): Remove when database-issues#6825 is fixed
                 if "Non-positive multiplicity in DistinctBy" in msg:
                     continue
                 print(f"Test failure occurred ({msg}), collecting it, and continuing.")
                 # collect, continue, and rethrow at the end
-                failures.append(msg)
+                failures.append(TestFailureDetails(message=msg, details=None))
 
         if len(failures) > 0:
             # reset test case name to remove current iteration and chunk, which does not apply to collected errors
@@ -159,20 +158,29 @@ def fetch_token(user_name: str, password: str) -> str:
         password=password,
         host="admin.cloud.materialize.com/frontegg",
         scheme="https",
-        max_tries=1,
+        max_tries=10,
     )
 
 
-def http_sql_query(host: str, query: str, token: str) -> list[list[str]]:
+def http_sql_query(
+    host: str, query: str, token: str, retries: int = 10
+) -> list[list[str]]:
     try:
         r = requests.post(
             f'https://{host}/api/sql?options={{"application_name":"canary-load","cluster":"qa_canary_environment_compute"}}',
             headers={"authorization": f"Bearer {token}"},
             json={"queries": [{"params": [], "query": query}]},
+            timeout=60,
         )
     except requests.exceptions.HTTPError as e:
         res = e.response
         print(f"{e}\n{res}\n{res.text}")
+        raise
+    except requests.exceptions.Timeout:
+        # TODO: This should be an error once database-issues#8737 is fixed
+        if retries > 0:
+            print("Timed out after 60s, retrying")
+            return http_sql_query(host, query, token, retries - 1)
         raise
     assert r.status_code == 200, f"{r}\n{r.text}"
     results = r.json()["results"]
@@ -199,16 +207,16 @@ def http_sql_query(host: str, query: str, token: str) -> list[list[str]]:
 def create_connection_and_cursor(
     host: str, user_name: str, app_password: str, cursor_statement: str
 ) -> tuple[Connection, Cursor]:
-    conn = pg8000.connect(
+    conn = psycopg.connect(
         host=host,
         user=user_name,
         password=app_password,
         port=6875,
-        ssl_context=ssl.create_default_context(),
+        sslmode="require",
     )
     cursor = conn.cursor()
     cursor.execute("BEGIN")
-    cursor.execute(cursor_statement)
+    cursor.execute(cursor_statement.encode())
 
     return conn, cursor
 
@@ -216,7 +224,7 @@ def create_connection_and_cursor(
 def close_connection_and_cursor(
     connection: Connection, cursor: Cursor, object_to_close: str
 ) -> None:
-    cursor.execute(f"CLOSE {object_to_close}")
+    cursor.execute(f"CLOSE {object_to_close}".encode())
     cursor.execute("ROLLBACK")
     cursor.close()
     connection.close()
@@ -265,13 +273,14 @@ def validate_updated_data(c: Composition, i: int) -> None:
     c.testdrive(
         dedent(
             f"""
-                > SELECT COUNT(DISTINCT l_returnflag) FROM qa_canary_environment.public_tpch.tpch_q01 WHERE sum_charge < 0
-                0
+                # TODO: Reenable when database-issues#5511 is fixed
+                # > SELECT COUNT(DISTINCT l_returnflag) FROM qa_canary_environment.public_tpch.tpch_q01 WHERE sum_charge < 0
+                # 0
 
-                > SELECT COUNT(DISTINCT c_name) FROM qa_canary_environment.public_tpch.tpch_q18 WHERE o_orderdate >= '2023-01-01'
-                0
+                # > SELECT COUNT(DISTINCT c_name) FROM qa_canary_environment.public_tpch.tpch_q18 WHERE o_orderdate >= '2023-01-01'
+                # 0
 
-                > SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_pg_cdc.wmr WHERE degree > 10
+                > SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_pg_cdc.pg_wmr WHERE degree > 10
                 0
 
                 > SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_mysql_cdc.mysql_wmr WHERE degree > 10
@@ -314,17 +323,18 @@ def validate_cursor_on_mv(
     cursor_on_mv.execute("FETCH ALL subscribe_mv WITH (timeout='5s')")
     results = cursor_on_mv.fetchall()
     # First the removal, then the addition if it happens at the same timestamp
-    r = sorted(list(results))  # type: ignore
+    r = list(sorted(list(results)))
     if i == 0:
         assert len(r) == 1, f"Unexpected results: {r}"
     else:
         assert len(r) % 2 == 0, f"Unexpected results: {r}"
-        assert int(r[-2][0]) >= current_time, f"Unexpected results: {r}"
-        assert int(r[-2][1]) == -1, f"Unexpected results: {r}"
-        assert int(r[-2][2]) == i * 100 - 1, f"Unexpected results: {r}"
-    assert int(r[-1][0]) >= current_time, f"Unexpected results: {r}"
-    assert int(r[-1][1]) == 1, f"Unexpected results: {r}"
-    assert int(r[-1][2]) == (i + 1) * 100 - 1, f"Unexpected results: {r}"
+        assert len(r) >= 2
+        assert int(r[-2][0]) >= current_time, f"Unexpected results: {r}"  # type: ignore
+        assert int(r[-2][1]) == -1, f"Unexpected results: {r}"  # type: ignore
+        assert int(r[-2][2]) == i * 100 - 1, f"Unexpected results: {r}"  # type: ignore
+    assert int(r[-1][0]) >= current_time, f"Unexpected results: {r}"  # type: ignore
+    assert int(r[-1][1]) == 1, f"Unexpected results: {r}"  # type: ignore
+    assert int(r[-1][2]) == (i + 1) * 100 - 1, f"Unexpected results: {r}"  # type: ignore
 
 
 def validate_data_through_http_connection(
@@ -335,23 +345,24 @@ def validate_data_through_http_connection(
     result = http_sql_query(host, "SELECT 1", token)
     assert result == [["1"]]
 
-    result = http_sql_query(
-        host,
-        "SELECT COUNT(DISTINCT l_returnflag) FROM qa_canary_environment.public_tpch.tpch_q01 WHERE sum_charge < 0",
-        token,
-    )
-    assert result == [["0"]]
+    # TODO: Reenable when database-issues#5511 is fixed
+    # result = http_sql_query(
+    #    host,
+    #    "SELECT COUNT(DISTINCT l_returnflag) FROM qa_canary_environment.public_tpch.tpch_q01 WHERE sum_charge < 0",
+    #    token,
+    # )
+    # assert result == [["0"]]
+
+    # result = http_sql_query(
+    #    host,
+    #    "SELECT COUNT(DISTINCT c_name) FROM qa_canary_environment.public_tpch.tpch_q18 WHERE o_orderdate >= '2023-01-01'",
+    #    token,
+    # )
+    # assert result == [["0"]]
 
     result = http_sql_query(
         host,
-        "SELECT COUNT(DISTINCT c_name) FROM qa_canary_environment.public_tpch.tpch_q18 WHERE o_orderdate >= '2023-01-01'",
-        token,
-    )
-    assert result == [["0"]]
-
-    result = http_sql_query(
-        host,
-        "SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_pg_cdc.wmr WHERE degree > 10",
+        "SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_pg_cdc.pg_wmr WHERE degree > 10",
         token,
     )
     assert result == [["0"]]

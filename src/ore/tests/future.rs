@@ -16,7 +16,7 @@
 use std::panic;
 
 use mz_ore::future::OreFutureExt;
-use mz_ore::panic::set_abort_on_panic;
+use mz_ore::panic::install_enhanced_handler;
 use scopeguard::defer;
 
 // IMPORTANT!!! Do not add any additional tests to this file. This test sets and
@@ -30,7 +30,7 @@ async fn catch_panic_async() {
         panic::set_hook(old_hook);
     }
 
-    set_abort_on_panic();
+    install_enhanced_handler();
 
     let result = async {
         panic!("panicked");

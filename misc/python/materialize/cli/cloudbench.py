@@ -264,7 +264,7 @@ sudo systemctl start confluent-schema-registry
 
     bench_id = util.nonce(8)
 
-    manifest_bytes = "".join(f"{i}-{rev}\n" for i, rev in clusters).encode("utf-8")
+    manifest_bytes = "".join(f"{i}-{rev}\n" for i, rev in clusters).encode()
     boto3.client("s3").put_object(
         Body=manifest_bytes, Bucket="mz-cloudbench", Key=f"{bench_id}/MANIFEST"
     )

@@ -1,6 +1,6 @@
 # Unbilled replicas
 
-- [#20317](https://github.com/MaterializeInc/materialize/issues/20317)
+- [#20317](https://github.com/MaterializeInc/database-issues/issues/6103)
 
 ## Context
 

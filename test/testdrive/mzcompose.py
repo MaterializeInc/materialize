@@ -7,14 +7,25 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Testdrive is the basic framework and language for defining product tests under
+the expected-result/actual-result (aka golden testing) paradigm. A query is
+retried until it produces the desired result.
+"""
+
+import glob
 from pathlib import Path
 
-from materialize import ci_util
+from materialize import MZ_ROOT, buildkite, ci_util
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.azure import Azurite
 from materialize.mzcompose.services.fivetran_destination import FivetranDestination
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -25,10 +36,14 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     Redpanda(),
+    Postgres(),
+    MySql(),
+    Azurite(),
+    Mz(app_password=""),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
-    Materialized(external_minio=True),
+    Materialized(external_blob_store=True),
     FivetranDestination(volumes_extra=["tmp:/share/tmp"]),
-    Testdrive(external_minio=True),
+    Testdrive(external_blob_store=True),
 ]
 
 
@@ -72,6 +87,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--rewrite-results",
+        action="store_true",
+        help="Rewrite results, disables junit reports",
+    )
+
+    parser.add_argument(
+        "--azurite", action="store_true", help="Use Azurite as blob store instead of S3"
+    )
+
+    parser.add_argument(
         "files",
         nargs="*",
         default=["*.td"],
@@ -79,42 +104,44 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     (args, passthrough_args) = parser.parse_known_args()
 
-    dependencies = ["fivetran-destination", "minio", "materialized"]
+    dependencies = [
+        "fivetran-destination",
+        "materialized",
+        "postgres",
+        "mysql",
+        "minio",
+    ]
     if args.redpanda:
         dependencies += ["redpanda"]
     else:
         dependencies += ["zookeeper", "kafka", "schema-registry"]
 
+    additional_system_parameter_defaults = {}
+    for val in args.system_param or []:
+        x = val[0].split("=", maxsplit=1)
+        assert len(x) == 2, f"--system-param '{val}' should be the format <key>=<val>"
+        additional_system_parameter_defaults[x[0]] = x[1]
+
+    materialized = Materialized(
+        default_size=args.default_size,
+        external_blob_store=True,
+        blob_store_is_azure=args.azurite,
+        additional_system_parameter_defaults=additional_system_parameter_defaults,
+    )
+
     testdrive = Testdrive(
-        forward_buildkite_shard=True,
         kafka_default_partitions=args.kafka_default_partitions,
         aws_region=args.aws_region,
         validate_catalog_store=True,
         default_timeout=args.default_timeout,
         volumes_extra=["mzdata:/mzdata"],
-        external_minio=True,
+        external_blob_store=True,
+        blob_store_is_azure=args.azurite,
         fivetran_destination=True,
         fivetran_destination_files_path="/share/tmp",
-        entrypoint_extra=[f"--var=uses-redpanda={args.redpanda}"],
-    )
-
-    sysparams = args.system_param
-    if not args.system_param:
-        sysparams = []
-
-    additional_system_parameter_defaults = {}
-    for val in sysparams:
-        x = val[0].split("=", maxsplit=1)
-        assert len(x) == 2, f"--system-param '{val}' should be the format <key>=<val>"
-        key = x[0]
-        val = x[1]
-
-        additional_system_parameter_defaults[key] = val
-
-    materialized = Materialized(
-        default_size=args.default_size,
-        external_minio=True,
-        additional_system_parameter_defaults=additional_system_parameter_defaults,
+        entrypoint_extra=[
+            f"--var=uses-redpanda={args.redpanda}",
+        ],
     )
 
     with c.override(testdrive, materialized):
@@ -171,22 +198,35 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 f"--var=default-storage-size={materialized.default_storage_size}"
             )
 
-        junit_report = ci_util.junit_report_filename(c.name)
+        print(f"Passing through arguments to testdrive {passthrough_args}\n")
+        # do not set default args, they should be set in the td file using set-arg-default to easen the execution
+        # without mzcompose
 
-        try:
-            junit_report = ci_util.junit_report_filename(c.name)
-            print(f"Passing through arguments to testdrive {passthrough_args}\n")
-            # do not set default args, they should be set in the td file using set-arg-default to easen the execution
-            # without mzcompose
-            for file in args.files:
+        def process(file: str) -> None:
+            junit_report = ci_util.junit_report_filename(f"{c.name}_{file}")
+            try:
                 c.run_testdrive_files(
-                    f"--junit-report={junit_report}",
+                    (
+                        "--rewrite-results"
+                        if args.rewrite_results
+                        else f"--junit-report={junit_report}"
+                    ),
                     *non_default_testdrive_vars,
                     *passthrough_args,
                     file,
                 )
-                c.sanity_restart_mz()
-        finally:
-            ci_util.upload_junit_report(
-                "testdrive", Path(__file__).parent / junit_report
-            )
+            finally:
+                ci_util.upload_junit_report(
+                    "testdrive", Path(__file__).parent / junit_report
+                )
+
+        files = buildkite.shard_list(
+            [
+                file
+                for pattern in args.files
+                for file in glob.glob(pattern, root_dir=MZ_ROOT / "test" / "testdrive")
+            ],
+            lambda file: file,
+        )
+        c.test_parts(files, process)
+        c.sanity_restart_mz()

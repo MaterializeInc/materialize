@@ -108,7 +108,11 @@ impl std::fmt::Display for Determinate {
     }
 }
 
-impl std::error::Error for Determinate {}
+impl std::error::Error for Determinate {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.inner.source()
+    }
+}
 
 impl Determinate {
     /// Return a new Determinate wrapping the given error.
@@ -142,7 +146,11 @@ impl std::fmt::Display for Indeterminate {
     }
 }
 
-impl std::error::Error for Indeterminate {}
+impl std::error::Error for Indeterminate {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.inner.source()
+    }
+}
 
 /// An impl of PartialEq purely for convenience in tests and debug assertions.
 #[cfg(any(test, debug_assertions))]
@@ -193,7 +201,14 @@ impl std::fmt::Display for ExternalError {
     }
 }
 
-impl std::error::Error for ExternalError {}
+impl std::error::Error for ExternalError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ExternalError::Determinate(e) => e.source(),
+            ExternalError::Indeterminate(e) => e.source(),
+        }
+    }
+}
 
 /// An impl of PartialEq purely for convenience in tests and debug assertions.
 #[cfg(any(test, debug_assertions))]
@@ -268,6 +283,14 @@ impl From<deadpool_postgres::tokio_postgres::Error> for ExternalError {
                 inner: anyhow::Error::new(e),
             }),
         }
+    }
+}
+
+impl From<azure_core::Error> for ExternalError {
+    fn from(value: azure_core::Error) -> Self {
+        ExternalError::Indeterminate(Indeterminate {
+            inner: anyhow!(value),
+        })
     }
 }
 
@@ -370,8 +393,8 @@ pub trait Consensus: std::fmt::Debug + Send + Sync {
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError>;
 
-    /// Return `limit` versions of data stored for this `key` at sequence numbers
-    /// >= `from`, in ascending order of sequence number.
+    /// Return `limit` versions of data stored for this `key` at sequence numbers >= `from`,
+    /// in ascending order of sequence number.
     ///
     /// Returns an empty vec if `from` is greater than the current sequence
     /// number or if there is no data at this key.
@@ -578,12 +601,14 @@ impl<A: Blob + 'static> Blob for Tasked<A> {
     }
 }
 
+/// Test helpers for the crate.
 #[cfg(test)]
 pub mod tests {
     use std::future::Future;
 
     use anyhow::anyhow;
     use futures_util::TryStreamExt;
+    use mz_ore::assert_err;
     use uuid::Uuid;
 
     use crate::location::Blob;
@@ -614,6 +639,7 @@ pub mod tests {
         Ok(keys)
     }
 
+    /// Common test impl for different blob implementations.
     pub async fn blob_impl_test<
         B: Blob,
         F: Future<Output = Result<B, ExternalError>>,
@@ -785,6 +811,7 @@ pub mod tests {
         Ok(())
     }
 
+    /// Common test impl for different consensus implementations.
     pub async fn consensus_impl_test<
         C: Consensus,
         F: Future<Output = Result<C, ExternalError>>,
@@ -805,7 +832,7 @@ pub mod tests {
         assert_eq!(consensus.scan(&key, SeqNo(0), SCAN_ALL).await, Ok(vec![]));
 
         // Cannot truncate data from a key that doesn't have any data
-        assert!(consensus.truncate(&key, SeqNo(0)).await.is_err(),);
+        assert_err!(consensus.truncate(&key, SeqNo(0)).await);
 
         let state = VersionedData {
             seqno: SeqNo(5),
@@ -855,7 +882,7 @@ pub mod tests {
         assert_eq!(consensus.truncate(&key, SeqNo(5)).await, Ok(0));
 
         // Cannot truncate data with an upper bound > head.
-        assert!(consensus.truncate(&key, SeqNo(6)).await.is_err(),);
+        assert_err!(consensus.truncate(&key, SeqNo(6)).await);
 
         let new_state = VersionedData {
             seqno: SeqNo(10),
@@ -1061,28 +1088,30 @@ pub mod tests {
                 .await,
             Ok(CaSResult::Committed),
         );
-        assert!(consensus
-            .compare_and_set(
-                &Uuid::new_v4().to_string(),
-                None,
-                VersionedData {
-                    seqno: SeqNo(1 << 63),
-                    data: Bytes::new(),
-                }
-            )
-            .await
-            .is_err());
-        assert!(consensus
-            .compare_and_set(
-                &Uuid::new_v4().to_string(),
-                None,
-                VersionedData {
-                    seqno: SeqNo(u64::MAX),
-                    data: Bytes::new(),
-                }
-            )
-            .await
-            .is_err());
+        assert_err!(
+            consensus
+                .compare_and_set(
+                    &Uuid::new_v4().to_string(),
+                    None,
+                    VersionedData {
+                        seqno: SeqNo(1 << 63),
+                        data: Bytes::new(),
+                    }
+                )
+                .await
+        );
+        assert_err!(
+            consensus
+                .compare_and_set(
+                    &Uuid::new_v4().to_string(),
+                    None,
+                    VersionedData {
+                        seqno: SeqNo(u64::MAX),
+                        data: Bytes::new(),
+                    }
+                )
+                .await
+        );
 
         Ok(())
     }

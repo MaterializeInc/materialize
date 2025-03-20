@@ -229,7 +229,7 @@ statement ok
 CREATE TABLE t (c text);
 
 query T multiline
-EXPLAIN SELECT parse_ident(c)::text FROM t;
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT parse_ident(c)::text FROM t;
 ----
 Explained Query:
   Project (#1)
@@ -384,7 +384,7 @@ statement ok
 CREATE TABLE t (c text);
 
 query T multiline
-EXPLAIN SELECT mz_internal.mz_normalize_object_name(c)::text FROM t;
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT mz_internal.mz_normalize_object_name(c)::text FROM t;
 ----
 Explained Query:
   Project (#1)

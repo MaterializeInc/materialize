@@ -182,8 +182,8 @@ impl ExprHumanizer for TestCatalog {
         self.humanize_id_unqualified(id).map(|name| vec![name])
     }
 
-    fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
-        DummyHumanizer.humanize_scalar_type(ty)
+    fn humanize_scalar_type(&self, ty: &ScalarType, postgres_compat: bool) -> String {
+        DummyHumanizer.humanize_scalar_type(ty, postgres_compat)
     }
 
     fn column_names_for_id(&self, _id: GlobalId) -> Option<Vec<String>> {
@@ -215,7 +215,7 @@ impl ExprHumanizer for TestCatalog {
 pub struct MirScalarExprDeserializeContext;
 
 impl MirScalarExprDeserializeContext {
-    fn build_column(&mut self, token: Option<TokenTree>) -> Result<MirScalarExpr, String> {
+    fn build_column(&self, token: Option<TokenTree>) -> Result<MirScalarExpr, String> {
         if let Some(TokenTree::Literal(literal)) = token {
             return Ok(MirScalarExpr::Column(
                 literal
@@ -231,7 +231,7 @@ impl MirScalarExprDeserializeContext {
     }
 
     fn build_literal_if_able<I>(
-        &mut self,
+        &self,
         first_arg: TokenTree,
         rest_of_stream: &mut I,
     ) -> Result<Option<MirScalarExpr>, String>
@@ -239,7 +239,7 @@ impl MirScalarExprDeserializeContext {
         I: Iterator<Item = TokenTree>,
     {
         match &first_arg {
-            TokenTree::Ident(i) if i.to_string().to_ascii_lowercase() == "ok" => {
+            TokenTree::Ident(i) if i.to_string().eq_ignore_ascii_case("ok") => {
                 // literal definition is mandatory after OK token
                 let first_arg = if let Some(first_arg) = rest_of_stream.next() {
                     first_arg
@@ -251,7 +251,7 @@ impl MirScalarExprDeserializeContext {
                     _ => Err(format!("expected literal after Ident: `{}`", i)),
                 }
             }
-            TokenTree::Ident(i) if i.to_string().to_ascii_lowercase() == "err" => {
+            TokenTree::Ident(i) if i.to_string().eq_ignore_ascii_case("err") => {
                 let error = deserialize_generic(rest_of_stream, "EvalError")?;
                 let typ: Option<ScalarType> =
                     deserialize_optional_generic(rest_of_stream, "ScalarType")?;
@@ -265,7 +265,7 @@ impl MirScalarExprDeserializeContext {
     }
 
     fn build_literal_ok_if_able<I>(
-        &mut self,
+        &self,
         first_arg: TokenTree,
         rest_of_stream: &mut I,
     ) -> Result<Option<MirScalarExpr>, String>
@@ -457,7 +457,7 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
         })
     }
 
-    fn build_get(&mut self, token: Option<TokenTree>) -> Result<MirRelationExpr, String> {
+    fn build_get(&self, token: Option<TokenTree>) -> Result<MirRelationExpr, String> {
         match token {
             Some(TokenTree::Ident(ident)) => {
                 let name = ident.to_string();

@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-NIGHTLY_RUST_DATE=2024-04-19
+NIGHTLY_RUST_DATE=2024-12-02
 
 cd "$(dirname "$0")/.."
 
@@ -24,7 +24,7 @@ cd "$(dirname "$0")/.."
 
 if [[ $# -lt 2 ]]
 then
-    echo "usage: $0 <command> <stable|nightly> [<args>...]
+    echo "usage: $0 <command> <stable|nightly|min> [<args>...]
 
 Manages the ci-builder Docker image, which contains the dependencies required
 to build, test, and deploy the code in this repository.
@@ -40,17 +40,25 @@ For details, consult ci/builder/README.md."
 fi
 
 cmd=$1 && shift
-channel=$1 && shift
+flavor=$1 && shift
 
 rust_date=
-case "$channel" in
-    stable) rust_version=$(sed -n 's/rust-version = "\(.*\)"/\1/p' Cargo.toml) ;;
+case "$flavor" in
+    min)
+        docker_target=ci-builder-min
+        rust_version=$(sed -n 's/rust-version = "\(.*\)"/\1/p' Cargo.toml)
+        ;;
+    stable)
+        docker_target=ci-builder-full
+        rust_version=$(sed -n 's/rust-version = "\(.*\)"/\1/p' Cargo.toml)
+        ;;
     nightly)
+        docker_target=ci-builder-full
         rust_version=nightly
         rust_date=/$NIGHTLY_RUST_DATE
         ;;
     *)
-        printf "unknown rust channel %q\n" "$channel"
+        printf "unknown CI builder flavor %q\n" "$flavor"
         exit 1
         ;;
 esac
@@ -58,7 +66,7 @@ esac
 arch_gcc=${MZ_DEV_CI_BUILDER_ARCH:-$(arch_gcc)}
 arch_go=$(arch_go "$arch_gcc")
 
-cid_file=ci/builder/.${channel%%-*}.cidfile
+cid_file=ci/builder/.${flavor%%-*}.cidfile
 
 rust_components=rustc,cargo,rust-std-$arch_gcc-unknown-linux-gnu,llvm-tools-preview
 if [[ $rust_version = nightly ]]; then
@@ -67,37 +75,7 @@ else
     rust_components+=,clippy-preview,rustfmt-preview
 fi
 
-# Target a specific CPU to get better performance, i.e. use more modern instructions.
-#
-# All of the x86-64 and ARM hardware we run in production support the v3 and neoverse-n1 micro
-# architectures, respectively.
-#
-# Sync: This target-cpu should be kept in sync with the one in ci-builder and .cargo/config.
-x86_64_target_cpu="x86-64-v3"
-aarch64_target_cpu="neoverse-n1"
-
-rust_cpu_target=""
-case "$arch_gcc" in
-    x86_64) rust_cpu_target="$x86_64_target_cpu" ;;
-    aarch64) rust_cpu_target="$aarch64_target_cpu" ;;
-    *) die "unknown host architecture \"$arch\"" ;;
-esac
-
-# Enable specific CPU features that we know our cloud infra supports.
-#
-# Note: specifying a target_cpu enables many features, these are specific ones that target_cpu
-# might miss.
-#
-# Sync: This list of features should be kept in sync with the one in xcompile and .cargo/config.
-x86_64_target_features="+aes,+pclmulqdq"
-aaarch64_target_features="+aes,+sha2"
-
-rust_target_features=""
-case "$arch_gcc" in
-    x86_64) rust_target_features="$x86_64_target_features" ;;
-    aarch64) rust_target_features="$aaarch64_target_features" ;;
-    *) die "unknown host architecture \"$arch\"" ;;
-esac
+bazel_version=$(cat .bazelversion)
 
 uid=$(id -u)
 gid=$(id -g)
@@ -113,10 +91,10 @@ build() {
         --build-arg "RUST_VERSION=$rust_version" \
         --build-arg "RUST_DATE=$rust_date" \
         --build-arg "RUST_COMPONENTS=$rust_components" \
-        --build-arg "RUST_CPU_TARGET=$rust_cpu_target" \
-        --build-arg "RUST_TARGET_FEATURES=$rust_target_features" \
+        --build-arg "BAZEL_VERSION=$bazel_version" \
         --tag materialize/ci-builder:"$tag" \
         --tag materialize/ci-builder:"$cache_tag" \
+        --target $docker_target \
         "$@" ci/builder
 }
 
@@ -134,7 +112,7 @@ fi
 # *inside* this image. See materialize.git.expand_globs in the Python code for
 # details on this computation.
 files=$(cat \
-        <(git diff --name-only -z 4b825dc642cb6eb9a060e54bf8d69288fbee4904 ci/builder) \
+        <(git diff --name-only -z 4b825dc642cb6eb9a060e54bf8d69288fbee4904 ci/builder .bazelversion) \
         <(git ls-files --others --exclude-standard -z ci/builder) \
     | LC_ALL=C sort -z \
     | xargs -0 "$shasum")
@@ -142,6 +120,7 @@ files+="
 rust-version:$rust_version
 rust-date:$rust_date
 arch:$arch_gcc
+flavor:$flavor
 "
 tag=$(echo "$files" | python3 -c '
 import base64
@@ -152,7 +131,7 @@ input = sys.stdin.buffer.read()
 hash = base64.b32encode(hashlib.sha1(input).digest())
 print(hash.decode())
 ')
-cache_tag=cache-$rust_version-$arch_go
+cache_tag=cache-$flavor-$rust_version-$arch_go
 
 
 case "$cmd" in
@@ -203,19 +182,16 @@ case "$cmd" in
             --env AWS_DEFAULT_REGION
             --env AWS_SECRET_ACCESS_KEY
             --env AWS_SESSION_TOKEN
-            --env BUILDKITE_CI_API_KEY
             --env CANARY_LOADTEST_APP_PASSWORD
             --env CANARY_LOADTEST_PASSWORD
-            --env CI
-            --env CI_SANITIZER
-            --env CI_COVERAGE_ENABLED
-            --env CI_FINAL_PREFLIGHT_CHECK_VERSION
-            --env CI_FINAL_PREFLIGHT_CHECK_ROLLBACK
-            --env CI_TEST_SELECTION
             --env CLOUDTEST_CLUSTER_DEFINITION_FILE
             --env COMMON_ANCESTOR_OVERRIDE
             --env CONFLUENT_CLOUD_DEVEX_KAFKA_PASSWORD
             --env CONFLUENT_CLOUD_DEVEX_KAFKA_USERNAME
+            --env AZURE_SERVICE_ACCOUNT_USERNAME
+            --env AZURE_SERVICE_ACCOUNT_PASSWORD
+            --env AZURE_SERVICE_ACCOUNT_TENANT
+            --env GCP_SERVICE_ACCOUNT_JSON
             --env GITHUB_TOKEN
             --env GPG_KEY
             --env LAUNCHDARKLY_API_TOKEN
@@ -226,17 +202,32 @@ case "$cmd" in
             --env NO_COLOR
             --env NPM_TOKEN
             --env POLAR_SIGNALS_API_TOKEN
+            --env PRODUCTION_ANALYTICS_USERNAME
             --env PRODUCTION_ANALYTICS_APP_PASSWORD
-            --env PRODUCTION_SANDBOX_APP_PASSWORD
             --env PYPI_TOKEN
+            --env RUST_MIN_STACK
             --env MZ_DEV_BUILD_SHA
-            --env BUILDKITE_SENTRY_DSN
             # For Miri with nightly Rust
             --env ZOOKEEPER_ADDR
             --env KAFKA_ADDRS
             --env SCHEMA_REGISTRY_URL
+            --env STEP_START_TIMESTAMP_WITH_TZ
             --env POSTGRES_URL
             --env COCKROACH_URL
+            # For ci-closed-issues-detect
+            --env GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN
+            # For auto_cut_release
+            --env GIT_AUTHOR_EMAIL
+            --env GIT_AUTHOR_NAME
+            --env GIT_COMMITTER_EMAIL
+            --env GIT_COMMITTER_NAME
+            # For cloud canary
+            --env REDPANDA_CLOUD_CLIENT_ID
+            --env REDPANDA_CLOUD_CLIENT_SECRET
+            --env QA_BENCHMARKING_APP_PASSWORD
+            # For self managed docs
+            --env BUILDKITE_BRANCH
+            --env BUILDKITE_ORGANIZATION_SLUG
         )
 
         if [[ $detach_container == "true" ]]; then
@@ -247,7 +238,7 @@ case "$cmd" in
             args+=("--name=$container_name_param")
         fi
 
-        for env in $(printenv | grep -E '^(BUILDKITE|MZCOMPOSE)' | sed 's/=.*//'); do
+        for env in $(printenv | grep -E '^(BUILDKITE|MZCOMPOSE|CI)' | sed 's/=.*//'); do
             args+=(--env "$env")
         done
         if [[ -t 1 ]]; then
@@ -265,6 +256,13 @@ case "$cmd" in
             args+=(
                 --volume "$SSH_AUTH_SOCK:/tmp/ssh-agent.sock"
                 --env "SSH_AUTH_SOCK=/tmp/ssh-agent.sock"
+            )
+        fi
+        # Forward the GitHub output file, if available.
+        if [[ "${GITHUB_OUTPUT:-}" ]]; then
+            args+=(
+                --volume "$GITHUB_OUTPUT:/tmp/github-output"
+                --env "GITHUB_OUTPUT=/tmp/github-output"
             )
         fi
         if [[ "$(uname -s)" = Linux ]]; then
@@ -320,6 +318,16 @@ case "$cmd" in
                 --env "RUSTC_WRAPPER=sccache"
                 --env SCCACHE_BUCKET
             )
+        fi
+        if [[ "${CI_BAZEL_BUILD:-}" ]]; then
+            args+=(
+                --tmpfs "/dev/shm:exec,dev,suid,size=128g"
+            )
+        fi
+        # For git-worktrees add the original repository at its original path
+        if [[ "$(git rev-parse --git-dir)" != "$(git rev-parse --git-common-dir)" ]]; then
+            GIT_ROOT_DIR="$(git rev-parse --git-dir | sed -e "s#/.git/worktrees/.*#/#")"
+            args+=(--volume "$GIT_ROOT_DIR:$GIT_ROOT_DIR")
         fi
         rm -f "$cid_file"
         docker run "${args[@]}" "materialize/ci-builder:$tag" "${docker_command[@]}"

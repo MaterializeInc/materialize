@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use columnar::Columnar;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use mz_expr::MfpPlan;
 use mz_expr::{MapFilterProject, MirScalarExpr, TableFunc};
@@ -26,10 +27,11 @@ impl<G> Context<G>
 where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
+    <G::Timestamp as Columnar>::Container: Clone + Send,
 {
-    /// Renders `relation_expr` followed by `map_filter_project` if provided.
+    /// Applies a `TableFunc` to every row, followed by an `mfp`.
     pub fn render_flat_map(
-        &mut self,
+        &self,
         input: CollectionBundle<G>,
         func: TableFunc,
         exprs: Vec<MirScalarExpr>,
@@ -38,8 +40,8 @@ where
     ) -> CollectionBundle<G> {
         let until = self.until.clone();
         let mfp_plan = mfp.into_plan().expect("MapFilterProject planning failed");
-        let (ok_collection, err_collection) = input.as_specific_collection(input_key.as_deref());
-        let mut storage = Vec::new();
+        let (ok_collection, err_collection) =
+            input.as_specific_collection(input_key.as_deref(), &self.config_set);
         let stream = ok_collection.inner;
         let (oks, errs) = stream.unary_fallible(Pipeline, "FlatMapStage", move |_, _| {
             Box::new(move |input, ok_output, err_output| {
@@ -50,12 +52,10 @@ where
                 let mut table_func_output = Vec::new();
 
                 input.for_each(|cap, data| {
-                    data.swap(&mut storage);
-
                     let mut ok_session = ok_output.session_with_builder(&cap);
                     let mut err_session = err_output.session_with_builder(&cap);
 
-                    'input: for (input_row, time, diff) in storage.drain(..) {
+                    'input: for (input_row, time, diff) in data.drain(..) {
                         let temp_storage = RowArena::new();
 
                         // Unpack datums for expression evaluation.
@@ -133,6 +133,7 @@ fn drain_through_mfp<T>(
     >,
 ) where
     T: crate::render::RenderTimestamp,
+    <T as Columnar>::Container: Clone + Send,
 {
     let temp_storage = RowArena::new();
     let binding = SharedRow::get();

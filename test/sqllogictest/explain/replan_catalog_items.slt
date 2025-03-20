@@ -32,7 +32,7 @@ CREATE INDEX ON t1(y);
 
 # EXPLAIN and EXPLAIN REPLAN should coincide.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
@@ -57,7 +57,7 @@ EOF
 
 # EXPLAIN and EXPLAIN REPLAN should coincide.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 REPLAN MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
@@ -82,19 +82,18 @@ EOF
 
 # EXPLAIN CREATE should differ from the above two.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 CREATE MATERIALIZED VIEW mv AS SELECT x, sum(z) FROM t1 JOIN t2 USING(y) GROUP BY x;
 ----
 materialize.public.mv:
   Reduce group_by=[#0] aggregates=[sum(#1)]
     Project (#0, #3)
-      Filter (#1) IS NOT NULL
-        Join on=(#1 = #2) type=differential
-          ArrangeBy keys=[[#1]]
-            ReadIndex on=t1 t1_y_idx=[differential join]
-          ArrangeBy keys=[[#0]]
-            Filter (#0) IS NOT NULL
-              ReadStorage materialize.public.t2
+      Join on=(#1 = #2) type=differential
+        ArrangeBy keys=[[#1]]
+          ReadIndex on=t1 t1_y_idx=[differential join]
+        ArrangeBy keys=[[#0]]
+          Filter (#0) IS NOT NULL
+            ReadStorage materialize.public.t2
 
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
@@ -111,7 +110,7 @@ CREATE INDEX v_idx ON v(x);
 
 # EXPLAIN and EXPLAIN REPLAN should coincide.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 INDEX v_idx;
 ----
 materialize.public.v_idx:
@@ -121,13 +120,12 @@ materialize.public.v_idx:
 materialize.public.v:
   Reduce group_by=[#0] aggregates=[sum(#1)]
     Project (#0, #3)
-      Filter (#1) IS NOT NULL
-        Join on=(#1 = #2) type=differential
-          ArrangeBy keys=[[#1]]
-            ReadIndex on=t1 t1_y_idx=[differential join]
-          ArrangeBy keys=[[#0]]
-            Filter (#0) IS NOT NULL
-              ReadStorage materialize.public.t2
+      Join on=(#1 = #2) type=differential
+        ArrangeBy keys=[[#1]]
+          ReadIndex on=t1 t1_y_idx=[differential join]
+        ArrangeBy keys=[[#0]]
+          Filter (#0) IS NOT NULL
+            ReadStorage materialize.public.t2
 
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
@@ -141,7 +139,7 @@ EOF
 
 # EXPLAIN and EXPLAIN REPLAN should coincide.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 REPLAN INDEX v_idx;
 ----
 materialize.public.v_idx:
@@ -151,13 +149,12 @@ materialize.public.v_idx:
 materialize.public.v:
   Reduce group_by=[#0] aggregates=[sum(#1)]
     Project (#0, #3)
-      Filter (#1) IS NOT NULL
-        Join on=(#1 = #2) type=differential
-          ArrangeBy keys=[[#1]]
-            ReadIndex on=t1 t1_y_idx=[differential join]
-          ArrangeBy keys=[[#0]]
-            Filter (#0) IS NOT NULL
-              ReadStorage materialize.public.t2
+      Join on=(#1 = #2) type=differential
+        ArrangeBy keys=[[#1]]
+          ReadIndex on=t1 t1_y_idx=[differential join]
+        ArrangeBy keys=[[#0]]
+          Filter (#0) IS NOT NULL
+            ReadStorage materialize.public.t2
 
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
@@ -171,7 +168,7 @@ EOF
 
 # EXPLAIN CREATE should differ from the above two.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 CREATE INDEX ON v(x);
 ----
 materialize.public.v_x_idx:

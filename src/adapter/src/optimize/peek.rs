@@ -17,8 +17,10 @@ use mz_compute_types::dataflows::IndexDesc;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_ore::soft_assert_or_log;
 use mz_repr::explain::trace_plan;
 use mz_repr::{GlobalId, RelationType, Timestamp};
+use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_transform::dataflow::DataflowMetainfo;
@@ -26,7 +28,7 @@ use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
 use mz_transform::{StatisticsOracle, TransformCtx};
 use timely::progress::Antichain;
-use tracing::{debug_span, warn};
+use tracing::debug_span;
 
 use crate::catalog::Catalog;
 use crate::coord::peek::{create_fast_path_plan, PeekDataflowPlan, PeekPlan};
@@ -34,7 +36,6 @@ use crate::optimize::dataflows::{
     prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, EvalTime,
     ExprPrepStyle,
 };
-use crate::optimize::metrics::OptimizerMetrics;
 use crate::optimize::{
     optimize_mir_local, trace_plan, MirDataflowDescription, Optimize, OptimizeMode,
     OptimizerConfig, OptimizerError,
@@ -132,7 +133,7 @@ impl Debug for Optimizer {
 pub struct Unresolved;
 
 /// The (sealed intermediate) result after HIR ⇒ MIR lowering and decorrelation
-/// and MIR optimization.
+/// and local MIR optimization.
 #[derive(Clone)]
 pub struct LocalMirPlan<T = Unresolved> {
     expr: MirRelationExpr,
@@ -156,9 +157,6 @@ pub struct Resolved<'s> {
 /// 4. optimizing the resulting `DataflowDescription` with `MIR` plans.
 /// 5. MIR ⇒ LIR lowering, and
 /// 6. optimizing the resulting `DataflowDescription` with `LIR` plans.
-///
-///  MIR ⇒ LIR lowering and optimizing the resulting
-/// `DataflowDescription` with `LIR` plans.
 #[derive(Debug)]
 pub struct GlobalLirPlan {
     peek_plan: PeekPlan,
@@ -176,12 +174,16 @@ impl Optimize<HirRelationExpr> for Optimizer {
         trace_plan!(at: "raw", &expr);
 
         // HIR ⇒ MIR lowering and decorrelation
-        let expr = expr.lower(&self.config)?;
+        let expr = expr.lower(&self.config, Some(&self.metrics))?;
 
         // MIR ⇒ MIR optimization (local)
         let mut df_meta = DataflowMetainfo::default();
-        let mut transform_ctx =
-            TransformCtx::local(&self.config.features, &self.typecheck_ctx, &mut df_meta);
+        let mut transform_ctx = TransformCtx::local(
+            &self.config.features,
+            &self.typecheck_ctx,
+            &mut df_meta,
+            Some(&self.metrics),
+        );
         let expr = optimize_mir_local(expr, &mut transform_ctx)?.into_inner();
 
         self.duration += time.elapsed();
@@ -255,7 +257,12 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         let debug_name = format!("oneshot-select-{}", self.select_id);
         let mut df_desc = MirDataflowDescription::new(debug_name.to_string());
 
-        df_builder.import_view_into_dataflow(&self.select_id, &expr, &mut df_desc)?;
+        df_builder.import_view_into_dataflow(
+            &self.select_id,
+            &expr,
+            &mut df_desc,
+            &self.config.features,
+        )?;
         df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
         // Resolve all unmaterializable function calls except mz_now(), because
@@ -293,13 +300,14 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         //
         // If `timestamp_ctx.antichain()` is empty, `timestamp_ctx.timestamp()`
         // will return `None` and we use the default (empty) `until`. Otherwise,
-        // we expect to be able to set `until = as_of + 1` without an overflow.
-        if let Some(as_of) = timestamp_ctx.timestamp() {
-            if let Some(until) = as_of.checked_add(1) {
-                df_desc.until = Antichain::from_elem(until);
-            } else {
-                warn!(as_of = %as_of, "as_of + 1 overflow");
-            }
+        // we expect to be able to set `until = as_of + 1` without an overflow, unless
+        // we query at the maximum timestamp. In this case, the default empty `until`
+        // is the correct choice.
+        if let Some(until) = timestamp_ctx
+            .timestamp()
+            .and_then(Timestamp::try_step_forward)
+        {
+            df_desc.until = Antichain::from_elem(until);
         }
 
         // Construct TransformCtx for global optimization.
@@ -309,9 +317,32 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             &self.config.features,
             &self.typecheck_ctx,
             &mut df_meta,
+            Some(&self.metrics),
         );
+
+        // Let's already try creating a fast path plan. If successful, we don't need to run the
+        // whole optimizer pipeline, but just a tiny subset of it. (But we'll need to run
+        // `create_fast_path_plan` later again, because, e.g., running `LiteralConstraints` is still
+        // ahead of us.)
+        let use_fast_path_optimizer = match create_fast_path_plan(
+            &mut df_desc,
+            self.select_id,
+            Some(&self.finishing),
+            self.config.features.persist_fast_path_limit,
+        ) {
+            Ok(maybe_fast_path_plan) => maybe_fast_path_plan.is_some(),
+            Err(OptimizerError::UnsafeMfpPlan) => {
+                // This is expected, in that `create_fast_path_plan` can choke on `mz_now`, which we
+                // haven't removed yet.
+                false
+            }
+            Err(e) => {
+                return Err(e);
+            }
+        };
+
         // Run global optimization.
-        mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx)?;
+        mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx, use_fast_path_optimizer)?;
 
         if self.config.mode == OptimizeMode::Explain {
             // Collect the list of indexes used by the dataflow at this point.
@@ -375,6 +406,11 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
                 PeekPlan::FastPath(plan)
             }
             _ => {
+                soft_assert_or_log!(
+                    !use_fast_path_optimizer || self.config.no_fast_path,
+                    "The fast_path_optimizer shouldn't make a fast path plan slow path."
+                );
+
                 // Ensure all expressions are normalized before finalizing.
                 for build in df_desc.objects_to_build.iter_mut() {
                     normalize_lets(&mut build.plan.0, &self.config.features)?

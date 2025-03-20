@@ -65,9 +65,9 @@ pub async fn ensure_gtid_consistency(conn: &mut Conn) -> Result<(), MySqlError> 
 pub async fn ensure_replication_commit_order(conn: &mut Conn) -> Result<(), MySqlError> {
     // This system variables were renamed between MySQL 5.7 and 8.0
     let is_multi_threaded = match query_sys_var(conn, "replica_parallel_workers").await {
-        Ok(val) => val != "0" || val != "1",
+        Ok(val) => val != "0" && val != "1",
         Err(_) => match query_sys_var(conn, "slave_parallel_workers").await {
-            Ok(val) => val != "0" || val != "1",
+            Ok(val) => val != "0" && val != "1",
             Err(err) => return Err(err),
         },
     };

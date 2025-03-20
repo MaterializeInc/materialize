@@ -27,6 +27,7 @@ use mz_expr::visit::Visit;
 use mz_expr::{BinaryFunc, VariadicFunc};
 use mz_expr::{MapFilterProject, MirRelationExpr, MirScalarExpr};
 
+use crate::analysis::equivalences::EquivalenceClasses;
 use crate::canonicalize_mfp::CanonicalizeMfp;
 use crate::predicate_pushdown::PredicatePushdown;
 use crate::{TransformCtx, TransformError};
@@ -39,12 +40,16 @@ use crate::{TransformCtx, TransformError};
 pub struct Join;
 
 impl crate::Transform for Join {
+    fn name(&self) -> &'static str {
+        "JoinFusion"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "join_fusion")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
@@ -61,7 +66,7 @@ impl crate::Transform for Join {
         // and CanonicalizeMfp in order to re-construct an equi-Join which would
         // be de-constructed as a Filter + CrossJoin by the action application.
         //
-        // TODO(#25918): This is a temporary solution which fixes the "Product
+        // TODO(database-issues#7728): This is a temporary solution which fixes the "Product
         // limits" issue observed in a failed Nightly run when the PR was first
         // tested (https://buildkite.com/materialize/nightly/builds/6670). We
         // should re-evaluate if we need this ad-hoc re-normalization step when
@@ -90,11 +95,15 @@ impl Join {
             // Local non-fusion tidying.
             inputs.retain(|e| !e.is_constant_singleton());
             if inputs.len() == 0 {
-                *relation = MirRelationExpr::constant(vec![vec![]], mz_repr::RelationType::empty());
+                *relation = MirRelationExpr::constant(vec![vec![]], mz_repr::RelationType::empty())
+                    .filter(unpack_equivalences(equivalences));
                 return Ok(false);
             }
-            if inputs.len() == 1 && equivalences.is_empty() {
-                *relation = inputs.pop().unwrap();
+            if inputs.len() == 1 {
+                *relation = inputs
+                    .pop()
+                    .unwrap()
+                    .filter(unpack_equivalences(equivalences));
                 return Ok(false);
             }
 
@@ -240,10 +249,21 @@ impl Join {
     }
 }
 
-/// Unpacks multiple equivalence classes into conjuncts that should be equivalent.
+/// Unpacks multiple equivalence classes into conjuncts that should all be true, essentially
+/// turning join equivalences into a Filter.
+///
+/// Note that a join equivalence treats null equal to null, while an `=` in a Filter does not.
+/// This function is mindful of this.
 fn unpack_equivalences(equivalences: &Vec<Vec<MirScalarExpr>>) -> Vec<MirScalarExpr> {
     let mut result = Vec::new();
-    for class in equivalences.iter() {
+    for mut class in equivalences.iter().cloned() {
+        // Let's put the simplest expression at the beginning of `class`, because all the
+        // expressions will involve `class[0]`. For example, without sorting, we can get stuff like
+        // `Filter (#0 = 5) AND (#0 = #1)`.
+        // With sorting, this comes out as
+        // `Filter (#0 = 5) AND (#1 = 5)`.
+        // TODO: In the long term, we might want to call the entire `EquivalenceClasses::minimize`.
+        class.sort_by(EquivalenceClasses::mir_scalar_expr_complexity);
         for expr in class[1..].iter() {
             result.push(MirScalarExpr::CallVariadic {
                 func: VariadicFunc::Or,

@@ -1,7 +1,7 @@
 # `ALTER CONNECTION`
 
 -   Associated:
-    -   https://github.com/MaterializeInc/materialize/issues/17620
+    -   https://github.com/MaterializeInc/database-issues/issues/5128
 
 ## Context
 

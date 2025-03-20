@@ -199,19 +199,25 @@
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use mz_ore::error::ErrorExt;
 use mz_repr::{GlobalId, Row};
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
-use mz_storage_types::sources::{GenericSourceConnection, IngestionDescription};
+use mz_storage_types::dyncfgs;
+use mz_storage_types::oneshot_sources::{OneshotIngestionDescription, OneshotIngestionRequest};
+use mz_storage_types::sinks::StorageSinkDesc;
+use mz_storage_types::sources::{GenericSourceConnection, IngestionDescription, SourceConnection};
+use mz_timely_util::antichain::AntichainExt;
 use timely::communication::Allocate;
 use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback, Leave, Map};
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
+use tokio::sync::Semaphore;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::source::RawSourceCreationConfig;
 use crate::storage_state::StorageState;
 
 mod persist_sink;
@@ -232,7 +238,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
     source_resume_uppers: BTreeMap<GlobalId, Vec<Row>>,
 ) {
     let worker_id = timely_worker.index();
-    let worker_logging = timely_worker.log_register().get("timely");
+    let worker_logging = timely_worker.log_register().get("timely").map(Into::into);
     let debug_name = primary_source_id.to_string();
     let name = format!("Source dataflow: {debug_name}");
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, root_scope| {
@@ -248,67 +254,94 @@ pub fn build_ingestion_dataflow<A: Allocate>(
             let (feedback_handle, feedback) = mz_scope.feedback(Default::default());
 
             let connection = description.desc.connection.clone();
-            let (mut outputs, source_health, source_tokens) = match connection {
+            tracing::info!(
+                id = %primary_source_id,
+                as_of = %as_of.pretty(),
+                resume_uppers = ?resume_uppers,
+                source_resume_uppers = ?source_resume_uppers,
+                "timely-{worker_id} building {} source pipeline", connection.name(),
+            );
+
+            let busy_signal = if dyncfgs::SUSPENDABLE_SOURCES
+                .get(storage_state.storage_configuration.config_set())
+            {
+                Arc::new(Semaphore::new(1))
+            } else {
+                Arc::new(Semaphore::new(Semaphore::MAX_PERMITS))
+            };
+
+            let base_source_config = RawSourceCreationConfig {
+                name: format!("{}-{}", connection.name(), primary_source_id),
+                id: primary_source_id,
+                source_exports: description.source_exports.clone(),
+                timestamp_interval: description.desc.timestamp_interval,
+                worker_id: mz_scope.index(),
+                worker_count: mz_scope.peers(),
+                now_fn: storage_state.now.clone(),
+                metrics: storage_state.metrics.clone(),
+                as_of: as_of.clone(),
+                resume_uppers: resume_uppers.clone(),
+                source_resume_uppers,
+                storage_metadata: description.ingestion_metadata.clone(),
+                persist_clients: Arc::clone(&storage_state.persist_clients),
+                source_statistics: storage_state
+                    .aggregated_statistics
+                    .get_source(&primary_source_id)
+                    .expect("statistics initialized")
+                    .clone(),
+                shared_remap_upper: Rc::clone(
+                    &storage_state.source_uppers[&description.remap_collection_id],
+                ),
+                // This might quite a large clone, but its just during rendering
+                config: storage_state.storage_configuration.clone(),
+                remap_collection_id: description.remap_collection_id.clone(),
+                busy_signal: Arc::clone(&busy_signal),
+            };
+
+            let (outputs, source_health, source_tokens) = match connection {
                 GenericSourceConnection::Kafka(c) => crate::render::sources::render_source(
                     mz_scope,
                     &debug_name,
-                    primary_source_id,
                     c,
                     description.clone(),
-                    as_of.clone(),
-                    resume_uppers.clone(),
-                    source_resume_uppers,
                     &feedback,
                     storage_state,
+                    base_source_config,
                 ),
                 GenericSourceConnection::Postgres(c) => crate::render::sources::render_source(
                     mz_scope,
                     &debug_name,
-                    primary_source_id,
                     c,
                     description.clone(),
-                    as_of.clone(),
-                    resume_uppers.clone(),
-                    source_resume_uppers,
                     &feedback,
                     storage_state,
+                    base_source_config,
                 ),
                 GenericSourceConnection::MySql(c) => crate::render::sources::render_source(
                     mz_scope,
                     &debug_name,
-                    primary_source_id,
                     c,
                     description.clone(),
-                    as_of.clone(),
-                    resume_uppers.clone(),
-                    source_resume_uppers,
                     &feedback,
                     storage_state,
+                    base_source_config,
                 ),
                 GenericSourceConnection::LoadGenerator(c) => crate::render::sources::render_source(
                     mz_scope,
                     &debug_name,
-                    primary_source_id,
                     c,
                     description.clone(),
-                    as_of.clone(),
-                    resume_uppers.clone(),
-                    source_resume_uppers,
                     &feedback,
                     storage_state,
+                    base_source_config,
                 ),
             };
             tokens.extend(source_tokens);
 
-            let mut health_configs = BTreeMap::new();
-
             let mut upper_streams = vec![];
             let mut health_streams = vec![source_health];
-            let source_exports = description.source_exports_with_output_indices();
-            for (export_id, export) in source_exports {
-                let (ok, err) = outputs
-                    .get_mut(export.ingestion_output)
-                    .expect("known to exist");
+            for (export_id, (ok, err)) in outputs {
+                let export = &description.source_exports[&export_id];
                 let source_data = ok.map(Ok).concat(&err.map(Err));
 
                 let metrics = storage_state.metrics.get_source_persist_sink_metrics(
@@ -316,11 +349,13 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     primary_source_id,
                     worker_id,
                     &export.storage_metadata.data_shard,
-                    export.ingestion_output,
                 );
 
                 tracing::info!(
-                    "timely-{worker_id} rendering {export_id} with multi-worker persist_sink",
+                    id = %primary_source_id,
+                    "timely-{worker_id}: persisting export {} of {}",
+                    export_id,
+                    primary_source_id
                 );
                 let (upper_stream, errors, sink_tokens) = crate::render::persist_sink::render(
                     mz_scope,
@@ -329,22 +364,21 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     source_data,
                     storage_state,
                     metrics,
-                    export.ingestion_output,
+                    Arc::clone(&busy_signal),
                 );
                 upper_streams.push(upper_stream);
                 tokens.extend(sink_tokens);
 
-                let sink_health = errors.map(|err: Rc<anyhow::Error>| {
+                let sink_health = errors.map(move |err: Rc<anyhow::Error>| {
                     let halt_status =
                         HealthStatusUpdate::halting(err.display_with_causes().to_string(), None);
                     HealthStatusMessage {
-                        index: 0,
+                        id: None,
                         namespace: StatusNamespace::Internal,
                         update: halt_status,
                     }
                 });
                 health_streams.push(sink_health.leave());
-                health_configs.insert(export.ingestion_output, export_id);
             }
 
             mz_scope
@@ -366,15 +400,16 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 primary_source_id,
                 "source",
                 &health_stream,
-                health_configs,
                 crate::healthcheck::DefaultWriter {
-                    command_tx: Rc::clone(&storage_state.internal_cmd_tx),
-                    updates: Rc::clone(&storage_state.object_status_updates),
+                    command_tx: storage_state.internal_cmd_tx.clone(),
+                    updates: Rc::clone(&storage_state.shared_status_updates),
                 },
                 storage_state
                     .storage_configuration
                     .parameters
                     .record_namespaced_errors,
+                dyncfgs::STORAGE_SUSPEND_AND_RESTART_DELAY
+                    .get(storage_state.storage_configuration.config_set()),
             );
             tokens.push(health_token);
 
@@ -390,9 +425,9 @@ pub fn build_export_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     storage_state: &mut StorageState,
     id: GlobalId,
-    description: StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>,
+    description: StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>,
 ) {
-    let worker_logging = timely_worker.log_register().get("timely");
+    let worker_logging = timely_worker.log_register().get("timely").map(Into::into);
     let debug_name = id.to_string();
     let name = format!("Source dataflow: {debug_name}");
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, root_scope| {
@@ -411,13 +446,6 @@ pub fn build_export_dataflow<A: Allocate>(
                 crate::render::sinks::render_sink(scope, storage_state, id, &description);
             tokens.extend(sink_tokens);
 
-            let mut health_configs = BTreeMap::new();
-            health_configs.insert(
-                // There is only 1 sink (as opposed to many sub-sources), so we just use a single
-                // index.
-                0, id,
-            );
-
             // Note that sinks also have only 1 active worker, which simplifies the work that
             // `health_operator` has to do internally.
             let health_token = crate::healthcheck::health_operator(
@@ -427,19 +455,62 @@ pub fn build_export_dataflow<A: Allocate>(
                 id,
                 "sink",
                 &health_stream,
-                health_configs,
                 crate::healthcheck::DefaultWriter {
-                    command_tx: Rc::clone(&storage_state.internal_cmd_tx),
-                    updates: Rc::clone(&storage_state.object_status_updates),
+                    command_tx: storage_state.internal_cmd_tx.clone(),
+                    updates: Rc::clone(&storage_state.shared_status_updates),
                 },
                 storage_state
                     .storage_configuration
                     .parameters
                     .record_namespaced_errors,
+                dyncfgs::STORAGE_SUSPEND_AND_RESTART_DELAY
+                    .get(storage_state.storage_configuration.config_set()),
             );
             tokens.push(health_token);
 
             storage_state.sink_tokens.insert(id, tokens);
         })
     });
+}
+
+pub(crate) fn build_oneshot_ingestion_dataflow<A: Allocate>(
+    timely_worker: &mut TimelyWorker<A>,
+    storage_state: &mut StorageState,
+    ingestion_id: uuid::Uuid,
+    collection_id: GlobalId,
+    collection_meta: CollectionMetadata,
+    description: OneshotIngestionRequest,
+) {
+    let (results_tx, results_rx) = tokio::sync::mpsc::unbounded_channel();
+    let callback = move |result| {
+        // TODO(cf3): Do we care if the receiver has gone away?
+        //
+        // Persist is working on cleaning up leaked blobs, we could also use `OneshotReceiverExt`
+        // here, but that might run into the infamous async-Drop problem.
+        let _ = results_tx.send(result);
+    };
+    let connection_context = storage_state
+        .storage_configuration
+        .connection_context
+        .clone();
+
+    let tokens = timely_worker.dataflow(|scope| {
+        mz_storage_operators::oneshot_source::render(
+            scope.clone(),
+            Arc::clone(&storage_state.persist_clients),
+            connection_context,
+            collection_id,
+            collection_meta,
+            description,
+            callback,
+        )
+    });
+    let ingestion_description = OneshotIngestionDescription {
+        tokens,
+        results: results_rx,
+    };
+
+    storage_state
+        .oneshot_ingestions
+        .insert(ingestion_id, ingestion_description);
 }

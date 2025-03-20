@@ -1,0 +1,144 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# Stream Table Join
+
+statement ok
+CREATE TABLE small (pk INT, val STRING)
+
+statement ok
+INSERT INTO small VALUES (1, 'v0')
+
+statement ok
+CREATE TABLE big (fk INT)
+
+statement ok
+CREATE CONTINUAL TASK stj
+    FROM TRANSFORM big USING
+    (SELECT big.fk, small.val FROM big JOIN small ON big.fk = small.pk)
+
+statement ok
+INSERT INTO big VALUES (1)
+
+statement ok
+UPDATE small SET val = 'v1'
+
+statement ok
+INSERT INTO big VALUES (1)
+
+query IT
+SELECT * FROM stj
+----
+1 v0
+1 v1
+
+# Audit Log
+
+statement ok
+CREATE TABLE anomalies (a INT);
+
+statement ok
+CREATE MATERIALIZED VIEW anomalies_mv AS SELECT * FROM anomalies
+
+statement ok
+CREATE CONTINUAL TASK audit_log
+    FROM TRANSFORM anomalies_mv USING
+    (TABLE anomalies_mv)
+
+statement ok
+INSERT INTO anomalies VALUES (1)
+
+statement ok
+DELETE FROM anomalies
+
+query I
+SELECT * FROM anomalies_mv
+----
+
+query I
+SELECT * FROM audit_log
+----
+1
+
+# Stateless Source Transformation
+statement ok
+CREATE TABLE source_raw (ts STRING);
+
+statement ok
+CREATE CONTINUAL TASK source_cleaned
+    FROM TRANSFORM source_raw USING
+    (SELECT ts::timestamptz FROM source_raw)
+
+query T
+SELECT try_parse_monotonic_iso8601_timestamp('2024-10-11T15:28:01')
+----
+NULL
+
+statement ok
+INSERT INTO source_raw VALUES ('2024-10-11T15:28:01')
+
+query T
+SELECT * FROM source_cleaned
+----
+2024-10-11 15:28:01+00
+
+# Idempotency Keys
+
+statement ok
+CREATE TABLE maybe_dup (val STRING, idem_key INT)
+
+statement ok
+CREATE CONTINUAL TASK deduped
+    FROM TRANSFORM maybe_dup USING
+    (SELECT * FROM maybe_dup WHERE idem_key NOT IN (SELECT idem_key FROM deduped))
+
+statement ok
+INSERT INTO maybe_dup VALUES ('orig-1', 1), ('orig-2', 2)
+
+statement ok
+INSERT INTO maybe_dup VALUES ('nope', 1), ('yep', 3)
+
+query T
+SELECT val FROM deduped ORDER BY val
+----
+orig-1
+orig-2
+yep
+
+# Demultiplexing Webhook Sources
+statement ok
+CREATE TABLE events (data JSONB)
+
+statement ok
+CREATE CONTINUAL TASK events_load
+    FROM TRANSFORM events USING
+    (SELECT data->>'user' FROM events WHERE data->>'type' = 'load')
+
+statement ok
+CREATE CONTINUAL TASK events_click
+    FROM TRANSFORM events USING
+    (SELECT data->>'foo' FROM events WHERE data->>'type' = 'click')
+
+statement ok
+INSERT INTO events VALUES ('{"type": "load", "user": "alice"}')
+
+statement ok
+INSERT INTO events VALUES ('{"type": "click", "foo": "bar"}')
+
+query T
+SELECT * FROM events_load
+----
+alice
+
+query T
+SELECT * FROM events_click
+----
+bar

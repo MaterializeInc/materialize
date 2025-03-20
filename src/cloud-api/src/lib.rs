@@ -28,7 +28,7 @@
 //!     .build(config);
 //!
 //! // List all the available providers
-//! let cloud_providers = client.list_cloud_providers().await.unwrap();
+//! let cloud_providers = client.list_cloud_regions().await.unwrap();
 //! ```
 //!
 //! ## Implementation

@@ -11,10 +11,9 @@ use itertools::Itertools;
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_ore::soft_assert_eq_or_log;
 
-use crate::plan::expr::{HirRelationExpr, HirScalarExpr};
+use crate::plan::hir::{HirRelationExpr, HirScalarExpr};
+use crate::plan::lowering::{ColumnMap, Context, CteMap};
 use crate::plan::PlanError;
-
-use crate::plan::lowering::{ColumnMap, Config, CteMap};
 
 /// Attempt to render a stack of left joins as an inner join against "enriched" right relations.
 ///
@@ -37,22 +36,29 @@ pub(crate) fn attempt_left_join_magic(
     get_outer: MirRelationExpr,
     col_map: &ColumnMap,
     cte_map: &mut CteMap,
-    config: &Config,
+    context: &Context,
 ) -> Result<Option<MirRelationExpr>, PlanError> {
     use mz_expr::LocalId;
 
+    let inc_metrics = |case: &str| {
+        if let Some(metrics) = context.metrics {
+            metrics.inc_outer_join_lowering(case);
+        }
+    };
+
+    let oa = get_outer.arity();
     tracing::debug!(
         inputs = rights.len() + 1,
-        outer_arity = get_outer.arity(),
+        outer_arity = oa,
         "attempt_left_join_magic"
     );
 
-    let oa = get_outer.arity();
     if oa > 0 {
         // Bail out in correlated contexts for now. Even though the code below
         // supports them, we want to test this code path more thoroughly before
         // enabling this.
         tracing::debug!(case = 1, oa, "attempt_left_join_magic");
+        inc_metrics("voj_1");
         return Ok(None);
     }
 
@@ -61,24 +67,30 @@ pub(crate) fn attempt_left_join_magic(
     let mut bindings = Vec::new();
     let mut augmented = Vec::new();
     // A vector associating result columns with their corresponding input number
-    // (where 0 idicates columns from the outer context).
+    // (where 0 indicates columns from the outer context).
     let mut bound_to = (0..oa).map(|_| 0).collect::<Vec<_>>();
     // A vector associating inputs with their arities (where the [0] entry
-    // correponds to the arity of the outer context).
+    // corresponds to the arity of the outer context).
     let mut arities = vec![oa];
 
     // Left relation, its type, and its arity.
     let left = left
         .clone()
-        .applied_to(id_gen, get_outer.clone(), col_map, cte_map, config)?;
-    let lt = left.typ().column_types.into_iter().skip(oa).collect_vec();
+        .applied_to(id_gen, get_outer.clone(), col_map, cte_map, context)?;
+    let full_left_typ = left.typ();
+    let lt = full_left_typ
+        .column_types
+        .iter()
+        .skip(oa)
+        .cloned()
+        .collect_vec();
     let la = lt.len();
 
     // Create a new let binding to use as input.
     // We may use these relations multiple times to extract augmenting values.
     let id = LocalId::new(id_gen.allocate_id());
     // The join body that we will iteratively develop.
-    let mut body = MirRelationExpr::local_get(id, left.typ());
+    let mut body = MirRelationExpr::local_get(id, full_left_typ);
     bindings.push((id, body.clone(), left));
     bound_to.extend((0..la).map(|_| 1));
     arities.push(la);
@@ -96,6 +108,7 @@ pub(crate) fn attempt_left_join_magic(
         // outer join lowering, and I don't know what they mean. Fail conservatively.
         if right.is_correlated() {
             tracing::debug!(case = 2, index, "attempt_left_join_magic");
+            inc_metrics("voj_2");
             return Ok(None);
         }
 
@@ -104,11 +117,17 @@ pub(crate) fn attempt_left_join_magic(
         let right = right
             .clone()
             .map(vec![HirScalarExpr::literal_true()]) // add a bit to mark "real" rows.
-            .applied_to(id_gen, get_outer.clone(), &right_col_map, cte_map, config)?;
-        let rt = right.typ().column_types.into_iter().skip(oa).collect_vec();
+            .applied_to(id_gen, get_outer.clone(), &right_col_map, cte_map, context)?;
+        let full_right_typ = right.typ();
+        let rt = full_right_typ
+            .column_types
+            .iter()
+            .skip(oa)
+            .cloned()
+            .collect_vec();
         let ra = rt.len() - 1; // don't count the new column
 
-        let mut right_type = right.typ();
+        let mut right_type = full_right_typ;
         // Create a binding for `right`, unadulterated.
         let id = LocalId::new(id_gen.allocate_id());
         let get_right = MirRelationExpr::local_get(id, right_type.clone());
@@ -141,12 +160,13 @@ pub(crate) fn attempt_left_join_magic(
         // Decorrelate and lower the `on` clause.
         let on = on
             .clone()
-            .applied_to(id_gen, col_map, cte_map, config, &mut product, &None)?;
+            .applied_to(id_gen, col_map, cte_map, &mut product, &None, context)?;
 
         // if `on` added any new columns, .. no clue what to do.
         // Return with failure, to avoid any confusion.
-        if product.typ().column_types.len() > oa + ba + ra + 1 {
+        if product.arity() > oa + ba + ra + 1 {
             tracing::debug!(case = 3, index, "attempt_left_join_magic");
+            inc_metrics("voj_3");
             return Ok(None);
         }
 
@@ -159,6 +179,7 @@ pub(crate) fn attempt_left_join_magic(
             list
         } else {
             tracing::debug!(case = 4, index, "attempt_left_join_magic");
+            inc_metrics("voj_4");
             return Ok(None);
         };
 
@@ -171,6 +192,7 @@ pub(crate) fn attempt_left_join_magic(
             // If the right reference is not actually to `right`, bail out.
             if right < oa + ba {
                 tracing::debug!(case = 5, index, "attempt_left_join_magic");
+                inc_metrics("voj_5");
                 return Ok(None);
             }
             // Only columns not from the outer scope introduce bindings.
@@ -179,6 +201,7 @@ pub(crate) fn attempt_left_join_magic(
                     // If left references come from different inputs, bail out.
                     if bound_to[left] != bound {
                         tracing::debug!(case = 6, index, "attempt_left_join_magic");
+                        inc_metrics("voj_6");
                         return Ok(None);
                     }
                 }
@@ -214,7 +237,7 @@ pub(crate) fn attempt_left_join_magic(
                 MirRelationExpr::Constant {
                     rows: Ok(vec![(
                         mz_repr::Row::pack(
-                            std::iter::repeat(mz_repr::Datum::Null).take(get_left.arity()),
+                            std::iter::repeat(mz_repr::Datum::Null).take(left_typ.arity()),
                         ),
                         1,
                     )]),
@@ -339,6 +362,7 @@ pub(crate) fn attempt_left_join_magic(
             assert_eq!(oa + ba, body.arity());
         } else {
             tracing::debug!(case = 7, index, "attempt_left_join_magic");
+            inc_metrics("voj_7");
             return Ok(None);
         }
     }
@@ -361,6 +385,7 @@ pub(crate) fn attempt_left_join_magic(
     }
 
     tracing::debug!(case = 0, "attempt_left_join_magic");
+    inc_metrics("voj_0");
     Ok(Some(body))
 }
 
@@ -407,7 +432,7 @@ fn decompose_equations(predicate: &MirScalarExpr) -> Option<Vec<(usize, usize)>>
     // Ensure that every rhs column c2 appears only once. Otherwise, we have at
     // least two lhs columns c1 and c1' that are rendered equal by the same c2
     // column. The VOJ lowering will then produce a plan that will incorrectly
-    // push down a local filter c1 = c1' to the lhs (see #26707).
+    // push down a local filter c1 = c1' to the lhs (see database-issues#7892).
     if equations.iter().duplicates_by(|(_, c)| c).next().is_some() {
         return None;
     }

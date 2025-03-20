@@ -13,9 +13,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import subprocess
 import time
+from collections import namedtuple
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import dbt_common.exceptions
 from dbt_common.contracts.constraints import (
@@ -39,7 +41,7 @@ from dbt.adapters.materialize.exceptions import (
 )
 from dbt.adapters.materialize.relation import MaterializeRelation
 from dbt.adapters.postgres.column import PostgresColumn
-from dbt.adapters.postgres.impl import PostgresAdapter
+from dbt.adapters.postgres.impl import PostgresAdapter, SQLAdapter
 from dbt.adapters.sql.impl import LIST_RELATIONS_MACRO_NAME
 
 
@@ -104,7 +106,7 @@ class MaterializeConfig(AdapterConfig):
     refresh_interval: Optional[MaterializeRefreshIntervalConfig] = None
 
 
-class MaterializeAdapter(PostgresAdapter):
+class MaterializeAdapter(PostgresAdapter, SQLAdapter):
     ConnectionManager = MaterializeConnectionManager
     Relation = MaterializeRelation
 
@@ -112,7 +114,7 @@ class MaterializeAdapter(PostgresAdapter):
 
     # NOTE(morsapaes): Materialize supports enforcing the NOT NULL constraint
     # for materialized views (via the ASSERT NOT NULL clause) and tables. As a
-    # reminder, tables are modeled as static materialized views (see #5266).
+    # reminder, tables are modeled as static materialized views (see database-issues#1623).
     CONSTRAINT_SUPPORT = {
         ConstraintType.check: ConstraintSupport.NOT_SUPPORTED,
         ConstraintType.not_null: ConstraintSupport.ENFORCED,
@@ -147,8 +149,37 @@ class MaterializeAdapter(PostgresAdapter):
         # [0]: https://github.com/dbt-labs/dbt-core/blob/13b18654f03d92eab3f5a9113e526a2a844f145d/plugins/postgres/dbt/adapters/postgres/impl.py#L126-L133
         pass
 
+    def _link_cached_database_relations(self, schemas: Set[str]):
+        """
+        :param schemas: The set of schemas that should have links added.
+        """
+        database = self.config.credentials.database
+        _Relation = namedtuple("_Relation", "database schema identifier")
+        links = [
+            (
+                _Relation(database, dep_schema, dep_identifier),
+                _Relation(database, ref_schema, ref_identifier),
+            )
+            for dep_schema, dep_identifier, ref_schema, ref_identifier in self.execute_macro(
+                "materialize__get_relations"
+            )
+            # don't record in cache if this relation isn't in a relevant schema
+            if ref_schema in schemas
+        ]
+
+        for dependent, referenced in links:
+            self.cache.add_link(
+                referenced=self.Relation.create(**referenced._asdict()),
+                dependent=self.Relation.create(**dependent._asdict()),
+            )
+
     def verify_database(self, database):
         pass
+
+    def _get_catalog_schemas(self, manifest):
+        # Materialize allows cross-database references, so we need to adjust this method
+        schemas = super(SQLAdapter, self)._get_catalog_schemas(manifest)
+        return schemas
 
     def parse_index(self, raw_index: Any) -> Optional[MaterializeIndexConfig]:
         return MaterializeIndexConfig.parse(raw_index)
@@ -226,6 +257,20 @@ class MaterializeAdapter(PostgresAdapter):
     def sleep(cls, seconds):
         time.sleep(seconds)
 
+    @available
+    @classmethod
+    def get_git_commit_sha(cls):
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                capture_output=True,
+                check=True,
+                text=True,
+            )
+            return result.stdout.strip()
+        except subprocess.CalledProcessError:
+            return None
+
     def get_column_schema_from_query(self, sql: str) -> List[PostgresColumn]:
         # The idea is that this function returns the names and types of the
         # columns returned by `sql` without actually executing the statement.
@@ -295,7 +340,7 @@ class MaterializeAdapter(PostgresAdapter):
     @available
     def generate_final_cluster_name(
         self, cluster_name: str, force_deploy_suffix: bool = False
-    ) -> str:
+    ) -> Optional[str]:
         cluster_name = self.execute_macro(
             "generate_cluster_name",
             kwargs={"custom_cluster_name": cluster_name},

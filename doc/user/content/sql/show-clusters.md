@@ -7,11 +7,19 @@ menu:
 
 ---
 
-`SHOW CLUSTERS` lists the [clusters](/get-started/key-concepts/#clusters) configured in Materialize.
+`SHOW CLUSTERS` lists the [clusters](/concepts/clusters/) configured in Materialize.
 
 ## Syntax
 
-{{< diagram "show-clusters.svg" >}}
+```sql
+SHOW CLUSTERS
+[LIKE <pattern> | WHERE <condition(s)>]
+```
+
+Option                        | Description
+------------------------------|------------
+**LIKE** \<pattern\>          | If specified, only show clusters that match the pattern.
+**WHERE** <condition(s)>      | If specified, only show clusters that match the condition(s).
 
 ## Pre-installed clusters
 
@@ -21,7 +29,7 @@ pre-installed.
 
 ### `quickstart` cluster
 
-A cluster named `quickstart` with a size of `100cc` and a replication factor of
+A cluster named `quickstart` with a size of `25cc` and a replication factor of
 `1` will be pre-installed in every environment. You can modify or drop this
 cluster at any time.
 
@@ -92,7 +100,7 @@ The following characteristics apply to the `mz_system` cluster:
 
 ## Examples
 
-```sql
+```mzsql
 SET CLUSTER = mz_catalog_server;
 
 SHOW CLUSTERS;
@@ -109,7 +117,7 @@ SHOW CLUSTERS;
  mz_support           |
 ```
 
-```sql
+```mzsql
 SHOW CLUSTERS LIKE 'auction_%';
 ```
 

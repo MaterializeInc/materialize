@@ -14,7 +14,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::char;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION};
-use mz_repr::{ColumnName, ColumnType, Datum, GlobalId, RelationDesc, ScalarType};
+use mz_repr::{CatalogItemId, ColumnName, ColumnType, Datum, RelationDesc, ScalarType};
 use serde_json::{json, Map};
 
 use crate::avro::DocTarget;
@@ -26,50 +26,23 @@ const MICROS_PER_MILLIS: u32 = 1_000;
 
 // Manages encoding of JSON-encoded bytes
 pub struct JsonEncoder {
-    key_columns: Option<Vec<(ColumnName, ColumnType)>>,
-    value_columns: Vec<(ColumnName, ColumnType)>,
+    columns: Vec<(ColumnName, ColumnType)>,
 }
 
 impl JsonEncoder {
-    pub fn new(key_desc: Option<RelationDesc>, value_desc: RelationDesc, debezium: bool) -> Self {
-        let mut value_columns = column_names_and_types(value_desc);
+    pub fn new(desc: RelationDesc, debezium: bool) -> Self {
+        let mut columns = column_names_and_types(desc);
         if debezium {
-            value_columns = envelopes::dbz_envelope(value_columns);
-        }
-        JsonEncoder {
-            key_columns: if let Some(desc) = key_desc {
-                Some(column_names_and_types(desc))
-            } else {
-                None
-            },
-            value_columns,
-        }
-    }
-
-    pub fn encode_row(
-        &self,
-        row: mz_repr::Row,
-        names_types: &[(ColumnName, ColumnType)],
-    ) -> Vec<u8> {
-        let value = encode_datums_as_json(row.iter(), names_types);
-        value.to_string().into_bytes()
+            columns = envelopes::dbz_envelope(columns);
+        };
+        JsonEncoder { columns }
     }
 }
 
 impl Encode for JsonEncoder {
-    fn get_format_name(&self) -> &str {
-        "json"
-    }
-
-    fn encode_key_unchecked(&self, row: mz_repr::Row) -> Vec<u8> {
-        self.encode_row(
-            row,
-            self.key_columns.as_ref().expect("key schema must exist"),
-        )
-    }
-
-    fn encode_value_unchecked(&self, row: mz_repr::Row) -> Vec<u8> {
-        self.encode_row(row, &self.value_columns)
+    fn encode_unchecked(&self, row: mz_repr::Row) -> Vec<u8> {
+        let value = encode_datums_as_json(row.iter(), self.columns.as_ref());
+        value.to_string().into_bytes()
     }
 }
 
@@ -81,7 +54,7 @@ impl fmt::Debug for JsonEncoder {
                 &format!(
                     "{:?}",
                     build_row_schema_json(
-                        &self.value_columns,
+                        &self.columns,
                         "schema",
                         &BTreeMap::new(),
                         None,
@@ -287,9 +260,9 @@ fn encode_array<'a>(
 
 fn build_row_schema_field_type(
     type_namer: &mut Namer,
-    custom_names: &BTreeMap<GlobalId, String>,
+    custom_names: &BTreeMap<CatalogItemId, String>,
     typ: &ColumnType,
-    item_id: Option<GlobalId>,
+    item_id: Option<CatalogItemId>,
     options: &SchemaOptions,
 ) -> serde_json::Value {
     let mut field_type = match &typ.scalar_type {
@@ -435,8 +408,8 @@ fn build_row_schema_field_type(
 fn build_row_schema_fields(
     columns: &[(ColumnName, ColumnType)],
     type_namer: &mut Namer,
-    custom_names: &BTreeMap<GlobalId, String>,
-    item_id: Option<GlobalId>,
+    custom_names: &BTreeMap<CatalogItemId, String>,
+    item_id: Option<CatalogItemId>,
     options: &SchemaOptions,
 ) -> Vec<serde_json::Value> {
     let mut fields = Vec::new();
@@ -494,8 +467,8 @@ pub struct SchemaOptions {
 pub fn build_row_schema_json(
     columns: &[(ColumnName, ColumnType)],
     name: &str,
-    custom_names: &BTreeMap<GlobalId, String>,
-    item_id: Option<GlobalId>,
+    custom_names: &BTreeMap<CatalogItemId, String>,
+    item_id: Option<CatalogItemId>,
     options: &SchemaOptions,
 ) -> Result<serde_json::Value, anyhow::Error> {
     let fields = build_row_schema_fields(

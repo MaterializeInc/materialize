@@ -269,6 +269,7 @@ impl WebhookAppender {
         self.stats
             .updates_staged
             .fetch_add(count, Ordering::Relaxed);
+        let updates = updates.into_iter().map(|update| update.into()).collect();
         self.tx.append(updates).await?;
         self.stats
             .updates_committed
@@ -427,6 +428,8 @@ impl Default for WebhookConcurrencyLimiter {
 
 #[cfg(test)]
 mod test {
+    use mz_ore::assert_err;
+
     use super::WebhookConcurrencyLimiter;
 
     #[mz_ore::test(tokio::test)]
@@ -438,7 +441,7 @@ mod test {
         let _permit_a = semaphore_a.try_acquire_many(10).expect("acquire");
 
         let semaphore_b = limiter.semaphore();
-        assert!(semaphore_b.try_acquire().is_err());
+        assert_err!(semaphore_b.try_acquire());
 
         // Increase our limit.
         limiter.set_limit(15);
@@ -452,6 +455,6 @@ mod test {
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
         // This should fail again.
-        assert!(semaphore_b.try_acquire().is_err());
+        assert_err!(semaphore_b.try_acquire());
     }
 }

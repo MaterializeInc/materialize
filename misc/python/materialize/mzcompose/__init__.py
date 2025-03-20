@@ -17,19 +17,19 @@ documentation][user-docs].
 
 import subprocess
 from collections.abc import Iterable
-from ssl import SSLContext
 from typing import Any, Literal, TypeVar
 
-import pg8000
+import psycopg
 
 from materialize import spawn, ui
+from materialize.mz_version import MzVersion
 from materialize.ui import UIError
 
 T = TypeVar("T")
 say = ui.speaker("C> ")
 
 
-DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.5.2"
+DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.7.0"
 
 DEFAULT_MZ_VOLUMES = [
     "mzdata:/mzdata",
@@ -38,72 +38,134 @@ DEFAULT_MZ_VOLUMES = [
     "scratch:/scratch",
 ]
 
-DEFAULT_SYSTEM_PARAMETERS = {
-    # -----
-    # Unsafe functions
-    "enable_unsafe_functions": "true",
-    "enable_dangerous_functions": "true",  # former name of 'enable_unsafe_functions'
-    # -----
-    # To reduce CRDB load as we are struggling with it in CI (values based on load test environment):
-    "persist_next_listen_batch_retryer_clamp": "16s",
-    "persist_next_listen_batch_retryer_initial_backoff": "100ms",
-    "persist_next_listen_batch_retryer_fixed_sleep": "1200ms",
-    # -----
-    # Persist internals changes: advance coverage
-    "persist_enable_arrow_lgalloc_noncc_sizes": "true",
-    "persist_enable_s3_lgalloc_noncc_sizes": "true",
-    # -----
-    # Others (ordered by name)
-    "allow_real_time_recency": "true",
-    "cluster_always_use_disk": "true",
-    "compute_dataflow_max_inflight_bytes": "134217728",  # 128 MiB
-    "compute_hydration_concurrency": 2,
-    "disk_cluster_replicas_default": "true",
-    "enable_alter_swap": "true",
-    "enable_assert_not_null": "true",
-    "enable_columnation_lgalloc": "true",
-    "enable_comment": "true",
-    "enable_compute_chunked_stack": "true",
-    "enable_connection_validation_syntax": "true",
-    "enable_copy_to_expr": "true",
-    "enable_disk_cluster_replicas": "true",
-    "enable_eager_delta_joins": "true",
-    "enable_envelope_debezium_in_subscribe": "true",
-    "enable_expressions_in_limit_syntax": "true",
-    "enable_logical_compaction_window": "true",
-    "enable_multi_worker_storage_persist_sink": "true",
-    "enable_mysql_source": "true",
-    "enable_rbac_checks": "true",
-    "enable_reduce_mfp_fusion": "true",
-    "enable_refresh_every_mvs": "true",
-    "enable_cluster_schedule_refresh": "true",
-    "enable_sink_doc_on_option": "true",
-    "enable_statement_lifecycle_logging": "true",
-    "enable_table_keys": "true",
-    "enable_variadic_left_join_lowering": "true",
-    "enable_worker_core_affinity": "true",
-    "persist_batch_delete_enabled": "true",
-    "persist_fast_path_limit": "1000",
-    "persist_inline_writes_single_max_bytes": "4096",
-    "persist_inline_writes_total_max_bytes": "1048576",
-    "persist_pubsub_client_enabled": "true",
-    "persist_pubsub_push_diff_enabled": "true",
-    "persist_roundtrip_spine": "true",
-    "persist_sink_minimum_batch_updates": "128",
-    "persist_stats_audit_percent": "100",
-    "persist_txn_tables": "lazy",
-    "persist_use_critical_since_catalog": "true",
-    "persist_use_critical_since_snapshot": "true",
-    # TODO: change to true when #27219 is resolved
-    "persist_use_critical_since_source": "false",
-    "persist_part_decode_format": "row_with_validate",
-    "statement_logging_default_sample_rate": "0.01",
-    "statement_logging_max_sample_rate": "0.01",
-    "storage_persist_sink_minimum_batch_updates": "100",
-    "storage_source_decode_fuel": "100000",
-    "timestamp_oracle": "postgres",
-    "wait_catalog_consolidation_on_startup": "true",
+
+# Parameters which disable systems that periodically/unpredictably impact performance
+ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {
+    "enable_statement_lifecycle_logging": "false",
+    "persist_catalog_force_compaction_fuel": "0",
+    "statement_logging_default_sample_rate": "0",
+    "statement_logging_max_sample_rate": "0",
+    # Default of 128 MB increases memory usage by a lot for some small
+    # performance in benchmarks, see for example FastPathLimit scenario: 55%
+    # more memory, 5% faster
+    "persist_blob_cache_mem_limit_bytes": "1048576",
+    # This would increase the memory usage of many tests, making it harder to
+    # tell small memory increase regressions
+    "persist_blob_cache_scale_with_threads": "false",
 }
+
+
+def get_default_system_parameters(
+    version: MzVersion | None = None,
+    zero_downtime: bool = False,
+    force_source_table_syntax: bool = False,
+) -> dict[str, str]:
+    """For upgrade tests we only want parameters set when all environmentd /
+    clusterd processes have reached a specific version (or higher)
+    """
+
+    if not version:
+        version = MzVersion.parse_cargo()
+
+    return {
+        # -----
+        # Unsafe functions
+        "unsafe_enable_unsafe_functions": "true",
+        # -----
+        # To reduce CRDB load as we are struggling with it in CI (values based on load test environment):
+        "persist_next_listen_batch_retryer_clamp": "16s",
+        "persist_next_listen_batch_retryer_initial_backoff": "100ms",
+        "persist_next_listen_batch_retryer_fixed_sleep": "1200ms",
+        # -----
+        # Persist internals changes: advance coverage
+        "persist_enable_arrow_lgalloc_noncc_sizes": "true",
+        "persist_enable_s3_lgalloc_noncc_sizes": "true",
+        # -----
+        # Others (ordered by name)
+        "allow_real_time_recency": "true",
+        "cluster_always_use_disk": "true",
+        "compute_dataflow_max_inflight_bytes": "134217728",  # 128 MiB
+        "compute_hydration_concurrency": "2",
+        "compute_replica_expiration_offset": "3d",
+        "compute_apply_column_demands": "true",
+        "disk_cluster_replicas_default": "true",
+        "enable_0dt_deployment": "true" if zero_downtime else "false",
+        "enable_0dt_deployment_panic_after_timeout": "true",
+        "enable_0dt_deployment_sources": (
+            "true" if version >= MzVersion.parse_mz("v0.132.0-dev") else "false"
+        ),
+        "enable_alter_swap": "true",
+        "enable_columnation_lgalloc": "true",
+        "enable_compute_correction_v2": "true",
+        "enable_compute_logical_backpressure": "true",
+        "enable_connection_validation_syntax": "true",
+        "enable_continual_task_builtins": (
+            "true" if version > MzVersion.parse_mz("v0.127.0-dev") else "false"
+        ),
+        "enable_continual_task_create": "true",
+        "enable_continual_task_retain": "true",
+        "enable_continual_task_transform": "true",
+        "enable_copy_to_expr": "true",
+        "enable_create_table_from_source": "true",
+        "enable_disk_cluster_replicas": "true",
+        "enable_eager_delta_joins": "true",
+        "enable_envelope_debezium_in_subscribe": "true",
+        "enable_expressions_in_limit_syntax": "true",
+        "enable_introspection_subscribes": "true",
+        "enable_kafka_sink_partition_by": "true",
+        "enable_logical_compaction_window": "true",
+        "enable_multi_worker_storage_persist_sink": "true",
+        "enable_multi_replica_sources": "true",
+        "enable_rbac_checks": "true",
+        "enable_reduce_mfp_fusion": "true",
+        "enable_refresh_every_mvs": "true",
+        "enable_cluster_schedule_refresh": "true",
+        "enable_statement_lifecycle_logging": "true",
+        "unsafe_enable_table_keys": "true",
+        "enable_variadic_left_join_lowering": "true",
+        "enable_worker_core_affinity": "true",
+        "kafka_default_metadata_fetch_interval": "1s",
+        "mysql_offset_known_interval": "1s",
+        "force_source_table_syntax": "true" if force_source_table_syntax else "false",
+        "persist_batch_columnar_format": (
+            "structured" if version > MzVersion.parse_mz("v0.135.0-dev") else "both_v2"
+        ),
+        "persist_batch_delete_enabled": "true",
+        "persist_batch_structured_order": "true",
+        "persist_batch_structured_key_lower_len": "256",
+        "persist_batch_max_run_len": "4",
+        "persist_catalog_force_compaction_fuel": "1024",
+        "persist_catalog_force_compaction_wait": "1s",
+        "persist_encoding_enable_dictionary": "true",
+        "persist_fast_path_limit": "1000",
+        "persist_inline_writes_single_max_bytes": "4096",
+        "persist_inline_writes_total_max_bytes": "1048576",
+        "persist_pubsub_client_enabled": "true",
+        "persist_pubsub_push_diff_enabled": "true",
+        "persist_record_compactions": "true",
+        "persist_record_schema_id": (
+            "true" if version > MzVersion.parse_mz("v0.127.0-dev") else "false"
+        ),
+        # 16 MiB - large enough to avoid a big perf hit, small enough to get more coverage...
+        "persist_blob_target_size": "16777216",
+        "persist_stats_audit_percent": "100",
+        "persist_use_critical_since_catalog": "true",
+        "persist_use_critical_since_snapshot": "false" if zero_downtime else "true",
+        "persist_use_critical_since_source": "false" if zero_downtime else "true",
+        "persist_part_decode_format": "arrow",
+        "persist_blob_cache_scale_with_threads": "true",
+        "pg_offset_known_interval": "1s",
+        "statement_logging_default_sample_rate": "0.01",
+        "statement_logging_max_sample_rate": "0.01",
+        "storage_reclock_to_latest": "true",
+        "storage_source_decode_fuel": "100000",
+        "storage_statistics_collection_interval": "1000",
+        "storage_statistics_interval": "2000",
+        "storage_use_continual_feedback_upsert": "true",
+        "with_0dt_deployment_max_wait": "1800s",
+        # End of list (ordered by name)
+    }
+
 
 DEFAULT_CRDB_ENVIRONMENT = [
     "COCKROACH_ENGINE_MAX_SYNC_DURATION_DEFAULT=120s",
@@ -155,7 +217,7 @@ def _wait_for_pg(
     password: str | None,
     expected: Iterable[Any] | Literal["any"],
     print_result: bool = False,
-    ssl_context: SSLContext | None = None,
+    sslmode: str = "disable",
 ) -> None:
     """Wait for a pg-compatible database (includes materialized)"""
     obfuscated_password = password[0:1] if password is not None else ""
@@ -164,19 +226,19 @@ def _wait_for_pg(
     error = None
     for remaining in ui.timeout_loop(timeout_secs, tick=0.5):
         try:
-            conn = pg8000.connect(
-                database=dbname,
+            conn = psycopg.connect(
+                dbname=dbname,
                 host=host,
                 port=port,
                 user=user,
                 password=password,
-                timeout=1,
-                ssl_context=ssl_context,
+                connect_timeout=1,
+                sslmode=sslmode,
             )
             # The default (autocommit = false) wraps everything in a transaction.
             conn.autocommit = True
             with conn.cursor() as cur:
-                cur.execute(query)
+                cur.execute(query.encode())
                 if expected == "any" and cur.rowcount == -1:
                     ui.progress(" success!", finish=True)
                     return
@@ -196,3 +258,55 @@ def _wait_for_pg(
             error = e
     ui.progress(finish=True)
     raise UIError(f"never got correct result for {args}: {error}")
+
+
+def bootstrap_cluster_replica_size() -> str:
+    return "bootstrap"
+
+
+def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
+    def replica_size(
+        workers: int,
+        scale: int,
+        disabled: bool = False,
+        is_cc: bool = True,
+        memory_limit: str | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "cpu_exclusive": False,
+            "cpu_limit": None,
+            "credits_per_hour": f"{workers * scale}",
+            "disabled": disabled,
+            "disk_limit": None,
+            "is_cc": is_cc,
+            "memory_limit": memory_limit,
+            "scale": scale,
+            "workers": workers,
+            # "selectors": {},
+        }
+
+    replica_sizes = {
+        bootstrap_cluster_replica_size(): replica_size(1, 1),
+        "2-4": replica_size(4, 2),
+        "free": replica_size(0, 0, disabled=True),
+        "1cc": replica_size(1, 1),
+        "1C": replica_size(1, 1),
+        "1-no-disk": replica_size(1, 1, is_cc=False),
+        "2-no-disk": replica_size(2, 1, is_cc=False),
+    }
+
+    for i in range(0, 6):
+        workers = 1 << i
+        replica_sizes[f"{workers}"] = replica_size(workers, 1)
+        for mem in [4, 8, 16, 32]:
+            replica_sizes[f"{workers}-{mem}G"] = replica_size(
+                workers, 1, memory_limit=f"{mem} GiB"
+            )
+
+        replica_sizes[f"{workers}-1"] = replica_size(1, workers)
+        replica_sizes[f"{workers}-{workers}"] = replica_size(workers, workers)
+        replica_sizes[f"mem-{workers}"] = replica_size(
+            workers, 1, memory_limit=f"{workers} GiB"
+        )
+
+    return replica_sizes

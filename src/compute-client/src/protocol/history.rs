@@ -14,14 +14,15 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::UIntGauge;
-use mz_ore::soft_assert_or_log;
+use mz_ore::{assert_none, soft_assert_or_log};
 use timely::progress::Antichain;
 use timely::PartialOrder;
 
+use crate::controller::StorageCollections;
 use crate::metrics::HistoryMetrics;
 use crate::protocol::command::{ComputeCommand, ComputeParameters};
 
-/// TODO(#25239): Add documentation.
+/// TODO(database-issues#7533): Add documentation.
 #[derive(Debug)]
 pub struct ComputeCommandHistory<M, T = mz_repr::Timestamp> {
     /// The number of commands at the last time we compacted the history.
@@ -41,7 +42,7 @@ where
     M: Borrow<UIntGauge>,
     T: timely::progress::Timestamp,
 {
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub fn new(metrics: HistoryMetrics<M>) -> Self {
         metrics.reset();
 
@@ -100,17 +101,17 @@ where
         let mut final_configuration = ComputeParameters::default();
 
         let mut initialization_complete = false;
-        let mut read_only = true;
+        let mut allow_writes = false;
 
         for command in self.commands.drain(..) {
             match command {
                 create_timely @ ComputeCommand::CreateTimely { .. } => {
-                    assert!(create_timely_command.is_none());
+                    assert_none!(create_timely_command);
                     create_timely_command = Some(create_timely);
                 }
                 // We should be able to handle the Create* commands, should this client need to be restartable.
                 create_inst @ ComputeCommand::CreateInstance(_) => {
-                    assert!(create_inst_command.is_none());
+                    assert_none!(create_inst_command);
                     create_inst_command = Some(create_inst);
                 }
                 ComputeCommand::InitializationComplete => {
@@ -135,7 +136,7 @@ where
                     live_peeks.remove(&uuid);
                 }
                 ComputeCommand::AllowWrites => {
-                    read_only = false;
+                    allow_writes = true;
                 }
             }
         }
@@ -243,7 +244,7 @@ where
             self.commands.push(ComputeCommand::InitializationComplete);
         }
 
-        if !read_only {
+        if allow_writes {
             self.commands.push(ComputeCommand::AllowWrites);
         }
 
@@ -264,6 +265,25 @@ where
             }
             !is_peek
         });
+    }
+
+    /// Update the source import uppers to reflect the current state of the imported collections.
+    ///
+    /// This method should be called after compacting the history to make sure that the dataflow
+    /// descriptions do not mention storage collections that don't exist anymore. Its main
+    /// purpose is to advance the uppers when connecting a new replica.
+    pub fn update_source_uppers(&mut self, storage_collections: &StorageCollections<T>) {
+        for command in &mut self.commands {
+            if let ComputeCommand::CreateDataflow(dataflow) = command {
+                for (id, (_, _, upper)) in dataflow.source_imports.iter_mut() {
+                    let frontiers = storage_collections
+                        .collection_frontiers(*id)
+                        .expect("collection exists");
+
+                    *upper = frontiers.write_frontier;
+                }
+            }
+        }
     }
 
     /// Iterate through the contained commands.

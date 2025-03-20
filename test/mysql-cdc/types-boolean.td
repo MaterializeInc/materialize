@@ -10,8 +10,6 @@
 $ set-sql-timeout duration=1s
 $ set-max-tries max-tries=20
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_mysql_source = true
 
 #
 # Test the BOOLEAN data type
@@ -41,9 +39,10 @@ INSERT INTO t2 VALUES (1, NULL, NULL, NULL);
 INSERT INTO t2 VALUES (2, false, false, false);
 INSERT INTO t2 (f1) VALUES (3);
 
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
+> CREATE TABLE t2 FROM SOURCE mz_source (REFERENCE public.t2);
 
 > SELECT COUNT(*) > 0 FROM t1;
 true

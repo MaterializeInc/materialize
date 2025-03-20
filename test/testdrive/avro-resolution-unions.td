@@ -31,6 +31,8 @@ $ kafka-ingest format=avro topic=resolution-unions schema=${union-int} timestamp
 > CREATE SOURCE resolution_unions
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-resolution-unions-${testdrive.seed}')
+
+> CREATE TABLE resolution_unions_tbl FROM SOURCE resolution_unions (REFERENCE "testdrive-resolution-unions-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
@@ -38,8 +40,8 @@ $ kafka-ingest format=avro topic=resolution-unions schema=${union-int-string} ti
 {"f1": {"int": 123 } }
 {"f1": {"string": "abc" } }
 
-! SELECT f1 FROM resolution_unions
+! SELECT f1 FROM resolution_unions_tbl
 contains:Failed to match writer union variant `String` against any variant in the reader for field `schema_union.f1`
 
-! SELECT f1 FROM resolution_unions
+! SELECT f1 FROM resolution_unions_tbl
 contains:unable to decode row (Avro schema id =

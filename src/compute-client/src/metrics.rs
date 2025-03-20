@@ -13,28 +13,27 @@ use std::borrow::Borrow;
 use std::sync::Arc;
 use std::time::Duration;
 
+use mz_cluster_client::metrics::{ControllerMetrics, WallclockLagMetrics};
 use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::raw::UIntGaugeVec;
 use mz_ore::metrics::{
-    CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, GaugeVec,
-    GaugeVecExt, HistogramVec, HistogramVecExt, IntCounterVec, MetricsRegistry,
+    DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, HistogramVec, IntCounterVec,
+    MetricVecExt, MetricsRegistry,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_repr::GlobalId;
 use mz_service::codec::StatsCollector;
-use prometheus::core::{AtomicF64, AtomicU64};
+use prometheus::core::AtomicU64;
 
 use crate::protocol::command::{ComputeCommand, ProtoComputeCommand};
 use crate::protocol::response::{PeekResponse, ProtoComputeResponse};
 
-type IntCounter = DeleteOnDropCounter<'static, AtomicU64, Vec<String>>;
-type Gauge = DeleteOnDropGauge<'static, AtomicF64, Vec<String>>;
-/// TODO(#25239): Add documentation.
-pub type UIntGauge = DeleteOnDropGauge<'static, AtomicU64, Vec<String>>;
-type Histogram = DeleteOnDropHistogram<'static, Vec<String>>;
+pub(crate) type IntCounter = DeleteOnDropCounter<AtomicU64, Vec<String>>;
+pub(crate) type UIntGauge = DeleteOnDropGauge<AtomicU64, Vec<String>>;
+type Histogram = DeleteOnDropHistogram<Vec<String>>;
 
 /// Compute controller metrics.
 #[derive(Debug, Clone)]
@@ -53,7 +52,8 @@ pub struct ComputeControllerMetrics {
     subscribe_count: UIntGaugeVec,
     copy_to_count: UIntGaugeVec,
     command_queue_size: UIntGaugeVec,
-    response_queue_size: UIntGaugeVec,
+    response_send_count: IntCounterVec,
+    response_recv_count: IntCounterVec,
     hydration_queue_size: UIntGaugeVec,
 
     // command history
@@ -64,13 +64,13 @@ pub struct ComputeControllerMetrics {
     peeks_total: IntCounterVec,
     peek_duration_seconds: HistogramVec,
 
-    // dataflows
-    dataflow_initial_output_duration_seconds: GaugeVec,
+    /// Metrics shared with the storage controller.
+    shared: ControllerMetrics,
 }
 
 impl ComputeControllerMetrics {
     /// Create a metrics instance registered into the given registry.
-    pub fn new(metrics_registry: MetricsRegistry) -> Self {
+    pub fn new(metrics_registry: &MetricsRegistry, shared: ControllerMetrics) -> Self {
         ComputeControllerMetrics {
             commands_total: metrics_registry.register(metric!(
                 name: "mz_compute_commands_total",
@@ -127,10 +127,15 @@ impl ComputeControllerMetrics {
                 help: "The size of the compute command queue.",
                 var_labels: ["instance_id", "replica_id"],
             )),
-            response_queue_size: metrics_registry.register(metric!(
-                name: "mz_compute_controller_response_queue_size",
-                help: "The size of the compute response queue.",
-                var_labels: ["instance_id", "replica_id"],
+            response_send_count: metrics_registry.register(metric!(
+                name: "mz_compute_controller_response_send_count",
+                help: "The number of sends on the compute response queue.",
+                var_labels: ["instance_id"],
+            )),
+            response_recv_count: metrics_registry.register(metric!(
+                name: "mz_compute_controller_response_recv_count",
+                help: "The number of receives on the compute response queue.",
+                var_labels: ["instance_id"],
             )),
             hydration_queue_size: metrics_registry.register(metric!(
                 name: "mz_compute_controller_hydration_queue_size",
@@ -158,45 +163,47 @@ impl ComputeControllerMetrics {
                 var_labels: ["instance_id", "result"],
                 buckets: histogram_seconds_buckets(0.000_500, 32.),
             )),
-            dataflow_initial_output_duration_seconds: metrics_registry.register(metric!(
-                name: "mz_dataflow_initial_output_duration_seconds",
-                help: "The time from dataflow creation up to when the first output was produced.",
-                var_labels: ["instance_id", "replica_id", "collection_id"],
-            )),
+
+            shared,
         }
     }
 
     /// Return an object suitable for tracking metrics for the given compute instance.
     pub fn for_instance(&self, instance_id: ComputeInstanceId) -> InstanceMetrics {
         let labels = vec![instance_id.to_string()];
-        let replica_count = self.replica_count.get_delete_on_drop_gauge(labels.clone());
+        let replica_count = self.replica_count.get_delete_on_drop_metric(labels.clone());
         let collection_count = self
             .collection_count
-            .get_delete_on_drop_gauge(labels.clone());
+            .get_delete_on_drop_metric(labels.clone());
         let collection_unscheduled_count = self
             .collection_unscheduled_count
-            .get_delete_on_drop_gauge(labels.clone());
-        let peek_count = self.peek_count.get_delete_on_drop_gauge(labels.clone());
+            .get_delete_on_drop_metric(labels.clone());
+        let peek_count = self.peek_count.get_delete_on_drop_metric(labels.clone());
         let subscribe_count = self
             .subscribe_count
-            .get_delete_on_drop_gauge(labels.clone());
-        let copy_to_count = self.copy_to_count.get_delete_on_drop_gauge(labels.clone());
+            .get_delete_on_drop_metric(labels.clone());
+        let copy_to_count = self.copy_to_count.get_delete_on_drop_metric(labels.clone());
         let history_command_count = CommandMetrics::build(|typ| {
             let labels = labels.iter().cloned().chain([typ.into()]).collect();
-            self.history_command_count.get_delete_on_drop_gauge(labels)
+            self.history_command_count.get_delete_on_drop_metric(labels)
         });
         let history_dataflow_count = self
             .history_dataflow_count
-            .get_delete_on_drop_gauge(labels.clone());
+            .get_delete_on_drop_metric(labels.clone());
         let peeks_total = PeekMetrics::build(|typ| {
             let labels = labels.iter().cloned().chain([typ.into()]).collect();
-            self.peeks_total.get_delete_on_drop_counter(labels)
+            self.peeks_total.get_delete_on_drop_metric(labels)
         });
         let peek_duration_seconds = PeekMetrics::build(|typ| {
             let labels = labels.iter().cloned().chain([typ.into()]).collect();
-            self.peek_duration_seconds
-                .get_delete_on_drop_histogram(labels)
+            self.peek_duration_seconds.get_delete_on_drop_metric(labels)
         });
+        let response_send_count = self
+            .response_send_count
+            .get_delete_on_drop_metric(labels.clone());
+        let response_recv_count = self
+            .response_recv_count
+            .get_delete_on_drop_metric(labels.clone());
 
         InstanceMetrics {
             instance_id,
@@ -211,6 +218,8 @@ impl ComputeControllerMetrics {
             history_dataflow_count,
             peeks_total,
             peek_duration_seconds,
+            response_send_count,
+            response_recv_count,
         }
     }
 }
@@ -241,10 +250,14 @@ pub struct InstanceMetrics {
     pub peeks_total: PeekMetrics<IntCounter>,
     /// Histogram tracking peek durations.
     pub peek_duration_seconds: PeekMetrics<Histogram>,
+    /// Gauge tracking the number of sends on the compute response queue.
+    pub response_send_count: IntCounter,
+    /// Gauge tracking the number of receives on the compute response queue.
+    pub response_recv_count: IntCounter,
 }
 
 impl InstanceMetrics {
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub fn for_replica(&self, replica_id: ReplicaId) -> ReplicaMetrics {
         let labels = vec![self.instance_id.to_string(), replica_id.to_string()];
         let extended_labels = |extra: &str| {
@@ -259,39 +272,35 @@ impl InstanceMetrics {
             let labels = extended_labels(typ);
             self.metrics
                 .commands_total
-                .get_delete_on_drop_counter(labels)
+                .get_delete_on_drop_metric(labels)
         });
         let command_message_bytes_total = CommandMetrics::build(|typ| {
             let labels = extended_labels(typ);
             self.metrics
                 .command_message_bytes_total
-                .get_delete_on_drop_counter(labels)
+                .get_delete_on_drop_metric(labels)
         });
         let responses_total = ResponseMetrics::build(|typ| {
             let labels = extended_labels(typ);
             self.metrics
                 .responses_total
-                .get_delete_on_drop_counter(labels)
+                .get_delete_on_drop_metric(labels)
         });
         let response_message_bytes_total = ResponseMetrics::build(|typ| {
             let labels = extended_labels(typ);
             self.metrics
                 .response_message_bytes_total
-                .get_delete_on_drop_counter(labels)
+                .get_delete_on_drop_metric(labels)
         });
 
         let command_queue_size = self
             .metrics
             .command_queue_size
-            .get_delete_on_drop_gauge(labels.clone());
-        let response_queue_size = self
-            .metrics
-            .response_queue_size
-            .get_delete_on_drop_gauge(labels.clone());
+            .get_delete_on_drop_metric(labels.clone());
         let hydration_queue_size = self
             .metrics
             .hydration_queue_size
-            .get_delete_on_drop_gauge(labels.clone());
+            .get_delete_on_drop_metric(labels.clone());
 
         ReplicaMetrics {
             instance_id: self.instance_id,
@@ -303,25 +312,24 @@ impl InstanceMetrics {
                 responses_total,
                 response_message_bytes_total,
                 command_queue_size,
-                response_queue_size,
                 hydration_queue_size,
             }),
         }
     }
 
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub fn for_history(&self) -> HistoryMetrics<UIntGauge> {
         let labels = vec![self.instance_id.to_string()];
         let command_counts = CommandMetrics::build(|typ| {
             let labels = labels.iter().cloned().chain([typ.into()]).collect();
             self.metrics
                 .history_command_count
-                .get_delete_on_drop_gauge(labels)
+                .get_delete_on_drop_metric(labels)
         });
         let dataflow_count = self
             .metrics
             .history_dataflow_count
-            .get_delete_on_drop_gauge(labels);
+            .get_delete_on_drop_metric(labels);
 
         HistoryMetrics {
             command_counts,
@@ -359,8 +367,6 @@ pub struct ReplicaMetricsInner {
 
     /// Gauge tracking the size of the compute command queue.
     pub command_queue_size: UIntGauge,
-    /// Gauge tracking the size of the compute response queue.
-    pub response_queue_size: UIntGauge,
     /// Gauge tracking the size of the hydration queue.
     pub hydration_queue_size: UIntGauge,
 }
@@ -378,19 +384,13 @@ impl ReplicaMetrics {
             return None;
         }
 
-        let labels = vec![
-            self.instance_id.to_string(),
-            self.replica_id.to_string(),
+        let wallclock_lag = self.metrics.shared.wallclock_lag_metrics(
             collection_id.to_string(),
-        ];
-        let initial_output_duration_seconds = self
-            .metrics
-            .dataflow_initial_output_duration_seconds
-            .get_delete_on_drop_gauge(labels);
+            Some(self.instance_id.to_string()),
+            Some(self.replica_id.to_string()),
+        );
 
-        Some(ReplicaCollectionMetrics {
-            initial_output_duration_seconds,
-        })
+        Some(ReplicaCollectionMetrics { wallclock_lag })
     }
 }
 
@@ -416,12 +416,12 @@ impl StatsCollector<ProtoComputeCommand, ProtoComputeResponse> for ReplicaMetric
 /// Per-replica-and-collection metrics.
 #[derive(Debug)]
 pub(crate) struct ReplicaCollectionMetrics {
-    /// TODO(#25239): Add documentation.
-    pub initial_output_duration_seconds: Gauge,
+    /// Metrics tracking dataflow wallclock lag.
+    pub wallclock_lag: WallclockLagMetrics,
 }
 
 /// Metrics keyed by `ComputeCommand` type.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CommandMetrics<M> {
     /// Metrics for `CreateTimely`.
     pub create_timely: M,
@@ -446,7 +446,7 @@ pub struct CommandMetrics<M> {
 }
 
 impl<M> CommandMetrics<M> {
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub fn build<F>(build_metric: F) -> Self
     where
         F: Fn(&str) -> M,
@@ -480,7 +480,7 @@ impl<M> CommandMetrics<M> {
         f(&self.cancel_peek);
     }
 
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub fn for_command<T>(&self, command: &ComputeCommand<T>) -> &M {
         use ComputeCommand::*;
 

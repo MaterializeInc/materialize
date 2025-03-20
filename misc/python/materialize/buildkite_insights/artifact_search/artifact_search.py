@@ -10,6 +10,8 @@
 # by the Apache License, Version 2.0.
 
 import argparse
+import re
+from typing import Any
 
 from materialize.buildkite_insights.artifact_search.artifact_search_presentation import (
     print_artifact_match,
@@ -18,10 +20,17 @@ from materialize.buildkite_insights.artifact_search.artifact_search_presentation
 )
 from materialize.buildkite_insights.buildkite_api.buildkite_config import MZ_PIPELINES
 from materialize.buildkite_insights.buildkite_api.generic_api import RateLimitExceeded
-from materialize.buildkite_insights.cache import artifacts_cache
+from materialize.buildkite_insights.cache import (
+    artifacts_cache,
+    builds_cache,
+    logs_cache,
+)
 from materialize.buildkite_insights.cache.cache_constants import (
     FETCH_MODE_CHOICES,
     FetchMode,
+)
+from materialize.buildkite_insights.util.build_step_utils import (
+    extract_build_step_names_by_job_id,
 )
 from materialize.buildkite_insights.util.search_utility import (
     _search_value_to_pattern,
@@ -35,65 +44,222 @@ ACCEPTED_FILE_ENDINGS = {"log", "txt", "xml", "zst"}
 def main(
     pipeline_slug: str,
     build_number: int,
-    job_id: str,
+    specified_job_id: str | None,
     pattern: str,
     fetch: FetchMode,
     max_results: int,
     use_regex: bool,
+    file_name_regex: str | None,
     include_zst_files: bool,
+    search_logs_instead_of_artifacts: bool,
 ) -> None:
     assert len(pattern) > 0, "pattern must not be empty"
 
-    job_artifact_list = artifacts_cache.get_or_query_job_artifact_list(
-        pipeline_slug, fetch, build_number=build_number, job_id=job_id
+    if specified_job_id is not None:
+        build_step_name_by_job_id = dict()
+        build_step_name_by_job_id[specified_job_id] = "(unknown)"
+    else:
+        build = builds_cache.get_or_query_single_build(
+            pipeline_slug, fetch, build_number=build_number
+        )
+        build_step_name_by_job_id = extract_build_step_names_by_job_id(build)
+
+    try:
+        (
+            count_matches,
+            count_all_artifacts,
+            ignored_file_names,
+            max_search_results_hit,
+        ) = (
+            _search_logs(
+                pipeline_slug=pipeline_slug,
+                build_number=build_number,
+                pattern=pattern,
+                fetch=fetch,
+                max_results=max_results,
+                use_regex=use_regex,
+                build_step_name_by_job_id=build_step_name_by_job_id,
+            )
+            if search_logs_instead_of_artifacts
+            else _search_artifacts(
+                pipeline_slug=pipeline_slug,
+                build_number=build_number,
+                pattern=pattern,
+                fetch=fetch,
+                max_results=max_results,
+                use_regex=use_regex,
+                file_name_regex=file_name_regex,
+                include_zst_files=include_zst_files,
+                build_step_name_by_job_id=build_step_name_by_job_id,
+            )
+        )
+
+    except RateLimitExceeded:
+        print("Aborting due to exceeded rate limit!")
+        return
+
+    print_summary(
+        pipeline_slug=pipeline_slug,
+        build_number=build_number,
+        job_id=specified_job_id,
+        count_artifacts=count_all_artifacts,
+        count_matches=count_matches,
+        ignored_file_names=ignored_file_names,
+        max_search_results_hit=max_search_results_hit,
     )
+
+
+def _search_artifacts(
+    pipeline_slug: str,
+    build_number: int,
+    pattern: str,
+    fetch: FetchMode,
+    max_results: int,
+    use_regex: bool,
+    file_name_regex: str | None,
+    include_zst_files: bool,
+    build_step_name_by_job_id: dict[str, str],
+) -> tuple[int, int, set[str], bool]:
+    """
+    :return: count_matches, count_all_artifacts, ignored_file_names, max_search_results_hit
+    """
+    artifact_list_by_job_id: dict[str, list[Any]] = dict()
+    for job_id in build_step_name_by_job_id.keys():
+        artifact_list_by_job_id[job_id] = (
+            artifacts_cache.get_or_query_job_artifact_list(
+                pipeline_slug, fetch, build_number=build_number, job_id=job_id
+            )
+        )
 
     print_before_search_results()
 
     count_matches = 0
+    count_all_artifacts = 0
     ignored_file_names = set()
     max_search_results_hit = False
 
-    for artifact in job_artifact_list:
+    for job_id, artifact_list in artifact_list_by_job_id.items():
+        artifact_list = _filter_artifact_list(artifact_list, file_name_regex)
+        count_artifacts_of_job = len(artifact_list)
+        build_step_name = build_step_name_by_job_id[job_id]
+
+        if count_artifacts_of_job == 0:
+            print(f"Skipping job '{build_step_name}' ({job_id}) without artifacts.")
+            continue
+
+        print(
+            f"Searching {count_artifacts_of_job} artifacts of job '{build_step_name}' ({job_id})."
+        )
+        count_all_artifacts = count_all_artifacts + count_artifacts_of_job
+
+        for artifact in artifact_list:
+            max_entries_to_print = max(0, max_results - count_matches)
+            if max_entries_to_print == 0:
+                max_search_results_hit = True
+                break
+
+            artifact_id = artifact["id"]
+            artifact_file_name = artifact["filename"]
+
+            if not _can_search_artifact(artifact_file_name, include_zst_files):
+                print(f"Skipping artifact {artifact_file_name} due to file ending!")
+                ignored_file_names.add(artifact_file_name)
+                continue
+
+            artifact_content = artifacts_cache.get_or_download_artifact(
+                pipeline_slug,
+                fetch,
+                build_number=build_number,
+                job_id=job_id,
+                artifact_id=artifact_id,
+                is_zst_compressed=is_zst_file(artifact_file_name),
+            )
+
+            matches_in_artifact, max_search_results_hit = _search_artifact_content(
+                artifact_file_name=artifact_file_name,
+                artifact_content=artifact_content,
+                pattern=pattern,
+                use_regex=use_regex,
+                max_entries_to_print=max_entries_to_print,
+            )
+
+            count_matches = count_matches + matches_in_artifact
+
+    return (
+        count_matches,
+        count_all_artifacts,
+        ignored_file_names,
+        max_search_results_hit,
+    )
+
+
+def _filter_artifact_list(
+    artifact_list: list[Any], file_name_regex: str | None
+) -> list[Any]:
+    if file_name_regex is None:
+        return artifact_list
+
+    filtered_list = []
+
+    for artifact in artifact_list:
+        artifact_file_name = artifact["filename"]
+        if re.search(file_name_regex, artifact_file_name):
+            filtered_list.append(artifact)
+
+    return filtered_list
+
+
+def _search_logs(
+    pipeline_slug: str,
+    build_number: int,
+    pattern: str,
+    fetch: FetchMode,
+    max_results: int,
+    use_regex: bool,
+    build_step_name_by_job_id: dict[str, str],
+) -> tuple[int, int, set[str], bool]:
+    """
+    :return: count_matches, count_all_artifacts, ignored_file_names, max_search_results_hit
+    """
+
+    print_before_search_results()
+
+    count_matches = 0
+    count_all_artifacts = 0
+    ignored_file_names = set()
+    max_search_results_hit = False
+
+    for job_id, build_step_name in build_step_name_by_job_id.items():
+        print(f"Searching log of job '{build_step_name}' ({job_id}).")
+        count_all_artifacts = count_all_artifacts + 1
+
         max_entries_to_print = max(0, max_results - count_matches)
         if max_entries_to_print == 0:
             max_search_results_hit = True
             break
 
-        artifact_id = artifact["id"]
-        artifact_file_name = artifact["filename"]
+        log_content = logs_cache.get_or_download_log(
+            pipeline_slug,
+            fetch,
+            build_number=build_number,
+            job_id=job_id,
+        )
 
-        if not _can_search_artifact(artifact_file_name, include_zst_files):
-            print(f"Skipping artifact {artifact_file_name} due to file ending!")
-            ignored_file_names.add(artifact_file_name)
-            continue
+        matches_in_log, max_search_results_hit = _search_artifact_content(
+            artifact_file_name="log",
+            artifact_content=log_content,
+            pattern=pattern,
+            use_regex=use_regex,
+            max_entries_to_print=max_entries_to_print,
+        )
 
-        try:
-            matches_in_artifact, max_search_results_hit = _search_artifact(
-                pipeline_slug,
-                artifact_file_name=artifact_file_name,
-                build_number=build_number,
-                job_id=job_id,
-                artifact_id=artifact_id,
-                pattern=pattern,
-                use_regex=use_regex,
-                fetch=fetch,
-                max_entries_to_print=max_entries_to_print,
-            )
-        except RateLimitExceeded:
-            print("Aborting due to exceeded rate limit!")
-            return
+        count_matches = count_matches + matches_in_log
 
-        count_matches = count_matches + matches_in_artifact
-
-    print_summary(
-        pipeline_slug=pipeline_slug,
-        build_number=build_number,
-        job_id=job_id,
-        count_artifacts=len(job_artifact_list),
-        count_matches=count_matches,
-        ignored_file_names=ignored_file_names,
-        max_search_results_hit=max_search_results_hit,
+    return (
+        count_matches,
+        count_all_artifacts,
+        ignored_file_names,
+        max_search_results_hit,
     )
 
 
@@ -108,13 +274,9 @@ def _can_search_artifact(artifact_file_name: str, include_zst_files: bool) -> bo
     return False
 
 
-def _search_artifact(
-    pipeline_slug: str,
-    fetch: FetchMode,
-    build_number: int,
-    job_id: str,
-    artifact_id: str,
+def _search_artifact_content(
     artifact_file_name: str,
+    artifact_content: str,
     pattern: str,
     use_regex: bool,
     max_entries_to_print: int,
@@ -123,15 +285,6 @@ def _search_artifact(
     :return: number of highlighted results and whether further matches exceeding max_entries_to_print exist
     """
     search_pattern = _search_value_to_pattern(pattern, use_regex)
-
-    artifact_content = artifacts_cache.get_or_download_artifact(
-        pipeline_slug,
-        fetch,
-        build_number=build_number,
-        job_id=job_id,
-        artifact_id=artifact_id,
-        is_zst_compressed=is_zst_file(artifact_file_name),
-    )
 
     search_offset = 0
     match_count = 0
@@ -189,18 +342,23 @@ if __name__ == "__main__":
         type=int,
     )
 
-    # no hyphen because positionals with hyphen cause issues
-    parser.add_argument("jobid", type=str)
-
     parser.add_argument("pattern", type=str)
+
+    parser.add_argument("--job-id", type=str)
 
     parser.add_argument("--max-results", default=50, type=int)
     parser.add_argument(
         "--use-regex",
         action="store_true",
     )
+    parser.add_argument("--file-name-regex", type=str)
     parser.add_argument(
         "--include-zst-files", action=argparse.BooleanOptionalAction, default=True
+    )
+    parser.add_argument(
+        "--search-logs-instead-of-artifacts",
+        default=False,
+        action="store_true",
     )
     parser.add_argument(
         "--fetch",
@@ -215,10 +373,12 @@ if __name__ == "__main__":
     main(
         args.pipeline,
         args.buildnumber,
-        args.jobid,
+        args.job_id,
         args.pattern,
         args.fetch,
         args.max_results,
         args.use_regex,
+        args.file_name_regex,
         args.include_zst_files,
+        args.search_logs_instead_of_artifacts,
     )

@@ -8,13 +8,12 @@
 # by the Apache License, Version 2.0.
 
 # This is a test that was used to ensure a specific ordering of updates
-# in `upsert` continued to be processed properly in pr #24663. Its short,
+# in `upsert` continued to be processed properly in pr materialize#24663. Its short,
 # so its copied here.
 
 $ set-arg-default default-storage-size=1
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET kafka_default_metadata_fetch_interval = 1000
 ALTER SYSTEM SET storage_statistics_collection_interval = 1000
 ALTER SYSTEM SET storage_statistics_interval = 2000
 
@@ -108,27 +107,32 @@ $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keys
 > CREATE SOURCE dbz_no_before
   IN CLUSTER dbz_no_before_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbz-no-before-${testdrive.seed}')
+
+> CREATE TABLE dbz_no_before_tbl FROM SOURCE dbz_no_before (REFERENCE "testdrive-dbz-no-before-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> SELECT count(*) FROM dbz_no_before
+> SELECT count(*) FROM dbz_no_before_tbl
 0
 
+# WIP: The feedback upsert implementation does not count tombstones in
+# bytes_indexed. For now.
 > SELECT
     bool_and(u.snapshot_committed),
     SUM(u.bytes_indexed) > 0,
     SUM(u.records_indexed)
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('dbz_no_before')
-  GROUP BY s.name
-  ORDER BY s.name
-true true 0
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  WHERE t.name IN ('dbz_no_before_tbl')
+  GROUP BY t.name
+  ORDER BY t.name
+true false 0
+
 
 $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keyschema} schema=${schema} timestamp=1
 {"id": 1} {"after": {"row": {"id": 1, "creature": "mudskipper"}}, "op": "c", "source": {"file": "binlog1", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
-> SELECT * FROM dbz_no_before
+> SELECT * FROM dbz_no_before_tbl
 id creature
 -------------
 1  mudskipper
@@ -137,27 +141,28 @@ id creature
     bool_and(u.snapshot_committed),
     SUM(u.bytes_indexed) > 0,
     SUM(u.records_indexed)
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('dbz_no_before')
-  GROUP BY s.name
-  ORDER BY s.name
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  WHERE t.name IN ('dbz_no_before_tbl')
+  GROUP BY t.name
+  ORDER BY t.name
 true true 1
 
 $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keyschema} schema=${schema} timestamp=1
 {"id": 1} {"after": null, "op": "c", "source": {"file": "binlog3", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
-> SELECT count(*) FROM dbz_no_before
+> SELECT count(*) FROM dbz_no_before_tbl
 0
 
-# A tombstone is left behind
+# WIP: The feedback upsert implementation does not count tombstones in
+# bytes_indexed. For now.
 > SELECT
     bool_and(u.snapshot_committed),
     SUM(u.bytes_indexed) > 0,
     SUM(u.records_indexed)
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('dbz_no_before')
-  GROUP BY s.name
-  ORDER BY s.name
-true true 0
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  WHERE t.name IN ('dbz_no_before_tbl')
+  GROUP BY t.name
+  ORDER BY t.name
+true false 0

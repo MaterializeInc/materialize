@@ -25,6 +25,7 @@ use mz_timestamp_oracle::postgres_oracle::PostgresTimestampOracleParameters;
 /// Return the current compute configuration, derived from the system configuration.
 pub fn compute_config(config: &SystemVars) -> ComputeParameters {
     ComputeParameters {
+        workload_class: None,
         max_result_size: Some(config.max_result_size()),
         tracing: tracing_config(config),
         grpc_client: grpc_client_config(config),
@@ -47,11 +48,13 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
             config.mysql_source_snapshot_max_execution_time(),
             config.mysql_source_snapshot_lock_wait_timeout(),
             config.mysql_source_tcp_keepalive(),
+            config.mysql_source_connect_timeout(),
         ),
         keep_n_source_status_history_entries: config.keep_n_source_status_history_entries(),
         keep_n_sink_status_history_entries: config.keep_n_sink_status_history_entries(),
         keep_n_privatelink_status_history_entries: config
             .keep_n_privatelink_status_history_entries(),
+        replica_status_history_retention_window: config.replica_status_history_retention_window(),
         upsert_rocksdb_tuning_config: {
             match mz_rocksdb_types::RocksDBTuningParameters::from_parameters(
                 config.upsert_rocksdb_compaction_style(),
@@ -135,7 +138,6 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
             config.kafka_socket_connection_setup_timeout(),
             config.kafka_fetch_metadata_timeout(),
             config.kafka_progress_record_fetch_timeout(),
-            config.kafka_default_metadata_fetch_interval(),
         ),
         statistics_interval: config.storage_statistics_interval(),
         statistics_collection_interval: config.storage_statistics_collection_interval(),

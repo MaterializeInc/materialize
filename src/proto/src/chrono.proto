@@ -12,36 +12,36 @@ syntax = "proto3";
 package mz_proto.chrono;
 
 message ProtoTz {
-    string name = 1;
+  string name = 1;
 }
 
 message ProtoNaiveDate {
-    // Year
-    int32 year = 1;
-    // Day-of-year (0..365)
-    uint32 ordinal = 2;
+  // Year
+  int32 year = 1;
+  // Day-of-year (0..365)
+  uint32 ordinal = 2;
 }
 
 message ProtoNaiveTime {
-    // The number of seconds since midnight
-    uint32 secs = 1;
-    // Additional fractional seconds since midnight in nanosecond granularity.
-    // This can can exceed 1,000,000,000 in order to represent the leap second.
-    uint32 frac = 2;
+  // The number of seconds since midnight
+  uint32 secs = 1;
+  // Additional fractional seconds since midnight in nanosecond granularity.
+  // This can can exceed 1,000,000,000 in order to represent the leap second.
+  uint32 frac = 2;
 }
 
 message ProtoNaiveDateTime {
-    // Year
-    int32 year = 1;
-    // Day-of-year (0..365)
-    uint32 ordinal = 2;
-    // The number of seconds since midnight
-    uint32 secs = 3;
-    // Additional fractional seconds since midnight in nanosecond granularity.
-    // This can can exceed 1,000,000,000 in order to represent the leap second.
-    uint32 frac = 4;
+  // Year
+  int32 year = 1;
+  // Day-of-year (0..365)
+  uint32 ordinal = 2;
+  // The number of seconds since midnight
+  uint32 secs = 3;
+  // Additional fractional seconds since midnight in nanosecond granularity.
+  // This can can exceed 1,000,000,000 in order to represent the leap second.
+  uint32 frac = 4;
 }
 
 message ProtoFixedOffset {
-    int32 local_minus_utc = 1;
+  int32 local_minus_utc = 1;
 }

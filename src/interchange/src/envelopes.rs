@@ -9,17 +9,17 @@
 
 use std::collections::BTreeMap;
 use std::iter;
+use std::sync::LazyLock;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::{Batch, BatchReader, Cursor, TraceReader};
+use differential_dataflow::IntoOwned;
 use differential_dataflow::{AsCollection, Collection};
 use itertools::{EitherOrBoth, Itertools};
 use maplit::btreemap;
 use mz_ore::cast::CastFrom;
-use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, Row, RowPacker, ScalarType};
-use once_cell::sync::Lazy;
+use mz_repr::{CatalogItemId, ColumnName, ColumnType, Datum, Diff, Row, RowPacker, ScalarType};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
@@ -47,15 +47,13 @@ where
     Tr::Batch: Batch,
     for<'a> Tr::TimeGat<'a>: Ord,
 {
-    let mut rows_buf = vec![];
     let x: Stream<G, ((Option<Row>, Vec<DiffPair<Row>>), G::Timestamp, Diff)> = arranged
         .stream
         .unary(Pipeline, "combine_at_timestamp", move |_, _| {
             move |input, output| {
                 while let Some((cap, batches)) = input.next() {
                     let mut session = output.session(&cap);
-                    batches.swap(&mut rows_buf);
-                    for batch in rows_buf.drain(..) {
+                    for batch in batches.drain(..) {
                         let mut befores = vec![];
                         let mut afters = vec![];
 
@@ -136,10 +134,10 @@ where
 // catalog with userspace IDs when the user creates the sink, and their
 // names and IDs should be plumbed in from the catalog at the moment
 // the sink is created.
-pub(crate) const TRANSACTION_TYPE_ID: GlobalId = GlobalId::Transient(1);
-pub(crate) const DBZ_ROW_TYPE_ID: GlobalId = GlobalId::Transient(2);
+pub(crate) const TRANSACTION_TYPE_ID: CatalogItemId = CatalogItemId::Transient(1);
+pub(crate) const DBZ_ROW_TYPE_ID: CatalogItemId = CatalogItemId::Transient(2);
 
-pub static ENVELOPE_CUSTOM_NAMES: Lazy<BTreeMap<GlobalId, String>> = Lazy::new(|| {
+pub static ENVELOPE_CUSTOM_NAMES: LazyLock<BTreeMap<CatalogItemId, String>> = LazyLock::new(|| {
     btreemap! {
         TRANSACTION_TYPE_ID => "transaction".into(),
         DBZ_ROW_TYPE_ID => "row".into(),
@@ -152,7 +150,7 @@ pub(crate) fn dbz_envelope(
     let row = ColumnType {
         nullable: true,
         scalar_type: ScalarType::Record {
-            fields: names_and_types,
+            fields: names_and_types.into(),
             custom_id: Some(DBZ_ROW_TYPE_ID),
         },
     };

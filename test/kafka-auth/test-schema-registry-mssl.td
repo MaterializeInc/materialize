@@ -42,7 +42,7 @@ $ kafka-ingest topic=avro-data format=avro schema=${schema}
     URL 'https://mssl.schema-registry.local:8082',
     SSL CERTIFICATE AUTHORITY = '${ca-crt}'
   )
-contains:alert bad certificate
+contains:error sending request for url
 
 # This is a bad error message to indicate "disallowed client certificate" but
 # it's not under our control.
@@ -76,9 +76,11 @@ contains:key values mismatch
 > CREATE SOURCE avro_data FROM KAFKA CONNECTION kafka (
     TOPIC 'testdrive-avro-data-${testdrive.seed}'
   )
+
+> CREATE TABLE avro_data_tbl FROM SOURCE avro_data (REFERENCE "testdrive-avro-data-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION schema_registry
 
-> SELECT * FROM avro_data
+> SELECT * FROM avro_data_tbl
 a
 ----
 1
@@ -96,9 +98,11 @@ a
 > CREATE SOURCE avro_data_ssh FROM KAFKA CONNECTION kafka (
     TOPIC 'testdrive-avro-data-${testdrive.seed}'
   )
+
+> CREATE TABLE avro_data_ssh_tbl FROM SOURCE avro_data_ssh (REFERENCE "testdrive-avro-data-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION schema_registry
 
-> SELECT * FROM avro_data_ssh
+> SELECT * FROM avro_data_ssh_tbl
 a
 ----
 1

@@ -277,7 +277,6 @@ impl Transactor {
             let mut updates = match updates_res {
                 Ok(x) => x,
                 Err(since) => {
-                    let recent_upper = self.write.fetch_recent_upper().await;
                     // Because we artificially share the same CriticalReaderId
                     // between nodes, it doesn't quite act like a capability.
                     // Prod doesn't have this issue, because a new one will
@@ -294,15 +293,10 @@ impl Transactor {
                         snap_ts,
                         since.0.as_option()
                     );
+                    self.advance_since().await?;
+
+                    let recent_upper = self.write.fetch_recent_upper().await;
                     self.read_ts = Self::extract_ts(recent_upper)? - 1;
-                    self.since = self
-                        .client
-                        .open_critical_since(
-                            self.shard_id,
-                            PersistClient::CONTROLLER_CRITICAL_SINCE,
-                            Diagnostics::from_purpose("maelstrom since"),
-                        )
-                        .await?;
                     continue;
                 }
             };
@@ -311,7 +305,6 @@ impl Transactor {
             let listen = match listen_res {
                 Ok(x) => x,
                 Err(since) => {
-                    let recent_upper = self.write.fetch_recent_upper().await;
                     // Because we artificially share the same CriticalReaderId
                     // between nodes, it doesn't quite act like a capability.
                     // Prod doesn't have this issue, because a new one will
@@ -328,15 +321,15 @@ impl Transactor {
                         snap_ts,
                         since.0.as_option(),
                     );
+                    self.advance_since().await?;
+                    let recent_upper = self.write.fetch_recent_upper().await;
                     self.read_ts = Self::extract_ts(recent_upper)? - 1;
-                    self.since = self
-                        .client
-                        .open_critical_since(
-                            self.shard_id,
-                            PersistClient::CONTROLLER_CRITICAL_SINCE,
-                            Diagnostics::from_purpose("maelstrom since"),
-                        )
-                        .await?;
+                    assert!(
+                        PartialOrder::less_than(self.since.since(), recent_upper),
+                        "invariant: since {:?} should be held behind the recent upper {:?}",
+                        &**self.since.since(),
+                        &**recent_upper
+                    );
                     continue;
                 }
             };
@@ -537,19 +530,17 @@ impl Transactor {
                 .await;
             match res {
                 Some(Ok(latest_since)) => {
-                    // Success! If we weren't the last one to update since, but
-                    // only then, it might have advanced past our read_ts, so
+                    // Success! Another process might have advanced past our read_ts, so
                     // forward read_ts to since_ts.
-                    if expected_token != self.cads_token {
-                        let since_ts = Self::extract_ts(&latest_since)?;
-                        if since_ts > self.read_ts {
-                            info!(
-                                "since was last updated by {}, forwarding our read_ts from {} to {}",
-                                expected_token, self.read_ts, since_ts
-                            );
-                            self.read_ts = since_ts;
-                        }
+                    let since_ts = Self::extract_ts(&latest_since)?;
+                    if since_ts > self.read_ts {
+                        info!(
+                            "since was last updated by {}, forwarding our read_ts from {} to {}",
+                            expected_token, self.read_ts, since_ts
+                        );
+                        self.read_ts = since_ts;
                     }
+
                     return Ok(());
                 }
                 Some(Err(actual_token)) => {
@@ -617,7 +608,7 @@ impl Service for TransactorService {
                     blob_uri,
                     Box::new(config.clone()),
                     metrics.s3_blob.clone(),
-                    config.configs.clone(),
+                    Arc::clone(&config.configs),
                 )
                 .await
                 .expect("blob_uri should be valid");
@@ -716,9 +707,14 @@ impl Service for TransactorService {
 }
 
 mod codec_impls {
-    use mz_persist_types::codec_impls::{SimpleDecoder, SimpleEncoder, SimpleSchema};
-    use mz_persist_types::columnar::{ColumnPush, Schema};
-    use mz_persist_types::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg};
+    use arrow::array::{BinaryArray, BinaryBuilder, UInt64Array, UInt64Builder};
+    use arrow::datatypes::ToByteSlice;
+    use bytes::Bytes;
+    use mz_persist_types::codec_impls::{
+        SimpleColumnarData, SimpleColumnarDecoder, SimpleColumnarEncoder,
+    };
+    use mz_persist_types::columnar::Schema;
+    use mz_persist_types::stats::NoneStats;
     use mz_persist_types::Codec;
 
     use crate::maelstrom::txn_list_append_single::{MaelstromKey, MaelstromVal};
@@ -739,30 +735,58 @@ mod codec_impls {
             buf.put(bytes.as_slice());
         }
 
-        fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        fn decode<'a>(buf: &'a [u8], _schema: &MaelstromKeySchema) -> Result<Self, String> {
             Ok(MaelstromKey(
                 serde_json::from_slice(buf).map_err(|err| err.to_string())?,
             ))
         }
+
+        fn encode_schema(_schema: &Self::Schema) -> Bytes {
+            Bytes::new()
+        }
+
+        fn decode_schema(buf: &Bytes) -> Self::Schema {
+            assert_eq!(*buf, Bytes::new());
+            MaelstromKeySchema
+        }
     }
 
-    #[derive(Debug)]
+    impl SimpleColumnarData for MaelstromKey {
+        type ArrowBuilder = UInt64Builder;
+        type ArrowColumn = UInt64Array;
+
+        fn goodbytes(builder: &Self::ArrowBuilder) -> usize {
+            builder.values_slice().to_byte_slice().len()
+        }
+
+        fn push(&self, builder: &mut Self::ArrowBuilder) {
+            builder.append_value(self.0);
+        }
+        fn push_null(builder: &mut Self::ArrowBuilder) {
+            builder.append_null();
+        }
+
+        fn read(&mut self, idx: usize, column: &Self::ArrowColumn) {
+            *self = MaelstromKey(column.value(idx));
+        }
+    }
+
+    #[derive(Debug, PartialEq)]
     pub struct MaelstromKeySchema;
 
     impl Schema<MaelstromKey> for MaelstromKeySchema {
-        type Encoder = SimpleEncoder<MaelstromKey, u64>;
-        type Decoder = SimpleDecoder<MaelstromKey, u64>;
+        type ArrowColumn = UInt64Array;
+        type Statistics = NoneStats;
 
-        fn columns(&self) -> DynStructCfg {
-            SimpleSchema::<MaelstromKey, u64>::columns(&())
+        type Decoder = SimpleColumnarDecoder<MaelstromKey>;
+        type Encoder = SimpleColumnarEncoder<MaelstromKey>;
+
+        fn encoder(&self) -> Result<Self::Encoder, anyhow::Error> {
+            Ok(SimpleColumnarEncoder::default())
         }
 
-        fn decoder(&self, cols: ColumnsRef) -> Result<Self::Decoder, String> {
-            SimpleSchema::<MaelstromKey, u64>::decoder(cols, |val, ret| ret.0 = val)
-        }
-
-        fn encoder(&self, cols: ColumnsMut) -> Result<Self::Encoder, String> {
-            SimpleSchema::<MaelstromKey, u64>::encoder(cols, |val| val.0)
+        fn decoder(&self, col: Self::ArrowColumn) -> Result<Self::Decoder, anyhow::Error> {
+            Ok(SimpleColumnarDecoder::new(col))
         }
     }
 
@@ -782,36 +806,59 @@ mod codec_impls {
             buf.put(bytes.as_slice());
         }
 
-        fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        fn decode<'a>(buf: &'a [u8], _schema: &MaelstromValSchema) -> Result<Self, String> {
             Ok(MaelstromVal(
                 serde_json::from_slice(buf).map_err(|err| err.to_string())?,
             ))
         }
+
+        fn encode_schema(_schema: &Self::Schema) -> Bytes {
+            Bytes::new()
+        }
+
+        fn decode_schema(buf: &Bytes) -> Self::Schema {
+            assert_eq!(*buf, Bytes::new());
+            MaelstromValSchema
+        }
     }
 
-    #[derive(Debug)]
+    impl SimpleColumnarData for MaelstromVal {
+        type ArrowBuilder = BinaryBuilder;
+        type ArrowColumn = BinaryArray;
+
+        fn goodbytes(builder: &Self::ArrowBuilder) -> usize {
+            builder.values_slice().to_byte_slice().len()
+        }
+
+        fn push(&self, builder: &mut Self::ArrowBuilder) {
+            builder.append_value(&self.encode_to_vec());
+        }
+        fn push_null(builder: &mut Self::ArrowBuilder) {
+            builder.append_null()
+        }
+
+        fn read(&mut self, idx: usize, column: &Self::ArrowColumn) {
+            *self = MaelstromVal::decode(column.value(idx), &MaelstromValSchema)
+                .expect("should be valid MaelstromVal");
+        }
+    }
+
+    #[derive(Debug, PartialEq)]
     pub struct MaelstromValSchema;
 
     impl Schema<MaelstromVal> for MaelstromValSchema {
-        type Encoder = SimpleEncoder<MaelstromVal, Vec<u8>>;
-        type Decoder = SimpleDecoder<MaelstromVal, Vec<u8>>;
+        type ArrowColumn = BinaryArray;
+        type Statistics = NoneStats;
 
-        fn columns(&self) -> DynStructCfg {
-            SimpleSchema::<MaelstromVal, Vec<u8>>::columns(&())
+        type Decoder = SimpleColumnarDecoder<MaelstromVal>;
+        type Encoder = SimpleColumnarEncoder<MaelstromVal>;
+
+        fn encoder(&self) -> Result<Self::Encoder, anyhow::Error> {
+            Ok(SimpleColumnarEncoder::default())
         }
 
-        fn decoder(&self, cols: ColumnsRef) -> Result<Self::Decoder, String> {
-            SimpleSchema::<MaelstromVal, Vec<u8>>::decoder(cols, |val, ret| {
-                *ret = MaelstromVal::decode(val).expect("should be valid MaelstromVal")
-            })
-        }
-
-        fn encoder(&self, cols: ColumnsMut) -> Result<Self::Encoder, String> {
-            SimpleSchema::<MaelstromVal, Vec<u8>>::push_encoder(cols, |col, val| {
-                let mut buf = Vec::new();
-                MaelstromVal::encode(val, &mut buf);
-                ColumnPush::<Vec<u8>>::push(col, &buf)
-            })
+        fn decoder(&self, col: Self::ArrowColumn) -> Result<Self::Decoder, anyhow::Error> {
+            Ok(SimpleColumnarDecoder::new(col))
         }
     }
 }

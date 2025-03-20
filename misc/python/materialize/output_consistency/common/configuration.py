@@ -6,6 +6,9 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from materialize.output_consistency.execution.query_output_mode import (
+    QueryOutputMode,
+)
 from materialize.output_consistency.input_data.scenarios.evaluation_scenario import (
     EvaluationScenario,
 )
@@ -22,13 +25,15 @@ class ConsistencyTestConfiguration:
         random_seed: str,
         split_and_retry_on_db_error: bool,
         dry_run: bool,
-        fail_fast: bool,
         verbose_output: bool,
         print_reproduction_code: bool,
         max_runtime_in_sec: int,
         max_iterations: int,
+        max_failures_until_abort: int,
         avoid_expressions_expecting_db_error: bool,
-        postgres_compatible_mode: bool,
+        disable_predefined_queries: bool,
+        query_output_mode: QueryOutputMode,
+        vertical_join_tables: int,
     ):
         self.scenario = scenario
         self.queries_per_tx = queries_per_tx
@@ -38,13 +43,15 @@ class ConsistencyTestConfiguration:
         self.random_seed = random_seed
         self.split_and_retry_on_db_error = split_and_retry_on_db_error
         self.dry_run = dry_run
-        self.fail_fast = fail_fast
         self.verbose_output = verbose_output
         self.print_reproduction_code = print_reproduction_code
         self.max_runtime_in_sec = max_runtime_in_sec
         self.max_iterations = max_iterations
+        self.max_failures_until_abort = max_failures_until_abort
         self.avoid_expressions_expecting_db_error = avoid_expressions_expecting_db_error
-        self.postgres_compatible_mode = postgres_compatible_mode
+        self.disable_predefined_queries = disable_predefined_queries
+        self.query_output_mode = query_output_mode
+        self.vertical_join_tables = vertical_join_tables
 
     def validate(self) -> None:
         if self.max_runtime_in_sec == 0 and self.max_iterations == 0:

@@ -1,6 +1,6 @@
 # Managed clusters
 
-Epic: [#19547](https://github.com/MaterializeInc/materialize/issues/19547)
+Epic: [#19547](https://github.com/MaterializeInc/database-issues/issues/5808)
 
 ## Context
 
@@ -361,6 +361,6 @@ We could wait to improve the API until we've built [dynamic cluster scheduling].
 
 
 [cluster replica design]: https://github.com/MaterializeInc/materialize/blob/d7101d4b952f9eb4f1185fdcceacd64c4d151de5/doc/developer/design/20220413_cluster_replica.md#future-work
-[dynamic cluster scheduling]: https://github.com/MaterializeInc/materialize/issues/13870
+[dynamic cluster scheduling]: https://github.com/MaterializeInc/database-issues/issues/3968
 [terraform provider]: https://github.com/MaterializeInc/terraform-provider-materialize/issues/145
 [web console]: https://materializeinc.slack.com/archives/CU7ELJ6E9/p1683568811596419?thread_ts=1683565139.938549&cid=CU7ELJ6E9

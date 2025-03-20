@@ -9,10 +9,12 @@
 
 import argparse
 
-import pg8000
-from pg8000 import Connection
-from pg8000.exceptions import InterfaceError
+import psycopg
+from psycopg import Connection
+from psycopg.errors import OperationalError
 
+from materialize import buildkite
+from materialize.mzcompose.composition import Composition
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
@@ -21,9 +23,14 @@ from materialize.output_consistency.execution.evaluation_strategy import (
     DataFlowRenderingEvaluation,
     EvaluationStrategy,
 )
-from materialize.output_consistency.execution.sql_executor import create_sql_executor
+from materialize.output_consistency.execution.query_output_mode import QueryOutputMode
+from materialize.output_consistency.execution.sql_executor import (
+    DryRunSqlExecutor,
+    MzDatabaseSqlExecutor,
+    PgWireDatabaseSqlExecutor,
+    SqlExecutor,
+)
 from materialize.output_consistency.execution.sql_executors import SqlExecutors
-from materialize.output_consistency.execution.test_summary import ConsistencyTestSummary
 from materialize.output_consistency.generators.expression_generator import (
     ExpressionGenerator,
 )
@@ -43,27 +50,42 @@ from materialize.output_consistency.input_data.test_input_data import (
 from materialize.output_consistency.output.output_printer import OutputPrinter
 from materialize.output_consistency.runner.test_runner import ConsistencyTestRunner
 from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
+from materialize.output_consistency.status.test_summary import ConsistencyTestSummary
+from materialize.output_consistency.validation.error_message_normalizer import (
+    ErrorMessageNormalizer,
+)
 from materialize.output_consistency.validation.result_comparator import ResultComparator
+from materialize.test_analytics.config.test_analytics_db_config import (
+    create_test_analytics_config,
+)
+from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
 
 
 class OutputConsistencyTest:
     def run_output_consistency_tests(
         self,
-        connection: Connection,
+        default_connection: Connection,
+        mz_system_connection: Connection,
         args: argparse.Namespace,
+        query_output_mode: QueryOutputMode,
+        override_max_runtime_in_sec: int | None = None,
     ) -> ConsistencyTestSummary:
         """Entry point for output consistency tests"""
 
         return self._run_output_consistency_tests_internal(
-            connection,
+            default_connection,
+            mz_system_connection,
             args.seed,
             args.dry_run,
             args.fail_fast,
             args.verbose,
             args.max_cols_per_query,
-            args.max_runtime_in_sec,
+            override_max_runtime_in_sec or args.max_runtime_in_sec,
             args.max_iterations,
+            args.max_failures_until_abort,
             args.avoid_expressions_expecting_db_error,
+            args.disable_predefined_queries,
+            query_output_mode=query_output_mode,
         )
 
     def parse_output_consistency_input_args(
@@ -89,8 +111,15 @@ class OutputConsistencyTest:
         parser.add_argument("--max-cols-per-query", default=20, type=int)
         parser.add_argument("--max-runtime-in-sec", default=600, type=int)
         parser.add_argument("--max-iterations", default=100000, type=int)
+        parser.add_argument("--max-failures-until-abort", default=15, type=int)
         parser.add_argument(
             "--avoid-expressions-expecting-db-error",
+            default=False,
+            type=bool,
+            action=argparse.BooleanOptionalAction,
+        )
+        parser.add_argument(
+            "--disable-predefined-queries",
             default=False,
             type=bool,
             action=argparse.BooleanOptionalAction,
@@ -100,7 +129,8 @@ class OutputConsistencyTest:
 
     def _run_output_consistency_tests_internal(
         self,
-        connection: Connection,
+        default_connection: Connection,
+        mz_system_connection: Connection,
         random_seed: str,
         dry_run: bool,
         fail_fast: bool,
@@ -108,57 +138,69 @@ class OutputConsistencyTest:
         max_cols_per_query: int,
         max_runtime_in_sec: int,
         max_iterations: int,
+        max_failures_until_abort: int,
         avoid_expressions_expecting_db_error: bool,
+        disable_predefined_queries: bool,
+        query_output_mode: QueryOutputMode,
     ) -> ConsistencyTestSummary:
         input_data = self.create_input_data()
 
-        output_printer = OutputPrinter(input_data)
         scenario = self.get_scenario()
+
+        if fail_fast:
+            max_failures_until_abort = 1
 
         config = ConsistencyTestConfiguration(
             random_seed=random_seed,
             scenario=scenario,
             dry_run=dry_run,
-            fail_fast=fail_fast,
             verbose_output=verbose_output,
             max_cols_per_query=max_cols_per_query,
             max_runtime_in_sec=max_runtime_in_sec,
             max_iterations=max_iterations,
+            max_failures_until_abort=max_failures_until_abort,
             avoid_expressions_expecting_db_error=avoid_expressions_expecting_db_error,
             queries_per_tx=20,
             max_pending_expressions=100,
             use_autocommit=True,
             split_and_retry_on_db_error=True,
             print_reproduction_code=True,
-            postgres_compatible_mode=scenario
-            == EvaluationScenario.POSTGRES_CONSISTENCY,
+            disable_predefined_queries=disable_predefined_queries,
+            query_output_mode=query_output_mode,
+            vertical_join_tables=4,
         )
 
+        output_printer = OutputPrinter(input_data, config.query_output_mode)
         output_printer.print_config(config)
         config.validate()
 
-        if config.postgres_compatible_mode:
-            input_data.remove_postgres_incompatible_data()
-
         randomized_picker = RandomizedPicker(config)
 
-        sql_executors = self.create_sql_executors(config, connection, output_printer)
+        sql_executors = self.create_sql_executors(
+            config, default_connection, mz_system_connection, output_printer
+        )
 
         evaluation_strategies = self.create_evaluation_strategies(sql_executors)
 
-        ignore_filter = self.create_inconsistency_ignore_filter(sql_executors)
+        # prerequisite: sql_executors need to be created
+        self.filter_input_data(input_data)
 
+        # prerequisite: sql_executors need to be created
+        ignore_filter = self.create_inconsistency_ignore_filter()
+
+        # prerequisite: input data needs to be filtered
         expression_generator = ExpressionGenerator(
             config, randomized_picker, input_data
         )
         query_generator = QueryGenerator(
-            config, randomized_picker, input_data, ignore_filter
+            config, randomized_picker, input_data, expression_generator, ignore_filter
         )
         output_comparator = self.create_result_comparator(ignore_filter)
 
         output_printer.print_info(sql_executors.get_database_infos())
         output_printer.print_empty_line()
 
+        # prerequisite: input data needs to be filtered
         output_printer.print_info(input_data.get_stats())
         output_printer.print_empty_line()
 
@@ -200,14 +242,59 @@ class OutputConsistencyTest:
     def create_input_data(self) -> ConsistencyTestInputData:
         return ConsistencyTestInputData()
 
+    def filter_input_data(self, input_data: ConsistencyTestInputData) -> None:
+        # This allows to filter the input data when sql_executors are created
+        pass
+
     def create_sql_executors(
         self,
         config: ConsistencyTestConfiguration,
-        connection: Connection,
+        default_connection: Connection,
+        mz_system_connection: Connection | None,
         output_printer: OutputPrinter,
     ) -> SqlExecutors:
         return SqlExecutors(
-            create_sql_executor(config, connection, output_printer, "mz")
+            self.create_sql_executor(
+                config, default_connection, mz_system_connection, output_printer, "mz"
+            )
+        )
+
+    def create_sql_executor(
+        self,
+        config: ConsistencyTestConfiguration,
+        default_connection: Connection,
+        mz_system_connection: Connection | None,
+        output_printer: OutputPrinter,
+        name: str,
+        is_mz: bool = True,
+    ) -> SqlExecutor:
+        if config.dry_run:
+            return DryRunSqlExecutor(output_printer, name)
+
+        if is_mz:
+            return self.create_mz_sql_executor(
+                config, default_connection, mz_system_connection, output_printer, name
+            )
+
+        return PgWireDatabaseSqlExecutor(
+            default_connection, config.use_autocommit, output_printer, name
+        )
+
+    def create_mz_sql_executor(
+        self,
+        config: ConsistencyTestConfiguration,
+        default_connection: Connection,
+        mz_system_connection: Connection | None,
+        output_printer: OutputPrinter,
+        name: str,
+    ) -> SqlExecutor:
+        assert mz_system_connection is not None
+        return MzDatabaseSqlExecutor(
+            default_connection,
+            mz_system_connection,
+            config.use_autocommit,
+            output_printer,
+            name,
         )
 
     def get_scenario(self) -> EvaluationScenario:
@@ -216,11 +303,9 @@ class OutputConsistencyTest:
     def create_result_comparator(
         self, ignore_filter: GenericInconsistencyIgnoreFilter
     ) -> ResultComparator:
-        return ResultComparator(ignore_filter)
+        return ResultComparator(ignore_filter, ErrorMessageNormalizer())
 
-    def create_inconsistency_ignore_filter(
-        self, sql_executors: SqlExecutors
-    ) -> GenericInconsistencyIgnoreFilter:
+    def create_inconsistency_ignore_filter(self) -> GenericInconsistencyIgnoreFilter:
         return InternalOutputInconsistencyIgnoreFilter()
 
     def create_evaluation_strategies(
@@ -232,13 +317,44 @@ class OutputConsistencyTest:
         ]
 
 
+def upload_output_consistency_results_to_test_analytics(
+    c: Composition,
+    test_summary: ConsistencyTestSummary,
+) -> None:
+    if not buildkite.is_in_buildkite():
+        return
+
+    test_analytics = TestAnalyticsDb(create_test_analytics_config(c))
+    test_analytics.builds.add_build_job(was_successful=test_summary.all_passed())
+
+    test_analytics.output_consistency.add_stats(
+        count_executed_queries=test_summary.count_executed_query_templates,
+        count_successful_queries=test_summary.count_successful_query_templates,
+        count_ignored_error_queries=test_summary.count_ignored_error_query_templates,
+        count_failures=len(test_summary.failures),
+        count_predefined_queries=test_summary.count_predefined_queries,
+        count_available_data_types=test_summary.count_available_data_types,
+        count_available_op_variants=test_summary.count_available_op_variants,
+        count_used_ops=test_summary.count_used_ops(),
+        count_generated_select_expressions=test_summary.count_generated_select_expressions,
+        count_ignored_select_expressions=test_summary.count_ignored_select_expressions,
+    )
+
+    try:
+        test_analytics.submit_updates()
+        print("Uploaded results.")
+    except Exception as e:
+        # An error during an upload must never cause the build to fail
+        test_analytics.on_upload_failed(e)
+
+
 def connect(host: str, port: int, user: str, password: str | None = None) -> Connection:
     try:
         print(
             f"Connecting to database (host={host}, port={port}, user={user}, password={'****' if password else 'None'})"
         )
-        return pg8000.connect(host=host, port=port, user=user, password=password)
-    except InterfaceError:
+        return psycopg.connect(host=host, port=port, user=user, password=password)
+    except OperationalError:
         print(f"Connecting to database failed (host={host}, port={port}, user={user})!")
         raise
 
@@ -254,15 +370,23 @@ def main() -> int:
 
     parser.add_argument("--host", default="localhost", type=str)
     parser.add_argument("--port", default=6875, type=int)
+    parser.add_argument("--system-port", default=6877, type=int)
     args = test.parse_output_consistency_input_args(parser)
-    db_user = "materialize"
+    default_db_user = "materialize"
+    mz_system_db_user = "mz_system"
 
     try:
-        connection = connect(args.host, args.port, db_user)
-    except InterfaceError:
+        default_connection = connect(args.host, args.port, default_db_user)
+        mz_system_connection = connect(args.host, args.system_port, mz_system_db_user)
+    except OperationalError:
         return 1
 
-    result = test.run_output_consistency_tests(connection, args)
+    result = test.run_output_consistency_tests(
+        default_connection,
+        mz_system_connection,
+        args,
+        query_output_mode=QueryOutputMode.SELECT,
+    )
     return 0 if result.all_passed() else 1
 
 

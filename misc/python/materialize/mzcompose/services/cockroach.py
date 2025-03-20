@@ -21,7 +21,8 @@ from materialize.mzcompose.service import (
 
 
 class Cockroach(Service):
-    DEFAULT_COCKROACH_TAG = "v23.1.11"
+    # TODO: Bump version to >= v24.3.0 when https://github.com/cockroachdb/cockroach/issues/136678 is fixed
+    DEFAULT_COCKROACH_TAG = "v24.2.0"
 
     def __init__(
         self,
@@ -32,8 +33,9 @@ class Cockroach(Service):
         setup_materialize: bool = True,
         in_memory: bool = False,
         healthcheck: ServiceHealthcheck | None = None,
-        # Workaround for #19809, should be "no" otherwise
+        # Workaround for database-issues#5898, should be "no" otherwise
         restart: str = "on-failure:5",
+        stop_grace_period: str = "120s",
     ):
         volumes = []
 
@@ -73,5 +75,6 @@ class Cockroach(Service):
                 "healthcheck": healthcheck,
                 "restart": restart,
                 "environment": DEFAULT_CRDB_ENVIRONMENT,
+                "stop_grace_period": stop_grace_period,
             },
         )

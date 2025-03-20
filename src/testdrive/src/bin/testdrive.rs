@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::convert::Infallible;
 use std::error::Error;
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -16,15 +17,19 @@ use std::{io, process};
 
 use aws_credential_types::Credentials;
 use aws_types::region::Region;
+use clap::ArgAction;
 use globset::GlobBuilder;
 use itertools::Itertools;
 use mz_build_info::{build_info, BuildInfo};
+use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::path::PathExt;
+use mz_ore::url::SensitiveUrl;
 use mz_testdrive::{CatalogConfig, Config, ConsistencyCheckLevel};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
+#[allow(deprecated)] // fails with libraries still using old time lib
 use time::Instant;
 use tracing::info;
 use tracing_subscriber::filter::EnvFilter;
@@ -48,14 +53,19 @@ struct Args {
     ///
     /// Passing `--var foo=bar` will create a variable named `arg.foo` with the
     /// value `bar`. Can be specified multiple times to set multiple variables.
-    #[clap(long, env = "VAR", use_delimiter = true, value_name = "NAME=VALUE")]
+    #[clap(
+        long,
+        env = "VAR",
+        use_value_delimiter = true,
+        value_name = "NAME=VALUE"
+    )]
     var: Vec<String>,
     /// A random number to distinguish each testdrive run.
-    #[clap(long, value_name = "N")]
+    #[clap(long, value_name = "N", action = ArgAction::Set)]
     seed: Option<u32>,
     /// Whether to reset Materialize state before executing each script and
     /// to clean up AWS state after each script.
-    #[clap(long)]
+    #[clap(long, action = ArgAction::SetTrue)]
     no_reset: bool,
     /// Force the use of the specified temporary directory.
     ///
@@ -67,7 +77,7 @@ struct Args {
     #[clap(long, value_name = "SOURCE")]
     source: Option<String>,
     /// Default timeout for cancellable operations.
-    #[clap(long, parse(try_from_str = humantime::parse_duration), default_value = "30s", value_name = "DURATION")]
+    #[clap(long, value_parser = humantime::parse_duration, default_value = "30s", value_name = "DURATION")]
     default_timeout: Duration,
     /// The default number of times to retry a query expecting it to converge to the desired result.
     #[clap(long, default_value = "18446744073709551615", value_name = "N")]
@@ -75,7 +85,7 @@ struct Args {
     /// Initial backoff interval for retry operations.
     ///
     /// Set to 0 to retry immediately on failure.
-    #[clap(long, parse(try_from_str = humantime::parse_duration), default_value = "50ms", value_name = "DURATION")]
+    #[clap(long, value_parser = humantime::parse_duration, default_value = "50ms", value_name = "DURATION")]
     initial_backoff: Duration,
     /// Backoff factor when retrying.
     ///
@@ -95,7 +105,7 @@ struct Args {
     shuffle_tests: bool,
     /// Divide the test files into shards and run only the test files in this
     /// shard.
-    #[clap(long, requires = "shard-count", value_name = "N")]
+    #[clap(long, requires = "shard_count", value_name = "N")]
     shard: Option<usize>,
     /// Total number of shards in use.
     #[clap(long, requires = "shard", value_name = "N")]
@@ -109,8 +119,13 @@ struct Args {
     /// Which log messages to emit.
     ///
     /// See environmentd's `--startup-log-filter` option for details.
-    #[clap(long, env = "LOG_FILTER", value_name = "FILTER", default_value = "off")]
-    log_filter: EnvFilter,
+    #[clap(
+        long,
+        env = "LOG_FILTER",
+        value_name = "FILTER",
+        default_value = "librdkafka=off,mz_kafka_util::client=off,warn"
+    )]
+    log_filter: String,
     /// Glob patterns of testdrive scripts to run.
     globs: Vec<String>,
     /// Automatically rewrite the testdrive file with the correct results when they are not as
@@ -123,14 +138,16 @@ struct Args {
     #[clap(
         long,
         default_value = "postgres://materialize@localhost:6875",
-        value_name = "URL"
+        value_name = "URL",
+        action = ArgAction::Set,
     )]
     materialize_url: tokio_postgres::Config,
     /// materialize internal SQL connection string.
     #[clap(
         long,
         default_value = "postgres://materialize@localhost:6877",
-        value_name = "INTERNAL_URL"
+        value_name = "INTERNAL_URL",
+        action = ArgAction::Set,
     )]
     materialize_internal_url: tokio_postgres::Config,
     #[clap(long)]
@@ -148,7 +165,7 @@ struct Args {
     materialize_internal_http_port: u16,
     /// Arbitrary session parameters for testdrive to set after connecting to
     /// Materialize.
-    #[clap(long, value_name = "KEY=VAL", parse(from_str = parse_kafka_opt))]
+    #[clap(long, value_name = "KEY=VAL", value_parser = parse_kafka_opt)]
     materialize_param: Vec<(String, String)>,
     /// Validate the catalog state of the specified catalog kind.
     #[clap(long)]
@@ -159,23 +176,25 @@ struct Args {
     #[clap(
         long,
         value_name = "PERSIST_CONSENSUS_URL",
-        required_if_eq("validate-catalog-store", "true")
+        required_if_eq("validate_catalog_store", "true"),
+        action = ArgAction::Set,
     )]
-    persist_consensus_url: Option<String>,
+    persist_consensus_url: Option<SensitiveUrl>,
     /// Handle to the persist blob storage.
     #[clap(
         long,
         value_name = "PERSIST_BLOB_URL",
-        required_if_eq("validate-catalog-store", "true")
+        required_if_eq("validate_catalog_store", "true")
     )]
-    persist_blob_url: Option<String>,
+    persist_blob_url: Option<SensitiveUrl>,
 
     // === Confluent options. ===
     /// Address of the Kafka broker that testdrive will interact with.
     #[clap(
         long,
         value_name = "ENCRYPTION://HOST:PORT",
-        default_value = "localhost:9092"
+        default_value = "localhost:9092",
+        action = ArgAction::Set,
     )]
     kafka_addr: String,
     /// Default number of partitions to create for topics
@@ -183,7 +202,7 @@ struct Args {
     kafka_default_partitions: usize,
     /// Arbitrary rdkafka options for testdrive to use when connecting to the
     /// Kafka broker.
-    #[clap(long, env = "KAFKA_OPTION", use_delimiter=true, value_name = "KEY=VAL", parse(from_str = parse_kafka_opt))]
+    #[clap(long, env = "KAFKA_OPTION", use_value_delimiter=true, value_name = "KEY=VAL", value_parser = parse_kafka_opt)]
     kafka_option: Vec<(String, String)>,
     /// URL of the schema registry that testdrive will connect to.
     #[clap(long, value_name = "URL", default_value = "http://localhost:8081")]
@@ -210,7 +229,7 @@ struct Args {
     /// Cannot be specified if --aws-endpoint is specified.
     #[clap(
         long,
-        conflicts_with = "aws-endpoint",
+        conflicts_with = "aws_endpoint",
         value_name = "REGION",
         env = "AWS_REGION"
     )]
@@ -221,7 +240,7 @@ struct Args {
     /// Cannot be specified if --aws-region is specified.
     #[clap(
         long,
-        conflicts_with = "aws-region",
+        conflicts_with = "aws_region",
         value_name = "URL",
         env = "AWS_ENDPOINT"
     )]
@@ -257,6 +276,9 @@ struct Args {
         default_value = "/tmp"
     )]
     fivetran_destination_files_path: String,
+    /// A map from size name to resource allocations for cluster replicas.
+    #[clap(long, env = "CLUSTER_REPLICA_SIZES")]
+    cluster_replica_sizes: String,
 }
 
 #[tokio::main]
@@ -264,8 +286,8 @@ async fn main() {
     let args: Args = cli::parse_args(CliConfig::default());
 
     tracing_subscriber::fmt()
-        .with_env_filter(args.log_filter)
-        .with_writer(io::stderr)
+        .with_env_filter(EnvFilter::from(args.log_filter))
+        .with_writer(io::stdout)
         .init();
 
     let (aws_config, aws_account) = match args.aws_region {
@@ -346,6 +368,10 @@ async fn main() {
         arg_vars.insert(name.to_string(), val.to_string());
     }
 
+    let cluster_replica_sizes: ClusterReplicaSizeMap =
+        serde_json::from_str(&args.cluster_replica_sizes)
+            .unwrap_or_else(|e| die!("testdrive: failed to parse replica size map: {}", e));
+
     let materialize_catalog_config = if args.validate_catalog_store {
         Some(CatalogConfig {
             persist_consensus_url: args
@@ -376,6 +402,7 @@ async fn main() {
 
         // === Materialize options. ===
         materialize_pgconfig: args.materialize_url,
+        materialize_cluster_replica_sizes: cluster_replica_sizes,
         materialize_internal_pgconfig: args.materialize_internal_url,
         materialize_http_port: args.materialize_http_port,
         materialize_internal_http_port: args.materialize_internal_http_port,
@@ -477,6 +504,7 @@ async fn main() {
     };
 
     for file in files.into_iter().take(args.max_tests) {
+        #[allow(deprecated)] // fails with libraries still using old time lib
         let start_time = Instant::now();
         let res = if file == Path::new("-") {
             if args.rewrite_results {
@@ -496,14 +524,15 @@ async fn main() {
                     &file.to_string_lossy(),
                     start_time.elapsed(),
                     "failure",
-                    &error.to_string(),
+                    // Encode newlines so they get preserved when being parsed by python-junit-xml
+                    &error.to_string().replace("\n", "&#10;"),
                 ),
             };
             test_case.set_classname("testdrive");
             junit_suite.add_testcase(test_case);
         }
         if let Err(error) = res {
-            let _ = error.print_stderr();
+            let _ = error.print_error();
             error_count += 1;
             error_files.insert(file);
             if error_count >= args.max_errors {
@@ -539,9 +568,9 @@ async fn main() {
     }
 }
 
-fn parse_kafka_opt(opt: &str) -> (String, String) {
+fn parse_kafka_opt(opt: &str) -> Result<(String, String), Infallible> {
     let mut pieces = opt.splitn(2, '=');
     let key = pieces.next().unwrap_or("").to_owned();
     let val = pieces.next().unwrap_or("").to_owned();
-    (key, val)
+    Ok((key, val))
 }

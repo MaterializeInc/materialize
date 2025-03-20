@@ -20,7 +20,7 @@ use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::fold::{Fold, FoldNode};
 use crate::ast::{
     Ident, Statement, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName,
+    UnresolvedSchemaName, Version,
 };
 
 /// This represents the metadata that lives next to an AST, as we take it through
@@ -47,7 +47,7 @@ pub trait AstInfo: Clone {
     /// The type used to specify a column.
     ///
     /// n.b. when implementing visitors, you likely want to build the visitor to
-    /// vist [`crate::ast::ColumnName`] instead of visiting this struct
+    /// visit [`crate::ast::ColumnName`] instead of visiting this struct
     /// directly. The visitor on this should usually just return an error.
     type ColumnReference: AstDisplay + Clone + Hash + Debug + Eq + Ord;
     /// The type used for schema names.
@@ -62,6 +62,8 @@ pub trait AstInfo: Clone {
     type CteId: Clone + Hash + Debug + Eq + Ord;
     /// The type used for role references.
     type RoleName: AstDisplay + Clone + Hash + Debug + Eq + Ord;
+    /// The type used for network policy references.
+    type NetworkPolicyName: AstDisplay + Clone + Hash + Debug + Eq + Ord;
     /// They type used for any object names. Objects are the superset of all objects in Materialize.
     type ObjectName: AstDisplay + Clone + Hash + Debug + Eq + Ord;
 }
@@ -79,27 +81,28 @@ impl AstInfo for Raw {
     type DataType = RawDataType;
     type CteId = ();
     type RoleName = Ident;
+    type NetworkPolicyName = RawNetworkPolicyName;
     type ObjectName = UnresolvedObjectName;
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]
 pub enum RawItemName {
     Name(UnresolvedItemName),
-    Id(String, UnresolvedItemName),
+    Id(String, UnresolvedItemName, Option<Version>),
 }
 
 impl RawItemName {
     pub fn name(&self) -> &UnresolvedItemName {
         match self {
             RawItemName::Name(name) => name,
-            RawItemName::Id(_, name) => name,
+            RawItemName::Id(_, name, _) => name,
         }
     }
 
     pub fn name_mut(&mut self) -> &mut UnresolvedItemName {
         match self {
             RawItemName::Name(name) => name,
-            RawItemName::Id(_, name) => name,
+            RawItemName::Id(_, name, _) => name,
         }
     }
 }
@@ -108,9 +111,13 @@ impl AstDisplay for RawItemName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             RawItemName::Name(o) => f.write_node(o),
-            RawItemName::Id(id, o) => {
+            RawItemName::Id(id, o, v) => {
                 f.write_str(format!("[{} AS ", id));
                 f.write_node(o);
+                if let Some(v) = v {
+                    f.write_str(" VERSION ");
+                    f.write_node(v);
+                }
                 f.write_str("]");
             }
         }
@@ -161,6 +168,38 @@ where
         F: Fold<Raw, T>,
     {
         f.fold_cluster_name(self)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]
+pub enum RawNetworkPolicyName {
+    Unresolved(Ident),
+    Resolved(String),
+}
+
+impl AstDisplay for RawNetworkPolicyName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            RawNetworkPolicyName::Unresolved(id) => f.write_node(id),
+            RawNetworkPolicyName::Resolved(id) => {
+                f.write_str(format!("[{}]", id));
+            }
+        }
+    }
+}
+impl_display!(RawNetworkPolicyName);
+
+impl<T> FoldNode<Raw, T> for RawNetworkPolicyName
+where
+    T: AstInfo,
+{
+    type Folded = T::NetworkPolicyName;
+
+    fn fold<F>(self, f: &mut F) -> Self::Folded
+    where
+        F: Fold<Raw, T>,
+    {
+        f.fold_network_policy_name(self)
     }
 }
 

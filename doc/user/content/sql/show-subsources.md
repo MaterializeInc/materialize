@@ -10,12 +10,14 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-subsources.svg" >}}
+```mzsql
+SHOW SUBSOURCES [ FROM <schema_name> | ON <source_name> ]
+```
 
-Field | Use
-------|-----
-_schema&lowbar;name_ | The schema to show subsources from. Defaults to first resolvable schema in the search path if `on_name` is not shown.
-_on&lowbar;name_     | The name of the source whose associated subsources you want to show. If omitted, all subsources in the schema are shown.
+Option                 | Description
+-----------------------|------------
+**FROM** <schema_name> | If specified, only show subsources from the specified schema. Defaults to first resolvable schema in the search path.
+**ON** <source_name>   | If specified, only show subsources on the specified source.
 
 ## Details
 
@@ -48,7 +50,7 @@ Field    | Meaning
 
 ## Examples
 
-```sql
+```mzsql
 SHOW SOURCES;
 ```
 ```nofmt
@@ -57,7 +59,7 @@ SHOW SOURCES;
  postgres
  kafka
 ```
-```sql
+```mzsql
 SHOW SUBSOURCES ON pg;
 ```
 ```nofmt
@@ -67,7 +69,7 @@ SHOW SUBSOURCES ON pg;
  table1_in_postgres | subsource
  table2_in_postgres | subsource
 ```
-```sql
+```mzsql
 SHOW SUBSOURCES ON kafka;
 ```
 ```nofmt

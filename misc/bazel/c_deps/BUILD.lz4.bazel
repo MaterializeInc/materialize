@@ -30,8 +30,8 @@ cc_library(
         "lib/lz4hc.h",
         "lib/xxhash.h",
     ],
-    include_prefix = "lz4",
     # Always compile with optimizations enabled, otherwise things are much too slow.
     copts = ["-O3"],
+    include_prefix = "lz4",
     visibility = ["//visibility:public"],
 )

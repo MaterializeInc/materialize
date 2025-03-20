@@ -11,15 +11,13 @@
 //!
 //! Consult [TopKPlan] documentation for details.
 
-use std::cell::RefCell;
-use std::collections::BTreeMap;
-use std::rc::Rc;
-
+use columnar::Columnar;
+use differential_dataflow::containers::Columnation;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::{Batch, Builder, Trace, TraceReader};
+use differential_dataflow::IntoOwned;
 use differential_dataflow::{AsCollection, Collection};
 use mz_compute_types::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
@@ -31,18 +29,23 @@ use mz_ore::soft_assert_or_log;
 use mz_repr::{Datum, DatumVec, Diff, Row, ScalarType, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
-use timely::container::columnation::{Columnation, TimelyStack};
-use timely::container::CapacityContainerBuilder;
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::rc::Rc;
+use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::Scope;
+use timely::Container;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
 use crate::render::Pairer;
-use crate::row_spine::{DatumSeq, RowValSpine};
+use crate::row_spine::{
+    DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBuilder, RowValSpine,
+};
 use crate::typedefs::{KeyBatcher, RowRowSpine, RowSpine};
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
@@ -50,13 +53,14 @@ impl<G> Context<G>
 where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
+    <G::Timestamp as Columnar>::Container: Clone + Send,
 {
     pub(crate) fn render_topk(
-        &mut self,
+        &self,
         input: CollectionBundle<G>,
         top_k_plan: TopKPlan,
     ) -> CollectionBundle<G> {
-        let (ok_input, err_input) = input.as_specific_collection(None);
+        let (ok_input, err_input) = input.as_specific_collection(None, &self.config_set);
 
         // We create a new region to compartmentalize the topk logic.
         let (ok_result, err_collection) = ok_input.scope().region_named("TopK", |inner| {
@@ -67,7 +71,8 @@ where
             // TODO(vmarcos): We evaluate the limit expression below for each input update. There
             // is an opportunity to do so for every group key instead if the error handling is
             // integrated with: 1. The intra-timestamp thinning step in monotonic top-k, e.g., by
-            // adding an error output there; 2. The validating reduction on basic top-k (#23687).
+            // adding an error output there; 2. The validating reduction on basic top-k
+            // (database-issues#7108).
             let limit_err = match &top_k_plan {
                 TopKPlan::MonotonicTop1(MonotonicTop1Plan { .. }) => None,
                 TopKPlan::MonotonicTopK(MonotonicTopKPlan { limit, .. }) => Some(limit),
@@ -150,7 +155,7 @@ where
                             "Non-monotonic input to MonotonicTopK",
                             &format!("data={data:?}, diff={diff}"),
                         );
-                        let m = "tried to build monotonic top-k on non-monotonic input".to_string();
+                        let m = "tried to build monotonic top-k on non-monotonic input".into();
                         (DataflowError::from(EvalError::Internal(m)), 1)
                     });
                     err_collection = err_collection.concat(&errs);
@@ -399,10 +404,12 @@ where
         // If validating: demux errors, otherwise we cannot produce errors.
         let (input, oks, errs) = if validating {
             // Build topk stage, produce errors for invalid multiplicities.
-            let (input, stage) =
-                build_topk_negated_stage::<S, _, RowValSpine<Result<Row, Row>, _, _>>(
-                    &input, order_key, offset, limit, arity,
-                );
+            let (input, stage) = build_topk_negated_stage::<
+                S,
+                _,
+                RowValBuilder<_, _, _>,
+                RowValSpine<Result<Row, Row>, _, _>,
+            >(&input, order_key, offset, limit, arity);
             let stage = stage.as_collection(|k, v| (k.into_owned(), v.clone()));
 
             // Demux oks and errors.
@@ -417,7 +424,7 @@ where
                         let k = SharedRow::pack(hk_iter);
                         let message = "Negative multiplicities in TopK";
                         error_logger.log(message, &format!("k={k:?}, h={h}, v={v:?}"));
-                        Err(EvalError::Internal(message.to_string()).into())
+                        Err(EvalError::Internal(message.into()).into())
                     }
                     Ok(t) => Ok((hk, t)),
                 },
@@ -425,9 +432,10 @@ where
             (input, oks, Some(errs))
         } else {
             // Build non-validating topk stage.
-            let (input, stage) = build_topk_negated_stage::<S, _, RowRowSpine<_, _>>(
-                &input, order_key, offset, limit, arity,
-            );
+            let (input, stage) =
+                build_topk_negated_stage::<S, _, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                    &input, order_key, offset, limit, arity,
+                );
             // Turn arrangement into collection.
             let stage = stage.as_collection(|k, v| (k.into_owned(), v.into_owned()));
 
@@ -475,7 +483,7 @@ where
                 "Non-monotonic input to MonotonicTop1",
                 &format!("data={data:?}, diff={diff}"),
             );
-            let m = "tried to build monotonic top-1 on non-monotonic input".to_string();
+            let m = "tried to build monotonic top-1 on non-monotonic input".into();
             (EvalError::Internal(m).into(), 1)
         });
         let partial: KeyCollection<_, _, _> = partial
@@ -490,15 +498,17 @@ where
             })
             .into();
         let result = partial
-            .mz_arrange::<RowSpine<_, _>>("Arranged MonotonicTop1 partial [val: empty]")
-            .mz_reduce_abelian::<_, _, _, RowRowSpine<_, _>>(
+            .mz_arrange::<RowBatcher<_, _>, RowBuilder<_, _>, RowSpine<_, _>>(
+                "Arranged MonotonicTop1 partial [val: empty]",
+            )
+            .mz_reduce_abelian::<_, _, _, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
                 "MonotonicTop1",
                 move |_key, input, output| {
                     let accum: &monoids::Top1Monoid = &input[0].1;
                     output.push((accum.row.clone(), 1));
                 },
             );
-        // TODO(#7331): Here we discard the arranged output.
+        // TODO(database-issues#2288): Here we discard the arranged output.
         (result.as_collection(|_k, v| v.into_owned()), errs)
     }
 }
@@ -510,7 +520,7 @@ where
 /// Returns two arrangements:
 /// * The arranged input data without modifications, and
 /// * the maintained negated output data.
-fn build_topk_negated_stage<G, V, Tr>(
+fn build_topk_negated_stage<G, V, Bu, Tr>(
     input: &Collection<G, (Row, Row), Diff>,
     order_key: Vec<mz_expr::ColumnOrder>,
     offset: usize,
@@ -524,12 +534,13 @@ where
     G: Scope,
     G::Timestamp: Lattice + Columnation,
     V: MaybeValidatingRow<Row, Row>,
+    Bu: Builder<Time = G::Timestamp, Output = Tr::Batch>,
+    Bu::Input: Container + PushInto<((Row, V), G::Timestamp, Diff)>,
     Tr: Trace
         + for<'a> TraceReader<Key<'a> = DatumSeq<'a>, Time = G::Timestamp, Diff = Diff>
         + 'static,
     for<'a> Tr::Val<'a>: IntoOwned<'a, Owned = V>,
     Tr::Batch: Batch,
-    Tr::Builder: Builder<Input = TimelyStack<((Row, V), G::Timestamp, Diff)>>,
     Arranged<G, TraceAgent<Tr>>: ArrangementSize,
 {
     let mut datum_vec = mz_repr::DatumVec::new();
@@ -537,10 +548,12 @@ where
     // We only want to arrange parts of the input that are not part of the actual output
     // such that `input.concat(&negated_output)` yields the correct TopK
     // NOTE(vmarcos): The arranged input operator name below is used in the tuning advice
-    // built-in view mz_internal.mz_expected_group_size_advice.
-    let arranged = input.mz_arrange::<RowRowSpine<_, _>>("Arranged TopK input");
+    // built-in view mz_introspection.mz_expected_group_size_advice.
+    let arranged = input.mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+        "Arranged TopK input",
+    );
 
-    let reduced = arranged.mz_reduce_abelian::<_, _, _, Tr>("Reduced TopK input", {
+    let reduced = arranged.mz_reduce_abelian::<_, _, _, Bu, Tr>("Reduced TopK input", {
         move |mut hash_key, source, target: &mut Vec<(V, Diff)>| {
             // Unpack the limit, either into an integer literal or an expression to evaluate.
             let limit: Option<i64> = limit.as_ref().map(|l| {
@@ -656,7 +669,6 @@ where
     let mut datum_vec = mz_repr::DatumVec::new();
 
     let mut aggregates = BTreeMap::new();
-    let mut vector = Vec::new();
     let shared = Rc::new(RefCell::new(monoids::Top1MonoidShared {
         order_key,
         left: DatumVec::new(),
@@ -670,11 +682,10 @@ where
             [],
             move |input, output, notificator| {
                 while let Some((time, data)) = input.next() {
-                    data.swap(&mut vector);
                     let agg_time = aggregates
                         .entry(time.time().clone())
                         .or_insert_with(BTreeMap::new);
-                    for ((grp_row, row), record_time, diff) in vector.drain(..) {
+                    for ((grp_row, row), record_time, diff) in data.drain(..) {
                         let monoid = monoids::Top1MonoidLocal {
                             row,
                             shared: Rc::clone(&shared),
@@ -830,14 +841,14 @@ pub mod monoids {
     use std::hash::{Hash, Hasher};
     use std::rc::Rc;
 
+    use differential_dataflow::containers::{Columnation, Region};
     use differential_dataflow::difference::{IsZero, Multiply, Semigroup};
     use mz_expr::ColumnOrder;
     use mz_repr::{DatumVec, Diff, Row};
     use serde::{Deserialize, Serialize};
-    use timely::container::columnation::{Columnation, Region};
 
     /// A monoid containing a row and an ordering.
-    #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
+    #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash, Default)]
     pub struct Top1Monoid {
         pub row: Row,
         pub order_key: Vec<ColumnOrder>,

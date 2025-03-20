@@ -53,7 +53,9 @@ def test_testdrive(mz: MaterializeApplication) -> None:
                 > CREATE SOURCE s1
                   IN CLUSTER c2
                   FROM KAFKA CONNECTION kafka
-                  (TOPIC 'testdrive-test-${testdrive.seed}')
+                  (TOPIC 'testdrive-test-${testdrive.seed}');
+
+                > CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-test-${testdrive.seed}")
                   FORMAT BYTES
                   ENVELOPE NONE;
 
@@ -61,7 +63,7 @@ def test_testdrive(mz: MaterializeApplication) -> None:
                 > SELECT * FROM v1;
                 1
 
-                > CREATE MATERIALIZED VIEW v2 AS SELECT COUNT(*) FROM s1;
+                > CREATE MATERIALIZED VIEW v2 AS SELECT COUNT(*) FROM s1_tbl;
                 > SELECT * FROM v2;
                 1
 

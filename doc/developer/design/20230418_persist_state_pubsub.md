@@ -1,5 +1,5 @@
 - Feature name: Persist State PubSub
-- Associated: https://github.com/MaterializeInc/materialize/issues/18661
+- Associated: https://github.com/MaterializeInc/database-issues/issues/5515
 
 # Summary
 [summary]: #summary
@@ -11,7 +11,7 @@ Complementing Persist's polling-based discovery of new state with pub-sub update
 
 tl;dr
 * Reduces CockroachDB read traffic to near zero, reducing current CPU usage by 20-30% (relative to total usage).
-  This will allow us to [scale down our clusters further](https://github.com/MaterializeInc/materialize/issues/18665).
+  This will allow us to [scale down our clusters further](https://github.com/MaterializeInc/database-issues/issues/5518).
 * Reduces the median latency of observing new data written to a shard from ~300ms to single digit millis
 
 ---

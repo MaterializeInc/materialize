@@ -7,8 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-regex match=(s\d+|\d{13}|u\d{1,3}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d\.\d\d\d\)) replacement=<>
-
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET allow_real_time_recency = true
 
@@ -32,8 +30,8 @@ $ set-max-tries max-tries=1
 
 > SELECT sum(count)
   FROM (
-      SELECT count(*) FROM input_1
-      UNION ALL SELECT count(*) FROM input_2
+      SELECT count(*) FROM input_1_tbl
+      UNION ALL SELECT count(*) FROM input_2_tbl
       UNION ALL SELECT count(*) FROM t
   ) AS x;
 2000204
@@ -48,8 +46,8 @@ A,B,0
 
 > SELECT sum(count)
   FROM (
-      SELECT count(*) FROM input_1
-      UNION ALL SELECT count(*) FROM input_2
+      SELECT count(*) FROM input_1_tbl
+      UNION ALL SELECT count(*) FROM input_2_tbl
       UNION ALL SELECT count(*) FROM t
   ) AS x;
 3000207
@@ -83,6 +81,8 @@ A,B,0
 > SELECT sum FROM sum;
 5000207
 
+$ set-regex match=(s\d+|\d{13}|u\d+|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d\.\d\d\d\)|true|false) replacement=<>
+
 # RTR timestamp should be present.
 > EXPLAIN TIMESTAMP FOR SELECT sum FROM sum
-"                query timestamp: <> <>\n          oracle read timestamp: <> <>\n    real time recency timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: true\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.sum (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\n    real time recency timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.sum (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"

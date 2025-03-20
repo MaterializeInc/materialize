@@ -14,12 +14,13 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
-use mz_expr::{
-    AccessStrategy, AggregateExpr, AggregateFunc, Id, MirRelationExpr, OptimizedMirRelationExpr,
-    RowSetFinishing,
-};
+use mz_expr::{AccessStrategy, Id, MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_ore::num::NonNeg;
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::{GlobalId, Timestamp};
+use mz_sql::ast::Statement;
+use mz_sql::names::Aug;
+use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_transform::EmptyStatisticsOracle;
@@ -28,7 +29,6 @@ use serde::Serialize;
 use crate::catalog::Catalog;
 use crate::coord::peek::{FastPathPlan, PeekPlan};
 use crate::optimize::dataflows::ComputeInstanceSnapshot;
-use crate::optimize::metrics::OptimizerMetrics;
 use crate::optimize::{self, Optimize, OptimizerConfig, OptimizerError};
 use crate::session::SessionMeta;
 use crate::TimestampContext;
@@ -36,6 +36,7 @@ use crate::TimestampContext;
 /// Information needed to compute PlanInsights.
 #[derive(Debug)]
 pub struct PlanInsightsContext {
+    pub stmt: Option<Statement<Aug>>,
     pub raw_expr: HirRelationExpr,
     pub catalog: Arc<Catalog>,
     // Snapshots of all user compute instances.
@@ -43,6 +44,7 @@ pub struct PlanInsightsContext {
     // TODO: Avoid populating this if not needed. Maybe make this a method that can return a
     // ComputeInstanceSnapshot for a given cluster.
     pub compute_instances: BTreeMap<String, ComputeInstanceSnapshot>,
+    pub target_instance: String,
     pub metrics: OptimizerMetrics,
     pub finishing: RowSetFinishing,
     pub optimizer_config: OptimizerConfig,
@@ -65,31 +67,41 @@ pub struct PlanInsights {
     /// this as fast path. That is: if this query were run on the cluster of the key, it would be
     /// fast because it would use the index of the value.
     pub fast_path_clusters: BTreeMap<String, Option<FastPathCluster>>,
+    /// For the current cluster, whether adding a LIMIT <= this will result in a fast path.
+    pub fast_path_limit: Option<usize>,
     /// Names of persist sources over which a count(*) is done.
     pub persist_count: Vec<Name>,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct FastPathCluster {
-    index: String,
-    on: String,
+    index: Name,
+    on: Name,
 }
 
 impl PlanInsights {
-    pub async fn compute_fast_path_clusters(&mut self, ctx: PlanInsightsContext) {
+    pub async fn compute_fast_path_clusters(
+        &mut self,
+        humanizer: &dyn ExprHumanizer,
+        ctx: Box<PlanInsightsContext>,
+    ) {
         let session: Arc<dyn SessionMetadata + Send> = Arc::new(ctx.session);
         let tasks = ctx
             .compute_instances
             .into_iter()
             .map(|(name, compute_instance)| {
-                // Optimize in parallel.
                 let raw_expr = ctx.raw_expr.clone();
+                let mut finishing = ctx.finishing.clone();
+                // For the current cluster, try adding a LIMIT to see if it fast paths with PeekPersist.
+                if name == ctx.target_instance {
+                    finishing.limit = Some(NonNeg::try_from(1).expect("non-negitave"));
+                }
                 let session = Arc::clone(&session);
                 let timestamp_context = ctx.timestamp_context.clone();
                 let mut optimizer = optimize::peek::Optimizer::new(
                     Arc::clone(&ctx.catalog),
                     compute_instance,
-                    ctx.finishing.clone(),
+                    finishing,
                     ctx.view_id,
                     ctx.index_id,
                     ctx.optimizer_config.clone(),
@@ -119,20 +131,20 @@ impl PlanInsights {
             };
             let (plan, _, _) = plan.unapply();
             if let PeekPlan::FastPath(plan) = plan {
+                // Same-cluster optimization is the LIMIT check.
+                if name == ctx.target_instance {
+                    self.fast_path_limit =
+                        Some(ctx.optimizer_config.features.persist_fast_path_limit);
+                    continue;
+                }
                 let idx_name = if let FastPathPlan::PeekExisting(_, idx_id, _, _) = plan {
-                    let idx_entry = ctx.catalog.get_entry(&idx_id);
-                    let idx_name = ctx
-                        .catalog
-                        .resolve_full_name(idx_entry.name(), Some(session.conn_id()));
-                    let on_entry = ctx
-                        .catalog
-                        .get_entry(&idx_entry.index().expect("must be index").on);
-                    let on_name = ctx
-                        .catalog
-                        .resolve_full_name(on_entry.name(), Some(session.conn_id()));
+                    let idx_entry = ctx.catalog.get_entry_by_global_id(&idx_id);
                     Some(FastPathCluster {
-                        index: idx_name.to_string(),
-                        on: on_name.to_string(),
+                        index: structured_name(humanizer, idx_id),
+                        on: structured_name(
+                            humanizer,
+                            idx_entry.index().expect("must be index").on,
+                        ),
                     })
                 } else {
                     // This shouldn't ever happen (changing the cluster should not affect whether a
@@ -251,15 +263,7 @@ fn global_insights(
             let [aggregate] = aggregates.as_slice() else {
                 return;
             };
-            let AggregateExpr {
-                func: AggregateFunc::Count,
-                distinct: false,
-                expr,
-            } = aggregate
-            else {
-                return;
-            };
-            if !expr.is_literal_true() {
+            if !aggregate.is_count_asterisk() {
                 return;
             }
             let name = structured_name(humanizer, *id);

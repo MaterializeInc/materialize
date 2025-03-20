@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""Tests the dynamic tracing setup on environmentd"""
+
 import os
 import time
 
@@ -15,10 +17,12 @@ import requests
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
 
-SENTRY_DSN = os.environ["BUILDKITE_SENTRY_DSN"]
+SENTRY_DSN = os.getenv("BUILDKITE_SENTRY_DSN")
 
 SERVICES = [
+    Mz(app_password=""),
     Materialized(
         options=[
             "--opentelemetry-endpoint=whatever:7777",
@@ -31,11 +35,14 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    """Tests the dynamic tracing setup on environmentd"""
-    for name in c.workflows:
-        if name != "default":
-            with c.test_case(name):
-                c.workflow(name)
+    def process(name: str) -> None:
+        if name == "default":
+            return
+
+        with c.test_case(name):
+            c.workflow(name)
+
+    c.test_parts(list(c.workflows.keys()), process)
 
 
 def workflow_with_everything(c: Composition) -> None:
@@ -150,7 +157,7 @@ def workflow_clusterd(c: Composition) -> None:
     port = c.port("clusterd", 6878)
 
     c.sql(
-        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )

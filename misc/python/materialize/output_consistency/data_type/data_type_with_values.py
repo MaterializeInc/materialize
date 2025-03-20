@@ -13,6 +13,7 @@ from materialize.output_consistency.data_value.data_value import DataValue
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
+from materialize.output_consistency.query.data_source import DataSource
 
 
 class DataTypeWithValues:
@@ -22,7 +23,7 @@ class DataTypeWithValues:
         """Creates a new instance and prefills the values with a NULL value"""
         self.data_type = data_type
         self.null_value = self._create_raw_value(
-            "NULL", "NULL", {ExpressionCharacteristics.NULL}
+            "NULL", "NULL", {ExpressionCharacteristics.NULL}, is_null_value=True
         )
         # values (and implicitly a column for each value for horizontal storage)
         self.raw_values: list[DataValue] = [self.null_value]
@@ -32,8 +33,15 @@ class DataTypeWithValues:
         value: str,
         column_name: str,
         characteristics: set[ExpressionCharacteristics],
+        is_null_value: bool = False,
     ) -> DataValue:
-        return DataValue(value, self.data_type, column_name, characteristics)
+        return DataValue(
+            value,
+            self.data_type,
+            column_name,
+            characteristics,
+            is_null_value=is_null_value,
+        )
 
     def add_raw_value(
         self,
@@ -43,9 +51,7 @@ class DataTypeWithValues:
         is_pg_compatible: bool = True,
     ) -> None:
         raw_value = self._create_raw_value(value, column_name, characteristics)
-
-        if not is_pg_compatible:
-            raw_value.is_postgres_compatible = False
+        raw_value.is_pg_compatible = is_pg_compatible
 
         self.raw_values.append(raw_value)
 
@@ -55,5 +61,12 @@ class DataTypeWithValues:
         for raw_value in self.raw_values:
             raw_value.own_characteristics.add(characteristic)
 
-    def create_vertical_storage_column(self) -> DataColumn:
+    def create_unassigned_vertical_storage_column(self) -> DataColumn:
         return DataColumn(self.data_type, self.raw_values)
+
+    def create_assigned_vertical_storage_column(
+        self, data_source: DataSource
+    ) -> DataColumn:
+        column = self.create_unassigned_vertical_storage_column()
+        column.assign_data_source(data_source=data_source, force=False)
+        return column

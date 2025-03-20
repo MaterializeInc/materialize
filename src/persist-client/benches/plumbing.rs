@@ -18,12 +18,14 @@ use criterion::{Bencher, BenchmarkId, Criterion, Throughput};
 use differential_dataflow::trace::Description;
 use futures::stream::{FuturesUnordered, StreamExt};
 use mz_ore::task::RuntimeExt;
+use mz_persist::indexed::columnar::ColumnarRecords;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Blob, CaSResult, Consensus, ExternalError, SeqNo, VersionedData};
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist::workload::{self, DataGenerator};
 use mz_persist_client::internals_bench::trace_push_batch_one_iter;
 use mz_persist_client::ShardId;
+use mz_persist_types::parquet::EncodingConfig;
 use timely::progress::Antichain;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -191,6 +193,7 @@ pub fn bench_encode_batch(name: &str, throughput: bool, c: &mut Criterion, data:
     }
 
     let metrics = ColumnarMetrics::disconnected();
+    let config = EncodingConfig::default();
     let trace = BlobTraceBatchPart {
         desc: Description::new(
             Antichain::from_elem(0u64),
@@ -198,16 +201,17 @@ pub fn bench_encode_batch(name: &str, throughput: bool, c: &mut Criterion, data:
             Antichain::from_elem(0u64),
         ),
         index: 0,
-        updates: mz_persist::indexed::encoding::BlobTraceUpdates::Row(
-            data.batches().collect::<Vec<_>>(),
-        ),
+        updates: mz_persist::indexed::encoding::BlobTraceUpdates::Row(ColumnarRecords::concat(
+            &data.batches().collect::<Vec<_>>(),
+            &metrics,
+        )),
     };
 
     g.bench_function(BenchmarkId::new("trace", data.goodput_pretty()), |b| {
         b.iter(|| {
             // Intentionally alloc a new buf each iter.
             let mut buf = Vec::new();
-            trace.encode(&mut buf, &metrics);
+            trace.encode(&mut buf, &metrics, &config);
         })
     });
 }

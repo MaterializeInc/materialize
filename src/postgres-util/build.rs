@@ -7,13 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::env;
+use std::path::PathBuf;
 
 fn main() {
-    env::set_var("PROTOC", mz_build_tools::protoc());
-
     let mut config = prost_build::Config::new();
-    config.btree_map(["."]);
+    config
+        .protoc_executable(mz_build_tools::protoc())
+        .btree_map(["."]);
 
     tonic_build::configure()
         // Enabling `emit_rerun_if_changed` will rerun the build script when
@@ -22,6 +22,13 @@ fn main() {
         // is to re-run if any file in the crate changes; that's still a bit too
         // broad, but it's better.
         .emit_rerun_if_changed(false)
-        .compile_with_config(config, &["postgres-util/src/desc.proto"], &[".."])
+        .compile_protos_with_config(
+            config,
+            &[
+                "postgres-util/src/desc.proto",
+                "postgres-util/src/tunnel.proto",
+            ],
+            &[PathBuf::from(".."), mz_build_tools::protoc_include()],
+        )
         .unwrap_or_else(|e| panic!("{e}"))
 }

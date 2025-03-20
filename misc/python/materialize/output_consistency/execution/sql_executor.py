@@ -10,14 +10,15 @@ from collections import deque
 from collections.abc import Sequence
 from typing import Any
 
-import dateutil  # type: ignore
-from pg8000 import Connection
-from pg8000.dbapi import ProgrammingError
-from pg8000.exceptions import DatabaseError, InterfaceError
-
-from materialize.output_consistency.common.configuration import (
-    ConsistencyTestConfiguration,
+from psycopg import Connection, DataError
+from psycopg.errors import (
+    DatabaseError,
+    InternalError_,
+    OperationalError,
+    ProgrammingError,
+    SyntaxError,
 )
+
 from materialize.output_consistency.output.output_printer import OutputPrinter
 
 
@@ -57,6 +58,18 @@ class SqlExecutor:
 
     def query_version(self) -> str:
         raise NotImplementedError
+
+    def before_query_execution(self) -> None:
+        pass
+
+    def after_query_execution(self) -> None:
+        pass
+
+    def before_new_tx(self):
+        pass
+
+    def after_new_tx(self):
+        pass
 
 
 class PgWireDatabaseSqlExecutor(SqlExecutor):
@@ -98,15 +111,10 @@ class PgWireDatabaseSqlExecutor(SqlExecutor):
     def _execute_with_cursor(self, sql: str) -> None:
         try:
             self.last_statements.append(sql)
-            self.cursor.execute(sql)
-        except (ProgrammingError, DatabaseError) as err:
-            raise SqlExecutionError(self._extract_message_from_error(err))
-        except dateutil.parser._parser.ParserError as err:  # type: ignore
-            raise SqlExecutionError(err.args[0])
-        except ValueError as err:
-            self.output_printer.print_error(f"Query with value error is: {sql}")
-            raise err
-        except InterfaceError:
+            self.cursor.execute(sql.encode())
+        except OperationalError as e:
+            if "server closed the connection unexpectedly" not in str(e):
+                raise SqlExecutionError(self._extract_message_from_error(e))
             print("A network error occurred! Aborting!")
             # The current or one of previous queries might have broken the database.
             last_statements_desc = self.last_statements.copy()
@@ -118,33 +126,51 @@ class PgWireDatabaseSqlExecutor(SqlExecutor):
                 f"Last {len(last_statements_desc)} queries in descending order:\n{statements_str}"
             )
             exit(1)
+        except (ProgrammingError, DatabaseError, SyntaxError, InternalError_) as err:
+            raise SqlExecutionError(self._extract_message_from_error(err))
+        except DataError as err:  # type: ignore
+            raise SqlExecutionError(err.args[0])
+        except ValueError as err:
+            self.output_printer.print_error(f"Query with value error is: {sql}")
+            raise err
         except Exception:
             self.output_printer.print_error(f"Query with unexpected error is: {sql}")
             raise
 
     def _extract_message_from_error(
-        self, error: ProgrammingError | DatabaseError
+        self,
+        error: (
+            OperationalError
+            | ProgrammingError
+            | DataError
+            | DatabaseError
+            | SyntaxError
+            | InternalError_
+        ),
     ) -> str:
-        error_args = error.args[0]
+        if error.diag.message_primary is not None:
+            result = str(error.diag.message_primary)
+            if error.diag.message_detail is not None:
+                result += f" ({error.diag.message_detail})"
+            return result
 
-        message = error_args.get("M") if "M" in error_args else str(error_args)
-        details = error_args.get("H") if "H" in error_args else None
+        if len(error.args) > 0:
+            return str(error.args[0])
 
-        if details is None:
-            return f"{message}"
-        else:
-            return f"{message} ({details})"
+        return str(error)
 
 
 class MzDatabaseSqlExecutor(PgWireDatabaseSqlExecutor):
     def __init__(
         self,
-        connection: Connection,
+        default_connection: Connection,
+        mz_system_connection: Connection,
         use_autocommit: bool,
         output_printer: OutputPrinter,
         name: str,
     ):
-        super().__init__(connection, use_autocommit, output_printer, name)
+        super().__init__(default_connection, use_autocommit, output_printer, name)
+        self.mz_system_connection = mz_system_connection
 
     def query_version(self) -> str:
         return self.query("SELECT mz_version();")[0][0]
@@ -176,23 +202,3 @@ class DryRunSqlExecutor(SqlExecutor):
 
     def query_version(self) -> str:
         return "(dry-run)"
-
-
-def create_sql_executor(
-    config: ConsistencyTestConfiguration,
-    connection: Connection,
-    output_printer: OutputPrinter,
-    name: str,
-    is_mz: bool = True,
-) -> SqlExecutor:
-    if config.dry_run:
-        return DryRunSqlExecutor(output_printer, name)
-
-    if is_mz:
-        return MzDatabaseSqlExecutor(
-            connection, config.use_autocommit, output_printer, name
-        )
-
-    return PgWireDatabaseSqlExecutor(
-        connection, config.use_autocommit, output_printer, name
-    )

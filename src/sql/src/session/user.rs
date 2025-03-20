@@ -8,43 +8,50 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::LazyLock;
 
 use mz_repr::role_id::RoleId;
 use mz_repr::user::ExternalUserMetadata;
-use once_cell::sync::Lazy;
 use serde::Serialize;
 
 pub const SYSTEM_USER_NAME: &str = "mz_system";
-pub static SYSTEM_USER: Lazy<User> = Lazy::new(|| User {
+pub static SYSTEM_USER: LazyLock<User> = LazyLock::new(|| User {
     name: SYSTEM_USER_NAME.into(),
     external_metadata: None,
 });
 
 pub const SUPPORT_USER_NAME: &str = "mz_support";
-pub static SUPPORT_USER: Lazy<User> = Lazy::new(|| User {
+pub static SUPPORT_USER: LazyLock<User> = LazyLock::new(|| User {
     name: SUPPORT_USER_NAME.into(),
     external_metadata: None,
 });
 
-pub static INTERNAL_USER_NAMES: Lazy<BTreeSet<String>> = Lazy::new(|| {
-    [&SYSTEM_USER, &SUPPORT_USER]
+pub const ANALYTICS_USER_NAME: &str = "mz_analytics";
+pub static ANALYTICS_USER: LazyLock<User> = LazyLock::new(|| User {
+    name: ANALYTICS_USER_NAME.into(),
+    external_metadata: None,
+});
+
+pub static INTERNAL_USER_NAMES: LazyLock<BTreeSet<String>> = LazyLock::new(|| {
+    [&SYSTEM_USER, &SUPPORT_USER, &ANALYTICS_USER]
         .into_iter()
         .map(|user| user.name.clone())
         .collect()
 });
 
-pub static INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER: Lazy<BTreeMap<String, String>> =
-    Lazy::new(|| {
+pub static INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER: LazyLock<BTreeMap<String, String>> =
+    LazyLock::new(|| {
         [
             (&SYSTEM_USER, "mz_system"),
             (&SUPPORT_USER, "mz_catalog_server"),
+            (&ANALYTICS_USER, "mz_analytics"),
         ]
         .into_iter()
         .map(|(user, cluster)| (user.name.clone(), cluster.to_string()))
         .collect()
     });
 
-pub static HTTP_DEFAULT_USER: Lazy<User> = Lazy::new(|| User {
+pub static HTTP_DEFAULT_USER: LazyLock<User> = LazyLock::new(|| User {
     name: "anonymous_http_user".into(),
     external_metadata: None,
 });
@@ -56,6 +63,15 @@ pub struct User {
     pub name: String,
     /// Metadata about this user in an external system.
     pub external_metadata: Option<ExternalUserMetadata>,
+}
+
+impl From<&User> for mz_pgwire_common::UserMetadata {
+    fn from(user: &User) -> mz_pgwire_common::UserMetadata {
+        mz_pgwire_common::UserMetadata {
+            is_admin: user.is_external_admin(),
+            should_limit_connections: user.limit_max_connections(),
+        }
+    }
 }
 
 impl PartialEq for User {
@@ -112,6 +128,7 @@ pub enum UserKind {
 
 pub const MZ_SYSTEM_ROLE_ID: RoleId = RoleId::System(1);
 pub const MZ_SUPPORT_ROLE_ID: RoleId = RoleId::System(2);
+pub const MZ_ANALYTICS_ROLE_ID: RoleId = RoleId::System(3);
 pub const MZ_MONITOR_ROLE_ID: RoleId = RoleId::Predefined(1);
 pub const MZ_MONITOR_REDACTED_ROLE_ID: RoleId = RoleId::Predefined(2);
 
@@ -130,4 +147,15 @@ pub struct RoleMetadata {
     /// The role of the current execution context. This role is used for all normal privilege
     /// checks.
     pub current_role: RoleId,
+}
+
+impl RoleMetadata {
+    /// Returns a RoleMetadata with all fields set to `id`.
+    pub fn new(id: RoleId) -> RoleMetadata {
+        RoleMetadata {
+            authenticated_role: id,
+            session_role: id,
+            current_role: id,
+        }
+    }
 }

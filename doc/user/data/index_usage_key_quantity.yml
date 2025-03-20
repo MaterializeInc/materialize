@@ -1,0 +1,71 @@
+# CREATE INDEX idx_orders_view_qty on orders_view (quantity);
+queries:
+  - query: |
+      ```mzsql
+      SELECT * FROM orders_view;
+      ```
+    index_usage: Index scan.
+
+  - query: |
+      ```mzsql
+      SELECT * FROM orders_view WHERE quantity = 10;
+      ```
+    index_usage: Point lookup.
+
+  - query: |
+      ```mzsql
+      SELECT * FROM orders_view WHERE quantity IN (10, 20);
+      ```
+    index_usage: Point lookup.
+
+  - query: |
+      ```mzsql
+      SELECT * FROM orders_view WHERE quantity = 10 OR quantity = 20;
+      ```
+    index_usage: |
+      Point lookup. Query uses `OR` to combine conditions on the **same** field.
+
+  - query: |
+      ```mzsql
+      SELECT * FROM orders_view WHERE quantity = 10 AND price = 5.00;
+      ```
+    index_usage: |
+      Point lookup on `quantity`, then filter on `price`.
+
+  - query: |
+      ```mzsql
+      SELECT * FROM orders_view WHERE (quantity, price) = (10, 5.00);
+      ```
+    index_usage: |
+      Point lookup on `quantity`, then filter on `price`.
+
+  - query: |
+      ```mzsql
+      SELECT * FROM orders_view WHERE quantity = 10 OR price = 5.00;
+      ```
+    index_usage: |
+      Index scan. Query uses `OR` to combine conditions on **different** fields.
+
+  - query: |
+      ```mzsql
+      SELECT * FROM orders_view WHERE quantity <= 10;
+      ```
+    index_usage: Index scan.
+
+  - query: |
+      ```mzsql
+      SELECT * FROM orders_view WHERE round(quantity) = 20;
+      ```
+    index_usage: Index scan.
+
+
+  - query: |
+      ```mzsql
+      -- Assume quantity is an integer
+      SELECT * FROM orders_view WHERE quantity = 'hello';
+      SELECT * FROM orders_view WHERE quantity::TEXT = 'hello';
+      ```
+    index_usage: |
+      Index scan, assuming `quantity` field in `orders_view` is an integer.
+      In the first query, the quantity is implicitly cast to text.
+      In the second query, the quantity is explicitly cast to text.

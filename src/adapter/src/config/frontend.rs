@@ -14,8 +14,9 @@ use std::time::Duration;
 use derivative::Derivative;
 use launchdarkly_server_sdk as ld;
 use mz_build_info::BuildInfo;
+use mz_cloud_provider::CloudProvider;
 use mz_ore::now::NowFn;
-use mz_sql::catalog::{CloudProvider, EnvironmentId};
+use mz_sql::catalog::EnvironmentId;
 use tokio::time;
 
 use crate::config::{Metrics, SynchronizedParameters, SystemParameterSyncConfig};
@@ -86,14 +87,6 @@ impl SystemParameterFrontend {
         }
 
         changed
-    }
-}
-
-impl Drop for SystemParameterFrontend {
-    fn drop(&mut self) {
-        tracing::info!("closing LaunchDarkly client");
-        self.ld_client.close();
-        tracing::info!("closed LaunchDarkly client");
     }
 }
 

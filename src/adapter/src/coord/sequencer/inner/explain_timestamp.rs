@@ -29,6 +29,8 @@ use crate::session::{RequireLinearization, Session};
 use crate::{CollectionIdBundle, ExecuteContext, TimelineContext, TimestampExplanation};
 
 impl Staged for ExplainTimestampStage {
+    type Ctx = ExecuteContext;
+
     fn validity(&mut self) -> &mut PlanValidity {
         match self {
             ExplainTimestampStage::Optimize(stage) => &mut stage.validity,
@@ -96,13 +98,19 @@ impl Coordinator {
             .catalog()
             .resolve_target_cluster(target_cluster, session)?;
         let cluster_id = cluster.id;
-        let validity = PlanValidity {
-            transient_revision: self.catalog().transient_revision(),
-            dependency_ids: plan.raw_plan.depends_on(),
-            cluster_id: Some(cluster_id),
-            replica_id: None,
-            role_metadata: session.role_metadata().clone(),
-        };
+        let dependencies = plan
+            .raw_plan
+            .depends_on()
+            .into_iter()
+            .map(|id| self.catalog().resolve_item_id(&id))
+            .collect();
+        let validity = PlanValidity::new(
+            self.catalog().transient_revision(),
+            dependencies,
+            Some(cluster_id),
+            None,
+            session.role_metadata().clone(),
+        );
         Ok(ExplainTimestampStage::Optimize(ExplainTimestampOptimize {
             validity,
             plan,
@@ -122,7 +130,6 @@ impl Coordinator {
         // Collect optimizer parameters.
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
-        // Build an optimizer for this VIEW.
         let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
 
         let span = Span::current();
@@ -155,7 +162,7 @@ impl Coordinator {
 
     #[instrument]
     async fn explain_timestamp_real_time_recency(
-        &mut self,
+        &self,
         session: &Session,
         ExplainTimestampRealTimeRecency {
             validity,
@@ -166,8 +173,12 @@ impl Coordinator {
         }: ExplainTimestampRealTimeRecency,
     ) -> Result<StageResult<Box<ExplainTimestampStage>>, AdapterError> {
         let source_ids = optimized_plan.depends_on();
+        let source_items: Vec<_> = source_ids
+            .iter()
+            .map(|gid| self.catalog().resolve_item_id(gid))
+            .collect();
         let fut = self
-            .determine_real_time_recent_timestamp(session, source_ids.iter().cloned())
+            .determine_real_time_recent_timestamp(session, source_items.into_iter())
             .await?;
 
         match fut {
@@ -224,7 +235,7 @@ impl Coordinator {
             for (id, since, upper) in frontiers {
                 let name = self
                     .catalog()
-                    .try_get_entry(&id)
+                    .try_get_entry_by_global_id(&id)
                     .map(|item| item.name())
                     .map(|name| {
                         self.catalog()
@@ -243,13 +254,13 @@ impl Coordinator {
             if let Some(compute_ids) = id_bundle.compute_ids.get(&cluster_id) {
                 let catalog = self.catalog();
                 for id in compute_ids {
-                    let state = self
+                    let frontiers = self
                         .controller
                         .compute
-                        .collection(cluster_id, *id)
+                        .collection_frontiers(*id, Some(cluster_id))
                         .expect("id does not exist");
                     let name = catalog
-                        .try_get_entry(id)
+                        .try_get_entry_by_global_id(id)
                         .map(|item| item.name())
                         .map(|name| {
                             catalog
@@ -259,8 +270,8 @@ impl Coordinator {
                         .unwrap_or_else(|| id.to_string());
                     sources.push(TimestampSource {
                         name: format!("{name} ({id}, compute)"),
-                        read_frontier: state.read_capability().elements().to_vec(),
-                        write_frontier: state.write_frontier().to_vec(),
+                        read_frontier: frontiers.read_frontier.to_vec(),
+                        write_frontier: frontiers.write_frontier.to_vec(),
                     });
                 }
             }
@@ -290,16 +301,16 @@ impl Coordinator {
     ) -> Result<StageResult<Box<ExplainTimestampStage>>, AdapterError> {
         let id_bundle = self
             .index_oracle(cluster_id)
-            .sufficient_collections(&source_ids);
+            .sufficient_collections(source_ids.iter().copied());
 
         let is_json = match format {
-            ExplainFormat::Text => false,
+            ExplainFormat::Text | ExplainFormat::VerboseText => false,
             ExplainFormat::Json => true,
             ExplainFormat::Dot => {
                 return Err(AdapterError::Unsupported("EXPLAIN TIMESTAMP AS DOT"));
             }
         };
-        let mut timeline_context = self.validate_timeline_context(source_ids.clone())?;
+        let mut timeline_context = self.validate_timeline_context(source_ids.iter().copied())?;
         if matches!(timeline_context, TimelineContext::TimestampIndependent)
             && optimized_plan.contains_temporal()
         {

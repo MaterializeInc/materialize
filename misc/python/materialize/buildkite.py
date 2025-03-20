@@ -16,6 +16,8 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import Any, TypeVar
 
+import yaml
+
 from materialize import git, spawn, ui
 
 T = TypeVar("T")
@@ -24,6 +26,7 @@ T = TypeVar("T")
 class BuildkiteEnvVar(Enum):
     # environment
     BUILDKITE_AGENT_META_DATA_AWS_INSTANCE_TYPE = auto()
+    BUILDKITE_AGENT_META_DATA_INSTANCE_TYPE = auto()
 
     # build
     BUILDKITE_PULL_REQUEST = auto()
@@ -72,6 +75,9 @@ def is_in_pull_request() -> bool:
     if git.is_on_release_version():
         return False
 
+    if git.contains_commit("HEAD", "main", fetch=True):
+        return False
+
     return True
 
 
@@ -115,7 +121,7 @@ def inline_link(url: str, label: str | None = None) -> str:
 
 def inline_image(url: str, alt: str) -> str:
     """See https://buildkite.com/docs/pipelines/links-and-images-in-log-output#images-syntax-for-inlining-images"""
-    content = f"url='\"{url}\"';alt='\"{alt}\"'"
+    content = f"url='{url}';alt='{alt}'"
     # These escape codes are not supported by terminals
     return f"\033]1338;{content}\a" if is_in_buildkite() else f"{alt},{url}"
 
@@ -151,12 +157,14 @@ def find_modified_lines() -> set[tuple[str, int]]:
     return modified_lines
 
 
-def upload_artifact(path: Path | str, cwd: Path | None = None):
+def upload_artifact(path: Path | str, cwd: Path | None = None, quiet: bool = False):
     spawn.runv(
         [
             "buildkite-agent",
             "artifact",
             "upload",
+            "--log-level",
+            "fatal" if quiet else "notice",
             path,
         ],
         cwd=cwd,
@@ -187,7 +195,7 @@ def _accepted_by_shard(
         return True
 
     hash_value = int.from_bytes(
-        hashlib.md5(identifier.encode("utf-8")).digest(), byteorder="big"
+        hashlib.md5(identifier.encode()).digest(), byteorder="big"
     )
     return hash_value % parallelism_count == parallelism_index
 
@@ -201,28 +209,48 @@ def _upload_shard_info_metadata(items: list[str]) -> None:
     )
 
 
+def notify_qa_team_about_failure(failure: str) -> None:
+    if not is_in_buildkite():
+        return
+
+    label = get_var(BuildkiteEnvVar.BUILDKITE_LABEL)
+    message = f"{label}: {failure}"
+    print(message)
+    pipeline = {
+        "notify": [
+            {
+                "slack": {
+                    "channels": ["#team-testing-bots"],
+                    "message": message,
+                },
+                "if": 'build.state == "passed" || build.state == "failed" || build.state == "canceled"',
+            }
+        ]
+    }
+    spawn.runv(
+        ["buildkite-agent", "pipeline", "upload"], stdin=yaml.dump(pipeline).encode()
+    )
+
+
 def shard_list(items: list[T], to_identifier: Callable[[T], str]) -> list[T]:
+    if len(items) == 0:
+        return []
+
     parallelism_index = get_parallelism_index()
     parallelism_count = get_parallelism_count()
 
     if parallelism_count == 1:
         return items
 
-    if is_in_buildkite():
-        _upload_shard_info_metadata(
-            [
-                to_identifier(item)
-                for item in items
-                if _accepted_by_shard(
-                    to_identifier(item), parallelism_index, parallelism_count
-                )
-            ]
-        )
-    return [
+    accepted_items = [
         item
         for item in items
         if _accepted_by_shard(to_identifier(item), parallelism_index, parallelism_count)
     ]
+
+    if is_in_buildkite() and accepted_items:
+        _upload_shard_info_metadata(list(map(to_identifier, accepted_items)))
+    return accepted_items
 
 
 def _validate_parallelism_configuration() -> None:
@@ -250,9 +278,9 @@ def _validate_parallelism_configuration() -> None:
     ), f"{job_index_desc} out of valid range with {job_count_desc}"
 
 
-def truncate_str(text: str, length: int = 900_000) -> str:
+def truncate_annotation_str(text: str, max_length: int = 900_000) -> str:
     # 400 Bad Request: The annotation body must be less than 1 MB
-    return text if len(text) <= length else text[:length] + "..."
+    return text if len(text) <= max_length else text[:max_length] + "..."
 
 
 def get_artifact_url(artifact: dict[str, Any]) -> str:
@@ -263,6 +291,10 @@ def get_artifact_url(artifact: dict[str, Any]) -> str:
 
 
 def add_annotation_raw(style: str, markdown: str) -> None:
+    """
+    Note that this does not trim the data.
+    :param markdown: must not exceed 1 MB
+    """
     spawn.runv(
         [
             "buildkite-agent",
@@ -278,10 +310,21 @@ def add_annotation(style: str, title: str, content: str) -> None:
     if style == "info":
         markdown = f"""<details><summary>{title}</summary>
 
-{truncate_str(content)}
+{truncate_annotation_str(content)}
 </details>"""
     else:
         markdown = f"""{title}
 
-{truncate_str(content)}"""
+{truncate_annotation_str(content)}"""
     add_annotation_raw(style, markdown)
+
+
+def get_job_url_from_build_url(build_url: str, build_job_id: str) -> str:
+    return f"{build_url}#{build_job_id}"
+
+
+def get_job_url_from_pipeline_and_build(
+    pipeline: str, build_number: str | int, build_job_id: str
+) -> str:
+    build_url = f"https://buildkite.com/materialize/{pipeline}/builds/{build_number}"
+    return get_job_url_from_build_url(build_url, build_job_id)

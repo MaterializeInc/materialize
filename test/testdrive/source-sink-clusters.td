@@ -8,7 +8,8 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
+ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true
+ALTER SYSTEM SET enable_create_table_from_source = true
 
 # Clean up cluster manually, since testdrive does not automatically clean up
 # clusters.
@@ -26,10 +27,10 @@ ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
 contains:CLUSTER "storage" has no replicas available to service request
 
 # Creating a source in an empty, zero-replica cluster should work.
-> CREATE SOURCE loadgen IN CLUSTER storage FROM LOAD GENERATOR COUNTER
+> CREATE SOURCE loadgen IN CLUSTER storage FROM LOAD GENERATOR COUNTER (UP TO 100)
 
 ! ALTER SOURCE loadgen SET (SIZE = '1')
-contains:Expected one of IGNORE or TIMELINE or TIMESTAMP or RETAIN, found SIZE
+contains:Expected one of TIMESTAMP or RETAIN, found SIZE
 
 # Create indexes and materialized views in a storage cluster is allowed.
 > CREATE INDEX t_idx IN CLUSTER storage ON t (a)
@@ -41,12 +42,8 @@ contains:Expected one of IGNORE or TIMELINE or TIMESTAMP or RETAIN, found SIZE
 > SELECT generate_series(1, 1)
 1
 
-# Only one replica of a storage cluster is permitted.
-! CREATE CLUSTER REPLICA storage.r2 SIZE '1'
-contains:cannot create more than one replica of a cluster containing sources or sinks
-
 # Creating sources on clusters containing compute objects is allowed
-> CREATE SOURCE lg2 IN CLUSTER storage FROM LOAD GENERATOR COUNTER
+> CREATE SOURCE lg2 IN CLUSTER storage FROM LOAD GENERATOR COUNTER (UP TO 100)
 
 # Test that `DROP CLUSTER` only succeeds with `CASCADE`.
 ! DROP CLUSTER storage
@@ -78,24 +75,28 @@ bb
 > CREATE SOURCE data1
   IN CLUSTER storage
   FROM KAFKA CONNECTION kafka (TOPIC 'testdrive-data1-${testdrive.seed}')
+
+> CREATE TABLE data1_tbl FROM SOURCE data1 (REFERENCE "testdrive-data1-${testdrive.seed}")
   FORMAT TEXT
 
 > CREATE SOURCE data2
   IN CLUSTER storage
   FROM KAFKA CONNECTION kafka (TOPIC 'testdrive-data2-${testdrive.seed}')
+
+> CREATE TABLE data2_tbl FROM SOURCE data2 (REFERENCE "testdrive-data2-${testdrive.seed}")
   FORMAT TEXT
 
-> SELECT * FROM data1
+> SELECT * FROM data1_tbl
 a
 b
 
-> SELECT * FROM data2
+> SELECT * FROM data2_tbl
 aa
 bb
 
-> CREATE MATERIALIZED VIEW view1 AS SELECT text FROM data1
+> CREATE MATERIALIZED VIEW view1 AS SELECT text FROM data1_tbl
 
-> CREATE MATERIALIZED VIEW view2 AS SELECT text || text AS text FROM data2
+> CREATE MATERIALIZED VIEW view2 AS SELECT text || text AS text FROM data2_tbl
 
 > CREATE SINK sink1
   IN CLUSTER storage
@@ -104,7 +105,7 @@ bb
   FORMAT JSON ENVELOPE DEBEZIUM
 
 ! ALTER SINK sink1 SET (SIZE = '1')
-contains:Expected one of SNAPSHOT
+contains:Expected one of PARTITION or SNAPSHOT or VERSION
 
 > CREATE SINK sink2
   IN CLUSTER storage
@@ -132,12 +133,12 @@ c
 $ kafka-ingest format=bytes topic=data2
 cc
 
-> SELECT * FROM data1
+> SELECT * FROM data1_tbl
 a
 b
 c
 
-> SELECT * FROM data2
+> SELECT * FROM data2_tbl
 aa
 bb
 cc

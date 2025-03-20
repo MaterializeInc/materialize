@@ -11,9 +11,13 @@ When you [sign up for Materialize](https://materialize.com/register/), you get a
 free trial account so you can explore the product and start building! This page
 answers some frequently asked questions about free trials.
 
+{{< tip >}}
+For help getting started with your data or other questions about Materialize, you can schedule a [free guided trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
+{{< /tip >}}
+
 ## What are the limits of a free trial?
 
-In Materialize, [clusters](/get-started/key-concepts/#clusters) are the pools of
+In Materialize, [clusters](/concepts/clusters/) are the pools of
 compute resources for running your workloads. The size and replication factor
 of each cluster determines its [credit usage](/sql/create-cluster/#credit-usage).
 
@@ -36,7 +40,7 @@ is under the rate limit of 4 credits per hour.
 
 7 days.
 
-If you need additional time, please [chat with our team](http://materialize.com/convert-account/).
+If you need additional time, please [chat with our team](http://materialize.com/convert-account/?utm_campaign=General&utm_source=documentation).
 Otherwise, Materialize will delete your resources and data at the end of the
 trial period.
 
@@ -45,7 +49,7 @@ trial period.
 To see your current credit consumption rate, measured in credits per hour, run
 the following query against Materialize:
 
-```sql
+```mzsql
 SELECT sum(s.credits_per_hour) AS credit_consumption_rate
   FROM mz_cluster_replicas r
   JOIN mz_cluster_replica_sizes s ON r.size = s.size;
@@ -68,12 +72,12 @@ No, you cannot go over the rate limit of 4 credits per hour at any time during
 your free trial. If you try to add a replica that puts you over the limit,
 Materialize will return an error similar to:
 
-```sql
+```nofmt
 Error: creating cluster replica would violate max_credit_consumption_rate limit (desired: 6, limit: 4, current: 3)
 Hint: Drop an existing cluster replica or contact support to request a limit increase.
 ```
 
-If you need additional resources during your trial, [chat with our team](http://materialize.com/convert-account/).
+If you need additional resources during your trial, [chat with our team](http://materialize.com/convert-account/?utm_campaign=General&utm_source=documentation).
 
 ## How do I get help during my trial?
 

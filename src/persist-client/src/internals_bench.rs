@@ -32,12 +32,12 @@ pub fn trace_push_batch_one_iter(num_batches: usize) {
         // A single non-empty batch followed by a large number of empty batches
         // and no compaction. This is a particularly problematic workload for
         // our fork of Spine which came up during deserialization of State in
-        // #17214.
+        // database-issues#4985.
         //
         // Other, much better handled, workloads include all empty or all
         // non-empty.
         let len = if ts == 0 { 1 } else { 0 };
-        let _ = trace.push_batch(HollowBatch::new(
+        let _ = trace.push_batch(HollowBatch::new_run(
             Description::new(
                 Antichain::from_elem(ts),
                 Antichain::from_elem(ts + 1),
@@ -45,7 +45,6 @@ pub fn trace_push_batch_one_iter(num_batches: usize) {
             ),
             vec![],
             len,
-            vec![],
         ));
     }
     black_box(trace);

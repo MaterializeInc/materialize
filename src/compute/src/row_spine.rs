@@ -10,13 +10,17 @@
 pub use self::container::DatumContainer;
 pub use self::container::DatumSeq;
 pub use self::offset_opt::OffsetOptimized;
-pub use self::spines::{RowRowSpine, RowSpine, RowValSpine};
+pub use self::spines::{
+    RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowRowSpine, RowSpine, RowValBatcher,
+    RowValBuilder, RowValSpine,
+};
 use differential_dataflow::trace::implementations::OffsetList;
 
 /// Spines specialized to contain `Row` types in keys and values.
 mod spines {
     use std::rc::Rc;
 
+    use differential_dataflow::containers::{Columnation, TimelyStack};
     use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatch, OrdKeyBuilder};
     use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, OrdValBuilder};
     use differential_dataflow::trace::implementations::spine_fueled::Spine;
@@ -24,27 +28,24 @@ mod spines {
     use differential_dataflow::trace::implementations::Update;
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
     use mz_repr::Row;
-    use mz_timely_util::containers::stack::StackWrapper;
-    use timely::container::columnation::{Columnation, TimelyStack};
 
     use crate::row_spine::{DatumContainer, OffsetOptimized};
     use crate::typedefs::{KeyBatcher, KeyValBatcher};
 
-    pub type RowRowSpine<T, R> = Spine<
-        Rc<OrdValBatch<RowRowLayout<((Row, Row), T, R)>>>,
-        KeyValBatcher<Row, Row, T, R>,
-        RcBuilder<OrdValBuilder<RowRowLayout<((Row, Row), T, R)>, TimelyStack<((Row, Row), T, R)>>>,
-    >;
-    pub type RowValSpine<V, T, R> = Spine<
-        Rc<OrdValBatch<RowValLayout<((Row, V), T, R)>>>,
-        KeyValBatcher<Row, V, T, R>,
-        RcBuilder<OrdValBuilder<RowValLayout<((Row, V), T, R)>, TimelyStack<((Row, V), T, R)>>>,
-    >;
-    pub type RowSpine<T, R> = Spine<
-        Rc<OrdKeyBatch<RowLayout<((Row, ()), T, R)>>>,
-        KeyBatcher<Row, T, R>,
-        RcBuilder<OrdKeyBuilder<RowLayout<((Row, ()), T, R)>, TimelyStack<((Row, ()), T, R)>>>,
-    >;
+    pub type RowRowSpine<T, R> = Spine<Rc<OrdValBatch<RowRowLayout<((Row, Row), T, R)>>>>;
+    pub type RowRowBatcher<T, R> = KeyValBatcher<Row, Row, T, R>;
+    pub type RowRowBuilder<T, R> =
+        RcBuilder<OrdValBuilder<RowRowLayout<((Row, Row), T, R)>, TimelyStack<((Row, Row), T, R)>>>;
+
+    pub type RowValSpine<V, T, R> = Spine<Rc<OrdValBatch<RowValLayout<((Row, V), T, R)>>>>;
+    pub type RowValBatcher<V, T, R> = KeyValBatcher<Row, V, T, R>;
+    pub type RowValBuilder<V, T, R> =
+        RcBuilder<OrdValBuilder<RowValLayout<((Row, V), T, R)>, TimelyStack<((Row, V), T, R)>>>;
+
+    pub type RowSpine<T, R> = Spine<Rc<OrdKeyBatch<RowLayout<((Row, ()), T, R)>>>>;
+    pub type RowBatcher<T, R> = KeyBatcher<Row, T, R>;
+    pub type RowBuilder<T, R> =
+        RcBuilder<OrdKeyBuilder<RowLayout<((Row, ()), T, R)>, TimelyStack<((Row, ()), T, R)>>>;
 
     /// A layout based on timely stacks
     pub struct RowRowLayout<U: Update<Key = Row, Val = Row>> {
@@ -65,8 +66,8 @@ mod spines {
         type Target = U;
         type KeyContainer = DatumContainer;
         type ValContainer = DatumContainer;
-        type TimeContainer = StackWrapper<U::Time>;
-        type DiffContainer = StackWrapper<U::Diff>;
+        type TimeContainer = TimelyStack<U::Time>;
+        type DiffContainer = TimelyStack<U::Diff>;
         type OffsetContainer = OffsetOptimized;
     }
     impl<U: Update<Key = Row>> Layout for RowValLayout<U>
@@ -77,9 +78,9 @@ mod spines {
     {
         type Target = U;
         type KeyContainer = DatumContainer;
-        type ValContainer = StackWrapper<U::Val>;
-        type TimeContainer = StackWrapper<U::Time>;
-        type DiffContainer = StackWrapper<U::Diff>;
+        type ValContainer = TimelyStack<U::Val>;
+        type TimeContainer = TimelyStack<U::Time>;
+        type DiffContainer = TimelyStack<U::Diff>;
         type OffsetContainer = OffsetOptimized;
     }
     impl<U: Update<Key = Row, Val = ()>> Layout for RowLayout<U>
@@ -89,16 +90,16 @@ mod spines {
     {
         type Target = U;
         type KeyContainer = DatumContainer;
-        type ValContainer = StackWrapper<()>;
-        type TimeContainer = StackWrapper<U::Time>;
-        type DiffContainer = StackWrapper<U::Diff>;
+        type ValContainer = TimelyStack<()>;
+        type TimeContainer = TimelyStack<U::Time>;
+        type DiffContainer = TimelyStack<U::Diff>;
         type OffsetContainer = OffsetOptimized;
     }
 }
 
 /// A `Row`-specialized container using dictionary compression.
 mod container {
-    use differential_dataflow::trace::cursor::IntoOwned;
+    use differential_dataflow::IntoOwned;
     use std::cmp::Ordering;
 
     use differential_dataflow::trace::implementations::BatchContainer;
@@ -324,7 +325,10 @@ mod container {
 
     use mz_repr::fixed_length::ToDatumIter;
     impl<'long> ToDatumIter for DatumSeq<'long> {
-        type DatumIter<'short> = DatumSeq<'short> where Self: 'short;
+        type DatumIter<'short>
+            = DatumSeq<'short>
+        where
+            Self: 'short;
         fn to_datum_iter<'short>(&'short self) -> Self::DatumIter<'short> {
             *self
         }

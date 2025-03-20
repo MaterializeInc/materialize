@@ -1,17 +1,11 @@
 -- Copyright Materialize, Inc. and contributors. All rights reserved.
 --
--- Licensed under the Apache License, Version 2.0 (the "License");
--- you may not use this file except in compliance with the License.
--- You may obtain a copy of the License in the LICENSE file at the
--- root of this repository, or online at
+-- Use of this software is governed by the Business Source License
+-- included in the LICENSE file at the root of this repository.
 --
---     http://www.apache.org/licenses/LICENSE-2.0
---
--- Unless required by applicable law or agreed to in writing, software
--- distributed under the License is distributed on an "AS IS" BASIS,
--- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
--- See the License for the specific language governing permissions and
--- limitations under the License.
+-- As of the Change Date specified in that file, in accordance with
+-- the Business Source License, use of this software will be governed
+-- by the Apache License, Version 2.0.
 
 -- meta data of the build
 CREATE TABLE build (
@@ -20,9 +14,13 @@ CREATE TABLE build (
    build_id TEXT NOT NULL,
    branch TEXT NOT NULL,
    commit_hash TEXT NOT NULL,
+   main_ancestor_commit_hash TEXT, -- nullable for now not to break earlier versions
    mz_version TEXT NOT NULL,
    date TIMESTAMPTZ NOT NULL,
-   build_url TEXT NOT NULL,
-   data_version UINT4 NOT NULL,
-   remarks TEXT
+   data_version UINT4 NOT NULL
 );
+
+CREATE INDEX IN CLUSTER test_analytics ON build (build_id);
+
+ALTER TABLE build OWNER TO qa;
+GRANT SELECT, INSERT, UPDATE ON TABLE build TO "hetzner-ci";

@@ -15,21 +15,25 @@ use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::Utc;
 use futures::StreamExt;
 use jsonwebtoken::{DecodingKey, EncodingKey};
-use mz_balancerd::{BalancerConfig, BalancerService, FronteggResolver, Resolver, BUILD_INFO};
+use mz_balancerd::{
+    BalancerConfig, BalancerService, CancellationResolver, FronteggResolver, Resolver, BUILD_INFO,
+};
 use mz_environmentd::test_util::{self, make_pg_tls, Ca};
 use mz_frontegg_auth::{
     Authenticator as FronteggAuthentication, AuthenticatorConfig as FronteggConfig,
     DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
 };
-use mz_frontegg_mock::{ApiToken, FronteggMockServer, UserConfig};
+use mz_frontegg_mock::{models::ApiToken, models::UserConfig, FronteggMockServer};
 use mz_ore::cast::CastFrom;
 use mz_ore::id_gen::{conn_id_org_uuid, org_id_conn_bits};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
-use mz_ore::{assert_contains, task};
+use mz_ore::tracing::TracingHandle;
+use mz_ore::{assert_contains, assert_err, assert_ok, task};
 use mz_server_core::TlsCertConfig;
 use openssl::ssl::{SslConnectorBuilder, SslVerifyMode};
 use openssl::x509::X509;
@@ -53,6 +57,8 @@ async fn test_balancer() {
     let initial_api_tokens = vec![ApiToken {
         client_id: client_id.clone(),
         secret: secret.clone(),
+        description: None,
+        created_at: Utc::now(),
     }];
     let roles = Vec::new();
     let users = BTreeMap::from([(
@@ -90,6 +96,7 @@ async fn test_balancer() {
         Some(Duration::from_millis(100)),
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
@@ -116,28 +123,31 @@ async fn test_balancer() {
     let envid = config.environment_id.clone();
     let envd_server = config.start().await;
 
-    // Ensure we could connect directly to envd without SSL on the balancer port.
-    let pg_client_envd = envd_server
-        .connect()
-        .balancer()
-        .user(frontegg_user)
-        .password(&frontegg_password)
-        .await
-        .unwrap();
-
-    let res: i32 = pg_client_envd
-        .query_one("SELECT 4", &[])
-        .await
-        .unwrap()
-        .get(0);
-    assert_eq!(res, 4);
+    let cancel_dir = tempfile::tempdir().unwrap();
+    let cancel_name = conn_id_org_uuid(org_id_conn_bits(&envid.organization_id()));
+    std::fs::write(
+        cancel_dir.path().join(cancel_name),
+        format!(
+            "{}\n{}",
+            envd_server.inner.sql_local_addr(),
+            // Ensure that multiline files and non-existent addresses both work.
+            "non-existent-addr:1234",
+        ),
+    )
+    .unwrap();
 
     let resolvers = vec![
-        Resolver::Static(envd_server.inner.balancer_sql_local_addr().to_string()),
-        Resolver::Frontegg(FronteggResolver {
-            auth: frontegg_auth,
-            addr_template: envd_server.inner.balancer_sql_local_addr().to_string(),
-        }),
+        (
+            Resolver::Static(envd_server.inner.sql_local_addr().to_string()),
+            CancellationResolver::Static(envd_server.inner.sql_local_addr().to_string()),
+        ),
+        (
+            Resolver::Frontegg(FronteggResolver {
+                auth: frontegg_auth,
+                addr_template: envd_server.inner.sql_local_addr().to_string(),
+            }),
+            CancellationResolver::Directory(cancel_dir.path().to_owned()),
+        ),
     ];
     let cert_config = Some(TlsCertConfig {
         cert: server_cert.clone(),
@@ -153,35 +163,30 @@ async fn test_balancer() {
         .tls_info(true)
         .build()
         .unwrap();
-    let cancel_dir = tempfile::tempdir().unwrap();
-    let cancel_name = conn_id_org_uuid(org_id_conn_bits(&envid.organization_id()));
-    std::fs::write(
-        cancel_dir.path().join(cancel_name),
-        format!(
-            "{}\n{}",
-            envd_server.inner.sql_local_addr(),
-            // Ensure that multiline files and non-existent addresses both work.
-            "non-existent-addr:1234",
-        ),
-    )
-    .unwrap();
 
-    for resolver in resolvers {
+    for (resolver, cancellation_resolver) in resolvers {
         let (mut reload_tx, reload_rx) = futures::channel::mpsc::channel(1);
         let ticker = Box::pin(reload_rx);
         let is_frontegg_resolver = matches!(resolver, Resolver::Frontegg(_));
         let balancer_cfg = BalancerConfig::new(
             &BUILD_INFO,
-            None,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-            Some(cancel_dir.path().to_path_buf()),
+            cancellation_resolver,
             resolver,
-            envd_server.inner.balancer_http_local_addr().to_string(),
+            envd_server.inner.http_local_addr().to_string(),
             cert_config.clone(),
+            true,
             MetricsRegistry::new(),
             ticker,
+            None,
+            Duration::ZERO,
+            None,
+            None,
+            None,
+            TracingHandle::disabled(),
+            vec![],
         );
         let balancer_server = BalancerService::new(balancer_cfg).await.unwrap();
         let balancer_pgwire_listen = balancer_server.pgwire.0.local_addr();
@@ -254,7 +259,7 @@ async fn test_balancer() {
         let (tx, rx) = oneshot::channel();
         reload_tx.try_send(Some(tx)).unwrap();
         let res = rx.await.unwrap();
-        assert!(res.is_err());
+        assert_err!(res);
 
         // We should still be on the old cert because now the cert and key mismatch.
         let resp = client
@@ -275,7 +280,7 @@ async fn test_balancer() {
         let (tx, rx) = oneshot::channel();
         reload_tx.try_send(Some(tx)).unwrap();
         let res = rx.await.unwrap();
-        assert!(res.is_ok());
+        assert_ok!(res);
         let resp = client
             .post(&https_url)
             .header("Content-Type", "application/json")
@@ -294,6 +299,7 @@ async fn test_balancer() {
 
         // Test de-duplication in the frontegg resolver. This is a bit racy so use a retry loop.
         Retry::default()
+            .max_duration(Duration::from_secs(30))
             .retry_async(|_| async {
                 let start_auth_count = *frontegg_server.auth_requests.lock().unwrap();
                 const CONNS: u64 = 10;
@@ -338,6 +344,7 @@ async fn test_balancer() {
             port = balancer_https_internal.port()
         );
         Retry::default()
+            .max_duration(Duration::from_secs(30))
             .retry_async(|_| async {
                 let resp = client
                     .get(&metrics_url)

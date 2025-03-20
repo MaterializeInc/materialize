@@ -33,7 +33,7 @@ use std::collections::BTreeMap;
 use mz_expr::{Id, MirRelationExpr, MirScalarExpr};
 use mz_repr::Datum;
 
-use crate::analysis::equivalences::{EquivalenceClasses, Equivalences};
+use crate::analysis::equivalences::{EquivalenceClasses, Equivalences, ExpressionReducer};
 use crate::analysis::{Arity, DerivedView, RelationType};
 
 use crate::{TransformCtx, TransformError};
@@ -43,12 +43,16 @@ use crate::{TransformCtx, TransformError};
 pub struct EquivalencePropagation;
 
 impl crate::Transform for EquivalencePropagation {
+    fn name(&self) -> &'static str {
+        "EquivalencePropagation"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer"
         level = "trace",
         fields(path.segment = "equivalence_propagation")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         ctx: &mut TransformCtx,
@@ -60,6 +64,8 @@ impl crate::Transform for EquivalencePropagation {
         let derived = builder.visit(relation);
         let derived = derived.as_view();
 
+        let prior = relation.clone();
+
         let mut get_equivalences = BTreeMap::default();
         self.apply(
             relation,
@@ -68,7 +74,21 @@ impl crate::Transform for EquivalencePropagation {
             &mut get_equivalences,
         );
 
+        // Trace the plan as the result of `equivalence_propagation` before potentially applying
+        // `ColumnKnowledge`. (If `ColumnKnowledge` runs, it will trace its own result.)
         mz_repr::explain::trace_plan(&*relation);
+
+        if prior == *relation {
+            let ck = crate::ColumnKnowledge::default();
+            ck.transform(relation, ctx)?;
+            if prior != *relation {
+                tracing::error!(
+                    ?ctx.global_id,
+                    "ColumnKnowledge performed work after EquivalencePropagation",
+                );
+            }
+        }
+
         Ok(())
     }
 }
@@ -104,21 +124,31 @@ impl EquivalencePropagation {
         let expr_type = derived
             .value::<RelationType>()
             .expect("RelationType required");
+        assert!(expr_type.is_some());
         let expr_equivalences = derived
             .value::<Equivalences>()
             .expect("Equivalences required");
 
+        // `None` analysis values indicate collections that can be pruned.
+        let expr_equivalences = if let Some(e) = expr_equivalences {
+            e
+        } else {
+            expr.take_safely_with_col_types(expr_type.clone().unwrap());
+            return;
+        };
+
         // Optimize `outer_equivalences` in the context of `expr_type`.
         // If it ends up unsatisfiable, we can replace `expr` with an empty constant of the same relation type.
+        let reducer = expr_equivalences.reducer();
         for class in outer_equivalences.classes.iter_mut() {
             for expr in class.iter_mut() {
-                expr_equivalences.reduce_expr(expr);
+                reducer.reduce_expr(expr);
             }
         }
 
-        outer_equivalences.minimize(expr_type);
+        outer_equivalences.minimize(expr_type.as_ref().map(|x| &x[..]));
         if outer_equivalences.unsatisfiable() {
-            expr.take_safely();
+            expr.take_safely_with_col_types(expr_type.clone().unwrap());
             return;
         }
 
@@ -172,15 +202,15 @@ impl EquivalencePropagation {
                     self.apply(value.0, value.1, equivalences.clone(), get_equivalences);
                 }
             }
-            MirRelationExpr::LetRec { body, .. } => {
-                // Only descend into `body` without more careful analysis.
-                // We could determine non-recursive bindings, for example, and process them.
-                self.apply(
-                    body,
-                    derived.last_child(),
-                    outer_equivalences,
-                    get_equivalences,
-                );
+            MirRelationExpr::LetRec { .. } => {
+                let mut child_iter = expr.children_mut().rev().zip(derived.children_rev());
+                // Continue in `body` with the outer equivalences.
+                let (body, view) = child_iter.next().unwrap();
+                self.apply(body, view, outer_equivalences, get_equivalences);
+                // Continue recursively, but without the outer equivalences supplied to `body`.
+                for (child, view) in child_iter {
+                    self.apply(child, view, EquivalenceClasses::default(), get_equivalences);
+                }
             }
             MirRelationExpr::Project { input, outputs } => {
                 // Transform `outer_equivalences` to one relevant for `input`.
@@ -198,20 +228,41 @@ impl EquivalencePropagation {
                     .last_child()
                     .value::<Equivalences>()
                     .expect("Equivalences required");
-                for expr in scalars.iter_mut() {
-                    input_equivalences.reduce_expr(expr);
+
+                if let Some(input_equivalences) = input_equivalences {
+                    // Clone the equivalences in case of variadic map, which will need to mutate them.
+                    let mut input_equivalences = input_equivalences.clone();
+                    // Get all output types, to reveal a prefix to each scaler expr.
+                    let input_types = derived
+                        .value::<RelationType>()
+                        .expect("RelationType required")
+                        .as_ref()
+                        .unwrap();
+                    let input_arity = input_types.len() - scalars.len();
+                    for (index, expr) in scalars.iter_mut().enumerate() {
+                        let reducer = input_equivalences.reducer();
+                        reducer.reduce_expr(expr);
+                        expr.reduce(&input_types[..(input_arity + index)]);
+                        // Introduce the fact relating the mapped expression and corresponding column.
+                        // This allows subsequent expressions to be optimized with this information.
+                        input_equivalences.classes.push(vec![
+                            expr.clone(),
+                            MirScalarExpr::column(input_arity + index),
+                        ]);
+                        input_equivalences.minimize(Some(input_types));
+                    }
+                    let input_arity = *derived
+                        .last_child()
+                        .value::<Arity>()
+                        .expect("Arity required");
+                    outer_equivalences.project(0..input_arity);
+                    self.apply(
+                        input,
+                        derived.last_child(),
+                        outer_equivalences,
+                        get_equivalences,
+                    );
                 }
-                let input_arity = *derived
-                    .last_child()
-                    .value::<Arity>()
-                    .expect("Arity required");
-                outer_equivalences.project(0..input_arity);
-                self.apply(
-                    input,
-                    derived.last_child(),
-                    outer_equivalences,
-                    get_equivalences,
-                );
             }
             MirRelationExpr::FlatMap { input, exprs, .. } => {
                 // Transform `exprs` by guarantees from `input` *and* from `outer`???
@@ -219,20 +270,29 @@ impl EquivalencePropagation {
                     .last_child()
                     .value::<Equivalences>()
                     .expect("Equivalences required");
-                for expr in exprs.iter_mut() {
-                    input_equivalences.reduce_expr(expr);
+
+                if let Some(input_equivalences) = input_equivalences {
+                    let input_types = derived
+                        .last_child()
+                        .value::<RelationType>()
+                        .expect("RelationType required");
+                    let reducer = input_equivalences.reducer();
+                    for expr in exprs.iter_mut() {
+                        reducer.reduce_expr(expr);
+                        expr.reduce(input_types.as_ref().unwrap());
+                    }
+                    let input_arity = *derived
+                        .last_child()
+                        .value::<Arity>()
+                        .expect("Arity required");
+                    outer_equivalences.project(0..input_arity);
+                    self.apply(
+                        input,
+                        derived.last_child(),
+                        outer_equivalences,
+                        get_equivalences,
+                    );
                 }
-                let input_arity = *derived
-                    .last_child()
-                    .value::<Arity>()
-                    .expect("Arity required");
-                outer_equivalences.project(0..input_arity);
-                self.apply(
-                    input,
-                    derived.last_child(),
-                    outer_equivalences,
-                    get_equivalences,
-                );
             }
             MirRelationExpr::Filter { input, predicates } => {
                 // Transform `predicates` by guarantees from `input` *and* from `outer`???
@@ -242,27 +302,31 @@ impl EquivalencePropagation {
                     .last_child()
                     .value::<Equivalences>()
                     .expect("Equivalences required");
-                let input_types = derived
-                    .last_child()
-                    .value::<RelationType>()
-                    .expect("RelationType required");
-                for expr in predicates.iter_mut() {
-                    input_equivalences.reduce_expr(expr);
+                if let Some(input_equivalences) = input_equivalences {
+                    let input_types = derived
+                        .last_child()
+                        .value::<RelationType>()
+                        .expect("RelationType required");
+                    let reducer = input_equivalences.reducer();
+                    for expr in predicates.iter_mut() {
+                        reducer.reduce_expr(expr);
+                        expr.reduce(input_types.as_ref().unwrap());
+                    }
+                    // Incorporate `predicates` into `outer_equivalences`.
+                    let mut class = predicates.clone();
+                    class.push(MirScalarExpr::literal_ok(
+                        Datum::True,
+                        mz_repr::ScalarType::Bool,
+                    ));
+                    outer_equivalences.classes.push(class);
+                    outer_equivalences.minimize(input_types.as_ref().map(|x| &x[..]));
+                    self.apply(
+                        input,
+                        derived.last_child(),
+                        outer_equivalences,
+                        get_equivalences,
+                    );
                 }
-                // Incorporate `predicates` into `outer_equivalences`.
-                let mut class = predicates.clone();
-                class.push(MirScalarExpr::literal_ok(
-                    Datum::True,
-                    mz_repr::ScalarType::Bool,
-                ));
-                outer_equivalences.classes.push(class);
-                outer_equivalences.minimize(input_types);
-                self.apply(
-                    input,
-                    derived.last_child(),
-                    outer_equivalences,
-                    get_equivalences,
-                );
             }
 
             MirRelationExpr::Join {
@@ -273,21 +337,8 @@ impl EquivalencePropagation {
                 // Certain equivalences are ensured by each of the inputs.
                 // Other equivalences are imposed by parents of the expression.
                 // We must not weaken the properties provided by the expression to its parents,
-                // meaning we can optimize `equivalences` with respect to input guararentees,
+                // meaning we can optimize `equivalences` with respect to input guarantees,
                 // but not with respect to `outer_equivalences`.
-
-                let mut join_equivalences = EquivalenceClasses::default();
-                join_equivalences
-                    .classes
-                    .extend(equivalences.iter().cloned());
-
-                // // Optionally, introduce `outer_equivalences` into `equivalences`.
-                // // This is not required, but it could be very helpful. To be seen.
-                // join_equivalences
-                //     .classes
-                //     .extend(outer_equivalences.classes.clone());
-
-                join_equivalences.minimize(expr_type);
 
                 // Each child can be presented with the integration of `join_equivalences`, `outer_equivalences`,
                 // and each input equivalence *other than* their own, projected onto the input's columns.
@@ -296,6 +347,22 @@ impl EquivalencePropagation {
                 let mut children: Vec<_> = derived.children_rev().collect::<Vec<_>>();
                 children.reverse();
 
+                // Assemble the appended input types, for use in expression minimization.
+                // Do not use `expr_types`, which may reflect nullability that does not hold for the inputs.
+                let mut input_types = Some(
+                    children
+                        .iter()
+                        .flat_map(|c| {
+                            c.value::<RelationType>()
+                                .expect("RelationType required")
+                                .as_ref()
+                                .unwrap()
+                                .iter()
+                                .cloned()
+                        })
+                        .collect::<Vec<_>>(),
+                );
+
                 // For each child, assemble its equivalences using join-relative column numbers.
                 // Don't do anything with the children yet, as we'll want to revisit each with
                 // this information at hand.
@@ -303,15 +370,56 @@ impl EquivalencePropagation {
                 let mut input_equivalences = Vec::with_capacity(children.len());
                 for child in children.iter() {
                     let child_arity = child.value::<Arity>().expect("Arity required");
-                    let mut equivalences = child
+                    let equivalences = child
                         .value::<Equivalences>()
                         .expect("Equivalences required")
                         .clone();
-                    let permutation = (columns..(columns + child_arity)).collect::<Vec<_>>();
-                    equivalences.permute(&permutation);
-                    input_equivalences.push(equivalences);
+
+                    if let Some(mut equivalences) = equivalences {
+                        let permutation = (columns..(columns + child_arity)).collect::<Vec<_>>();
+                        equivalences.permute(&permutation);
+                        equivalences.minimize(input_types.as_ref().map(|x| &x[..]));
+                        input_equivalences.push(equivalences);
+                    }
                     columns += child_arity;
                 }
+
+                // Form the equivalences we will use to replace `equivalences`.
+                let mut join_equivalences = EquivalenceClasses::default();
+                join_equivalences
+                    .classes
+                    .extend(equivalences.iter().cloned());
+                // // Optionally, introduce `outer_equivalences` into `equivalences`.
+                // // This is not required, but it could be very helpful. To be seen.
+                // join_equivalences
+                //     .classes
+                //     .extend(outer_equivalences.classes.clone());
+
+                // Reduce join equivalences by the input equivalences.
+                for input_equivs in input_equivalences.iter() {
+                    let reducer = input_equivs.reducer();
+                    for class in join_equivalences.classes.iter_mut() {
+                        for expr in class.iter_mut() {
+                            // Semijoin elimination currently fails if you do more advanced simplification than
+                            // literal substitution.
+                            let old = expr.clone();
+                            reducer.reduce_expr(expr);
+                            let acceptable_sub = literal_domination(&old, expr);
+                            expr.reduce(input_types.as_ref().unwrap());
+                            if !acceptable_sub && !literal_domination(&old, expr) {
+                                expr.clone_from(&old);
+                            }
+                        }
+                    }
+                }
+                // Remove nullability information, as it has already been incorporated from input equivalences,
+                // and if it was reduced out relative to input equivalences we don't want to re-introduce it.
+                if let Some(input_types) = input_types.as_mut() {
+                    for col in input_types.iter_mut() {
+                        col.nullable = true;
+                    }
+                }
+                join_equivalences.minimize(input_types.as_ref().map(|x| &x[..]));
 
                 // Revisit each child, determining the information to present to it, and recurring.
                 let mut columns = 0;
@@ -342,12 +450,48 @@ impl EquivalencePropagation {
             MirRelationExpr::Reduce {
                 input,
                 group_key,
-                aggregates: _,
+                aggregates,
                 ..
             } => {
                 // TODO: MIN, MAX, ANY, ALL aggregates pass through all certain properties of their columns.
                 // This may involve projection and permutation, to reposition the information appropriately.
                 // TODO: Non-null constraints likely push down into the support of the aggregate expressions.
+
+                // Apply any equivalences about the input to key and aggregate expressions.
+                let input_equivalences = derived
+                    .last_child()
+                    .value::<Equivalences>()
+                    .expect("Equivalences required");
+                if let Some(input_equivalences) = input_equivalences {
+                    let input_type = derived
+                        .last_child()
+                        .value::<RelationType>()
+                        .expect("RelationType required");
+                    let reducer = input_equivalences.reducer();
+                    for key in group_key.iter_mut() {
+                        // Semijoin elimination currently fails if you do more advanced simplification than
+                        // literal substitution.
+                        let old_key = key.clone();
+                        reducer.reduce_expr(key);
+                        let acceptable_sub = literal_domination(&old_key, key);
+                        key.reduce(input_type.as_ref().unwrap());
+                        if !acceptable_sub && !literal_domination(&old_key, key) {
+                            key.clone_from(&old_key);
+                        }
+                    }
+                    for aggr in aggregates.iter_mut() {
+                        reducer.reduce_expr(&mut aggr.expr);
+                        aggr.expr.reduce(input_type.as_ref().unwrap());
+                        // A count expression over a non-null expression can discard the expression.
+                        if aggr.func == mz_expr::AggregateFunc::Count && !aggr.distinct {
+                            let mut probe = aggr.expr.clone().call_is_null();
+                            reducer.reduce_expr(&mut probe);
+                            if probe.is_literal_false() {
+                                aggr.expr = MirScalarExpr::literal_true();
+                            }
+                        }
+                    }
+                }
 
                 // To transform `outer_equivalences` to one about `input`, we will "pretend" to pre-pend all of
                 // the input columns, introduce equivalences about the evaluation of `group_key` on them
@@ -376,10 +520,34 @@ impl EquivalencePropagation {
                 );
             }
             MirRelationExpr::TopK {
-                input, group_key, ..
+                input,
+                group_key,
+                limit,
+                ..
             } => {
-                // TODO: Update `limit` expressions, but only if we update `group_key` at the same time.
-                //       It is important to both or neither, to ensure that `limit` only references columns in `group_key`.
+                // We must be careful when updating `limit` to not install column references
+                // outside of `group_key`. We'll do this for now with `literal_domination`,
+                // which will ensure we only perform substitutions by a literal.
+                let input_equivalences = derived
+                    .last_child()
+                    .value::<Equivalences>()
+                    .expect("Equivalences required");
+                if let Some(input_equivalences) = input_equivalences {
+                    let input_types = derived
+                        .last_child()
+                        .value::<RelationType>()
+                        .expect("RelationType required");
+                    let reducer = input_equivalences.reducer();
+                    if let Some(expr) = limit {
+                        let old_expr = expr.clone();
+                        reducer.reduce_expr(expr);
+                        let acceptable_sub = literal_domination(&old_expr, expr);
+                        expr.reduce(input_types.as_ref().unwrap());
+                        if !acceptable_sub && !literal_domination(&old_expr, expr) {
+                            expr.clone_from(&old_expr);
+                        }
+                    }
+                }
 
                 // Discard equivalences among non-key columns, as it is not correct that `input` may drop rows
                 // that violate constraints among non-key columns without affecting the result.
@@ -423,4 +591,92 @@ impl EquivalencePropagation {
             }
         }
     }
+}
+
+/// Logic encapsulating our willingness to accept an expression simplification.
+///
+/// For reasons of robustness, we cannot yet perform all recommended simplifications.
+/// Certain transforms expect idiomatic expressions, often around precise use of column
+/// identifiers, rather than equivalent identifiers.
+///
+/// The substitutions we are confident with are those that introduce literals for columns,
+/// or which replace column nullability checks with literals.
+fn literal_domination(old: &MirScalarExpr, new: &MirScalarExpr) -> bool {
+    let mut todo = vec![(old, new)];
+    while let Some((old, new)) = todo.pop() {
+        match (old, new) {
+            (_, MirScalarExpr::Literal(_, _)) => {
+                // Substituting a literal is always acceptable; we don't need to consult
+                // the result of the old expression to determine this.
+            }
+            (
+                MirScalarExpr::CallUnary { func: f0, expr: e0 },
+                MirScalarExpr::CallUnary { func: f1, expr: e1 },
+            ) => {
+                if f0 != f1 {
+                    return false;
+                } else {
+                    todo.push((&**e0, &**e1));
+                }
+            }
+            (
+                MirScalarExpr::CallBinary {
+                    func: f0,
+                    expr1: e01,
+                    expr2: e02,
+                },
+                MirScalarExpr::CallBinary {
+                    func: f1,
+                    expr1: e11,
+                    expr2: e12,
+                },
+            ) => {
+                if f0 != f1 {
+                    return false;
+                } else {
+                    todo.push((&**e01, &**e11));
+                    todo.push((&**e02, &**e12));
+                }
+            }
+            (
+                MirScalarExpr::CallVariadic {
+                    func: f0,
+                    exprs: e0s,
+                },
+                MirScalarExpr::CallVariadic {
+                    func: f1,
+                    exprs: e1s,
+                },
+            ) => {
+                use itertools::Itertools;
+                if f0 != f1 {
+                    return false;
+                } else {
+                    todo.extend(e0s.iter().zip_eq(e1s));
+                }
+            }
+            (
+                MirScalarExpr::If {
+                    cond: c0,
+                    then: t0,
+                    els: e0,
+                },
+                MirScalarExpr::If {
+                    cond: c1,
+                    then: t1,
+                    els: e1,
+                },
+            ) => {
+                todo.push((&**c0, &**c1));
+                todo.push((&**t0, &**t1));
+                todo.push((&**e0, &**e1))
+            }
+            _ => {
+                if old != new {
+                    return false;
+                }
+            }
+        }
+    }
+    true
 }

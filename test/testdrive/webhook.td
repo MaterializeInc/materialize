@@ -19,9 +19,15 @@ $ set-arg-default replicas=1
   BODY FORMAT TEXT;
 
 > SHOW COLUMNS FROM webhook_text;
-name   nullable  type
----------------------
-body   false     text
+name   nullable  type  comment
+------------------------------
+body   false     text  ""
+
+> SHOW CREATE SOURCE webhook_text;
+materialize.public.webhook_text "CREATE SOURCE \"materialize\".\"public\".\"webhook_text\" IN CLUSTER \"webhook_cluster\" FROM WEBHOOK BODY FORMAT TEXT"
+
+> SELECT name, type FROM mz_objects WHERE name = 'webhook_text';
+webhook_text source
 
 $ webhook-append database=materialize schema=public name=webhook_text
 a
@@ -73,10 +79,10 @@ d
   INCLUDE HEADERS;
 
 > SHOW COLUMNS FROM webhook_json_with_headers;
-name     nullable  type
-------------------------
-body     false     jsonb
-headers  false     map
+name     nullable  type   comment
+----------------------------------
+body     false     jsonb  ""
+headers  false     map    ""
 
 $ webhook-append database=materialize schema=public name=webhook_json_with_headers content-type=application/json app=test_drive
 {
@@ -137,9 +143,9 @@ d
   BODY FORMAT BYTES;
 
 > SHOW COLUMNS FROM webhook_bytes;
-name   nullable  type
----------------------
-body   false     bytea
+name   nullable  type   comment
+-------------------------------
+body   false     bytea  ""
 
 $ webhook-append database=materialize schema=public name=webhook_bytes
 和製漢語
@@ -540,3 +546,36 @@ SHOW cluster;
 
 > SELECT c.name = '${current-cluster}' FROM mz_clusters c JOIN mz_sources s ON c.id = s.cluster_id WHERE s.name = 'webhook_in_current';
 true
+
+> CREATE TABLE webhook_as_table FROM WEBHOOK BODY FORMAT TEXT;
+
+$ webhook-append name=webhook_as_table
+aaa_1
+
+> SELECT * FROM webhook_as_table;
+aaa_1
+
+> SHOW CREATE TABLE webhook_as_table;
+materialize.public.webhook_as_table "CREATE TABLE \"materialize\".\"public\".\"webhook_as_table\" FROM WEBHOOK BODY FORMAT TEXT"
+
+> SHOW COLUMNS FROM webhook_as_table;
+name   nullable  type  comment
+------------------------------
+body   false     text  ""
+
+> SHOW TABLES
+not_a_webhook ""
+webhook_as_table ""
+
+> SELECT name, type FROM mz_objects WHERE name = 'webhook_as_table';
+webhook_as_table table
+
+$ set-from-sql var=webhook-table-id
+SELECT id FROM mz_tables WHERE name = 'webhook_as_table';
+
+$ set-from-sql var=webhook-table-shard-id
+SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '${webhook-table-id}';
+
+> DROP TABLE webhook_as_table;
+
+$ check-shard-tombstone shard-id=${webhook-table-shard-id}

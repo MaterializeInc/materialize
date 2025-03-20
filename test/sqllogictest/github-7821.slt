@@ -1,0 +1,149 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for database-issues#7821.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_variadic_left_join_lowering TO true;
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE ft(pk int, k1 int, k2 int, k3 int);
+
+statement ok
+CREATE TABLE d1(k1 int, v1 text);
+
+statement ok
+CREATE TABLE d2(k2 int, v2 text);
+
+statement ok
+CREATE TABLE d3(k3 int, v3 text);
+
+statement ok
+INSERT INTO ft VALUES
+  ( 0 , null , null , null ),
+  ( 1 , 1    , null , null ),
+  ( 2 , null , 2    , null ),
+  ( 3 , null , null , 3    ),
+  ( 4 , 2    , 3    , null ),
+  ( 5 , null , 2    , 1    ),
+  ( 6 , 1    , 2    , 3    );
+
+statement ok
+INSERT INTO d1 VALUES
+  ( 1    , 'd1-0001'),
+  ( 2    , 'd1-0002'),
+  ( 3    , 'd1-0003'),
+  ( null , 'd1-null');
+
+statement ok
+INSERT INTO d2 VALUES
+  ( 1    , 'd2-0001'),
+  ( 2    , 'd2-0002'),
+  ( 3    , 'd2-0003'),
+  ( null , 'd2-null');
+
+statement ok
+INSERT INTO d3 VALUES
+  ( 1    , 'd3-0001'),
+  ( 2    , 'd3-0002'),
+  ( 3    , 'd3-0003'),
+  ( null , 'd3-null');
+
+# Entries where kx IS NULL in ft should not be joined against actual dx rows.
+# Star schema with a single key.
+query ITTT rowsort
+SELECT
+  ft.pk,
+  d1.v1,
+  d2.v2,
+  d3.v3
+FROM
+  ft
+  LEFT JOIN d1 ON(ft.k1 = d1.k1)
+  LEFT JOIN d2 ON(ft.k2 = d2.k2)
+  LEFT JOIN d3 ON(ft.k3 = d3.k3)
+ORDER BY
+  ft.pk;
+----
+0
+NULL
+NULL
+NULL
+1
+d1-0001
+NULL
+NULL
+2
+NULL
+d2-0002
+NULL
+3
+NULL
+NULL
+d3-0003
+4
+d1-0002
+d2-0003
+NULL
+5
+NULL
+d2-0002
+d3-0001
+6
+d1-0001
+d2-0002
+d3-0003
+
+
+# Entries where kx IS NULL in ft should not be joined against actual dx rows.
+# Chain schema with a single key.
+query ITTT rowsort
+SELECT
+  ft.pk,
+  d1.v1,
+  d2.v2,
+  d3.v3
+FROM
+  ft
+  LEFT JOIN d1 ON(ft.k1 = d1.k1)
+  LEFT JOIN d2 ON(d1.k1 = d2.k2)
+  LEFT JOIN d3 ON(d2.k2 = d3.k3)
+ORDER BY
+  ft.pk;
+----
+0
+NULL
+NULL
+NULL
+1
+d1-0001
+d2-0001
+d3-0001
+2
+NULL
+NULL
+NULL
+3
+NULL
+NULL
+NULL
+4
+d1-0002
+d2-0002
+d3-0002
+5
+NULL
+NULL
+NULL
+6
+d1-0001
+d2-0001
+d3-0001

@@ -28,23 +28,28 @@
 pub mod serialization;
 pub(crate) mod state_update;
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
-use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
+use mz_audit_log::VersionedEvent;
 use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
+use mz_persist_types::ShardId;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::GlobalId;
+use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
 use mz_sql::catalog::{
     CatalogItemType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, ObjectType, RoleAttributes,
     RoleMembership, RoleVars,
 };
 use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
-use mz_sql::plan::ClusterSchedule;
+use mz_sql::plan::{ClusterSchedule, NetworkPolicyRule};
 use proptest_derive::Arbitrary;
 
+use crate::builtin::RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL;
 use crate::durable::objects::serialization::proto;
+use crate::durable::Epoch;
 
 // Structs used to pass information to outside modules.
 
@@ -78,7 +83,7 @@ pub trait DurableType: Sized {
     fn key(&self) -> Self::Key;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct Database {
     pub id: DatabaseId,
     pub oid: u32,
@@ -118,7 +123,7 @@ impl DurableType for Database {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct Schema {
     pub id: SchemaId,
     pub oid: u32,
@@ -161,7 +166,7 @@ impl DurableType for Schema {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct Role {
     pub id: RoleId,
     pub oid: u32,
@@ -204,7 +209,50 @@ impl DurableType for Role {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct NetworkPolicy {
+    pub name: String,
+    pub id: NetworkPolicyId,
+    pub oid: u32,
+    pub rules: Vec<NetworkPolicyRule>,
+    pub owner_id: RoleId,
+    pub(crate) privileges: Vec<MzAclItem>,
+}
+
+impl DurableType for NetworkPolicy {
+    type Key = NetworkPolicyKey;
+    type Value = NetworkPolicyValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            NetworkPolicyKey { id: self.id },
+            NetworkPolicyValue {
+                oid: self.oid,
+                name: self.name,
+                rules: self.rules,
+                owner_id: self.owner_id,
+                privileges: self.privileges,
+            },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            id: key.id,
+            oid: value.oid,
+            name: value.name,
+            rules: value.rules,
+            owner_id: value.owner_id,
+            privileges: value.privileges,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        NetworkPolicyKey { id: self.id }
+    }
+}
+
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct Cluster {
     pub id: ClusterId,
     pub name: String,
@@ -247,6 +295,7 @@ impl DurableType for Cluster {
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterConfig {
     pub variant: ClusterVariant,
+    pub workload_class: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
@@ -266,10 +315,11 @@ pub struct ClusterVariantManaged {
     pub schedule: ClusterSchedule,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Ord, PartialOrd, PartialEq, Eq)]
 pub struct IntrospectionSourceIndex {
     pub cluster_id: ClusterId,
     pub name: String,
+    pub item_id: CatalogItemId,
     pub index_id: GlobalId,
     pub oid: u32,
 }
@@ -279,25 +329,20 @@ impl DurableType for IntrospectionSourceIndex {
     type Value = ClusterIntrospectionSourceIndexValue;
 
     fn into_key_value(self) -> (Self::Key, Self::Value) {
-        let index_id = match self.index_id {
-            GlobalId::System(id) => id,
-            GlobalId::User(_) => {
-                unreachable!("cluster introspection source index mapping cannot use a User ID")
-            }
-            GlobalId::Transient(_) => {
-                unreachable!("cluster introspection source index mapping cannot use a Transient ID")
-            }
-            GlobalId::Explain => {
-                unreachable!("cluster introspection source index mapping cannot use an Explain ID")
-            }
-        };
         (
             ClusterIntrospectionSourceIndexKey {
                 cluster_id: self.cluster_id,
                 name: self.name,
             },
             ClusterIntrospectionSourceIndexValue {
-                index_id,
+                catalog_id: self
+                    .item_id
+                    .try_into()
+                    .expect("cluster introspection source index mapping must be an Introspection Source Index ID"),
+                global_id: self
+                    .index_id
+                    .try_into()
+                    .expect("cluster introspection source index mapping must be a Introspection Source Index ID"),
                 oid: self.oid,
             },
         )
@@ -307,7 +352,8 @@ impl DurableType for IntrospectionSourceIndex {
         Self {
             cluster_id: key.cluster_id,
             name: key.name,
-            index_id: GlobalId::System(value.index_id),
+            item_id: value.catalog_id.into(),
+            index_id: value.global_id.into(),
             oid: value.oid,
         }
     }
@@ -320,7 +366,7 @@ impl DurableType for IntrospectionSourceIndex {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct ClusterReplica {
     pub cluster_id: ClusterId,
     pub replica_id: ReplicaId,
@@ -398,6 +444,7 @@ pub enum ReplicaLocation {
         disk: bool,
         internal: bool,
         billed_as: Option<String>,
+        pending: bool,
     },
 }
 
@@ -427,6 +474,7 @@ impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
                     disk,
                     billed_as,
                     internal,
+                    pending,
                 },
             ) => ReplicaLocation::Managed {
                 size,
@@ -442,20 +490,29 @@ impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
                 disk,
                 internal,
                 billed_as,
+                pending,
             },
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct Item {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub oid: u32,
+    pub global_id: GlobalId,
     pub schema_id: SchemaId,
     pub name: String,
     pub create_sql: String,
     pub owner_id: RoleId,
     pub privileges: Vec<MzAclItem>,
+    pub extra_versions: BTreeMap<RelationVersion, GlobalId>,
+}
+
+impl Item {
+    pub fn item_type(&self) -> CatalogItemType {
+        item_type(&self.create_sql)
+    }
 }
 
 impl DurableType for Item {
@@ -464,32 +521,177 @@ impl DurableType for Item {
 
     fn into_key_value(self) -> (Self::Key, Self::Value) {
         (
-            ItemKey { gid: self.id },
+            ItemKey { id: self.id },
             ItemValue {
                 oid: self.oid,
+                global_id: self.global_id,
                 schema_id: self.schema_id,
                 name: self.name,
                 create_sql: self.create_sql,
                 owner_id: self.owner_id,
                 privileges: self.privileges,
+                extra_versions: self.extra_versions,
             },
         )
     }
 
     fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
         Self {
-            id: key.gid,
+            id: key.id,
             oid: value.oid,
+            global_id: value.global_id,
             schema_id: value.schema_id,
             name: value.name,
             create_sql: value.create_sql,
             owner_id: value.owner_id,
             privileges: value.privileges,
+            extra_versions: value.extra_versions,
         }
     }
 
     fn key(&self) -> Self::Key {
-        ItemKey { gid: self.id }
+        ItemKey { id: self.id }
+    }
+}
+
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct SourceReferences {
+    pub source_id: CatalogItemId,
+    pub updated_at: u64,
+    pub references: Vec<SourceReference>,
+}
+
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq, Arbitrary)]
+pub struct SourceReference {
+    pub name: String,
+    pub namespace: Option<String>,
+    pub columns: Vec<String>,
+}
+
+impl DurableType for SourceReferences {
+    type Key = SourceReferencesKey;
+    type Value = SourceReferencesValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            SourceReferencesKey {
+                source_id: self.source_id,
+            },
+            SourceReferencesValue {
+                updated_at: self.updated_at,
+                references: self.references,
+            },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            source_id: key.source_id,
+            updated_at: value.updated_at,
+            references: value.references,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        SourceReferencesKey {
+            source_id: self.source_id,
+        }
+    }
+}
+
+/// A newtype wrapper for [`CatalogItemId`] that is only for the "system" namespace.
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct SystemCatalogItemId(u64);
+
+impl TryFrom<CatalogItemId> for SystemCatalogItemId {
+    type Error = &'static str;
+
+    fn try_from(val: CatalogItemId) -> Result<Self, Self::Error> {
+        match val {
+            CatalogItemId::System(x) => Ok(SystemCatalogItemId(x)),
+            CatalogItemId::IntrospectionSourceIndex(_) => Err("introspection_source_index"),
+            CatalogItemId::User(_) => Err("user"),
+            CatalogItemId::Transient(_) => Err("transient"),
+        }
+    }
+}
+
+impl From<SystemCatalogItemId> for CatalogItemId {
+    fn from(val: SystemCatalogItemId) -> Self {
+        CatalogItemId::System(val.0)
+    }
+}
+
+/// A newtype wrapper for [`CatalogItemId`] that is only for the "introspection source index" namespace.
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct IntrospectionSourceIndexCatalogItemId(u64);
+
+impl TryFrom<CatalogItemId> for IntrospectionSourceIndexCatalogItemId {
+    type Error = &'static str;
+
+    fn try_from(val: CatalogItemId) -> Result<Self, Self::Error> {
+        match val {
+            CatalogItemId::System(_) => Err("system"),
+            CatalogItemId::IntrospectionSourceIndex(x) => {
+                Ok(IntrospectionSourceIndexCatalogItemId(x))
+            }
+            CatalogItemId::User(_) => Err("user"),
+            CatalogItemId::Transient(_) => Err("transient"),
+        }
+    }
+}
+
+impl From<IntrospectionSourceIndexCatalogItemId> for CatalogItemId {
+    fn from(val: IntrospectionSourceIndexCatalogItemId) -> Self {
+        CatalogItemId::IntrospectionSourceIndex(val.0)
+    }
+}
+
+/// A newtype wrapper for [`GlobalId`] that is only for the "system" namespace.
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct SystemGlobalId(u64);
+
+impl TryFrom<GlobalId> for SystemGlobalId {
+    type Error = &'static str;
+
+    fn try_from(val: GlobalId) -> Result<Self, Self::Error> {
+        match val {
+            GlobalId::System(x) => Ok(SystemGlobalId(x)),
+            GlobalId::IntrospectionSourceIndex(_) => Err("introspection_source_index"),
+            GlobalId::User(_) => Err("user"),
+            GlobalId::Transient(_) => Err("transient"),
+            GlobalId::Explain => Err("explain"),
+        }
+    }
+}
+
+impl From<SystemGlobalId> for GlobalId {
+    fn from(val: SystemGlobalId) -> Self {
+        GlobalId::System(val.0)
+    }
+}
+
+/// A newtype wrapper for [`GlobalId`] that is only for the "introspection source index" namespace.
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct IntrospectionSourceIndexGlobalId(u64);
+
+impl TryFrom<GlobalId> for IntrospectionSourceIndexGlobalId {
+    type Error = &'static str;
+
+    fn try_from(val: GlobalId) -> Result<Self, Self::Error> {
+        match val {
+            GlobalId::System(_) => Err("system"),
+            GlobalId::IntrospectionSourceIndex(x) => Ok(IntrospectionSourceIndexGlobalId(x)),
+            GlobalId::User(_) => Err("user"),
+            GlobalId::Transient(_) => Err("transient"),
+            GlobalId::Explain => Err("explain"),
+        }
+    }
+}
+
+impl From<IntrospectionSourceIndexGlobalId> for GlobalId {
+    fn from(val: IntrospectionSourceIndexGlobalId) -> Self {
+        GlobalId::IntrospectionSourceIndex(val.0)
     }
 }
 
@@ -500,10 +702,17 @@ pub struct SystemObjectDescription {
     pub object_name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct SystemObjectUniqueIdentifier {
-    pub id: GlobalId,
+    pub catalog_id: CatalogItemId,
+    pub global_id: GlobalId,
     pub fingerprint: String,
+}
+
+impl SystemObjectUniqueIdentifier {
+    pub fn runtime_alterable(&self) -> bool {
+        self.fingerprint == RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL
+    }
 }
 
 /// Functions can share the same name as any other catalog item type
@@ -513,7 +722,7 @@ pub struct SystemObjectUniqueIdentifier {
 /// As such, system objects are keyed in the catalog storage by the
 /// tuple (schema_name, object_type, object_name), which is guaranteed
 /// to be unique.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct SystemObjectMapping {
     pub description: SystemObjectDescription,
     pub unique_identifier: SystemObjectUniqueIdentifier,
@@ -531,12 +740,16 @@ impl DurableType for SystemObjectMapping {
                 object_name: self.description.object_name,
             },
             GidMappingValue {
-                id: match self.unique_identifier.id {
-                    GlobalId::System(id) => id,
-                    GlobalId::User(_) => unreachable!("GID mapping cannot use a User ID"),
-                    GlobalId::Transient(_) => unreachable!("GID mapping cannot use a Transient ID"),
-                    GlobalId::Explain => unreachable!("GID mapping cannot use an Explain ID"),
-                },
+                catalog_id: self
+                    .unique_identifier
+                    .catalog_id
+                    .try_into()
+                    .expect("catalog_id to be in the system namespace"),
+                global_id: self
+                    .unique_identifier
+                    .global_id
+                    .try_into()
+                    .expect("collection_id to be in the system namespace"),
                 fingerprint: self.unique_identifier.fingerprint,
             },
         )
@@ -550,7 +763,8 @@ impl DurableType for SystemObjectMapping {
                 object_name: key.object_name,
             },
             unique_identifier: SystemObjectUniqueIdentifier {
-                id: GlobalId::System(value.id),
+                catalog_id: value.catalog_id.into(),
+                global_id: value.global_id.into(),
                 fingerprint: value.fingerprint,
             },
         }
@@ -565,7 +779,7 @@ impl DurableType for SystemObjectMapping {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct DefaultPrivilege {
     pub object: DefaultPrivilegeObject,
     pub acl_item: DefaultPrivilegeAclItem,
@@ -616,7 +830,7 @@ impl DurableType for DefaultPrivilege {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct Comment {
     pub object_id: CommentObjectId,
     pub sub_component: Option<usize>,
@@ -750,7 +964,7 @@ impl DurableType for Setting {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct SystemConfiguration {
     pub name: String,
     pub value: String,
@@ -813,7 +1027,7 @@ impl DurableType for MzAclItem {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct AuditLog {
     pub event: VersionedEvent,
 }
@@ -837,39 +1051,10 @@ impl DurableType for AuditLog {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StorageUsage {
-    pub metric: VersionedStorageUsage,
-}
-
-impl DurableType for StorageUsage {
-    type Key = StorageUsageKey;
-    type Value = ();
-
-    fn into_key_value(self) -> (Self::Key, Self::Value) {
-        (
-            StorageUsageKey {
-                metric: self.metric,
-            },
-            (),
-        )
-    }
-
-    fn from_key_value(key: Self::Key, _value: Self::Value) -> Self {
-        Self { metric: key.metric }
-    }
-
-    fn key(&self) -> Self::Key {
-        StorageUsageKey {
-            metric: self.metric.clone(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct StorageCollectionMetadata {
     pub id: GlobalId,
-    pub shard: String,
+    pub shard: ShardId,
 }
 
 impl DurableType for StorageCollectionMetadata {
@@ -895,9 +1080,9 @@ impl DurableType for StorageCollectionMetadata {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct UnfinalizedShard {
-    pub shard: String,
+    pub shard: ShardId,
 }
 
 impl DurableType for UnfinalizedShard {
@@ -930,6 +1115,7 @@ pub struct Snapshot {
     pub items: BTreeMap<proto::ItemKey, proto::ItemValue>,
     pub comments: BTreeMap<proto::CommentKey, proto::CommentValue>,
     pub clusters: BTreeMap<proto::ClusterKey, proto::ClusterValue>,
+    pub network_policies: BTreeMap<proto::NetworkPolicyKey, proto::NetworkPolicyValue>,
     pub cluster_replicas: BTreeMap<proto::ClusterReplicaKey, proto::ClusterReplicaValue>,
     pub introspection_sources: BTreeMap<
         proto::ClusterIntrospectionSourceIndexKey,
@@ -942,6 +1128,7 @@ pub struct Snapshot {
     pub system_configurations:
         BTreeMap<proto::ServerConfigurationKey, proto::ServerConfigurationValue>,
     pub default_privileges: BTreeMap<proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue>,
+    pub source_references: BTreeMap<proto::SourceReferencesKey, proto::SourceReferencesValue>,
     pub system_privileges: BTreeMap<proto::SystemPrivilegesKey, proto::SystemPrivilegesValue>,
     pub storage_collection_metadata:
         BTreeMap<proto::StorageCollectionMetadataKey, proto::StorageCollectionMetadataValue>,
@@ -952,6 +1139,30 @@ pub struct Snapshot {
 impl Snapshot {
     pub fn empty() -> Snapshot {
         Snapshot::default()
+    }
+}
+
+/// Token used to fence out other processes.
+///
+/// Every time a new process takes over, the `epoch` should be incremented.
+/// Every time a new version is deployed, the `deploy` generation should be incremented.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Arbitrary)]
+pub struct FenceToken {
+    pub(crate) deploy_generation: u64,
+    pub(crate) epoch: Epoch,
+}
+
+impl PartialOrd for FenceToken {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for FenceToken {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.deploy_generation
+            .cmp(&other.deploy_generation)
+            .then(self.epoch.cmp(&other.epoch))
     }
 }
 
@@ -984,7 +1195,8 @@ pub struct GidMappingKey {
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct GidMappingValue {
-    pub(crate) id: u64,
+    pub(crate) catalog_id: SystemCatalogItemId,
+    pub(crate) global_id: SystemGlobalId,
     pub(crate) fingerprint: String,
 }
 
@@ -1009,7 +1221,8 @@ pub struct ClusterIntrospectionSourceIndexKey {
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterIntrospectionSourceIndexValue {
-    pub(crate) index_id: u64,
+    pub(crate) catalog_id: IntrospectionSourceIndexCatalogItemId,
+    pub(crate) global_id: IntrospectionSourceIndexGlobalId,
     pub(crate) oid: u32,
 }
 
@@ -1040,6 +1253,17 @@ pub struct DatabaseValue {
 }
 
 #[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct SourceReferencesKey {
+    pub(crate) source_id: CatalogItemId,
+}
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
+pub struct SourceReferencesValue {
+    pub(crate) references: Vec<SourceReference>,
+    pub(crate) updated_at: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct SchemaKey {
     pub(crate) id: SchemaId,
 }
@@ -1055,7 +1279,7 @@ pub struct SchemaValue {
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash, Debug, Arbitrary)]
 pub struct ItemKey {
-    pub(crate) gid: GlobalId,
+    pub(crate) id: CatalogItemId,
 }
 
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
@@ -1066,31 +1290,41 @@ pub struct ItemValue {
     pub(crate) owner_id: RoleId,
     pub(crate) privileges: Vec<MzAclItem>,
     pub(crate) oid: u32,
+    pub(crate) global_id: GlobalId,
+    pub(crate) extra_versions: BTreeMap<RelationVersion, GlobalId>,
 }
 
 impl ItemValue {
-    pub(crate) fn item_type(&self) -> CatalogItemType {
-        // NOTE(benesch): the implementation of this method is hideous, but is
-        // there a better alternative? Storing the object type alongside the
-        // `create_sql` would introduce the possibility of skew.
-        let mut tokens = self.create_sql.split_whitespace();
-        assert_eq!(tokens.next(), Some("CREATE"));
-        match tokens.next() {
-            Some("TABLE") => CatalogItemType::Table,
-            Some("SOURCE") | Some("SUBSOURCE") => CatalogItemType::Source,
-            Some("SINK") => CatalogItemType::Sink,
-            Some("VIEW") => CatalogItemType::View,
-            Some("MATERIALIZED") => {
-                assert_eq!(tokens.next(), Some("VIEW"));
-                CatalogItemType::MaterializedView
-            }
-            Some("INDEX") => CatalogItemType::Index,
-            Some("TYPE") => CatalogItemType::Type,
-            Some("FUNCTION") => CatalogItemType::Func,
-            Some("SECRET") => CatalogItemType::Secret,
-            Some("CONNECTION") => CatalogItemType::Connection,
-            _ => panic!("unexpected create sql: {}", self.create_sql),
+    pub fn item_type(&self) -> CatalogItemType {
+        item_type(&self.create_sql)
+    }
+}
+
+fn item_type(create_sql: &str) -> CatalogItemType {
+    // NOTE(benesch): the implementation of this method is hideous, but is
+    // there a better alternative? Storing the object type alongside the
+    // `create_sql` would introduce the possibility of skew.
+    let mut tokens = create_sql.split_whitespace();
+    assert_eq!(tokens.next(), Some("CREATE"));
+    match tokens.next() {
+        Some("TABLE") => CatalogItemType::Table,
+        Some("SOURCE") | Some("SUBSOURCE") => CatalogItemType::Source,
+        Some("SINK") => CatalogItemType::Sink,
+        Some("VIEW") => CatalogItemType::View,
+        Some("MATERIALIZED") => {
+            assert_eq!(tokens.next(), Some("VIEW"));
+            CatalogItemType::MaterializedView
         }
+        Some("CONTINUAL") => {
+            assert_eq!(tokens.next(), Some("TASK"));
+            CatalogItemType::ContinualTask
+        }
+        Some("INDEX") => CatalogItemType::Index,
+        Some("TYPE") => CatalogItemType::Type,
+        Some("FUNCTION") => CatalogItemType::Func,
+        Some("SECRET") => CatalogItemType::Secret,
+        Some("CONNECTION") => CatalogItemType::Connection,
+        _ => panic!("unexpected create sql: {}", create_sql),
     }
 }
 
@@ -1119,6 +1353,20 @@ pub struct RoleValue {
     pub(crate) oid: u32,
 }
 
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash, Debug)]
+pub struct NetworkPolicyKey {
+    pub(crate) id: NetworkPolicyId,
+}
+
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Debug)]
+pub struct NetworkPolicyValue {
+    pub(crate) name: String,
+    pub(crate) rules: Vec<NetworkPolicyRule>,
+    pub(crate) owner_id: RoleId,
+    pub(crate) privileges: Vec<MzAclItem>,
+    pub(crate) oid: u32,
+}
+
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ConfigKey {
     pub(crate) key: String,
@@ -1135,10 +1383,6 @@ pub struct AuditLogKey {
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
-pub struct StorageUsageKey {
-    pub(crate) metric: VersionedStorageUsage,
-}
-#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct StorageCollectionMetadataKey {
     pub(crate) id: GlobalId,
 }
@@ -1147,21 +1391,21 @@ pub struct StorageCollectionMetadataKey {
 /// manipulated by the storage controller.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct StorageCollectionMetadataValue {
-    pub(crate) shard: String,
+    pub(crate) shard: ShardId,
 }
 
 /// This value is stored transparently, however, it should only ever be
 /// manipulated by the storage controller.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct UnfinalizedShardKey {
-    pub(crate) shard: String,
+    pub(crate) shard: ShardId,
 }
 
 /// This value is stored transparently, however, it should only ever be
 /// manipulated by the storage controller.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct TxnWalShardValue {
-    pub(crate) shard: String,
+    pub(crate) shard: ShardId,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
@@ -1204,7 +1448,10 @@ mod test {
     use mz_proto::{ProtoType, RustType};
     use proptest::prelude::*;
 
-    use super::{DatabaseKey, DatabaseValue, ItemKey, ItemValue, SchemaKey, SchemaValue};
+    use super::{
+        DatabaseKey, DatabaseValue, FenceToken, ItemKey, ItemValue, SchemaKey, SchemaValue,
+    };
+    use crate::durable::Epoch;
 
     proptest! {
         #[mz_ore::test]
@@ -1260,5 +1507,33 @@ mod test {
 
             prop_assert_eq!(value, round);
         }
+    }
+
+    #[mz_ore::test]
+    fn test_fence_token_order() {
+        let ft1 = FenceToken {
+            deploy_generation: 10,
+            epoch: Epoch::new(20).expect("non-zero"),
+        };
+        let ft2 = FenceToken {
+            deploy_generation: 10,
+            epoch: Epoch::new(19).expect("non-zero"),
+        };
+
+        assert!(ft1 > ft2);
+
+        let ft3 = FenceToken {
+            deploy_generation: 11,
+            epoch: Epoch::new(10).expect("non-zero"),
+        };
+
+        assert!(ft3 > ft1);
+
+        let ft4 = FenceToken {
+            deploy_generation: 11,
+            epoch: Epoch::new(30).expect("non-zero"),
+        };
+
+        assert!(ft4 > ft1);
     }
 }

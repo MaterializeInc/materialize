@@ -14,7 +14,7 @@ from textwrap import dedent
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.mysql import MySql
 from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
-from materialize.zippy.framework import Action, Capabilities, Capability
+from materialize.zippy.framework import Action, Capabilities, Capability, State
 from materialize.zippy.mysql_capabilities import MySqlRunning, MySqlTableExists
 from materialize.zippy.mysql_cdc_capabilities import MySqlCdcTableExists
 from materialize.zippy.mz_capabilities import MzIsRunning
@@ -58,11 +58,11 @@ class CreateMySqlCdcTable(Action):
 
             self.mysql_cdc_table = existing_mysql_cdc_tables[0]
         else:
-            assert False
+            raise RuntimeError("More than one CDC table exists")
 
         super().__init__(capabilities)
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         if self.new_mysql_cdc_table:
             assert self.mysql_cdc_table is not None
             assert self.mysql_cdc_table.mysql_table is not None
@@ -79,10 +79,12 @@ class CreateMySqlCdcTable(Action):
 
                     > CREATE SOURCE {name}_source
                       IN CLUSTER {self.cluster_name}
-                      FROM MYSQL CONNECTION {name}_conn
-                      FOR TABLES (public.{self.mysql_cdc_table.mysql_table.name} AS {name})
+                      FROM MYSQL CONNECTION {name}_conn;
+
+                    > CREATE TABLE {name} FROM SOURCE {name}_source (REFERENCE public.{self.mysql_cdc_table.mysql_table.name});
                     """
-                )
+                ),
+                mz_service=state.mz_service,
             )
 
     def provides(self) -> list[Capability]:

@@ -68,7 +68,7 @@ $ kafka-ingest format=avro topic=csr_test key-format=avro key-schema=${keyschema
 ! CREATE CONNECTION csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
   ) WITH (VALIDATE = true);
-contains:address is not global
+contains:Address resolved to a private IP
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET storage_enforce_external_addresses = false

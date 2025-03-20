@@ -15,7 +15,6 @@ from textwrap import dedent
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, externally_idempotent
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
-from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
 
 
@@ -46,9 +45,6 @@ class AlterConnectionSshChangeBase(Check):
         self.ssh_change = ssh_change
         self.index = index
 
-    def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.79.0-dev")
-
     def initialize(self) -> Testdrive:
         i = self.index
 
@@ -56,9 +52,6 @@ class AlterConnectionSshChangeBase(Check):
             schema()
             + dedent(
                 f"""
-                $[version>=5500] postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
-                ALTER SYSTEM SET enable_table_keys = true;
-
                 $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
                 ALTER SYSTEM SET enable_connection_validation_syntax = true
 
@@ -70,8 +63,9 @@ class AlterConnectionSshChangeBase(Check):
                 > CREATE CONNECTION kafka_conn_alter_connection_{i}a
                   TO KAFKA (SECURITY PROTOCOL = "plaintext", BROKER '${{testdrive.kafka-addr}}' {WITH_SSH_SUFFIX.replace('{i}', str(i)) if self.ssh_change in {SshChange.DROP_SSH, SshChange.CHANGE_SSH_HOST} else ''});
 
-                > CREATE SOURCE alter_connection_source_{i}a
-                  FROM KAFKA CONNECTION kafka_conn_alter_connection_{i}a (TOPIC 'testdrive-alter-connection-{i}a-${{testdrive.seed}}')
+                > CREATE SOURCE alter_connection_source_{i}a_src
+                  FROM KAFKA CONNECTION kafka_conn_alter_connection_{i}a (TOPIC 'testdrive-alter-connection-{i}a-${{testdrive.seed}}');
+                > CREATE TABLE alter_connection_source_{i}a FROM SOURCE alter_connection_source_{i}a_src (REFERENCE "testdrive-alter-connection-{i}a-${{testdrive.seed}}")
                   FORMAT TEXT
                   ENVELOPE NONE;
 
@@ -119,8 +113,9 @@ class AlterConnectionSshChangeBase(Check):
                 > CREATE CONNECTION kafka_conn_alter_connection_{i}b
                   TO KAFKA (SECURITY PROTOCOL = "plaintext", BROKER '${{testdrive.kafka-addr}}' {WITH_SSH_SUFFIX.replace('{i}', str(i)) if self.ssh_change in {SshChange.DROP_SSH, SshChange.CHANGE_SSH_HOST} else ''});
 
-                > CREATE SOURCE alter_connection_source_{i}b
-                  FROM KAFKA CONNECTION kafka_conn_alter_connection_{i}b (TOPIC 'testdrive-alter-connection-{i}b-${{testdrive.seed}}')
+                > CREATE SOURCE alter_connection_source_{i}b_src
+                  FROM KAFKA CONNECTION kafka_conn_alter_connection_{i}b (TOPIC 'testdrive-alter-connection-{i}b-${{testdrive.seed}}');
+                > CREATE TABLE alter_connection_source_{i}b FROM SOURCE alter_connection_source_{i}b_src (REFERENCE "testdrive-alter-connection-{i}b-${{testdrive.seed}}")
                   FORMAT TEXT
                   ENVELOPE NONE;
 
@@ -172,10 +167,9 @@ class AlterConnectionSshChangeBase(Check):
                 thirty
                 fourty
 
-                > DROP SOURCE IF EXISTS alter_connection_sink_source_{i}
-
-                > CREATE SOURCE alter_connection_sink_source_{i}
-                  FROM KAFKA CONNECTION kafka_conn_alter_connection_{i}a (TOPIC 'testdrive-alter-connection-sink-{i}-${{testdrive.seed}}')
+                > CREATE SOURCE alter_connection_sink_source_{i}_src
+                  FROM KAFKA CONNECTION kafka_conn_alter_connection_{i}a (TOPIC 'testdrive-alter-connection-sink-{i}-${{testdrive.seed}}');
+                > CREATE TABLE alter_connection_sink_source_{i} FROM SOURCE alter_connection_sink_source_{i}_src (REFERENCE "testdrive-alter-connection-sink-{i}-${{testdrive.seed}}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE;
 
@@ -198,6 +192,8 @@ class AlterConnectionSshChangeBase(Check):
                 <null> (1)
                 <null> (2)
                 <null> (3)
+
+                > DROP SOURCE IF EXISTS alter_connection_sink_source_{i}_src CASCADE
                 """
             )
         )

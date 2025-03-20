@@ -47,12 +47,12 @@ class SourceErrors(Check):
                 > CREATE SOURCE source_errors_sourceA
                   FROM POSTGRES CONNECTION source_errors_connection
                   (PUBLICATION 'source_errors_publicationa') /* all lowercase */
-                  FOR TABLES (source_errors_table AS source_errors_tableA)
+                > CREATE TABLE source_errors_tableA FROM SOURCE source_errors_sourceA (REFERENCE source_errors_table);
 
                 > CREATE SOURCE source_errors_sourceB
                   FROM POSTGRES CONNECTION source_errors_connection
                   (PUBLICATION 'source_errors_publicationb') /* all lowercase */
-                  FOR TABLES (source_errors_table AS source_errors_tableB)
+                > CREATE TABLE source_errors_tableB FROM SOURCE source_errors_sourceB (REFERENCE source_errors_table);
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO source_errors_table VALUES (2);
@@ -91,18 +91,35 @@ class SourceErrors(Check):
     def validate(self) -> Testdrive:
         return Testdrive(
             dedent(
-                # This could also check that the error propagates to subsources,
-                # but the GlobalId migration that occurrs in v0.98 means that we
-                # lose historical data for source errors and this check is not
-                # so crucial that it's imperative that we correlate the original
-                # IDs to these errors.
+                # We check two things: a) that the expected (sub)sources are
+                # stalled, and b) that they report the expected error. Only
+                # checking the error using bool_and wouldn't work because this
+                # check ignores NULL values, so would succeed if, say, all
+                # sources are in state 'running'.
+                #
+                # TODO(aljoscha): We recently migrated the status history
+                # collection, so all updates are lost when upgrading. This has
+                # the consequence that sources report as 'created'. We therefore
+                # have to accept 'created' below, but should remove this
+                # relaxation once we have enough new releasees that there won't
+                # be a migration between tested versions. Plus, because of this
+                # we have to wrap the error check in a coalesce: when all the
+                # status updates show 'created', we'll have no error and get a
+                # NULL result.
+                #
+                # Additionally, we also have to accept paused, because platform
+                # checks might pause replicas, and these paused status updates
+                # take precedence over errors. To fix this, we might want to
+                # rewrite this test to look at mz_source_status_history
+                # instead, which contains the full history.
                 """
-                > SELECT bool_and(error ~* 'publication .+ does not exist')
+                > SELECT
+                        coalesce(bool_and(error ~* 'publication .+ does not exist'), true) as matches,
+                        bool_and(status IN ('stalled', 'created', 'paused')) as is_stalled
                     FROM mz_internal.mz_source_statuses
                     WHERE
-                    name
-                    IN ('source_errors_sourcea', 'source_errors_sourceb');
-                true
+                        name IN ('source_errors_sourcea', 'source_errors_sourceb', 'source_errors_tablea', 'source_errors_tableb');
+                true true
                 """
             )
         )

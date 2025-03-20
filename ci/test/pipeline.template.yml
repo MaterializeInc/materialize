@@ -15,38 +15,99 @@
 dag: true
 
 env:
-  CI_BUILDER_SCCACHE: 1
+  CI_BAZEL_BUILD: 1
+  CI_BAZEL_REMOTE_CACHE: $BAZEL_REMOTE_CACHE
   # Note: In .cargo/config we set the default build jobs to -1 so on developer machines we keep
   # a single core open when compiling. But we want to use all of CI's resources, hence setting the
   # build jobs to "default" which will use all cores.
   CARGO_BUILD_JOBS: "default"
 
+# When resources are constrained, run early since this might be blocking a PR from merging
+priority: 20
+
 steps:
   - group: Builds
     key: builds
     steps:
-      # TODO(def-) Get rid of this for PRs once we don't have any x86-64 tests remaining
-      - id: build-x86_64
-        label: Build x86_64
+      - id: rust-build-x86_64
+        label: ":rust: Build x86_64"
+        env:
+          CI_BAZEL_BUILD: 0
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
         depends_on: []
         timeout_in_minutes: 60
-        priority: 1
+        priority: 50
+        agents:
+          queue: builder-linux-x86_64
+
+      - id: upload-debug-symbols-x86_64
+        label: "Upload debug symbols for x86_64"
+        env:
+          CI_BAZEL_BUILD: 0
+        command: bin/ci-builder run stable bin/pyactivate -m materialize.ci_util.upload_debug_symbols_to_polarsignals
+        inputs:
+          - "*"
+        depends_on: [build-x86_64]
+        timeout_in_minutes: 20
+        priority: 50
+        if: build.tag != null
+        agents:
+          queue: builder-linux-x86_64
+        coverage: skip
+
+      - id: rust-build-aarch64
+        label: ":rust: Build aarch64"
+        env:
+          CI_BAZEL_BUILD: 0
+        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
+        inputs:
+          - "*"
+        depends_on: []
+        priority: 50
+        timeout_in_minutes: 60
+        agents:
+          queue: builder-linux-aarch64-mem
+
+      - id: upload-debug-symbols-aarch64
+        label: "Upload debug symbols for aarch64"
+        env:
+          CI_BAZEL_BUILD: 0
+        command: bin/ci-builder run stable bin/pyactivate -m materialize.ci_util.upload_debug_symbols_to_polarsignals
+        inputs:
+          - "*"
+        depends_on: [build-aarch64]
+        priority: 50
+        timeout_in_minutes: 20
+        if: build.tag != null
+        agents:
+          queue: builder-linux-aarch64-mem
+        coverage: skip
+
+      - id: build-x86_64
+        label: ":bazel: Build x86_64"
+        env:
+        command: bin/ci-builder run min bin/pyactivate -m ci.test.build
+        inputs:
+          - "*"
+        artifact_paths: bazel-explain.log
+        depends_on: []
+        timeout_in_minutes: 60
         agents:
           queue: builder-linux-x86_64
 
       - id: build-aarch64
-        label: Build aarch64
-        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
+        label: ":bazel: Build aarch64"
+        env:
+        command: bin/ci-builder run min bin/pyactivate -m ci.test.build
         inputs:
           - "*"
+        artifact_paths: bazel-explain.log
         depends_on: []
-        priority: 1
         timeout_in_minutes: 60
         agents:
-          queue: builder-linux-aarch64
+          queue: builder-linux-aarch64-mem
 
       - id: build-wasm
         label: Build WASM
@@ -54,7 +115,7 @@ steps:
         inputs:
           - "*"
         depends_on: []
-        timeout_in_minutes: 10
+        timeout_in_minutes: 20
         agents:
           # Error: no prebuilt wasm-opt binaries are available for this platform: Unrecognized target!
           queue: linux-x86_64-small
@@ -66,25 +127,26 @@ steps:
         command: ci/test/check-merge-with-target.sh
         inputs:
           - Cargo.lock
+          - Cargo.toml
           - "**/Cargo.toml"
           - "**/*.rs"
         depends_on: []
-        timeout_in_minutes: 30
+        timeout_in_minutes: 45
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-16cpu-32gb
         if: "build.pull_request.id != null"
         coverage: skip
         sanitizer: skip
 
       - id: devel-docker-tags
         label: Tag development docker images
-        command: bin/ci-builder run stable bin/pyactivate -m ci.test.dev_tag
+        command: bin/ci-builder run min bin/pyactivate -m ci.test.dev_tag
         inputs:
           - "*"
         depends_on:
           - build-x86_64
           - build-aarch64
-        timeout_in_minutes: 10
+        timeout_in_minutes: 20
         agents:
           queue: linux-aarch64-small
         coverage: skip
@@ -104,8 +166,9 @@ steps:
         inputs:
           - "*"
         depends_on: []
-        timeout_in_minutes: 10
+        timeout_in_minutes: 20
         agents:
+          # Use AWS machines so we have access to the Bazel remote cache.
           queue: linux-aarch64-small
         coverage: skip
         sanitizer: skip
@@ -115,24 +178,26 @@ steps:
         command: bin/ci-builder run stable ci/test/lint-slow.sh
         inputs:
           - Cargo.lock
+          - Cargo.toml
           - "**/Cargo.toml"
           - "**/*.rs"
+          - misc/helm-charts
         depends_on: []
-        timeout_in_minutes: 30
+        timeout_in_minutes: 40
         agents:
-          # note: the `x86_64-unknown-linux-gnu` target may not be installed
-          queue: builder-linux-x86_64
+          queue: hetzner-x86-64-dedi-32cpu-128gb
         coverage: skip
         sanitizer: skip
 
       - id: lint-macos
-        label: macOS Clippy
+        label: ":rust: macOS Clippy"
         command: cargo clippy --all-targets -- -D warnings
         env:
           CARGO_INCREMENTAL: "0"
           RUSTUP_TOOLCHAIN: $RUST_VERSION
         inputs:
           - Cargo.lock
+          - Cargo.toml
           - "**/Cargo.toml"
           - "**/*.rs"
         depends_on: []
@@ -141,37 +206,26 @@ steps:
           queue: mac
         coverage: skip
         sanitizer: skip
+        branches: "main v*.* self-managed/v*"
 
       - id: lint-deps
         label: Lint dependencies
         command: bin/ci-builder run stable ci/test/lint-deps.sh
         inputs:
           - Cargo.lock
+          - Cargo.toml
           - "**/Cargo.toml"
           - "**/*.rs"
         depends_on: []
         timeout_in_minutes: 30
         agents:
-          queue: linux-aarch64-small
-        coverage: skip
-        sanitizer: skip
-
-      - id: vet-check
-        label: Cargo vet Check
-        command: bin/ci-builder run stable cargo vet check --locked
-        inputs:
-          - Cargo.lock
-          - misc/cargo-vet/config.toml
-        depends_on: []
-        timeout_in_minutes: 20
-        agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         coverage: skip
         sanitizer: skip
 
   - group: Docs tests
     key: docs-tests
-    label: Docs tests
+    label: ":rust: Docs tests"
     steps:
       - id: lint-docs
         label: Lint docs
@@ -184,7 +238,7 @@ steps:
         timeout_in_minutes: 30
         agents:
           # hugo: command not found
-          queue: linux-x86_64-small
+          queue: hetzner-x86-64-4cpu-8gb
         coverage: skip
         sanitizer: skip
 
@@ -209,15 +263,16 @@ steps:
         depends_on: []
         timeout_in_minutes: 15
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         coverage: skip
         sanitizer: skip
 
   - id: cargo-test
-    label: Cargo test
-    timeout_in_minutes: 45
+    label: ":rust: Cargo test"
+    timeout_in_minutes: 60
     inputs:
       - Cargo.lock
+      - Cargo.toml
       - ".config/nextest.toml"
       - "**/Cargo.toml"
       - "**/*.rs"
@@ -228,28 +283,28 @@ steps:
       AWS_DEFAULT_REGION: "us-east-1"
       # cargo-test's coverage is handled separately by cargo-llvm-cov
       BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_COVERAGE: "true"
+      # some tests run into stack overflows
+      RUST_MIN_STACK: "4194304"
     plugins:
-      - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: cargo-test
     agents:
-      queue: builder-linux-aarch64
+      queue: hetzner-x86-64-dedi-48cpu-192gb
 
   - id: testdrive
-    label: Testdrive %N
+    label: "Testdrive"
     depends_on: build-aarch64
     timeout_in_minutes: 40
     inputs: [test/testdrive]
     parallelism: 8
     plugins:
-      - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
     agents:
-      queue: linux-aarch64
+      queue: hetzner-aarch64-16cpu-32gb
 
   - id: cluster-tests
-    label: Cluster tests %N
+    label: "Cluster tests"
     depends_on: build-aarch64
     timeout_in_minutes: 30
     inputs: [test/cluster]
@@ -258,47 +313,48 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: cluster
     agents:
-      queue: linux-aarch64
+      queue: hetzner-aarch64-8cpu-16gb
 
   - id: sqllogictest-fast
-    label: Fast SQL logic tests %N
+    label: "Fast SQL logic tests"
     depends_on: build-aarch64
     timeout_in_minutes: 30
-    parallelism: 2
+    parallelism: 6
     inputs: [test/sqllogictest]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
           run: fast-tests
     agents:
-      queue: linux-aarch64-small
+      queue: hetzner-aarch64-8cpu-16gb
 
   - id: restarts
-    label: Restart test
+    label: "Restart test"
     depends_on: build-aarch64
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/mzcompose:
           composition: restart
     agents:
-      queue: linux-aarch64-small
+      queue: hetzner-aarch64-4cpu-8gb
 
-  - id: legacy-upgrade
-    label: Legacy upgrade tests (last version from docs)
+  - id: legacy-upgrade-docs-ignore-missing
+    label: "Legacy upgrade tests (last version from docs, ignore missing)"
+    parallelism: 2
     depends_on: build-aarch64
     timeout_in_minutes: 60
     plugins:
       - ./ci/plugins/mzcompose:
           composition: legacy-upgrade
-          args: ["--versions-source=docs"]
+          args: ["--versions-source=docs", "--ignore-missing-version"]
     agents:
-      queue: linux-aarch64-small
+      queue: hetzner-aarch64-4cpu-8gb
 
   - group: "Debezium tests"
     key: debezium-tests
     steps:
       - id: debezium-postgres
-        label: Debezium Postgres tests
+        label: "Debezium Postgres tests"
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/debezium]
@@ -307,10 +363,10 @@ steps:
               composition: debezium
               run: postgres
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
 
       - id: debezium-sql-server
-        label: Debezium SQL Server tests
+        label: "Debezium SQL Server tests"
         depends_on: build-x86_64
         timeout_in_minutes: 30
         inputs: [test/debezium]
@@ -320,10 +376,10 @@ steps:
               run: sql-server
         agents:
           # too slow to run emulated on aarch64, SQL Server's docker image is not yet available for aarch64 natively yet: https://github.com/microsoft/mssql-docker/issues/802
-          queue: linux-x86_64-small
+          queue: hetzner-x86-64-4cpu-8gb
 
       - id: debezium-mysql
-        label: Debezium MySQL tests
+        label: "Debezium MySQL tests"
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/debezium]
@@ -332,13 +388,13 @@ steps:
               composition: debezium
               run: mysql
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
 
   - group: "MySQL tests"
     key: mysql-tests
     steps:
       - id: mysql-cdc
-        label: MySQL CDC tests %N
+        label: "MySQL CDC tests"
         parallelism: 2
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -346,13 +402,12 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc
-              args: ["--mysql-version=8.4.0"]
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
 
       - id: mysql-cdc-resumption
-        label: MySQL CDC resumption tests %N
-        parallelism: 2
+        label: "MySQL CDC resumption tests"
+        parallelism: 6
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/mysql-cdc-resumption]
@@ -360,10 +415,10 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc-resumption
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
 
       - id: mysql-rtr
-        label: MySQL RTR tests
+        label: "MySQL RTR tests"
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/mysql-rtr]
@@ -371,13 +426,14 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: mysql-rtr
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
 
   - group: "Postgres tests"
     key: postgres-tests
     steps:
       - id: pg-cdc
-        label: Postgres CDC tests
+        label: "Postgres CDC tests"
+        parallelism: 2
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc]
@@ -385,12 +441,12 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         # the mzbuild postgres version will be used, which depends on the Dockerfile specification
 
       - id: pg-cdc-resumption
-        label: Postgres CDC resumption tests %N
-        parallelism: 2
+        label: "Postgres CDC resumption tests"
+        parallelism: 5
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc-resumption]
@@ -398,10 +454,11 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc-resumption
         agents:
-          queue: linux-aarch64-small
+          # Larger agent for faster runtime
+          queue: hetzner-aarch64-8cpu-16gb
 
       - id: pg-rtr
-        label: Postgres RTR tests
+        label: "Postgres RTR tests"
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-rtr]
@@ -409,7 +466,33 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: pg-rtr
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
+
+  - id: yugabyte-cdc
+    label: "Yugabyte CDC tests"
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    inputs: [test/yugabyte-cdc]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: yugabyte-cdc
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
+  - group: "SQL Server tests"
+    key: sql-server-tests
+    steps:
+      - id: sql-server-cdc
+        label: "SQL Server CDC tests"
+        parallelism: 2
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        inputs: [test/sql-server-cdc]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: sql-server-cdc
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
 
   - group: "Connection tests"
     key: connection-tests
@@ -423,7 +506,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: ssh-connection
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
 
       - id: fivetran-destination-tests
         label: Fivetran Destination tests
@@ -434,7 +517,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: fivetran-destination
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
 
   - group: "Copy to S3 tests"
     key: copy-to-s3-tests
@@ -449,7 +532,7 @@ steps:
               composition: copy-to-s3
               run: ci
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
 
   - group: "Kafka tests"
     key: kafka-tests
@@ -462,7 +545,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: kafka-resumption
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
 
       - id: kafka-auth
         label: Kafka auth test
@@ -473,7 +556,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: kafka-auth
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
 
       - id: kafka-exactly-once
         label: Kafka exactly-once tests
@@ -483,18 +566,20 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: kafka-exactly-once
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
 
       - id: kafka-rtr
-        label: Kafka RTR tests
+        label: "Kafka RTR tests"
         depends_on: build-aarch64
         timeout_in_minutes: 30
+        parallelism: 2
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
               composition: kafka-rtr
         agents:
-          queue: linux-aarch64-small
+          # Larger agent to run test faster
+          queue: hetzner-aarch64-8cpu-16gb
 
   - id: zippy-kafka-sources-short
     label: "Short Zippy"
@@ -502,23 +587,23 @@ steps:
     inputs: [misc/python/materialize/zippy]
     timeout_in_minutes: 30
     agents:
-      queue: linux-aarch64-small
+      queue: hetzner-aarch64-4cpu-8gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=KafkaSources, --actions=200]
+          args: [--scenario=KafkaSources, --actions=100]
 
   - group: "Platform checks"
     key: platform-checks
     steps:
       - id: checks-restart-environmentd-clusterd-storage
-        label: "Checks + restart of environmentd & storage clusterd %N"
+        label: "Checks + restart of environmentd & storage clusterd"
         depends_on: build-aarch64
         inputs: [misc/python/materialize/checks]
         timeout_in_minutes: 45
         parallelism: 6
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -529,90 +614,48 @@ steps:
                 ]
 
       - id: checks-no-restart-no-upgrade
-        label: "Checks without restart or upgrade %N"
+        label: "Checks without restart or upgrade"
         depends_on: build-aarch64
         inputs: [misc/python/materialize/checks]
         timeout_in_minutes: 45
-        parallelism: 4
+        parallelism: 6
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=NoRestartNoUpgrade, "--seed=$BUILDKITE_JOB_ID"]
 
-  - id: cloudtest
-    label: Cloudtest %N
-    depends_on: build-aarch64
-    parallelism: 8
-    timeout_in_minutes: 40
-    inputs:
-      - test/cloudtest
-      - misc/python/materialize/cloudtest
-      - misc/kind
-    env:
-      CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
-    plugins:
-      - ./ci/plugins/scratch-aws-access: ~
-      - ./ci/plugins/cloudtest:
-          args:
-            [
-              --exitfirst,
-              -m,
-              "not long and not node_recovery",
-              --aws-region=us-east-1,
-              test/cloudtest/,
-            ]
-    agents:
-      queue: linux-aarch64
-    sanitizer: skip
-
   - id: source-sink-errors
-    label: "Source/Sink Error Reporting %N"
+    label: "Source/Sink Error Reporting"
     depends_on: build-aarch64
     parallelism: 2
     timeout_in_minutes: 30
     agents:
-      queue: linux-aarch64-small
+      queue: hetzner-aarch64-4cpu-8gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: source-sink-errors
 
-  - id: backup-restore
-    label: "CRDB / Persist backup and restore"
-    depends_on: build-aarch64
-    timeout_in_minutes: 30
-    agents:
-      queue: linux-aarch64-small
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: backup-restore
-
   - id: feature-benchmark-kafka-only
     label: "Feature benchmark (Kafka only)"
-    depends_on: build-aarch64
-    timeout_in_minutes: 45
+    depends_on: build-x86_64
+    timeout_in_minutes: 60
     plugins:
       - ./ci/plugins/mzcompose:
           composition: feature-benchmark
-          args: [--scenario=KafkaUpsertUnique]
+          args:
+            [
+              --scenario=KafkaUpsertUnique,
+              --other-tag=common-ancestor,
+              --ignore-other-tag-missing,
+            ]
     coverage: skip
     agents:
-      queue: linux-aarch64-small
+      queue: hetzner-x86-64-dedi-4cpu-16gb
 
   # Fast tests closer to the end, doesn't matter as much if they have to wait
   # for an agent
-  - id: replica-isolation
-    label: Replica isolation
-    depends_on: build-aarch64
-    timeout_in_minutes: 30
-    inputs: [test/replica-isolation]
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: replica-isolation
-    agents:
-      queue: linux-aarch64-small
-
   - id: persistence
     label: Persistence tests
     depends_on: build-aarch64
@@ -621,7 +664,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: persistence
     agents:
-      queue: linux-aarch64-small
+      queue: hetzner-aarch64-4cpu-8gb
 
   - id: cluster-isolation
     label: Cluster isolation test
@@ -632,7 +675,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: cluster-isolation
     agents:
-      queue: linux-aarch64-small
+      queue: hetzner-aarch64-4cpu-8gb
 
   - id: chbench-demo
     label: chbench smoke test
@@ -644,7 +687,7 @@ steps:
           args: [--run-seconds=10, --wait]
     timeout_in_minutes: 30
     agents:
-      queue: linux-aarch64-small
+      queue: hetzner-aarch64-4cpu-8gb
 
   - id: metabase-demo
     label: Metabase smoke test
@@ -655,7 +698,7 @@ steps:
           composition: metabase
     agents:
       # too slow to run emulated on aarch64, Metabase'ss docker image is not yet available for aarch64 natively yet: https://github.com/metabase/metabase/issues/13119
-      queue: linux-x86_64-small
+      queue: hetzner-x86-64-4cpu-8gb
 
   - id: dbt-materialize
     label: dbt-materialize tests
@@ -665,14 +708,14 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: dbt-materialize
     agents:
-      queue: linux-aarch64-small
+      queue: hetzner-aarch64-4cpu-8gb
 
   - id: storage-usage
     label: "Storage Usage Table Test"
     depends_on: build-aarch64
     timeout_in_minutes: 30
     agents:
-      queue: linux-aarch64-small
+      queue: hetzner-aarch64-4cpu-8gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: storage-usage
@@ -686,7 +729,20 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: tracing
     agents:
+      # Requires BUILDKITE_SENTRY_DSN
       queue: linux-aarch64-small
+
+  - id: rtr-combined
+    label: RTR with all sources
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    inputs: [test/rtr-combined]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: rtr-combined
+    agents:
+      queue: hetzner-aarch64-8cpu-16gb
+    skip: "Flakes because of database-issues#8489"
 
   - id: skip-version-upgrade
     label: "Skip Version Upgrade"
@@ -697,14 +753,15 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: skip-version-upgrade
     agents:
-      queue: linux-aarch64-small
+      queue: hetzner-aarch64-4cpu-8gb
+    skip: "Version upgrade skips are allowed for LTS releases now"
 
   - id: deploy-website
     label: Deploy website
     depends_on: lint-docs
     trigger: deploy-website
     async: true
-    branches: main
+    branches: "main self-managed-docs/*"
     build:
       commit: "$BUILDKITE_COMMIT"
       branch: "$BUILDKITE_BRANCH"
@@ -798,7 +855,7 @@ steps:
     inputs: ["*"]
     priority: 1
     agents:
-      queue: linux-aarch64-large
+      queue: hetzner-aarch64-16cpu-32gb
     coverage: only
 
   - wait: ~

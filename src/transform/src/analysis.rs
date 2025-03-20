@@ -10,14 +10,14 @@
 //! Traits and types for reusable expression analysis
 
 pub mod equivalences;
+pub mod monotonic;
 
 use mz_expr::MirRelationExpr;
-
-pub use common::{Derived, DerivedBuilder, DerivedView};
 
 pub use arity::Arity;
 pub use cardinality::Cardinality;
 pub use column_names::{ColumnName, ColumnNames};
+pub use common::{Derived, DerivedBuilder, DerivedView};
 pub use explain::annotate_plan;
 pub use non_negative::NonNegative;
 pub use subtree::SubtreeSize;
@@ -28,7 +28,7 @@ pub use unique_keys::UniqueKeys;
 pub trait Analysis: 'static {
     /// The type of value this analysis associates with an expression.
     type Value: std::fmt::Debug;
-    /// Announce any depencies this analysis has on other analyses.
+    /// Announce any dependencies this analysis has on other analyses.
     ///
     /// The method should invoke `builder.require::<Foo>()` for each other
     /// analysis `Foo` this analysis depends upon.
@@ -48,7 +48,7 @@ pub trait Analysis: 'static {
     /// The `index` indicates the post-order index for the expression, for use in finding
     /// the corresponding information in `results` and `depends`.
     ///
-    /// The return result will be associated with this expression for this analysis,
+    /// The returned result will be associated with this expression for this analysis,
     /// and the analyses will continue.
     fn derive(
         &self,
@@ -82,6 +82,7 @@ pub mod common {
 
     use mz_expr::LocalId;
     use mz_expr::MirRelationExpr;
+    use mz_ore::assert_none;
     use mz_repr::optimize::OptimizerFeatures;
 
     use super::subtree::SubtreeSize;
@@ -101,25 +102,18 @@ pub mod common {
 
     impl Derived {
         /// Return the analysis results derived so far.
-        pub fn results<A: Analysis>(&self) -> Option<&[A::Value]> {
+        ///
+        /// # Panics
+        ///
+        /// This method panics if `A` was not installed as a required analysis.
+        pub fn results<A: Analysis>(&self) -> &[A::Value] {
             let type_id = TypeId::of::<Bundle<A>>();
             if let Some(bundle) = self.analyses.get(&type_id) {
                 if let Some(bundle) = bundle.as_any().downcast_ref::<Bundle<A>>() {
-                    return Some(&bundle.results[..]);
+                    return &bundle.results[..];
                 }
             }
-            None
-        }
-        /// Return an owned version of analysis results derived so far,
-        /// replacing them with an empty vector.
-        pub fn take_results<A: Analysis>(&mut self) -> Option<Vec<A::Value>> {
-            let type_id = TypeId::of::<Bundle<A>>();
-            if let Some(bundle) = self.analyses.get_mut(&type_id) {
-                if let Some(bundle) = bundle.as_any_mut().downcast_mut::<Bundle<A>>() {
-                    return Some(std::mem::take(&mut bundle.results));
-                }
-            }
-            None
+            panic!("Analysis {:?} missing", std::any::type_name::<A>());
         }
         /// Bindings from local identifiers to result offsets for analysis values.
         pub fn bindings(&self) -> &BTreeMap<LocalId, usize> {
@@ -137,7 +131,7 @@ pub mod common {
             start: usize,
             count: usize,
         ) -> impl Iterator<Item = usize> + 'a {
-            let sizes = self.results::<SubtreeSize>().expect("SubtreeSize missing");
+            let sizes = self.results::<SubtreeSize>();
             let offset = 1;
             (0..count).scan(offset, move |offset, _| {
                 let result = start - *offset;
@@ -151,10 +145,7 @@ pub mod common {
             DerivedView {
                 derived: self,
                 lower: 0,
-                upper: self
-                    .results::<SubtreeSize>()
-                    .expect("SubtreeSize missing")
-                    .len(),
+                upper: self.results::<SubtreeSize>().len(),
             }
         }
     }
@@ -176,7 +167,7 @@ pub mod common {
     impl<'a> DerivedView<'a> {
         /// The value associated with the expression.
         pub fn value<A: Analysis>(&self) -> Option<&'a A::Value> {
-            self.results::<A>().and_then(|slice| slice.last())
+            self.results::<A>().last()
         }
 
         /// The post-order traversal index for the expression.
@@ -195,16 +186,18 @@ pub mod common {
             self.derived
                 .bindings
                 .get(&id)
-                .and_then(|index| self.derived.results::<A>().and_then(|r| r.get(*index)))
+                .and_then(|index| self.derived.results::<A>().get(*index))
         }
 
         /// The results for expression and its children.
         ///
         /// The results for the expression itself will be the last element.
-        pub fn results<A: Analysis>(&self) -> Option<&'a [A::Value]> {
-            self.derived
-                .results::<A>()
-                .map(|slice| &slice[self.lower..self.upper])
+        ///
+        /// # Panics
+        ///
+        /// This method panics if `A` was not installed as a required analysis.
+        pub fn results<A: Analysis>(&self) -> &'a [A::Value] {
+            &self.derived.results::<A>()[self.lower..self.upper]
         }
 
         /// Bindings from local identifiers to result offsets for analysis values.
@@ -231,7 +224,7 @@ pub mod common {
             // Repeatedly read out the last element, then peel off that many elements.
             // Each extracted slice corresponds to a child of the current expression.
             // We should end cleanly with an empty slice, otherwise there is an issue.
-            let sizes = self.results::<SubtreeSize>().expect("SubtreeSize missing");
+            let sizes = self.results::<SubtreeSize>();
             let sizes = &sizes[..sizes.len() - 1];
 
             let offset = self.lower;
@@ -297,8 +290,7 @@ pub mod common {
                 // If we have not sequenced `type_id` but have a bundle, it means
                 // we are in the process of fulfilling its requirements: a cycle.
                 if self.result.analyses.contains_key(&type_id) {
-                    // TODO: Find a better way to identify `A`.
-                    panic!("Cyclic dependency detected: {:?}", type_id);
+                    panic!("Cyclic dependency detected: {}", std::any::type_name::<A>());
                 }
                 // Insert the analysis bundle first, so that we can detect cycles.
                 self.result.analyses.insert(
@@ -351,7 +343,7 @@ pub mod common {
                     Err(local_id) => {
                         // Capture the *remaining* work, which we'll need to flip around.
                         let prior = self.result.bindings.insert(local_id, rev_post_order.len());
-                        assert!(prior.is_none(), "Shadowing not allowed");
+                        assert_none!(prior, "Shadowing not allowed");
                     }
                 }
             }
@@ -384,10 +376,6 @@ pub mod common {
         ///
         /// NOTE: This is required until <https://github.com/rust-lang/rfcs/issues/2765> is fixed
         fn as_any(&self) -> &dyn std::any::Any;
-        /// Upcasts `self` to a `&mut dyn Any`.
-        ///
-        /// NOTE: This is required until <https://github.com/rust-lang/rfcs/issues/2765> is fixed
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
     }
 
     /// A wrapper for analysis state.
@@ -427,15 +415,13 @@ pub mod common {
         fn as_any(&self) -> &dyn std::any::Any {
             self
         }
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-            self
-        }
     }
 
     impl<A: Analysis> Bundle<A> {
         /// Analysis that starts optimistically but is only correct at a fixed point.
         ///
         /// Will fail out to `analyse_pessimistic` if the lattice is missing, or `self.fuel` is exhausted.
+        /// When successful, the result indicates whether new information was produced for `exprs.last()`.
         fn analyse_optimistic(
             &mut self,
             exprs: &[&MirRelationExpr],
@@ -444,55 +430,39 @@ pub mod common {
             depends: &Derived,
             lattice: &dyn crate::analysis::Lattice<A::Value>,
         ) -> Result<bool, ()> {
-            if let MirRelationExpr::LetRec { .. } = &exprs[upper - 1] {
-                let sizes = depends
-                    .results::<SubtreeSize>()
-                    .expect("SubtreeSize required");
-                let mut values = depends
-                    .children_of_rev(upper - 1, exprs[upper - 1].children().count())
-                    .skip(1)
-                    .collect::<Vec<_>>();
-                values.reverse();
+            // Repeatedly re-evaluate the whole tree bottom up, until no changes of fuel spent.
+            let mut changed = true;
+            while changed {
+                changed = false;
 
-                // Visit each child, and track whether any new information emerges.
-                // Repeat, as long as new information continues to emerge.
-                let mut new_information = true;
-                while new_information {
-                    // Bail out if we have done too many `LetRec` passes in this analysis.
-                    self.fuel -= 1;
-                    if self.fuel == 0 {
-                        return Err(());
-                    }
-
-                    new_information = false;
-                    // Visit non-body children (values).
-                    for child in values.iter() {
-                        new_information = self.analyse_optimistic(
-                            exprs,
-                            *child + 1 - sizes[*child],
-                            *child + 1,
-                            depends,
-                            lattice,
-                        )? || new_information;
-                    }
+                // Bail out if we have done too many `LetRec` passes in this analysis.
+                self.fuel -= 1;
+                if self.fuel == 0 {
+                    return Err(());
                 }
-                // Visit `body` and then the `LetRec` and return whether it evolved.
-                let body = upper - 2;
-                self.analyse_optimistic(exprs, body + 1 - sizes[body], body + 1, depends, lattice)?;
-                let value = self.derive(exprs[upper - 1], upper - 1, depends);
-                Ok(lattice.meet_assign(&mut self.results[upper - 1], value))
-            } else {
-                // If not a `LetRec`, we still want to revisit results and update them with meet.
-                let mut changed = false;
+
+                // Track if repetitions may be required, to avoid iteration if they are not.
+                let mut is_recursive = false;
+                // Update each derived value and track if any have changed.
                 for index in lower..upper {
                     let value = self.derive(exprs[index], index, depends);
-                    changed = lattice.meet_assign(&mut self.results[index], value);
+                    changed = lattice.meet_assign(&mut self.results[index], value) || changed;
+                    if let MirRelationExpr::LetRec { .. } = &exprs[index] {
+                        is_recursive = true;
+                    }
                 }
-                Ok(changed)
+
+                // Un-set the potential loop if there was no recursion.
+                if !is_recursive {
+                    changed = false;
+                }
             }
+            Ok(true)
         }
 
         /// Analysis that starts conservatively and can be stopped at any point.
+        ///
+        /// Result indicates whether new information was produced for `exprs.last()`.
         fn analyse_pessimistic(&mut self, exprs: &[&MirRelationExpr], depends: &Derived) -> bool {
             // TODO: consider making iterative, from some `bottom()` up using `join_assign()`.
             self.results.clear();
@@ -580,11 +550,20 @@ mod arity {
 /// Expression types
 mod types {
 
-    use super::{Analysis, Derived};
+    use super::{Analysis, Derived, Lattice};
     use mz_expr::MirRelationExpr;
     use mz_repr::ColumnType;
 
     /// Analysis that determines the type of relation expressions.
+    ///
+    /// The value is `Some` when it discovers column types, and `None` in the case that
+    /// it has discovered no constraining information on the column types. The `None`
+    /// variant should only occur in the course of iteration, and should not be revealed
+    /// as an output of the analysis. One can `unwrap()` the result, and if it errors then
+    /// either the expression is malformed or the analysis has a bug.
+    ///
+    /// The analysis will panic if an expression is not well typed (i.e. if `try_col_with_input_cols`
+    /// returns an error).
     #[derive(Debug)]
     pub struct RelationType;
 
@@ -603,12 +582,81 @@ mod types {
                 .map(|child| &results[child])
                 .collect::<Vec<_>>();
 
-            if offsets.iter().all(|o| o.is_some()) {
-                let input_cols = offsets.into_iter().rev().map(|o| o.as_ref().unwrap());
-                let subtree_column_types = expr.try_col_with_input_cols(input_cols);
-                subtree_column_types.ok()
-            } else {
-                None
+            // For most expressions we'll apply `try_col_with_input_cols`, but for `Get` expressions
+            // we'll want to combine what we know (iteratively) with the stated `Get::typ`.
+            match expr {
+                MirRelationExpr::Get {
+                    id: mz_expr::Id::Local(i),
+                    typ,
+                    ..
+                } => {
+                    let mut result = typ.column_types.clone();
+                    if let Some(o) = depends.bindings().get(i) {
+                        if let Some(t) = results.get(*o) {
+                            if let Some(rec_typ) = t {
+                                // Reconcile nullability statements.
+                                // Unclear if we should trust `typ`.
+                                assert_eq!(result.len(), rec_typ.len());
+                                result.clone_from(rec_typ);
+                                for (res, col) in result.iter_mut().zip(typ.column_types.iter()) {
+                                    if !col.nullable {
+                                        res.nullable = false;
+                                    }
+                                }
+                            } else {
+                                // Our `None` information indicates that we are optimistically
+                                // assuming the best, including that all columns are non-null.
+                                // This should only happen in the first visit to a `Get` expr.
+                                // Use `typ`, but flatten nullability.
+                                for col in result.iter_mut() {
+                                    col.nullable = false;
+                                }
+                            }
+                        }
+                    }
+                    Some(result)
+                }
+                _ => {
+                    // Every expression with inputs should have non-`None` inputs at this point.
+                    let input_cols = offsets.into_iter().rev().map(|o| {
+                        o.as_ref()
+                            .expect("RelationType analysis discovered type-less expression")
+                    });
+                    Some(expr.try_col_with_input_cols(input_cols).unwrap())
+                }
+            }
+        }
+
+        fn lattice() -> Option<Box<dyn Lattice<Self::Value>>> {
+            Some(Box::new(RTLattice))
+        }
+    }
+
+    struct RTLattice;
+
+    impl Lattice<Option<Vec<ColumnType>>> for RTLattice {
+        fn top(&self) -> Option<Vec<ColumnType>> {
+            None
+        }
+        fn meet_assign(&self, a: &mut Option<Vec<ColumnType>>, b: Option<Vec<ColumnType>>) -> bool {
+            match (a, b) {
+                (_, None) => false,
+                (Some(a), Some(b)) => {
+                    let mut changed = false;
+                    assert_eq!(a.len(), b.len());
+                    for (at, bt) in a.iter_mut().zip(b.iter()) {
+                        assert_eq!(at.scalar_type, bt.scalar_type);
+                        if !at.nullable && bt.nullable {
+                            at.nullable = true;
+                            changed = true;
+                        }
+                    }
+                    changed
+                }
+                (a, b) => {
+                    *a = b;
+                    true
+                }
             }
         }
     }
@@ -673,7 +721,7 @@ mod unique_keys {
                     keys
                 }
                 _ => {
-                    let arity = depends.results::<Arity>().unwrap();
+                    let arity = depends.results::<Arity>();
                     expr.keys_with_input_keys(
                         offsets.iter().map(|o| arity[*o]),
                         offsets.iter().map(|o| &results[*o]),
@@ -735,6 +783,7 @@ mod unique_keys {
 mod non_negative {
 
     use super::{Analysis, Derived, Lattice};
+    use crate::analysis::common_lattice::BoolLattice;
     use mz_expr::{Id, MirRelationExpr};
 
     /// Analysis that determines if all accumulations at all times are non-negative.
@@ -759,43 +808,131 @@ mod non_negative {
                     .map(|r| r.iter().all(|(_, diff)| diff >= &0))
                     .unwrap_or(true),
                 MirRelationExpr::Get { id, .. } => match id {
-                    Id::Local(id) => depends
-                        .bindings()
-                        .get(id)
-                        .map(|off| results[*off])
-                        .unwrap_or(false),
+                    Id::Local(id) => {
+                        let index = *depends
+                            .bindings()
+                            .get(id)
+                            .expect("Dependency info not found");
+                        *results.get(index).unwrap_or(&false)
+                    }
                     Id::Global(_) => true,
                 },
                 // Negate must be false unless input is "non-positive".
                 MirRelationExpr::Negate { .. } => false,
                 // Threshold ensures non-negativity.
                 MirRelationExpr::Threshold { .. } => true,
-                MirRelationExpr::Join { .. } | MirRelationExpr::Union { .. } => {
-                    // These two cases require all of their inputs to be non-negative.
+                // Reduce errors on negative input.
+                MirRelationExpr::Reduce { .. } => true,
+                MirRelationExpr::Join { .. } => {
+                    // If all inputs are non-negative, the join is non-negative.
                     depends
                         .children_of_rev(index, expr.children().count())
                         .all(|off| results[off])
+                }
+                MirRelationExpr::Union { base, inputs } => {
+                    // If all inputs are non-negative, the union is non-negative.
+                    let all_non_negative = depends
+                        .children_of_rev(index, expr.children().count())
+                        .all(|off| results[off]);
+
+                    if all_non_negative {
+                        return true;
+                    }
+
+                    // We look for the pattern `Union { base, Negate(Subset(base)) }`.
+                    // TODO: take some care to ensure that union fusion does not introduce a regression.
+                    if inputs.len() == 1 {
+                        if let MirRelationExpr::Negate { input } = &inputs[0] {
+                            // If `base` is non-negative, and `is_superset_of(base, input)`, return true.
+                            // TODO: this is not correct until we have `is_superset_of` validate non-negativity
+                            // as it goes, but it matches the current implementation.
+                            let mut children = depends.children_of_rev(index, 2);
+                            let _negate = children.next().unwrap();
+                            let base_id = children.next().unwrap();
+                            debug_assert_eq!(children.next(), None);
+                            if results[base_id] && is_superset_of(&*base, &*input) {
+                                return true;
+                            }
+                        }
+                    }
+
+                    false
                 }
                 _ => results[index - 1],
             }
         }
 
         fn lattice() -> Option<Box<dyn Lattice<Self::Value>>> {
-            Some(Box::new(NNLattice))
+            Some(Box::new(BoolLattice))
         }
     }
 
-    struct NNLattice;
-
-    impl Lattice<bool> for NNLattice {
-        fn top(&self) -> bool {
-            true
+    /// Returns true only if `rhs.negate().union(lhs)` contains only non-negative multiplicities
+    /// once consolidated.
+    ///
+    /// Informally, this happens when `rhs` is a multiset subset of `lhs`, meaning the multiplicity
+    /// of any record in `rhs` is at most the multiplicity of the same record in `lhs`.
+    ///
+    /// This method recursively descends each of `lhs` and `rhs` and performs a great many equality
+    /// tests, which has the potential to be quadratic. We should consider restricting its attention
+    /// to `Get` identifiers, under the premise that equal AST nodes would necessarily be identified
+    /// by common subexpression elimination. This requires care around recursively bound identifiers.
+    ///
+    /// These rules are .. somewhat arbitrary, and likely reflect observed opportunities. For example,
+    /// while we do relate `distinct(filter(A)) <= distinct(A)`, we do not relate `distinct(A) <= A`.
+    /// Further thoughts about the class of optimizations, and whether there should be more or fewer,
+    /// can be found here: <https://github.com/MaterializeInc/database-issues/issues/4044>.
+    fn is_superset_of(mut lhs: &MirRelationExpr, mut rhs: &MirRelationExpr) -> bool {
+        // This implementation is iterative.
+        // Before converting this implementation to recursive (e.g. to improve its accuracy)
+        // make sure to use the `CheckedRecursion` struct to avoid blowing the stack.
+        while lhs != rhs {
+            match rhs {
+                MirRelationExpr::Filter { input, .. } => rhs = &**input,
+                MirRelationExpr::TopK { input, .. } => rhs = &**input,
+                // Descend in both sides if the current roots are
+                // projections with the same `outputs` vector.
+                MirRelationExpr::Project {
+                    input: rhs_input,
+                    outputs: rhs_outputs,
+                } => match lhs {
+                    MirRelationExpr::Project {
+                        input: lhs_input,
+                        outputs: lhs_outputs,
+                    } if lhs_outputs == rhs_outputs => {
+                        rhs = &**rhs_input;
+                        lhs = &**lhs_input;
+                    }
+                    _ => return false,
+                },
+                // Descend in both sides if the current roots are reduces with empty aggregates
+                // on the same set of keys (that is, a distinct operation on those keys).
+                MirRelationExpr::Reduce {
+                    input: rhs_input,
+                    group_key: rhs_group_key,
+                    aggregates: rhs_aggregates,
+                    monotonic: _,
+                    expected_group_size: _,
+                } if rhs_aggregates.is_empty() => match lhs {
+                    MirRelationExpr::Reduce {
+                        input: lhs_input,
+                        group_key: lhs_group_key,
+                        aggregates: lhs_aggregates,
+                        monotonic: _,
+                        expected_group_size: _,
+                    } if lhs_aggregates.is_empty() && lhs_group_key == rhs_group_key => {
+                        rhs = &**rhs_input;
+                        lhs = &**lhs_input;
+                    }
+                    _ => return false,
+                },
+                _ => {
+                    // TODO: Imagine more complex reasoning here!
+                    return false;
+                }
+            }
         }
-        fn meet_assign(&self, into: &mut bool, item: bool) -> bool {
-            let changed = *into && !item;
-            *into = *into && item;
-            changed
-        }
+        true
     }
 }
 
@@ -887,7 +1024,7 @@ mod column_names {
                     typ,
                     access_strategy: _,
                 } => {
-                    // Emit ColumnName::Global instanceds for each column in the
+                    // Emit ColumnName::Global instances for each column in the
                     // `Get` type. Those can be resolved to real names later when an
                     // ExpressionHumanizer is available.
                     (0..typ.columns().len())
@@ -1062,16 +1199,18 @@ mod column_names {
 }
 
 mod explain {
-    //! Derived attributes framework and definitions.
+    //! Derived Analysis framework and definitions.
 
     use std::collections::BTreeMap;
 
-    use mz_expr::explain::ExplainContext;
+    use mz_expr::explain::{ExplainContext, HumanizedExplain, HumanizerMode};
     use mz_expr::MirRelationExpr;
     use mz_ore::stack::RecursionLimitError;
-    use mz_repr::explain::{AnnotatedPlan, Attributes};
+    use mz_repr::explain::{Analyses, AnnotatedPlan};
 
-    // Attributes should have shortened paths when exported.
+    use crate::analysis::equivalences::{Equivalences, HumanizedEquivalenceClasses};
+
+    // Analyses should have shortened paths when exported.
     use super::DerivedBuilder;
 
     impl<'c> From<&ExplainContext<'c>> for DerivedBuilder<'c> {
@@ -1100,24 +1239,27 @@ mod explain {
             if context.config.column_names || context.config.humanized_exprs {
                 builder.require(super::ColumnNames);
             }
+            if context.config.equivalences {
+                builder.require(Equivalences);
+            }
             builder
         }
     }
 
     /// Produce an [`AnnotatedPlan`] wrapping the given [`MirRelationExpr`] along
-    /// with [`Attributes`] derived from the given context configuration.
+    /// with [`Analyses`] derived from the given context configuration.
     pub fn annotate_plan<'a>(
         plan: &'a MirRelationExpr,
         context: &'a ExplainContext,
     ) -> Result<AnnotatedPlan<'a, MirRelationExpr>, RecursionLimitError> {
-        let mut annotations = BTreeMap::<&MirRelationExpr, Attributes>::default();
+        let mut annotations = BTreeMap::<&MirRelationExpr, Analyses>::default();
         let config = context.config;
 
-        // We want to annotate the plan with attributes in the following cases:
-        // 1. An attribute was explicitly requested in the ExplainConfig.
+        // We want to annotate the plan with analyses in the following cases:
+        // 1. An Analysis was explicitly requested in the ExplainConfig.
         // 2. Humanized expressions were requested in the ExplainConfig (in which
-        //    case we need to derive the ColumnNames attribute).
-        if config.requires_attributes() || config.humanized_exprs {
+        //    case we need to derive the ColumnNames Analysis).
+        if config.requires_analyses() || config.humanized_exprs {
             // get the annotation keys
             let subtree_refs = plan.post_order_vec();
             // get the annotation values
@@ -1127,76 +1269,91 @@ mod explain {
             if config.subtree_size {
                 for (expr, subtree_size) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::SubtreeSize>().unwrap().into_iter(),
+                    derived.results::<super::SubtreeSize>().into_iter(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
-                    attrs.subtree_size = Some(*subtree_size);
+                    let analyses = annotations.entry(expr).or_default();
+                    analyses.subtree_size = Some(*subtree_size);
                 }
             }
             if config.non_negative {
                 for (expr, non_negative) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::NonNegative>().unwrap().into_iter(),
+                    derived.results::<super::NonNegative>().into_iter(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
-                    attrs.non_negative = Some(*non_negative);
+                    let analyses = annotations.entry(expr).or_default();
+                    analyses.non_negative = Some(*non_negative);
                 }
             }
 
             if config.arity {
                 for (expr, arity) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::Arity>().unwrap().into_iter(),
+                    derived.results::<super::Arity>().into_iter(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
-                    attrs.arity = Some(*arity);
+                    let analyses = annotations.entry(expr).or_default();
+                    analyses.arity = Some(*arity);
                 }
             }
 
             if config.types {
                 for (expr, types) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived
-                        .results::<super::RelationType>()
-                        .unwrap()
-                        .into_iter(),
+                    derived.results::<super::RelationType>().into_iter(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
-                    attrs.types = Some(types.clone());
+                    let analyses = annotations.entry(expr).or_default();
+                    analyses.types = Some(types.clone());
                 }
             }
 
             if config.keys {
                 for (expr, keys) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::UniqueKeys>().unwrap().into_iter(),
+                    derived.results::<super::UniqueKeys>().into_iter(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
-                    attrs.keys = Some(keys.clone());
+                    let analyses = annotations.entry(expr).or_default();
+                    analyses.keys = Some(keys.clone());
                 }
             }
 
             if config.cardinality {
                 for (expr, card) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::Cardinality>().unwrap().into_iter(),
+                    derived.results::<super::Cardinality>().into_iter(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
-                    attrs.cardinality = Some(card.to_string());
+                    let analyses = annotations.entry(expr).or_default();
+                    analyses.cardinality = Some(card.to_string());
                 }
             }
 
             if config.column_names || config.humanized_exprs {
                 for (expr, column_names) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::ColumnNames>().unwrap().into_iter(),
+                    derived.results::<super::ColumnNames>().into_iter(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
+                    let analyses = annotations.entry(expr).or_default();
                     let value = column_names
                         .iter()
                         .map(|column_name| column_name.humanize(context.humanizer))
                         .collect();
-                    attrs.column_names = Some(value);
+                    analyses.column_names = Some(value);
+                }
+            }
+
+            if config.equivalences {
+                for (expr, equivs) in std::iter::zip(
+                    subtree_refs.iter(),
+                    derived.results::<Equivalences>().into_iter(),
+                ) {
+                    let analyses = annotations.entry(expr).or_default();
+                    analyses.equivalences = Some(match equivs.as_ref() {
+                        Some(equivs) => HumanizedEquivalenceClasses {
+                            equivalence_classes: equivs,
+                            cols: analyses.column_names.as_ref(),
+                            mode: HumanizedExplain::new(config.redacted),
+                        }
+                        .to_string(),
+                        None => "<empty collection>".to_string(),
+                    });
                 }
             }
         }
@@ -1205,7 +1362,7 @@ mod explain {
     }
 }
 
-/// Definition and helper structs for the [`Cardinality`] attribute.
+/// Definition and helper structs for the [`Cardinality`] Analysis.
 mod cardinality {
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -1659,18 +1816,9 @@ mod cardinality {
         ) -> Self::Value {
             use MirRelationExpr::*;
 
-            let sizes = depends
-                .as_view()
-                .results::<SubtreeSize>()
-                .expect("SubtreeSize analysis results missing");
-            let arity = depends
-                .as_view()
-                .results::<Arity>()
-                .expect("Arity analysis results missing");
-            let keys = depends
-                .as_view()
-                .results::<UniqueKeys>()
-                .expect("UniqueKeys analysis results missing");
+            let sizes = depends.as_view().results::<SubtreeSize>();
+            let arity = depends.as_view().results::<Arity>();
+            let keys = depends.as_view().results::<UniqueKeys>();
 
             match expr {
                 Constant { rows, .. } => {
@@ -1708,7 +1856,7 @@ mod cardinality {
                 }
                 Filter { predicates, .. } => {
                     let input = results[index - 1];
-                    let keys = depends.results::<UniqueKeys>().expect("UniqueKeys missing");
+                    let keys = depends.results::<UniqueKeys>();
                     let keys = &keys[index - 1];
                     self.filter(predicates, keys, input)
                 }
@@ -1774,6 +1922,25 @@ mod cardinality {
                 CardinalityEstimate::Estimate(OrderedFloat(estimate)) => write!(f, "{estimate}"),
                 CardinalityEstimate::Unknown => write!(f, "<UNKNOWN>"),
             }
+        }
+    }
+}
+
+mod common_lattice {
+    use crate::analysis::Lattice;
+
+    pub struct BoolLattice;
+
+    impl Lattice<bool> for BoolLattice {
+        // `true` > `false`.
+        fn top(&self) -> bool {
+            true
+        }
+        // `false` is the greatest lower bound. `into` changes if it's true and `item` is false.
+        fn meet_assign(&self, into: &mut bool, item: bool) -> bool {
+            let changed = *into && !item;
+            *into = *into && item;
+            changed
         }
     }
 }

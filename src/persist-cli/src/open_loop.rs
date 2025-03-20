@@ -10,6 +10,7 @@
 #![allow(clippy::cast_precision_loss)]
 
 use std::fs::File;
+use std::future::IntoFuture;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -20,6 +21,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task::JoinHandle;
+use mz_ore::url::SensitiveUrl;
 use mz_persist::workload::DataGenerator;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
@@ -27,6 +29,7 @@ use mz_persist_client::metrics::Metrics;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{PersistLocation, ShardId};
 use prometheus::Encoder;
+use tokio::net::TcpListener;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::Barrier;
 use tracing::{debug, error, info, info_span, trace, Instrument};
@@ -34,7 +37,7 @@ use tracing::{debug, error, info, info_span, trace, Instrument};
 use crate::open_loop::api::{BenchmarkReader, BenchmarkWriter};
 
 /// Different benchmark configurations.
-#[derive(clap::ArgEnum, Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(clap::ValueEnum, Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 enum BenchmarkType {
     /// Data is written straight into persistence from the data generator.
     RawWriter,
@@ -56,18 +59,18 @@ pub struct Args {
 
     /// Handle to the persist consensus system.
     #[clap(long, value_name = "CONSENSUS_URI")]
-    consensus_uri: String,
+    consensus_uri: SensitiveUrl,
 
     /// Handle to the persist blob storage.
     #[clap(long, value_name = "BLOB_URI")]
-    blob_uri: String,
+    blob_uri: SensitiveUrl,
 
     /// The type of benchmark to run
-    #[clap(arg_enum, long, default_value_t = BenchmarkType::RawWriter)]
+    #[clap(value_enum, long, default_value_t = BenchmarkType::RawWriter)]
     benchmark_type: BenchmarkType,
 
     /// Runtime in a whole number of seconds
-    #[clap(long, parse(try_from_str = humantime::parse_duration), value_name = "S", default_value = "60s")]
+    #[clap(long, value_parser = humantime::parse_duration, value_name = "S", default_value = "60s")]
     runtime: Duration,
 
     /// How many records writers should emit per second.
@@ -83,7 +86,7 @@ pub struct Args {
     batch_size: usize,
 
     /// Duration between subsequent informational log outputs.
-    #[clap(long, parse(try_from_str = humantime::parse_duration), value_name = "L", default_value = "1s")]
+    #[clap(long, value_parser = humantime::parse_duration, value_name = "L", default_value = "1s")]
     logging_granularity: Duration,
 
     /// Id of the persist shard (for use in multi-process runs).
@@ -109,9 +112,13 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
             "serving internal HTTP server on http://{}/metrics",
             args.internal_http_listen_addr
         );
+        let listener = TcpListener::bind(&args.internal_http_listen_addr)
+            .await
+            .expect("can bind");
         mz_ore::task::spawn(
             || "http_server",
-            axum::Server::bind(&args.internal_http_listen_addr).serve(
+            axum::serve(
+                listener,
                 axum::Router::new()
                     .route(
                         "/metrics",
@@ -120,7 +127,8 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
                         }),
                     )
                     .into_make_service(),
-            ),
+            )
+            .into_future(),
         );
     }
 
@@ -545,7 +553,7 @@ mod raw_persist_benchmark {
             let (records_tx, mut records_rx) = tokio::sync::mpsc::channel::<ColumnarRecords>(2);
             let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel(10);
 
-            let mut write = persist
+            let write = persist
                 .open_writer::<Vec<u8>, Vec<u8>, u64, i64>(
                     id,
                     Arc::new(VecU8Schema),

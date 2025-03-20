@@ -351,13 +351,6 @@ With
       Get x
       Get y
 ----
-Return
-  Project (#1)
-    Join on=(#0 = #2)
-      Project (#0, #2)
-        Get l0
-      Project (#1)
-        Get l0
 With
   cte l0 =
     Project (#0, #1, #3)
@@ -366,6 +359,13 @@ With
           Get x
         Project (#0, #2)
           Get y
+Return
+  Project (#1)
+    Join on=(#0 = #2)
+      Project (#0, #2)
+        Get l0
+      Project (#1)
+        Get l0
 
 # Project around a Let (2)
 apply pipeline=projection_pushdown
@@ -380,12 +380,6 @@ With
       Get x
       Get y
 ----
-Return
-  Project (#1)
-    Join on=(#0 = #2)
-      Get l0
-      Project (#1)
-        Get l0
 With
   cte l0 =
     Project (#0, #1)
@@ -394,6 +388,12 @@ With
           Get x
         Project (#0)
           Get y
+Return
+  Project (#1)
+    Join on=(#0 = #2)
+      Get l0
+      Project (#1)
+        Get l0
 
 # Project around a Let (3)
 apply pipeline=projection_pushdown
@@ -410,6 +410,11 @@ With
     Map (1)
       Get x
 ----
+With
+  cte l0 =
+    Map (1)
+      Project (#0, #1)
+        Get x
 Return
   Union
     Join on=(#0 = #1)
@@ -418,11 +423,6 @@ Return
       Get y
     Project (#0, #1, #0, #2)
       Get l0
-With
-  cte l0 =
-    Map (1)
-      Project (#0, #1)
-        Get x
 
 
 ## LetRec cases
@@ -442,13 +442,6 @@ With Mutually Recursive
       Get x
       Get y
 ----
-Return
-  Project (#1)
-    Join on=(#0 = #2)
-      Project (#0, #2)
-        Get l0
-      Project (#1)
-        Get l0
 With Mutually Recursive
   cte l0 =
     Project (#0, #1, #3)
@@ -457,6 +450,13 @@ With Mutually Recursive
           Get x
         Project (#0, #2)
           Get y
+Return
+  Project (#1)
+    Join on=(#0 = #2)
+      Project (#0, #2)
+        Get l0
+      Project (#1)
+        Get l0
 
 # Project around a LetRec (2)
 apply pipeline=projection_pushdown
@@ -471,12 +471,6 @@ With Mutually Recursive
       Get x
       Get y
 ----
-Return
-  Project (#1)
-    Join on=(#0 = #2)
-      Get l0
-      Project (#1)
-        Get l0
 With Mutually Recursive
   cte l0 =
     Project (#0, #1)
@@ -485,6 +479,12 @@ With Mutually Recursive
           Get x
         Project (#0)
           Get y
+Return
+  Project (#1)
+    Join on=(#0 = #2)
+      Get l0
+      Project (#1)
+        Get l0
 
 # Project around a LetRec (3)
 apply pipeline=projection_pushdown
@@ -501,6 +501,11 @@ With Mutually Recursive
     Map (1)
       Get x
 ----
+With Mutually Recursive
+  cte l0 =
+    Map (1)
+      Project (#0, #1)
+        Get x
 Return
   Union
     Join on=(#0 = #1)
@@ -509,11 +514,6 @@ Return
       Get y
     Project (#0, #1, #0, #2)
       Get l0
-With Mutually Recursive
-  cte l0 =
-    Map (1)
-      Project (#0, #1)
-        Get x
 
 
 # Three bindings, l0 and l2 are not recursive
@@ -537,14 +537,10 @@ With Mutually Recursive
   cte l0 = // { types: "(bigint, bigint, bigint)" }
     Get x
 ----
-Return
-  Join on=(#0 = #1)
-    Get l2
-    Project (#0)
-      Get l1
 With Mutually Recursive
-  cte l2 =
-    Get l0
+  cte l0 =
+    Project (#0)
+      Get x
   cte l1 =
     Project (#0, #0, #0)
       Distinct project=[#0]
@@ -553,6 +549,10 @@ With Mutually Recursive
             Get l1
           Project (#0)
             Get x
-  cte l0 =
+  cte l2 =
+    Get l0
+Return
+  Join on=(#0 = #1)
+    Get l2
     Project (#0)
-      Get x
+      Get l1

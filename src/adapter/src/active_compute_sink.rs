@@ -22,13 +22,15 @@ use mz_expr::compare_columns;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
 use mz_repr::adt::numeric;
-use mz_repr::{Datum, GlobalId, IntoRowIterator, Row, Timestamp};
+use mz_repr::{CatalogItemId, Datum, GlobalId, IntoRowIterator, Row, Timestamp};
 use mz_sql::plan::SubscribeOutput;
+use mz_storage_types::instances::StorageInstanceId;
 use timely::progress::Antichain;
 use tokio::sync::{mpsc, oneshot};
+use uuid::Uuid;
 
 use crate::coord::peek::PeekResponseUnary;
-use crate::{AdapterError, ExecuteResponse};
+use crate::{AdapterError, ExecuteContext, ExecuteResponse};
 
 #[derive(Debug)]
 /// A description of an active compute sink from the coordinator's perspective.
@@ -94,6 +96,8 @@ pub enum ActiveComputeSinkRetireReason {
 pub struct ActiveSubscribe {
     /// The ID of the connection which created the subscribe.
     pub conn_id: ConnectionId,
+    /// The UUID of the session which created the subscribe.
+    pub session_uuid: Uuid,
     /// The ID of the cluster on which the subscribe is running.
     pub cluster_id: ClusterId,
     /// The IDs of the objects on which the subscribe depends.
@@ -156,7 +160,7 @@ impl ActiveSubscribe {
     /// Processes a subscribe response from the controller.
     ///
     /// Returns `true` if the subscribe is finished.
-    pub fn process_response(&mut self, batch: SubscribeBatch) -> bool {
+    pub fn process_response(&self, batch: SubscribeBatch) -> bool {
         let mut rows = match batch.updates {
             Ok(rows) => rows,
             Err(s) => {
@@ -168,7 +172,7 @@ impl ActiveSubscribe {
         // Sort results by time. We use stable sort here because it will produce
         // deterministic results since the cursor will always produce rows in
         // the same order. Compute doesn't guarantee that the results are sorted
-        // (#18936)
+        // (materialize#18936)
         let mut row_buf = Row::default();
         match &self.output {
             SubscribeOutput::WithinTimestampOrderBy { order_by } => {
@@ -431,4 +435,17 @@ impl ActiveCopyTo {
         };
         let _ = self.tx.send(message);
     }
+}
+
+/// State we keep in the `Coordinator` to track active `COPY FROM` statements.
+#[derive(Debug)]
+pub(crate) struct ActiveCopyFrom {
+    /// ID of the ingestion running in clusterd.
+    pub ingestion_id: uuid::Uuid,
+    /// The cluster this is currently running on.
+    pub cluster_id: StorageInstanceId,
+    /// The table we're currently copying into.
+    pub table_id: CatalogItemId,
+    /// Context of the SQL session that ran the statement.
+    pub ctx: ExecuteContext,
 }

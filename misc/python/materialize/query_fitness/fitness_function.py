@@ -16,4 +16,4 @@ class FitnessFunction:
         self._cur = conn.cursor()
 
     def fitness(self, query: str) -> float:
-        assert False
+        raise NotImplementedError

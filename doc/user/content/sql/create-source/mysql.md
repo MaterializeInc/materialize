@@ -1,6 +1,6 @@
 ---
 title: "CREATE SOURCE: MySQL"
-description: "Connecting Materialize to a MySQL database"
+description: "Connecting Materialize to a MySQL database for Change Data Capture (CDC)."
 pagerank: 40
 menu:
   main:
@@ -9,8 +9,6 @@ menu:
     name: MySQL
     weight: 20
 ---
-
-{{< private-preview />}}
 
 {{% create-source/intro %}}
 Materialize supports MySQL (5.7+) as a real-time data source. To connect to a
@@ -44,14 +42,14 @@ _src_name_  | The name for the source.
 **FOR SCHEMAS (** _schema_list_ **)** | Create subsources for specific schemas upstream.
 **FOR TABLES (** _table_list_ **)** | Create subsources for specific tables upstream. Requires fully-qualified table names (`<schema>.<table>`).
 **EXPOSE PROGRESS AS** _progress_subsource_name_ | The name of the progress collection for the source. If this is not specified, the progress collection will be named `<src_name>_progress`. For more information, see [Monitoring source progress](#monitoring-source-progress).
-**RETAIN HISTORY FOR** <br>_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data for performing [time travel queries](/transform-data/patterns/time-travel-queries). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+**RETAIN HISTORY FOR** <br>_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
 
 ### `CONNECTION` options
 
-Field                                | Value                           | Description
--------------------------------------|---------------------------------|-------------------------------------
-`IGNORE COLUMNS`                     | A list of fully-qualified names | Ignore specific columns that cannot be decoded or should not be included in the subsources created in Materialize.
-`TEXT COLUMNS`                       | A list of fully-qualified names | Decode data as `text` for specific columns that contain MySQL types that are [unsupported in Materialize](#supported-types).
+Field             | Value                           | Description
+------------------|---------------------------------|-------------------------------------
+`EXCLUDE COLUMNS` | A list of fully-qualified names | Exclude specific columns that cannot be decoded or should not be included in the subsources created in Materialize.
+`TEXT COLUMNS`    | A list of fully-qualified names | Decode data as `text` for specific columns that contain MySQL types that are [unsupported in Materialize](#supported-types).
 
 ## Features
 
@@ -125,7 +123,7 @@ that overrides `binlog_expire_logs_seconds` and is set to `NULL` by default.
 Materialize ingests the raw replication stream data for all (or a specific set
 of) tables in your upstream MySQL database.
 
-```sql
+```mzsql
 CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_connection
   FOR ALL TABLES;
@@ -137,17 +135,17 @@ When you define a source, Materialize will automatically:
    initial, snapshot-based sync of the tables before it starts ingesting change
    events.
 
-    ```sql
+    ```mzsql
     SHOW SOURCES;
     ```
 
     ```nofmt
-             name         |   type    |  size   |  cluster  |
-    ----------------------+-----------+---------+------------
-     mz_source            | mysql     |         |
-     mz_source_progress   | progress  |         |
-     table_1              | subsource |         |
-     table_2              | subsource |         |
+             name         |   type    |  cluster  |
+    ----------------------+-----------+------------
+     mz_source            | mysql     |
+     mz_source_progress   | progress  |
+     table_1              | subsource |
+     table_2              | subsource |
     ```
 
 1. Incrementally update any materialized or indexed views that depend on the
@@ -167,7 +165,7 @@ replicating `schema1.table_1` and `schema2.table_1`. Use the `FOR TABLES`
 clause to provide aliases for each upstream table, in such cases, or to specify
 an alternative destination schema in Materialize.
 
-```sql
+```mzsql
 CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_connection
   FOR TABLES (schema1.table_1 AS s1_table_1, schema2.table_1 AS s2_table_1);
@@ -188,13 +186,13 @@ The following metadata is available for each source as a progress subsource:
 
 Field              | Type                                                    | Details
 -------------------|---------------------------------------------------------|--------------
-`source_id_lower`  | [`uuid`](https://materialize.com/docs/sql/types/uuid/)  | The lower-bound GTID `source_id` of the GTIDs covered by this range.
-`source_id_upper`  | [`uuid`](https://materialize.com/docs/sql/types/uuid/)  | The upper-bound GTID `source_id` of the GTIDs covered by this range.
+`source_id_lower`  | [`uuid`](/sql/types/uuid/)  | The lower-bound GTID `source_id` of the GTIDs covered by this range.
+`source_id_upper`  | [`uuid`](/sql/types/uuid/)  | The upper-bound GTID `source_id` of the GTIDs covered by this range.
 `transaction_id`   | [`uint8`](/sql/types/uint/#uint8-info)                  | The `transaction_id` of the next GTID possible from the GTID `source_id`s covered by this range.
 
 And can be queried using:
 
-```sql
+```mzsql
 SELECT transaction_id
 FROM <src_name>_progress;
 ```
@@ -219,6 +217,7 @@ Materialize natively supports the following MySQL types:
 <ul style="column-count: 3">
 <li><code>bigint</code></li>
 <li><code>binary</code></li>
+<li><code>bit</code></li>
 <li><code>blob</code></li>
 <li><code>boolean</code></li>
 <li><code>char</code></li>
@@ -258,7 +257,7 @@ following types:
 
 The specified columns will be treated as `text`, and will thus not offer the
 expected MySQL type features. For any unsupported data types not listed above,
-use the [`IGNORE COLUMNS`](#ignoring-columns) option.
+use the [`EXCLUDE COLUMNS`](#excluding-columns) option.
 
 ##### Truncation
 
@@ -267,7 +266,7 @@ truncated while replicated, the whole source becomes inaccessible and will not
 produce any data until it is recreated. Instead, remove all rows from a table
 using an unqualified `DELETE`.
 
-```sql
+```mzsql
 DELETE FROM t;
 ```
 
@@ -292,7 +291,7 @@ Once created, a connection is **reusable** across multiple `CREATE SOURCE`
 statements. For more details on creating connections, check the
 [`CREATE CONNECTION`](/sql/create-connection/#mysql) documentation page.
 
-```sql
+```mzsql
 CREATE SECRET mysqlpass AS '<MYSQL_PASSWORD>';
 
 CREATE CONNECTION mysql_connection TO MYSQL (
@@ -305,11 +304,33 @@ CREATE CONNECTION mysql_connection TO MYSQL (
 
 If your MySQL server is not exposed to the public internet, you can
 [tunnel the connection](/sql/create-connection/#network-security-connections)
-through an SSH bastion host.
+through an AWS PrivateLink service or an SSH bastion host SSH bastion host.
 
 {{< tabs tabID="1" >}}
+{{< tab "AWS PrivateLink">}}
+
+```mzsql
+CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
+   SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
+   AVAILABILITY ZONES ('use1-az1', 'use1-az4')
+);
+
+CREATE CONNECTION mysql_connection TO MYSQL (
+    HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
+    PORT 3306,
+    USER 'root',
+    PASSWORD SECRET mysqlpass,
+    AWS PRIVATELINK privatelink_svc
+);
+```
+
+For step-by-step instructions on creating AWS PrivateLink connections and
+configuring an AWS PrivateLink service to accept connections from Materialize,
+check [this guide](/ops/network-security/privatelink/).
+
+{{< /tab >}}
 {{< tab "SSH tunnel">}}
-```sql
+```mzsql
 CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     HOST 'bastion-host',
     PORT 22,
@@ -317,7 +338,7 @@ CREATE CONNECTION ssh_connection TO SSH TUNNEL (
 );
 ```
 
-```sql
+```mzsql
 CREATE CONNECTION mysql_connection TO MYSQL (
     HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
     SSH TUNNEL ssh_connection
@@ -335,7 +356,7 @@ an SSH bastion server to accept connections from Materialize, check
 
 _Create subsources for all tables in MySQL_
 
-```sql
+```mzsql
 CREATE SOURCE mz_source
     FROM MYSQL CONNECTION mysql_connection
     FOR ALL TABLES;
@@ -343,7 +364,7 @@ CREATE SOURCE mz_source
 
 _Create subsources for all tables from specific schemas in MySQL_
 
-```sql
+```mzsql
 CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_connection
   FOR SCHEMAS (mydb, project);
@@ -351,7 +372,7 @@ CREATE SOURCE mz_source
 
 _Create subsources for specific tables in MySQL_
 
-```sql
+```mzsql
 CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_connection
   FOR TABLES (mydb.table_1, mydb.table_2 AS alias_table_2);
@@ -364,7 +385,7 @@ by Materialize, use the `TEXT COLUMNS` option to decode data as `text` for the
 affected columns. This option expects the upstream fully-qualified names of the
 replicated table and column (i.e. as defined in your MySQL database).
 
-```sql
+```mzsql
 CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_connection (
     TEXT COLUMNS (mydb.table_1.column_of_unsupported_type)
@@ -372,16 +393,16 @@ CREATE SOURCE mz_source
   FOR ALL TABLES;
 ```
 
-#### Ignoring columns
+#### Excluding columns
 
 MySQL doesn't provide a way to filter out columns from the replication stream.
-To exclude specific upstream columns from being ingested, use the `IGNORE
+To exclude specific upstream columns from being ingested, use the `EXCLUDE
 COLUMNS` option.
 
-```sql
+```mzsql
 CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_connection (
-    IGNORE COLUMNS (mydb.table_1.column_to_ignore)
+    EXCLUDE COLUMNS (mydb.table_1.column_to_ignore)
   )
   FOR ALL TABLES;
 ```
@@ -393,7 +414,7 @@ the [`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected
 subsource, and then [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/) to add
 the subsource back to the source.
 
-```sql
+```mzsql
 -- List all subsources in mz_source
 SHOW SUBSOURCES ON mz_source;
 

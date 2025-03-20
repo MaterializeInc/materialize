@@ -9,61 +9,68 @@
 
 //! An abstraction for dealing with storage collections.
 
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::num::NonZeroI64;
-use std::str::FromStr;
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
 use futures::future::BoxFuture;
-use futures::stream::FuturesUnordered;
+use futures::stream::{BoxStream, FuturesUnordered};
 use futures::{Future, FutureExt, StreamExt};
 use itertools::Itertools;
 
 use mz_ore::collections::CollectionExt;
-use mz_ore::instrument;
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::AbortOnDropHandle;
+use mz_ore::{assert_none, instrument, soft_assert_or_log};
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::critical::SinceHandle;
-use mz_persist_client::read::ReadHandle;
+use mz_persist_client::read::{Cursor, ReadHandle};
+use mz_persist_client::schema::CaESchema;
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::txn::TxnsCodec;
 use mz_persist_types::Codec64;
-use mz_repr::{Diff, GlobalId, RelationDesc, TimestampManipulation};
+use mz_repr::{Diff, GlobalId, RelationDesc, RelationVersion, Row, TimestampManipulation};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::{
-    CollectionMetadata, StorageError, TxnWalTablesImpl, TxnsCodecRow,
-};
+use mz_storage_types::controller::{CollectionMetadata, StorageError, TxnsCodecRow};
 use mz_storage_types::dyncfgs::STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sources::{
-    ExportReference, GenericSourceConnection, IngestionDescription, SourceData, SourceDesc,
-    SourceExport,
+    GenericSourceConnection, IngestionDescription, SourceData, SourceDesc, SourceEnvelope,
+    SourceExport, SourceExportDataConfig, Timeline,
 };
+use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use mz_txn_wal::txn_read::{DataSnapshot, TxnsRead};
 use mz_txn_wal::txns::TxnsHandle;
+use timely::order::TotalOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp as TimelyTimestamp};
 use timely::PartialOrder;
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, trace, warn};
 
+use crate::client::TimestamplessUpdateBuilder;
 use crate::controller::{
-    CollectionDescription, DataSource, DataSourceOther, PersistEpoch, StorageMetadata, StorageTxn,
+    CollectionDescription, DataSource, PersistEpoch, StorageMetadata, StorageTxn,
 };
+use crate::storage_collections::metrics::{ShardIdSet, StorageCollectionsMetrics};
+
+mod metrics;
 
 /// An abstraction for keeping track of storage collections and managing access
 /// to them.
@@ -88,30 +95,10 @@ pub trait StorageCollections: Debug {
     /// We get `init_ids`, which tells us about all collections that currently
     /// exist, so that we can record durable state for those that _we_ don't
     /// know yet about.
-    ///
-    /// We also get `drop_ids`, which tells us about all collections that we
-    /// might have known about before and have now been dropped.
     async fn initialize_state(
         &self,
         txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
         init_ids: BTreeSet<GlobalId>,
-        drop_ids: BTreeSet<GlobalId>,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
-
-    /// Resets the txns system to a set of invariants necessary for correctness.
-    ///
-    /// Must be called on boot before create_collections or the various appends.
-    /// This is true _regardless_ of whether the txn-wal feature is on or
-    /// not. See the big comment in the impl of the method for details. Ideally,
-    /// this would have just been folded into `Controller::new`, but it needs
-    /// the timestamp and there are boot dependency issues.
-    ///
-    /// TODO: This can be removed once we've flipped to the new txns system for
-    /// good and there is no possibility of the old code running concurrently
-    /// with the new code.
-    async fn init_txns(
-        &self,
-        init_ts: Self::Timestamp,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Update storage configuration with new parameters.
@@ -181,6 +168,60 @@ pub trait StorageCollections: Debug {
         as_of: Antichain<Self::Timestamp>,
     ) -> BoxFuture<'static, Result<SnapshotPartsStats, StorageError<Self::Timestamp>>>;
 
+    /// Returns a snapshot of the contents of collection `id` at `as_of`.
+    fn snapshot(
+        &self,
+        id: GlobalId,
+        as_of: Self::Timestamp,
+    ) -> BoxFuture<'static, Result<Vec<(Row, Diff)>, StorageError<Self::Timestamp>>>;
+
+    /// Returns a snapshot of the contents of collection `id` at the largest
+    /// readable `as_of`.
+    async fn snapshot_latest(
+        &self,
+        id: GlobalId,
+    ) -> Result<Vec<Row>, StorageError<Self::Timestamp>>;
+
+    /// Returns a snapshot of the contents of collection `id` at `as_of`.
+    async fn snapshot_cursor(
+        &mut self,
+        id: GlobalId,
+        as_of: Self::Timestamp,
+    ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError<Self::Timestamp>>
+    where
+        Self::Timestamp: Codec64 + TimelyTimestamp + Lattice;
+
+    /// Generates a snapshot of the contents of collection `id` at `as_of` and
+    /// streams out all of the updates in bounded memory.
+    ///
+    /// The output is __not__ consolidated.
+    fn snapshot_and_stream(
+        &self,
+        id: GlobalId,
+        as_of: Self::Timestamp,
+    ) -> BoxFuture<
+        'static,
+        Result<
+            BoxStream<'static, (SourceData, Self::Timestamp, Diff)>,
+            StorageError<Self::Timestamp>,
+        >,
+    >;
+
+    /// Create a [`TimestamplessUpdateBuilder`] that can be used to stage
+    /// updates for the provided [`GlobalId`].
+    fn create_update_builder(
+        &self,
+        id: GlobalId,
+    ) -> BoxFuture<
+        'static,
+        Result<
+            TimestamplessUpdateBuilder<SourceData, (), Self::Timestamp, Diff>,
+            StorageError<Self::Timestamp>,
+        >,
+    >
+    where
+        Self::Timestamp: Lattice + Codec64;
+
     /// Update the given [`StorageTxn`] with the appropriate metadata given the
     /// IDs to add and drop.
     ///
@@ -191,6 +232,7 @@ pub trait StorageCollections: Debug {
         txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
         ids_to_add: BTreeSet<GlobalId>,
         ids_to_drop: BTreeSet<GlobalId>,
+        ids_to_register: BTreeMap<GlobalId, ShardId>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Create the collections described by the individual
@@ -215,11 +257,15 @@ pub trait StorageCollections: Debug {
     /// but hold off on that initially.) Callers must provide a Some if any of
     /// the collections is a table. A None may be given if none of the
     /// collections are a table (i.e. all materialized views, sources, etc).
-    async fn create_collections(
+    ///
+    /// `migrated_storage_collections` is a set of migrated storage collections to be excluded
+    /// from the txn-wal sub-system.
+    async fn create_collections_for_bootstrap(
         &self,
         storage_metadata: &StorageMetadata,
         register_ts: Option<Self::Timestamp>,
-        mut collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
+        collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
+        migrated_storage_collections: &BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Alters the identified ingestion to use the provided [`SourceDesc`].
@@ -235,6 +281,12 @@ pub trait StorageCollections: Debug {
         source_desc: SourceDesc,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
+    /// Alters the data config for the specified source exports of the specified ingestions.
+    async fn alter_ingestion_export_data_configs(
+        &self,
+        source_exports: BTreeMap<GlobalId, SourceExportDataConfig>,
+    ) -> Result<(), StorageError<Self::Timestamp>>;
+
     /// Alters each identified collection to use the correlated
     /// [`GenericSourceConnection`].
     ///
@@ -242,6 +294,15 @@ pub trait StorageCollections: Debug {
     async fn alter_ingestion_connections(
         &self,
         source_connections: BTreeMap<GlobalId, GenericSourceConnection<InlinedConnection>>,
+    ) -> Result<(), StorageError<Self::Timestamp>>;
+
+    /// Updates the [`RelationDesc`] for the specified table.
+    async fn alter_table_desc(
+        &self,
+        existing_collection: GlobalId,
+        new_collection: GlobalId,
+        new_desc: RelationDesc,
+        expected_version: RelationVersion,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Drops the read capability for the sources and allows their resources to
@@ -283,17 +344,35 @@ pub trait StorageCollections: Debug {
         desired_holds: Vec<GlobalId>,
     ) -> Result<Vec<ReadHold<Self::Timestamp>>, ReadHoldError>;
 
-    /// Applies `updates` and sends any appropriate compaction command.
-    ///
-    /// This is a legacy interface that should _not_ be used! It is only used by
-    /// the compute controller.
-    fn update_read_capabilities(
+    /// Get the time dependence for a storage collection. Returns no value if unknown or if
+    /// the object isn't managed by storage.
+    fn determine_time_dependence(
         &self,
-        updates: &mut BTreeMap<GlobalId, ChangeBatch<Self::Timestamp>>,
-    );
+        id: GlobalId,
+    ) -> Result<Option<TimeDependence>, TimeDependenceError>;
+}
+
+/// A cursor over a snapshot, allowing us to read just part of a snapshot in its
+/// consolidated form.
+pub struct SnapshotCursor<T: Codec64 + TimelyTimestamp + Lattice> {
+    // We allocate a temporary read handle for each snapshot, and that handle needs to live at
+    // least as long as the cursor itself, which holds part leases. Bundling them together!
+    pub _read_handle: ReadHandle<SourceData, (), T, Diff>,
+    pub cursor: Cursor<SourceData, (), T, Diff>,
+}
+
+impl<T: Codec64 + TimelyTimestamp + Lattice + Sync> SnapshotCursor<T> {
+    pub async fn next(
+        &mut self,
+    ) -> Option<
+        impl Iterator<Item = ((Result<SourceData, String>, Result<(), String>), T, Diff)> + Sized + '_,
+    > {
+        self.cursor.next().await
+    }
 }
 
 /// Frontiers of the collection identified by `id`.
+#[derive(Debug)]
 pub struct CollectionFrontiers<T> {
     /// The [GlobalId] of the collection that these frontiers belong to.
     pub id: GlobalId,
@@ -314,26 +393,6 @@ pub struct CollectionFrontiers<T> {
     pub read_capabilities: Antichain<T>,
 }
 
-#[derive(Debug, Clone)]
-enum TxnsWal<T> {
-    EnabledEager,
-    EnabledLazy { txns_read: TxnsRead<T> },
-}
-
-impl<T: TimelyTimestamp + Lattice + Codec64> TxnsWal<T> {
-    fn expect_enabled_lazy(&self, txns_id: &ShardId) -> &TxnsRead<T> {
-        match self {
-            TxnsWal::EnabledLazy { txns_read, .. } => {
-                assert_eq!(txns_id, txns_read.txns_id());
-                txns_read
-            }
-            TxnsWal::EnabledEager { .. } => {
-                panic!("set if txns are enabled and lazy")
-            }
-        }
-    }
-}
-
 /// Implementation of [StorageCollections] that is shallow-cloneable and uses a
 /// background task for doing work concurrently, in the background.
 #[derive(Debug, Clone)]
@@ -344,27 +403,41 @@ pub struct StorageCollectionsImpl<
     /// all of the controllers and Coordinator.
     envd_epoch: NonZeroI64,
 
+    /// Whether or not this [StorageCollections] is in read-only mode.
+    ///
+    /// When in read-only mode, we are not allowed to affect changes to external
+    /// systems, including, for example, acquiring and downgrading critical
+    /// [SinceHandles](SinceHandle)
+    read_only: bool,
+
     /// The set of [ShardIds](ShardId) that we have to finalize. These will have
     /// been persisted by the caller of [StorageCollections::prepare_state].
-    finalizable_shards: Arc<std::sync::Mutex<BTreeSet<ShardId>>>,
+    finalizable_shards: Arc<ShardIdSet>,
 
     /// The set of [ShardIds](ShardId) that we have finalized. We keep track of
     /// shards here until we are given a chance to let our callers know that
     /// these have been finalized, for example via
     /// [StorageCollections::prepare_state].
-    finalized_shards: Arc<std::sync::Mutex<BTreeSet<ShardId>>>,
+    finalized_shards: Arc<ShardIdSet>,
 
     /// Collections maintained by this [StorageCollections].
     collections: Arc<std::sync::Mutex<BTreeMap<GlobalId, CollectionState<T>>>>,
 
-    /// Whether to use the new txn-wal tables implementation or the legacy one.
-    txns: TxnsWal<T>,
-    /// Whether we have run `txns_init` yet (required before create_collections
-    /// and the various flavors of append).
-    txns_init_run: Arc<AtomicBool>,
+    /// A shared TxnsCache running in a task and communicated with over a channel.
+    txns_read: TxnsRead<T>,
 
     /// Storage configuration parameters.
     config: Arc<Mutex<StorageConfiguration>>,
+
+    /// The upper of the txn shard as it was when we booted. We forward the
+    /// upper of created/registered tables to make sure that their uppers are at
+    /// least not less than the initially known txn upper.
+    ///
+    /// NOTE: This works around a quirk in how the adapter chooses the as_of of
+    /// existing indexes when bootstrapping, where tables that have an upper
+    /// that is less than the initially known txn upper can lead to indexes that
+    /// cannot hydrate in read-only mode.
+    initial_txn_upper: Antichain<T>,
 
     /// The persist location where all storage collections are being written to
     persist_location: PersistLocation,
@@ -380,6 +453,7 @@ pub struct StorageCollectionsImpl<
 
     /// Handles to tasks we own, making sure they're dropped when we are.
     _background_task: Arc<AbortOnDropHandle<()>>,
+    _finalize_shards_task: Arc<AbortOnDropHandle<()>>,
 }
 
 // Supporting methods for implementing [StorageCollections].
@@ -398,7 +472,8 @@ where
         + Codec64
         + From<EpochMillis>
         + TimestampManipulation
-        + Into<mz_repr::Timestamp>,
+        + Into<mz_repr::Timestamp>
+        + Sync,
 {
     /// Creates and returns a new [StorageCollections].
     ///
@@ -406,24 +481,26 @@ where
     /// reconcile it with the previous state using
     /// [StorageCollections::initialize_state],
     /// [StorageCollections::prepare_state], and
-    /// [StorageCollections::create_collections].
+    /// [StorageCollections::create_collections_for_bootstrap].
     pub async fn new(
         persist_location: PersistLocation,
         persist_clients: Arc<PersistClientCache>,
+        metrics_registry: &MetricsRegistry,
         _now: NowFn,
         txns_metrics: Arc<TxnMetrics>,
         envd_epoch: NonZeroI64,
-        txn_wal_tables: TxnWalTablesImpl,
+        read_only: bool,
         connection_context: ConnectionContext,
         txn: &dyn StorageTxn<T>,
     ) -> Self {
+        let metrics = StorageCollectionsMetrics::register_into(metrics_registry);
+
         // This value must be already installed because we must ensure it's
         // durably recorded before it is used, otherwise we risk leaking persist
         // state.
         let txns_id = txn
             .get_txn_wal_shard()
             .expect("must call prepare initialization before creating StorageCollections");
-        let txns_id = ShardId::from_str(txns_id.as_str()).expect("shard ID must be valid");
 
         let txns_client = persist_clients
             .open(persist_location.clone())
@@ -436,16 +513,15 @@ where
             TxnsHandle::open(
                 T::minimum(),
                 txns_client.clone(),
+                txns_client.dyncfgs().clone(),
                 Arc::clone(&txns_metrics),
                 txns_id,
-                Arc::new(RelationDesc::empty()),
-                Arc::new(UnitSchema),
             )
             .await;
 
         // For handing to the background task, for listening to upper updates.
         let (txns_key_schema, txns_val_schema) = TxnsCodecRow::schemas();
-        let txns_write = txns_client
+        let mut txns_write = txns_client
             .open_writer(
                 txns_id,
                 Arc::new(txns_key_schema),
@@ -458,35 +534,29 @@ where
             .await
             .expect("txns schema shouldn't change");
 
-        let txns = match txn_wal_tables {
-            TxnWalTablesImpl::Lazy => {
-                let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
-                TxnsWal::EnabledLazy { txns_read }
-            }
-            TxnWalTablesImpl::Eager => TxnsWal::EnabledEager,
-        };
+        let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
 
         let collections = Arc::new(std::sync::Mutex::new(BTreeMap::default()));
-        let finalizable_shards = Arc::new(std::sync::Mutex::new(BTreeSet::default()));
-        let finalized_shards = Arc::new(std::sync::Mutex::new(BTreeSet::default()));
+        let finalizable_shards =
+            Arc::new(ShardIdSet::new(metrics.finalization_outstanding.clone()));
+        let finalized_shards =
+            Arc::new(ShardIdSet::new(metrics.finalization_pending_commit.clone()));
         let config = Arc::new(Mutex::new(StorageConfiguration::new(
             connection_context,
             mz_dyncfgs::all_dyncfgs(),
         )));
 
+        let initial_txn_upper = txns_write.fetch_recent_upper().await.to_owned();
+
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (holds_tx, holds_rx) = mpsc::unbounded_channel();
         let mut background_task = BackgroundTask {
-            envd_epoch: envd_epoch.clone(),
-            persist_location: persist_location.clone(),
-            persist: Arc::clone(&persist_clients),
             config: Arc::clone(&config),
             cmds_tx: cmd_tx.clone(),
             cmds_rx: cmd_rx,
             holds_rx,
             collections: Arc::clone(&collections),
             finalizable_shards: Arc::clone(&finalizable_shards),
-            finalized_shards: Arc::clone(&finalized_shards),
             shard_by_id: BTreeMap::new(),
             since_handles: BTreeMap::new(),
             txns_handle: Some(txns_write),
@@ -498,23 +568,39 @@ where
                 background_task.run().await
             });
 
+        let finalize_shards_task = mz_ore::task::spawn(
+            || "storage_collections::finalize_shards_task",
+            finalize_shards_task::<T>(FinalizeShardsTaskConfig {
+                envd_epoch: envd_epoch.clone(),
+                config: Arc::clone(&config),
+                metrics,
+                finalizable_shards: Arc::clone(&finalizable_shards),
+                finalized_shards: Arc::clone(&finalized_shards),
+                persist_location: persist_location.clone(),
+                persist: Arc::clone(&persist_clients),
+                read_only,
+            }),
+        );
+
         Self {
             finalizable_shards,
             finalized_shards,
             collections,
-            txns,
-            txns_init_run: Arc::new(AtomicBool::new(false)),
+            txns_read,
             envd_epoch,
+            read_only,
             config,
+            initial_txn_upper,
             persist_location,
             persist: persist_clients,
             cmd_tx,
             holds_tx,
             _background_task: Arc::new(background_task.abort_on_drop()),
+            _finalize_shards_task: Arc::new(finalize_shards_task.abort_on_drop()),
         }
     }
 
-    /// Opens a write and critical since handles for the given `shard`.
+    /// Opens a [WriteHandle] and a [SinceHandleWrapper], for holding back the since.
     ///
     /// `since` is an optional since that the read handle will be forwarded to
     /// if it is less than its current since.
@@ -528,10 +614,86 @@ where
         since: Option<&Antichain<T>>,
         relation_desc: RelationDesc,
         persist_client: &PersistClient,
-    ) -> (
-        WriteHandle<SourceData, (), T, Diff>,
-        SinceHandle<SourceData, (), T, Diff, PersistEpoch>,
-    ) {
+    ) -> (WriteHandle<SourceData, (), T, Diff>, SinceHandleWrapper<T>) {
+        let since_handle = if self.read_only {
+            let read_handle = self
+                .open_leased_handle(id, shard, relation_desc.clone(), since, persist_client)
+                .await;
+            SinceHandleWrapper::Leased(read_handle)
+        } else {
+            let since_handle = self
+                .open_critical_handle(id, shard, since, persist_client)
+                .await;
+
+            SinceHandleWrapper::Critical(since_handle)
+        };
+
+        let mut write_handle = self
+            .open_write_handle(id, shard, relation_desc, persist_client)
+            .await;
+
+        // N.B.
+        // Fetch the most recent upper for the write handle. Otherwise, this may
+        // be behind the since of the since handle. Its vital this happens AFTER
+        // we create the since handle as it needs to be linearized with that
+        // operation. It may be true that creating the write handle after the
+        // since handle already ensures this, but we do this out of an abundance
+        // of caution.
+        //
+        // Note that this returns the upper, but also sets it on the handle to
+        // be fetched later.
+        write_handle.fetch_recent_upper().await;
+
+        (write_handle, since_handle)
+    }
+
+    /// Opens a write handle for the given `shard`.
+    async fn open_write_handle(
+        &self,
+        id: &GlobalId,
+        shard: ShardId,
+        relation_desc: RelationDesc,
+        persist_client: &PersistClient,
+    ) -> WriteHandle<SourceData, (), T, Diff> {
+        let diagnostics = Diagnostics {
+            shard_name: id.to_string(),
+            handle_purpose: format!("controller data for {}", id),
+        };
+
+        let write = persist_client
+            .open_writer(
+                shard,
+                Arc::new(relation_desc),
+                Arc::new(UnitSchema),
+                diagnostics.clone(),
+            )
+            .await
+            .expect("invalid persist usage");
+
+        write
+    }
+
+    /// Opens a critical since handle for the given `shard`.
+    ///
+    /// `since` is an optional since that the read handle will be forwarded to
+    /// if it is less than its current since.
+    ///
+    /// This will `halt!` the process if we cannot successfully acquire a
+    /// critical handle with our current epoch.
+    async fn open_critical_handle(
+        &self,
+        id: &GlobalId,
+        shard: ShardId,
+        since: Option<&Antichain<T>>,
+        persist_client: &PersistClient,
+    ) -> SinceHandle<SourceData, (), T, Diff, PersistEpoch> {
+        tracing::debug!(%id, ?since, "opening critical handle");
+
+        assert!(
+            !self.read_only,
+            "attempting to open critical SinceHandle in read-only mode"
+        );
+
         let diagnostics = Diagnostics {
             shard_name: id.to_string(),
             handle_purpose: format!("controller data for {}", id),
@@ -585,36 +747,58 @@ where
             }
         };
 
-        let mut write = persist_client
-            .open_writer(
+        since_handle
+    }
+
+    /// Opens a leased [ReadHandle], for the purpose of holding back a since,
+    /// for the given `shard`.
+    ///
+    /// `since` is an optional since that the read handle will be forwarded to
+    /// if it is less than its current since.
+    async fn open_leased_handle(
+        &self,
+        id: &GlobalId,
+        shard: ShardId,
+        relation_desc: RelationDesc,
+        since: Option<&Antichain<T>>,
+        persist_client: &PersistClient,
+    ) -> ReadHandle<SourceData, (), T, Diff> {
+        tracing::debug!(%id, ?since, "opening leased handle");
+
+        let diagnostics = Diagnostics {
+            shard_name: id.to_string(),
+            handle_purpose: format!("controller data for {}", id),
+        };
+
+        let use_critical_since = false;
+        let mut handle: ReadHandle<_, _, _, _> = persist_client
+            .open_leased_reader(
                 shard,
                 Arc::new(relation_desc),
                 Arc::new(UnitSchema),
                 diagnostics.clone(),
+                use_critical_since,
             )
             .await
             .expect("invalid persist usage");
 
-        // N.B.
-        // Fetch the most recent upper for the write handle. Otherwise, this may
-        // be behind the since of the since handle. Its vital this happens AFTER
-        // we create the since handle as it needs to be linearized with that
-        // operation. It may be true that creating the write handle after the
-        // since handle already ensures this, but we do this out of an abundance
-        // of caution.
-        //
-        // Note that this returns the upper, but also sets it on the handle to
-        // be fetched later.
-        write.fetch_recent_upper().await;
+        // Take the join of the handle's since and the provided `since`;
+        // this lets materialized views express the since at which their
+        // read handles "start."
+        let since = handle
+            .since()
+            .join(since.unwrap_or(&Antichain::from_elem(T::minimum())));
 
-        (write, since_handle)
+        handle.downgrade_since(&since).await;
+
+        handle
     }
 
     fn register_handles(
         &self,
         id: GlobalId,
         is_in_txns: bool,
-        since_handle: SinceHandle<SourceData, (), T, Diff, PersistEpoch>,
+        since_handle: SinceHandleWrapper<T>,
         write_handle: WriteHandle<SourceData, (), T, Diff>,
     ) {
         self.send(BackgroundCmd::Register {
@@ -674,7 +858,9 @@ where
                     &dep_collection.implied_capability,
                     collection_implied_capability
                 ),
-                "dependency since cannot be in advance of dependent's since"
+                "dependency since ({dep}@{:?}) cannot be in advance of dependent's since ({id}@{:?})",
+                dep_collection.implied_capability,
+                collection_implied_capability,
             );
         }
 
@@ -693,33 +879,40 @@ where
     /// Currently, collections have either 0 or 1 dependencies.
     fn determine_collection_dependencies(
         &self,
-        self_collections: &mut BTreeMap<GlobalId, CollectionState<T>>,
-        data_source: &DataSource,
+        self_collections: &BTreeMap<GlobalId, CollectionState<T>>,
+        data_source: &DataSource<T>,
     ) -> Result<Vec<GlobalId>, StorageError<T>> {
         let dependencies = match &data_source {
             DataSource::Introspection(_)
             | DataSource::Webhook
-            | DataSource::Other(DataSourceOther::TableWrites)
+            | DataSource::Table { primary: None }
             | DataSource::Progress
-            | DataSource::Other(DataSourceOther::Compute) => Vec::new(),
-            DataSource::IngestionExport { ingestion_id, .. } => {
+            | DataSource::Other => Vec::new(),
+            DataSource::Table {
+                primary: Some(primary),
+            } => vec![*primary],
+            DataSource::IngestionExport {
+                ingestion_id,
+                data_config,
+                ..
+            } => {
                 // Ingestion exports depend on their primary source's remap
-                // collection.
-                let source_collection = self_collections
+                // collection, except when they use a CDCv2 envelope.
+                let source = self_collections
                     .get(ingestion_id)
                     .ok_or(StorageError::IdentifierMissing(*ingestion_id))?;
-                match &source_collection.description {
-                    CollectionDescription {
-                        data_source: DataSource::Ingestion(ingestion_desc),
-                        ..
-                    } => vec![ingestion_desc.remap_collection_id],
-                    _ => unreachable!(
-                        "SourceExport must only refer to primary sources that already exist"
-                    ),
+                let DataSource::Ingestion(ingestion) = &source.description.data_source else {
+                    panic!("SourceExport must refer to a primary source that already exists");
+                };
+
+                match data_config.envelope {
+                    SourceEnvelope::CdcV2 => Vec::new(),
+                    _ => vec![ingestion.remap_collection_id],
                 }
             }
             // Ingestions depend on their remap collection.
             DataSource::Ingestion(ingestion) => vec![ingestion.remap_collection_id],
+            DataSource::Sink { desc } => vec![desc.sink.from],
         };
 
         Ok(dependencies)
@@ -739,21 +932,24 @@ where
             changes.update(time.clone(), 1);
         }
 
-        let user_capabilities = self_collections
-            .iter_mut()
-            .filter(|(id, _c)| id.is_user())
-            .map(|(id, c)| {
-                let updates = c.read_capabilities.updates().cloned().collect_vec();
-                (*id, c.implied_capability.clone(), updates)
-            })
-            .collect_vec();
+        if tracing::span_enabled!(tracing::Level::TRACE) {
+            // Collecting `user_capabilities` is potentially slow, thus only do it when needed.
+            let user_capabilities = self_collections
+                .iter_mut()
+                .filter(|(id, _c)| id.is_user())
+                .map(|(id, c)| {
+                    let updates = c.read_capabilities.updates().cloned().collect_vec();
+                    (*id, c.implied_capability.clone(), updates)
+                })
+                .collect_vec();
 
-        trace!(
-            %from_id,
-            ?storage_dependencies,
-            ?read_capability,
-            ?user_capabilities,
-            "install_read_capabilities_inner");
+            trace!(
+                %from_id,
+                ?storage_dependencies,
+                ?read_capability,
+                ?user_capabilities,
+                "install_read_capabilities_inner");
+        }
 
         let mut storage_read_updates = storage_dependencies
             .iter()
@@ -766,39 +962,68 @@ where
             &mut storage_read_updates,
         );
 
-        let user_capabilities = self_collections
-            .iter_mut()
-            .filter(|(id, _c)| id.is_user())
-            .map(|(id, c)| {
-                let updates = c.read_capabilities.updates().cloned().collect_vec();
-                (*id, c.implied_capability.clone(), updates)
-            })
-            .collect_vec();
+        if tracing::span_enabled!(tracing::Level::TRACE) {
+            // Collecting `user_capabilities` is potentially slow, thus only do it when needed.
+            let user_capabilities = self_collections
+                .iter_mut()
+                .filter(|(id, _c)| id.is_user())
+                .map(|(id, c)| {
+                    let updates = c.read_capabilities.updates().cloned().collect_vec();
+                    (*id, c.implied_capability.clone(), updates)
+                })
+                .collect_vec();
 
-        trace!(
-            %from_id,
-            ?storage_dependencies,
-            ?read_capability,
-            ?user_capabilities,
-            "after install_read_capabilities_inner!");
+            trace!(
+                %from_id,
+                ?storage_dependencies,
+                ?read_capability,
+                ?user_capabilities,
+                "after install_read_capabilities_inner!");
+        }
 
         Ok(())
     }
 
+    async fn recent_upper(&self, id: GlobalId) -> Result<Antichain<T>, StorageError<T>> {
+        let metadata = &self.collection_metadata(id)?;
+        let persist_client = self
+            .persist
+            .open(metadata.persist_location.clone())
+            .await
+            .unwrap();
+        // Duplicate part of open_data_handles here because we don't need the
+        // fetch_recent_upper call. The pubsub-updated shared_upper is enough.
+        let diagnostics = Diagnostics {
+            shard_name: id.to_string(),
+            handle_purpose: format!("controller data for {}", id),
+        };
+        // NB: Opening a WriteHandle is cheap if it's never used in a
+        // compare_and_append operation.
+        let write = persist_client
+            .open_writer::<SourceData, (), T, Diff>(
+                metadata.data_shard,
+                Arc::new(metadata.relation_desc.clone()),
+                Arc::new(UnitSchema),
+                diagnostics.clone(),
+            )
+            .await
+            .expect("invalid persist usage");
+        Ok(write.shared_upper())
+    }
+
     async fn read_handle_for_snapshot(
-        &self,
+        persist: Arc<PersistClientCache>,
         metadata: &CollectionMetadata,
         id: GlobalId,
     ) -> Result<ReadHandle<SourceData, (), T, Diff>, StorageError<T>> {
-        let persist_client = self
-            .persist
+        let persist_client = persist
             .open(metadata.persist_location.clone())
             .await
             .unwrap();
 
         // We create a new read handle every time someone requests a snapshot
         // and then immediately expire it instead of keeping a read handle
-        // permanently in our state to avoid having it heartbeat continously.
+        // permanently in our state to avoid having it heartbeat continually.
         // The assumption is that calls to snapshot are rare and therefore worth
         // it to always create a new handle.
         let read_handle = persist_client
@@ -810,11 +1035,138 @@ where
                     shard_name: id.to_string(),
                     handle_purpose: format!("snapshot {}", id),
                 },
-                false,
+                USE_CRITICAL_SINCE_SNAPSHOT.get(&persist.cfg),
             )
             .await
             .expect("invalid persist usage");
         Ok(read_handle)
+    }
+
+    // TODO(petrosagg): This signature is not very useful in the context of partially ordered times
+    // where the as_of frontier might have multiple elements. In the current form the mutually
+    // incomparable updates will be accumulated together to a state of the collection that never
+    // actually existed. We should include the original time in the updates advanced by the as_of
+    // frontier in the result and let the caller decide what to do with the information.
+    fn snapshot(
+        &self,
+        id: GlobalId,
+        as_of: T,
+        txns_read: &TxnsRead<T>,
+    ) -> BoxFuture<'static, Result<Vec<(Row, Diff)>, StorageError<T>>>
+    where
+        T: Codec64 + From<EpochMillis> + TimestampManipulation,
+    {
+        let metadata = match self.collection_metadata(id) {
+            Ok(metadata) => metadata.clone(),
+            Err(e) => return async { Err(e) }.boxed(),
+        };
+        let txns_read = metadata.txns_shard.as_ref().map(|txns_id| {
+            assert_eq!(txns_id, txns_read.txns_id());
+            txns_read.clone()
+        });
+        let persist = Arc::clone(&self.persist);
+        async move {
+            let mut read_handle = Self::read_handle_for_snapshot(persist, &metadata, id).await?;
+            let contents = match txns_read {
+                None => {
+                    // We're not using txn-wal for tables, so we can take a snapshot directly.
+                    read_handle
+                        .snapshot_and_fetch(Antichain::from_elem(as_of))
+                        .await
+                }
+                Some(txns_read) => {
+                    // We _are_ using txn-wal for tables. It advances the physical upper of the
+                    // shard lazily, so we need to ask it for the snapshot to ensure the read is
+                    // unblocked.
+                    //
+                    // Consider the following scenario:
+                    // - Table A is written to via txns at time 5
+                    // - Tables other than A are written to via txns consuming timestamps up to 10
+                    // - We'd like to read A at 7
+                    // - The application process of A's txn has advanced the upper to 5+1, but we need
+                    //   it to be past 7, but the txns shard knows that (5,10) is empty of writes to A
+                    // - This branch allows it to handle that advancing the physical upper of Table A to
+                    //   10 (NB but only once we see it get past the write at 5!)
+                    // - Then we can read it normally.
+                    txns_read.update_gt(as_of.clone()).await;
+                    let data_snapshot = txns_read
+                        .data_snapshot(metadata.data_shard, as_of.clone())
+                        .await;
+                    data_snapshot.snapshot_and_fetch(&mut read_handle).await
+                }
+            };
+            match contents {
+                Ok(contents) => {
+                    let mut snapshot = Vec::with_capacity(contents.len());
+                    for ((data, _), _, diff) in contents {
+                        // TODO(petrosagg): We should accumulate the errors too and let the user
+                        // interprret the result
+                        let row = data.expect("invalid protobuf data").0?;
+                        snapshot.push((row, diff));
+                    }
+                    Ok(snapshot)
+                }
+                Err(_) => Err(StorageError::ReadBeforeSince(id)),
+            }
+        }
+        .boxed()
+    }
+
+    fn snapshot_and_stream(
+        &self,
+        id: GlobalId,
+        as_of: T,
+        txns_read: &TxnsRead<T>,
+    ) -> BoxFuture<'static, Result<BoxStream<'static, (SourceData, T, Diff)>, StorageError<T>>>
+    {
+        use futures::stream::StreamExt;
+
+        let metadata = match self.collection_metadata(id) {
+            Ok(metadata) => metadata.clone(),
+            Err(e) => return async { Err(e) }.boxed(),
+        };
+        let txns_read = metadata.txns_shard.as_ref().map(|txns_id| {
+            assert_eq!(txns_id, txns_read.txns_id());
+            txns_read.clone()
+        });
+        let persist = Arc::clone(&self.persist);
+
+        async move {
+            let mut read_handle = Self::read_handle_for_snapshot(persist, &metadata, id).await?;
+            let stream = match txns_read {
+                None => {
+                    // We're not using txn-wal for tables, so we can take a snapshot directly.
+                    read_handle
+                        .snapshot_and_stream(Antichain::from_elem(as_of))
+                        .await
+                        .map_err(|_| StorageError::ReadBeforeSince(id))?
+                        .boxed()
+                }
+                Some(txns_read) => {
+                    txns_read.update_gt(as_of.clone()).await;
+                    let data_snapshot = txns_read
+                        .data_snapshot(metadata.data_shard, as_of.clone())
+                        .await;
+                    data_snapshot
+                        .snapshot_and_stream(&mut read_handle)
+                        .await
+                        .map_err(|_| StorageError::ReadBeforeSince(id))?
+                        .boxed()
+                }
+            };
+
+            // Map our stream, unwrapping Persist internal errors.
+            let stream = stream
+                .map(|((k, _v), t, d)| {
+                    // TODO(parkmycar): We should accumulate the errors and pass them on to the
+                    // caller.
+                    let data = k.expect("error while streaming from Persist");
+                    (data, t, d)
+                })
+                .boxed();
+            Ok(stream)
+        }
+        .boxed()
     }
 
     fn set_read_policies_inner(
@@ -944,42 +1296,47 @@ where
 
             let (changes, frontier) = collections_net
                 .entry(id)
-                .or_insert_with(|| (ChangeBatch::new(), Antichain::new()));
+                .or_insert_with(|| (<ChangeBatch<_>>::new(), Antichain::new()));
 
             changes.extend(update.drain());
             *frontier = collection.read_capabilities.frontier().to_owned();
         }
 
         // Translate our net compute actions into downgrades of persist sinces.
-        // The actual downgrades are performed by a Tokio task asynchorously.
-        let mut persist_compaction_commands = BTreeMap::default();
+        // The actual downgrades are performed by a Tokio task asynchronously.
+        let mut persist_compaction_commands = Vec::with_capacity(collections_net.len());
         for (key, (mut changes, frontier)) in collections_net {
             if !changes.is_empty() {
+                // If the table has a "primary" collection, let that collection drive compaction.
+                let collection = collections.get(&key).expect("must still exist");
+                let should_emit_persist_compaction = !matches!(
+                    collection.description.data_source,
+                    DataSource::Table { primary: Some(_) }
+                );
+
                 if frontier.is_empty() {
                     info!(id = %key, "removing collection state because the since advanced to []!");
                     collections.remove(&key).expect("must still exist");
                 }
-                persist_compaction_commands.insert(key, frontier);
+
+                if should_emit_persist_compaction {
+                    persist_compaction_commands.push((key, frontier));
+                }
             }
         }
 
-        let persist_compaction_commands = persist_compaction_commands.into_iter().collect_vec();
-
-        cmd_tx
-            .send(BackgroundCmd::DowngradeSince(persist_compaction_commands))
-            .expect("cannot fail to send");
+        if !persist_compaction_commands.is_empty() {
+            cmd_tx
+                .send(BackgroundCmd::DowngradeSince(persist_compaction_commands))
+                .expect("cannot fail to send");
+        }
     }
 
     /// Remove any shards that we know are finalized
     fn synchronize_finalized_shards(&self, storage_metadata: &StorageMetadata) {
         self.finalized_shards
             .lock()
-            .expect("lock poisoned")
-            .retain(|shard| {
-                storage_metadata
-                    .unfinalized_shards
-                    .contains(shard.to_string().as_str())
-            });
+            .retain(|shard| storage_metadata.unfinalized_shards.contains(shard));
     }
 }
 
@@ -992,7 +1349,8 @@ where
         + Codec64
         + From<EpochMillis>
         + TimestampManipulation
-        + Into<mz_repr::Timestamp>,
+        + Into<mz_repr::Timestamp>
+        + Sync,
 {
     type Timestamp = T;
 
@@ -1000,72 +1358,35 @@ where
         &self,
         txn: &mut (dyn StorageTxn<T> + Send),
         init_ids: BTreeSet<GlobalId>,
-        drop_ids: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<T>> {
         let metadata = txn.get_collection_metadata();
-
-        let processed_metadata: Result<Vec<_>, _> = metadata
-            .into_iter()
-            .map(|(id, shard)| ShardId::from_str(&shard).map(|shard| (id, shard)))
-            .collect();
-
-        let metadata = processed_metadata.map_err(|e| StorageError::Generic(anyhow::anyhow!(e)))?;
         let existing_metadata: BTreeSet<_> = metadata.into_iter().map(|(id, _)| id).collect();
 
         // Determine which collections we do not yet have metadata for.
-        let new_collections: BTreeSet<GlobalId> = init_ids
-            .iter()
-            .filter(|id| !existing_metadata.contains(id))
-            .cloned()
-            .collect();
+        let new_collections: BTreeSet<GlobalId> =
+            init_ids.difference(&existing_metadata).cloned().collect();
 
-        mz_ore::soft_assert_or_log!(
-                new_collections.iter().all(|id| id.is_system()),
-                "initializing collections should only be missing metadata for new system objects, but got {:?}",
-                new_collections
-            );
-
-        self.prepare_state(txn, new_collections, drop_ids).await?;
+        self.prepare_state(
+            txn,
+            new_collections,
+            BTreeSet::default(),
+            BTreeMap::default(),
+        )
+        .await?;
 
         // All shards that belong to collections dropped in the last epoch are
-        // eligible for finalization. This intentionally includes any built-in
-        // collections present in `drop_ids`.
+        // eligible for finalization.
         //
         // n.b. this introduces an unlikely race condition: if a collection is
         // dropped from the catalog, but the dataflow is still running on a
         // worker, assuming the shard is safe to finalize on reboot may cause
         // the cluster to panic.
-        let unfinalized_shards = txn
-            .get_unfinalized_shards()
-            .into_iter()
-            .map(|shard| ShardId::from_str(&shard).expect("deserialization corrupted"))
-            .collect_vec();
+        let unfinalized_shards = txn.get_unfinalized_shards().into_iter().collect_vec();
 
         info!(?unfinalized_shards, "initializing finalizable_shards");
 
-        self.finalizable_shards
-            .lock()
-            .expect("lock poisoned")
-            .extend(unfinalized_shards.into_iter());
+        self.finalizable_shards.lock().extend(unfinalized_shards);
 
-        Ok(())
-    }
-
-    /// See [crate::controller::StorageController::init_txns] and its
-    /// implementation.
-    async fn init_txns(
-        &self,
-        _init_ts: Self::Timestamp,
-    ) -> Result<(), StorageError<Self::Timestamp>> {
-        assert_eq!(
-            self.txns_init_run.load(std::sync::atomic::Ordering::SeqCst),
-            false
-        );
-
-        // We don't initialize the txns system, the `StorageController` does
-        // that. All we care about is that initialization has been run.
-        self.txns_init_run
-            .store(true, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
 
@@ -1155,12 +1476,13 @@ where
         let as_of = match metadata.txns_shard.as_ref() {
             None => SnapshotStatsAsOf::Direct(as_of),
             Some(txns_id) => {
-                let txns_read = self.txns.expect_enabled_lazy(txns_id);
+                assert_eq!(txns_id, self.txns_read.txns_id());
                 let as_of = as_of
                     .into_option()
                     .expect("cannot read as_of the empty antichain");
-                txns_read.update_gt(as_of.clone()).await;
-                let data_snapshot = txns_read
+                self.txns_read.update_gt(as_of.clone()).await;
+                let data_snapshot = self
+                    .txns_read
                     .data_snapshot(metadata.data_shard, as_of.clone())
                     .await;
                 SnapshotStatsAsOf::Txns(data_snapshot)
@@ -1190,7 +1512,8 @@ where
 
         // See the comments in StorageController::snapshot for what's going on
         // here.
-        let read_handle = self.read_handle_for_snapshot(&metadata, id).await;
+        let persist = Arc::clone(&self.persist);
+        let read_handle = Self::read_handle_for_snapshot(persist, &metadata, id).await;
 
         let data_snapshot = match (metadata, as_of.as_option()) {
             (
@@ -1201,23 +1524,178 @@ where
                 },
                 Some(as_of),
             ) => {
-                let txns_read = self.txns.expect_enabled_lazy(&txns_id);
-                txns_read.update_gt(as_of.clone()).await;
-                let data_snapshot = txns_read.data_snapshot(data_shard, as_of.clone()).await;
+                assert_eq!(txns_id, *self.txns_read.txns_id());
+                self.txns_read.update_gt(as_of.clone()).await;
+                let data_snapshot = self
+                    .txns_read
+                    .data_snapshot(data_shard, as_of.clone())
+                    .await;
                 Some(data_snapshot)
             }
             _ => None,
         };
 
         Box::pin(async move {
-            let mut read_handle = read_handle?;
+            let read_handle = read_handle?;
             let result = match data_snapshot {
-                Some(data_snapshot) => data_snapshot.snapshot_parts_stats(&mut read_handle).await,
+                Some(data_snapshot) => data_snapshot.snapshot_parts_stats(&read_handle).await,
                 None => read_handle.snapshot_parts_stats(as_of).await,
             };
             read_handle.expire().await;
             result.map_err(|_| StorageError::ReadBeforeSince(id))
         })
+    }
+
+    // TODO(petrosagg): This signature is not very useful in the context of partially ordered times
+    // where the as_of frontier might have multiple elements. In the current form the mutually
+    // incomparable updates will be accumulated together to a state of the collection that never
+    // actually existed. We should include the original time in the updates advanced by the as_of
+    // frontier in the result and let the caller decide what to do with the information.
+    fn snapshot(
+        &self,
+        id: GlobalId,
+        as_of: Self::Timestamp,
+    ) -> BoxFuture<'static, Result<Vec<(Row, Diff)>, StorageError<Self::Timestamp>>> {
+        self.snapshot(id, as_of, &self.txns_read)
+    }
+
+    async fn snapshot_latest(
+        &self,
+        id: GlobalId,
+    ) -> Result<Vec<Row>, StorageError<Self::Timestamp>> {
+        let upper = self.recent_upper(id).await?;
+        let res = match upper.as_option() {
+            Some(f) if f > &T::minimum() => {
+                let as_of = f.step_back().unwrap();
+
+                let snapshot = self.snapshot(id, as_of, &self.txns_read).await.unwrap();
+                snapshot
+                    .into_iter()
+                    .map(|(row, diff)| {
+                        assert_eq!(diff, 1, "snapshot doesn't accumulate to set");
+                        row
+                    })
+                    .collect()
+            }
+            Some(_min) => {
+                // The collection must be empty!
+                Vec::new()
+            }
+            // The collection is closed, we cannot determine a latest read
+            // timestamp based on the upper.
+            _ => {
+                return Err(StorageError::InvalidUsage(
+                    "collection closed, cannot determine a read timestamp based on the upper"
+                        .to_string(),
+                ));
+            }
+        };
+
+        Ok(res)
+    }
+
+    async fn snapshot_cursor(
+        &mut self,
+        id: GlobalId,
+        as_of: Self::Timestamp,
+    ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError<Self::Timestamp>>
+    where
+        Self::Timestamp: TimelyTimestamp + Lattice + Codec64,
+    {
+        let metadata = &self.collection_metadata(id)?;
+
+        // See the comments in Self::snapshot for what's going on here.
+        let cursor = match metadata.txns_shard.as_ref() {
+            None => {
+                let persist = Arc::clone(&self.persist);
+                let mut handle = Self::read_handle_for_snapshot(persist, metadata, id).await?;
+                let cursor = handle
+                    .snapshot_cursor(Antichain::from_elem(as_of), |_| true)
+                    .await
+                    .map_err(|_| StorageError::ReadBeforeSince(id))?;
+                SnapshotCursor {
+                    _read_handle: handle,
+                    cursor,
+                }
+            }
+            Some(txns_id) => {
+                assert_eq!(txns_id, self.txns_read.txns_id());
+                self.txns_read.update_gt(as_of.clone()).await;
+                let data_snapshot = self
+                    .txns_read
+                    .data_snapshot(metadata.data_shard, as_of.clone())
+                    .await;
+                let persist = Arc::clone(&self.persist);
+                let mut handle = Self::read_handle_for_snapshot(persist, metadata, id).await?;
+                let cursor = data_snapshot
+                    .snapshot_cursor(&mut handle, |_| true)
+                    .await
+                    .map_err(|_| StorageError::ReadBeforeSince(id))?;
+                SnapshotCursor {
+                    _read_handle: handle,
+                    cursor,
+                }
+            }
+        };
+
+        Ok(cursor)
+    }
+
+    fn snapshot_and_stream(
+        &self,
+        id: GlobalId,
+        as_of: Self::Timestamp,
+    ) -> BoxFuture<
+        'static,
+        Result<
+            BoxStream<'static, (SourceData, Self::Timestamp, Diff)>,
+            StorageError<Self::Timestamp>,
+        >,
+    >
+    where
+        Self::Timestamp: TimelyTimestamp + Lattice + Codec64 + 'static,
+    {
+        self.snapshot_and_stream(id, as_of, &self.txns_read)
+    }
+
+    fn create_update_builder(
+        &self,
+        id: GlobalId,
+    ) -> BoxFuture<
+        'static,
+        Result<
+            TimestamplessUpdateBuilder<SourceData, (), Self::Timestamp, Diff>,
+            StorageError<Self::Timestamp>,
+        >,
+    > {
+        let metadata = match self.collection_metadata(id) {
+            Ok(m) => m,
+            Err(e) => return Box::pin(async move { Err(e) }),
+        };
+        let persist = Arc::clone(&self.persist);
+
+        async move {
+            let persist_client = persist
+                .open(metadata.persist_location.clone())
+                .await
+                .expect("invalid persist usage");
+            let write_handle = persist_client
+                .open_writer::<SourceData, (), Self::Timestamp, Diff>(
+                    metadata.data_shard,
+                    Arc::new(metadata.relation_desc.clone()),
+                    Arc::new(UnitSchema),
+                    Diagnostics {
+                        shard_name: id.to_string(),
+                        handle_purpose: format!("create write batch {}", id),
+                    },
+                )
+                .await
+                .expect("invalid persist usage");
+            let builder = TimestamplessUpdateBuilder::new(&write_handle);
+
+            Ok(builder)
+        }
+        .boxed()
     }
 
     fn check_exists(&self, id: GlobalId) -> Result<(), StorageError<Self::Timestamp>> {
@@ -1235,13 +1713,15 @@ where
         txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
         ids_to_add: BTreeSet<GlobalId>,
         ids_to_drop: BTreeSet<GlobalId>,
+        ids_to_register: BTreeMap<GlobalId, ShardId>,
     ) -> Result<(), StorageError<T>> {
         txn.insert_collection_metadata(
             ids_to_add
                 .into_iter()
-                .map(|id| (id, ShardId::new().to_string()))
+                .map(|id| (id, ShardId::new()))
                 .collect(),
         )?;
+        txn.insert_collection_metadata(ids_to_register)?;
 
         // Delete the metadata for any dropped collections.
         let dropped_mappings = txn.delete_collection_metadata(ids_to_drop);
@@ -1255,13 +1735,7 @@ where
 
         // Reconcile any shards we've successfully finalized with the shard
         // finalization collection.
-        let finalized_shards = self
-            .finalized_shards
-            .lock()
-            .expect("lock poisoned")
-            .iter()
-            .map(|v| v.to_string())
-            .collect();
+        let finalized_shards = self.finalized_shards.lock().iter().copied().collect();
         txn.mark_shards_as_finalized(finalized_shards);
 
         Ok(())
@@ -1270,13 +1744,17 @@ where
     // TODO(aljoscha): It would be swell if we could refactor this Leviathan of
     // a method/move individual parts to their own methods.
     #[instrument(level = "debug")]
-    async fn create_collections(
+    async fn create_collections_for_bootstrap(
         &self,
         storage_metadata: &StorageMetadata,
         register_ts: Option<Self::Timestamp>,
         mut collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
+        migrated_storage_collections: &BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
-        assert!(self.txns_init_run.load(std::sync::atomic::Ordering::SeqCst));
+        let is_in_txns = |id, metadata: &CollectionMetadata| {
+            metadata.txns_shard.is_some()
+                && !(self.read_only && migrated_storage_collections.contains(&id))
+        };
 
         // Validate first, to avoid corrupting state.
         // 1. create a dropped identifier, or
@@ -1286,7 +1764,7 @@ where
         collections.dedup();
         for pos in 1..collections.len() {
             if collections[pos - 1].0 == collections[pos].0 {
-                return Err(StorageError::SourceIdReused(collections[pos].0));
+                return Err(StorageError::CollectionIdReused(collections[pos].0));
             }
         }
 
@@ -1300,7 +1778,7 @@ where
             for (id, description) in collections.iter() {
                 if let Some(existing_collection) = self_collections.get(id) {
                     if &existing_collection.description != description {
-                        return Err(StorageError::SourceIdReused(*id));
+                        return Err(StorageError::CollectionIdReused(*id));
                     }
                 }
             }
@@ -1316,11 +1794,6 @@ where
                 let get_shard = |id| -> Result<ShardId, StorageError<T>> {
                     let shard = storage_metadata.get_collection_shard::<T>(id)?;
                     Ok(shard)
-                };
-
-                let status_shard = match description.status_collection_id {
-                    Some(status_collection_id) => Some(get_shard(status_collection_id)?),
-                    None => None,
                 };
 
                 let remap_shard = match &description.data_source {
@@ -1339,27 +1812,15 @@ where
                 // If the shard is being managed by txn-wal (initially,
                 // tables), then we need to pass along the shard id for the txns
                 // shard to dataflow rendering.
-                let txns_shard = match description.data_source {
-                    DataSource::Other(DataSourceOther::TableWrites) => match &self.txns {
-                        // If we're not using lazy txn-wal upper (i.e. we're
-                        // using eager uppers) then all reads should be done
-                        // normally.
-                        TxnsWal::EnabledEager { .. } => None,
-                        TxnsWal::EnabledLazy { txns_read, .. } => Some(*txns_read.txns_id()),
-                    },
-                    DataSource::Ingestion(_)
-                    | DataSource::IngestionExport { .. }
-                    | DataSource::Introspection(_)
-                    | DataSource::Progress
-                    | DataSource::Webhook
-                    | DataSource::Other(DataSourceOther::Compute) => None,
-                };
+                let txns_shard = description
+                    .data_source
+                    .in_txns()
+                    .then(|| *self.txns_read.txns_id());
 
                 let metadata = CollectionMetadata {
                     persist_location: self.persist_location.clone(),
                     remap_shard,
                     data_shard,
-                    status_shard,
                     relation_desc: description.desc.clone(),
                     txns_shard,
                 };
@@ -1383,54 +1844,71 @@ where
             .map(|data: Result<_, StorageError<Self::Timestamp>>| {
                 let register_ts = register_ts.clone();
                 async move {
-                let (id, description, metadata) = data?;
+                    let (id, description, metadata) = data?;
 
-                // should be replaced with real introspection
-                // (https://github.com/MaterializeInc/materialize/issues/14266)
-                // but for now, it's helpful to have this mapping written down
-                // somewhere
-                debug!(
-                    "mapping GlobalId={} to remap shard ({:?}), data shard ({}), status shard ({:?})",
-                    id, metadata.remap_shard, metadata.data_shard, metadata.status_shard
-                );
+                    // should be replaced with real introspection
+                    // (https://github.com/MaterializeInc/database-issues/issues/4078)
+                    // but for now, it's helpful to have this mapping written down
+                    // somewhere
+                    debug!(
+                        "mapping GlobalId={} to remap shard ({:?}), data shard ({})",
+                        id, metadata.remap_shard, metadata.data_shard
+                    );
 
-                let (write, mut since_handle) = this
-                    .open_data_handles(
-                        &id,
-                        metadata.data_shard,
-                        description.since.as_ref(),
-                        metadata.relation_desc.clone(),
-                        persist_client,
-                    )
-                    .await;
+                    let (write, mut since_handle) = this
+                        .open_data_handles(
+                            &id,
+                            metadata.data_shard,
+                            description.since.as_ref(),
+                            metadata.relation_desc.clone(),
+                            persist_client,
+                        )
+                        .await;
 
-                // Present tables as springing into existence at the register_ts
-                // by advancing the since. Otherwise, we could end up in a
-                // situation where a table with a long compaction window appears
-                // to exist before the environment (and this the table) existed.
-                //
-                // We could potentially also do the same thing for other
-                // sources, in particular storage's internal sources and perhaps
-                // others, but leave them for now.
-                match description.data_source {
-                    DataSource::Introspection(_)
-                    | DataSource::IngestionExport { .. }
-                    | DataSource::Webhook
-                    | DataSource::Ingestion(_)
-                    | DataSource::Progress
-                    | DataSource::Other(DataSourceOther::Compute) => {},
-                    DataSource::Other(DataSourceOther::TableWrites) => {
-                        let register_ts = register_ts.expect("caller should have provided a register_ts when creating a table");
-                        if since_handle.since().elements() == &[T::minimum()] {
-                            debug!("advancing {} to initial since of {:?}", id, register_ts);
-                            let token = since_handle.opaque().clone();
-                            let _ = since_handle.compare_and_downgrade_since(&token, (&token, &Antichain::from_elem(register_ts.clone()))).await;
+                    // Present tables as springing into existence at the register_ts
+                    // by advancing the since. Otherwise, we could end up in a
+                    // situation where a table with a long compaction window appears
+                    // to exist before the environment (and this the table) existed.
+                    //
+                    // We could potentially also do the same thing for other
+                    // sources, in particular storage's internal sources and perhaps
+                    // others, but leave them for now.
+                    match description.data_source {
+                        DataSource::Introspection(_)
+                        | DataSource::IngestionExport { .. }
+                        | DataSource::Webhook
+                        | DataSource::Ingestion(_)
+                        | DataSource::Progress
+                        | DataSource::Other => {}
+                        DataSource::Sink { .. } => {}
+                        DataSource::Table { .. } => {
+                            let register_ts = register_ts.expect(
+                                "caller should have provided a register_ts when creating a table",
+                            );
+                            if since_handle.since().elements() == &[T::minimum()]
+                                && !migrated_storage_collections.contains(&id)
+                            {
+                                debug!("advancing {} to initial since of {:?}", id, register_ts);
+                                let token = since_handle.opaque();
+                                let _ = since_handle
+                                    .compare_and_downgrade_since(
+                                        &token,
+                                        (&token, &Antichain::from_elem(register_ts.clone())),
+                                    )
+                                    .await;
+                            }
                         }
                     }
-                }
 
-                Ok::<_, StorageError<Self::Timestamp>>((id, description, write, since_handle, metadata))
-            }})
+                    Ok::<_, StorageError<Self::Timestamp>>((
+                        id,
+                        description,
+                        write,
+                        since_handle,
+                        metadata,
+                    ))
+                }
+            })
             // Poll each future for each collection concurrently, maximum of 50 at a time.
             .buffer_unordered(50)
             // HERE BE DRAGONS:
@@ -1450,44 +1928,47 @@ where
             .await?;
 
         // Reorder in dependency order.
-        to_register.sort_by_key(|(id, ..)| *id);
-
-        // New collections that are being created.
-        let mut new_collections = BTreeSet::new();
+        #[derive(Ord, PartialOrd, Eq, PartialEq)]
+        enum DependencyOrder {
+            /// Tables should always be registered first, and large ids before small ones.
+            Table(Reverse<GlobalId>),
+            /// For most collections the id order is the correct one.
+            Collection(GlobalId),
+            /// Sinks should always be registered last.
+            Sink(GlobalId),
+        }
+        to_register.sort_by_key(|(id, desc, ..)| match &desc.data_source {
+            DataSource::Table { .. } => DependencyOrder::Table(Reverse(*id)),
+            DataSource::Sink { .. } => DependencyOrder::Sink(*id),
+            _ => DependencyOrder::Collection(*id),
+        });
 
         // We hold this lock for a very short amount of time, just doing some
         // hashmap inserts and unbounded channel sends.
         let mut self_collections = self.collections.lock().expect("lock poisoned");
 
         for (id, mut description, write_handle, since_handle, metadata) in to_register {
-            new_collections.insert(id);
-
-            // Ensure that the ingestion has an export for its primary source.
-            // This is done in an akward spot to appease the borrow checker.
+            // Ensure that the ingestion has an export for its primary source if applicable.
+            // This is done in an awkward spot to appease the borrow checker.
+            // TODO(database-issues#8620): This will be removed once sources no longer export
+            // to primary collections and only export to explicit SourceExports (tables).
             if let DataSource::Ingestion(ingestion) = &mut description.data_source {
-                ingestion.source_exports.insert(
-                    id,
-                    SourceExport {
-                        ingestion_output: None,
-                        storage_metadata: (),
-                    },
-                );
+                let export = ingestion.desc.primary_source_export();
+                ingestion.source_exports.insert(id, export);
             }
 
             let write_frontier = write_handle.upper();
             let data_shard_since = since_handle.since().clone();
 
             // Determine if this collection has any dependencies.
-            let storage_dependencies = self.determine_collection_dependencies(
-                &mut *self_collections,
-                &description.data_source,
-            )?;
+            let storage_dependencies = self
+                .determine_collection_dependencies(&*self_collections, &description.data_source)?;
 
-            // Determine the intial since of the collection.
+            // Determine the initial since of the collection.
             let initial_since = match storage_dependencies
                 .iter()
                 .at_most_one()
-                .expect("should have at most one depdendency")
+                .expect("should have at most one dependency")
             {
                 Some(dep) => {
                     let dependency_collection = self_collections
@@ -1506,19 +1987,27 @@ where
                     // establishing a new persist connection, still have data we
                     // said _could_ be compacted.
                     if PartialOrder::less_than(&data_shard_since, &dependency_since) {
-                        // The dependency since cannot be in advance of the
-                        // dependent upper unless the collection is new. If the
-                        // dependency since advanced past the dependent's upper,
-                        // the dependent cannot read data from the dependency at
-                        // its upper.
+                        // The dependency since cannot be beyond the dependent
+                        // (our) upper unless the collection is new. In
+                        // practice, the depdenency is the remap shard of a
+                        // source (export), and if the since is allowed to
+                        // "catch up" to the upper, that is `upper <= since`, a
+                        // restarting ingestion cannot differentiate between
+                        // updates that have already been written out to the
+                        // backing persist shard and updates that have yet to be
+                        // written. We would write duplicate updates.
                         //
-                        // Another way of understanding that this is a problem
-                        // is that this means that the read hold installed on
-                        // the dependency was probably not been upheld––if it
-                        // were, the dependency's since could not have advanced
-                        // as far the dependent's upper.
+                        // If this check fails, it means that the read hold
+                        // installed on the dependency was probably not upheld
+                        // –– if it were, the dependency's since could not have
+                        // advanced as far the dependent's upper.
+                        //
+                        // We don't care about the dependency since when the
+                        // write frontier is empty. In that case, no-one can
+                        // write down any more updates.
                         mz_ore::soft_assert_or_log!(
                             write_frontier.elements() == &[T::minimum()]
+                                || write_frontier.is_empty()
                                 || PartialOrder::less_than(&dependency_since, write_frontier),
                             "dependency ({dep}) since has advanced past dependent ({id}) upper \n
                             dependent ({id}): since {:?}, upper {:?} \n
@@ -1554,7 +2043,8 @@ where
                 }
                 DataSource::IngestionExport {
                     ingestion_id,
-                    external_reference,
+                    details,
+                    data_config,
                 } => {
                     // Adjust the source to contain this export.
                     let source_collection = self_collections
@@ -1567,10 +2057,9 @@ where
                         } => ingestion_desc.source_exports.insert(
                             id,
                             SourceExport {
-                                ingestion_output: Some(ExportReference::from(
-                                    external_reference.clone(),
-                                )),
                                 storage_metadata: (),
+                                details: details.clone(),
+                                data_config: data_config.clone(),
                             },
                         ),
                         _ => unreachable!(
@@ -1580,38 +2069,38 @@ where
 
                     self_collections.insert(id, collection_state);
                 }
-                DataSource::Other(DataSourceOther::TableWrites) => {
-                    let register_ts = register_ts
-                        .as_ref()
-                        .expect("caller should have provided a register_ts when creating a table");
-                    // This register call advances the logical upper of the
-                    // table. The register call eventually circles that info
-                    // back to us, but some tests fail if we don't synchronously
-                    // update it in create_collections, so just do that now.
-                    let advance_to = mz_persist_types::StepForward::step_forward(register_ts);
-
-                    if let TxnsWal::EnabledLazy { .. } = &self.txns {
-                        if collection_state.write_frontier.less_than(&advance_to) {
-                            collection_state.write_frontier =
-                                Antichain::from_elem(advance_to.clone());
-                        }
+                DataSource::Table { .. } => {
+                    // See comment on self.initial_txn_upper on why we're doing
+                    // this.
+                    if is_in_txns(id, &metadata)
+                        && PartialOrder::less_than(
+                            &collection_state.write_frontier,
+                            &self.initial_txn_upper,
+                        )
+                    {
+                        // We could try and be cute and use the join of the txn
+                        // upper and the table upper. But that has more
+                        // complicated reasoning for why it is or isn't correct,
+                        // and we're only dealing with totally ordered times
+                        // here.
+                        collection_state
+                            .write_frontier
+                            .clone_from(&self.initial_txn_upper);
                     }
                     self_collections.insert(id, collection_state);
                 }
-                DataSource::Progress | DataSource::Other(DataSourceOther::Compute) => {
+                DataSource::Progress | DataSource::Other => {
                     self_collections.insert(id, collection_state);
                 }
                 DataSource::Ingestion(_) => {
                     self_collections.insert(id, collection_state);
                 }
+                DataSource::Sink { .. } => {
+                    self_collections.insert(id, collection_state);
+                }
             }
 
-            self.register_handles(
-                id,
-                metadata.txns_shard.is_some(),
-                since_handle,
-                write_handle,
-            );
+            self.register_handles(id, is_in_txns(id, &metadata), since_handle, write_handle);
 
             // If this collection has a dependency, install a read hold on it.
             self.install_collection_dependency_read_holds_inner(&mut *self_collections, id)?;
@@ -1648,6 +2137,66 @@ where
         Ok(())
     }
 
+    async fn alter_ingestion_export_data_configs(
+        &self,
+        source_exports: BTreeMap<GlobalId, SourceExportDataConfig>,
+    ) -> Result<(), StorageError<Self::Timestamp>> {
+        let mut self_collections = self.collections.lock().expect("lock poisoned");
+
+        for (source_export_id, new_data_config) in source_exports {
+            // We need to adjust the data config on the CollectionState for
+            // the source export collection directly
+            let source_export_collection = self_collections
+                .get_mut(&source_export_id)
+                .ok_or_else(|| StorageError::IdentifierMissing(source_export_id))?;
+            let ingestion_id = match &mut source_export_collection.description.data_source {
+                DataSource::IngestionExport {
+                    ingestion_id,
+                    details: _,
+                    data_config,
+                } => {
+                    *data_config = new_data_config.clone();
+                    *ingestion_id
+                }
+                o => {
+                    tracing::warn!("alter_ingestion_export_data_configs called on {:?}", o);
+                    Err(StorageError::IdentifierInvalid(source_export_id))?
+                }
+            };
+            // We also need to adjust the data config on the CollectionState of the
+            // Ingestion that the export is associated with.
+            let ingestion_collection = self_collections
+                .get_mut(&ingestion_id)
+                .ok_or_else(|| StorageError::IdentifierMissing(ingestion_id))?;
+
+            match &mut ingestion_collection.description.data_source {
+                DataSource::Ingestion(ingestion_desc) => {
+                    let source_export = ingestion_desc
+                        .source_exports
+                        .get_mut(&source_export_id)
+                        .ok_or_else(|| StorageError::IdentifierMissing(source_export_id))?;
+
+                    if source_export.data_config != new_data_config {
+                        tracing::info!(?source_export_id, from = ?source_export.data_config, to = ?new_data_config, "alter_ingestion_export_data_configs, updating");
+                        source_export.data_config = new_data_config;
+                    } else {
+                        tracing::warn!(
+                            "alter_ingestion_export_data_configs called on \
+                                    export {source_export_id} of {ingestion_id} but \
+                                    the data config was the same"
+                        );
+                    }
+                }
+                o => {
+                    tracing::warn!("alter_ingestion_export_data_configs called on {:?}", o);
+                    Err(StorageError::IdentifierInvalid(ingestion_id))?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     async fn alter_ingestion_connections(
         &self,
         source_connections: BTreeMap<GlobalId, GenericSourceConnection<InlinedConnection>>,
@@ -1679,6 +2228,170 @@ where
                 }
             }
         }
+
+        Ok(())
+    }
+
+    async fn alter_table_desc(
+        &self,
+        existing_collection: GlobalId,
+        new_collection: GlobalId,
+        new_desc: RelationDesc,
+        expected_version: RelationVersion,
+    ) -> Result<(), StorageError<Self::Timestamp>> {
+        let data_shard = {
+            let self_collections = self.collections.lock().expect("lock poisoned");
+            let existing = self_collections
+                .get(&existing_collection)
+                .ok_or_else(|| StorageError::IdentifierMissing(existing_collection))?;
+
+            // TODO(alter_table): Support changes to sources.
+            if !matches!(&existing.description.data_source, DataSource::Table { .. }) {
+                return Err(StorageError::IdentifierInvalid(existing_collection));
+            }
+
+            existing.collection_metadata.data_shard
+        };
+
+        let persist_client = self
+            .persist
+            .open(self.persist_location.clone())
+            .await
+            .unwrap();
+
+        // Evolve the schema of this shard.
+        let diagnostics = Diagnostics {
+            shard_name: existing_collection.to_string(),
+            handle_purpose: "alter_table_desc".to_string(),
+        };
+        // We map the Adapter's RelationVersion 1:1 with SchemaId.
+        let expected_schema = expected_version.into();
+        let schema_result = persist_client
+            .compare_and_evolve_schema::<SourceData, (), T, Diff>(
+                data_shard,
+                expected_schema,
+                &new_desc,
+                &UnitSchema,
+                diagnostics,
+            )
+            .await
+            .map_err(|e| StorageError::InvalidUsage(e.to_string()))?;
+        tracing::info!(
+            ?existing_collection,
+            ?new_collection,
+            ?new_desc,
+            "evolved schema"
+        );
+
+        match schema_result {
+            CaESchema::Ok(id) => id,
+            // TODO(alter_table): If we get an expected mismatch we should retry.
+            CaESchema::ExpectedMismatch {
+                schema_id,
+                key,
+                val,
+            } => {
+                mz_ore::soft_panic_or_log!(
+                    "schema expectation mismatch {schema_id:?}, {key:?}, {val:?}"
+                );
+                return Err(StorageError::Generic(anyhow::anyhow!(
+                    "schema expected mismatch, {existing_collection:?}",
+                )));
+            }
+            CaESchema::Incompatible => {
+                mz_ore::soft_panic_or_log!(
+                    "incompatible schema! {existing_collection} {new_desc:?}"
+                );
+                return Err(StorageError::Generic(anyhow::anyhow!(
+                    "schema incompatible, {existing_collection:?}"
+                )));
+            }
+        };
+
+        // Once the new schema is registered we can open new data handles.
+        let (write_handle, since_handle) = self
+            .open_data_handles(
+                &new_collection,
+                data_shard,
+                None,
+                new_desc.clone(),
+                &persist_client,
+            )
+            .await;
+
+        // TODO(alter_table): Do we need to advance the since of the table to match the time this
+        // new version was registered with txn-wal?
+
+        // Great! Our new schema is registered with Persist, now we need to update our internal
+        // data structures.
+        {
+            let mut self_collections = self.collections.lock().expect("lock poisoned");
+
+            // Update the existing collection so we know it's a "projection" of this new one.
+            let existing = self_collections
+                .get_mut(&existing_collection)
+                .expect("existing collection missing");
+
+            // A higher level should already be asserting this, but let's make sure.
+            assert!(matches!(
+                existing.description.data_source,
+                DataSource::Table { primary: None }
+            ));
+
+            // The existing version of the table will depend on the new version.
+            existing.description.data_source = DataSource::Table {
+                primary: Some(new_collection),
+            };
+            existing.storage_dependencies.push(new_collection);
+
+            // Copy over the frontiers from the previous version.
+            // The new table starts with two holds - the implied capability, and the hold from
+            // the previous version - both at the previous version's read frontier.
+            let implied_capability = existing.read_capabilities.frontier().to_owned();
+            let write_frontier = existing.write_frontier.clone();
+
+            // Determine the relevant read capabilities on the new collection.
+            //
+            // Note(parkmycar): Originally we used `install_collection_dependency_read_holds_inner`
+            // here, but that only installed a ReadHold on the new collection for the implied
+            // capability of the existing collection. This would cause runtime panics because it
+            // would eventually result in negative read capabilities.
+            let mut changes = ChangeBatch::new();
+            changes.extend(implied_capability.iter().map(|t| (t.clone(), 1)));
+
+            // Note: The new collection is now the "primary collection" so we specify `None` here.
+            let collection_desc = CollectionDescription::for_table(new_desc.clone(), None);
+            let collection_meta = CollectionMetadata {
+                persist_location: self.persist_location.clone(),
+                relation_desc: collection_desc.desc.clone(),
+                data_shard,
+                // TODO(alter_table): Support changes to sources.
+                remap_shard: None,
+                txns_shard: Some(self.txns_read.txns_id().clone()),
+            };
+            let collection_state = CollectionState::new(
+                collection_desc,
+                implied_capability,
+                write_frontier,
+                Vec::new(),
+                collection_meta,
+            );
+
+            // Add a record of the new collection.
+            self_collections.insert(new_collection, collection_state);
+
+            let mut updates = BTreeMap::from([(new_collection, changes)]);
+            StorageCollectionsImpl::update_read_capabilities_inner(
+                &self.cmd_tx,
+                &mut *self_collections,
+                &mut updates,
+            );
+        };
+
+        // TODO(alter_table): Support changes to sources.
+        self.register_handles(new_collection, true, since_handle, write_handle);
+
+        info!(%existing_collection, %new_collection, ?new_desc, "altered table");
 
         Ok(())
     }
@@ -1830,7 +2543,7 @@ where
 
         let acquired_holds = advanced_holds
             .into_iter()
-            .map(|(id, since)| ReadHold::new(id, since, self.holds_tx.clone()))
+            .map(|(id, since)| ReadHold::with_channel(id, since, self.holds_tx.clone()))
             .collect_vec();
 
         trace!(?desired_holds, ?acquired_holds, "acquire_read_holds");
@@ -1838,22 +2551,178 @@ where
         Ok(acquired_holds)
     }
 
-    fn update_read_capabilities(
+    /// Determine time dependence information for the object.
+    fn determine_time_dependence(
         &self,
-        updates: &mut BTreeMap<GlobalId, ChangeBatch<Self::Timestamp>>,
-    ) {
-        let mut collections = self.collections.lock().expect("lock poisoned");
+        id: GlobalId,
+    ) -> Result<Option<TimeDependence>, TimeDependenceError> {
+        use TimeDependenceError::CollectionMissing;
+        let collections = self.collections.lock().expect("lock poisoned");
+        let mut collection = Some(collections.get(&id).ok_or(CollectionMissing(id))?);
 
-        StorageCollectionsImpl::update_read_capabilities_inner(
-            &self.cmd_tx,
-            &mut collections,
-            updates,
-        );
+        let mut result = None;
+
+        while let Some(c) = collection.take() {
+            use DataSource::*;
+            if let Some(timeline) = &c.description.timeline {
+                // Only the epoch timeline follows wall-clock.
+                if *timeline != Timeline::EpochMilliseconds {
+                    break;
+                }
+            }
+            match &c.description.data_source {
+                Ingestion(ingestion) => {
+                    use GenericSourceConnection::*;
+                    match ingestion.desc.connection {
+                        // Kafka, Postgres, MySql sources follow wall clock.
+                        Kafka(_) | Postgres(_) | MySql(_) => {
+                            result = Some(TimeDependence::default())
+                        }
+                        // Load generators not further specified.
+                        LoadGenerator(_) => {}
+                    }
+                }
+                IngestionExport { ingestion_id, .. } => {
+                    let c = collections
+                        .get(ingestion_id)
+                        .ok_or(CollectionMissing(*ingestion_id))?;
+                    collection = Some(c);
+                }
+                // Introspection, other, progress, table, and webhook sources follow wall clock.
+                Introspection(_) | Progress | Table { .. } | Webhook { .. } => {
+                    result = Some(TimeDependence::default())
+                }
+                // Materialized views, continual tasks, etc, aren't managed by storage.
+                Other => {}
+                Sink { .. } => {}
+            };
+        }
+        Ok(result)
+    }
+}
+
+/// Wraps either a "critical" [SinceHandle] or a leased [ReadHandle].
+///
+/// When a [StorageCollections] is in read-only mode, we will only ever acquire
+/// [ReadHandle], because acquiring the [SinceHandle] and driving forward its
+/// since is considered a write. Conversely, when in read-write mode, we acquire
+/// [SinceHandle].
+#[derive(Debug)]
+enum SinceHandleWrapper<T>
+where
+    T: TimelyTimestamp + Lattice + Codec64,
+{
+    Critical(SinceHandle<SourceData, (), T, Diff, PersistEpoch>),
+    Leased(ReadHandle<SourceData, (), T, Diff>),
+}
+
+impl<T> SinceHandleWrapper<T>
+where
+    T: TimelyTimestamp + Lattice + Codec64 + TotalOrder + Sync,
+{
+    pub fn since(&self) -> &Antichain<T> {
+        match self {
+            Self::Critical(handle) => handle.since(),
+            Self::Leased(handle) => handle.since(),
+        }
+    }
+
+    pub fn opaque(&self) -> PersistEpoch {
+        match self {
+            Self::Critical(handle) => handle.opaque().clone(),
+            Self::Leased(_handle) => {
+                // The opaque is expected to be used with
+                // `compare_and_downgrade_since`, and the leased handle doesn't
+                // have a notion of an opaque. We pretend here and in
+                // `compare_and_downgrade_since`.
+                PersistEpoch(None)
+            }
+        }
+    }
+
+    pub async fn compare_and_downgrade_since(
+        &mut self,
+        expected: &PersistEpoch,
+        new: (&PersistEpoch, &Antichain<T>),
+    ) -> Result<Antichain<T>, PersistEpoch> {
+        match self {
+            Self::Critical(handle) => handle.compare_and_downgrade_since(expected, new).await,
+            Self::Leased(handle) => {
+                let (opaque, since) = new;
+                assert_none!(opaque.0);
+
+                handle.downgrade_since(since).await;
+
+                Ok(since.clone())
+            }
+        }
+    }
+
+    pub async fn maybe_compare_and_downgrade_since(
+        &mut self,
+        expected: &PersistEpoch,
+        new: (&PersistEpoch, &Antichain<T>),
+    ) -> Option<Result<Antichain<T>, PersistEpoch>> {
+        match self {
+            Self::Critical(handle) => {
+                handle
+                    .maybe_compare_and_downgrade_since(expected, new)
+                    .await
+            }
+            Self::Leased(handle) => {
+                let (opaque, since) = new;
+                assert_none!(opaque.0);
+
+                handle.maybe_downgrade_since(since).await;
+
+                Some(Ok(since.clone()))
+            }
+        }
+    }
+
+    pub fn snapshot_stats(
+        &self,
+        id: GlobalId,
+        as_of: Option<Antichain<T>>,
+    ) -> BoxFuture<'static, Result<SnapshotStats, StorageError<T>>> {
+        match self {
+            Self::Critical(handle) => {
+                let res = handle
+                    .snapshot_stats(as_of)
+                    .map(move |x| x.map_err(|_| StorageError::ReadBeforeSince(id)));
+                Box::pin(res)
+            }
+            Self::Leased(handle) => {
+                let res = handle
+                    .snapshot_stats(as_of)
+                    .map(move |x| x.map_err(|_| StorageError::ReadBeforeSince(id)));
+                Box::pin(res)
+            }
+        }
+    }
+
+    pub fn snapshot_stats_from_txn(
+        &self,
+        id: GlobalId,
+        data_snapshot: DataSnapshot<T>,
+    ) -> BoxFuture<'static, Result<SnapshotStats, StorageError<T>>> {
+        match self {
+            Self::Critical(handle) => Box::pin(
+                data_snapshot
+                    .snapshot_stats_from_critical(handle)
+                    .map(move |x| x.map_err(|_| StorageError::ReadBeforeSince(id))),
+            ),
+            Self::Leased(handle) => Box::pin(
+                data_snapshot
+                    .snapshot_stats_from_leased(handle)
+                    .map(move |x| x.map_err(|_| StorageError::ReadBeforeSince(id))),
+            ),
+        }
     }
 }
 
 /// State maintained about individual collections.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct CollectionState<T> {
     /// Description with which the collection was created
     pub description: CollectionDescription<T>,
@@ -1920,22 +2789,18 @@ impl<T: TimelyTimestamp> CollectionState<T> {
 /// This shares state with [StorageCollectionsImpl] via `Arcs` and channels.
 #[derive(Debug)]
 struct BackgroundTask<T: TimelyTimestamp + Lattice + Codec64> {
-    envd_epoch: NonZeroI64,
     config: Arc<Mutex<StorageConfiguration>>,
     cmds_tx: mpsc::UnboundedSender<BackgroundCmd<T>>,
     cmds_rx: mpsc::UnboundedReceiver<BackgroundCmd<T>>,
     holds_rx: mpsc::UnboundedReceiver<(GlobalId, ChangeBatch<T>)>,
-    finalizable_shards: Arc<std::sync::Mutex<BTreeSet<ShardId>>>,
-    finalized_shards: Arc<std::sync::Mutex<BTreeSet<ShardId>>>,
+    finalizable_shards: Arc<ShardIdSet>,
     collections: Arc<std::sync::Mutex<BTreeMap<GlobalId, CollectionState<T>>>>,
     // So we know what shard ID corresponds to what global ID, which we need
     // when re-enqueing futures for determining the next upper update.
     shard_by_id: BTreeMap<GlobalId, ShardId>,
-    since_handles: BTreeMap<GlobalId, SinceHandle<SourceData, (), T, Diff, PersistEpoch>>,
+    since_handles: BTreeMap<GlobalId, SinceHandleWrapper<T>>,
     txns_handle: Option<WriteHandle<SourceData, (), T, Diff>>,
     txns_shards: BTreeSet<GlobalId>,
-    persist_location: PersistLocation,
-    persist: Arc<PersistClientCache>,
 }
 
 #[derive(Debug)]
@@ -1944,16 +2809,7 @@ enum BackgroundCmd<T: TimelyTimestamp + Lattice + Codec64> {
         id: GlobalId,
         is_in_txns: bool,
         write_handle: WriteHandle<SourceData, (), T, Diff>,
-        since_handle: SinceHandle<SourceData, (), T, Diff, PersistEpoch>,
-    },
-    // This was also dead code in the StorageController. I think we keep around
-    // these code paths for when we need to do migrations in the future.
-    #[allow(dead_code)]
-    Update {
-        id: GlobalId,
-        is_in_txns: bool,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
-        since_handle: SinceHandle<SourceData, (), T, Diff, PersistEpoch>,
+        since_handle: SinceHandleWrapper<T>,
     },
     DowngradeSince(Vec<(GlobalId, Antichain<T>)>),
     SnapshotStats(
@@ -1979,7 +2835,8 @@ where
         + Codec64
         + From<EpochMillis>
         + TimestampManipulation
-        + Into<mz_repr::Timestamp>,
+        + Into<mz_repr::Timestamp>
+        + Sync,
 {
     async fn run(&mut self) {
         // Futures that fetch the recent upper from all other shards.
@@ -1993,29 +2850,30 @@ where
             >,
         > = FuturesUnordered::new();
 
-        let gen_upper_future = |id: GlobalId, mut handle: WriteHandle<SourceData, (), T, i64>| {
-            let fut = async move {
-                let current_upper = handle.shared_upper();
-                handle.wait_for_upper_past(&current_upper).await;
-                let new_upper = handle.shared_upper();
-                (id, handle, new_upper)
-            };
+        let gen_upper_future =
+            |id, mut handle: WriteHandle<_, _, _, _>, prev_upper: Antichain<T>| {
+                let fut = async move {
+                    soft_assert_or_log!(
+                        !prev_upper.is_empty(),
+                        "cannot await progress when upper is already empty"
+                    );
+                    handle.wait_for_upper_past(&prev_upper).await;
+                    let new_upper = handle.shared_upper();
+                    (id, handle, new_upper)
+                };
 
-            fut
-        };
+                fut
+            };
 
         let mut txns_upper_future = match self.txns_handle.take() {
             Some(txns_handle) => {
-                let txns_upper_future = gen_upper_future(GlobalId::Transient(1), txns_handle);
+                let upper = txns_handle.upper().clone();
+                let txns_upper_future =
+                    gen_upper_future(GlobalId::Transient(1), txns_handle, upper);
                 txns_upper_future.boxed()
             }
             None => async { std::future::pending().await }.boxed(),
         };
-
-        // We check periodically if there's any shards that we need to finalize
-        // and do so if yes.
-        let mut finalization_interval = tokio::time::interval(Duration::from_secs(5));
-        finalization_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
             tokio::select! {
@@ -2023,11 +2881,11 @@ where
                     trace!("new upper from txns shard: {:?}", upper);
                     let mut uppers = Vec::new();
                     for id in self.txns_shards.iter() {
-                        uppers.push((id.clone(), upper.clone()));
+                        uppers.push((*id, &upper));
                     }
                     self.update_write_frontiers(&uppers).await;
 
-                    let fut = gen_upper_future(id, handle);
+                    let fut = gen_upper_future(id, handle, upper);
                     txns_upper_future = fut.boxed();
                 }
                 Some((id, handle, upper)) = upper_futures.next() => {
@@ -2039,10 +2897,12 @@ where
                         if shard_id == &handle.shard_id() {
                             // Still current, so process the update and enqueue
                             // again!
-                            let uppers = vec![(id, upper)];
-                            self.update_write_frontiers(&uppers).await;
-                            let fut = gen_upper_future(id, handle);
-                            upper_futures.push(fut.boxed());
+                            let uppers = &[(id, &upper)];
+                            self.update_write_frontiers(uppers).await;
+                            if !upper.is_empty() {
+                                let fut = gen_upper_future(id, handle, upper);
+                                upper_futures.push(fut.boxed());
+                            }
                         } else {
                             // Be polite and expire the write handle. This can
                             // happen when we get an upper update for a write
@@ -2075,30 +2935,16 @@ where
                             if is_in_txns {
                                 self.txns_shards.insert(id);
                             } else {
-                                let fut = gen_upper_future(id, write_handle);
-                                upper_futures.push(fut.boxed());
+                                let upper = write_handle.upper().clone();
+                                if !upper.is_empty() {
+                                    let fut = gen_upper_future(id, write_handle, upper);
+                                    upper_futures.push(fut.boxed());
+                                }
                             }
 
                         }
                         BackgroundCmd::DowngradeSince(cmds) => {
                             self.downgrade_sinces(cmds).await;
-                        }
-                        BackgroundCmd::Update { id, is_in_txns, write_handle, since_handle } => {
-                            self.shard_by_id.insert(id, write_handle.shard_id()).expect(
-                                "BackgroundCmd::Update only valid for updating extant write handles",
-                            );
-
-                            self.since_handles.insert(id, since_handle).expect(
-                                "BackgroundCmd::Update only valid for updating extant since handles",
-                            );
-
-                            if is_in_txns {
-                                self.txns_shards.insert(id);
-                            } else {
-                                let fut = gen_upper_future(id, write_handle);
-                                upper_futures.push(fut.boxed());
-                            }
-
                         }
                         BackgroundCmd::SnapshotStats(id, as_of, tx) => {
                             // NB: The requested as_of could be arbitrarily far
@@ -2113,15 +2959,11 @@ where
                                         Result<SnapshotStats, StorageError<T>>,
                                     > = match as_of {
                                         SnapshotStatsAsOf::Direct(as_of) => {
-                                            Box::pin(x.snapshot_stats(Some(as_of)).map(move |x| {
-                                                x.map_err(|_| StorageError::ReadBeforeSince(id))
-                                            }))
+                                            x.snapshot_stats(id, Some(as_of))
                                         }
-                                        SnapshotStatsAsOf::Txns(data_snapshot) => Box::pin(
-                                            data_snapshot.snapshot_stats(x).map(move |x| {
-                                                x.map_err(|_| StorageError::ReadBeforeSince(id))
-                                            }),
-                                        ),
+                                        SnapshotStatsAsOf::Txns(data_snapshot) => {
+                                            x.snapshot_stats_from_txn(id, data_snapshot)
+                                        }
                                     };
                                     SnapshotStatsRes(fut)
                                 }
@@ -2165,9 +3007,6 @@ where
                         &mut batched_changes,
                     );
                 }
-                _time = finalization_interval.tick() => {
-                    self.finalize_shards().await;
-                }
             }
         }
 
@@ -2175,7 +3014,7 @@ where
     }
 
     #[instrument(level = "debug")]
-    async fn update_write_frontiers(&mut self, updates: &[(GlobalId, Antichain<T>)]) {
+    async fn update_write_frontiers(&mut self, updates: &[(GlobalId, &Antichain<T>)]) {
         let mut read_capability_changes = BTreeMap::default();
 
         let mut self_collections = self.collections.lock().expect("lock poisoned");
@@ -2184,11 +3023,11 @@ where
             let collection = if let Some(c) = self_collections.get_mut(id) {
                 c
             } else {
-                warn!("Reference to absent collection {id}");
+                trace!("Reference to absent collection {id}, due to concurrent removal of that collection");
                 continue;
             };
 
-            if PartialOrder::less_than(&collection.write_frontier, new_upper) {
+            if PartialOrder::less_than(&collection.write_frontier, *new_upper) {
                 collection.write_frontier.clone_from(new_upper);
             }
 
@@ -2280,10 +3119,7 @@ where
 
                 info!(%id, %dropped_shard_id, "enqueing shard finalization due to dropped collection and dropped persist handle");
 
-                self.finalizable_shards
-                    .lock()
-                    .expect("lock poisoned")
-                    .insert(dropped_shard_id);
+                self.finalizable_shards.lock().insert(dropped_shard_id);
 
                 res
             } else {
@@ -2297,56 +3133,87 @@ where
             }
         }
     }
+}
 
-    /// Attempts to close all shards marked for finalization.
-    #[instrument(level = "debug")]
-    async fn finalize_shards(&mut self) {
-        if !self
-            .config
+struct FinalizeShardsTaskConfig {
+    envd_epoch: NonZeroI64,
+    config: Arc<Mutex<StorageConfiguration>>,
+    metrics: StorageCollectionsMetrics,
+    finalizable_shards: Arc<ShardIdSet>,
+    finalized_shards: Arc<ShardIdSet>,
+    persist_location: PersistLocation,
+    persist: Arc<PersistClientCache>,
+    read_only: bool,
+}
+
+async fn finalize_shards_task<T>(
+    FinalizeShardsTaskConfig {
+        envd_epoch,
+        config,
+        metrics,
+        finalizable_shards,
+        finalized_shards,
+        persist_location,
+        persist,
+        read_only,
+    }: FinalizeShardsTaskConfig,
+) where
+    T: TimelyTimestamp + Lattice + Codec64 + Sync,
+{
+    if read_only {
+        info!("disabling shard finalization in read only mode");
+        return;
+    }
+
+    let mut interval = tokio::time::interval(Duration::from_secs(5));
+    interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    loop {
+        interval.tick().await;
+
+        if !config
             .lock()
             .expect("lock poisoned")
             .parameters
             .finalize_shards
         {
             debug!("not triggering shard finalization due to dropped storage object because enable_storage_shard_finalization parameter is false");
-            return;
+            continue;
         }
 
-        let finalizable_shards = {
+        let current_finalizable_shards = {
             // We hold the lock for as short as possible and pull our cloned set
             // of shards.
-            let shared_shards = self.finalizable_shards.lock().expect("lock poisoned");
-            shared_shards.iter().cloned().collect_vec()
+            finalizable_shards.lock().iter().cloned().collect_vec()
         };
 
-        if finalizable_shards.is_empty() {
+        if current_finalizable_shards.is_empty() {
             debug!("no shards to finalize");
-            return;
+            continue;
         }
 
-        debug!(?finalizable_shards, "attempting to finalize shards");
+        debug!(?current_finalizable_shards, "attempting to finalize shards");
 
         // Open a persist client to delete unused shards.
-        let persist_client = self
-            .persist
-            .open(self.persist_location.clone())
-            .await
-            .unwrap();
+        let persist_client = persist.open(persist_location.clone()).await.unwrap();
 
+        let metrics = &metrics;
+        let finalizable_shards = &finalizable_shards;
+        let finalized_shards = &finalized_shards;
         let persist_client = &persist_client;
         let diagnostics = &Diagnostics::from_purpose("finalizing shards");
 
         let force_downgrade_since = STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION
-            .get(self.config.lock().expect("lock poisoned").config_set());
+            .get(config.lock().expect("lock poisoned").config_set());
 
-        let epoch = &PersistEpoch::from(self.envd_epoch);
+        let epoch = &PersistEpoch::from(envd_epoch);
 
-        use futures::stream::StreamExt;
-        let finalized_shards: BTreeSet<ShardId> = futures::stream::iter(finalizable_shards.clone())
+        futures::stream::iter(current_finalizable_shards.clone())
             .map(|shard_id| async move {
                 let persist_client = persist_client.clone();
                 let diagnostics = diagnostics.clone();
                 let epoch = epoch.clone();
+
+                metrics.finalization_started.inc();
 
                 let is_finalized = persist_client
                     .is_finalized::<SourceData, (), T, Diff>(shard_id, diagnostics)
@@ -2357,133 +3224,139 @@ where
                     debug!(%shard_id, "shard is already finalized!");
                     Some(shard_id)
                 } else {
-                    debug!(%shard_id, "spawning new finalization task");
-                    // Finalizing a shard can take a long time cleaning up
-                    // existing data. Spawning a task means that we can't
-                    // proactively remove this shard from the finalization
-                    // register, unfortunately... but a future run of
-                    // `finalize_shards` should notice the shard has been
-                    // finalized and tidy up.
-                    mz_ore::task::spawn(|| format!("finalize_shard({shard_id})"), async move {
+                    debug!(%shard_id, "finalizing shard");
                         let finalize = || async move {
-                            let empty_batch: Vec<((SourceData, ()), T, Diff)> = vec![];
-                            let mut write_handle: WriteHandle<SourceData, (), T, Diff> =
-                                persist_client
-                                    .open_writer(
-                                        shard_id,
-                                        Arc::new(RelationDesc::empty()),
-                                        Arc::new(UnitSchema),
-                                        // TODO: thread the global ID into the shard finalization WAL
-                                        Diagnostics::from_purpose("finalizing shards"),
-                                    )
-                                    .await
-                                    .expect("invalid persist usage");
+                        // TODO: thread the global ID into the shard finalization WAL
+                        let diagnostics = Diagnostics::from_purpose("finalizing shards");
 
-                            let upper = write_handle.upper();
+                        let schemas = persist_client.latest_schema::<SourceData, (), T, Diff>(shard_id, diagnostics.clone()).await.expect("codecs have not changed");
+                        let (key_schema, val_schema) = match schemas {
+                            Some((_, key_schema, val_schema)) => (key_schema, val_schema),
+                            None => (RelationDesc::empty(), UnitSchema),
+                        };
 
-                            if !upper.is_empty() {
-                                let append = write_handle
-                                    .append(empty_batch, upper.clone(), Antichain::new())
-                                    .await?;
-
-                                if let Err(e) = append {
-                                    warn!(%shard_id, "tried to finalize a shard with an advancing upper: {e:?}");
-                                    return Ok(());
-                                }
-                            }
-                            write_handle.expire().await;
-
-                            if force_downgrade_since {
-                                let mut since_handle: SinceHandle<
-                                    SourceData,
-                                    (),
-                                    T,
-                                    Diff,
-                                    PersistEpoch,
-                                > = persist_client
-                                    .open_critical_since(
-                                        shard_id,
-                                        PersistClient::CONTROLLER_CRITICAL_SINCE,
-                                        Diagnostics::from_purpose("finalizing shards"),
-                                    )
-                                    .await
-                                    .expect("invalid persist usage");
-                                let handle_epoch = since_handle.opaque().clone();
-                                let our_epoch = epoch.clone();
-                                let epoch = if our_epoch.0 > handle_epoch.0 {
-                                    // We're newer, but it's fine to use the
-                                    // handle's old epoch to try and downgrade.
-                                    handle_epoch
-                                } else {
-                                    // Good luck, buddy! The downgrade below
-                                    // will not succeed. There's a process with
-                                    // a newer epoch out there and someone at
-                                    // some juncture will fence out this
-                                    // process.
-                                    our_epoch
-                                };
-                                let new_since = Antichain::new();
-                                let downgrade = since_handle
-                                    .compare_and_downgrade_since(&epoch, (&epoch, &new_since))
-                                    .await;
-                                if let Err(e) = downgrade {
-                                    warn!(
-                                        "tried to finalize a shard with an advancing epoch: {e:?}"
-                                    );
-                                    return Ok(());
-                                }
-                                // Not available now, so finalization is broken.
-                                // since_handle.expire().await;
-                            }
-
+                        let empty_batch: Vec<((SourceData, ()), T, Diff)> = vec![];
+                        let mut write_handle: WriteHandle<SourceData, (), T, Diff> =
                             persist_client
-                                .finalize_shard::<SourceData, (), T, Diff>(
+                                .open_writer(
                                     shard_id,
+                                    Arc::new(key_schema),
+                                    Arc::new(val_schema),
+                                    diagnostics,
+                                )
+                                .await
+                                .expect("invalid persist usage");
+
+                        let upper = write_handle.upper();
+
+                        if !upper.is_empty() {
+                            let append = write_handle
+                                .append(empty_batch, upper.clone(), Antichain::new())
+                                .await?;
+
+                            if let Err(e) = append {
+                                warn!(%shard_id, "tried to finalize a shard with an advancing upper: {e:?}");
+                                return Ok(());
+                            }
+                        }
+                        write_handle.expire().await;
+
+                        if force_downgrade_since {
+                            let mut since_handle: SinceHandle<
+                                SourceData,
+                                (),
+                                T,
+                                Diff,
+                                PersistEpoch,
+                            > = persist_client
+                                .open_critical_since(
+                                    shard_id,
+                                    PersistClient::CONTROLLER_CRITICAL_SINCE,
                                     Diagnostics::from_purpose("finalizing shards"),
                                 )
                                 .await
-                        };
-
-                        match finalize().await {
-                            Err(e) => {
-                                // Rather than error, just leave this shard as
-                                // one to finalize later.
-                                warn!("error during background finalization of shard {shard_id}: {e:?}");
+                                .expect("invalid persist usage");
+                            let handle_epoch = since_handle.opaque().clone();
+                            let our_epoch = epoch.clone();
+                            let epoch = if our_epoch.0 > handle_epoch.0 {
+                                // We're newer, but it's fine to use the
+                                // handle's old epoch to try and downgrade.
+                                handle_epoch
+                            } else {
+                                // Good luck, buddy! The downgrade below will
+                                // not succeed. There's a process with a newer
+                                // epoch out there and someone at some juncture
+                                // will fence out this process.
+                                our_epoch
+                            };
+                            let new_since = Antichain::new();
+                            let downgrade = since_handle
+                                .compare_and_downgrade_since(&epoch, (&epoch, &new_since))
+                                .await;
+                            if let Err(e) = downgrade {
+                                warn!(
+                                    "tried to finalize a shard with an advancing epoch: {e:?}"
+                                );
+                                return Ok(());
                             }
-                            Ok(()) => {
-                                debug!(%shard_id, "finalize success!");
-                            }
+                            // Not available now, so finalization is broken.
+                            // since_handle.expire().await;
                         }
-                    });
-                    None
+
+                        persist_client
+                            .finalize_shard::<SourceData, (), T, Diff>(
+                                shard_id,
+                                Diagnostics::from_purpose("finalizing shards"),
+                            )
+                            .await
+                    };
+
+                    match finalize().await {
+                        Err(e) => {
+                            // Rather than error, just leave this shard as
+                            // one to finalize later.
+                            warn!("error during finalization of shard {shard_id}: {e:?}");
+                            None
+                        }
+                        Ok(()) => {
+                            debug!(%shard_id, "finalize success!");
+                            Some(shard_id)
+                        }
+                    }
                 }
             })
             // Poll each future for each collection concurrently, maximum of 10
             // at a time.
+            // TODO(benesch): the concurrency here should be configurable
+            // via LaunchDarkly.
             .buffer_unordered(10)
-            // HERE BE DRAGONS: see warning on other uses of buffer_unordered
-            // before any changes to `collect`
-            .collect::<BTreeSet<Option<ShardId>>>()
-            .await
-            .into_iter()
-            .filter_map(|shard| shard)
-            .collect();
+            // HERE BE DRAGONS: see warning on other uses of buffer_unordered.
+            // The closure passed to `for_each` must remain fast or we risk
+            // starving the finalization futures of calls to `poll`.
+            .for_each(|shard_id| async move {
+                match shard_id {
+                    None => metrics.finalization_failed.inc(),
+                    Some(shard_id) => {
+                        // We make successfully finalized shards available for
+                        // removal from the finalization WAL one by one, so that
+                        // a handful of stuck shards don't prevent us from
+                        // removing the shards that have made progress. The
+                        // overhead of repeatedly acquiring and releasing the
+                        // locks is negligible.
+                        {
+                            let mut finalizable_shards = finalizable_shards.lock();
+                            let mut finalized_shards = finalized_shards.lock();
+                            finalizable_shards.remove(&shard_id);
+                            finalized_shards.insert(shard_id);
+                        }
 
-        let mut shared_finalizable_shards = self.finalizable_shards.lock().expect("lock poisoned");
-        let mut shared_finalized_shards = self.finalized_shards.lock().expect("lock poisoned");
+                        metrics.finalization_succeeded.inc();
+                    }
+                }
+            })
+            .await;
 
-        for id in finalized_shards.iter() {
-            shared_finalizable_shards.remove(id);
-            shared_finalized_shards.insert(*id);
-        }
-
-        debug!(
-            ?finalizable_shards,
-            ?finalized_shards,
-            ?shared_finalizable_shards,
-            ?shared_finalized_shards,
-            "done finalizing shards"
-        );
+        debug!("done finalizing shards");
     }
 }
 
@@ -2499,12 +3372,15 @@ pub(crate) enum SnapshotStatsAsOf<T: TimelyTimestamp + Lattice + Codec64> {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
     use std::sync::Arc;
 
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_dyncfg::ConfigSet;
-    use mz_ore::metrics::MetricsRegistry;
+    use mz_ore::assert_err;
+    use mz_ore::metrics::{MetricsRegistry, UIntGauge};
     use mz_ore::now::SYSTEM_TIME;
+    use mz_ore::url::SensitiveUrl;
     use mz_persist_client::cache::PersistClientCache;
     use mz_persist_client::cfg::PersistConfig;
     use mz_persist_client::rpc::PubSubClientConnection;
@@ -2519,8 +3395,8 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr`
     async fn test_snapshot_stats(&self) {
         let persist_location = PersistLocation {
-            blob_uri: "mem://".to_owned(),
-            consensus_uri: "mem://".to_owned(),
+            blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+            consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
         };
         let persist_client = PersistClientCache::new(
             PersistConfig::new_default_configs(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
@@ -2561,7 +3437,7 @@ mod tests {
             .send(BackgroundCmd::Register {
                 id: GlobalId::User(1),
                 is_in_txns: false,
-                since_handle,
+                since_handle: SinceHandleWrapper::Critical(since_handle),
                 write_handle,
             })
             .unwrap();
@@ -2579,11 +3455,11 @@ mod tests {
         // No stats for unknown GlobalId.
         let stats =
             snapshot_stats(&cmds_tx, GlobalId::User(2), Antichain::from_elem(0.into())).await;
-        assert!(stats.is_err());
+        assert_err!(stats);
 
         // Stats don't resolve for as_of past the upper.
         let stats_fut = snapshot_stats(&cmds_tx, GlobalId::User(1), Antichain::from_elem(1.into()));
-        assert!(stats_fut.now_or_never().is_none());
+        assert_none!(stats_fut.now_or_never());
 
         // // Call it again because now_or_never consumed our future and it's not clone-able.
         let stats_ts1_fut =
@@ -2654,8 +3530,8 @@ mod tests {
 
     impl<T: TimelyTimestamp + Lattice + Codec64> BackgroundTask<T> {
         fn new_for_test(
-            persist_location: PersistLocation,
-            persist_client: Arc<PersistClientCache>,
+            _persist_location: PersistLocation,
+            _persist_client: Arc<PersistClientCache>,
         ) -> (mpsc::UnboundedSender<BackgroundCmd<T>>, Self) {
             let (cmds_tx, cmds_rx) = mpsc::unbounded_channel();
             let (_holds_tx, holds_rx) = mpsc::unbounded_channel();
@@ -2663,7 +3539,6 @@ mod tests {
                 ConnectionContext::for_tests(Arc::new(InMemorySecretsController::new()));
 
             let task = Self {
-                envd_epoch: NonZeroI64::new(1).unwrap(),
                 config: Arc::new(Mutex::new(StorageConfiguration::new(
                     connection_context,
                     ConfigSet::default(),
@@ -2671,15 +3546,14 @@ mod tests {
                 cmds_tx: cmds_tx.clone(),
                 cmds_rx,
                 holds_rx,
-                finalizable_shards: Arc::new(Mutex::new(BTreeSet::new())),
-                finalized_shards: Arc::new(Mutex::new(BTreeSet::new())),
+                finalizable_shards: Arc::new(ShardIdSet::new(
+                    UIntGauge::new("finalizable_shards", "dummy gauge for tests").unwrap(),
+                )),
                 collections: Arc::new(Mutex::new(BTreeMap::new())),
                 shard_by_id: BTreeMap::new(),
                 since_handles: BTreeMap::new(),
                 txns_handle: None,
                 txns_shards: BTreeSet::new(),
-                persist_location,
-                persist: persist_client,
             };
 
             (cmds_tx, task)

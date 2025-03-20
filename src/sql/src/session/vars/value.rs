@@ -14,6 +14,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use ipnet::IpNet;
 use itertools::Itertools;
 use mz_pgwire_common::Severity;
 use mz_repr::adt::numeric::Numeric;
@@ -21,7 +22,6 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::strconv;
 use mz_rocksdb_types::config::{CompactionStyle, CompressionType};
 use mz_sql_parser::ast::{Ident, TransactionIsolationLevel};
-use mz_storage_types::controller::TxnWalTablesImpl;
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
 use serde::Serialize;
 use uncased::UncasedStr;
@@ -75,9 +75,14 @@ impl<'a> PartialEq for &'a dyn Value {
 }
 impl<'a> Eq for &'a dyn Value {}
 
-/// Helper trait ...
+/// Helper trait to cast a `&dyn T` to a `&dyn Any`.
 ///
-/// TODO(parkmycar): Document why this exists
+/// In Rust all types that are `'static` implement [`std::any::Any`] and thus can be casted to a
+/// `&dyn Any`. But once you create a trait object, the type is erased and thus so is the
+/// implementation for [`Any`]. This trait essentially adds a types' [`Any`] impl to the vtable
+/// created when casted to trait object, if [`AsAny`] is a supertrait.
+///
+/// See [`Value`] for an example of using [`AsAny`].
 pub trait AsAny {
     fn as_any(&self) -> &dyn Any;
 }
@@ -307,8 +312,8 @@ impl Value for Duration {
             "d" => (Duration::from_secs, SEC_TO_DAY),
             o => {
                 return Err(VarParseError::InvalidParameterValue {
-                    invalid_values: vec![s.to_string()],
-                    reason: format!("expected us, ms, s, min, h, or d but got {o:?}").into(),
+                    invalid_values: vec![o.to_string()],
+                    reason: "expected us, ms, s, min, h, or d but got {o:?}".to_string(),
                 })
             }
         };
@@ -466,7 +471,41 @@ impl Value for Vec<Ident> {
             .collect::<Result<_, _>>()
             .map_err(|e| VarParseError::InvalidParameterValue {
                 invalid_values: values.to_vec(),
-                reason: e.to_string().into(),
+                reason: e.to_string(),
+            })?;
+        Ok(values)
+    }
+
+    fn box_clone(&self) -> Box<dyn Value> {
+        Box::new(self.clone())
+    }
+
+    fn format(&self) -> String {
+        self.iter().map(|ident| ident.to_string()).join(", ")
+    }
+}
+
+impl Value for Vec<IpNet> {
+    fn type_name() -> Cow<'static, str>
+    where
+        Self: Sized,
+    {
+        "CIDR list".into()
+    }
+
+    fn parse(input: VarInput<'_>) -> Result<Self, VarParseError>
+    where
+        Self: Sized,
+    {
+        let values = input.to_vec();
+        let values: Vec<IpNet> = values
+            .iter()
+            .flat_map(|i| i.split(','))
+            .map(|d| IpNet::from_str(d.trim()))
+            .collect::<Result<_, _>>()
+            .map_err(|e| VarParseError::InvalidParameterValue {
+                invalid_values: values,
+                reason: e.to_string(),
             })?;
         Ok(values)
     }
@@ -500,7 +539,7 @@ impl Value for Vec<SerializableDirective> {
             .collect();
         dirs.map_err(|e| VarParseError::InvalidParameterValue {
             invalid_values: values.to_vec(),
-            reason: e.to_string().into(),
+            reason: e.to_string(),
         })
     }
 
@@ -550,7 +589,7 @@ impl Value for Failpoints {
                 })?;
             fail::cfg(failpoint, action).map_err(|e| VarParseError::InvalidParameterValue {
                 invalid_values: input.to_vec(),
-                reason: e.to_string().into(),
+                reason: e.to_string(),
             })?;
         }
 
@@ -764,6 +803,8 @@ impl Value for ClientSeverity {
 pub enum TimeZone {
     /// UTC
     UTC,
+    /// GMT
+    GMT,
     /// Fixed offset from UTC, currently only "+00:00" is supported.
     /// A string representation is kept here for compatibility with Postgres.
     FixedOffset(&'static str),
@@ -773,6 +814,7 @@ impl TimeZone {
     fn as_str(&self) -> &'static str {
         match self {
             TimeZone::UTC => "UTC",
+            TimeZone::GMT => "GMT",
             TimeZone::FixedOffset(s) => s,
         }
     }
@@ -796,6 +838,8 @@ impl Value for TimeZone {
 
         if s == TimeZone::UTC.as_str() {
             Ok(TimeZone::UTC)
+        } else if s == TimeZone::GMT.as_str() {
+            Ok(TimeZone::GMT)
         } else if s == "+00:00" {
             Ok(TimeZone::FixedOffset("+00:00"))
         } else {
@@ -965,7 +1009,7 @@ impl Value for CloneableEnvFilter {
         let s = extract_single_value(input)?;
         CloneableEnvFilter::from_str(s).map_err(|e| VarParseError::InvalidParameterValue {
             invalid_values: vec![s.to_string()],
-            reason: e.to_string().into(),
+            reason: e.to_string(),
         })
     }
 
@@ -1078,36 +1122,6 @@ impl Value for IntervalStyle {
     }
 }
 
-impl Value for TxnWalTablesImpl {
-    fn type_name() -> Cow<'static, str>
-    where
-        Self: Sized,
-    {
-        "string".into()
-    }
-
-    fn parse(input: VarInput<'_>) -> Result<Self, VarParseError>
-    where
-        Self: Sized,
-    {
-        let s = extract_single_value(input)?;
-        let s = UncasedStr::new(s);
-
-        TxnWalTablesImpl::from_str(s.as_str()).map_err(|_| VarParseError::ConstrainedParameter {
-            invalid_values: input.to_vec(),
-            valid_values: Some(vec!["off", "eager", "lazy"]),
-        })
-    }
-
-    fn box_clone(&self) -> Box<dyn Value> {
-        Box::new(self.clone())
-    }
-
-    fn format(&self) -> String {
-        self.to_string()
-    }
-}
-
 /// Macro to implement [`Value`] for simpler types, i.e. ones that already implement `FromStr` and
 /// `ToString`.
 ///
@@ -1156,6 +1170,8 @@ impl_value_for_simple!(CompressionType, "rocksdb_compression_type");
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_err;
+
     use super::*;
 
     #[mz_ore::test]
@@ -1207,7 +1223,7 @@ mod tests {
         );
 
         fn errs(t: &'static str) {
-            assert!(Duration::parse(VarInput::Flat(t)).is_err());
+            assert_err!(Duration::parse(VarInput::Flat(t)));
         }
         errs("1 m");
         errs("1 sec");

@@ -1,0 +1,4 @@
+<div class="tip">
+  <strong class="gutter">
+    💡 Tip: </strong> {{ .Inner  | replaceRE "^\\s+" "" | $.Page.RenderString }}
+</div>

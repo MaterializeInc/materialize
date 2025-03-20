@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use chrono::NaiveTime;
+use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::chrono::ProtoNaiveTime;
@@ -19,6 +19,7 @@ use mz_repr::adt::mz_acl_item::{
 };
 use mz_repr::adt::numeric::{Numeric, PackedNumeric};
 use mz_repr::adt::system::Oid;
+use mz_repr::adt::timestamp::PackedNaiveDateTime;
 use mz_repr::role_id::RoleId;
 use mz_repr::ProtoNumeric;
 use prost::Message;
@@ -29,7 +30,7 @@ fn bench_interval(c: &mut Criterion) {
 
     const INTERVAL: Interval = Interval::new(1, 1, 0);
     group.bench_function("encode", |b| {
-        let mut buf = vec![0u8; 32];
+        let mut buf = [0u8; 32];
         b.iter(|| {
             let packed = PackedInterval::from_value(std::hint::black_box(INTERVAL));
             std::hint::black_box(&mut buf[..PackedInterval::SIZE])
@@ -71,7 +72,7 @@ fn bench_time(c: &mut Criterion) {
 
     let naive_time = NaiveTime::from_hms_opt(1, 1, 1).unwrap();
     group.bench_function("encode", |b| {
-        let mut buf = vec![0u8; 32];
+        let mut buf = [0u8; 32];
         b.iter(|| {
             let packed = PackedNaiveTime::from_value(std::hint::black_box(naive_time));
             std::hint::black_box(&mut buf[..PackedNaiveTime::SIZE])
@@ -117,7 +118,7 @@ fn bench_acl_item(c: &mut Criterion) {
         acl_mode: AclMode::all(),
     };
     group.bench_function("encode", |b| {
-        let mut buf = vec![0u8; 32];
+        let mut buf = [0u8; 32];
         b.iter(|| {
             let packed = PackedAclItem::from_value(std::hint::black_box(acl_item));
             std::hint::black_box(&mut buf[..PackedAclItem::SIZE])
@@ -163,7 +164,7 @@ fn bench_mz_acl_item(c: &mut Criterion) {
         acl_mode: AclMode::all(),
     };
     group.bench_function("encode", |b| {
-        let mut buf = vec![0u8; 32];
+        let mut buf = [0u8; 32];
         b.iter(|| {
             let packed = PackedMzAclItem::from_value(std::hint::black_box(acl_item));
             std::hint::black_box(&mut buf[..PackedMzAclItem::SIZE])
@@ -208,7 +209,7 @@ fn bench_numeric(c: &mut Criterion) {
 
     let val = Numeric::from(-101);
     group.bench_function("encode", |b| {
-        let mut buf = vec![0u8; 64];
+        let mut buf = [0u8; 64];
         b.iter(|| {
             let packed = PackedNumeric::from_value(std::hint::black_box(val));
             std::hint::black_box(&mut buf[..PackedNumeric::SIZE])
@@ -248,12 +249,46 @@ fn bench_numeric(c: &mut Criterion) {
     group.finish();
 }
 
+#[allow(clippy::useless_vec)]
+fn bench_timestamp(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Timestamp");
+    group.throughput(Throughput::Elements(1));
+
+    let date = NaiveDate::from_ymd_opt(2024, 6, 30).unwrap();
+    let time = NaiveTime::from_hms_opt(12, 30, 1).unwrap();
+    let val = NaiveDateTime::new(date, time);
+
+    group.bench_function("encode", |b| {
+        let mut buf = vec![0u8; 64];
+        b.iter(|| {
+            let packed = PackedNaiveDateTime::from_value(std::hint::black_box(val));
+            std::hint::black_box(&mut buf[..PackedNaiveDateTime::SIZE])
+                .copy_from_slice(packed.as_bytes());
+        })
+    });
+    group.bench_function("encode/micros", |b| {
+        b.iter(|| {
+            let encoded = std::hint::black_box(val).and_utc().timestamp_micros();
+            std::hint::black_box(encoded);
+        })
+    });
+    group.bench_function("encode/proto", |b| {
+        let mut buf = vec![0u8; 64];
+        b.iter(|| {
+            let proto = std::hint::black_box(val).into_proto();
+            proto.encode(&mut buf).unwrap();
+            buf.clear();
+        });
+    });
+}
+
 criterion_group!(
     benches,
     bench_interval,
     bench_time,
     bench_acl_item,
     bench_mz_acl_item,
-    bench_numeric
+    bench_numeric,
+    bench_timestamp
 );
 criterion_main!(benches);

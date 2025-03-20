@@ -1,0 +1,97 @@
+columns:
+  - column: name
+  - column: global_id
+  - column: lir_id
+  - column: parent_lir_id
+  - column: operator
+  - column: duration
+  - column: count
+
+rows:
+  - name: "`winning_bids`"
+    global_id: "`u148`"
+    lir_id: "`6`"
+    parent_lir_id: "`null`"
+    operator: |
+      ```mzsql
+      TopK::Basic 5
+      ```
+    duration: "`00:00:00.74516`"
+    count: "`108650`"
+
+  - name: "`winning_bids`"
+    global_id: "`u148`"
+    lir_id: "`5`"
+    parent_lir_id: "`6`"
+    operator: |
+      ```mzsql
+        Join::Differential 2 » 4
+      ```
+    duration: "`00:00:00.017005`"
+    count: "`19099`"
+
+  - name: "`winning_bids`"
+    global_id: "`u148`"
+    lir_id: "`4`"
+    parent_lir_id: "`5`"
+    operator: |
+      ```mzsql
+          Arrange 3
+      ```
+    duration: "`00:00:00.058835`"
+    count: "`11506`"
+
+  - name: "`winning_bids`"
+    global_id: "`u148`"
+    lir_id: "`3`"
+    parent_lir_id: "`4`"
+    operator: |
+      ```mzsql
+            Get::PassArrangements u145
+      ```
+    duration: "`null`"
+    count: "`null`"
+
+  - name: "`winning_bids`"
+    global_id: "`u148`"
+    lir_id: "`2`"
+    parent_lir_id: "`5`"
+    operator: |
+      ```mzsql
+          Arrange 1
+      ```
+    duration: "`00:00:00.013885`"
+    count: "`7413`"
+
+  - name: "`winning_bids`"
+    global_id: "`u148`"
+    lir_id: "`1`"
+    parent_lir_id: "`2`"
+    operator: |
+      ```mzsql
+            Get::Collection u144
+      ```
+    duration: "`null`"
+    count: "`null`"
+
+  - name: "`wins_by_item`"
+    global_id: "`u149`"
+    lir_id: "`8`"
+    parent_lir_id: "`null`"
+    operator: |
+      ```mzsql
+      Arrange 7
+      ```
+    duration: "`00:00:00.013887`"
+    count: "`9347`"
+
+  - name: "`wins_by_item`"
+    global_id: "`u149`"
+    lir_id: "`7`"
+    parent_lir_id: "`8`"
+    operator: |
+      ```mzsql
+        Get::PassArrangements u148
+      ```
+    duration: "`null`"
+    count: "`null`"

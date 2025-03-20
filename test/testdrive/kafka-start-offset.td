@@ -9,9 +9,6 @@
 
 $ set-arg-default single-replica-cluster=quickstart
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_create_source_denylist_with_options = true
-
 $ kafka-create-topic topic=t0 partitions=1
 
 > CREATE CONNECTION kafka_conn
@@ -23,6 +20,4 @@ $ kafka-create-topic topic=t0 partitions=1
       TOPIC 'testdrive-t0-${testdrive.seed}',
       START OFFSET (100, 100)
     )
-  FORMAT TEXT
-  INCLUDE OFFSET
 exact:START OFFSET specified more partitions (2) than topic (testdrive-t0-${testdrive.seed}) contains (1)

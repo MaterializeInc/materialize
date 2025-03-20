@@ -49,7 +49,7 @@ end
 
 ## Insert data into tables
 
-**Basic Example:** [Insert a row](https://materialize.com/docs/sql/insert/) of data into a table named `countries` in Materialize:
+**Basic Example:** [Insert a row](/sql/insert/) of data into a table named `countries` in Materialize:
 
 ```ruby
 require 'pg'
@@ -180,7 +180,7 @@ An `mz_diff` value of `-1` indicates Materialize is deleting one row with the in
 
 To clean up the sources, views, and tables that we created, first connect to Materialize using a [PostgreSQL client](/integrations/sql-clients/) and then, run the following commands:
 
-```sql
+```mzsql
 DROP MATERIALIZED VIEW IF EXISTS counter_sum;
 DROP SOURCE IF EXISTS counter;
 DROP TABLE IF EXISTS countries;
@@ -190,4 +190,4 @@ DROP TABLE IF EXISTS countries;
 
 ORM frameworks like **Active Record** tend to run complex introspection queries that may use configuration settings, system tables or features not yet implemented in Materialize. This means that even if a tool is compatible with PostgreSQL, it’s not guaranteed that the same integration will work out-of-the-box.
 
-The level of support for these tools will improve as we extend the coverage of `pg_catalog` in Materialize {{% gh 2157 %}} and join efforts with each community to make the integrations Just Work™️.
+The level of support for these tools will improve as we extend the coverage of `pg_catalog` in Materialize and join efforts with each community to make the integrations Just Work™️.

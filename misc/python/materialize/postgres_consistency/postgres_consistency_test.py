@@ -8,8 +8,8 @@
 # by the Apache License, Version 2.0.
 import argparse
 
-from pg8000 import Connection
-from pg8000.exceptions import InterfaceError
+from psycopg import Connection
+from psycopg.errors import OperationalError
 
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
@@ -18,7 +18,7 @@ from materialize.output_consistency.execution.evaluation_strategy import (
     DataFlowRenderingEvaluation,
     EvaluationStrategy,
 )
-from materialize.output_consistency.execution.sql_executor import create_sql_executor
+from materialize.output_consistency.execution.query_output_mode import QueryOutputMode
 from materialize.output_consistency.execution.sql_executors import SqlExecutors
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
     GenericInconsistencyIgnoreFilter,
@@ -33,6 +33,9 @@ from materialize.output_consistency.output.output_printer import OutputPrinter
 from materialize.output_consistency.output_consistency_test import (
     OutputConsistencyTest,
     connect,
+)
+from materialize.output_consistency.validation.error_message_normalizer import (
+    ErrorMessageNormalizer,
 )
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 from materialize.postgres_consistency.custom.predefined_pg_queries import (
@@ -60,27 +63,28 @@ class PostgresConsistencyTest(OutputConsistencyTest):
     def create_sql_executors(
         self,
         config: ConsistencyTestConfiguration,
-        connection: Connection,
+        default_connection: Connection,
+        mz_system_connection: Connection,
         output_printer: OutputPrinter,
     ) -> SqlExecutors:
         if self.pg_connection is None:
             raise RuntimeError("Postgres connection is not initialized")
 
         return PgSqlExecutors(
-            create_sql_executor(config, connection, output_printer, "mz"),
-            create_sql_executor(
-                config, self.pg_connection, output_printer, "pg", is_mz=False
+            self.create_sql_executor(
+                config, default_connection, mz_system_connection, output_printer, "mz"
+            ),
+            self.create_sql_executor(
+                config, self.pg_connection, None, output_printer, "pg", is_mz=False
             ),
         )
 
     def create_result_comparator(
         self, ignore_filter: GenericInconsistencyIgnoreFilter
     ) -> ResultComparator:
-        return PostgresResultComparator(ignore_filter)
+        return PostgresResultComparator(ignore_filter, ErrorMessageNormalizer())
 
-    def create_inconsistency_ignore_filter(
-        self, sql_executors: SqlExecutors
-    ) -> GenericInconsistencyIgnoreFilter:
+    def create_inconsistency_ignore_filter(self) -> GenericInconsistencyIgnoreFilter:
         return PgInconsistencyIgnoreFilter()
 
     def create_evaluation_strategies(
@@ -101,6 +105,17 @@ class PostgresConsistencyTest(OutputConsistencyTest):
         input_data.predefined_queries.extend(create_custom_pg_consistency_queries())
         return input_data
 
+    def filter_input_data(self, input_data: ConsistencyTestInputData) -> None:
+        input_data.types_input.remove_types(
+            lambda data_type: not data_type.is_pg_compatible
+        )
+        input_data.types_input.remove_values(
+            lambda data_value: not data_value.is_pg_compatible
+        )
+        input_data.operations_input.remove_functions(
+            lambda db_operation: not db_operation.is_pg_compatible
+        )
+
 
 def main() -> int:
     test = PostgresConsistencyTest()
@@ -112,6 +127,7 @@ def main() -> int:
 
     parser.add_argument("--mz-host", default="localhost", type=str)
     parser.add_argument("--mz-port", default=6875, type=int)
+    parser.add_argument("--mz-system-port", default=6877, type=int)
     parser.add_argument("--pg-host", default="localhost", type=str)
     parser.add_argument("--pg-port", default=5432, type=int)
     parser.add_argument("--pg-password", default=None, type=str)
@@ -119,16 +135,25 @@ def main() -> int:
 
     try:
         mz_db_user = "materialize"
+        mz_system_user = "mz_system"
         mz_connection = connect(args.mz_host, args.mz_port, mz_db_user)
+        mz_system_connection = connect(
+            args.mz_host, args.mz_system_port, mz_system_user
+        )
 
         pg_db_user = "postgres"
         test.pg_connection = connect(
             args.pg_host, args.pg_port, pg_db_user, args.pg_password
         )
-    except InterfaceError:
+    except OperationalError:
         return 1
 
-    result = test.run_output_consistency_tests(mz_connection, args)
+    result = test.run_output_consistency_tests(
+        mz_connection,
+        mz_system_connection,
+        args,
+        query_output_mode=QueryOutputMode.SELECT,
+    )
     return 0 if result.all_passed() else 1
 
 

@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Basic test for the Data build tool (dbt) integration of Materialize
+"""
+
 from dataclasses import dataclass
 from textwrap import dedent
 from typing import Dict, List, Optional
@@ -83,6 +87,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         )
                     )
 
+                    # Set enable_create_table_from_source to true
+                    c.testdrive(
+                        input=dedent(
+                            """
+                                $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                                ALTER SYSTEM SET enable_create_table_from_source = true
+                                """
+                        )
+                    )
+
                     # Give the test harness permission to modify the built-in
                     # objects as necessary.
                     for what in [
@@ -96,6 +110,20 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                             port=6877,
                             sql=f"ALTER {what} OWNER TO materialize",
                         )
+
+                    # Create two databases that some tests rely on
+                    c.sql(
+                        service="materialized",
+                        user="materialize",
+                        sql=dedent(
+                            """
+                            CREATE DATABASE test_database_1;
+                            CREATE DATABASE test_database_2;
+                            CREATE TABLE test_database_1.public.table1 (id int);
+                            CREATE TABLE test_database_2.public.table2 (id int);
+                            """
+                        ),
+                    )
 
                     c.run(
                         "dbt",

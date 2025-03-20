@@ -12,7 +12,7 @@ schema.
 
 {{< warning >}}
 The objects in the `mz_internal` schema are not part of Materialize's stable interface.
-Backwards-incompatible changes to these tables may be made at any time.
+Backwards-incompatible changes to these objects may be made at any time.
 {{< /warning >}}
 
 {{< warning >}}
@@ -21,9 +21,7 @@ reference these objects is not allowed.
 {{< /warning >}}
 
 
-## System relations
-
-### `mz_recent_activity_log`
+## `mz_recent_activity_log`
 
 {{< public-preview />}}
 
@@ -38,7 +36,7 @@ Entries in this view may be cleared on restart (e.g., during Materialize mainten
 {{< /warning >}}
 
 The `mz_recent_activity_log` view contains a log of the SQL statements
-that have been issued to Materialize in the last three days, along
+that have been issued to Materialize in the last 24 hours, along
 with various metadata about them.
 
 Entries in this log may be sampled. The sampling rate is controlled by
@@ -56,34 +54,37 @@ granted the [`mz_monitor` role](/manage/access-control/manage-roles#builtin-role
 |----------------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `execution_id`             | [`uuid`]                     | An ID that is unique for each executed statement.                                                                                                                                                                                                                             |
 | `sample_rate`              | [`double precision`]         | The actual rate at which the statement was sampled.                                                                                                                                                                                                                           |
-| `cluster_id`               | [`text`]                     | The ID of the cluster the statement execution was directed to. Corresponds to [mz_clusters.id](https://materialize.com/docs/sql/system-catalog/mz_catalog/#mz_clusters).                                                                                                      |
-| `application_name`         | [`text`]                     | The value of the `application_name` configuration parameter at execution time.                                                                                                                                                                                                       |
+| `cluster_id`               | [`text`]                     | The ID of the cluster the statement execution was directed to. Corresponds to [mz_clusters.id](/sql/system-catalog/mz_catalog/#mz_clusters).                                                                                                      |
+| `application_name`         | [`text`]                     | The value of the `application_name` configuration parameter at execution time.                                                                                                                                                                                                |
 | `cluster_name`             | [`text`]                     | The name of the cluster with ID `cluster_id` at execution time.                                                                                                                                                                                                               |
-| `transaction_isolation`    | [`text`]                     | The value of the `transaction_isolation` configuration parameter at execution time.                                                                                                                                                                                                  |
+| `database_name`            | [`text`]                     | The value of the `database` configuration parameter at execution time.                                                                                                                                                                                                        |
+| `search_path`              | [`text list`]                | The value of the `search_path` configuration parameter at execution time.                                                                                                                                                                                                     |
+| `transaction_isolation`    | [`text`]                     | The value of the `transaction_isolation` configuration parameter at execution time.                                                                                                                                                                                           |
 | `execution_timestamp`      | [`uint8`]                    | The logical timestamp at which execution was scheduled.                                                                                                                                                                                                                       |
 | `transient_index_id`       | [`text`]                     | The internal index of the compute dataflow created for the query, if any.                                                                                                                                                                                                     |
 | `params`                   | [`text array`]               | The parameters with which the statement was executed.                                                                                                                                                                                                                         |
 | `mz_version`               | [`text`]                     | The version of Materialize that was running when the statement was executed.                                                                                                                                                                                                  |
 | `began_at`                 | [`timestamp with time zone`] | The wall-clock time at which the statement began executing.                                                                                                                                                                                                                   |
 | `finished_at`              | [`timestamp with time zone`] | The wall-clock time at which the statement finished executing.                                                                                                                                                                                                                |
-| `finished_status`          | [`text`]                     | The final status of the statement (e.g., `success`, `canceled`, `error`, or `aborted`). `aborted` means that Materialize exited before the statement finished executing.                                                                                                    |
+| `finished_status`          | [`text`]                     | The final status of the statement (e.g., `success`, `canceled`, `error`, or `aborted`). `aborted` means that Materialize exited before the statement finished executing.                                                                                                   |
 | `error_message`            | [`text`]                     | The error message, if the statement failed.                                                                                                                                                                                                                                   |
+| `result_size`              | [`bigint`]                   | The size in bytes of the result, for statements that return rows.                                                                                                                                                                                                                 |
 | `rows_returned`            | [`bigint`]                   | The number of rows returned, for statements that return rows.                                                                                                                                                                                                                 |
 | `execution_strategy`       | [`text`]                     | For `SELECT` queries, the strategy for executing the query. `constant` means computed in the control plane without the involvement of a cluster, `fast-path` means read by a cluster directly from an in-memory index, and `standard` means computed by a temporary dataflow. |
 | `transaction_id`           | [`uint8`]                    | The ID of the transaction that the statement was part of. Note that transaction IDs are only unique per session.                                                                                                                                                              |
 | `prepared_statement_id`    | [`uuid`]                     | An ID that is unique for each prepared statement. For example, if a statement is prepared once and then executed multiple times, all executions will have the same value for this column (but different values for `execution_id`).                                           |
 | `sql_hash`                 | [`bytea`]                    | An opaque value uniquely identifying the text of the query.                                                                                                                                                                                                                   |
 | `prepared_statement_name`  | [`text`]                     | The name given by the client library to the prepared statement.                                                                                                                                                                                                               |
-| `session_id`               | [`uuid`]                     | An ID that is unique for each session.                                                                                                                                                                                                                                        |
+| `session_id`               | [`uuid`]                     | An ID that is unique for each session. Corresponds to [mz_sessions.id](#mz_sessions). |
 | `prepared_at`              | [`timestamp with time zone`] | The time at which the statement was prepared.                                                                                                                                                                                                                                 |
 | `statement_type`           | [`text`]                     | The _type_ of the statement, e.g. `select` for a `SELECT` query, or `NULL` if the statement was empty.                                                                                                                                                                        |
-| `throttled_count`          | [`uint8`]                    | The number of statements that were dropped due to throttling before the current one was seen. If you have a very high volume of queries and need to log them without throttling, [contact our team](https://materialize.com/docs/support/).                                   |
+| `throttled_count`          | [`uint8`]                    | The number of statements that were dropped due to throttling before the current one was seen. If you have a very high volume of queries and need to log them without throttling, [contact our team](/support/).                                   |
 | `initial_application_name` | [`text`]                     | The initial value of `application_name` at the beginning of the session.                                                                                                                                                                                                      |
 | `authenticated_user`       | [`text`]                     | The name of the user for which the session was established.                                                                                                                                                                                                                   |
 | `sql`                      | [`text`]                     | The SQL text of the statement.                                                                                                                                                                                                                                                |
 
 
-### `mz_aws_connections`
+## `mz_aws_connections`
 
 The `mz_aws_connections` table contains a row for each AWS connection in the
 system.
@@ -105,7 +106,7 @@ system.
 | `external_id`                 | [`text`]  | The external ID Materialize will use when assuming the provided role, if the connection is configured to use role assumption.
 | `example_trust_policy`        | [`jsonb`] | An example of an IAM role trust policy that allows this connection's principal and external ID to assume the role.
 
-### `mz_aws_privatelink_connection_status_history`
+## `mz_aws_privatelink_connection_status_history`
 
 The `mz_aws_privatelink_connection_status_history` table contains a row describing
 the historical status for each AWS PrivateLink connection in the system.
@@ -117,7 +118,7 @@ the historical status for each AWS PrivateLink connection in the system.
 | `connection_id`   | `text`                     | The unique identifier of the AWS PrivateLink connection. Corresponds to [`mz_catalog.mz_connections.id`](../mz_catalog#mz_connections).   |
 | `status`          | `text`                     | The status of the connection: one of `pending-service-discovery`, `creating-endpoint`, `recreating-endpoint`, `updating-endpoint`, `available`, `deleted`, `deleting`, `expired`, `failed`, `pending`, `pending-acceptance`, `rejected`, or `unknown`.                        |
 
-### `mz_aws_privatelink_connection_statuses`
+## `mz_aws_privatelink_connection_statuses`
 
 The `mz_aws_privatelink_connection_statuses` table contains a row describing
 the most recent status for each AWS PrivateLink connection in the system.
@@ -130,42 +131,29 @@ the most recent status for each AWS PrivateLink connection in the system.
 | `last_status_change_at` | [`timestamp with time zone`] | Wall-clock timestamp of the connection status change.|
 | `status` | [`text`] | | The status of the connection: one of `pending-service-discovery`, `creating-endpoint`, `recreating-endpoint`, `updating-endpoint`, `available`, `deleted`, `deleting`, `expired`, `failed`, `pending`, `pending-acceptance`, `rejected`, or `unknown`. |
 
-### `mz_cluster_schedules`
+## `mz_cluster_deployment_lineage`
+
+The `mz_cluster_deployment_lineage` table shows the blue/green deployment lineage of all clusters in [`mz_clusters`](../mz_catalog/#mz_clusters). It determines all cluster IDs that are logically the same cluster.
+
+<!-- RELATION_SPEC mz_internal.mz_cluster_deployment_lineage -->
+| Field                               | Type         | Meaning                                                        |
+|-------------------------------------|--------------|----------------------------------------------------------------|
+| `cluster_id`                        | [`text`]     | The ID of the cluster. Corresponds to [`mz_clusters.id`](../mz_catalog/#mz_clusters) (though the cluster may no longer exist). |
+| `current_deployment_cluster_id`                              | [`text`]     | The cluster ID of the last cluster in `cluster_id`'s blue/green lineage (the cluster is guaranteed to exist). |
+| `cluster_name`   | [`text`] | The name of the cluster |
+
+## `mz_cluster_schedules`
 
 The `mz_cluster_schedules` table shows the `SCHEDULE` option specified for each cluster.
 
 <!-- RELATION_SPEC mz_internal.mz_cluster_schedules -->
-| Field                               | Type         | Meaning                                                       |
-|-------------------------------------|--------------|---------------------------------------------------------------|
-| `cluster_id`                        | [`text`]     | The ID of the cluster. Corresponds to [`mz_clusters.id`](../mz_catalog/#mz_clusters).|
-| `type`                              | [`text`]     | `on-refresh`, or `manual` (the default)                       |
-| `refresh_rehydration_time_estimate` | [`interval`] | The interval given in the `REHYDRATION TIME ESTIMATE` option. |
+| Field                               | Type         | Meaning                                                        |
+|-------------------------------------|--------------|----------------------------------------------------------------|
+| `cluster_id`                        | [`text`]     | The ID of the cluster. Corresponds to [`mz_clusters.id`](../mz_catalog/#mz_clusters). |
+| `type`                              | [`text`]     | `on-refresh`, or `manual`. Default: `manual`                   |
+| `refresh_hydration_time_estimate`   | [`interval`] | The interval given in the `HYDRATION TIME ESTIMATE` option.    |
 
-### `mz_cluster_replica_frontiers`
-
-The `mz_cluster_replica_frontiers` table describes the per-replica frontiers of
-sources, sinks, materialized views, indexes, and subscriptions in the system,
-as observed from the coordinator.
-
-[`mz_compute_frontiers`](#mz_compute_frontiers) is similar to
-`mz_cluster_replica_frontiers`, but `mz_compute_frontiers` reports the
-frontiers known to the active compute replica, while
-`mz_cluster_replica_frontiers` reports the frontiers of all replicas. Note also
-that `mz_compute_frontiers` is restricted to compute objects (indexes,
-materialized views, and subscriptions) while `mz_cluster_replica_frontiers`
-contains storage objects that are installed on replicas (sources, sinks) as
-well.
-
-At this time, we do not make any guarantees about the freshness of these numbers.
-
-<!-- RELATION_SPEC mz_internal.mz_cluster_replica_frontiers -->
-| Field            | Type             | Meaning                                                                |
-| -----------------| ---------------- | --------                                                               |
-| `object_id`      | [`text`]         | The ID of the source, sink, index, materialized view, or subscription. |
-| `replica_id`     | [`text`]         | The ID of a cluster replica.                                           |
-| `write_frontier` | [`mz_timestamp`] | The next timestamp at which the output may change.                     |
-
-### `mz_cluster_replica_metrics`
+## `mz_cluster_replica_metrics`
 
 The `mz_cluster_replica_metrics` table gives the last known CPU and RAM utilization statistics
 for all processes of all extant cluster replicas.
@@ -176,34 +164,30 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | Field               | Type         | Meaning                                                                                                                                                      |
 | ------------------- | ------------ | --------                                                                                                                                                     |
 | `replica_id`        | [`text`]     | The ID of a cluster replica.                                                                                                                                 |
-| `process_id`        | [`uint8`]    | An identifier of a compute process within a replica.                                                                                                         |
+| `process_id`        | [`uint8`]    | The ID of a process within the replica.                                                                                                         |
 | `cpu_nano_cores`    | [`uint8`]    | Approximate CPU usage, in billionths of a vCPU core.                                                                                                         |
 | `memory_bytes`      | [`uint8`]    | Approximate RAM usage, in bytes.                                                                                                                             |
 | `disk_bytes`        | [`uint8`]    | Approximate disk usage in bytes.                                                                                                                             |
 
-<!-- TODO(chaas): remove after v0.99 release -->
-### `mz_cluster_replica_sizes`
+## `mz_cluster_replica_metrics_history`
 
-The `mz_cluster_replica_sizes` table contains a mapping of logical sizes
-(e.g. `100cc`) to physical sizes (number of processes, and CPU and memory allocations per process).
+{{< warn-if-unreleased v0.116 >}}
+The `mz_cluster_replica_metrics_history` table records resource utilization metrics
+for all processes of all extant cluster replicas.
 
-{{< warning >}}
-The values in this table may change at any time. You should not rely on them for
-any kind of capacity planning.
-{{< /warning >}}
+At this time, we do not make any guarantees about the exactness or freshness of these numbers.
 
-| Field                  | Type        | Meaning                                                                                                                                                      |
-|------------------------|-------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `size`                 | [`text`]    | The human-readable replica size.                                                                                                                             |
-| `processes`            | [`uint8`]   | The number of processes in the replica.                                                                                                                      |
-| `workers`              | [`uint8`]   | The number of Timely Dataflow workers per process.                                                                                                           |
-| `cpu_nano_cores`       | [`uint8`]   | The CPU allocation per process, in billionths of a vCPU core.                                                                                                |
-| `memory_bytes`         | [`uint8`]   | The RAM allocation per process, in billionths of a vCPU core.                                                                                                |
-| `disk_bytes`           | [`uint8`]   | The disk allocation per process.                                                                                                                             |
-| `credits_per_hour`     | [`numeric`] | The number of compute credits consumed per hour.                                                                                                             |
+<!-- RELATION_SPEC mz_internal.mz_cluster_replica_metrics_history -->
+| Field            | Type      | Meaning
+| ---------------- | --------- | --------
+| `replica_id`     | [`text`]  | The ID of a cluster replica.
+| `process_id`     | [`uint8`] | The ID of a process within the replica.
+| `cpu_nano_cores` | [`uint8`] | Approximate CPU usage in billionths of a vCPU core.
+| `memory_bytes`   | [`uint8`] | Approximate memory usage in bytes.
+| `disk_bytes`     | [`uint8`] | Approximate disk usage in bytes.
+| `occurred_at`    | [`timestamp with time zone`] | Wall-clock timestamp at which the event occurred.
 
-
-### `mz_cluster_replica_statuses`
+## `mz_cluster_replica_statuses`
 
 The `mz_cluster_replica_statuses` table contains a row describing the status
 of each process in each cluster replica in the system.
@@ -213,11 +197,26 @@ of each process in each cluster replica in the system.
 |--------------|------------------------------|---------------------------------------------------------------------------------------------------------|
 | `replica_id` | [`text`]                     | Materialize's unique ID for the cluster replica.                                                        |
 | `process_id` | [`uint8`]                    | The ID of the process within the cluster replica.                                                       |
-| `status`     | [`text`]                     | The status of the cluster replica: `ready` or `not-ready`.                                              |
-| `reason`     | [`text`]                     | If the cluster replica is in a `not-ready` state, the reason (if available). For example, `oom-killed`. |
+| `status`     | [`text`]                     | The status of the cluster replica: `online` or `offline`.                                               |
+| `reason`     | [`text`]                     | If the cluster replica is in a `offline` state, the reason (if available). For example, `oom-killed`.   |
 | `updated_at` | [`timestamp with time zone`] | The time at which the status was last updated.                                                          |
 
-### `mz_cluster_replica_utilization`
+## `mz_cluster_replica_status_history`
+
+{{< warn-if-unreleased v0.116 >}}
+The `mz_cluster_replica_status_history` table records status changes
+for all processes of all extant cluster replicas.
+
+<!-- RELATION_SPEC mz_internal.mz_cluster_replica_status_history -->
+| Field         | Type      | Meaning
+|---------------|-----------|--------
+| `replica_id`  | [`text`]  | The ID of a cluster replica.
+| `process_id`  | [`uint8`] | The ID of a process within the replica.
+| `status`      | [`text`]  | The status of the cluster replica: `online` or `offline`.
+| `reason`      | [`text`]  | If the cluster replica is in an `offline` state, the reason (if available). For example, `oom-killed`.
+| `occurred_at` | [`timestamp with time zone`] | Wall-clock timestamp at which the event occurred.
+
+## `mz_cluster_replica_utilization`
 
 The `mz_cluster_replica_utilization` view gives the last known CPU and RAM utilization statistics
 for all processes of all extant cluster replicas, as a percentage of the total resource allocation.
@@ -228,12 +227,30 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | Field            | Type                 | Meaning                                                                                                                                                                                |
 |------------------|----------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `replica_id`     | [`text`]             | The ID of a cluster replica.                                                                                                                                                           |
-| `process_id`     | [`uint8`]            | An identifier of a compute process within a replica.                                                                                                                                   |
+| `process_id`     | [`uint8`]            | The ID of a process within the replica.                                                                                                                                   |
 | `cpu_percent`    | [`double precision`] | Approximate CPU usage in percent of the total allocation.                                                                                                                              |
 | `memory_percent` | [`double precision`] | Approximate RAM usage in percent of the total allocation.                                                                                                                              |
 | `disk_percent`   | [`double precision`] | Approximate disk usage in percent of the total allocation.                                                                                                                             |
 
-### `mz_cluster_replica_history`
+## `mz_cluster_replica_utilization_history`
+
+{{< warn-if-unreleased v0.116 >}}
+The `mz_cluster_replica_utilization_history` view records resource utilization metrics
+for all processes of all extant cluster replicas, as a percentage of the total resource allocation.
+
+At this time, we do not make any guarantees about the exactness or freshness of these numbers.
+
+<!-- RELATION_SPEC mz_internal.mz_cluster_replica_utilization_history -->
+| Field            | Type                 | Meaning
+|------------------|----------------------|--------
+| `replica_id`     | [`text`]             | The ID of a cluster replica.
+| `process_id`     | [`uint8`]            | The ID of a process within the replica.
+| `cpu_percent`    | [`double precision`] | Approximate CPU usage in percent of the total allocation.
+| `memory_percent` | [`double precision`] | Approximate RAM usage in percent of the total allocation.
+| `disk_percent`   | [`double precision`] | Approximate disk usage in percent of the total allocation.
+| `occurred_at`    | [`timestamp with time zone`] | Wall-clock timestamp at which the event occurred.
+
+## `mz_cluster_replica_history`
 
 The `mz_cluster_replica_history` view contains information about the timespan of
 each replica, including the times at which it was created and dropped
@@ -243,14 +260,27 @@ each replica, including the times at which it was created and dropped
 | Field                 | Type                         | Meaning                                                                                                                                   |
 |-----------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
 | `replica_id`          | [`text`]                     | The ID of a cluster replica.                                                                                                              |
-| `size`                | [`text`]                     | The size of the cluster replica. Corresponds to [`mz_cluster_replica_sizes.size`](#mz_cluster_replica_sizes).                             |
+| `size`                | [`text`]                     | The size of the cluster replica. Corresponds to [`mz_cluster_replica_sizes.size`](../mz_catalog#mz_cluster_replica_sizes).                             |
+| `cluster_id`        | [`text`]                     | The ID of the cluster associated with the replica.                                                                                      |
 | `cluster_name`        | [`text`]                     | The name of the cluster associated with the replica.                                                                                      |
 | `replica_name`        | [`text`]                     | The name of the replica.                                                                                                                  |
 | `created_at`          | [`timestamp with time zone`] | The time at which the replica was created.                                                                                                |
 | `dropped_at`          | [`timestamp with time zone`] | The time at which the replica was dropped, or `NULL` if it still exists.                                                                  |
-| `credits_per_hour`    | [`numeric`]                  | The number of compute credits consumed per hour. Corresponds to [`mz_cluster_replica_sizes.credits_per_hour`](#mz_cluster_replica_sizes). |
+| `credits_per_hour`    | [`numeric`]                  | The number of compute credits consumed per hour. Corresponds to [`mz_cluster_replica_sizes.credits_per_hour`](../mz_catalog#mz_cluster_replica_sizes). |
 
-### `mz_internal_cluster_replicas`
+## `mz_cluster_replica_name_history`
+
+The `mz_cluster_replica_name_history` view contains historical information about names of each cluster replica.
+
+<!-- RELATION_SPEC mz_internal.mz_cluster_replica_name_history -->
+| Field                 | Type                         | Meaning                                                                                                                                   |
+|-----------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
+| `occurred_at`          | [`timestamp with time zone`]                     |  The time at which the cluster replica was created or renamed. `NULL` if it's a built in system cluster replica.                                                                                                              |
+| `id`          | [`text`]                     | The ID of the cluster replica.                                                                                                              |
+| `previous_name`                | [`text`]                     | The previous name of the cluster replica. `NULL` if there was no previous name.   |
+| `new_name`        | [`text`]                     | The new name of the cluster replica.                                                                                     |
+
+## `mz_internal_cluster_replicas`
 
 The `mz_internal_cluster_replicas` table lists the replicas that are created and maintained by Materialize support.
 
@@ -259,19 +289,28 @@ The `mz_internal_cluster_replicas` table lists the replicas that are created and
 |------------|----------|-------------------------------------------------------------------------------------------------------------|
 | id         | [`text`] | The ID of a cluster replica. Corresponds to [`mz_cluster_replicas.id`](../mz_catalog/#mz_cluster_replicas). |
 
-### `mz_comments`
+## `mz_pending_cluster_replicas`
 
-The `mz_comments` table stores optional comments (descriptions) for objects in the database.
+The `mz_pending_cluster_replicas` table lists the replicas that were created during managed cluster alter statement that has not yet finished. The configurations of these replica may differ from the cluster's configuration.
+
+<!-- RELATION_SPEC mz_internal.mz_pending_cluster_replicas -->
+| Field      | Type     | Meaning                                                                                                     |
+|------------|----------|-------------------------------------------------------------------------------------------------------------|
+| id         | [`text`] | The ID of a cluster replica. Corresponds to [`mz_cluster_replicas.id`](../mz_catalog/#mz_cluster_replicas). |
+
+## `mz_comments`
+
+The `mz_comments` table stores optional comments (i.e., descriptions) for objects in the database.
 
 <!-- RELATION_SPEC mz_internal.mz_comments -->
 | Field          | Type        | Meaning                                                                                      |
 | -------------- |-------------| --------                                                                                     |
 | `id`           | [`text`]    | The ID of the object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).           |
 | `object_type`  | [`text`]    | The type of object the comment is associated with.                                           |
-| `object_sub_id`| [`integer`] | For a comment on a column of a relation, this is the column number. For all other object types this column is `NULL`. |
+| `object_sub_id`| [`integer`] | For a comment on a column of a relation, the column number. `NULL` for other object types.   |
 | `comment`      | [`text`]    | The comment itself.                                                                          |
 
-### `mz_compute_dependencies`
+## `mz_compute_dependencies`
 
 The `mz_compute_dependencies` table describes the dependency structure between each compute object (index, materialized view, or subscription) and the sources of its data.
 
@@ -284,20 +323,23 @@ SQL objects that don't exist in the compute layer (such as views) are omitted.
 | `object_id`     | [`text`] | The ID of a compute object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_internal.mz_subscriptions`](#mz_subscriptions).                                                           |
 | `dependency_id` | [`text`] | The ID of a compute dependency. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables). |
 
-### `mz_compute_hydration_statuses`
+## `mz_compute_hydration_statuses`
 
-The `mz_compute_hydration_statuses` table describes the per-replica hydration status of each compute object (index, materialized view, or subscription).
+The `mz_compute_hydration_statuses` view describes the per-replica hydration status of each compute object (index, materialized view).
 
 A compute object is hydrated on a given replica when it has fully processed the initial snapshot of data available in its inputs.
 
 <!-- RELATION_SPEC mz_internal.mz_compute_hydration_statuses -->
-| Field        | Type        | Meaning  |
-| -----------  | ----------- | -------- |
-| `object_id`  | [`text`]    | The ID of a compute object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_internal.mz_subscriptions`](#mz_subscriptions). |
-| `replica_id` | [`text`]    | The ID of a cluster replica. |
-| `hydrated`   | [`boolean`] | Whether the compute object is hydrated on the replica. |
+| Field            | Type         | Meaning  |
+| ---------------- | ------------ | -------- |
+| `object_id`      | [`text`]     | The ID of a compute object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes) or [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views) |
+| `replica_id`     | [`text`]     | The ID of a cluster replica. |
+| `hydrated`       | [`boolean`]  | Whether the compute object is hydrated on the replica. |
+| `hydration_time` | [`interval`] | The amount of time it took for the replica to hydrate the compute object. |
 
-### `mz_compute_operator_hydration_statuses`
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_hydration_times -->
+
+## `mz_compute_operator_hydration_statuses`
 
 The `mz_compute_operator_hydration_statuses` table describes the dataflow operator hydration status of compute objects (indexes or materialized views).
 
@@ -313,7 +355,7 @@ A dataflow operator is hydrated on a given replica when it has fully processed t
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_operator_hydration_statuses_per_worker -->
 
-### `mz_frontiers`
+## `mz_frontiers`
 
 The `mz_frontiers` table describes the frontiers of each source, sink, table,
 materialized view, index, and subscription in the system, as observed from the
@@ -330,20 +372,21 @@ At this time, we do not make any guarantees about the freshness of these numbers
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_global_frontiers -->
 
-### `mz_history_retention_strategies`
+## `mz_history_retention_strategies`
 
 The `mz_history_retention_strategies` describes the history retention strategies
 for tables, sources, indexes, materialized views that are configured with a
-[history retention period](/transform-data/patterns/time-travel-queries/#history-retention-period).
+[history retention
+period](/transform-data/patterns/durable-subscriptions/#history-retention-period).
 
 <!-- RELATION_SPEC mz_internal.mz_history_retention_strategies -->
 | Field | Type | Meaning |
 | - | - | - |
 | `id` | [`text`] | The ID of the object. |
 | `strategy` | [`text`] | The strategy. `FOR` is the only strategy, and means the object's compaction window is the duration of the `value` field. |
-| `value` | [`jsonb]` | The value of the strategy. For `FOR`, is a number of milliseconds. |
+| `value` | [`jsonb`] | The value of the strategy. For `FOR`, is a number of milliseconds. |
 
-### `mz_hydration_statuses`
+## `mz_hydration_statuses`
 
 The `mz_hydration_statuses` view describes the per-replica hydration status of
 each object powered by a dataflow.
@@ -359,18 +402,69 @@ inputs.
 | `replica_id` | [`text`]    | The ID of a cluster replica. |
 | `hydrated`   | [`boolean`] | Whether the object is hydrated on the replica. |
 
-### `mz_kafka_sources`
+## `mz_index_advice`
 
-The `mz_kafka_sources` table contains a row for each Kafka source in the system.
+{{< warning >}}
+Following the advice in this view might not always yield resource usage
+optimizations. You should test any changes in a development environment
+before deploying the changes to production.
+{{< /warning >}}
 
-<!-- RELATION_SPEC mz_internal.mz_kafka_sources -->
-| Field                  | Type           | Meaning                                                                                                   |
-|------------------------|----------------|-----------------------------------------------------------------------------------------------------------|
-| `id`                   | [`text`]       | The ID of the Kafka source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).        |
-| `group_id_prefix`      | [`text`]       | The value of the `GROUP ID PREFIX` connection option.                                                     |
-| `topic          `      | [`text`]       | The name of the Kafka topic the source is reading from.                                                              |
+The `mz_index_advice` view provides advice on opportunities to optimize resource
+usage (memory and CPU) in Materialize. The advice provided suggests either
+creating indexes or materialized views to precompute intermediate results that
+can be reused across several objects, or removing unnecessary indexes or
+materialized views.
 
-### `mz_materialization_lag`
+
+### Known limitations
+
+The suggestions are based on the graph of dependencies between objects and do
+not take into account other important factors, like the actual usage patterns
+and execution plans. This means that following the advice in this view **might
+not always lead to resource usage optimizations**. In some cases, the provided
+advice might lead to suboptimal execution plans or even increased resource
+usage. For example:
+
+- If a materialized view or an index has been created for direct querying, the
+  dependency graph will not reflect this nuance and `mz_index_advice` might
+  recommend using an unindexed view instead. In this case, you should refer to
+  the reference documentation for [query optimization](/transform-data/optimization/#indexes)
+  instead.
+- If a view is depended on by multiple objects that use very selective filters,
+  or multiple projections that can be pushed into or even beyond the view,
+  adding an index may increase resource usage.
+- If an index has been created to [enable delta joins](/transform-data/optimization/#optimize-multi-way-joins-with-delta-joins),
+  removing it may lead to lower memory utilization, but the delta join
+  optimization will no longer be used in the join implementation.
+
+To guarantee that there are no regressions given your specific usage patterns,
+it's important to test any changes in a development environment before
+deploying the changes to production.
+
+
+<!-- RELATION_SPEC mz_internal.mz_index_advice -->
+| Field                    | Type        | Meaning  |
+| ------------------------ | ----------- | -------- |
+| `object_id`              | [`text`]    | The ID of the object. Corresponds to [mz_objects.id](/sql/system-catalog/mz_catalog/#mz_objects). |
+| `hint`                   | [`text`]    | A suggestion to either change the object (e.g. create an index, turn a materialized view into an indexed view) or keep the object unchanged. |
+| `details`                | [`text`]    | Additional details on why the `hint` was proposed based on the dependencies of the object. |
+| `referenced_object_ids`  | [`list`]    | The IDs of objects referenced by `details`. Corresponds to [mz_objects.id](/sql/system-catalog/mz_catalog/#mz_objects). |
+
+## `mz_materialization_dependencies`
+
+The `mz_materialization_dependencies` view describes the dependency structure between each materialization (materialized view, index, or sink) and the sources of its data.
+
+In contrast to [`mz_object_dependencies`](#mz_object_dependencies), this view only lists dependencies in the dataflow layer.
+SQL objects that don't exist in the dataflow layer (such as views) are omitted.
+
+<!-- RELATION_SPEC mz_internal.mz_materialization_dependencies -->
+| Field       | Type     | Meaning                                                                                                                                                                                                                                                                                            |
+| ----------- | -------- | --------                                                                                                                                                                                                                                                                                           |
+| `object_id`     | [`text`] | The ID of a materialization. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_catalog.mz_sinks.id`](#mz_subscriptions).                                                           |
+| `dependency_id` | [`text`] | The ID of a dataflow dependency. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables). |
+
+## `mz_materialization_lag`
 
 The `mz_materialization_lag` view describes the difference between the input
 frontiers and the output frontier for each materialized view, index, and sink
@@ -388,7 +482,7 @@ At this time, we do not make any guarantees about the freshness of these numbers
 | `slowest_local_input_id`  | [`text`]         | The ID of the slowest direct input.                                                      |
 | `slowest_global_input_id` | [`text`]         | The ID of the slowest root input.                                                        |
 
-### `mz_materialized_view_refresh_strategies`
+## `mz_materialized_view_refresh_strategies`
 
 The `mz_materialized_view_refresh_strategies` table shows the refresh strategies
 specified for materialized views. If a materialized view has multiple refresh
@@ -403,7 +497,7 @@ strategies, a row will exist for each.
 | `aligned_to`           | [`timestamp with time zone`] | The `ALIGNED TO` option of a `REFRESH EVERY` option, or `NULL` if the `type` is not `every`. |
 | `at`                   | [`timestamp with time zone`] | The time of a `REFRESH AT`, or `NULL` if the `type` is not `at`.            |
 
-### `mz_materialized_view_refreshes`
+## `mz_materialized_view_refreshes`
 
 The `mz_materialized_view_refreshes` table shows the time of the last
 successfully completed refresh and the time of the next scheduled refresh for
@@ -416,7 +510,7 @@ each materialized view with a refresh strategy other than `on-commit`.
 | `last_completed_refresh` | [`mz_timestamp`]             | The time of the last successfully completed refresh. `NULL` if the materialized view hasn't completed any refreshes yet.  |
 | `next_refresh`           | [`mz_timestamp`]             | The time of the next scheduled refresh. `NULL` if the materialized view has no future scheduled refreshes.                 |
 
-### `mz_object_dependencies`
+## `mz_object_dependencies`
 
 The `mz_object_dependencies` table describes the dependency structure between
 all database objects in the system.
@@ -427,35 +521,49 @@ all database objects in the system.
 | `object_id`             | [`text`]     | The ID of the dependent object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).  |
 | `referenced_object_id`  | [`text`]     | The ID of the referenced object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). |
 
-### `mz_object_fully_qualified_names`
+## `mz_object_fully_qualified_names`
 
 The `mz_object_fully_qualified_names` view enriches the [`mz_catalog.mz_objects`](/sql/system-catalog/mz_catalog/#mz_objects) view with namespace information.
 
 <!-- RELATION_SPEC mz_internal.mz_object_fully_qualified_names -->
-| Field          | Type       | Meaning                                                                                                                                        |
-| ---------------|------------|------------------------------------------------------------------------------------------------------------------------------------------------|
-| `id`           | [`text`]   | Materialize's unique ID for the object.                                                                                                        |
-| `name`         | [`text`]   | The name of the object.                                                                                                                        |
-| `object_type`  | [`text`]   | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`. |
-| `schema_id`    | [`text`]   | The ID of the schema to which the object belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).                |
-| `schema_name`  | [`text`]   | The name of the schema to which the object belongs. Corresponds to [`mz_schemas.name`](/sql/system-catalog/mz_catalog/#mz_schemas).            |
-| `database_id`  | [`text`]   | The ID of the database to which the object belongs. Corresponds to [`mz_databases.id`](/sql/system-catalog/mz_catalog/#mz_schemas).             |
-| `database_name`| [`text`]   | The name of the database to which the object belongs. Corresponds to [`mz_databases.name`](/sql/system-catalog/mz_catalog/#mz_databases).      |
+| Field           | Type         | Meaning                                                                                                                                                                                         |
+| --------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------                                                |
+| `id`            | [`text`]     | Materialize's unique ID for the object.                                                                                                                                                         |
+| `name`          | [`text`]     | The name of the object.                                                                                                                                                                         |
+| `object_type`   | [`text`]     | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.                                                  |
+| `schema_id`     | [`text`]     | The ID of the schema to which the object belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).                                                                 |
+| `schema_name`   | [`text`]     | The name of the schema to which the object belongs. Corresponds to [`mz_schemas.name`](/sql/system-catalog/mz_catalog/#mz_schemas).                                                             |
+| `database_id`   | [`text`]     | The ID of the database to which the object belongs. Corresponds to [`mz_databases.id`](/sql/system-catalog/mz_catalog/#mz_schemas).                                                             |
+| `database_name` | [`text`]     | The name of the database to which the object belongs. Corresponds to [`mz_databases.name`](/sql/system-catalog/mz_catalog/#mz_databases).                                                       |
+| `cluster_id`    | [`text`]     | The ID of the cluster maintaining the source, materialized view, index, or sink. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters). `NULL` for other object types. |
 
-### `mz_object_lifetimes`
+## `mz_object_lifetimes`
 
 The `mz_object_lifetimes` view enriches the [`mz_catalog.mz_objects`](/sql/system-catalog/mz_catalog/#mz_objects) view with information about the last lifetime event that occurred for each object in the system.
 
 <!-- RELATION_SPEC mz_internal.mz_object_lifetimes -->
-| Field          | Type                         | Meaning                                          |
-| ---------------|------------------------------|------------------------------------------------- |
-| `id`           | [`text`]                     | Materialize's unique ID for the object.          |
-| `previous_id`  | [`text`]                     | The object's previous ID, if one exists.          |
-| `object_type`  | [`text`]                     | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.                                                                              |
-| `event_type`   | [`text`]                     | The lifetime event, either `create` or `drop`.   |
-| `occurred_at`  | [`timestamp with time zone`] | Wall-clock timestamp of when the event occurred. |
+| Field           | Type                           | Meaning                                                                                                                                        |
+| --------------- | ------------------------------ | -------------------------------------------------                                                                                              |
+| `id`            | [`text`]                       | Materialize's unique ID for the object.                                                                                                        |
+| `previous_id`   | [`text`]                       | The object's previous ID, if one exists.                                                                                                       |
+| `object_type`   | [`text`]                       | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`. |
+| `event_type`    | [`text`]                       | The lifetime event, either `create` or `drop`.                                                                                                 |
+| `occurred_at`   | [`timestamp with time zone`]   | Wall-clock timestamp of when the event occurred.                                                                                               |
 
-### `mz_object_transitive_dependencies`
+## `mz_object_history`
+
+The `mz_object_history` view enriches the [`mz_catalog.mz_objects`](/sql/system-catalog/mz_catalog/#mz_objects) view with historical information about each object in the system.
+
+<!-- RELATION_SPEC mz_internal.mz_object_history -->
+| Field           | Type                           | Meaning                                                                                                                                        |
+| --------------- | ------------------------------ | -------------------------------------------------                                                                                              |
+| `id`            | [`text`]                       | Materialize's unique ID for the object.                                                                                                        |
+| `cluster_id`   | [`text`]                       | The object's cluster ID. `NULL` if the object has no associated cluster.                                                                                                       |
+| `object_type`   | [`text`]                       | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`. |
+| `created_at`    | [`timestamp with time zone`]                       | Wall-clock timestamp of when the object was created. `NULL` for built in system objects.                                                                                                |
+| `dropped_at`   | [`timestamp with time zone`]   | Wall-clock timestamp of when the object was dropped. `NULL` for built in system objects or if the object hasn't been dropped.                                              |
+
+## `mz_object_transitive_dependencies`
 
 The `mz_object_transitive_dependencies` view describes the transitive dependency structure between
 all database objects in the system.
@@ -467,7 +575,7 @@ The view is defined as the transitive closure of [`mz_object_dependencies`](#mz_
 | `object_id`             | [`text`]     | The ID of the dependent object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).                          |
 | `referenced_object_id`  | [`text`]     | The ID of the (possibly transitively) referenced object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). |
 
-### `mz_notices`
+## `mz_notices`
 
 {{< public-preview />}}
 
@@ -491,7 +599,7 @@ system. The view can be accessed by Materialize _superusers_.
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_optimizer_notices -->
 
-### `mz_notices_redacted`
+## `mz_notices_redacted`
 
 {{< public-preview />}}
 
@@ -511,7 +619,7 @@ _superusers_ and Materialize support.
 | `object_id`             | [`text`]                     | The ID of the materialized view or index. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). For global notices, this column is `NULL`. |
 | `created_at`            | [`timestamp with time zone`] | The time at which the notice was created. Note that some notices are re-created on `environmentd` restart.                                        |
 
-### `mz_postgres_sources`
+## `mz_postgres_sources`
 
 The `mz_postgres_sources` table contains a row for each PostgreSQL source in the
 system.
@@ -523,32 +631,46 @@ system.
 | `replication_slot`  | [`text`]         | The name of the replication slot in the PostgreSQL database that Materialize will create and stream data from. |
 | `timeline_id`       | [`uint8`]        | The PostgreSQL [timeline ID](https://www.postgresql.org/docs/current/continuous-archiving.html#BACKUP-TIMELINES) determined on source creation.
 
-### `mz_postgres_source_tables`
+## `mz_postgres_source_tables`
 
-The `mz_postgres_source_tables` table contains the mapping between each
-subsource and the corresponding upstream PostgreSQL table being ingested.
+The `mz_postgres_source_tables` table contains the mapping between each Materialize
+subsource or table and the corresponding upstream PostgreSQL table being ingested.
 
 <!-- RELATION_SPEC mz_internal.mz_postgres_source_tables -->
 | Field               | Type             | Meaning                                                                                                        |
 | ------------------- | ---------------- | --------                                                                                                       |
-| `id`                | [`text`]         | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                   |
+| `id`                | [`text`]         | The ID of the subsource or table. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources) or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables).                   |
 | `schema_name`       | [`text`]         | The schema of the upstream table being ingested. |
 | `table_name`        | [`text`]         | The name of the upstream table being ingested.   |
 
-### `mz_mysql_source_tables`
+## `mz_mysql_source_tables`
 
-The `mz_mysql_source_tables` table contains the mapping between each
-subsource and the corresponding upstream MySQL table being ingested.
+The `mz_mysql_source_tables` table contains the mapping between each Materialize
+subsource or table and the corresponding upstream MySQL table being ingested.
 
 <!-- RELATION_SPEC mz_internal.mz_mysql_source_tables -->
 | Field               | Type             | Meaning                                                                                                        |
 | ------------------- | ---------------- | --------                                                                                                       |
-| `id`                | [`text`]         | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                   |
+| `id`                | [`text`]         | The ID of the subsource or table. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources) or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables).                   |
 | `schema_name`       | [`text`]         | The schema ([or, database](https://dev.mysql.com/doc/refman/8.0/en/glossary.html#glos_schema)) of the upstream table being ingested. |
 | `table_name`        | [`text`]         | The name of the upstream table being ingested. |
 
+## `mz_kafka_source_tables`
+
+The `mz_kafka_source_tables` table contains the mapping between each Materialize
+table and the corresponding upstream Kafka topic being ingested.
+
+<!-- RELATION_SPEC mz_internal.mz_kafka_source_tables -->
+| Field               | Type             | Meaning                                                                                                        |
+| ------------------- | ---------------- | --------                                                                                                       |
+| `id`                | [`text`]         | The ID of the table. Corresponds to [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables).                   |
+| `topic`             | [`text`]         | The topic being ingested. |
+| `envelope_type`     | [`text`]         | The [envelope](/sql/create-source/#envelopes) type: `none`, `upsert`, or `debezium`. `NULL` for other source types. |
+| `key_format`        | [`text`]         | The [format](/sql/create-source/#formats) of the Kafka message key: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`. |
+| `value_format`      | [`text`]         | The [format](/sql/create-source/#formats) of the Kafka message value: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`. `NULL` for other source types. |
+
 <!--
-### `mz_prepared_statement_history`
+## `mz_prepared_statement_history`
 
 The `mz_prepared_statement_history` table contains a subset of all
 statements that have been prepared. It only contains statements that
@@ -565,7 +687,7 @@ have one or more corresponding executions in
 -->
 
 <!--
-### `mz_session_history`
+## `mz_session_history`
 
 The `mz_session_history` table contains all the sessions that have
 been established in the last 30 days, or (even if older) that are
@@ -574,24 +696,76 @@ referenced from
 
 | Field                | Type                         | Meaning                                                                                                                           |
 |----------------------|------------------------------|-----------------------------------------------------------------------------------------------------------------------------------|
-| `id`                 | [`uuid`]                     | The globally unique ID of this history entry. Does **not** correspond to [`mz_sessions.id`](#mz_sessions), which can be recycled. |
+| `session_id`         | [`uuid`]                     | The globally unique ID of the session. Corresponds to [`mz_sessions.id`](#mz_sessions).                                           |
 | `connected_at`       | [`timestamp with time zone`] | The time at which the session was established.                                                                                    |
 | `application_name`   | [`text`]                     | The `application_name` session metadata field.                                                                                    |
 | `authenticated_user` | [`text`]                     | The name of the user for which the session was established.                                                                       |
 -->
 
-### `mz_sessions`
+{{< if-unreleased "v0.113" >}}
+### `mz_recent_storage_usage`
+
+The `mz_recent_storage_usage` table describes the storage utilization of each
+table, source, and materialized view in the system in the most recent storage
+utilization assessment. Storage utilization assessments occur approximately
+every hour.
+
+See [`mz_storage_usage`](../mz_catalog#mz_storage_usage) for historical storage
+usage information.
+
+Field                  | Type                         | Meaning
+---------------------- | ---------------------------- | -----------------------------------------------------------
+`object_id`            | [`text`]                     | The ID of the table, source, or materialized view.
+`size_bytes`           | [`uint8`]                    | The number of storage bytes used by the object in the most recent assessment.
+{{< /if-unreleased >}}
+
+## `mz_sessions`
 
 The `mz_sessions` table contains a row for each active session in the system.
 
 <!-- RELATION_SPEC mz_internal.mz_sessions -->
-| Field           | Type                           | Meaning                                                                                                                   |
-| --------------- | ------------------------------ | --------                                                                                                                  |
-| `id`            | [`uint4`]                      | The ID of the session.                                                                                                    |
-| `role_id`       | [`text`]                       | The role ID of the role that the session is logged in as. Corresponds to [`mz_catalog.mz_roles`](../mz_catalog#mz_roles). |
-| `connected_at`  | [`timestamp with time zone`]   | The time at which the session connected to the system.                                                                    |
+| Field            | Type                           | Meaning                                                                                                                   |
+| -----------------| ------------------------------ | --------                                                                                                                  |
+| `id`             | [`uuid`]                       | The globally unique ID of the session. |
+| `connection_id`  | [`uint4`]                      | The connection ID of the session. Unique only for active sessions and can be recycled. Corresponds to [`pg_backend_pid()`](/sql/functions/#pg_backend_pid). |
+| `role_id`        | [`text`]                       | The role ID of the role that the session is logged in as. Corresponds to [`mz_catalog.mz_roles`](../mz_catalog#mz_roles). |
+| `client_ip`      | [`text`]                       | The IP address of the client that initiated the session.                                                                  |
+| `connected_at`   | [`timestamp with time zone`]   | The time at which the session connected to the system.                                                                    |
 
-### `mz_show_all_privileges`
+
+## `mz_network_policies`
+
+The `mz_network_policies` table contains a row for each network policy in the
+system.
+
+<!-- RELATION_SPEC mz_internal.mz_network_policies -->
+| Field            | Type                  | Meaning                                                                                                            |
+| -----------------| ----------------------| --------                                                                                                           |
+| `id`             | [`text`]              | The ID of the network policy.                                                                                      |
+| `name`           | [`text`]              | The name of the network policy.                                                                                    |
+| `owner_id`       | [`text`]              | The role ID of the owner of the network policy. Corresponds to [`mz_catalog.mz_roles.id`](../mz_catalog#mz_roles). |
+| `privileges`     | [`mz_aclitem array`]  | The privileges belonging to the network policy.                                                                    |
+| `oid`            | [`oid`]               | A [PostgreSQL-compatible OID][`oid`] for the network policy.                                                       |
+
+## `mz_network_policy_rules`
+
+The `mz_network_policy_rules` table contains a row for each network policy rule
+in the system.
+
+<!-- RELATION_SPEC mz_internal.mz_network_policy_rules -->
+| Field            | Type       | Meaning                                                                                                |
+| -----------------| ----------------------| --------                                                                                    |
+| `name`           | [`text`]   | The name of the network policy rule. Can be combined with `policy_id` to form a unique identifier. |
+| `policy_id`      | [`text`]   | The ID the network policy the rule is part of. Corresponds to [`mz_network_policy_rules.id`](#mz_network_policy_rules).     |
+| `action`         | [`text`]   | The action of the rule. `allow` is the only supported action.                                                    |
+| `address`        | [`text`]   | The address the rule will take action on.                                                              |
+| `direction`      | [`text`]   | The direction of traffic the rule applies to. `ingress` is the only supported direction. |
+
+## `mz_show_network_policies`
+
+The `mz_show_show_network_policies` view contains a row for each network policy in the system.
+
+## `mz_show_all_privileges`
 
 The `mz_show_all_privileges` view contains a row for each privilege granted
 in the system on user objects to user roles.
@@ -608,7 +782,7 @@ in the system on user objects to user roles.
 | `privilege_type` | [`text`] | They type of privilege granted.                 |
 
 
-### `mz_show_cluster_privileges`
+## `mz_show_cluster_privileges`
 
 The `mz_show_cluster_privileges` view contains a row for each cluster privilege granted
 in the system on user clusters to user roles.
@@ -621,7 +795,7 @@ in the system on user clusters to user roles.
 | `name`           | [`text`] | The name of the cluster.                    |
 | `privilege_type` | [`text`] | They type of privilege granted.             |
 
-### `mz_show_database_privileges`
+## `mz_show_database_privileges`
 
 The `mz_show_database_privileges` view contains a row for each database privilege granted
 in the system on user databases to user roles.
@@ -634,7 +808,7 @@ in the system on user databases to user roles.
 | `name`           | [`text`] | The name of the database.                   |
 | `privilege_type` | [`text`] | They type of privilege granted.             |
 
-### `mz_show_default_privileges`
+## `mz_show_default_privileges`
 
 The `mz_show_default_privileges` view contains a row for each default privilege granted
 in the system in user databases and schemas to user roles.
@@ -649,7 +823,7 @@ in the system in user databases and schemas to user roles.
 | `grantee`        | [`text`] | Privileges described in this row will be granted to `grantee`.                                      |
 | `privilege_type` | [`text`] | They type of privilege to be granted.                                                               |
 
-### `mz_show_object_privileges`
+## `mz_show_object_privileges`
 
 The `mz_show_object_privileges` view contains a row for each object privilege granted
 in the system on user objects to user roles.
@@ -665,7 +839,7 @@ in the system on user objects to user roles.
 | `object_type`    | [`text`] | The type of object the privilege is granted on. |
 | `privilege_type` | [`text`] | They type of privilege granted.                 |
 
-### `mz_show_role_members`
+## `mz_show_role_members`
 
 The `mz_show_role_members` view contains a row for each role membership in the system.
 
@@ -676,7 +850,7 @@ The `mz_show_role_members` view contains a row for each role membership in the s
 | `member`  | [`text`] | The role that is a member of `role`.                    |
 | `grantor` | [`text`] | The role that granted membership of `member` to `role`. |
 
-### `mz_show_schema_privileges`
+## `mz_show_schema_privileges`
 
 The `mz_show_schema_privileges` view contains a row for each schema privilege granted
 in the system on user schemas to user roles.
@@ -690,7 +864,7 @@ in the system on user schemas to user roles.
 | `name`           | [`text`] | The name of the schema.                         |
 | `privilege_type` | [`text`] | They type of privilege granted.                 |
 
-### `mz_show_system_privileges`
+## `mz_show_system_privileges`
 
 The `mz_show_system_privileges` view contains a row for each system privilege granted
 in the system on to user roles.
@@ -702,7 +876,7 @@ in the system on to user roles.
 | `grantee`        | [`text`] | The role that the privilege was granted to. |
 | `privilege_type` | [`text`] | They type of privilege granted.             |
 
-### `mz_show_all_my_privileges`
+## `mz_show_all_my_privileges`
 
 The `mz_show_all_my_privileges` view is the same as
 [`mz_show_all_privileges`](/sql/system-catalog/mz_internal/#mz_show_all_privileges), but
@@ -719,7 +893,7 @@ only includes rows where the current role is a direct or indirect member of `gra
 | `object_type`    | [`text`] | The type of object the privilege is granted on. |
 | `privilege_type` | [`text`] | They type of privilege granted.                 |
 
-### `mz_show_my_cluster_privileges`
+## `mz_show_my_cluster_privileges`
 
 The `mz_show_my_cluster_privileges` view is the same as
 [`mz_show_cluster_privileges`](/sql/system-catalog/mz_internal/#mz_show_cluster_privileges), but
@@ -733,7 +907,7 @@ only includes rows where the current role is a direct or indirect member of `gra
 | `name`           | [`text`] | The name of the cluster.                    |
 | `privilege_type` | [`text`] | They type of privilege granted.             |
 
-### `mz_show_my_database_privileges`
+## `mz_show_my_database_privileges`
 
 The `mz_show_my_database_privileges` view is the same as
 [`mz_show_database_privileges`](/sql/system-catalog/mz_internal/#mz_show_database_privileges), but
@@ -747,7 +921,7 @@ only includes rows where the current role is a direct or indirect member of `gra
 | `name`           | [`text`] | The name of the cluster.                    |
 | `privilege_type` | [`text`] | They type of privilege granted.             |
 
-### `mz_show_my_default_privileges`
+## `mz_show_my_default_privileges`
 
 The `mz_show_my_default_privileges` view is the same as
 [`mz_show_default_privileges`](/sql/system-catalog/mz_internal/#mz_show_default_privileges), but
@@ -763,7 +937,7 @@ only includes rows where the current role is a direct or indirect member of `gra
 | `grantee`        | [`text`] | Privileges described in this row will be granted to `grantee`.                                      |
 | `privilege_type` | [`text`] | They type of privilege to be granted.                                                               |
 
-### `mz_show_my_object_privileges`
+## `mz_show_my_object_privileges`
 
 The `mz_show_my_object_privileges` view is the same as
 [`mz_show_object_privileges`](/sql/system-catalog/mz_internal/#mz_show_object_privileges), but
@@ -780,7 +954,7 @@ only includes rows where the current role is a direct or indirect member of `gra
 | `object_type`    | [`text`] | The type of object the privilege is granted on. |
 | `privilege_type` | [`text`] | They type of privilege granted.                 |
 
-### `mz_show_my_role_members`
+## `mz_show_my_role_members`
 
 The `mz_show_my_role_members` view is the same as
 [`mz_show_role_members`](/sql/system-catalog/mz_internal/#mz_show_role_members), but
@@ -793,7 +967,7 @@ only includes rows where the current role is a direct or indirect member of `mem
 | `member`  | [`text`] | The role that is a member of `role`.                    |
 | `grantor` | [`text`] | The role that granted membership of `member` to `role`. |
 
-### `mz_show_my_schema_privileges`
+## `mz_show_my_schema_privileges`
 
 The `mz_show_my_schema_privileges` view is the same as
 [`mz_show_schema_privileges`](/sql/system-catalog/mz_internal/#mz_show_schema_privileges), but
@@ -808,7 +982,7 @@ only includes rows where the current role is a direct or indirect member of `gra
 | `name`           | [`text`] | The name of the schema.                         |
 | `privilege_type` | [`text`] | They type of privilege granted.                 |
 
-### `mz_show_my_system_privileges`
+## `mz_show_my_system_privileges`
 
 The `mz_show_my_system_privileges` view is the same as
 [`mz_show_system_privileges`](/sql/system-catalog/mz_internal/#mz_show_system_privileges), but
@@ -823,11 +997,11 @@ only includes rows where the current role is a direct or indirect member of `gra
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_sink_statistics_raw -->
 
-### `mz_sink_statistics`
+## `mz_sink_statistics`
 
 The `mz_sink_statistics` view contains statistics about each sink.
 
-#### Counters
+### Counters
 `messages_staged`, `messages_committed`, `bytes_staged`, and `bytes_committed` are all counters that monotonically increase. They are _only
 useful for calculating rates_ to understand the general performance of your sink.
 
@@ -843,7 +1017,7 @@ Note that:
 | `bytes_staged`       | [`uint8`] | The number of bytes staged but possibly not committed to the sink. This counts both keys and values, if applicable. |
 | `bytes_committed`    | [`uint8`] | The number of bytes committed to the sink. This counts both keys and values, if applicable.                         |
 
-### `mz_sink_statuses`
+## `mz_sink_statuses`
 
 The `mz_sink_statuses` view provides the current state for each sink in the
 system, including potential error messages and additional metadata helpful for
@@ -860,7 +1034,7 @@ debugging.
 | `error`                  | [`text`]                        | If the sink is in an error state, the error message.                                                             |
 | `details`                | [`jsonb`]                       | Additional metadata provided by the sink. In case of error, may contain a `hint` field with helpful suggestions. |
 
-### `mz_sink_status_history`
+## `mz_sink_status_history`
 
 The `mz_sink_status_history` table contains rows describing the
 history of changes to the status of each sink in the system, including potential error
@@ -874,88 +1048,97 @@ messages and additional metadata helpful for debugging.
 | `status`       | [`text`]                        | The status of the sink: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.              |
 | `error`        | [`text`]                        | If the sink is in an error state, the error message.                                                             |
 | `details`      | [`jsonb`]                       | Additional metadata provided by the sink. In case of error, may contain a `hint` field with helpful suggestions. |
+| `replica_id`   | [`text`]                        | The ID of the replica that an instance of a sink is running on.                                                  |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_source_statistics_raw -->
 
-### `mz_source_statistics`
+## `mz_source_statistics`
 
 The `mz_source_statistics` view contains statistics about each source.
 
 <!-- RELATION_SPEC mz_internal.mz_source_statistics -->
-| Field                    | Type        | Meaning                                                                                                                                                                                                                                                                             |
-| -------------------------|-------------| --------                                                                                                                                                                                                                                                                            |
-| `id`                     | [`text`]     | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                                                                                                                                                                                        |
-| `messages_received`       | [`uint8`]    | The number of messages the worker has received from the external system. Messages are counted in a source type-specific manner. Messages do not correspond directly to updates: some messages produce multiple updates, while other messages may be coalesced into a single update. |
-| `bytes_received`          | [`uint8`]    | The number of bytes the worker has read from the external system. Bytes are counted in a source type-specific manner and may or may not include protocol overhead.                                                                                                                  |
-| `updates_staged`          | [`uint8`]    | The number of updates (insertions plus deletions) the worker has written but not yet committed to the storage layer.                                                                                                                                                                |
-| `updates_committed`       | [`uint8`]    | The number of updates (insertions plus deletions) the worker has committed to the storage layer.                                                                                                                                                                                    |
-| `records_indexed`         | [`uint8`]    | The number of individual records indexed in the source envelope state.                                                                                                                                                                                                              |
-| `bytes_indexed`           | [`uint8`]    | The number of bytes indexed in the source envelope state.                                                                                                                                                                                                                           |
-| `rehydration_latency`     | [`interval`] | The amount of time it took for the worker to rehydrate the source envelope state.                                                                                                                                                                                                   |
-| `snapshot_records_known`  | [`uint8`]    | The size of the source's snapshot. See above for its unit. |
-| `snapshot_records_staged` | [`uint8`]    | The amount of the source's snapshot Materialize has read. See above for its unit. |
-| `snapshot_committed`      | [`boolean`]  | Whether the worker has committed the initial snapshot for a source.                                                                                                                                                                                                                 |
-| `offset_known`            | [`uint8`]    | The offset of the most recent data in the source's upstream service that Materialize knows about. See above for its unit. |
-| `offset_committed`        | [`uint8`]    | The offset of the source's upstream service Materialize has fully committed. See above for its unit. |
+| Field                     | Type         | Meaning |
+| --------------------------|--------------|---------|
+| `id`                      | [`text`]     | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources). |
+| `messages_received`       | [`uint8`]    | The number of messages the source has received from the external system. Messages are counted in a source type-specific manner. Messages do not correspond directly to updates: some messages produce multiple updates, while other messages may be coalesced into a single update. |
+| `bytes_received`          | [`uint8`]    | The number of bytes the source has read from the external system. Bytes are counted in a source type-specific manner and may or may not include protocol overhead. |
+| `updates_staged`          | [`uint8`]    | The number of updates (insertions plus deletions) the source has written but not yet committed to the storage layer. |
+| `updates_committed`       | [`uint8`]    | The number of updates (insertions plus deletions) the source has committed to the storage layer. |
+| `records_indexed`         | [`uint8`]    | The number of individual records indexed in the source envelope state. |
+| `bytes_indexed`           | [`uint8`]    | The number of bytes stored in the source's internal index, if any. |
+| `rehydration_latency`     | [`interval`] | The amount of time it took for the source to rehydrate its internal index, if any, after the source last restarted. |
+| `snapshot_records_known`  | [`uint8`]    | The size of the source's snapshot, measured in number of records. See [below](#meaning-record) to learn what constitutes a record. |
+| `snapshot_records_staged` | [`uint8`]    | The number of records in the source's snapshot that Materialize has read. See [below](#meaning-record) to learn what constitutes a record. |
+| `snapshot_committed`      | [`boolean`]  | Whether the source has committed the initial snapshot for a source. |
+| `offset_known`            | [`uint8`]    | The offset of the most recent data in the source's upstream service that Materialize knows about. See [below](#meaning-offset) to learn what constitutes an offset. |
+| `offset_committed`        | [`uint8`]    | The offset of the the data that Materialize has durably ingested. See [below](#meaning-offset) to learn what constitutes an offset. |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_source_statistics_with_history -->
 
-#### Counters
-`messages_received`, `messages_staged`, `updates_staged`, and `updates_committed` are all counters that monotonically increase. They are _only
-useful for calculating rates_, to understand the general performance of your source.
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_source_references -->
 
-Note that:
-- For Postgres and MySQL sources, currently, the former 2 are collected on the top-level source, and the latter 2 on the source's tables.
-- The non-rate values themselves are not directly comparable, because they are collected and aggregated across multiple threads/processes.
+### Counter metrics
 
-#### Resetting gauges
-Resetting Gauges generally increase, but can periodically be reset to 0 or other numbers.
+`messages_received`, `bytes_received`, `updates_staged`, and `updates_committed`
+are counter metrics that monotonically increase over time.
 
----
-**Indexed records**
+Counters are updated in a best-effort manner. An ill-timed restart of the source
+may cause undercounting or overcounting. As a result, **counters are only useful
+for calculating rates to understand the general performance of your source.**
 
-`records_indexed` and `bytes_indexed` are the size (in records and bytes respectively) of the data the given source _indexes_. Currently, this is only
-`UPSERT` and `DEBEZIUM` sources. These reset to 0 when sources are restarted and must re-index their data.
+For Postgres and MySQL sources, `messages_received` and `bytes_received` are
+collected on the top-level source, and `updates_staged` and `updates_committed`
+are collected on the source's tables.
 
----
-**Rehydration latency**
+### Gauge metrics
 
-`rehydration_latency` is reset to `NULL` when sources are restarted, and is populated with a duration after rehydration finishes. This is typically
-the time it takes `UPSERT` and `DEBEZIUM` sources to re-index their data.
+Gauge metrics reflect values that can increase or decrease over time. Gauge
+metrics are eventually consistent. They may lag the true state of the source by
+seconds or minutes, but if the source stops ingesting messages, the gauges will
+eventually reflect the true state of the source.
 
----
-**Snapshot progress**
+`records_indexed` and `bytes_indexed` are the size (in records and bytes
+respectively) of the index the source must maintain internally to efficiently
+process incoming data. Currently, only sources that use the upsert and Debezium
+envelopes must maintain an index. These gauges reset to 0 when the source is
+restarted, as the index must be rehydrated.
 
-When a source is first created, it must process and initial snapshot of data. `snapshot_records_known` is the full size of that snapshot, and `snapshot_records_staged`
-is how much of that snapshot the source has read so far.
+`rehydration_latency` represents the amount of time it took for the source to
+rehydrate its index after the latest restart. It is reset to `NULL` when a
+source is restarted and is populated with a duration after hydration finishes.
 
-The _size_ of the snapshot has a source-defined unit:
+When a source is first created, it must process an initial snapshot of data.
+`snapshot_records_known` is the total number of records in the snapshot, and
+`snapshot_records_staged` is how many of the records the source has read so far.
+
+<a name="meaning-record"></a>
+
+The meaning of record depends on the source:
 - For Kafka sources, its the total number of offsets in the snapshot.
 - For Postgres and MySQL sources, its the number of rows in the snapshot.
 
-Note that when tables are added to Postgres or MySQL sources, this statistics will reset as we snapshot those new tables.
+Note that when tables are added to Postgres or MySQL sources,
+`snapshot_records_known` and `snapshot_records_staged` will reset as the source
+snapshots those new tables. The metrics will also reset if the source is
+restarted while the snapshot is in progres.
 
-#### Gauges
-Gauges never decrease/reset.
+`snapshot_committed` becomes true when we have fully committed the snapshot for
+the given source. <!-- TODO: when does this reset? -->
 
----
-**Snapshot Completion**
-`snapshot_committed` becomes true when we have fully _committed_ the snapshot for the given source.
+`offset_known` and `offset_committed` are used to represent the progress a
+source is making relative to its upstream source. `offset_known` is the maximum
+offset in the upstream system that Materialize knows about. `offset_committed`
+is the offset that Materialize has durably ingested. These metrics will never
+decrease over the lifetime of a source.
 
----
-**Steady-state progress**
+<a name="meaning-offset"></a>
 
-`offset_known` and `offset_committed` are used to represent the _progress_ a source is making,
-in comparison to its upstream source. They are designed to be turned into _rates_, and compared.
+The meaning of offset depends on the source:
+- For Kafka sources, an offset is the Kafka message offset.
+- For MySQL sources, an offset is the number of transactions committed across all servers in the cluster.
+- For Postgres sources, an offset is a log sequence number (LSN).
 
-`offset_known` is the maximum offset of upstream data knows about. `offset_committed` is the offset that Materialize has committed data up to.
-
-These statistics have a source-defined unit:
-- For Kafka sources, its the number of offsets.
-- For MySQL sources, its the number of transactions.
-- For Postgres sources, its the number of bytes in its replication stream.
-
-### `mz_source_statuses`
+## `mz_source_statuses`
 
 The `mz_source_statuses` view provides the current state for each source in the
 system, including potential error messages and additional metadata helpful for
@@ -968,11 +1151,11 @@ debugging.
 | `name`                   | [`text`]                        | The name of the source.                                                                                            |
 | `type`                   | [`text`]                        | The type of the source.                                                                                            |
 | `last_status_change_at`  | [`timestamp with time zone`]    | Wall-clock timestamp of the source status change.                                                                  |
-| `status`                 | [`text`]                        | The status of the source: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.              |
+| `status`                 | [`text`]                        | The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, `failed`, or `dropped`.    |
 | `error`                  | [`text`]                        | If the source is in an error state, the error message.                                                             |
 | `details`                | [`jsonb`]                       | Additional metadata provided by the source. In case of error, may contain a `hint` field with helpful suggestions. |
 
-### `mz_source_status_history`
+## `mz_source_status_history`
 
 The `mz_source_status_history` table contains a row describing the status of the
 historical state for each source in the system, including potential error
@@ -983,12 +1166,13 @@ messages and additional metadata helpful for debugging.
 | -------------- | ------------------------------- | --------                                                                                                           |
 | `occurred_at`  | [`timestamp with time zone`]    | Wall-clock timestamp of the source status change.                                                                  |
 | `source_id`    | [`text`]                        | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                       |
-| `status`       | [`text`]                        | The status of the source: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.              |
+| `status`       | [`text`]                        | The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, `failed`, or `dropped`.    |
 | `error`        | [`text`]                        | If the source is in an error state, the error message.                                                             |
 | `details`      | [`jsonb`]                       | Additional metadata provided by the source. In case of error, may contain a `hint` field with helpful suggestions. |
+| `replica_id`   | [`text`]                        | The ID of the replica that an instance of a source is running on.                                                  |
 
 <!--
-### `mz_statement_execution_history`
+## `mz_statement_execution_history`
 
 The `mz_statement_execution_history` table contains a row for each
 statement executed, that the system decided to log. Entries older than
@@ -1012,11 +1196,12 @@ and cannot be changed by users), the latter is used instead.
 | `finished_at`           | [`timestamp with time zone`] | The time at which execution ended.                                                                                                                                                                                                                                                                         |
 | `finished_status`       | [`text`]                     | `'success'`, `'error'`, `'canceled'`, or `'aborted'`. `'aborted'` means that the database restarted (e.g., due to a crash or planned maintenance) before the query finished.                                                                                                                               |
 | `error_message`         | [`text`]                     | The error returned when executing the statement, or `NULL` if it was successful, canceled or aborted.                                                                                                                                                                                                      |
+| `result_size`           | [`bigint`]                   | The size in bytes of the result, for statements that return rows.                                                                                                                                                                                                                 |
 | `rows_returned`         | [`int8`]                     | The number of rows returned by the statement, if it finished successfully and was of a kind of statement that can return rows, or `NULL` otherwise.                                                                                                                                                        |
 | `execution_strategy`    | [`text`]                     | `'standard'`, `'fast-path'` `'constant'`, or `NULL`. `'standard'` means a dataflow was built on a cluster to compute the result. `'fast-path'` means a cluster read the result from an existing arrangement. `'constant'` means the result was computed in the serving layer, without involving a cluster. |
 -->
 
-### `mz_statement_lifecycle_history`
+## `mz_statement_lifecycle_history`
 
 <!-- RELATION_SPEC mz_internal.mz_statement_lifecycle_history -->
 | Field          | Type                         | Meaning                                                                                                                                                |
@@ -1025,7 +1210,7 @@ and cannot be changed by users), the latter is used instead.
 | `event_type`   | [`text`]                     | The type of lifecycle event, e.g. `'execution-began'`, `'storage-dependencies-finished'`, `'compute-dependencies-finished'`, or `'execution-finished'` |
 | `occurred_at`  | [`timestamp with time zone`] | The time at which the event took place.                                                                                                                |
 
-### `mz_subscriptions`
+## `mz_subscriptions`
 
 The `mz_subscriptions` table describes all active [`SUBSCRIBE`](/sql/subscribe)
 operations in the system.
@@ -1034,12 +1219,29 @@ operations in the system.
 | Field                    | Type                         | Meaning                                                                                                                    |
 | ------------------------ |------------------------------| --------                                                                                                                   |
 | `id`                     | [`text`]                     | The ID of the subscription.                                                                                                |
-| `session_id`             | [`uint4`]                    | The ID of the session that runs the subscription. Corresponds to [`mz_sessions.id`](#mz_sessions).                         |
+| `session_id`             | [`uuid`]                     | The ID of the session that runs the subscription. Corresponds to [`mz_sessions.id`](#mz_sessions).                         |
 | `cluster_id`             | [`text`]                     | The ID of the cluster on which the subscription is running. Corresponds to [`mz_clusters.id`](../mz_catalog/#mz_clusters). |
 | `created_at`             | [`timestamp with time zone`] | The time at which the subscription was created.                                                                            |
 | `referenced_object_ids`  | [`text list`]                | The IDs of objects referenced by the subscription. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects)             |
 
-### `mz_webhook_sources`
+## `mz_wallclock_lag_history`
+
+The `mz_wallclock_lag_history` table records the historical wallclock lag,
+i.e., the difference between the write frontier and the current wallclock time,
+for each table, source, index, materialized view, and sink in the system.
+
+<!-- RELATION_SPEC mz_internal.mz_wallclock_lag_history -->
+| Field         | Type         | Meaning
+| --------------| -------------| --------
+| `object_id`   | [`text`]     | The ID of the table, source, materialized view, index, or sink. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).
+| `replica_id`  | [`text`]     | The ID of a replica computing the object, or `NULL` for persistent objects. Corresponds to [`mz_cluster_replicas.id`](../mz_catalog/#mz_cluster_replicas).
+| `lag`         | [`interval`] | The amount of time the object's write frontier lags behind wallclock time.
+| `occurred_at` | [`timestamp with time zone`] | Wall-clock timestamp at which the event occurred.
+
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_wallclock_global_lag_history -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_wallclock_global_lag_recent_history -->
+
+## `mz_webhook_sources`
 
 The `mz_webhook_sources` table contains a row for each webhook source in the system.
 
@@ -1050,417 +1252,58 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 | `name`         | [`text`]    | The name of the webhook source.                                                              |
 | `url`          | [`text`]    | The URL which can be used to send events to the source.                                      |
 
-## Replica introspection relations
-
-This section lists the available replica introspection relations.
-
-Introspection relations are maintained by independently collecting internal logging information within each of the replicas of a cluster.
-Thus, in a multi-replica cluster, queries to these relations need to be directed to a specific replica by issuing the command `SET cluster_replica = <replica_name>`.
-Note that once this command is issued, all subsequent `SELECT` queries, for introspection relations or not, will be directed to the targeted replica.
-Replica targeting can be cancelled by issuing the command `RESET cluster_replica`.
-
-For each of the below introspection relations, there exists also a variant with a `_per_worker` name suffix.
-Per-worker relations expose the same data as their global counterparts, but have an extra `worker_id` column that splits the information by Timely Dataflow worker.
-
-### `mz_active_peeks`
-
-The `mz_active_peeks` view describes all read queries ("peeks") that are pending in the [dataflow] layer.
-
-<!-- RELATION_SPEC mz_internal.mz_active_peeks -->
-| Field       | Type             | Meaning                                                                                                                                                                                                                                                                                                               |
-|-------------|------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `id`        | [`uuid`]         | The ID of the peek request.                                                                                                                                                                                                                                                                                           |
-| `object_id` | [`text`]         | The ID of the collection the peek is targeting. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables). |
-| `type`      | [`text`]         | The type of the corresponding peek: `index` if targeting an index or temporary dataflow; `persist` for a source, materialized view, or table.                                                                                                                                                                         |
-| `time`      | [`mz_timestamp`] | The timestamp the peek has requested.                                                                                                                                                                                                                                                                                 |
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_active_peeks_per_worker -->
-
-### `mz_arrangement_sharing`
-
-The `mz_arrangement_sharing` view describes how many times each [arrangement] in the system is used.
-
-<!-- RELATION_SPEC mz_internal.mz_arrangement_sharing -->
-| Field          | Type       | Meaning                                                                                                                   |
-| -------------- |------------| --------                                                                                                                  |
-| `operator_id`  | [`uint8`]  | The ID of the operator that created the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators). |
-| `count`        | [`bigint`] | The number of operators that share the arrangement.                                                                       |
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_sharing_per_worker -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_sharing_raw -->
-
-### `mz_arrangement_sizes`
-
-The `mz_arrangement_sizes` view describes the size of each [arrangement] in the system.
-
-The size, capacity, and allocations are an approximation, which may underestimate the actual size in memory.
-Specifically, reductions can use more memory than we show here.
-
-<!-- RELATION_SPEC mz_internal.mz_arrangement_sizes -->
-| Field         | Type        | Meaning                                                                                                                   |
-|---------------|-------------| --------                                                                                                                  |
-| `operator_id` | [`uint8`]   | The ID of the operator that created the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators). |
-| `records`     | [`numeric`] | The number of records in the arrangement.                                                                                 |
-| `batches`     | [`numeric`] | The number of batches in the arrangement.                                                                                 |
-| `size`        | [`numeric`] | The utilized size in bytes of the arrangement.                                                                            |
-| `capacity`    | [`numeric`] | The capacity in bytes of the arrangement. Can be larger than the size.                                                    |
-| `allocations` | [`numeric`] | The number of separate memory allocations backing the arrangement.                                                        |
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_sizes_per_worker -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_records_raw -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_batcher_allocations_raw -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_batcher_capacity_raw -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_batcher_records_raw -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_batcher_size_raw -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_batches_raw -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_heap_allocations_raw -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_heap_capacity_raw -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_heap_size_raw -->
-
-### `mz_compute_error_counts`
-
-The `mz_compute_error_counts` view describes the counts of errors in objects exported by [dataflows][dataflow] in the system.
-
-Dataflow exports that don't have any errors are not included in this view.
-
-<!-- RELATION_SPEC mz_internal.mz_compute_error_counts -->
-| Field        | Type        | Meaning                                                                                              |
-| ------------ |-------------| --------                                                                                             |
-| `export_id`  | [`text`]    | The ID of the dataflow export. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports). |
-| `count`      | [`numeric`] | The count of errors present in this dataflow export.                                                 |
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_error_counts_per_worker -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_error_counts_raw -->
-
-### `mz_compute_exports`
-
-The `mz_compute_exports` view describes the objects exported by [dataflows][dataflow] in the system.
-
-<!-- RELATION_SPEC mz_internal.mz_compute_exports -->
-| Field          | Type      | Meaning                                                                                                                                                                                                                                                                                        |
-| -------------- |-----------| --------                                                                                                                                                                                                                                                                                       |
-| `export_id`    | [`text`]  | The ID of the index, materialized view, or subscription exported by the dataflow. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_internal.mz_subscriptions`](#mz_subscriptions). |
-| `dataflow_id`  | [`uint8`] | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).                                                                                                                                                                                                               |
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_exports_per_worker -->
-
-### `mz_compute_frontiers`
-
-The `mz_compute_frontiers` view describes the frontier of each [dataflow] export in the system.
-The frontier describes the earliest timestamp at which the output of the dataflow may change; data prior to that timestamp is sealed.
-
-<!-- RELATION_SPEC mz_internal.mz_compute_frontiers -->
-| Field        | Type               | Meaning                                                                                              |
-| ------------ | ------------------ | --------                                                                                             |
-| `export_id`  | [`text`]           | The ID of the dataflow export. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports). |
-| `time`       | [`mz_timestamp`]   | The next timestamp at which the dataflow output may change.                                          |
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_frontiers_per_worker -->
-
-### `mz_compute_import_frontiers`
-
-The `mz_compute_import_frontiers` view describes the frontiers of each [dataflow] import in the system.
-The frontier describes the earliest timestamp at which the input into the dataflow may change; data prior to that timestamp is sealed.
-
-<!-- RELATION_SPEC mz_internal.mz_compute_import_frontiers -->
-| Field        | Type               | Meaning                                                                                                                                                                                                                |
-| ------------ | ------------------ | --------                                                                                                                                                                                                               |
-| `export_id`  | [`text`]           | The ID of the dataflow export. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).                                                                                                                   |
-| `import_id`  | [`text`]           | The ID of the dataflow import. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources) or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables) or [`mz_compute_exports.export_id`](#mz_compute_exports). |
-| `time`       | [`mz_timestamp`]   | The next timestamp at which the dataflow input may change.                                                                                                                                                             |
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_import_frontiers_per_worker -->
-
-### `mz_compute_operator_durations_histogram`
-
-The `mz_compute_operator_durations_histogram` view describes a histogram of the duration in nanoseconds of each invocation for each [dataflow] operator.
-
-<!-- RELATION_SPEC mz_internal.mz_compute_operator_durations_histogram -->
-| Field          | Type        | Meaning                                                                                      |
-| -------------- |-------------| --------                                                                                     |
-| `id`           | [`uint8`]   | The ID of the operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators). |
-| `duration_ns`  | [`uint8`]   | The upper bound of the duration bucket in nanoseconds.                                       |
-| `count`        | [`numeric`] | The (noncumulative) count of invocations in the bucket.                                      |
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_operator_durations_histogram_per_worker -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_operator_durations_histogram_raw -->
-
-### `mz_dataflows`
-
-The `mz_dataflows` view describes the [dataflows][dataflow] in the system.
-
-<!-- RELATION_SPEC mz_internal.mz_dataflows -->
-| Field       | Type      | Meaning                                |
-| ----------- |-----------| --------                               |
-| `id`        | [`uint8`] | The ID of the dataflow.                |
-| `name`      | [`text`]  | The internal name of the dataflow.     |
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflows_per_worker -->
-
-### `mz_dataflow_addresses`
-
-The `mz_dataflow_addresses` view describes how the [dataflow] channels and operators in the system are nested into scopes.
-
-<!-- RELATION_SPEC mz_internal.mz_dataflow_addresses -->
-| Field        | Type            | Meaning                                                                                                                                                       |
-| ------------ |-----------------| --------                                                                                                                                                      |
-| `id`         | [`uint8`]       | The ID of the channel or operator. Corresponds to [`mz_dataflow_channels.id`](#mz_dataflow_channels) or [`mz_dataflow_operators.id`](#mz_dataflow_operators). |
-| `address`    | [`bigint list`] | A list of scope-local indexes indicating the path from the root to this channel or operator.                                                                  |
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_addresses_per_worker -->
-
-### `mz_dataflow_arrangement_sizes`
-
-The `mz_dataflow_arrangement_sizes` view describes the size of arrangements per
-operators under each dataflow.
-
-<!-- RELATION_SPEC mz_internal.mz_dataflow_arrangement_sizes -->
-| Field         | Type        | Meaning                                                                      |
-|---------------|-------------|------------------------------------------------------------------------------|
-| `id`          | [`uint8`]   | The ID of the [dataflow]. Corresponds to [`mz_dataflows.id`](#mz_dataflows). |
-| `name`        | [`text`]    | The name of the [dataflow].                                                  |
-| `records`     | [`numeric`] | The number of records in all arrangements in the dataflow.                   |
-| `batches`     | [`numeric`] | The number of batches in all arrangements in the dataflow.                   |
-| `size`        | [`numeric`] | The utilized size in bytes of the arrangements.                              |
-| `capacity`    | [`numeric`] | The capacity in bytes of the arrangements. Can be larger than the size.      |
-| `allocations` | [`numeric`] | The number of separate memory allocations backing the arrangements.          |
-
-### `mz_dataflow_channels`
-
-The `mz_dataflow_channels` view describes the communication channels between [dataflow] operators.
-A communication channel connects one of the outputs of a source operator to one of the inputs of a target operator.
-
-<!-- RELATION_SPEC mz_internal.mz_dataflow_channels -->
-| Field            | Type      | Meaning                                                                                                                 |
-| ---------------- |-----------| --------                                                                                                                |
-| `id`             | [`uint8`] | The ID of the channel.                                                                                                  |
-| `from_index`     | [`uint8`] | The scope-local index of the source operator. Corresponds to [`mz_dataflow_addresses.address`](#mz_dataflow_addresses). |
-| `from_port`      | [`uint8`] | The source operator's output port.                                                                                      |
-| `to_index`       | [`uint8`] | The scope-local index of the target operator. Corresponds to [`mz_dataflow_addresses.address`](#mz_dataflow_addresses). |
-| `to_port`        | [`uint8`] | The target operator's input port.                                                                                       |
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_channels_per_worker -->
-
-### `mz_dataflow_channel_operators`
-
-The `mz_dataflow_channel_operators` view associates [dataflow] channels with the operators that are their endpoints.
-
-<!-- RELATION_SPEC mz_internal.mz_dataflow_channel_operators -->
-| Field                   | Type           | Meaning                                                                                                             |
-|-------------------------|----------------|---------------------------------------------------------------------------------------------------------------------|
-| `id`                    | [`uint8`]      | The ID of the channel. Corresponds to [`mz_dataflow_channels.id`](#mz_dataflow_channels).                           |
-| `from_operator_id`      | [`uint8`]      | The ID of the source of the channel. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).           |
-| `from_operator_address` | [`uint8 list`] | The address of the source of the channel. Corresponds to [`mz_dataflow_addresses.address`](#mz_dataflow_addresses). |
-| `to_operator_id`        | [`uint8`]      | The ID of the target of the channel. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).           |
-| `to_operator_address`   | [`uint8 list`] | The address of the target of the channel. Corresponds to [`mz_dataflow_addresses.address`](#mz_dataflow_addresses). |
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_channel_operators_per_worker -->
-
-### `mz_dataflow_operators`
-
-The `mz_dataflow_operators` view describes the [dataflow] operators in the system.
-
-<!-- RELATION_SPEC mz_internal.mz_dataflow_operators -->
-| Field        | Type      | Meaning                            |
-| ------------ |-----------| --------                           |
-| `id`         | [`uint8`] | The ID of the operator.            |
-| `name`       | [`text`]  | The internal name of the operator. |
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operators_per_worker -->
-
-### `mz_dataflow_operator_dataflows`
-
-The `mz_dataflow_operator_dataflows` view describes the [dataflow] to which each operator belongs.
-
-<!-- RELATION_SPEC mz_internal.mz_dataflow_operator_dataflows -->
-| Field            | Type      | Meaning                                                                                         |
-| ---------------- |-----------| --------                                                                                        |
-| `id`             | [`uint8`] | The ID of the operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).    |
-| `name`           | [`text`]  | The internal name of the operator.                                                              |
-| `dataflow_id`    | [`uint8`] | The ID of the dataflow hosting the operator. Corresponds to [`mz_dataflows.id`](#mz_dataflows). |
-| `dataflow_name`  | [`text`]  | The internal name of the dataflow hosting the operator.                                         |
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_dataflows_per_worker -->
-
-### `mz_dataflow_operator_parents`
-
-The `mz_dataflow_operator_parents` view describes how [dataflow] operators are nested into scopes, by relating operators to their parent operators.
-
-<!-- RELATION_SPEC mz_internal.mz_dataflow_operator_parents -->
-| Field        | Type      | Meaning                                                                                                        |
-| ------------ |-----------| --------                                                                                                       |
-| `id`         | [`uint8`] | The ID of the operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).                   |
-| `parent_id`  | [`uint8`] | The ID of the operator's parent operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators). |
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_parents_per_worker -->
-
-### `mz_dataflow_shutdown_durations_histogram`
-
-The `mz_dataflow_shutdown_durations_histogram` view describes a histogram of the time in nanoseconds required to fully shut down dropped [dataflows][dataflow].
-
-<!-- RELATION_SPEC mz_internal.mz_dataflow_shutdown_durations_histogram -->
-| Field          | Type        | Meaning                                                |
-| -------------- |-------------| --------                                               |
-| `duration_ns`  | [`uint8`]   | The upper bound of the bucket in nanoseconds.          |
-| `count`        | [`numeric`] | The (noncumulative) count of dataflows in this bucket. |
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_shutdown_durations_histogram_per_worker -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_shutdown_durations_histogram_raw -->
-
-### `mz_expected_group_size_advice`
-
-The `mz_expected_group_size_advice` view provides advice on opportunities to set [query hints].
-Query hints are applicable to dataflows maintaining [`MIN`], [`MAX`], or [Top K] query patterns.
-The maintainance of these query patterns is implemented inside an operator scope, called a region,
-through a hierarchical scheme for either aggregation or Top K computations.
-
-<!-- RELATION_SPEC mz_internal.mz_expected_group_size_advice -->
-| Field           | Type                 | Meaning                                                                                                   |
-|-----------------|----------------------|-----------------------------------------------------------------------------------------------------------|
-| `dataflow_id`   | [`uint8`]            | The ID of the [dataflow]. Corresponds to [`mz_dataflows.id`](#mz_dataflows).                              |
-| `dataflow_name` | [`text`]             | The internal name of the dataflow hosting the min/max aggregation or Top K.                               |
-| `region_id`     | [`uint8`]            | The ID of the root operator scope. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).   |
-| `region_name`   | [`text`]             | The internal name of the root operator scope for the min/max aggregation or Top K.                        |
-| `levels`        | [`bigint`]           | The number of levels in the hierarchical scheme implemented by the region.                                |
-| `to_cut`        | [`bigint`]           | The number of levels that can be eliminated (cut) from the region's hierarchy.                            |
-| `savings`       | [`numeric`]          | A conservative estimate of the amount of memory in bytes to be saved by applying the hint.                |
-| `hint`          | [`double precision`] | The hint value that will eliminate `to_cut` levels from the region's hierarchy.                           |
-
-### `mz_message_counts`
-
-The `mz_message_counts` view describes the messages and message batches sent and received over the [dataflow] channels in the system.
-It distinguishes between individual records (`sent`, `received`) and batches of records (`batch_sent`, `batch_sent`).
-
-<!-- RELATION_SPEC mz_internal.mz_message_counts -->
-| Field              | Type        | Meaning                                                                                   |
-| ------------------ |-------------| --------                                                                                  |
-| `channel_id`       | [`uint8`]   | The ID of the channel. Corresponds to [`mz_dataflow_channels.id`](#mz_dataflow_channels). |
-| `sent`             | [`numeric`] | The number of messages sent.                                                              |
-| `received`         | [`numeric`] | The number of messages received.                                                          |
-| `batch_sent`       | [`numeric`] | The number of batches sent.                                                               |
-| `batch_received`   | [`numeric`] | The number of batches received.                                                           |
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_message_counts_per_worker -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_message_batch_counts_received_raw -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_message_batch_counts_sent_raw -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_message_counts_received_raw -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_message_counts_sent_raw -->
-
-### `mz_peek_durations_histogram`
-
-The `mz_peek_durations_histogram` view describes a histogram of the duration in nanoseconds of read queries ("peeks") in the [dataflow] layer.
-
-<!-- RELATION_SPEC mz_internal.mz_peek_durations_histogram -->
-| Field         | Type        | Meaning                                            |
-|---------------|-------------|----------------------------------------------------|
-| `type`        | [`text`]    | The peek variant: `index` or `persist`.            |
-| `duration_ns` | [`uint8`]   | The upper bound of the bucket in nanoseconds.      |
-| `count`       | [`numeric`] | The (noncumulative) count of peeks in this bucket. |
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_peek_durations_histogram_per_worker -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_peek_durations_histogram_raw -->
-
-### `mz_records_per_dataflow`
-
-The `mz_records_per_dataflow` view describes the number of records in each [dataflow].
-
-<!-- RELATION_SPEC mz_internal.mz_records_per_dataflow -->
-| Field         | Type        | Meaning                                                                    |
-| ------------  |-------------| --------                                                                   |
-| `id`          | [`uint8`]   | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows). |
-| `name`        | [`text`]    | The internal name of the dataflow.                                         |
-| `records`     | [`numeric`] | The number of records in the dataflow.                                     |
-| `batches`     | [`numeric`] | The number of batches in the dataflow.                                     |
-| `size`        | [`numeric`] | The utilized size in bytes of the arrangements.                            |
-| `capacity`    | [`numeric`] | The capacity in bytes of the arrangements. Can be larger than the size.    |
-| `allocations` | [`numeric`] | The number of separate memory allocations backing the arrangements.        |
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_records_per_dataflow_per_worker -->
-
-### `mz_records_per_dataflow_operator`
-
-The `mz_records_per_dataflow_operator` view describes the number of records in each [dataflow] operator in the system.
-
-<!-- RELATION_SPEC mz_internal.mz_records_per_dataflow_operator -->
-| Field          | Type        | Meaning                                                                                      |
-| -------------- |-------------| --------                                                                                     |
-| `id`           | [`uint8`]   | The ID of the operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators). |
-| `name`         | [`text`]    | The internal name of the operator.                                                           |
-| `dataflow_id`  | [`uint8`]   | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).                   |
-| `records`      | [`numeric`] | The number of records in the operator.                                                       |
-| `batches`      | [`numeric`] | The number of batches in the dataflow.                                                       |
-| `size`         | [`numeric`] | The utilized size in bytes of the arrangement.                                               |
-| `capacity`     | [`numeric`] | The capacity in bytes of the arrangement. Can be larger than the size.                       |
-| `allocations`  | [`numeric`] | The number of separate memory allocations backing the arrangement.                           |
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_records_per_dataflow_operator_per_worker -->
-
-### `mz_scheduling_elapsed`
-
-The `mz_scheduling_elapsed` view describes the total amount of time spent in each [dataflow] operator.
-
-<!-- RELATION_SPEC mz_internal.mz_scheduling_elapsed -->
-| Field         | Type        | Meaning                                                                                      |
-| ------------- |-------------| --------                                                                                     |
-| `id`          | [`uint8`]   | The ID of the operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators). |
-| `elapsed_ns`  | [`numeric`] | The total elapsed time spent in the operator in nanoseconds.                                 |
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_scheduling_elapsed_per_worker -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_scheduling_elapsed_raw -->
-
-### `mz_scheduling_parks_histogram`
-
-The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] worker park events. A park event occurs when a worker has no outstanding work.
-
-<!-- RELATION_SPEC mz_internal.mz_scheduling_parks_histogram -->
-| Field           | Type        | Meaning                                                  |
-| --------------- |-------------| -------                                                  |
-| `slept_for_ns`  | [`uint8`]   | The actual length of the park event in nanoseconds.      |
-| `requested_ns`  | [`uint8`]   | The requested length of the park event in nanoseconds.   |
-| `count`         | [`numeric`] | The (noncumulative) count of park events in this bucket. |
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_scheduling_parks_histogram_per_worker -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_scheduling_parks_histogram_raw -->
-
-
 [`bigint`]: /sql/types/bigint
-[`bigint list`]: /sql/types/list
 [`boolean`]: /sql/types/boolean
+[`bytea`]: /sql/types/bytea
 [`double precision`]: /sql/types/double-precision
-[`interval`]: /sql/types/interval/
+[`integer`]: /sql/types/integer
+[`interval`]: /sql/types/interval
 [`jsonb`]: /sql/types/jsonb
 [`mz_timestamp`]: /sql/types/mz_timestamp
+[`mz_aclitem`]: /sql/types/mz_aclitem
+[`mz_aclitem array`]: /sql/types/mz_aclitem
 [`numeric`]: /sql/types/numeric
+[`oid`]: /sql/types/oid
 [`text`]: /sql/types/text
 [`text array`]: /sql/types/array
 [`text list`]: /sql/types/list
 [`uuid`]: /sql/types/uuid
 [`uint4`]: /sql/types/uint4
 [`uint8`]: /sql/types/uint8
+[`uint8 list`]: /sql/types/list
 [`timestamp with time zone`]: /sql/types/timestamp
-[arrangement]: /get-started/arrangements/#arrangements
-[dataflow]: /get-started/arrangements/#dataflows
-[`MIN`]: /sql/functions/#min
-[`MAX`]: /sql/functions/#max
-[Top K]: /transform-data/patterns/top-k
-[query hints]: /sql/select/#query-hints
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log_thinned -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_replica_metrics_history_ct -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_replica_status_history_ct -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_workload_classes -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_error_counts_raw_unified -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_continual_tasks -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_activity_log_redacted -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_activity_log_thinned -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_aggregates -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability_per_worker -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_prepared_statement_history -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_sql_text -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_sql_text_redacted -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_session_history -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_all_objects -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_clusters -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_cluster_replicas -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_columns -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_connections -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_continual_tasks -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_databases -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_indexes -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_materialized_views -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_network_policies -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_roles -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_schemas -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_secrets -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_sinks -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_sources -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_tables -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_types -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_views -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_sql_text -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_sql_text_redacted -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_statement_execution_history -->
@@ -1468,7 +1311,11 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_shards -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_usage_by_shard -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_type_pg_metadata -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_wallclock_lag_history_ct -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_object_oid_alias -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_objects_id_namespace_types -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_console_cluster_utilization_overview -->
+
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_class_all_databases -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_type_all_databases -->

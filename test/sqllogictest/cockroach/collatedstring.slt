@@ -327,7 +327,7 @@ SELECT a FROM foo
 ----
 NULL
 
-# Regression test for #24449
+# Regression test for database-issues#7300
 
 statement ok
 INSERT INTO foo VALUES ('aBcD' COLLATE en_u_ks_level2)

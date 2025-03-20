@@ -10,23 +10,23 @@
 use std::sync::Arc;
 
 use guppy::platform::{Platform, PlatformSpec, TargetFeatures, Triple};
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 use crate::ToBazelDefinition;
 
-static AARCH64_MAC_OS: Lazy<PlatformSpec> = Lazy::new(|| {
+static AARCH64_MAC_OS: LazyLock<PlatformSpec> = LazyLock::new(|| {
     let triple = Triple::new("aarch64-apple-darwin").unwrap();
     PlatformSpec::Platform(Arc::new(Platform::from_triple(triple, TargetFeatures::All)))
 });
-static X86_64_MAC_OS: Lazy<PlatformSpec> = Lazy::new(|| {
+static X86_64_MAC_OS: LazyLock<PlatformSpec> = LazyLock::new(|| {
     let triple = Triple::new("x86_64-apple-darwin").unwrap();
     PlatformSpec::Platform(Arc::new(Platform::from_triple(triple, TargetFeatures::All)))
 });
-static AARCH64_LINUX_GNU: Lazy<PlatformSpec> = Lazy::new(|| {
+static AARCH64_LINUX_GNU: LazyLock<PlatformSpec> = LazyLock::new(|| {
     let triple = Triple::new("aarch64-unknown-linux-gnu").unwrap();
     PlatformSpec::Platform(Arc::new(Platform::from_triple(triple, TargetFeatures::All)))
 });
-static X86_64_LINUX_GNU: Lazy<PlatformSpec> = Lazy::new(|| {
+static X86_64_LINUX_GNU: LazyLock<PlatformSpec> = LazyLock::new(|| {
     let triple = Triple::new("x86_64-unknown-linux-gnu").unwrap();
     PlatformSpec::Platform(Arc::new(Platform::from_triple(triple, TargetFeatures::All)))
 });

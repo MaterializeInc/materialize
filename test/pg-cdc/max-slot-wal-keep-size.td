@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
+ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER USER postgres WITH replication;
@@ -34,8 +34,9 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
   )
 > CREATE SOURCE mz_source
   IN CLUSTER storage
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR ALL TABLES;
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
 
 # Wait for the initial snapshot to be ingested
 > SELECT * FROM t1

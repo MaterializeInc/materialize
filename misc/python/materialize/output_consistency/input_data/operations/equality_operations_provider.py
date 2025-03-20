@@ -24,14 +24,14 @@ EQUALITY_OPERATION_TYPES: list[DbOperationOrFunction] = []
 TAG_EQUALITY = "equality"
 TAG_EQUALITY_ORDERING = "equality-order"
 
-EQUALITY_OPERATION_TYPES.append(
-    DbOperation(
-        "$ = $",
-        [AnyOperationParam(), AnyLikeOtherOperationParam(0)],
-        BooleanReturnTypeSpec(),
-        tags={TAG_EQUALITY},
-    )
+EQUALS_OPERATION = DbOperation(
+    "$ = $",
+    [AnyOperationParam(), AnyLikeOtherOperationParam(0)],
+    BooleanReturnTypeSpec(),
+    tags={TAG_EQUALITY},
 )
+
+EQUALITY_OPERATION_TYPES.append(EQUALS_OPERATION)
 
 EQUALITY_OPERATION_TYPES.append(
     DbOperation(

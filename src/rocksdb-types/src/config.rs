@@ -502,6 +502,7 @@ pub mod defaults {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
@@ -537,7 +538,7 @@ mod tests {
     fn rocksdb_tuning_roundtrip() {
         proptest!(|(expect in any::<RocksDBTuningParameters>())| {
             let actual = protobuf_roundtrip::<_, ProtoRocksDbTuningParameters>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
 
         });

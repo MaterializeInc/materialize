@@ -72,7 +72,7 @@ query error step mz_timestamp overflow
 select * from valid_max AS OF 0
 
 #
-# Regression test for #6635
+# Regression test for database-issues#2066
 #
 statement ok
 CREATE TABLE events (
@@ -134,8 +134,8 @@ CREATE VIEW dev_warm.stg_data_days AS
     SELECT *
     FROM dev.mock_data_days
     WHERE
-        mz_now() <= date_trunc('year', ts + CAST('1 year' AS interval)) AND
-        ts + CAST('7 days' AS interval) - CAST('1 month' AS interval) < mz_now();
+        TIMESTAMP '2024-12-21' <= date_trunc('year', ts + CAST('1 year' AS interval)) AND
+        ts + CAST('7 days' AS interval) - CAST('1 month' AS interval) < TIMESTAMP '2024-12-21';
 
 statement ok
 CREATE VIEW dev_warm.count_by_day AS
@@ -145,8 +145,8 @@ CREATE VIEW dev_warm.count_by_day AS
     FROM dev_warm.stg_data_days
     GROUP BY 1
     HAVING
-        NOT (mz_now() <= date_trunc('day', ts) + CAST('7 days' AS interval)) AND
-        mz_now() <= date_trunc('year', date_trunc('day', ts) + CAST('1 year' AS interval));
+        NOT (TIMESTAMP '2024-12-21' <= date_trunc('day', ts) + CAST('7 days' AS interval)) AND
+        TIMESTAMP '2024-12-21' <= date_trunc('year', date_trunc('day', ts) + CAST('1 year' AS interval));
 
 statement ok
 CREATE VIEW dev_fy2023.stg_data_days AS
@@ -168,8 +168,6 @@ CREATE VIEW dev_fy2023.count_by_day AS
         NOT (CAST('2024-01-01' AS timestamp) <= date_trunc('day', ts)) AND
         CAST('2023-01-01' AS timestamp) <= date_trunc('day', ts);
 
-# This test will break in the year 10000. If you've survived that far then congratulations. Please
-# update the years 10000 and 10001 in the view dev.mock_data_days to a much larger year.
 query TIT
 SELECT *, 'fy2023' AS origin FROM dev_fy2023.count_by_day
 UNION ALL
@@ -219,7 +217,7 @@ select mz_now() < '3000-01-01';
 ----
 true
 
-# Regression test for https://github.com/MaterializeInc/materialize/issues/25339
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/7560
 query B
 with v as (select mz_now() < '3000-01-01') select * from v;
 ----

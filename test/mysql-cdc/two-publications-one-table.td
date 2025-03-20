@@ -10,8 +10,6 @@
 $ set-sql-timeout duration=1s
 $ set-max-tries max-tries=20
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_mysql_source = true
 
 #
 # Test that two publications can replicate the same table
@@ -39,12 +37,12 @@ INSERT INTO t1 VALUES (1);
 > CREATE SCHEMA schema1
 
 > CREATE SOURCE mz_source1
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.t1 AS t1_1);
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE t1_1 FROM SOURCE mz_source1 (REFERENCE public.t1);
 
 > CREATE SOURCE mz_source2
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.t1 AS t1_2);
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE t1_2 FROM SOURCE mz_source2 (REFERENCE public.t1);
 
 > SELECT * FROM t1_1;
 1

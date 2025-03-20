@@ -187,7 +187,7 @@ sqlfunc!(
                 let count = list.iter().count();
                 match i32::try_from(count) {
                     Ok(len) => Ok(Some(len)),
-                    Err(_) => Err(EvalError::Int32OutOfRange(count.to_string())),
+                    Err(_) => Err(EvalError::Int32OutOfRange(count.to_string().into())),
                 }
             }
             _ => Ok(None),

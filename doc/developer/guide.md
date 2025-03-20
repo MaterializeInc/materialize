@@ -49,6 +49,27 @@ package manager is likely too old to build Materialize.
 
 For details on how we upgrade Rust see [here](/doc/developer/upgrade-rust.md).
 
+### Docker
+
+Materialize's tests mostly require Docker and Docker Compose to be installed. On macOS it is part of Docker Desktop:
+
+```shell
+brew install docker
+```
+
+On Debian-based Linux both Docker and the Docker Compose plugin have to be installed:
+
+```shell
+sudo apt update
+sudo apt install docker docker-compose-plugin
+```
+
+### Bazel
+
+Materialize can also optionally be built with [Bazel](https://bazel.build/). To
+learn more about Bazel and how it's setup at Materialize, checkout our
+[Bazel documentation](/doc/developer/bazel.md).
+
 ### CockroachDB
 
 Running Materialize locally requires a running CockroachDB server.
@@ -67,7 +88,7 @@ operations on macOS.)
 On Linux, we recommend using Docker:
 
 ```shell
-docker run --name=cockroach -d -p 26257:26257 -p 26258:8080 cockroachdb/cockroach:v23.1.11 start-single-node --insecure
+docker run --name=cockroach -d -p 127.0.0.1:26257:26257 -p 127.0.0.1:26258:8080 cockroachdb/cockroach:v23.1.11 start-single-node --insecure
 ```
 
 If you can successfully connect to CockroachDB with either
@@ -90,7 +111,6 @@ work but are not supported. Our recommended installation methods are:
 - macOS: [Homebrew](https://brew.sh)
 - Linux: System package manager if possible, or [community package repositories](https://launchpad.net/~deadsnakes/+archive/ubuntu/ppa) if necessary
 - Windows: [Microsoft App Store](https://apps.microsoft.com/detail/python-3-11/9NRWMJP3717K?hl=en-US&gl=US)
-- Cross-platform: [Nix] [flake](../../misc/nix)
 
 If none of the above work well for you, these are a few other methods that have
 worked for us in the past, but are not formally supported:
@@ -180,6 +200,33 @@ location, set `$CONFLUENT_HOME` to this location and add `$CONFLUENT_HOME/bin`
 to your $PATH. I found this to be the most convenient way to get confluent
 and it also works in a distro neutral way (if you are using, Arch Linux for example).
 
+### Nix
+
+Optionally, you can use [nix][Nix] to install all required dependencies on both Linux and macOS,
+using the provided [`shell.nix`](../../misc/nix). [Install nix][nix-manual] and use `nix-shell` to enter an
+environment that is isolated from the main OS.
+
+```bash
+nix-shell misc/nix/shell.nix
+[nix-shell]$ rustup install stable # If not installed already
+```
+
+Materialize can then be built inside this shell. Note that CockroachDB is not included in the above configuration
+and needs to be installed separately, as described above. Also, IDEs will not be able to access the installed
+dependencies unless they are started from within the `nix-shell` environment:
+
+```bash
+# Linux
+[nix-shell]$ code .
+# macOS
+[nix-shell]$ open -na "RustRover"
+[nix-shell]$ open -na "Visual Studio Code"
+```
+
+Note that on macOS, the `mzcompose` tests fail to run from within `nix-shell`,
+as our config does not yet set up [cross-compilation support](/misc/python/materialize/xcompile.py)
+for `x86-64` needed to run `mzcompose`.
+
 ## Building Materialize
 
 First, clone this repository:
@@ -191,6 +238,12 @@ git clone git@github.com:MaterializeInc/materialize.git
 Because the MaterializeInc organization requires two-factor authentication
 (2FA), you'll need to clone via SSH as indicated above, or [configure a personal
 access token for use with HTTPS][github-https].
+
+Optionally, you may need to also clone the associated submodules:
+
+```shell
+git submodule update --init --recursive
+```
 
 Then you can build Materialize. Because Materialize is a collection of several
 Rust services that need to be built together, each service can be built
@@ -345,9 +398,11 @@ See the [style guide](style.md) for additional recommendations on code style.
 ### Required Tools
 Linting requires the following tools and Cargo packages to be installed:
 * buf ([installation guide](https://buf.build/docs/installation))
+* shellcheck ([installation guide](https://hackage.haskell.org/package/ShellCheck#installing))
 * cargo-about (`cargo install cargo-about`)
 * cargo-hakari (`cargo install cargo-hakari`)
 * cargo-deplint (`cargo install cargo-deplint`)
+* cargo-deny (`cargo install cargo-deny`)
 
 ## Submitting and reviewing changes
 
@@ -454,56 +509,22 @@ acceptable for:
     entry. Changes to Materialize very rarely require changes in rust-dec, so
     maintaining the two separately does not introduce much overhead.
 
-## Dependency management and auditing
-
-We use the Mozilla-developed native Rust cargo-vet tool for dependency auditing
-to help ensure the security and reliability of external dependencies. Cargo-vet
-allows developers to audit their dependencies by checking for known security
-vulnerabilities, licensing issues, and overall health of the dependencies, which
-include factors like maintenance status, version stability, and community trust.
-
-For a developer, the basic workflow with cargo-vet starts with integrating it
-into their Rust development process. After installing cargo-vet locally, the
-developer runs it against their project’s Cargo.toml and Cargo.lock files.
-Cargo-vet will then analyze the list of dependencies and output a report
-detailing the status of each dependency.
-
-All crates currently in use have been added to the audited list, but CI will
-fail on PRs with new unaudited dependencies (or after 'cargo update'). Complete
-information on using cargo-vet are available in the book at
-https://mozilla.github.io/cargo-vet/how-it-works.html but in summary:
-
-  * cargo vet inspect some-crate
-  * cargo vet certify some-crate
-
-The 'certify' step will record an entry in the audits.toml file certifying the crate has been reviewed and is appropriate to use. Example:
-
-```toml
-[[audits.aws-sdk-s3]]
-who = "Matt Arthur <matthewleearthur@gmail.com>"
-criteria = "safe-to-deploy"
-version = "0.26.0"
-```
-
 ## Developer tools
 
 ### Editors and IDEs
 
 In principle, any text editor can be used to edit Rust code.
 
-By default, we recommend that developers without a strong preference of editor use
-Visual Studio Code with the Rust-Analyzer plugin. This is the most mainstream
+#### Visual Studio Code
+
+By default, we recommend that developers without a strong preference of an editor use
+[Visual Studio Code] with the [rust-analyzer] plugin.
+This is the most mainstream
 setup for developing Materialize, and the one for which you are the most likely
-to be able to get help if something goes wrong. It's important to note that you
-**should not** install the "Rust" plugin, as it is known to
-conflict with Rust-Analyzer; the latter has far more advanced code navigation
-features and is the de-facto standard for developing Rust. If you use
-Rust-Analyzer, you may wish to change the target directory so it does not
-conflict with other cargo commands.  You can do this by adding to the cargo
-check extra args "--target-dir" and "$NEWTARGET".
+to be able to get help if something goes wrong.
 
 Visual Studio Code also works well for editing Python; to work on the Python code
-in the Materialize repository, install the official Python extension from Microsoft
+in the Materialize repository, install the [official Python extension][vscode-python] from Microsoft
 and add the following to your `settings.json`.
 
 ``` json
@@ -527,13 +548,16 @@ If you are using Rust-Analyzer, you should configure it to conform to our
 * `imports.granularity.group` = `module`
 * `imports.prefix` = `crate`
 
-Besides Rust-Analyzer, the only other known tool with good code navigation features
-is CLion along with its Rust plugin. This is a good choice for developers who prefer
-the JetBrains ecosystem, but we no longer recommend it by default, since
-Rust-Analyzer has long since caught up to it in maturity. If you are a
-Materialize employee, ask Nikhil Benesch on Slack for access to our corporate
-JetBrains license. If you're not yet sure you want to use CLion, you can
-use the 30-day free trial.
+#### RustRover
+
+[RustRover] is another option for an IDE with good code navigation features.
+This is a good choice for developers who prefer the JetBrains ecosystem. This
+folder provides some [example run configurations](/misc/editor/rustrover)
+to help get started with running and debugging Materialize in RustRover.
+
+If you are a Materialize employee, ask in the #jetbrains channel on Slack for
+access to a corporate JetBrains license. If you're not yet sure you want to use
+RustRover, you can use the 30-day free trial.
 
 ### Editor add-ons
 
@@ -606,12 +630,16 @@ source /path/to/materialize/misc/completions/zsh/*
 [forked-cockroach-tap]: https://github.com/materializeInc/homebrew-cockroach
 [Kubernetes]: https://kubernetes.io
 [materialize-dbt-utils]: https://github.com/MaterializeInc/materialize-dbt-utils
-[Nix]: https://nixos.org
+[Nix]: https://nix.dev/tutorials/first-steps/ad-hoc-shell-environments
+[nix-manual]: https://nix.dev/manual/nix/2.18/installation/installing-binary
 [Python]: https://www.python.org
 [rust-dec]: https://github.com/MaterializeInc/rust-dec
 [Rust]: https://www.rust-lang.org
+[rust-analyzer]: https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer
 [rustfmt]: https://github.com/rust-lang/rustfmt
 [rustup]: https://www.rust-lang.org/tools/install
 [sqlparser]: https://github.com/MaterializeInc/sqlparser
 [Python]: https://www.python.org
-[Nix]: https://nixos.wiki/wiki/Flakes
+[vscode-python]: https://marketplace.visualstudio.com/items?itemName=ms-python.python
+[Visual Studio Code]: https://code.visualstudio.com
+[RustRover]: https://www.jetbrains.com/rust/

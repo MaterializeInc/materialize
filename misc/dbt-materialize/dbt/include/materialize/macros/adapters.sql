@@ -101,7 +101,17 @@
 
   {{ sql }}
   ;
-  {%- endmacro %}
+{%- endmacro %}
+
+{% macro materialize__create_source_table(relation, sql) %}
+  {% set contract_config = config.get('contract') %}
+  {% if contract_config.enforced %}
+    {{exceptions.warn("Model contracts cannot be enforced for custom materializations (see dbt-core #7213)")}}
+  {%- endif %}
+
+  create table {{ relation }}
+  {{ sql }}
+{% endmacro %}
 
 {% macro materialize__create_sink(relation, sql) -%}
   {% set contract_config = config.get('contract') %}
@@ -143,14 +153,37 @@
       drop source if exists {{ relation }} cascade
     {% elif relation.type == 'index' %}
       drop index if exists {{ relation }}
+    -- Tables are not supported as a materialization type in dbt-materialize,
+    -- but seeds and source tables are materialized as tables.
+    {% elif relation.type == 'table' %}
+      drop table if exists {{ relation }} cascade
     {% endif %}
   {%- endcall %}
 {% endmacro %}
 
+{% macro set_cluster(cluster) %}
+  set cluster = {{ cluster }};
+{% endmacro %}
+
 {% macro materialize__truncate_relation(relation) -%}
+  -- Materialize does not support the TRUNCATE command, so we work around that
+  -- by using an unqualified DELETE.
   {% call statement('truncate_relation') -%}
     delete from {{ relation }}
   {%- endcall %}
+{% endmacro %}
+
+{% macro truncate_relation_sql(relation, cluster) -%}
+  -- DELETE requires a scan of the relation, so it needs a valid cluster to run
+  -- against. This is expected to fail if no cluster is specified for the
+  -- target in the materialization configuration, `profiles.yml`, _and_ the
+  -- default cluster for the user is invalid(or intentionally set to
+  -- mz_catalog_server, which cannot query user data).
+  {% if cluster -%}
+      {%- set origin_cluster = adapter.generate_final_cluster_name(cluster) -%}
+      {% do run_query(set_cluster(origin_cluster)) -%}
+  {%- endif %}
+  {{ truncate_relation(relation) }}
 {% endmacro %}
 
 {% macro materialize__get_create_index_sql(relation, index_dict) -%}
@@ -186,13 +219,23 @@
     -- Materialize does not support running multiple COMMENT ON commands in a
     -- transaction, so we work around that by forcing a transaction per comment
     -- instead
-    -- See: https://github.com/MaterializeInc/materialize/issues/22379
+    -- See: https://github.com/MaterializeInc/database-issues/issues/6759
     {% for column_name in column_dict if (column_name in existing_columns) %}
       {% set comment = column_dict[column_name]['description'] %}
       {% set quote = column_dict[column_name]['quote'] %}
       {% do run_query(materialize__alter_column_comment_single(relation, column_name, quote, comment)) %}
     {% endfor %}
   {% endif %}
+{% endmacro %}
+
+{% macro materialize__apply_grants(relation, grant_config, should_revoke) -%}
+  {{ exceptions.raise_compiler_error(
+        """
+        dbt-materialize does not implement the grants configuration.
+
+        If this feature is important to you, please reach out!
+        """
+    )}}
 {% endmacro %}
 
 {% macro materialize__get_refresh_interval_sql(relation, refresh_interval_dict) -%}
@@ -222,16 +265,6 @@
   comment on column {{ relation }}.{{ adapter.quote(column_name) if quote else column_name }} is {{ escaped_comment }};
 {% endmacro %}
 
-{% macro materialize__alter_relation_comment(relation, comment) -%}
-  {% set escaped_comment = postgres_escape_comment(comment) %}
-  {% if relation.is_materialized_view -%}
-    {% set relation_type = "materialized view" %}
-  {%- else -%}
-    {%- set relation_type = relation.type -%}
-  {%- endif -%}
-  comment on {{ relation_type }} {{ relation }} is {{ escaped_comment }};
-{% endmacro %}
-
 -- In the dbt-adapter we extend the Relation class to include sinks and indexes
 {% macro materialize__list_relations_without_caching(schema_relation) %}
   {% call statement('list_relations_without_caching', fetch_result=True) -%}
@@ -247,8 +280,8 @@
     join mz_schemas s on o.schema_id = s.id and s.name = '{{ schema_relation.schema }}'
     join mz_databases d on s.database_id = d.id and d.name = '{{ schema_relation.database }}'
     where o.type in ('table', 'source', 'view', 'materialized-view', 'index', 'sink')
-      --Exclude subsources and progress subsources, which aren't relevant in this
-      --context and can bork the adapter (see #20483)
+      -- Exclude subsources and progress subsources, which aren't relevant in this
+      -- context and can bork the adapter (see database-issues#6162)
       and coalesce(so.type, '') not in ('subsource', 'progress')
   {% endcall %}
   {{ return(load_result('list_relations_without_caching').table) }}

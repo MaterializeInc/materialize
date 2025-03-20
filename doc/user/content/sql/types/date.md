@@ -61,7 +61,7 @@ Operation | Computes
 
 ## Examples
 
-```sql
+```mzsql
 SELECT DATE '2007-02-01' AS date_v;
 ```
 ```nofmt

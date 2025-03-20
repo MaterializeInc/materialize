@@ -14,19 +14,10 @@ mode cockroach
 statement error cannot create view with unstable dependencies
 CREATE VIEW v AS SELECT id, object_type, comment FROM mz_internal.mz_comments
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_rbac_checks TO false;
-----
-COMPLETE 0
+# Objects in the mz_introspection schema are unstable.
 
-# RBAC stops us from creating the index before we get the unstable error.
-statement error must be owner of TABLE mz_internal.mz_comments
-CREATE DEFAULT INDEX ON mz_internal.mz_comments
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM RESET enable_rbac_checks;
-----
-COMPLETE 0
+statement error cannot create view with unstable dependencies
+CREATE VIEW v AS SELECT export_id, dataflow_id FROM mz_introspection.mz_compute_exports
 
 # Other system tables are stable.
 
@@ -37,3 +28,19 @@ CREATE VIEW v AS SELECT id, oid, schema_id, name FROM mz_tables
 
 statement ok
 SELECT id, object_type, comment FROM mz_internal.mz_comments
+
+# Test the compatibility mechanism that automatically translates reads from
+# `mz_internal` relations that have been moved out of that schema to their new
+# schemas.
+
+statement ok
+SELECT * FROM mz_internal.mz_compute_exports
+
+statement ok
+SET search_path = mz_internal
+
+statement ok
+SELECT * FROM mz_compute_exports
+
+statement ok
+RESET search_path

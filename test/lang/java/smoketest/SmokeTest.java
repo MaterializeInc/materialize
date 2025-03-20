@@ -125,7 +125,7 @@ class SmokeTest {
         stmt.close();
     }
 
-    // Regression for #4117.
+    // Regression for materialize#4117.
     @Test
     void testBinaryTimestamp() throws SQLException, ClassNotFoundException {
         Class.forName("org.postgresql.jdbc.PgConnection");

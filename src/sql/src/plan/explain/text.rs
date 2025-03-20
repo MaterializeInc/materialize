@@ -95,59 +95,59 @@ impl HirRelationExpr {
                 }
             }
             Let {
-                name: _,
+                name,
                 id,
                 value,
                 body,
             } => {
-                let mut bindings = vec![(id, value.as_ref())];
+                let mut bindings = vec![(id, name, value.as_ref())];
                 let mut head = body.as_ref();
 
                 // Render Let-blocks nested in the body an outer Let-block in one step
                 // with a flattened list of bindings
                 while let Let {
-                    name: _,
+                    name,
                     id,
                     value,
                     body,
                 } = head
                 {
-                    bindings.push((id, value.as_ref()));
+                    bindings.push((id, name, value.as_ref()));
                     head = body.as_ref();
                 }
 
-                writeln!(f, "{}Return", ctx.indent)?;
-                ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                 writeln!(f, "{}With", ctx.indent)?;
                 ctx.indented(|ctx| {
-                    for (id, value) in bindings.iter().rev() {
+                    for (id, name, value) in bindings.iter() {
                         // TODO: print the name and not the id
-                        writeln!(f, "{}cte {} =", ctx.indent, *id)?;
+                        writeln!(f, "{}cte [{} as {}] =", ctx.indent, *id, *name)?;
                         ctx.indented(|ctx| value.fmt_text(f, ctx))?;
                     }
                     Ok(())
                 })?;
+                writeln!(f, "{}Return", ctx.indent)?;
+                ctx.indented(|ctx| head.fmt_text(f, ctx))?;
             }
             LetRec {
                 limit,
                 bindings,
                 body,
             } => {
-                writeln!(f, "{}Return", ctx.indent)?;
-                ctx.indented(|ctx| body.fmt_text(f, ctx))?;
                 write!(f, "{}With Mutually Recursive", ctx.indent)?;
                 if let Some(limit) = limit {
                     write!(f, " {}", limit)?;
                 }
                 writeln!(f)?;
                 ctx.indented(|ctx| {
-                    for (_name, id, value, _type) in bindings.iter().rev() {
+                    for (name, id, value, _type) in bindings.iter() {
                         // TODO: print the name and not the id
-                        writeln!(f, "{}cte {} =", ctx.indent, *id)?;
+                        writeln!(f, "{}cte [{} as {}] =", ctx.indent, *id, *name)?;
                         ctx.indented(|ctx| value.fmt_text(f, ctx))?;
                     }
                     Ok(())
                 })?;
+                writeln!(f, "{}Return", ctx.indent)?;
+                ctx.indented(|ctx| body.fmt_text(f, ctx))?;
             }
             Get { id, .. } => match id {
                 Id::Local(id) => {

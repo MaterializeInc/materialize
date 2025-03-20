@@ -6,11 +6,11 @@ user for Materialize with sufficient privileges to manage replication.
    [replica identity](https://www.postgresql.org/docs/current/sql-altertable.html#SQL-ALTERTABLE-REPLICA-IDENTITY)
    to `FULL`:
 
-    ```sql
+    ```postgres
     ALTER TABLE <table1> REPLICA IDENTITY FULL;
     ```
 
-    ```sql
+    ```postgres
     ALTER TABLE <table2> REPLICA IDENTITY FULL;
     ```
 
@@ -25,13 +25,13 @@ user for Materialize with sufficient privileges to manage replication.
 
     _For specific tables:_
 
-    ```sql
+    ```postgres
     CREATE PUBLICATION mz_source FOR TABLE <table1>, <table2>;
     ```
 
     _For all tables in the database:_
 
-    ```sql
+    ```postgres
     CREATE PUBLICATION mz_source FOR ALL TABLES;
     ```
 
@@ -45,31 +45,31 @@ user for Materialize with sufficient privileges to manage replication.
 
 1. Create a user for Materialize, if you don't already have one:
 
-    ``` sql
+    ```postgres
     CREATE USER materialize PASSWORD '<password>';
     ```
 
 1. Grant the user permission to manage replication:
 
-    ``` sql
+    ```postgres
     ALTER ROLE materialize WITH REPLICATION;
     ```
 
 1. Grant the user the required permissions on the tables you want to replicate:
 
-    ```sql
+    ```postgres
     GRANT CONNECT ON DATABASE <dbname> TO materialize;
     ```
 
-    ```sql
+    ```postgres
     GRANT USAGE ON SCHEMA <schema> TO materialize;
     ```
 
-    ```sql
+    ```postgres
     GRANT SELECT ON <table1> TO materialize;
     ```
 
-    ```sql
+    ```postgres
     GRANT SELECT ON <table2> TO materialize;
     ```
 
@@ -80,6 +80,6 @@ user for Materialize with sufficient privileges to manage replication.
     If you expect to add tables to your publication, you can grant `SELECT` on
     all tables in the schema instead of naming the specific tables:
 
-    ```sql
+    ```postgres
     GRANT SELECT ON ALL TABLES IN SCHEMA <schema> TO materialize;
     ```

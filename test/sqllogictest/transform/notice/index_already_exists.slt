@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_table_keys TO true
+ALTER SYSTEM SET unsafe_enable_table_keys TO true
 ----
 COMPLETE 0
 
@@ -24,6 +24,12 @@ ALTER SYSTEM SET enable_rbac_checks TO false
 COMPLETE 0
 
 statement ok
+CREATE SCHEMA notices;
+
+statement ok
+SET SCHEMA = notices;
+
+statement ok
 CREATE TABLE t (
   a int,
   b int
@@ -35,19 +41,19 @@ CREATE INDEX t_idx1 ON t(a + 7);
 
 # EXPLAIN CREATE INDEX for an identical index that emits the optimizer notice.
 query T multiline
-EXPLAIN WITH(humanized expressions) CREATE INDEX t_idx2 ON t(a + 7);
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR CREATE INDEX t_idx2 ON t(a + 7);
 ----
-materialize.public.t_idx2:
+materialize.notices.t_idx2:
   ArrangeBy keys=[[(#0{a} + 7)]]
     ReadIndex on=t t_idx1=[plan root (no new arrangement)]
 
 Used Indexes:
-  - materialize.public.t_idx1 (plan root (no new arrangement), index export)
+  - materialize.notices.t_idx1 (plan root (no new arrangement), index export)
 
 Target cluster: quickstart
 
 Notices:
-  - Notice: Index materialize.public.t_idx2 is identical to materialize.public.t_idx1, which is also defined on t((a + 7)).
+  - Notice: Index materialize.notices.t_idx2 is identical to materialize.notices.t_idx1, which is also defined on t((a + 7)).
     Hint: Please drop all indexes except the first index created on t((a + 7)) and recreate all dependent objects.
 
 EOF
@@ -58,19 +64,19 @@ CREATE INDEX t_idx2 ON t(a + 7);
 
 # Verify that the notice is shown in EXPLAIN.
 query T multiline
-EXPLAIN WITH(humanized expressions) INDEX t_idx2;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR INDEX t_idx2;
 ----
-materialize.public.t_idx2:
+materialize.notices.t_idx2:
   ArrangeBy keys=[[(#0{a} + 7)]]
     ReadIndex on=t t_idx1=[plan root (no new arrangement)]
 
 Used Indexes:
-  - materialize.public.t_idx1 (plan root (no new arrangement), index export)
+  - materialize.notices.t_idx1 (plan root (no new arrangement), index export)
 
 Target cluster: quickstart
 
 Notices:
-  - Notice: Index materialize.public.t_idx2 is identical to materialize.public.t_idx1, which is also defined on t((a + 7)).
+  - Notice: Index materialize.notices.t_idx2 is identical to materialize.notices.t_idx1, which is also defined on t((a + 7)).
     Hint: Please drop all indexes except the first index created on t((a + 7)) and recreate all dependent objects.
 
 EOF
@@ -86,8 +92,8 @@ WHERE
   idx.name LIKE 't_idx%'
 ----
 An identical index already exists
-Index materialize.public.t_idx2 is identical to materialize.public.t_idx1, which is also defined on t((a + 7)).
-Index materialize.public.t_idx2 is identical to materialize.public.t_idx1, which is also defined on t((a + █)).
+Index materialize.notices.t_idx2 is identical to materialize.notices.t_idx1, which is also defined on t((a + 7)).
+Index materialize.notices.t_idx2 is identical to materialize.notices.t_idx1, which is also defined on t((a + █)).
 Please drop all indexes except the first index created on t((a + 7)) and recreate all dependent objects.
 Please drop all indexes except the first index created on t((a + █)) and recreate all dependent objects.
 NULL
@@ -115,19 +121,19 @@ CREATE INDEX t_idx3 ON t(a + 7);
 
 # Verify that the notice is shown in EXPLAIN.
 query T multiline
-EXPLAIN WITH(humanized expressions) INDEX t_idx3;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR INDEX t_idx3;
 ----
-materialize.public.t_idx3:
+materialize.notices.t_idx3:
   ArrangeBy keys=[[(#0{a} + 7)]]
     ReadIndex on=t t_idx1=[plan root (no new arrangement)]
 
 Used Indexes:
-  - materialize.public.t_idx1 (plan root (no new arrangement), index export)
+  - materialize.notices.t_idx1 (plan root (no new arrangement), index export)
 
 Target cluster: quickstart
 
 Notices:
-  - Notice: Index materialize.public.t_idx3 is identical to materialize.public.t_idx1, which is also defined on t((a + 7)).
+  - Notice: Index materialize.notices.t_idx3 is identical to materialize.notices.t_idx1, which is also defined on t((a + 7)).
     Hint: Please drop all indexes except the first index created on t((a + 7)) and recreate all dependent objects.
 
 EOF
@@ -143,8 +149,8 @@ WHERE
   idx.name = 't_idx3'
 ----
 An identical index already exists
-Index materialize.public.t_idx3 is identical to materialize.public.t_idx1, which is also defined on t((a + 7)).
-Index materialize.public.t_idx3 is identical to materialize.public.t_idx1, which is also defined on t((a + █)).
+Index materialize.notices.t_idx3 is identical to materialize.notices.t_idx1, which is also defined on t((a + 7)).
+Index materialize.notices.t_idx3 is identical to materialize.notices.t_idx1, which is also defined on t((a + █)).
 Please drop all indexes except the first index created on t((a + 7)) and recreate all dependent objects.
 Please drop all indexes except the first index created on t((a + █)) and recreate all dependent objects.
 NULL
@@ -159,9 +165,9 @@ DROP INDEX t_idx1;
 
 # Verify that the notice is no longer shown in EXPLAIN.
 query T multiline
-EXPLAIN WITH(humanized expressions) INDEX t_idx3;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR INDEX t_idx3;
 ----
-materialize.public.t_idx3:
+materialize.notices.t_idx3:
   ArrangeBy keys=[[(#0{a} + 7)]]
     ReadIndex on=t [DELETED INDEX]=[plan root (no new arrangement)]
 
@@ -183,3 +189,7 @@ FROM
 WHERE
   idx.name = 't_idx3'
 ----
+
+# This further tests `drop_plans_and_metainfos`
+statement ok
+DROP SCHEMA notices CASCADE;

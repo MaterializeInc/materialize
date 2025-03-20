@@ -7,14 +7,22 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Stresses Materialize with large number of objects, large ingestions, etc. Good
+to prevent regressions in basic functionality for larger installations.
+"""
+
 import contextlib
 import json
 import sys
+import time
+import traceback
 import uuid
 from io import StringIO
 from textwrap import dedent
 from urllib.parse import quote
 
+from materialize import buildkite
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
@@ -22,12 +30,36 @@ from materialize.mzcompose.services.frontegg import FronteggMock
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
+from materialize.mzcompose.test_result import (
+    FailedTestExecutionError,
+    TestFailureDetails,
+)
+from materialize.test_analytics.config.test_analytics_db_config import (
+    create_test_analytics_config,
+)
+from materialize.test_analytics.data.product_limits import (
+    product_limits_result_storage,
+)
+from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
 from materialize.util import all_subclasses
+
+PRODUCT_LIMITS_FRAMEWORK_VERSION = "1.0.0"
+
+
+class Statistics:
+    def __init__(self, wallclock: float, explain_wallclock: float | None):
+        self.wallclock = wallclock
+        self.explain_wallclock = explain_wallclock
+
+    def __str__(self) -> str:
+        return f"""  wallclock: {self.wallclock:>7.2f}
+  explain_wallclock: {self.explain_wallclock:>7.2f}ms"""
 
 
 class Generator:
@@ -40,7 +72,13 @@ class Generator:
     #
     # For tests that deal with records, the number of records processed
     # is usually COUNT * 1000
-    COUNT = 1000
+    COUNT: int = 1000
+
+    VERSION: str = "1.0.0"
+
+    EXPLAIN: str | None = None
+
+    MAX_COUNT: int | None = None
 
     @classmethod
     def header(cls) -> None:
@@ -55,7 +93,12 @@ class Generator:
 
     @classmethod
     def body(cls) -> None:
-        assert False, "body() must be overriden"
+        raise NotImplementedError
+
+    @classmethod
+    def store_explain_and_run(cls, query: str) -> str | None:
+        cls.EXPLAIN = f"EXPLAIN {query}"
+        print(f"> {query}")
 
     @classmethod
     def footer(cls) -> None:
@@ -85,8 +128,9 @@ class Connections(Generator):
     def body(cls) -> None:
         print("$ postgres-execute connection=mz_system")
         # three extra connections for mz_system, default connection, and one
-        # since sqlparse 0.4.4. 3 reserved superuser connections since #25666
-        print(f"ALTER SYSTEM SET max_connections = {Connections.COUNT+4};")
+        # since sqlparse 0.4.4. 3 reserved superuser connections since materialize#25666
+        # try bumping limit a bit further since this is sometimes flaky
+        print(f"ALTER SYSTEM SET max_connections = {Connections.COUNT+10};")
 
         for i in cls.all():
             print(
@@ -97,21 +141,24 @@ class Connections(Generator):
 
 
 class Tables(Generator):
-    COUNT = 90  # https://github.com/MaterializeInc/materialize/issues/12773 and https://github.com/MaterializeInc/materialize/issues/26404
+    COUNT = 90  # https://github.com/MaterializeInc/database-issues/issues/3675 and https://github.com/MaterializeInc/database-issues/issues/7830
+
+    MAX_COUNT = 2880  # Too long-running with 5760 tables
 
     @classmethod
     def body(cls) -> None:
         print("$ postgres-execute connection=mz_system")
-        print(f"ALTER SYSTEM SET max_tables = {Tables.COUNT * 10};")
+        print(f"ALTER SYSTEM SET max_tables = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
-        print(f"ALTER SYSTEM SET max_objects_per_schema = {Tables.COUNT * 10};")
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
         for i in cls.all():
             print(f"> CREATE TABLE t{i} (f1 INTEGER);")
         for i in cls.all():
             print(f"> INSERT INTO t{i} VALUES ({i});")
         print("> BEGIN")
         for i in cls.all():
-            print(f"> SELECT * FROM t{i};\n{i}")
+            cls.store_explain_and_run(f"SELECT * FROM t{i}")
+            print(f"{i}")
         print("> COMMIT")
 
 
@@ -144,10 +191,12 @@ class Subscribe(Generator):
 
 
 class Indexes(Generator):
+    MAX_COUNT = 2000  # Too long-running with count=2562
+
     @classmethod
     def body(cls) -> None:
         print("$ postgres-execute connection=mz_system")
-        print(f"ALTER SYSTEM SET max_objects_per_schema = {Indexes.COUNT * 10};")
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
         print(
             "> CREATE TABLE t (" + ", ".join(f"f{i} INTEGER" for i in cls.all()) + ");"
         )
@@ -157,18 +206,21 @@ class Indexes(Generator):
         for i in cls.all():
             print(f"> CREATE INDEX i{i} ON t(f{i})")
         for i in cls.all():
-            print(f"> SELECT f{i} FROM t;\n{i}")
+            cls.store_explain_and_run(f"SELECT f{i} FROM t")
+            print(f"{i}")
 
 
 class KafkaTopics(Generator):
     COUNT = min(Generator.COUNT, 20)  # CREATE SOURCE is slow
 
+    MAX_COUNT = 640  # Too long-running with count=1280
+
     @classmethod
     def body(cls) -> None:
         print("$ postgres-execute connection=mz_system")
-        print(f"ALTER SYSTEM SET max_sources = {KafkaTopics.COUNT * 10};")
+        print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
-        print(f"ALTER SYSTEM SET max_objects_per_schema = {KafkaTopics.COUNT * 10};")
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
         print('$ set key-schema={"type": "string"}')
         print(
             '$ set value-schema={"type": "record", "name": "r", "fields": [{"name": "f1", "type": "string"}]}'
@@ -205,20 +257,21 @@ class KafkaTopics(Generator):
             )
 
         for i in cls.all():
-            print(f"> SELECT * FROM s{i};\n{i}")
+            cls.store_explain_and_run(f"SELECT * FROM s{i}")
+            print(f"{i}")
 
 
 class KafkaSourcesSameTopic(Generator):
     COUNT = 500  # high memory consumption
 
+    MAX_COUNT = COUNT  # Too long-running with 750 sources
+
     @classmethod
     def body(cls) -> None:
         print("$ postgres-execute connection=mz_system")
-        print(f"ALTER SYSTEM SET max_sources = {KafkaSourcesSameTopic.COUNT * 10};")
+        print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
-        print(
-            f"ALTER SYSTEM SET max_objects_per_schema = {KafkaSourcesSameTopic.COUNT * 10};"
-        )
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
         print('$ set key-schema={"type": "string"}')
         print(
             '$ set value-schema={"type": "record", "name": "r", "fields": [{"name": "f1", "type": "string"}]}'
@@ -253,20 +306,20 @@ class KafkaSourcesSameTopic(Generator):
             )
 
         for i in cls.all():
-            print(f"> SELECT * FROM s{i};\n123")
+            cls.store_explain_and_run(f"SELECT * FROM s{i}")
+            print("123")
 
 
 class KafkaPartitions(Generator):
     COUNT = min(Generator.COUNT, 100)  # It takes 5+min to process 1K partitions
+    MAX_COUNT = 3200  # Too long-running with 6400 partitions
 
     @classmethod
     def body(cls) -> None:
         print("$ postgres-execute connection=mz_system")
-        print(f"ALTER SYSTEM SET max_sources = {KafkaPartitions.COUNT * 10};")
+        print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
-        print(
-            f"ALTER SYSTEM SET max_objects_per_schema = {KafkaPartitions.COUNT * 10};"
-        )
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
         # gh#12193 : topic_metadata_refresh_interval_ms is not observed so a default refresh interval of 300s applies
         print("$ set-sql-timeout duration=600s")
         print('$ set key-schema={"type": "string"}')
@@ -316,20 +369,21 @@ class KafkaPartitions(Generator):
         for i in cls.all():
             print(f'"{i}" {{"f1": "{i}"}}')
 
-        print(f"> SELECT COUNT(*) FROM s1;\n{cls.COUNT * 2}")
+        cls.store_explain_and_run("SELECT COUNT(*) FROM s1")
+        print(f"{cls.COUNT * 2}")
 
 
 class KafkaRecordsEnvelopeNone(Generator):
     COUNT = Generator.COUNT * 10_000
 
+    MAX_COUNT = COUNT  # Only runs into max unsigned int size, takes a while
+
     @classmethod
     def body(cls) -> None:
         print("$ postgres-execute connection=mz_system")
-        print(f"ALTER SYSTEM SET max_sources = {KafkaRecordsEnvelopeNone.COUNT * 10};")
+        print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
-        print(
-            f"ALTER SYSTEM SET max_objects_per_schema = {KafkaRecordsEnvelopeNone.COUNT * 10};"
-        )
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
         print(
             '$ set kafka-records-envelope-none={"type": "record", "name": "r", "fields": [{"name": "f1", "type": "string"}]}'
         )
@@ -361,22 +415,21 @@ class KafkaRecordsEnvelopeNone(Generator):
               """
         )
 
-        print(f"> SELECT COUNT(*) FROM kafka_records_envelope_none;\n{cls.COUNT}")
+        cls.store_explain_and_run("SELECT COUNT(*) FROM kafka_records_envelope_none")
+        print(f"{cls.COUNT}")
 
 
 class KafkaRecordsEnvelopeUpsertSameValue(Generator):
     COUNT = Generator.COUNT * 10_000
 
+    MAX_COUNT = COUNT  # Only runs into max unsigned int size, takes a while
+
     @classmethod
     def body(cls) -> None:
         print("$ postgres-execute connection=mz_system")
-        print(
-            f"ALTER SYSTEM SET max_sources = {KafkaRecordsEnvelopeUpsertSameValue.COUNT * 10};"
-        )
+        print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
-        print(
-            f"ALTER SYSTEM SET max_objects_per_schema = {KafkaRecordsEnvelopeUpsertSameValue.COUNT * 10};"
-        )
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
         print(
             '$ set kafka-records-envelope-upsert-same-key={"type": "record", "name": "Key", "fields": [ {"name": "key", "type": "string"} ] }'
         )
@@ -412,7 +465,10 @@ class KafkaRecordsEnvelopeUpsertSameValue(Generator):
         )
 
         print("> SELECT * FROM kafka_records_envelope_upsert_same;\nfish fish")
-        print("> SELECT COUNT(*) FROM kafka_records_envelope_upsert_same;\n1")
+        cls.store_explain_and_run(
+            "SELECT COUNT(*) FROM kafka_records_envelope_upsert_same"
+        )
+        print("1")
 
 
 class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
@@ -421,13 +477,9 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
     @classmethod
     def body(cls) -> None:
         print("$ postgres-execute connection=mz_system")
-        print(
-            f"ALTER SYSTEM SET max_sources = {KafkaRecordsEnvelopeUpsertDistinctValues.COUNT * 10};"
-        )
+        print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
-        print(
-            f"ALTER SYSTEM SET max_objects_per_schema = {KafkaRecordsEnvelopeUpsertDistinctValues.COUNT * 10};"
-        )
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
         print(
             '$ set kafka-records-envelope-upsert-distinct-key={"type": "record", "name": "Key", "fields": [ {"name": "key", "type": "string"} ] }'
         )
@@ -464,9 +516,10 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
               """
         )
 
-        print(
-            f"> SELECT COUNT(*), COUNT(DISTINCT f1) FROM kafka_records_envelope_upsert_distinct;\n{cls.COUNT} {cls.COUNT}"
+        cls.store_explain_and_run(
+            "SELECT COUNT(*), COUNT(DISTINCT f1) FROM kafka_records_envelope_upsert_distinct"
         )
+        print(f"{cls.COUNT} {cls.COUNT}")
 
         print(
             f"$ kafka-ingest format=avro topic=kafka-records-envelope-upsert-distinct key-format=avro key-schema=${{kafka-records-envelope-upsert-distinct-key}} schema=${{kafka-records-envelope-upsert-distinct-value}} repeat={cls.COUNT}"
@@ -481,15 +534,16 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
 class KafkaSinks(Generator):
     COUNT = min(Generator.COUNT, 50)  # $ kafka-verify-data is slow
 
+    MAX_COUNT = 1600  # Too long-running with 3200 sinks
+
     @classmethod
     def body(cls) -> None:
-        print("$ set-regex match=\\d{13} replacement=<TIMESTAMP>")
         print("$ postgres-execute connection=mz_system")
-        print(f"ALTER SYSTEM SET max_materialized_views = {KafkaSinks.COUNT * 10};")
+        print(f"ALTER SYSTEM SET max_materialized_views = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
-        print(f"ALTER SYSTEM SET max_sinks = {KafkaSinks.COUNT * 10};")
+        print(f"ALTER SYSTEM SET max_sinks = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
-        print(f"ALTER SYSTEM SET max_objects_per_schema = {KafkaSinks.COUNT * 10};")
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
         for i in cls.all():
             print(f"> CREATE MATERIALIZED VIEW v{i} (f1) AS VALUES ({i})")
 
@@ -531,15 +585,14 @@ class KafkaSinks(Generator):
 class KafkaSinksSameSource(Generator):
     COUNT = min(Generator.COUNT, 50)  # $ kafka-verify-data is slow
 
+    MAX_COUNT = 3200  # Too long-running with 6400 sinks
+
     @classmethod
     def body(cls) -> None:
-        print("$ set-regex match=\\d{13} replacement=<TIMESTAMP>")
         print("$ postgres-execute connection=mz_system")
-        print(f"ALTER SYSTEM SET max_sinks = {KafkaSinksSameSource.COUNT * 10};")
+        print(f"ALTER SYSTEM SET max_sinks = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
-        print(
-            f"ALTER SYSTEM SET max_objects_per_schema = {KafkaSinksSameSource.COUNT * 10};"
-        )
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
         print("> CREATE MATERIALIZED VIEW v1 (f1) AS VALUES (123)")
         print(
             """> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);"""
@@ -584,24 +637,30 @@ class Columns(Generator):
             + " FROM t;"
         )
         print("> CREATE DEFAULT INDEX ON v")
-        print("> SELECT " + ", ".join(f"f{i} + 1" for i in cls.all()) + " FROM v;")
+        cls.store_explain_and_run(
+            "SELECT " + ", ".join(f"f{i} + 1" for i in cls.all()) + " FROM v;"
+        )
         print(" ".join(str(i + 2) for i in cls.all()))
 
 
 class TablesCommaJoinNoCondition(Generator):
-    COUNT = 100  # https://github.com/MaterializeInc/materialize/issues/12806
+    COUNT = 100  # https://github.com/MaterializeInc/database-issues/issues/3682
+
+    MAX_COUNT = 200  # Too long-running with 400 conditions
 
     @classmethod
     def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1);")
         table_list = ", ".join(f"t1 as a{i}" for i in cls.all())
-        print(f"> SELECT * FROM {table_list};")
+        cls.store_explain_and_run(f"SELECT * FROM {table_list};")
         print(" ".join("1" for i in cls.all()))
 
 
 class TablesCommaJoinWithJoinCondition(Generator):
     COUNT = 20  # Otherwise is very slow
+
+    MAX_COUNT = 320  # Too long-running with 640 conditions
 
     @classmethod
     def body(cls) -> None:
@@ -609,12 +668,12 @@ class TablesCommaJoinWithJoinCondition(Generator):
         print("> INSERT INTO t1 VALUES (1);")
         table_list = ", ".join(f"t1 as a{i}" for i in cls.all())
         condition_list = " AND ".join(f"a{i}.f1 = a{i+1}.f1" for i in cls.no_last())
-        print(f"> SELECT * FROM {table_list} WHERE {condition_list};")
+        cls.store_explain_and_run(f"SELECT * FROM {table_list} WHERE {condition_list};")
         print(" ".join("1" for i in cls.all()))
 
 
 class TablesCommaJoinWithCondition(Generator):
-    COUNT = min(Generator.COUNT, 100)  # Otherwise is very slow
+    COUNT = min(Generator.COUNT, 100)
 
     @classmethod
     def body(cls) -> None:
@@ -622,7 +681,7 @@ class TablesCommaJoinWithCondition(Generator):
         print("> INSERT INTO t1 VALUES (1);")
         table_list = ", ".join(f"t1 as a{i}" for i in cls.all())
         condition_list = " AND ".join(f"a1.f1 = a{i}.f1" for i in cls.no_first())
-        print(f"> SELECT * FROM {table_list} WHERE {condition_list};")
+        cls.store_explain_and_run(f"SELECT * FROM {table_list} WHERE {condition_list};")
         print(" ".join("1" for i in cls.all()))
 
 
@@ -636,7 +695,7 @@ class TablesOuterJoinUsing(Generator):
         table_list = " LEFT JOIN ".join(
             f"t1 as a{i} USING (f1)" for i in cls.no_first()
         )
-        print(f"> SELECT * FROM t1 AS a1 LEFT JOIN {table_list};")
+        cls.store_explain_and_run(f"SELECT * FROM t1 AS a1 LEFT JOIN {table_list};")
         print("1")
 
 
@@ -650,14 +709,14 @@ class TablesOuterJoinOn(Generator):
         table_list = " LEFT JOIN ".join(
             f"t1 as a{i} ON (a{i-1}.f1 = a{i}.f1)" for i in cls.no_first()
         )
-        print(f"> SELECT * FROM t1 AS a1 LEFT JOIN {table_list};")
+        cls.store_explain_and_run(f"SELECT * FROM t1 AS a1 LEFT JOIN {table_list};")
         print(" ".join("1" for i in cls.all()))
 
 
 class SubqueriesScalarSelectListWithCondition(Generator):
     COUNT = min(
         Generator.COUNT, 100
-    )  # https://github.com/MaterializeInc/materialize/issues/8598
+    )  # https://github.com/MaterializeInc/database-issues/issues/2626
 
     @classmethod
     def body(cls) -> None:
@@ -667,14 +726,14 @@ class SubqueriesScalarSelectListWithCondition(Generator):
             f"(SELECT f1 FROM t1 AS a{i} WHERE a{i}.f1 + 1 = t1.f1 + 1)"
             for i in cls.no_first()
         )
-        print(f"> SELECT {select_list} FROM t1;")
+        cls.store_explain_and_run(f"SELECT {select_list} FROM t1;")
         print(" ".join("1" for i in cls.no_first()))
 
 
 class SubqueriesScalarWhereClauseAnd(Generator):
     COUNT = min(
         Generator.COUNT, 10
-    )  # https://github.com/MaterializeInc/materialize/issues/8598
+    )  # https://github.com/MaterializeInc/database-issues/issues/2626
 
     @classmethod
     def body(cls) -> None:
@@ -683,14 +742,14 @@ class SubqueriesScalarWhereClauseAnd(Generator):
         where_clause = " AND ".join(
             f"(SELECT * FROM t1 WHERE f1 <= {i}) = 1" for i in cls.all()
         )
-        print(f"> SELECT 1 WHERE {where_clause}")
+        cls.store_explain_and_run(f"SELECT 1 WHERE {where_clause}")
         print("1")
 
 
 class SubqueriesExistWhereClause(Generator):
     COUNT = min(
         Generator.COUNT, 10
-    )  # https://github.com/MaterializeInc/materialize/issues/8598
+    )  # https://github.com/MaterializeInc/database-issues/issues/2626
 
     @classmethod
     def body(cls) -> None:
@@ -699,14 +758,14 @@ class SubqueriesExistWhereClause(Generator):
         where_clause = " AND ".join(
             f"EXISTS (SELECT * FROM t1 WHERE f1 <= {i})" for i in cls.all()
         )
-        print(f"> SELECT 1 WHERE {where_clause}")
+        cls.store_explain_and_run(f"SELECT 1 WHERE {where_clause}")
         print("1")
 
 
 class SubqueriesInWhereClauseCorrelated(Generator):
     COUNT = min(
         Generator.COUNT, 10
-    )  # https://github.com/MaterializeInc/materialize/issues/20557
+    )  # https://github.com/MaterializeInc/database-issues/issues/6189
 
     @classmethod
     def body(cls) -> None:
@@ -716,14 +775,14 @@ class SubqueriesInWhereClauseCorrelated(Generator):
             f"f1 IN (SELECT * FROM t1 WHERE f1 = a1.f1 AND f1 <= {i})"
             for i in cls.all()
         )
-        print(f"> SELECT * FROM t1 AS a1 WHERE {where_clause}")
+        cls.store_explain_and_run(f"SELECT * FROM t1 AS a1 WHERE {where_clause}")
         print("1")
 
 
 class SubqueriesInWhereClauseUncorrelated(Generator):
     COUNT = min(
         Generator.COUNT, 10
-    )  # https://github.com/MaterializeInc/materialize/issues/20557
+    )  # https://github.com/MaterializeInc/database-issues/issues/6189
 
     @classmethod
     def body(cls) -> None:
@@ -732,14 +791,15 @@ class SubqueriesInWhereClauseUncorrelated(Generator):
         where_clause = " AND ".join(
             f"f1 IN (SELECT * FROM t1 WHERE f1 <= {i})" for i in cls.all()
         )
-        print(f"> SELECT * FROM t1 AS a1 WHERE {where_clause}")
+        cls.store_explain_and_run(f"SELECT * FROM t1 AS a1 WHERE {where_clause}")
         print("1")
 
 
 class SubqueriesWhereClauseOr(Generator):
     COUNT = min(
         Generator.COUNT, 10
-    )  # https://github.com/MaterializeInc/materialize/issues/8602
+    )  # https://github.com/MaterializeInc/database-issues/issues/2630
+    MAX_COUNT = 160  # Too long-running with count=320
 
     @classmethod
     def body(cls) -> None:
@@ -748,7 +808,7 @@ class SubqueriesWhereClauseOr(Generator):
         where_clause = " OR ".join(
             f"(SELECT * FROM t1 WHERE f1 = {i}) = 1" for i in cls.all()
         )
-        print(f"> SELECT 1 WHERE {where_clause}")
+        cls.store_explain_and_run(f"SELECT 1 WHERE {where_clause}")
         print("1")
 
 
@@ -761,21 +821,24 @@ class SubqueriesNested(Generator):
     def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1);")
-        print("> SELECT 1 WHERE 1 = ")
-        print("\n".join("  (SELECT * FROM t1 WHERE f1 = " for i in cls.all()))
-        print("  1" + "".join("  )" for i in cls.all()) + ";")
+        cls.store_explain_and_run(
+            "SELECT 1 WHERE 1 = "
+            + " ".join("  (SELECT * FROM t1 WHERE f1 = " for i in cls.all())
+            + "  1"
+            + "".join("  )" for i in cls.all())
+        )
         print("1")
 
 
 class ViewsNested(Generator):
     COUNT = min(
         Generator.COUNT, 10
-    )  # https://github.com/MaterializeInc/materialize/issues/8598
+    )  # https://github.com/MaterializeInc/database-issues/issues/2626
 
     @classmethod
     def body(cls) -> None:
         print("$ postgres-execute connection=mz_system")
-        print(f"ALTER SYSTEM SET max_objects_per_schema = {ViewsNested.COUNT * 10};")
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
         print("> CREATE TABLE t (f1 INTEGER);")
         print("> INSERT INTO t VALUES (0);")
         print("> CREATE VIEW v0 (f1) AS SELECT f1 FROM t;")
@@ -783,26 +846,24 @@ class ViewsNested(Generator):
         for i in cls.all():
             print(f"> CREATE VIEW v{i} AS SELECT f1 + 1 AS f1 FROM v{i-1};")
 
-        print(f"> SELECT * FROM v{cls.COUNT};")
+        cls.store_explain_and_run(f"SELECT * FROM v{cls.COUNT};")
         print(f"{cls.COUNT}")
 
 
 class ViewsMaterializedNested(Generator):
     COUNT = min(
         Generator.COUNT, 25
-    )  # https://github.com/MaterializeInc/materialize/issues/13840
+    )  # https://github.com/MaterializeInc/database-issues/issues/3958
+
+    MAX_COUNT = 400  # Too long-running with 800 views
 
     @classmethod
     def body(cls) -> None:
         print("$ set-sql-timeout duration=300s")
         print("$ postgres-execute connection=mz_system")
-        print(
-            f"ALTER SYSTEM SET max_materialized_views = {ViewsMaterializedNested.COUNT * 10};"
-        )
+        print(f"ALTER SYSTEM SET max_materialized_views = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
-        print(
-            f"ALTER SYSTEM SET max_objects_per_schema = {ViewsMaterializedNested.COUNT * 10};"
-        )
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
         print("> CREATE TABLE t (f1 INTEGER);")
         print("> INSERT INTO t VALUES (0);")
         print("> CREATE MATERIALIZED VIEW v0 (f1) AS SELECT f1 FROM t;")
@@ -812,14 +873,16 @@ class ViewsMaterializedNested(Generator):
                 f"> CREATE MATERIALIZED VIEW v{i} AS SELECT f1 + 1 AS f1 FROM v{i-1};"
             )
 
-        print(f"> SELECT * FROM v{cls.COUNT};")
+        cls.store_explain_and_run(f"SELECT * FROM v{cls.COUNT};")
         print(f"{cls.COUNT}")
 
 
 class CTEs(Generator):
     COUNT = min(
         Generator.COUNT, 10
-    )  # https://github.com/MaterializeInc/materialize/issues/8600
+    )  # https://github.com/MaterializeInc/database-issues/issues/2628
+
+    MAX_COUNT = 240  # Too long-running with count=480
 
     @classmethod
     def body(cls) -> None:
@@ -829,14 +892,14 @@ class CTEs(Generator):
             f"a{i} AS (SELECT * FROM t1 WHERE f1 = 1)" for i in cls.all()
         )
         table_list = ", ".join(f"a{i}" for i in cls.all())
-        print(f"> WITH {cte_list} SELECT * FROM {table_list};")
+        cls.store_explain_and_run(f"WITH {cte_list} SELECT * FROM {table_list}")
         print(" ".join("1" for i in cls.all()))
 
 
 class NestedCTEsIndependent(Generator):
     COUNT = min(
         Generator.COUNT, 9
-    )  # https://github.com/MaterializeInc/materialize/issues/8600 and https://github.com/MaterializeInc/materialize/issues/26404
+    )  # https://github.com/MaterializeInc/database-issues/issues/2628 and https://github.com/MaterializeInc/database-issues/issues/7830
 
     @classmethod
     def body(cls) -> None:
@@ -847,8 +910,8 @@ class NestedCTEsIndependent(Generator):
             for i in cls.no_first()
         )
         table_list = ", ".join(f"a{i}" for i in cls.all())
-        print(
-            f"> WITH a{1} AS (SELECT * FROM t1 WHERE f1 <= 1), {cte_list} SELECT * FROM {table_list};"
+        cls.store_explain_and_run(
+            f"WITH a{1} AS (SELECT * FROM t1 WHERE f1 <= 1), {cte_list} SELECT * FROM {table_list}"
         )
         print(" ".join(f"{a}" for a in cls.all()))
 
@@ -856,7 +919,7 @@ class NestedCTEsIndependent(Generator):
 class NestedCTEsChained(Generator):
     COUNT = min(
         Generator.COUNT, 10
-    )  # https://github.com/MaterializeInc/materialize/issues/8601
+    )  # https://github.com/MaterializeInc/database-issues/issues/2629
 
     @classmethod
     def body(cls) -> None:
@@ -866,8 +929,8 @@ class NestedCTEsChained(Generator):
             f"a{i} AS (SELECT a{i-1}.f1 + 0 AS f1 FROM a{i-1}, t1 WHERE a{i-1}.f1 = t1.f1)"
             for i in cls.no_first()
         )
-        print(
-            f"> WITH a{1} AS (SELECT * FROM t1), {cte_list} SELECT * FROM a{cls.COUNT};"
+        cls.store_explain_and_run(
+            f"WITH a{1} AS (SELECT * FROM t1), {cte_list} SELECT * FROM a{cls.COUNT}"
         )
         print("1")
 
@@ -875,7 +938,9 @@ class NestedCTEsChained(Generator):
 class DerivedTables(Generator):
     COUNT = min(
         Generator.COUNT, 10
-    )  # https://github.com/MaterializeInc/materialize/issues/8602
+    )  # https://github.com/MaterializeInc/database-issues/issues/2630
+
+    MAX_COUNT = 320  # Too long-running with count=480
 
     @classmethod
     def body(cls) -> None:
@@ -885,14 +950,16 @@ class DerivedTables(Generator):
             f"(SELECT t1.f1 + {i} AS f1 FROM t1 WHERE f1 <= {i}) AS a{i}"
             for i in cls.all()
         )
-        print(f"> SELECT * FROM {table_list};")
+        cls.store_explain_and_run(f"SELECT * FROM {table_list};")
         print(" ".join(f"{i+1}" for i in cls.all()))
 
 
 class Lateral(Generator):
     COUNT = min(
         Generator.COUNT, 10
-    )  # https://github.com/MaterializeInc/materialize/issues/8603
+    )  # https://github.com/MaterializeInc/database-issues/issues/2631
+
+    MAX_COUNT = 160  # Too long-running with count=320
 
     @classmethod
     def body(cls) -> None:
@@ -902,13 +969,13 @@ class Lateral(Generator):
             f"(SELECT t1.f1 + {i-1} AS f1 FROM t1 WHERE f1 <= a{i-1}.f1) AS a{i}"
             for i in cls.no_first()
         )
-        print(f"> SELECT * FROM t1 AS a1 , LATERAL {table_list};")
+        cls.store_explain_and_run(f"SELECT * FROM t1 AS a1 , LATERAL {table_list};")
         print(" ".join(f"{i}" for i in cls.all()))
 
 
 class SelectExpression(Generator):
     # Stack exhaustion with COUNT=1000 due to unprotected path:
-    # https://github.com/MaterializeInc/materialize/issues/10496
+    # https://github.com/MaterializeInc/database-issues/issues/3107
     COUNT = min(Generator.COUNT, 500)
 
     @classmethod
@@ -920,21 +987,22 @@ class SelectExpression(Generator):
         print(f"> INSERT INTO t1 VALUES ({value_list});")
 
         const_expression = " + ".join(f"{i}" for i in cls.all())
-        print(f"> SELECT {const_expression} FROM t1;")
+        cls.store_explain_and_run(f"SELECT {const_expression} FROM t1;")
         print(f"{sum(cls.all())}")
 
         expression = " + ".join(f"f{i}" for i in cls.all())
-        print(f"> SELECT {expression} FROM t1;")
+        cls.store_explain_and_run(f"SELECT {expression} FROM t1;")
         print(f"{cls.COUNT}")
 
 
 class WhereExpression(Generator):
     # Stack exhaustion with COUNT=1000 due to unprotected path:
-    # https://github.com/MaterializeInc/materialize/issues/10496
+    # https://github.com/MaterializeInc/database-issues/issues/3107
     COUNT = min(Generator.COUNT, 500)
 
     @classmethod
     def body(cls) -> None:
+        print("> SET statement_timeout='120s'")
         column_list = ", ".join(f"f{i} INTEGER" for i in cls.all())
         print(f"> CREATE TABLE t1 ({column_list});")
 
@@ -942,12 +1010,14 @@ class WhereExpression(Generator):
         print(f"> INSERT INTO t1 VALUES ({value_list});")
 
         expression = " + ".join(f"{i}" for i in cls.all())
-        print(f"> SELECT f1 FROM t1 WHERE {expression} = {sum(cls.all())};")
+        cls.store_explain_and_run(
+            f"SELECT f1 FROM t1 WHERE {expression} = {sum(cls.all())};"
+        )
         print("1")
 
 
 class WhereConditionAnd(Generator):
-    # Stack overflow, see https://github.com/MaterializeInc/materialize/issues/19327
+    # Stack overflow, see https://github.com/MaterializeInc/database-issues/issues/5731
     COUNT = min(Generator.COUNT, 500)
 
     @classmethod
@@ -959,12 +1029,12 @@ class WhereConditionAnd(Generator):
         print(f"> INSERT INTO t1 VALUES ({value_list});")
 
         where_condition = " AND ".join(f"f{i} = 1" for i in cls.all())
-        print(f"> SELECT f1 FROM t1 WHERE {where_condition};")
+        cls.store_explain_and_run(f"SELECT f1 FROM t1 WHERE {where_condition};")
         print("1")
 
 
 class WhereConditionAndSameColumn(Generator):
-    # Stack overflow, see https://github.com/MaterializeInc/materialize/issues/19327
+    # Stack overflow, see https://github.com/MaterializeInc/database-issues/issues/5731
     COUNT = min(Generator.COUNT, 500)
 
     @classmethod
@@ -974,12 +1044,12 @@ class WhereConditionAndSameColumn(Generator):
         print("> INSERT INTO t1 VALUES (1);")
 
         where_condition = " AND ".join(f"f1 <= {i}" for i in cls.all())
-        print(f"> SELECT f1 FROM t1 WHERE {where_condition};")
+        cls.store_explain_and_run(f"SELECT f1 FROM t1 WHERE {where_condition};")
         print("1")
 
 
 class WhereConditionOr(Generator):
-    # Stack overflow, see https://github.com/MaterializeInc/materialize/issues/19327
+    # Stack overflow, see https://github.com/MaterializeInc/database-issues/issues/5731
     COUNT = min(Generator.COUNT, 500)
 
     @classmethod
@@ -991,12 +1061,12 @@ class WhereConditionOr(Generator):
         print(f"> INSERT INTO t1 VALUES ({value_list});")
 
         where_condition = " OR ".join(f"f{i} = 1" for i in cls.all())
-        print(f"> SELECT f1 FROM t1 WHERE {where_condition};")
+        cls.store_explain_and_run(f"SELECT f1 FROM t1 WHERE {where_condition};")
         print("1")
 
 
 class WhereConditionOrSameColumn(Generator):
-    # Stack overflow, see https://github.com/MaterializeInc/materialize/issues/19327
+    # Stack overflow, see https://github.com/MaterializeInc/database-issues/issues/5731
     COUNT = min(Generator.COUNT, 500)
 
     @classmethod
@@ -1006,7 +1076,7 @@ class WhereConditionOrSameColumn(Generator):
         print("> INSERT INTO t1 VALUES (1);")
 
         where_condition = " OR ".join(f"f1 = {i}" for i in cls.all())
-        print(f"> SELECT f1 FROM t1 WHERE {where_condition};")
+        cls.store_explain_and_run(f"SELECT f1 FROM t1 WHERE {where_condition};")
         print("1")
 
 
@@ -1017,7 +1087,7 @@ class InList(Generator):
         print(f"> INSERT INTO t1 VALUES ({cls.COUNT})")
 
         in_list = ", ".join(f"{i}" for i in cls.all())
-        print(f"> SELECT * FROM t1 WHERE f1 IN ({in_list})")
+        cls.store_explain_and_run(f"SELECT * FROM t1 WHERE f1 IN ({in_list})")
         print(f"{cls.COUNT}")
 
 
@@ -1033,7 +1103,9 @@ class JoinUsing(Generator):
         print(f"> INSERT INTO t1 VALUES ({value_list});")
 
         column_list = ", ".join(f"f{i}" for i in cls.all())
-        print(f"> SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 USING ({column_list})")
+        cls.store_explain_and_run(
+            f"SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 USING ({column_list})"
+        )
         print(" ".join("1" for i in cls.all()))
 
 
@@ -1049,7 +1121,9 @@ class JoinOn(Generator):
         print(f"> INSERT INTO t1 VALUES ({value_list});")
 
         on_clause = " AND ".join(f"a1.f{i} = a2.f1" for i in cls.all())
-        print(f"> SELECT COUNT(*) FROM t1 AS a1 LEFT JOIN t1 AS a2 ON({on_clause})")
+        cls.store_explain_and_run(
+            f"SELECT COUNT(*) FROM t1 AS a1 LEFT JOIN t1 AS a2 ON({on_clause})"
+        )
         print("1")
 
 
@@ -1063,13 +1137,13 @@ class Aggregates(Generator):
         print(f"> INSERT INTO t1 VALUES ({value_list});")
 
         aggregate_list = ", ".join(f"AVG(f{i})" for i in cls.all())
-        print(f"> SELECT {aggregate_list} FROM t1")
+        cls.store_explain_and_run(f"SELECT {aggregate_list} FROM t1")
         print(" ".join("1" for i in cls.all()))
 
 
 class AggregateExpression(Generator):
     # Stack exhaustion with COUNT=1000 due to unprotected path:
-    # https://github.com/MaterializeInc/materialize/issues/10496
+    # https://github.com/MaterializeInc/database-issues/issues/3107
     COUNT = min(Generator.COUNT, 500)
 
     @classmethod
@@ -1081,7 +1155,7 @@ class AggregateExpression(Generator):
         print(f"> INSERT INTO t1 VALUES ({value_list});")
 
         aggregate_expr = " + ".join(f"f{i}" for i in cls.all())
-        print(f"> SELECT AVG({aggregate_expr}) FROM t1")
+        cls.store_explain_and_run(f"SELECT AVG({aggregate_expr}) FROM t1")
         print(cls.COUNT)
 
 
@@ -1100,14 +1174,14 @@ class GroupBy(Generator):
             f"> CREATE MATERIALIZED VIEW v AS SELECT COUNT(*), {column_list_select} FROM t1 GROUP BY {column_list_group_by};"
         )
         print("> CREATE DEFAULT INDEX ON v")
-        print("> SELECT * FROM v")
+        cls.store_explain_and_run("SELECT * FROM v")
         print("1 " + " ".join("2" for i in cls.all()))
 
 
 class Unions(Generator):
     COUNT = min(
         Generator.COUNT, 10
-    )  # https://github.com/MaterializeInc/materialize/issues/8600
+    )  # https://github.com/MaterializeInc/database-issues/issues/2628
 
     @classmethod
     def body(cls) -> None:
@@ -1117,7 +1191,7 @@ class Unions(Generator):
         union_list = " UNION DISTINCT ".join(
             f"(SELECT f1 + {i} FROM t1 AS a{i})" for i in cls.all()
         )
-        print(f">SELECT COUNT(*) FROM ({union_list})")
+        cls.store_explain_and_run(f"SELECT COUNT(*) FROM ({union_list})")
         print(f"{cls.COUNT}")
 
 
@@ -1131,21 +1205,23 @@ class UnionsNested(Generator):
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1)")
 
-        print("> SELECT f1 + 0 FROM t1 UNION DISTINCT ")
-        print(
-            "\n".join(
+        cls.store_explain_and_run(
+            "SELECT f1 + 0 FROM t1 UNION DISTINCT "
+            + "\n".join(
                 f"  (SELECT f1 + {i} - {i} FROM t1 UNION DISTINCT " for i in cls.all()
             )
+            + "\n"
+            + "  SELECT * FROM t1 "
+            + "".join("  )" for i in cls.all())
         )
-        print("  SELECT * FROM t1 " + "".join("  )" for i in cls.all()) + ";")
         print("1")
 
 
 class CaseWhen(Generator):
     # Originally this was working with 1000, but after moving lowering and
     # decorrelation from the `plan_~` to the `sequence_~` method we had to
-    # reduce it a bit in order to avoid overflowing the stack. See #24076
-    # and #24820 for the latest occurrences of this.
+    # reduce it a bit in order to avoid overflowing the stack. See database-issues#7216
+    # and database-issues#7407 for the latest occurrences of this.
     COUNT = 600
 
     @classmethod
@@ -1161,7 +1237,7 @@ class CaseWhen(Generator):
             + " ELSE 123 END FROM t"
         )
         print("> CREATE DEFAULT INDEX ON v")
-        print("> SELECT * FROM v")
+        cls.store_explain_and_run("SELECT * FROM v")
         print("123")
 
 
@@ -1179,11 +1255,13 @@ class Coalesce(Generator):
             + ", 123) FROM t"
         )
         print("> CREATE DEFAULT INDEX ON v")
-        print("> SELECT * FROM v")
+        cls.store_explain_and_run("SELECT * FROM v")
         print("123")
 
 
 class Concat(Generator):
+    MAX_COUNT = 250_000  # Too long-running with 500_000
+
     @classmethod
     def body(cls) -> None:
         print("> CREATE TABLE t (f STRING)")
@@ -1195,7 +1273,7 @@ class Concat(Generator):
             + ") AS c FROM t"
         )
         print("> CREATE DEFAULT INDEX ON v")
-        print("> SELECT LENGTH(c) FROM v")
+        cls.store_explain_and_run("SELECT LENGTH(c) FROM v")
         print(f"{cls.COUNT*1024}")
 
 
@@ -1204,75 +1282,62 @@ class ArrayAgg(Generator):
 
     @classmethod
     def body(cls) -> None:
-        slt = dedent(
-            f"""
-            > CREATE TABLE t ({
-                ", ".join(
-                    ", ".join([
-                        f"a{i} STRING",
-                        f"b{i} STRING",
-                        f"c{i} STRING",
-                        f"d{i} STRING[]",
-                    ])
-                    for i in cls.all()
-                )
-            });
+        print("> SET statement_timeout='300s'")
+        print(
+            f"""> CREATE TABLE t ({
+            ", ".join(
+                ", ".join([
+                    f"a{i} STRING",
+                    f"b{i} STRING",
+                    f"c{i} STRING",
+                    f"d{i} STRING[]",
+                ])
+                for i in cls.all()
+            )
+        });"""
+        )
+        print("> INSERT INTO t DEFAULT VALUES;")
+        print(
+            f"""> CREATE MATERIALIZED VIEW v2 AS SELECT {
+            ", ".join(
+                f"ARRAY_AGG(a{i} ORDER BY b1) FILTER (WHERE 's{i}' = ANY(d{i})) AS r{i}"
+                for i in cls.all()
+            )
+        } FROM t GROUP BY a1;"""
+        )
+        print("> CREATE DEFAULT INDEX ON v2;")
 
-            > INSERT INTO t DEFAULT VALUES;
-
-            > CREATE MATERIALIZED VIEW v2 AS SELECT {
-                ", ".join(
-                    f"ARRAY_AGG(a{i} ORDER BY b1) FILTER (WHERE 's{i}' = ANY(d{i})) AS r{i}"
-                    for i in cls.all()
-                )
-            } FROM t GROUP BY a1;
-
-            > CREATE DEFAULT INDEX ON v2;
-
-            > SELECT COUNT(*) FROM v2;
-            1
-            """
-        ).strip()
-        print(slt)
+        cls.store_explain_and_run("SELECT COUNT(*) FROM v2")
+        print("1")
 
 
 class FilterSubqueries(Generator):
     """
-    Regression test for #20557.
+    Regression test for database-issues#6189.
 
-    Without the #20557 fix in #20702 this will cause `environmend` to OOM
+    Without the database-issues#6189 fix in materialize#20702 this will cause `environmend` to OOM
     because of excessive memory allocations in the `RedundantJoin` transform.
     """
 
-    COUNT = 100
+    COUNT = min(Generator.COUNT, 100)
+
+    MAX_COUNT = 111  # Too long-running with count=200
 
     @classmethod
     def body(cls) -> None:
-        slt = dedent(
-            f"""
-            > CREATE TABLE t1 (f1 INTEGER);
+        print("> CREATE TABLE t1 (f1 INTEGER);")
+        print("> INSERT INTO t1 VALUES (1);")
 
-            > INSERT INTO t1 VALUES (1);
+        # Increase SQL timeout to 10 minutes (~5 should be enough).
+        #
+        # Update: Now 20 minutes, not 10. This query appears to scale
+        # super-linear with COUNT.
+        print("$ set-sql-timeout duration=1200s")
 
-            # Increase SQL timeout to 10 minutes (~5 should be enough).
-            #
-            # Update: Now 15 minutes, not 10. This query appears to scale
-            # super-linear with COUNT. Here are timings for the first few
-            # multiples of 10 on a fresh staging env.
-            #
-            # 10: 200ms, 20: 375ms, 30: 1.5s, 40: 5.5s, 50: 16s, 60: 45s
-            $ set-sql-timeout duration=900s
-
-            > SELECT * FROM t1 AS a1 WHERE {
-                " AND ".join(
-                    f"f1 IN (SELECT * FROM t1 WHERE f1 = a1.f1 AND f1 <= {i})"
-                    for i in cls.all()
-                )
-            };
-            1
-            """
-        ).strip()
-        print(slt)
+        cls.store_explain_and_run(
+            f"SELECT * FROM t1 AS a1 WHERE {' AND '.join(f'f1 IN (SELECT * FROM t1 WHERE f1 = a1.f1 AND f1 <= {i})' for i in cls.all())}"
+        )
+        print("1")
 
 
 #
@@ -1291,7 +1356,7 @@ class Column(Generator):
         print("> SELECT COUNT(DISTINCT f1) FROM t1;")
         print("1")
 
-        print("> SELECT LENGTH(f1) FROM t1;")
+        cls.store_explain_and_run("SELECT LENGTH(f1) FROM t1")
         print(f"{cls.COUNT}")
 
 
@@ -1309,7 +1374,7 @@ class Rows(Generator):
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print(f"> INSERT INTO t1 SELECT * FROM generate_series(1, {cls.COUNT})")
 
-        print("> SELECT COUNT(*) FROM t1;")
+        cls.store_explain_and_run("SELECT COUNT(*) FROM t1")
         print(f"{cls.COUNT}")
 
 
@@ -1318,8 +1383,8 @@ class RowsAggregate(Generator):
 
     @classmethod
     def body(cls) -> None:
-        print(
-            f"> SELECT COUNT(*), MIN(generate_series), MAX(generate_series), COUNT(DISTINCT generate_series) FROM generate_series(1, {cls.COUNT});"
+        cls.store_explain_and_run(
+            f"SELECT COUNT(*), MIN(generate_series), MAX(generate_series), COUNT(DISTINCT generate_series) FROM generate_series(1, {cls.COUNT})"
         )
         print(f"{cls.COUNT} 1 {cls.COUNT} {cls.COUNT}")
 
@@ -1327,10 +1392,12 @@ class RowsAggregate(Generator):
 class RowsOrderByLimit(Generator):
     COUNT = 10_000_000
 
+    MAX_COUNT = 80_000_000  # Too long-running with 160_000_000
+
     @classmethod
     def body(cls) -> None:
-        print(
-            f"> SELECT * FROM generate_series(1, {cls.COUNT}) ORDER BY generate_series DESC LIMIT 1;"
+        cls.store_explain_and_run(
+            f"SELECT * FROM generate_series(1, {cls.COUNT}) ORDER BY generate_series DESC LIMIT 1"
         )
         print(f"{cls.COUNT}")
 
@@ -1343,8 +1410,8 @@ class RowsJoinOneToOne(Generator):
         print(
             f"> CREATE MATERIALIZED VIEW v1 AS SELECT * FROM generate_series(1, {cls.COUNT});"
         )
-        print(
-            "> SELECT COUNT(*) FROM v1 AS a1, v1 AS a2 WHERE a1.generate_series = a2.generate_series;"
+        cls.store_explain_and_run(
+            "SELECT COUNT(*) FROM v1 AS a1, v1 AS a2 WHERE a1.generate_series = a2.generate_series"
         )
         print(f"{cls.COUNT}")
 
@@ -1352,24 +1419,28 @@ class RowsJoinOneToOne(Generator):
 class RowsJoinOneToMany(Generator):
     COUNT = 10_000_000
 
+    MAX_COUNT = 80_000_000  # Too long-running with 160_000_000
+
     @classmethod
     def body(cls) -> None:
         print(
             f"> CREATE MATERIALIZED VIEW v1 AS SELECT * FROM generate_series(1, {cls.COUNT});"
         )
-        print("> SELECT COUNT(*) FROM v1 AS a1, (SELECT 1) AS a2;")
+        cls.store_explain_and_run("SELECT COUNT(*) FROM v1 AS a1, (SELECT 1) AS a2")
         print(f"{cls.COUNT}")
 
 
 class RowsJoinCross(Generator):
     COUNT = 1_000_000
 
+    MAX_COUNT = 64_000_000  # Too long-running with 128_000_000
+
     @classmethod
     def body(cls) -> None:
         print(
             f"> CREATE MATERIALIZED VIEW v1 AS SELECT * FROM generate_series(1, {cls.COUNT});"
         )
-        print("> SELECT COUNT(*) FROM v1 AS a1, v1 AS a2;")
+        cls.store_explain_and_run("SELECT COUNT(*) FROM v1 AS a1, v1 AS a2")
         print(f"{cls.COUNT**2}")
 
 
@@ -1391,7 +1462,7 @@ class RowsJoinLargeRetraction(Generator):
 
         print("> DELETE FROM t1")
 
-        print("> SELECT COUNT(*) FROM v1;")
+        cls.store_explain_and_run("SELECT COUNT(*) FROM v1")
         print("0")
 
 
@@ -1403,7 +1474,9 @@ class RowsJoinDifferential(Generator):
         print(
             f"> CREATE MATERIALIZED VIEW v1 AS SELECT generate_series AS f1, generate_series AS f2 FROM (SELECT * FROM generate_series(1, {cls.COUNT}));"
         )
-        print("> SELECT COUNT(*) FROM v1 AS a1, v1 AS a2 WHERE a1.f1 = a2.f1;")
+        cls.store_explain_and_run(
+            "SELECT COUNT(*) FROM v1 AS a1, v1 AS a2 WHERE a1.f1 = a2.f1"
+        )
         print(f"{cls.COUNT}")
 
 
@@ -1415,19 +1488,25 @@ class RowsJoinOuter(Generator):
         print(
             f"> CREATE MATERIALIZED VIEW v1 AS SELECT generate_series AS f1, generate_series AS f2 FROM (SELECT * FROM generate_series(1, {cls.COUNT}));"
         )
-        print("> SELECT COUNT(*) FROM v1 AS a1 LEFT JOIN v1 AS a2 USING (f1);")
+        cls.store_explain_and_run(
+            "SELECT COUNT(*) FROM v1 AS a1 LEFT JOIN v1 AS a2 USING (f1)"
+        )
         print(f"{cls.COUNT}")
 
 
 class PostgresSources(Generator):
-    COUNT = 500  # high memory consumption
+    COUNT = 300  # high memory consumption, slower  with source tables
+    MAX_COUNT = 600  # Too long-running with count=1200
 
     @classmethod
     def body(cls) -> None:
+        print("> SET statement_timeout='300s'")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_tables = {cls.COUNT * 10};")
         print("$ postgres-execute connection=postgres://postgres:postgres@postgres")
         print("ALTER USER postgres WITH replication;")
         print("DROP SCHEMA IF EXISTS public CASCADE;")
@@ -1451,23 +1530,33 @@ class PostgresSources(Generator):
             print(
                 f"""> CREATE SOURCE p{i}
               IN CLUSTER single_replica_cluster
-              FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES (t{i})
+              FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
               """
             )
-
+            print(
+                f"""> CREATE TABLE t{i}
+              FROM SOURCE p{i} (REFERENCE t{i})
+              """
+            )
         for i in cls.all():
-            print(f"> SELECT * FROM t{i};\n{i}")
+            cls.store_explain_and_run(f"SELECT * FROM t{i}")
+            print(f"{i}")
 
 
 class MySqlSources(Generator):
-    COUNT = 500  # high memory consumption
+    COUNT = 300  # high memory consumption, slower with source tables
+
+    MAX_COUNT = 400  # Too long-running with count=473
 
     @classmethod
     def body(cls) -> None:
+        print("$ set-sql-timeout duration=300s")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_tables = {cls.COUNT * 10};")
         print(
             f"$ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}"
         )
@@ -1493,15 +1582,24 @@ class MySqlSources(Generator):
             print(
                 f"""> CREATE SOURCE m{i}
               IN CLUSTER single_replica_cluster
-              FROM MYSQL CONNECTION mysql FOR TABLES (public.t{i})
+              FROM MYSQL CONNECTION mysql
               """
             )
-
+            print(
+                f"""> CREATE TABLE t{i}
+              FROM SOURCE m{i} (REFERENCE public.t{i})
+              """
+            )
         for i in cls.all():
-            print(f"> SELECT * FROM t{i};\n{i}")
+            cls.store_explain_and_run(f"SELECT * FROM t{i}")
+            print(f"{i}")
 
 
 class WebhookSources(Generator):
+    COUNT = 100  # TODO: Remove when database-issues#8508 is fixed
+
+    MAX_COUNT = 400  # timeout expired with count=800
+
     @classmethod
     def body(cls) -> None:
         print("$ postgres-execute connection=mz_system")
@@ -1518,7 +1616,7 @@ class WebhookSources(Generator):
             print(f"text{i}")
 
         for i in cls.all():
-            print(f"> SELECT * FROM w{i}")
+            cls.store_explain_and_run(f"SELECT * FROM w{i}")
             print(f"text{i}")
 
 
@@ -1550,6 +1648,10 @@ def app_password(email: str) -> str:
     return password
 
 
+MAX_CLUSTERS = 8
+MAX_REPLICAS = 4
+MAX_NODES = 4
+
 SERVICES = [
     Zookeeper(),
     Kafka(),
@@ -1559,7 +1661,7 @@ SERVICES = [
     # We create all sources, sinks and dataflows by default with SIZE '1'
     # The workflow_instance_size workflow is testing multi-process clusters
     Testdrive(
-        default_timeout="120s",
+        default_timeout="60s",
         materialize_url=f"postgres://{quote(ADMIN_USER)}:{app_password(ADMIN_USER)}@balancerd:6875?sslmode=require",
         materialize_use_https=True,
         no_reset=True,
@@ -1581,13 +1683,16 @@ SERVICES = [
             "--pgwire-listen-addr=0.0.0.0:6875",
             "--https-listen-addr=0.0.0.0:6876",
             "--internal-http-listen-addr=0.0.0.0:6878",
-            "--frontegg-resolver-template=materialized:6880",
+            "--frontegg-resolver-template=materialized:6875",
             "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
             f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
             f"--frontegg-admin-role={ADMIN_ROLE}",
-            "--https-resolver-template=materialized:6881",
+            "--https-resolver-template=materialized:6876",
             "--tls-key=/secrets/balancerd.key",
             "--tls-cert=/secrets/balancerd.crt",
+            "--internal-tls",
+            # Nonsensical but we don't need cancellations here
+            "--cancellation-resolver-dir=/secrets",
         ],
         depends_on=["test-certs"],
         volumes=[
@@ -1613,16 +1718,127 @@ SERVICES = [
         ],
         sanity_restart=False,
     ),
+    Mz(app_password=""),
+]
+
+for cluster_id in range(1, MAX_CLUSTERS + 1):
+    for replica_id in range(1, MAX_REPLICAS + 1):
+        for node_id in range(1, MAX_NODES + 1):
+            SERVICES.append(
+                Clusterd(name=f"clusterd_{cluster_id}_{replica_id}_{node_id}")
+            )
+
+
+service_names = [
+    "zookeeper",
+    "kafka",
+    "schema-registry",
+    "postgres",
+    "mysql",
+    "materialized",
+    "balancerd",
+    "frontegg-mock",
+    "clusterd_1_1_1",
+    "clusterd_1_2_1",
+    "clusterd_2_1_1",
+    "clusterd_2_2_1",
+    "clusterd_3_1_1",
+    "clusterd_3_2_1",
 ]
 
 
-def workflow_default(c: Composition) -> None:
-    for name in c.workflows:
-        if name == "default":
-            continue
+def setup(c: Composition, workers: int) -> None:
+    c.up(*service_names)
 
+    c.sql(
+        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
+
+    c.sql(
+        f"""
+        DROP CLUSTER quickstart cascade;
+        CREATE CLUSTER quickstart REPLICAS (
+            replica1 (
+                STORAGECTL ADDRESSES ['clusterd_1_1_1:2100', 'clusterd_1_2_1:2100'],
+                STORAGE ADDRESSES ['clusterd_1_1_1:2103', 'clusterd_1_2_1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd_1_1_1:2101', 'clusterd_1_2_1:2101'],
+                COMPUTE ADDRESSES ['clusterd_1_1_1:2102', 'clusterd_1_2_1:2102'],
+                WORKERS {workers}
+            ),
+            replica2 (
+                STORAGECTL ADDRESSES ['clusterd_2_1_1:2100', 'clusterd_2_2_1:2100'],
+                STORAGE ADDRESSES ['clusterd_2_1_1:2103', 'clusterd_2_2_1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd_2_1_1:2101', 'clusterd_2_2_1:2101'],
+                COMPUTE ADDRESSES ['clusterd_2_1_1:2102', 'clusterd_2_2_1:2102'],
+                WORKERS {workers}
+            )
+        );
+        DROP CLUSTER IF EXISTS single_replica_cluster CASCADE;
+        CREATE CLUSTER single_replica_cluster REPLICAS (
+            replica1 (
+                STORAGECTL ADDRESSES ['clusterd_3_1_1:2100', 'clusterd_3_2_1:2100'],
+                STORAGE ADDRESSES ['clusterd_3_1_1:2103', 'clusterd_3_2_1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd_3_1_1:2101', 'clusterd_3_2_1:2101'],
+                COMPUTE ADDRESSES ['clusterd_3_1_1:2102', 'clusterd_3_2_1:2102'],
+                WORKERS {workers}
+            )
+        );
+        GRANT ALL PRIVILEGES ON CLUSTER single_replica_cluster TO materialize;
+    """,
+        port=6877,
+        user="mz_system",
+    )
+
+
+def upload_results_to_test_analytics(
+    c: Composition,
+    stats: dict[tuple[type[Generator], int], Statistics],
+    was_successful: bool,
+) -> None:
+    if not buildkite.is_in_buildkite():
+        return
+
+    test_analytics = TestAnalyticsDb(create_test_analytics_config(c))
+    test_analytics.builds.add_build_job(was_successful=was_successful)
+
+    result_entries = []
+
+    for (scenario, count), stat in stats.items():
+        scenario_name = scenario.__name__
+        scenario_version = scenario.VERSION
+        result_entries.append(
+            product_limits_result_storage.ProductLimitsResultEntry(
+                scenario_name=scenario_name,
+                scenario_version=str(scenario_version),
+                count=count,
+                wallclock=stat.wallclock,
+                explain_wallclock=stat.explain_wallclock,
+            )
+        )
+
+    test_analytics.product_limits_results.add_result(
+        framework_version=PRODUCT_LIMITS_FRAMEWORK_VERSION,
+        results=result_entries,
+    )
+
+    try:
+        test_analytics.submit_updates()
+        print("Uploaded results.")
+    except Exception as e:
+        # An error during an upload must never cause the build to fail
+        test_analytics.on_upload_failed(e)
+
+
+def workflow_default(c: Composition) -> None:
+    def process(name: str) -> None:
+        if name == "default":
+            return
         with c.test_case(name):
             c.workflow(name)
+
+    c.test_parts(list(c.workflows.keys()), process)
 
 
 def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -1639,86 +1855,144 @@ def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
         default=2,
         help="set the default number of workers",
     )
+
+    parser.add_argument(
+        "--find-limit",
+        action="store_true",
+        help="Increase limit until the test fails, record higehst limit that works",
+    )
     args = parser.parse_args()
 
-    c.up(
-        "zookeeper",
-        "kafka",
-        "schema-registry",
-        "postgres",
-        "mysql",
-        "materialized",
-        "balancerd",
-        "frontegg-mock",
-    )
-
-    nodes = [
-        Clusterd(name="clusterd_1_1"),
-        Clusterd(name="clusterd_1_2"),
-        Clusterd(name="clusterd_2_1"),
-        Clusterd(name="clusterd_2_2"),
-        Clusterd(name="clusterd_3_1"),
-        Clusterd(name="clusterd_3_2"),
-    ]
-    with c.override(*nodes):
-        c.up(*[n.name for n in nodes])
-
-        c.sql(
-            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
-
-        c.sql(
-            f"""
-            DROP CLUSTER quickstart cascade;
-            CREATE CLUSTER quickstart REPLICAS (
-                replica1 (
-                    STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
-                    STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
-                    COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102'],
-                    WORKERS {args.workers}
-                ),
-                replica2 (
-                    STORAGECTL ADDRESSES ['clusterd_2_1:2100', 'clusterd_2_2:2100'],
-                    STORAGE ADDRESSES ['clusterd_2_1:2103', 'clusterd_2_2:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd_2_1:2101', 'clusterd_2_2:2101'],
-                    COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102'],
-                    WORKERS {args.workers}
-                )
-            );
-            DROP CLUSTER IF EXISTS single_replica_cluster CASCADE;
-            CREATE CLUSTER single_replica_cluster REPLICAS (
-                replica1 (
-                    STORAGECTL ADDRESSES ['clusterd_3_1:2100', 'clusterd_3_2:2100'],
-                    STORAGE ADDRESSES ['clusterd_3_1:2103', 'clusterd_3_2:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd_3_1:2101', 'clusterd_3_2:2101'],
-                    COMPUTE ADDRESSES ['clusterd_3_1:2102', 'clusterd_3_2:2102'],
-                    WORKERS {args.workers}
-                )
-            );
-            GRANT ALL PRIVILEGES ON CLUSTER single_replica_cluster TO materialize;
-        """,
-            port=6877,
-            user="mz_system",
-        )
-
-        c.up("testdrive", persistent=True)
-
-        scenarios = (
+    scenarios = buildkite.shard_list(
+        (
             [globals()[args.scenario]]
             if args.scenario
             else list(all_subclasses(Generator))
-        )
+        ),
+        lambda s: s.__name__,
+    )
+    print(
+        f"Scenarios in shard with index {buildkite.get_parallelism_index()}: {scenarios}"
+    )
 
-        for scenario in scenarios:
+    if not scenarios:
+        return
+
+    setup(c, args.workers)
+
+    c.up("testdrive", persistent=True)
+
+    failures: list[TestFailureDetails] = []
+    stats: dict[tuple[type[Generator], int], Statistics] = {}
+
+    for scenario in scenarios:
+        if args.find_limit:
+            good_count = None
+            bad_count = None
+            while True:
+                print(
+                    f"--- Running scenario {scenario.__name__} with count {scenario.COUNT}"
+                )
+                f = StringIO()
+                with contextlib.redirect_stdout(f):
+                    scenario.generate()
+                    sys.stdout.flush()
+                try:
+                    start_time = time.time()
+                    c.testdrive(f.getvalue(), quiet=True).stdout
+                    wallclock = time.time() - start_time
+                except Exception as e:
+                    print(
+                        f"Failed scenario {scenario.__name__} with count {scenario.COUNT}: {e}"
+                    )
+                    i = 0
+                    while True:
+                        try:
+                            c.kill(*service_names)
+                            c.rm(*service_names)
+                            c.rm_volumes("mzdata")
+                            break
+                        except:
+                            if i > 10:
+                                raise
+                            i += 1
+                            traceback.print_exc()
+                            print("Retrying in a minute...")
+                            time.sleep(60)
+                    setup(c, args.workers)
+
+                    bad_count = scenario.COUNT
+                    previous_count = scenario.COUNT
+                    scenario.COUNT = (
+                        scenario.COUNT // 2
+                        if good_count is None
+                        else (good_count + bad_count) // 2
+                    )
+                    if scenario.COUNT >= bad_count:
+                        if not good_count:
+                            failures.append(
+                                TestFailureDetails(
+                                    message=str(e),
+                                    details=traceback.format_exc(),
+                                    test_class_name_override=f"{scenario.__name__} with count {previous_count}",
+                                )
+                            )
+                        break
+                    continue
+                else:
+                    if scenario.EXPLAIN:
+                        with c.sql_cursor(
+                            sslmode="require",
+                            user=ADMIN_USER,
+                            password=app_password(ADMIN_USER),
+                        ) as cur:
+                            start_time = time.time()
+                            cur.execute(scenario.EXPLAIN)
+                            explain_wallclock = time.time() - start_time
+                            explain_wallclock_str = (
+                                f", explain took {explain_wallclock:.2f} s"
+                            )
+                    else:
+                        explain_wallclock = None
+                        explain_wallclock_str = ""
+                    print(
+                        f"Scenario {scenario.__name__} with count {scenario.COUNT} took {wallclock:.2f} s{explain_wallclock_str}"
+                    )
+                    stats[(scenario, scenario.COUNT)] = Statistics(
+                        wallclock, explain_wallclock
+                    )
+                good_count = scenario.COUNT
+                if bad_count is None:
+                    scenario.COUNT *= 2
+                else:
+                    scenario.COUNT = (good_count + bad_count) // 2
+                if scenario.MAX_COUNT is not None:
+                    scenario.COUNT = min(scenario.COUNT, scenario.MAX_COUNT)
+                if scenario.COUNT <= good_count:
+                    break
+            print(f"Final good count: {good_count}")
+        else:
             print(f"--- Running scenario {scenario.__name__}")
             f = StringIO()
             with contextlib.redirect_stdout(f):
                 scenario.generate()
                 sys.stdout.flush()
-            c.testdrive(f.getvalue())
+            try:
+                c.testdrive(f.getvalue())
+            except Exception as e:
+                failures.append(
+                    TestFailureDetails(
+                        message=str(e),
+                        details=traceback.format_exc(),
+                        test_class_name_override=scenario.__name__,
+                    )
+                )
+
+    if args.find_limit:
+        upload_results_to_test_analytics(c, stats, not failures)
+
+    if failures:
+        raise FailedTestExecutionError(errors=failures)
 
 
 def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -1740,20 +2014,24 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
         help="set the number of clusters to create",
     )
     parser.add_argument(
-        "--nodes",
-        type=int,
-        metavar="N",
-        default=4,
-        help="set the number of nodes per cluster",
-    )
-    parser.add_argument(
         "--replicas",
         type=int,
         metavar="N",
         default=4,
         help="set the number of replicas per cluster",
     )
+    parser.add_argument(
+        "--nodes",
+        type=int,
+        metavar="N",
+        default=4,
+        help="set the number of nodes per cluster replica",
+    )
     args = parser.parse_args()
+
+    assert args.clusters <= MAX_CLUSTERS, "SERVICES have to be static"
+    assert args.replicas <= MAX_REPLICAS, "SERVICES have to be static"
+    assert args.nodes <= MAX_NODES, "SERVICES have to be static"
 
     c.up("testdrive", persistent=True)
     c.up(
@@ -1766,150 +2044,147 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
     )
 
     # Construct the requied Clusterd instances and peer them into clusters
-    cluster_replicas = []
-    for cluster_id in range(0, args.clusters):
-        for replica_id in range(0, args.replicas):
-            nodes = []
-            for node_id in range(0, args.nodes):
-                node_name = f"compute_u{cluster_id}_{replica_id}_{node_id}"
+    nodes = []
+    for cluster_id in range(1, args.clusters + 1):
+        for replica_id in range(1, args.replicas + 1):
+            for node_id in range(1, args.nodes + 1):
+                node_name = f"clusterd_{cluster_id}_{replica_id}_{node_id}"
                 nodes.append(node_name)
 
-            for node_id in range(0, args.nodes):
-                cluster_replicas.append(Clusterd(name=nodes[node_id]))
+    with c.override(
+        Testdrive(
+            seed=1,
+            materialize_url=f"postgres://{quote(ADMIN_USER)}:{app_password(ADMIN_USER)}@balancerd:6875?sslmode=require",
+            materialize_use_https=True,
+            no_reset=True,
+        )
+    ):
+        c.up(*nodes)
 
-    with c.override(*cluster_replicas):
-        with c.override(
-            Testdrive(
-                seed=1,
-                materialize_url=f"postgres://{quote(ADMIN_USER)}:{app_password(ADMIN_USER)}@balancerd:6875?sslmode=require",
-                materialize_use_https=True,
-                no_reset=True,
+        # Increase resource limits
+        c.testdrive(
+            dedent(
+                f"""
+                $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                ALTER SYSTEM SET max_clusters = {args.clusters * 10}
+                ALTER SYSTEM SET max_replicas_per_cluster = {args.replicas * 10}
+
+                CREATE CLUSTER single_replica_cluster SIZE = '4';
+                GRANT ALL ON CLUSTER single_replica_cluster TO materialize;
+                """
             )
-        ):
-            c.up(*[n.name for n in cluster_replicas])
+        )
+        # Create some input data
+        c.testdrive(
+            dedent(
+                """
+                > CREATE TABLE ten (f1 INTEGER);
+                > INSERT INTO ten VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
 
-            # Increase resource limits
+                $ set schema={
+                    "type" : "record",
+                    "name" : "test",
+                    "fields" : [
+                        {"name":"f1", "type":"string"}
+                    ]
+                  }
+
+                $ kafka-create-topic topic=instance-size
+
+                $ kafka-ingest format=avro topic=instance-size schema=${schema} repeat=10000
+                {"f1": "fish"}
+                """
+            )
+        )
+
+        # Construct the required CREATE CLUSTER statements
+        for cluster_id in range(1, args.clusters + 1):
+            replica_definitions = []
+            for replica_id in range(1, args.replicas + 1):
+                nodes = []
+                for node_id in range(1, args.nodes + 1):
+                    node_name = f"clusterd_{cluster_id}_{replica_id}_{node_id}"
+                    nodes.append(node_name)
+
+                replica_name = f"replica_u{cluster_id}_{replica_id}"
+
+                replica_definitions.append(
+                    f"{replica_name} (STORAGECTL ADDRESSES ["
+                    + ", ".join(f"'{n}:2100'" for n in nodes)
+                    + "], STORAGE ADDRESSES ["
+                    + ", ".join(f"'{n}:2103'" for n in nodes)
+                    + "], COMPUTECTL ADDRESSES ["
+                    + ", ".join(f"'{n}:2101'" for n in nodes)
+                    + "], COMPUTE ADDRESSES ["
+                    + ", ".join(f"'{n}:2102'" for n in nodes)
+                    + f"], WORKERS {args.workers})"
+                )
+
+            c.sql(
+                "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
+                port=6877,
+                user="mz_system",
+            )
+            c.sql(
+                f"CREATE CLUSTER cluster_u{cluster_id} REPLICAS ("
+                + ",".join(replica_definitions)
+                + ")",
+                port=6877,
+                user="mz_system",
+            )
+            c.sql(
+                f"GRANT ALL PRIVILEGES ON CLUSTER cluster_u{cluster_id} TO materialize",
+                port=6877,
+                user="mz_system",
+            )
+
+        # Construct some dataflows in each cluster
+        for cluster_id in range(1, args.clusters + 1):
+            cluster_name = f"cluster_u{cluster_id}"
+
             c.testdrive(
                 dedent(
                     f"""
-                    $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
-                    ALTER SYSTEM SET max_clusters = {args.clusters * 10}
-                    ALTER SYSTEM SET max_replicas_per_cluster = {args.replicas * 10}
+                     > SET cluster={cluster_name}
 
-                    CREATE CLUSTER single_replica_cluster SIZE = '4';
-                    GRANT ALL ON CLUSTER single_replica_cluster TO materialize;
-                    """
+                     > CREATE DEFAULT INDEX ON ten;
+
+                     > CREATE MATERIALIZED VIEW v_{cluster_name} AS
+                       SELECT COUNT(*) AS c1 FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4;
+
+                     > CREATE CONNECTION IF NOT EXISTS kafka_conn
+                       TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+
+                     > CREATE CONNECTION IF NOT EXISTS csr_conn
+                       FOR CONFLUENT SCHEMA REGISTRY
+                       URL '${{testdrive.schema-registry-url}}';
+
+                     > CREATE SOURCE s_{cluster_name}
+                       IN CLUSTER single_replica_cluster
+                       FROM KAFKA CONNECTION kafka_conn (TOPIC
+                       'testdrive-instance-size-${{testdrive.seed}}')
+
+                     > CREATE TABLE s_{cluster_name}_tbl FROM SOURCE s_{cluster_name} (REFERENCE "testdrive-instance-size-${{testdrive.seed}}")
+                       FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                       ENVELOPE NONE
+                 """
                 )
             )
-            # Create some input data
+
+        # Validate that each individual cluster is operating properly
+        for cluster_id in range(1, args.clusters + 1):
+            cluster_name = f"cluster_u{cluster_id}"
+
             c.testdrive(
                 dedent(
-                    """
-                    > CREATE TABLE ten (f1 INTEGER);
-                    > INSERT INTO ten VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+                    f"""
+                     > SET cluster={cluster_name}
 
-                    $ set schema={
-                        "type" : "record",
-                        "name" : "test",
-                        "fields" : [
-                            {"name":"f1", "type":"string"}
-                        ]
-                      }
+                     > SELECT c1 FROM v_{cluster_name};
+                     10000
 
-                    $ kafka-create-topic topic=instance-size
-
-                    $ kafka-ingest format=avro topic=instance-size schema=${schema} repeat=10000
-                    {"f1": "fish"}
-                    """
+                     > SELECT COUNT(*) FROM s_{cluster_name}_tbl
+                     10000
+                 """
                 )
             )
-
-            # Construct the required CREATE CLUSTER statements
-            for cluster_id in range(0, args.clusters):
-                replica_definitions = []
-                for replica_id in range(0, args.replicas):
-                    nodes = []
-                    for node_id in range(0, args.nodes):
-                        node_name = f"compute_u{cluster_id}_{replica_id}_{node_id}"
-                        nodes.append(node_name)
-
-                    replica_name = f"replica_u{cluster_id}_{replica_id}"
-
-                    replica_definitions.append(
-                        f"{replica_name} (STORAGECTL ADDRESSES ["
-                        + ", ".join(f"'{n}:2100'" for n in nodes)
-                        + "], STORAGE ADDRESSES ["
-                        + ", ".join(f"'{n}:2103'" for n in nodes)
-                        + "], COMPUTECTL ADDRESSES ["
-                        + ", ".join(f"'{n}:2101'" for n in nodes)
-                        + "], COMPUTE ADDRESSES ["
-                        + ", ".join(f"'{n}:2102'" for n in nodes)
-                        + f"], WORKERS {args.workers})"
-                    )
-
-                c.sql(
-                    "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
-                    port=6877,
-                    user="mz_system",
-                )
-                c.sql(
-                    f"CREATE CLUSTER cluster_u{cluster_id} REPLICAS ("
-                    + ",".join(replica_definitions)
-                    + ")",
-                    port=6877,
-                    user="mz_system",
-                )
-                c.sql(
-                    f"GRANT ALL PRIVILEGES ON CLUSTER cluster_u{cluster_id} TO materialize",
-                    port=6877,
-                    user="mz_system",
-                )
-
-            # Construct some dataflows in each cluster
-            for cluster_id in range(0, args.clusters):
-                cluster_name = f"cluster_u{cluster_id}"
-
-                c.testdrive(
-                    dedent(
-                        f"""
-                         > SET cluster={cluster_name}
-
-                         > CREATE DEFAULT INDEX ON ten;
-
-                         > CREATE MATERIALIZED VIEW v_{cluster_name} AS
-                           SELECT COUNT(*) AS c1 FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4;
-
-                         > CREATE CONNECTION IF NOT EXISTS kafka_conn
-                           TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
-
-                         > CREATE CONNECTION IF NOT EXISTS csr_conn
-                           FOR CONFLUENT SCHEMA REGISTRY
-                           URL '${{testdrive.schema-registry-url}}';
-
-                         > CREATE SOURCE s_{cluster_name}
-                           IN CLUSTER single_replica_cluster
-                           FROM KAFKA CONNECTION kafka_conn (TOPIC
-                           'testdrive-instance-size-${{testdrive.seed}}')
-                           FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-                           ENVELOPE NONE
-                     """
-                    )
-                )
-
-            # Validate that each individual cluster is operating properly
-            for cluster_id in range(0, args.clusters):
-                cluster_name = f"cluster_u{cluster_id}"
-
-                c.testdrive(
-                    dedent(
-                        f"""
-                         > SET cluster={cluster_name}
-
-                         > SELECT c1 FROM v_{cluster_name};
-                         10000
-
-                         > SELECT COUNT(*) FROM s_{cluster_name}
-                         10000
-                     """
-                    )
-                )

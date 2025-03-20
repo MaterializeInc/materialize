@@ -7,6 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use anyhow::ensure;
+use async_stream::{stream, try_stream};
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
@@ -15,33 +18,50 @@ use std::ops::ControlFlow::{self, Break, Continue};
 use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 
+use arrow::array::{make_array, Array, ArrayData};
+use arrow::datatypes::DataType;
+use bytes::Bytes;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::Description;
+use differential_dataflow::Hashable;
+use futures::Stream;
+use futures_util::StreamExt;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
+use mz_ore::soft_panic_or_log;
 use mz_ore::vec::PartialOrdVecExt;
-use mz_persist::location::SeqNo;
+use mz_persist::indexed::encoding::BatchColumnarFormat;
+use mz_persist::location::{Blob, SeqNo};
+use mz_persist_types::arrow::{ArrayBound, ProtoArrayData};
+use mz_persist_types::columnar::{ColumnEncoder, Schema};
+use mz_persist_types::schema::{backward_compatible, SchemaId};
 use mz_persist_types::{Codec, Codec64, Opaque};
+use mz_proto::ProtoType;
+use mz_proto::RustType;
 use proptest_derive::Arbitrary;
 use semver::Version;
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
+use timely::{Container, PartialOrder};
 use tracing::info;
 use uuid::Uuid;
 
 use crate::critical::CriticalReaderId;
 use crate::error::InvalidUsage;
-use crate::internal::encoding::{parse_id, LazyInlineBatchPart, LazyPartStats};
+use crate::internal::encoding::{parse_id, LazyInlineBatchPart, LazyPartStats, LazyProto};
 use crate::internal::gc::GcReq;
-use crate::internal::paths::{PartialBatchKey, PartialRollupKey, WriterKey};
+use crate::internal::machine::retry_external;
+use crate::internal::paths::{BlobKey, PartId, PartialBatchKey, PartialRollupKey, WriterKey};
 use crate::internal::trace::{
     ActiveCompaction, ApplyMergeResult, FueledMergeReq, FueledMergeRes, Trace,
 };
+use crate::metrics::Metrics;
 use crate::read::LeasedReaderId;
+use crate::schema::CaESchema;
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
 
@@ -66,12 +86,6 @@ pub(crate) const ROLLUP_THRESHOLD: Config<usize> = Config::new(
     "persist_rollup_threshold",
     128,
     "The number of seqnos between rollups.",
-);
-
-pub(crate) const WRITE_DIFFS_SUM: Config<bool> = Config::new(
-    "persist_write_diffs_sum",
-    true,
-    "CYA to skip writing the diffs_sum field on HollowBatchPart",
 );
 
 /// A token to disambiguate state commands that could not otherwise be
@@ -187,7 +201,30 @@ pub enum BatchPart<T> {
     Inline {
         updates: LazyInlineBatchPart,
         ts_rewrite: Option<Antichain<T>>,
+        schema_id: Option<SchemaId>,
+
+        /// ID of a schema that has since been deprecated and exists only to cleanly roundtrip.
+        deprecated_schema_id: Option<SchemaId>,
     },
+}
+
+fn decode_structured_lower(lower: &LazyProto<ProtoArrayData>) -> Option<ArrayBound> {
+    let try_decode = |lower: &LazyProto<ProtoArrayData>| {
+        let proto = lower.decode()?;
+        let data = ArrayData::from_proto(proto)?;
+        ensure!(data.len() == 1);
+        Ok(ArrayBound::new(make_array(data), 0))
+    };
+
+    let decoded: anyhow::Result<ArrayBound> = try_decode(lower);
+
+    match decoded {
+        Ok(bound) => Some(bound),
+        Err(e) => {
+            soft_panic_or_log!("failed to decode bound: {e:#?}");
+            None
+        }
+    }
 }
 
 impl<T> BatchPart<T> {
@@ -211,7 +248,7 @@ impl<T> BatchPart<T> {
 
     pub fn writer_key(&self) -> Option<WriterKey> {
         match self {
-            BatchPart::Hollow(x) => Some(x.key.split().0),
+            BatchPart::Hollow(x) => x.key.split().map(|(writer, _part)| writer),
             BatchPart::Inline { .. } => None,
         }
     }
@@ -252,10 +289,298 @@ impl<T> BatchPart<T> {
         }
     }
 
+    pub fn structured_key_lower(&self) -> Option<ArrayBound> {
+        let part = match self {
+            BatchPart::Hollow(part) => part,
+            BatchPart::Inline { .. } => return None,
+        };
+
+        decode_structured_lower(part.structured_key_lower.as_ref()?)
+    }
+
     pub fn ts_rewrite(&self) -> Option<&Antichain<T>> {
         match self {
             BatchPart::Hollow(x) => x.ts_rewrite.as_ref(),
             BatchPart::Inline { ts_rewrite, .. } => ts_rewrite.as_ref(),
+        }
+    }
+
+    pub fn schema_id(&self) -> Option<SchemaId> {
+        match self {
+            BatchPart::Hollow(x) => x.schema_id,
+            BatchPart::Inline { schema_id, .. } => *schema_id,
+        }
+    }
+}
+
+/// An ordered list of parts, generally stored as part of a larger run.
+#[derive(Debug, Clone)]
+pub struct HollowRun<T> {
+    /// Pointers usable to retrieve the updates.
+    pub(crate) parts: Vec<RunPart<T>>,
+}
+
+/// A reference to a [HollowRun], including the key in the blob store and some denormalized
+/// metadata.
+#[derive(Debug, Eq, PartialEq, Clone, Serialize)]
+pub struct HollowRunRef<T> {
+    pub key: PartialBatchKey,
+
+    /// The size of the referenced run object, plus all of the hollow objects it contains.
+    pub hollow_bytes: usize,
+
+    /// The size of the largest individual part in the run; useful for sizing compaction.
+    pub max_part_bytes: usize,
+
+    /// The lower bound of the data in this part, ordered by the codec ordering.
+    pub key_lower: Vec<u8>,
+
+    /// The lower bound of the data in this part, ordered by the structured ordering.
+    pub structured_key_lower: Option<LazyProto<ProtoArrayData>>,
+
+    pub(crate) _phantom_data: PhantomData<T>,
+}
+impl<T: Eq> PartialOrd<Self> for HollowRunRef<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T: Eq> Ord for HollowRunRef<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.key.cmp(&other.key)
+    }
+}
+
+impl<T> HollowRunRef<T> {
+    pub fn writer_key(&self) -> Option<WriterKey> {
+        Some(self.key.split()?.0)
+    }
+}
+
+impl<T: Timestamp + Codec64> HollowRunRef<T> {
+    /// Stores the given runs and returns a [HollowRunRef] that points to them.
+    pub async fn set(
+        shard_id: ShardId,
+        blob: &dyn Blob,
+        writer: &WriterKey,
+        data: HollowRun<T>,
+        metrics: &Metrics,
+    ) -> Self {
+        let hollow_bytes = data.parts.iter().map(|p| p.hollow_bytes()).sum();
+        let max_part_bytes = data
+            .parts
+            .iter()
+            .map(|p| p.max_part_bytes())
+            .max()
+            .unwrap_or(0);
+        let key_lower = data
+            .parts
+            .first()
+            .map_or(vec![], |p| p.key_lower().to_vec());
+        let structured_key_lower = match data.parts.first() {
+            Some(RunPart::Many(r)) => r.structured_key_lower.clone(),
+            Some(RunPart::Single(BatchPart::Hollow(p))) => p.structured_key_lower.clone(),
+            Some(RunPart::Single(BatchPart::Inline { .. })) | None => None,
+        };
+
+        let key = PartialBatchKey::new(writer, &PartId::new());
+        let blob_key = key.complete(&shard_id);
+        let bytes = Bytes::from(prost::Message::encode_to_vec(&data.into_proto()));
+        let () = retry_external(&metrics.retries.external.hollow_run_set, || {
+            blob.set(&blob_key, bytes.clone())
+        })
+        .await;
+        Self {
+            key,
+            hollow_bytes,
+            max_part_bytes,
+            key_lower,
+            structured_key_lower,
+            _phantom_data: Default::default(),
+        }
+    }
+
+    /// Retrieve the [HollowRun] that this reference points to.
+    /// The caller is expected to ensure that this ref is the result of calling [HollowRunRef::set]
+    /// with the same shard id and backing store.
+    pub async fn get(
+        &self,
+        shard_id: ShardId,
+        blob: &dyn Blob,
+        metrics: &Metrics,
+    ) -> Option<HollowRun<T>> {
+        let blob_key = self.key.complete(&shard_id);
+        let mut bytes = retry_external(&metrics.retries.external.hollow_run_get, || {
+            blob.get(&blob_key)
+        })
+        .await?;
+        let proto_runs: ProtoHollowRun =
+            prost::Message::decode(&mut bytes).expect("illegal state: invalid proto bytes");
+        let runs = proto_runs
+            .into_rust()
+            .expect("illegal state: invalid encoded runs proto");
+        Some(runs)
+    }
+}
+
+/// Part of the updates in a run.
+///
+/// Either a pointer to ones stored in Blob or a single part stored inline.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum RunPart<T> {
+    Single(BatchPart<T>),
+    Many(HollowRunRef<T>),
+}
+
+impl<T: Ord> PartialOrd<Self> for RunPart<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T: Ord> Ord for RunPart<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (RunPart::Single(a), RunPart::Single(b)) => a.cmp(b),
+            (RunPart::Single(_), RunPart::Many(_)) => Ordering::Less,
+            (RunPart::Many(_), RunPart::Single(_)) => Ordering::Greater,
+            (RunPart::Many(a), RunPart::Many(b)) => a.cmp(b),
+        }
+    }
+}
+
+impl<T> RunPart<T> {
+    #[cfg(test)]
+    pub fn expect_hollow_part(&self) -> &HollowBatchPart<T> {
+        match self {
+            RunPart::Single(BatchPart::Hollow(hollow)) => hollow,
+            _ => panic!("expected hollow part!"),
+        }
+    }
+
+    pub fn hollow_bytes(&self) -> usize {
+        match self {
+            Self::Single(p) => p.hollow_bytes(),
+            Self::Many(r) => r.hollow_bytes,
+        }
+    }
+
+    pub fn is_inline(&self) -> bool {
+        match self {
+            Self::Single(p) => p.is_inline(),
+            Self::Many(_) => false,
+        }
+    }
+
+    pub fn inline_bytes(&self) -> usize {
+        match self {
+            Self::Single(p) => p.inline_bytes(),
+            Self::Many(_) => 0,
+        }
+    }
+
+    pub fn max_part_bytes(&self) -> usize {
+        match self {
+            Self::Single(p) => p.encoded_size_bytes(),
+            Self::Many(r) => r.max_part_bytes,
+        }
+    }
+
+    pub fn writer_key(&self) -> Option<WriterKey> {
+        match self {
+            Self::Single(p) => p.writer_key(),
+            Self::Many(r) => r.writer_key(),
+        }
+    }
+
+    pub fn encoded_size_bytes(&self) -> usize {
+        match self {
+            Self::Single(p) => p.encoded_size_bytes(),
+            Self::Many(r) => r.hollow_bytes,
+        }
+    }
+
+    pub fn schema_id(&self) -> Option<SchemaId> {
+        match self {
+            Self::Single(p) => p.schema_id(),
+            Self::Many(_) => None,
+        }
+    }
+
+    // A user-interpretable identifier or description of the part (for logs and
+    // such).
+    pub fn printable_name(&self) -> &str {
+        match self {
+            Self::Single(p) => p.printable_name(),
+            Self::Many(r) => r.key.0.as_str(),
+        }
+    }
+
+    pub fn stats(&self) -> Option<&LazyPartStats> {
+        match self {
+            Self::Single(p) => p.stats(),
+            // TODO: if we kept stats we could avoid fetching the metadata here.
+            Self::Many(_) => None,
+        }
+    }
+
+    pub fn key_lower(&self) -> &[u8] {
+        match self {
+            Self::Single(p) => p.key_lower(),
+            Self::Many(r) => r.key_lower.as_slice(),
+        }
+    }
+
+    pub fn structured_key_lower(&self) -> Option<ArrayBound> {
+        match self {
+            Self::Single(p) => p.structured_key_lower(),
+            Self::Many(_) => None,
+        }
+    }
+
+    pub fn ts_rewrite(&self) -> Option<&Antichain<T>> {
+        match self {
+            Self::Single(p) => p.ts_rewrite(),
+            Self::Many(_) => None,
+        }
+    }
+}
+
+/// A blob was missing!
+#[derive(Clone, Debug)]
+pub struct MissingBlob(BlobKey);
+
+impl std::fmt::Display for MissingBlob {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "unexpectedly missing key: {}", self.0)
+    }
+}
+
+impl std::error::Error for MissingBlob {}
+
+impl<T: Timestamp + Codec64 + Sync> RunPart<T> {
+    pub fn part_stream<'a>(
+        &'a self,
+        shard_id: ShardId,
+        blob: &'a dyn Blob,
+        metrics: &'a Metrics,
+    ) -> impl Stream<Item = Result<Cow<'a, BatchPart<T>>, MissingBlob>> + Send + 'a {
+        try_stream! {
+            match self {
+                RunPart::Single(p) => {
+                    yield Cow::Borrowed(p);
+                }
+                RunPart::Many(r) => {
+                    let fetched = r.get(shard_id, blob, metrics).await.ok_or_else(|| MissingBlob(r.key.complete(&shard_id)))?;
+                    for run_part in fetched.parts {
+                        for await batch_part in run_part.part_stream(shard_id, blob, metrics).boxed() {
+                            yield Cow::Owned(batch_part?.into_owned());
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -274,17 +599,54 @@ impl<T: Ord> Ord for BatchPart<T> {
                 BatchPart::Inline {
                     updates: s_updates,
                     ts_rewrite: s_ts_rewrite,
+                    schema_id: s_schema_id,
+                    deprecated_schema_id: s_deprecated_schema_id,
                 },
                 BatchPart::Inline {
                     updates: o_updates,
                     ts_rewrite: o_ts_rewrite,
+                    schema_id: o_schema_id,
+                    deprecated_schema_id: o_deprecated_schema_id,
                 },
-            ) => (s_updates, s_ts_rewrite.as_ref().map(|x| x.elements()))
-                .cmp(&(o_updates, o_ts_rewrite.as_ref().map(|x| x.elements()))),
+            ) => (
+                s_updates,
+                s_ts_rewrite.as_ref().map(|x| x.elements()),
+                s_schema_id,
+                s_deprecated_schema_id,
+            )
+                .cmp(&(
+                    o_updates,
+                    o_ts_rewrite.as_ref().map(|x| x.elements()),
+                    o_schema_id,
+                    o_deprecated_schema_id,
+                )),
             (BatchPart::Hollow(_), BatchPart::Inline { .. }) => Ordering::Less,
             (BatchPart::Inline { .. }, BatchPart::Hollow(_)) => Ordering::Greater,
         }
     }
+}
+
+/// What order are the parts in this run in?
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Ord, PartialOrd, Serialize)]
+pub(crate) enum RunOrder {
+    /// They're in no particular order.
+    Unordered,
+    /// They're ordered based on the codec-encoded K/V bytes.
+    Codec,
+    /// They're ordered by the natural ordering of the structured data.
+    Structured,
+}
+
+/// Metadata shared across a run.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Ord, PartialOrd, Serialize)]
+pub struct RunMeta {
+    /// If none, Persist should infer the order based on the proto metadata.
+    pub(crate) order: Option<RunOrder>,
+    /// All parts in a run should have the same schema.
+    pub(crate) schema: Option<SchemaId>,
+
+    /// ID of a schema that has since been deprecated and exists only to cleanly roundtrip.
+    pub(crate) deprecated_schema: Option<SchemaId>,
 }
 
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.
@@ -298,6 +660,9 @@ pub struct HollowBatchPart<T> {
     /// possible key: `vec![]`.)
     #[serde(serialize_with = "serialize_part_bytes")]
     pub key_lower: Vec<u8>,
+    /// A lower bound on the keys in the part, stored as structured data.
+    #[serde(serialize_with = "serialize_lazy_proto")]
+    pub structured_key_lower: Option<LazyProto<ProtoArrayData>>,
     /// Aggregate statistics about data contained in this part.
     #[serde(serialize_with = "serialize_part_stats")]
     pub stats: Option<LazyPartStats>,
@@ -318,6 +683,19 @@ pub struct HollowBatchPart<T> {
     /// we later decide that's of some benefit.
     #[serde(serialize_with = "serialize_diffs_sum")]
     pub diffs_sum: Option<[u8; 8]>,
+    /// Columnar format that this batch was written in.
+    ///
+    /// This is `None` if this part was written before we started writing structured
+    /// columnar data.
+    pub format: Option<BatchColumnarFormat>,
+    /// The schemas used to encode the data in this batch part.
+    ///
+    /// Or None for historical data written before the schema registry was
+    /// added.
+    pub schema_id: Option<SchemaId>,
+
+    /// ID of a schema that has since been deprecated and exists only to cleanly roundtrip.
+    pub deprecated_schema_id: Option<SchemaId>,
 }
 
 /// A [Batch] but with the updates themselves stored externally.
@@ -330,7 +708,7 @@ pub struct HollowBatch<T> {
     /// The number of updates in the batch.
     pub len: usize,
     /// Pointers usable to retrieve the updates.
-    pub(crate) parts: Vec<BatchPart<T>>,
+    pub(crate) parts: Vec<RunPart<T>>,
     /// Runs of sequential sorted batch parts, stored as indices into `parts`.
     /// ex.
     /// ```text
@@ -338,7 +716,10 @@ pub struct HollowBatch<T> {
     ///     parts=[p1, p2, p3], runs=[1]    --> runs are [p1] and [p2, p3]
     ///     parts=[p1, p2, p3], runs=[1, 2] --> runs are [p1], [p2], [p3]
     /// ```
-    pub(crate) runs: Vec<usize>,
+    pub(crate) run_splits: Vec<usize>,
+    /// Run-level metadata: the first entry has metadata for the first run, and so on.
+    /// If there's no corresponding entry for a particular run, it's assumed to be [RunMeta::default()].
+    pub(crate) run_meta: Vec<RunMeta>,
 }
 
 impl<T: Debug> Debug for HollowBatch<T> {
@@ -347,7 +728,8 @@ impl<T: Debug> Debug for HollowBatch<T> {
             desc,
             parts,
             len,
-            runs,
+            run_splits: runs,
+            run_meta,
         } = self;
         f.debug_struct("HollowBatch")
             .field(
@@ -361,6 +743,7 @@ impl<T: Debug> Debug for HollowBatch<T> {
             .field("parts", &parts)
             .field("len", &len)
             .field("runs", &runs)
+            .field("run_meta", &run_meta)
             .finish()
     }
 }
@@ -372,7 +755,8 @@ impl<T: Serialize> serde::Serialize for HollowBatch<T> {
             len,
             // Both parts and runs are covered by the self.runs call.
             parts: _,
-            runs: _,
+            run_splits: _,
+            run_meta: _,
         } = self;
         let mut s = s.serialize_struct("HollowBatch", 5)?;
         let () = s.serialize_field("lower", &desc.lower().elements())?;
@@ -398,13 +782,15 @@ impl<T: Ord> Ord for HollowBatch<T> {
             desc: self_desc,
             parts: self_parts,
             len: self_len,
-            runs: self_runs,
+            run_splits: self_runs,
+            run_meta: self_run_meta,
         } = self;
         let HollowBatch {
             desc: other_desc,
             parts: other_parts,
             len: other_len,
-            runs: other_runs,
+            run_splits: other_runs,
+            run_meta: other_run_meta,
         } = other;
         (
             self_desc.lower().elements(),
@@ -413,6 +799,7 @@ impl<T: Ord> Ord for HollowBatch<T> {
             self_parts,
             self_len,
             self_runs,
+            self_run_meta,
         )
             .cmp(&(
                 other_desc.lower().elements(),
@@ -421,10 +808,27 @@ impl<T: Ord> Ord for HollowBatch<T> {
                 other_parts,
                 other_len,
                 other_runs,
+                other_run_meta,
             ))
     }
 }
 
+impl<T: Timestamp + Codec64 + Sync> HollowBatch<T> {
+    pub fn part_stream<'a>(
+        &'a self,
+        shard_id: ShardId,
+        blob: &'a dyn Blob,
+        metrics: &'a Metrics,
+    ) -> impl Stream<Item = Result<Cow<'a, BatchPart<T>>, MissingBlob>> + 'a {
+        stream! {
+            for part in &self.parts {
+                for await part in part.part_stream(shard_id, blob, metrics) {
+                    yield part;
+                }
+            }
+        }
+    }
+}
 impl<T> HollowBatch<T> {
     /// Construct an in-memory hollow batch from the given metadata.
     ///
@@ -434,20 +838,50 @@ impl<T> HollowBatch<T> {
     /// `len` should represent the number of valid updates in the referenced parts.
     pub(crate) fn new(
         desc: Description<T>,
-        parts: Vec<BatchPart<T>>,
+        parts: Vec<RunPart<T>>,
         len: usize,
-        runs: Vec<usize>,
+        run_meta: Vec<RunMeta>,
+        run_splits: Vec<usize>,
     ) -> Self {
-        debug_assert!(runs.is_sorted(), "run indices should be sorted");
         debug_assert!(
-            runs.last().iter().all(|i| **i <= parts.len()),
-            "run indices should be a valid indices into parts"
+            run_splits.is_strictly_sorted(),
+            "run indices should be strictly increasing"
         );
+        debug_assert!(
+            run_splits.first().map_or(true, |i| *i > 0),
+            "run indices should be positive"
+        );
+        debug_assert!(
+            run_splits.last().map_or(true, |i| *i < parts.len()),
+            "run indices should be valid indices into parts"
+        );
+        debug_assert!(
+            parts.is_empty() || run_meta.len() == run_splits.len() + 1,
+            "all metadata should correspond to a run"
+        );
+
         Self {
             desc,
             len,
             parts,
-            runs,
+            run_splits,
+            run_meta,
+        }
+    }
+
+    /// Construct a batch of a single run with default metadata. Mostly interesting for tests.
+    pub(crate) fn new_run(desc: Description<T>, parts: Vec<RunPart<T>>, len: usize) -> Self {
+        let run_meta = if parts.is_empty() {
+            vec![]
+        } else {
+            vec![RunMeta::default()]
+        };
+        Self {
+            desc,
+            len,
+            parts,
+            run_splits: vec![],
+            run_meta,
         }
     }
 
@@ -457,34 +891,31 @@ impl<T> HollowBatch<T> {
             desc,
             len: 0,
             parts: vec![],
-            runs: vec![],
+            run_splits: vec![],
+            run_meta: vec![],
         }
     }
 
-    pub(crate) fn runs(&self) -> impl Iterator<Item = &[BatchPart<T>]> {
+    pub(crate) fn runs(&self) -> impl Iterator<Item = (&RunMeta, &[RunPart<T>])> {
         let run_ends = self
-            .runs
+            .run_splits
             .iter()
             .copied()
             .chain(std::iter::once(self.parts.len()));
-        run_ends
+        let run_metas = self.run_meta.iter();
+        let run_parts = run_ends
             .scan(0, |start, end| {
                 let range = *start..end;
                 *start = end;
                 Some(range)
             })
             .filter(|range| !range.is_empty())
-            .map(|range| &self.parts[range])
+            .map(|range| &self.parts[range]);
+        run_metas.zip(run_parts)
     }
 
     pub(crate) fn inline_bytes(&self) -> usize {
-        self.parts
-            .iter()
-            .map(|x| match x {
-                BatchPart::Inline { updates, .. } => updates.encoded_size_bytes(),
-                BatchPart::Hollow(_) => 0,
-            })
-            .sum()
+        self.parts.iter().map(|x| x.inline_bytes()).sum()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -559,8 +990,17 @@ impl<T: Timestamp + TotalOrder> HollowBatch<T> {
         );
         for part in &mut self.parts {
             match part {
-                BatchPart::Hollow(part) => part.ts_rewrite = Some(frontier.clone()),
-                BatchPart::Inline { ts_rewrite, .. } => *ts_rewrite = Some(frontier.clone()),
+                RunPart::Single(BatchPart::Hollow(part)) => {
+                    part.ts_rewrite = Some(frontier.clone())
+                }
+                RunPart::Single(BatchPart::Inline { ts_rewrite, .. }) => {
+                    *ts_rewrite = Some(frontier.clone())
+                }
+                RunPart::Many(runs) => {
+                    // Currently unreachable: we only apply rewrites to user batches, and we don't
+                    // ever generate runs of >1 part for those.
+                    panic!("unexpected rewrite of a hollow runs ref: {runs:?}");
+                }
             }
         }
         Ok(())
@@ -581,33 +1021,49 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
             key: self_key,
             encoded_size_bytes: self_encoded_size_bytes,
             key_lower: self_key_lower,
+            structured_key_lower: self_structured_key_lower,
             stats: self_stats,
             ts_rewrite: self_ts_rewrite,
             diffs_sum: self_diffs_sum,
+            format: self_format,
+            schema_id: self_schema_id,
+            deprecated_schema_id: self_deprecated_schema_id,
         } = self;
         let HollowBatchPart {
             key: other_key,
             encoded_size_bytes: other_encoded_size_bytes,
             key_lower: other_key_lower,
+            structured_key_lower: other_structured_key_lower,
             stats: other_stats,
             ts_rewrite: other_ts_rewrite,
             diffs_sum: other_diffs_sum,
+            format: other_format,
+            schema_id: other_schema_id,
+            deprecated_schema_id: other_deprecated_schema_id,
         } = other;
         (
             self_key,
             self_encoded_size_bytes,
             self_key_lower,
+            self_structured_key_lower,
             self_stats,
             self_ts_rewrite.as_ref().map(|x| x.elements()),
             self_diffs_sum,
+            self_format,
+            self_schema_id,
+            self_deprecated_schema_id,
         )
             .cmp(&(
                 other_key,
                 other_encoded_size_bytes,
                 other_key_lower,
+                other_structured_key_lower,
                 other_stats,
                 other_ts_rewrite.as_ref().map(|x| x.elements()),
                 other_diffs_sum,
+                other_format,
+                other_schema_id,
+                other_deprecated_schema_id,
             ))
     }
 }
@@ -650,12 +1106,49 @@ pub struct StateCollections<T> {
     pub(crate) leased_readers: BTreeMap<LeasedReaderId, LeasedReaderState<T>>,
     pub(crate) critical_readers: BTreeMap<CriticalReaderId, CriticalReaderState<T>>,
     pub(crate) writers: BTreeMap<WriterId, WriterState<T>>,
+    pub(crate) schemas: BTreeMap<SchemaId, EncodedSchemas>,
 
     // - Invariant: `trace.since == meet(all reader.since)`
     // - Invariant: `trace.since` doesn't regress across state versions.
     // - Invariant: `trace.upper` doesn't regress across state versions.
     // - Invariant: `trace` upholds its own invariants.
     pub(crate) trace: Trace<T>,
+}
+
+/// A key and val [Codec::Schema] encoded via [Codec::encode_schema].
+///
+/// This strategy of directly serializing the schema objects requires that
+/// persist users do the right thing. Specifically, that an encoded schema
+/// doesn't in some later version of mz decode to an in-mem object that acts
+/// differently. In a sense, the current system (before the introduction of the
+/// schema registry) where schemas are passed in unchecked to reader and writer
+/// registration calls also has the same defect, so seems fine.
+///
+/// An alternative is to write down here some persist-specific representation of
+/// the schema (e.g. the arrow DataType). This is a lot more work and also has
+/// the potential to lead down a similar failure mode to the mz_persist_types
+/// `Data` trait, where the boilerplate isn't worth the safety. Given that we
+/// can always migrate later by rehydrating these, seems fine to start with the
+/// easy thing.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct EncodedSchemas {
+    /// A full in-mem `K::Schema` impl encoded via [Codec::encode_schema].
+    pub key: Bytes,
+    /// The arrow `DataType` produced by this `K::Schema` at the time it was
+    /// registered, encoded as a `ProtoDataType`.
+    pub key_data_type: Bytes,
+    /// A full in-mem `V::Schema` impl encoded via [Codec::encode_schema].
+    pub val: Bytes,
+    /// The arrow `DataType` produced by this `V::Schema` at the time it was
+    /// registered, encoded as a `ProtoDataType`.
+    pub val_data_type: Bytes,
+}
+
+impl EncodedSchemas {
+    pub(crate) fn decode_data_type(buf: &[u8]) -> DataType {
+        let proto = prost::Message::decode(buf).expect("valid ProtoDataType");
+        DataType::from_proto(proto).expect("valid DataType")
+    }
 }
 
 #[derive(Debug)]
@@ -807,6 +1300,150 @@ where
         Continue(state)
     }
 
+    pub fn register_schema<K: Codec, V: Codec>(
+        &mut self,
+        key_schema: &K::Schema,
+        val_schema: &V::Schema,
+    ) -> ControlFlow<NoOpStateTransition<Option<SchemaId>>, Option<SchemaId>> {
+        fn encode_data_type(data_type: &DataType) -> Bytes {
+            let proto = data_type.into_proto();
+            prost::Message::encode_to_vec(&proto).into()
+        }
+
+        // Look for an existing registered SchemaId for these schemas.
+        //
+        // The common case is that this should be a recent one, so as a minor
+        // optimization, do this search in reverse order.
+        //
+        // TODO: Note that this impl is `O(schemas)`. Combined with the
+        // possibility of cmd retries, it's possible but unlikely for this to
+        // get expensive. We could maintain a reverse map to speed this up in
+        // necessary. This would either need to work on the encoded
+        // representation (which, we'd have to fall back to the linear scan) or
+        // we'd need to add a Hash/Ord bound to Schema.
+        let existing_id = self.schemas.iter().rev().find(|(_, x)| {
+            K::decode_schema(&x.key) == *key_schema && V::decode_schema(&x.val) == *val_schema
+        });
+        match existing_id {
+            Some((schema_id, _)) => {
+                // TODO: Validate that the decoded schemas still produce records
+                // of the recorded DataType, to detect shenanigans. Probably
+                // best to wait until we've turned on Schema2 in prod and thus
+                // committed to the current mappings.
+                Break(NoOpStateTransition(Some(*schema_id)))
+            }
+            None if self.is_tombstone() => {
+                // TODO: Is this right?
+                Break(NoOpStateTransition(None))
+            }
+            None if self.schemas.is_empty() => {
+                // We'll have to do something more sophisticated here to
+                // generate the next id if/when we start supporting the removal
+                // of schemas.
+                let id = SchemaId(self.schemas.len());
+                let key_data_type = mz_persist_types::columnar::data_type::<K>(key_schema)
+                    .expect("valid key schema");
+                let val_data_type = mz_persist_types::columnar::data_type::<V>(val_schema)
+                    .expect("valid val schema");
+                let prev = self.schemas.insert(
+                    id,
+                    EncodedSchemas {
+                        key: K::encode_schema(key_schema),
+                        key_data_type: encode_data_type(&key_data_type),
+                        val: V::encode_schema(val_schema),
+                        val_data_type: encode_data_type(&val_data_type),
+                    },
+                );
+                assert_eq!(prev, None);
+                Continue(Some(id))
+            }
+            None => {
+                info!(
+                    "register_schemas got {:?} expected {:?}",
+                    key_schema,
+                    self.schemas
+                        .iter()
+                        .map(|(id, x)| (id, K::decode_schema(&x.key)))
+                        .collect::<Vec<_>>()
+                );
+                // Until we implement persist schema changes, only allow at most
+                // one registered schema.
+                Break(NoOpStateTransition(None))
+            }
+        }
+    }
+
+    pub fn compare_and_evolve_schema<K: Codec, V: Codec>(
+        &mut self,
+        expected: SchemaId,
+        key_schema: &K::Schema,
+        val_schema: &V::Schema,
+    ) -> ControlFlow<NoOpStateTransition<CaESchema<K, V>>, CaESchema<K, V>> {
+        fn data_type<T>(schema: &impl Schema<T>) -> DataType {
+            // To be defensive, create an empty batch and inspect the resulting
+            // data type (as opposed to something like allowing the `Schema` to
+            // declare the DataType).
+            let array = Schema::encoder(schema).expect("valid schema").finish();
+            Array::data_type(&array).clone()
+        }
+
+        let (current_id, current) = self
+            .schemas
+            .last_key_value()
+            .expect("all shards have a schema");
+        if *current_id != expected {
+            return Break(NoOpStateTransition(CaESchema::ExpectedMismatch {
+                schema_id: *current_id,
+                key: K::decode_schema(&current.key),
+                val: V::decode_schema(&current.val),
+            }));
+        }
+
+        let current_key = K::decode_schema(&current.key);
+        let current_key_dt = EncodedSchemas::decode_data_type(&current.key_data_type);
+        let current_val = V::decode_schema(&current.val);
+        let current_val_dt = EncodedSchemas::decode_data_type(&current.val_data_type);
+
+        let key_dt = data_type(key_schema);
+        let val_dt = data_type(val_schema);
+
+        // If the schema is exactly the same as the current one, no-op.
+        if current_key == *key_schema
+            && current_key_dt == key_dt
+            && current_val == *val_schema
+            && current_val_dt == val_dt
+        {
+            return Break(NoOpStateTransition(CaESchema::Ok(*current_id)));
+        }
+
+        let key_fn = backward_compatible(&current_key_dt, &key_dt);
+        let val_fn = backward_compatible(&current_val_dt, &val_dt);
+        let (Some(key_fn), Some(val_fn)) = (key_fn, val_fn) else {
+            return Break(NoOpStateTransition(CaESchema::Incompatible));
+        };
+        // Persist initially disallows dropping columns. This would require a
+        // bunch more work (e.g. not safe to use the latest schema in
+        // compaction) and isn't initially necessary in mz.
+        if key_fn.contains_drop() || val_fn.contains_drop() {
+            return Break(NoOpStateTransition(CaESchema::Incompatible));
+        }
+
+        // We'll have to do something more sophisticated here to
+        // generate the next id if/when we start supporting the removal
+        // of schemas.
+        let id = SchemaId(self.schemas.len());
+        self.schemas.insert(
+            id,
+            EncodedSchemas {
+                key: K::encode_schema(key_schema),
+                key_data_type: prost::Message::encode_to_vec(&key_dt.into_proto()).into(),
+                val: V::encode_schema(val_schema),
+                val_data_type: prost::Message::encode_to_vec(&val_dt.into_proto()).into(),
+            },
+        );
+        Continue(CaESchema::Ok(id))
+    }
+
     pub fn compare_and_append(
         &mut self,
         batch: &HollowBatch<T>,
@@ -817,7 +1454,8 @@ where
         debug_info: &HandleDebugState,
         inline_writes_total_max_bytes: usize,
         record_compactions: bool,
-        claim_unclaimed_compactions: bool,
+        claim_compaction_percent: usize,
+        claim_compaction_min_version: Option<&Version>,
     ) -> ControlFlow<CompareAndAppendBreak<T>, Vec<FueledMergeReq<T>>> {
         // We expire all writers if the upper and since both advance to the
         // empty antichain. Gracefully handle this. At the same time,
@@ -915,9 +1553,25 @@ where
 
         // NB: we don't claim unclaimed compactions when the recording flag is off, even if we'd
         // otherwise be allowed to, to avoid triggering the same compactions in every writer.
-        if record_compactions && claim_unclaimed_compactions && merge_reqs.is_empty() {
+        let all_empty_reqs = merge_reqs
+            .iter()
+            .all(|req| req.inputs.iter().all(|b| b.batch.is_empty()));
+        if record_compactions && all_empty_reqs && !batch.is_empty() {
+            let mut reqs_to_take = claim_compaction_percent / 100;
+            if (usize::cast_from(idempotency_token.hashed()) % 100)
+                < (claim_compaction_percent % 100)
+            {
+                reqs_to_take += 1;
+            }
             let threshold_ms = heartbeat_timestamp_ms.saturating_sub(lease_duration_ms);
-            merge_reqs.extend(self.trace.fueled_merge_reqs_before_ms(threshold_ms).take(1))
+            let min_writer = claim_compaction_min_version.map(WriterKey::for_version);
+            merge_reqs.extend(
+                // We keep the oldest `reqs_to_take` batches, under the theory that they're least
+                // likely to be compacted soon for other reasons.
+                self.trace
+                    .fueled_merge_reqs_before_ms(threshold_ms, min_writer)
+                    .take(reqs_to_take),
+            )
         }
 
         if record_compactions {
@@ -969,6 +1623,21 @@ where
         Continue(apply_merge_result)
     }
 
+    pub fn spine_exert(
+        &mut self,
+        fuel: usize,
+    ) -> ControlFlow<NoOpStateTransition<Vec<FueledMergeReq<T>>>, Vec<FueledMergeReq<T>>> {
+        let (merge_reqs, did_work) = self.trace.exert(fuel);
+        if did_work {
+            Continue(merge_reqs)
+        } else {
+            assert!(merge_reqs.is_empty());
+            // Break if we have nothing useful to do to save the seqno (and
+            // resulting crdb traffic)
+            Break(NoOpStateTransition(Vec::new()))
+        }
+    }
+
     pub fn downgrade_since(
         &mut self,
         reader_id: &LeasedReaderId,
@@ -985,7 +1654,14 @@ where
             return Break(NoOpStateTransition(Since(Antichain::new())));
         }
 
-        let reader_state = self.leased_reader(reader_id);
+        // The only way to have a missing reader in state is if it's been expired... and in that
+        // case, we behave the same as though that reader had been downgraded to the empty antichain.
+        let Some(reader_state) = self.leased_reader(reader_id) else {
+            tracing::warn!(
+                "Leased reader {reader_id} was expired due to inactivity. Did the machine go to sleep?",
+            );
+            return Break(NoOpStateTransition(Since(Antichain::new())));
+        };
 
         // Also use this as an opportunity to heartbeat the reader and downgrade
         // the seqno capability.
@@ -1055,9 +1731,9 @@ where
             )));
         }
 
+        reader_state.opaque = OpaqueState(Codec64::encode(new_opaque));
         if PartialOrder::less_equal(&reader_state.since, new_since) {
             reader_state.since.clone_from(new_since);
-            reader_state.opaque = OpaqueState(Codec64::encode(new_opaque));
             self.update_since();
             Continue(Ok(Since(new_since.clone())))
         } else {
@@ -1109,7 +1785,7 @@ where
 
         let existed = self.leased_readers.remove(reader_id).is_some();
         if existed {
-            // TODO(#22789): Re-enable this
+            // TODO(database-issues#6885): Re-enable this
             //
             // Temporarily disabling this because we think it might be the cause
             // of the remap since bug. Specifically, a clusterd process has a
@@ -1142,7 +1818,7 @@ where
 
         let existed = self.critical_readers.remove(reader_id).is_some();
         if existed {
-            // TODO(#22789): Re-enable this
+            // TODO(database-issues#6885): Re-enable this
             //
             // Temporarily disabling this because we think it might be the cause
             // of the remap since bug. Specifically, a clusterd process has a
@@ -1181,20 +1857,8 @@ where
         Continue(existed)
     }
 
-    fn leased_reader(&mut self, id: &LeasedReaderId) -> &mut LeasedReaderState<T> {
-        self.leased_readers
-            .get_mut(id)
-            // The only (tm) ways to hit this are (1) inventing a LeasedReaderId
-            // instead of getting it from Register or (2) if a lease expired.
-            // (1) is a gross mis-use and (2) may happen if a reader did not get
-            // to heartbeat for a long time. Readers are expected to
-            // heartbeat/downgrade their since regularly.
-            .unwrap_or_else(|| {
-                panic!(
-                    "LeasedReaderId({}) was expired due to inactivity. Did the machine go to sleep?",
-                    id
-                )
-            })
+    fn leased_reader(&mut self, id: &LeasedReaderId) -> Option<&mut LeasedReaderState<T>> {
+        self.leased_readers.get_mut(id)
     }
 
     fn critical_reader(&mut self, id: &CriticalReaderId) -> &mut CriticalReaderState<T> {
@@ -1468,6 +2132,7 @@ where
                 leased_readers: BTreeMap::new(),
                 critical_readers: BTreeMap::new(),
                 writers: BTreeMap::new(),
+                schemas: BTreeMap::new(),
                 trace: Trace::default(),
             },
         };
@@ -1634,19 +2299,26 @@ where
     pub fn expire_at(&mut self, walltime_ms: EpochMillis) -> ExpiryMetrics {
         let mut metrics = ExpiryMetrics::default();
         let shard_id = self.shard_id();
-        self.collections.leased_readers.retain(|k, v| {
-            let retain = v.last_heartbeat_timestamp_ms + v.lease_duration_ms >= walltime_ms;
+        self.collections.leased_readers.retain(|id, state| {
+            let retain = state.last_heartbeat_timestamp_ms + state.lease_duration_ms >= walltime_ms;
             if !retain {
-                info!("Force expiring reader ({k}) of shard ({shard_id}) due to inactivity");
+                info!(
+                    "Force expiring reader {id} ({}) of shard {shard_id} due to inactivity",
+                    state.debug.purpose
+                );
                 metrics.readers_expired += 1;
             }
             retain
         });
         // critical_readers don't need forced expiration. (In fact, that's the point!)
-        self.collections.writers.retain(|k, v| {
-            let retain = (v.last_heartbeat_timestamp_ms + v.lease_duration_ms) >= walltime_ms;
+        self.collections.writers.retain(|id, state| {
+            let retain =
+                (state.last_heartbeat_timestamp_ms + state.lease_duration_ms) >= walltime_ms;
             if !retain {
-                info!("Force expiring writer ({k}) of shard ({shard_id}) due to inactivity");
+                info!(
+                    "Force expiring writer {id} ({}) of shard {shard_id} due to inactivity",
+                    state.debug.purpose
+                );
                 metrics.writers_expired += 1;
             }
             retain
@@ -1753,6 +2425,15 @@ fn serialize_part_bytes<S: Serializer>(val: &[u8], s: S) -> Result<S::Ok, S::Err
     val.serialize(s)
 }
 
+fn serialize_lazy_proto<S: Serializer, T: prost::Message + Default>(
+    val: &Option<LazyProto<T>>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    val.as_ref()
+        .map(|lazy| hex::encode(&lazy.into_proto()))
+        .serialize(s)
+}
+
 fn serialize_part_stats<S: Serializer>(
     val: &Option<LazyPartStats>,
     s: S,
@@ -1787,6 +2468,7 @@ impl<T: Serialize + Timestamp + Lattice> Serialize for State<T> {
                     leased_readers,
                     critical_readers,
                     writers,
+                    schemas,
                     trace,
                 },
         } = self;
@@ -1801,6 +2483,7 @@ impl<T: Serialize + Timestamp + Lattice> Serialize for State<T> {
         let () = s.serialize_field("leased_readers", leased_readers)?;
         let () = s.serialize_field("critical_readers", critical_readers)?;
         let () = s.serialize_field("writers", writers)?;
+        let () = s.serialize_field("schemas", schemas)?;
         let () = s.serialize_field("since", &trace.since().elements())?;
         let () = s.serialize_field("upper", &trace.upper().elements())?;
         let trace = trace.flatten();
@@ -1848,6 +2531,7 @@ pub(crate) mod tests {
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_dyncfg::ConfigUpdates;
     use mz_ore::now::SYSTEM_TIME;
+    use mz_ore::{assert_none, assert_ok};
     use mz_proto::RustType;
     use proptest::prelude::*;
     use proptest::strategy::ValueTree;
@@ -1876,7 +2560,7 @@ pub(crate) mod tests {
                 any::<T>(),
                 any::<T>(),
                 any::<T>(),
-                proptest::collection::vec(any_batch_part::<T>(), 0..3),
+                proptest::collection::vec(any_run_part::<T>(), 0..3),
                 any::<usize>(),
                 any::<bool>(),
             ),
@@ -1887,12 +2571,17 @@ pub(crate) mod tests {
                     (Antichain::from_elem(t1), Antichain::from_elem(t0))
                 };
                 let since = Antichain::from_elem(since);
-                let runs = if runs { vec![parts.len()] } else { vec![] };
-                HollowBatch {
-                    desc: Description::new(lower, upper, since),
-                    parts,
-                    len: len % 10,
-                    runs,
+                if runs && parts.len() > 2 {
+                    let split_at = parts.len() / 2;
+                    HollowBatch::new(
+                        Description::new(lower, upper, since),
+                        parts,
+                        len % 10,
+                        vec![RunMeta::default(), RunMeta::default()],
+                        vec![split_at],
+                    )
+                } else {
+                    HollowBatch::new_run(Description::new(lower, upper, since), parts, len % 10)
                 }
             },
         )
@@ -1900,8 +2589,14 @@ pub(crate) mod tests {
 
     pub fn any_batch_part<T: Arbitrary + Timestamp>() -> impl Strategy<Value = BatchPart<T>> {
         Strategy::prop_map(
-            (any::<bool>(), any_hollow_batch_part(), any::<Option<T>>()),
-            |(is_hollow, hollow, ts_rewrite)| {
+            (
+                any::<bool>(),
+                any_hollow_batch_part(),
+                any::<Option<T>>(),
+                any::<Option<SchemaId>>(),
+                any::<Option<SchemaId>>(),
+            ),
+            |(is_hollow, hollow, ts_rewrite, schema_id, deprecated_schema_id)| {
                 if is_hollow {
                     BatchPart::Hollow(hollow)
                 } else {
@@ -1910,10 +2605,16 @@ pub(crate) mod tests {
                     BatchPart::Inline {
                         updates,
                         ts_rewrite,
+                        schema_id,
+                        deprecated_schema_id,
                     }
                 }
             },
         )
+    }
+
+    pub fn any_run_part<T: Arbitrary + Timestamp>() -> impl Strategy<Value = RunPart<T>> {
+        Strategy::prop_map(any_batch_part(), |part| RunPart::Single(part))
     }
 
     pub fn any_hollow_batch_part<T: Arbitrary + Timestamp>(
@@ -1926,14 +2627,33 @@ pub(crate) mod tests {
                 any_some_lazy_part_stats(),
                 any::<Option<T>>(),
                 any::<[u8; 8]>(),
+                any::<Option<BatchColumnarFormat>>(),
+                any::<Option<SchemaId>>(),
+                any::<Option<SchemaId>>(),
             ),
-            |(key, encoded_size_bytes, key_lower, stats, ts_rewrite, diffs_sum)| HollowBatchPart {
+            |(
                 key,
                 encoded_size_bytes,
                 key_lower,
                 stats,
-                ts_rewrite: ts_rewrite.map(Antichain::from_elem),
-                diffs_sum: Some(diffs_sum),
+                ts_rewrite,
+                diffs_sum,
+                format,
+                schema_id,
+                deprecated_schema_id,
+            )| {
+                HollowBatchPart {
+                    key,
+                    encoded_size_bytes,
+                    key_lower,
+                    structured_key_lower: None,
+                    stats,
+                    ts_rewrite: ts_rewrite.map(Antichain::from_elem),
+                    diffs_sum: Some(diffs_sum),
+                    format,
+                    schema_id,
+                    deprecated_schema_id,
+                }
             },
         )
     }
@@ -2009,6 +2729,23 @@ pub(crate) mod tests {
         )
     }
 
+    pub fn any_encoded_schemas() -> impl Strategy<Value = EncodedSchemas> {
+        Strategy::prop_map(
+            (
+                any::<Vec<u8>>(),
+                any::<Vec<u8>>(),
+                any::<Vec<u8>>(),
+                any::<Vec<u8>>(),
+            ),
+            |(key, key_data_type, val, val_data_type)| EncodedSchemas {
+                key: Bytes::from(key),
+                key_data_type: Bytes::from(key_data_type),
+                val: Bytes::from(val),
+                val_data_type: Bytes::from(val_data_type),
+            },
+        )
+    }
+
     pub fn any_state<T: Arbitrary + Timestamp + Lattice>(
         num_trace_batches: Range<usize>,
     ) -> impl Strategy<Value = State<T>> {
@@ -2031,6 +2768,7 @@ pub(crate) mod tests {
                     1..3,
                 ),
                 proptest::collection::btree_map(any::<WriterId>(), any_writer_state::<T>(), 0..3),
+                proptest::collection::btree_map(any::<SchemaId>(), any_encoded_schemas(), 0..3),
                 any_trace::<T>(num_trace_batches),
             ),
             |(
@@ -2043,6 +2781,7 @@ pub(crate) mod tests {
                 leased_readers,
                 critical_readers,
                 writers,
+                schemas,
                 trace,
             )| State {
                 applier_version: semver::Version::new(1, 2, 3),
@@ -2057,6 +2796,7 @@ pub(crate) mod tests {
                     critical_readers,
                     writers,
                     trace,
+                    schemas,
                 },
             },
         )
@@ -2068,7 +2808,7 @@ pub(crate) mod tests {
         keys: &[&str],
         len: usize,
     ) -> HollowBatch<T> {
-        HollowBatch::new(
+        HollowBatch::new_run(
             Description::new(
                 Antichain::from_elem(lower),
                 Antichain::from_elem(upper),
@@ -2076,18 +2816,21 @@ pub(crate) mod tests {
             ),
             keys.iter()
                 .map(|x| {
-                    BatchPart::Hollow(HollowBatchPart {
+                    RunPart::Single(BatchPart::Hollow(HollowBatchPart {
                         key: PartialBatchKey((*x).to_owned()),
                         encoded_size_bytes: 0,
                         key_lower: vec![],
+                        structured_key_lower: None,
                         stats: None,
                         ts_rewrite: None,
                         diffs_sum: None,
-                    })
+                        format: None,
+                        schema_id: None,
+                        deprecated_schema_id: None,
+                    }))
                 })
                 .collect(),
             len,
-            vec![],
         )
     }
 
@@ -2226,7 +2969,7 @@ pub(crate) mod tests {
             state.collections.expire_leased_reader(&reader2),
             Continue(true)
         );
-        // TODO(#22789): expiry temporarily doesn't advance since
+        // TODO(database-issues#6885): expiry temporarily doesn't advance since
         // Switch this assertion back when we re-enable this.
         //
         // assert_eq!(state.collections.trace.since(), &Antichain::from_elem(10));
@@ -2237,11 +2980,76 @@ pub(crate) mod tests {
             state.collections.expire_leased_reader(&reader3),
             Continue(true)
         );
-        // TODO(#22789): expiry temporarily doesn't advance since
+        // TODO(database-issues#6885): expiry temporarily doesn't advance since
         // Switch this assertion back when we re-enable this.
         //
         // assert_eq!(state.collections.trace.since(), &Antichain::from_elem(10));
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
+    }
+
+    #[mz_ore::test]
+    fn compare_and_downgrade_since() {
+        let mut state = TypedState::<(), (), u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+            "".to_owned(),
+            0,
+        );
+        let reader = CriticalReaderId::new();
+        let _ = state
+            .collections
+            .register_critical_reader::<u64>("", &reader, "");
+
+        // The shard global since == 0 initially.
+        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(0));
+        // The initial opaque value should be set.
+        assert_eq!(
+            u64::decode(state.collections.critical_reader(&reader).opaque.0),
+            u64::initial()
+        );
+
+        // Greater
+        assert_eq!(
+            state.collections.compare_and_downgrade_since::<u64>(
+                &reader,
+                &u64::initial(),
+                (&1, &Antichain::from_elem(2)),
+            ),
+            Continue(Ok(Since(Antichain::from_elem(2))))
+        );
+        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
+        assert_eq!(
+            u64::decode(state.collections.critical_reader(&reader).opaque.0),
+            1
+        );
+        // Equal (no-op)
+        assert_eq!(
+            state.collections.compare_and_downgrade_since::<u64>(
+                &reader,
+                &1,
+                (&2, &Antichain::from_elem(2)),
+            ),
+            Continue(Ok(Since(Antichain::from_elem(2))))
+        );
+        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
+        assert_eq!(
+            u64::decode(state.collections.critical_reader(&reader).opaque.0),
+            2
+        );
+        // Less (no-op)
+        assert_eq!(
+            state.collections.compare_and_downgrade_since::<u64>(
+                &reader,
+                &2,
+                (&3, &Antichain::from_elem(1)),
+            ),
+            Continue(Ok(Since(Antichain::from_elem(2))))
+        );
+        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
+        assert_eq!(
+            u64::decode(state.collections.critical_reader(&reader).opaque.0),
+            3
+        );
     }
 
     #[mz_ore::test]
@@ -2273,7 +3081,8 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
+                None
             ),
             Break(CompareAndAppendBreak::Upper {
                 shard_upper: Antichain::from_elem(0),
@@ -2292,7 +3101,8 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
+                None
             )
             .is_continue());
 
@@ -2307,7 +3117,8 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
+                None
             ),
             Break(CompareAndAppendBreak::InvalidUsage(InvalidBounds {
                 lower: Antichain::from_elem(5),
@@ -2326,7 +3137,8 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
+                None
             ),
             Break(CompareAndAppendBreak::InvalidUsage(
                 InvalidEmptyTimeInterval {
@@ -2348,7 +3160,8 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
+                None
             )
             .is_continue());
     }
@@ -2395,7 +3208,8 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
+                None
             )
             .is_continue());
 
@@ -2469,7 +3283,8 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
+                None
             )
             .is_continue());
 
@@ -2500,7 +3315,8 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
+                None
             )
             .is_continue());
 
@@ -2563,7 +3379,8 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
+                None
             )
             .is_continue());
         assert!(state
@@ -2577,7 +3394,8 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
+                None
             )
             .is_continue());
 
@@ -2634,7 +3452,8 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
+                None
             )
             .is_continue());
 
@@ -2655,7 +3474,8 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
+                None
             )
             .is_continue());
     }
@@ -2690,7 +3510,8 @@ pub(crate) mod tests {
             &debug_state(),
             0,
             true,
-            true,
+            100,
+            None,
         );
         assert_eq!(state.maybe_gc(false), None);
 
@@ -2743,13 +3564,13 @@ pub(crate) mod tests {
 
         // shouldn't need a rollup at the seqno of the rollup
         state.seqno = SeqNo(5);
-        assert!(state.need_rollup(ROLLUP_THRESHOLD).is_none());
+        assert_none!(state.need_rollup(ROLLUP_THRESHOLD));
 
         // shouldn't need a rollup at seqnos less than our threshold
         state.seqno = SeqNo(6);
-        assert!(state.need_rollup(ROLLUP_THRESHOLD).is_none());
+        assert_none!(state.need_rollup(ROLLUP_THRESHOLD));
         state.seqno = SeqNo(7);
-        assert!(state.need_rollup(ROLLUP_THRESHOLD).is_none());
+        assert_none!(state.need_rollup(ROLLUP_THRESHOLD));
 
         // hit our threshold! we should need a rollup
         state.seqno = SeqNo(8);
@@ -2760,7 +3581,7 @@ pub(crate) mod tests {
 
         // but we don't need rollups for every seqno > the threshold
         state.seqno = SeqNo(9);
-        assert!(state.need_rollup(ROLLUP_THRESHOLD).is_none());
+        assert_none!(state.need_rollup(ROLLUP_THRESHOLD));
 
         // we only need a rollup each `ROLLUP_THRESHOLD` beyond our current seqno
         state.seqno = SeqNo(11);
@@ -2781,7 +3602,7 @@ pub(crate) mod tests {
             .is_continue());
 
         state.seqno = SeqNo(8);
-        assert!(state.need_rollup(ROLLUP_THRESHOLD).is_none());
+        assert_none!(state.need_rollup(ROLLUP_THRESHOLD));
         state.seqno = SeqNo(9);
         assert_eq!(
             state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
@@ -2825,7 +3646,7 @@ pub(crate) mod tests {
     fn state_inspect_serde_json() {
         const STATE_SERDE_JSON: &str = include_str!("state_serde.json");
         let mut runner = proptest::test_runner::TestRunner::deterministic();
-        let tree = any_state::<u64>(5..6).new_tree(&mut runner).unwrap();
+        let tree = any_state::<u64>(6..8).new_tree(&mut runner).unwrap();
         let json = serde_json::to_string_pretty(&tree.current()).unwrap();
         assert_eq!(
             json.trim(),
@@ -2863,15 +3684,15 @@ pub(crate) mod tests {
 
         // Start at v0.10.0.
         let res = open_and_write(&mut clients, Version::new(0, 10, 0), shard_id).await;
-        assert!(res.is_ok());
+        assert_ok!(res);
 
         // Upgrade to v0.11.0 is allowed.
         let res = open_and_write(&mut clients, Version::new(0, 11, 0), shard_id).await;
-        assert!(res.is_ok());
+        assert_ok!(res);
 
         // Downgrade to v0.10.0 is allowed.
         let res = open_and_write(&mut clients, Version::new(0, 10, 0), shard_id).await;
-        assert!(res.is_ok());
+        assert_ok!(res);
 
         // Downgrade to v0.9.0 is _NOT_ allowed.
         let res = open_and_write(&mut clients, Version::new(0, 9, 0), shard_id).await;

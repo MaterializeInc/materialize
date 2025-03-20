@@ -114,10 +114,12 @@ pub async fn enable(
 /// Disable a region in the profile organization.
 ///
 /// This command can take several minutes to complete.
-pub async fn disable(cx: RegionContext) -> Result<(), Error> {
+pub async fn disable(cx: RegionContext, hard: bool) -> Result<(), Error> {
     let loading_spinner = cx
         .output_formatter()
         .loading_spinner("Retrieving information...");
+
+    let cloud_provider = cx.get_cloud_provider().await?;
 
     // The `delete_region` method retries disabling a region,
     // has an inner timeout, and manages a `504` response.
@@ -127,11 +129,9 @@ pub async fn disable(cx: RegionContext) -> Result<(), Error> {
         .max_duration(Duration::from_secs(720))
         .clamp_backoff(Duration::from_secs(1))
         .retry_async(|_| async {
-            let cloud_provider = cx.get_cloud_provider().await?;
-
             loading_spinner.set_message("Disabling region...");
             cx.cloud_client()
-                .delete_region(cloud_provider.clone())
+                .delete_region(cloud_provider.clone(), hard)
                 .await?;
 
             loading_spinner.finish_with_message("Region disabled.");
@@ -153,7 +153,7 @@ pub async fn list(cx: RegionContext) -> Result<(), Error> {
         status: &'a str,
     }
 
-    let cloud_providers: Vec<CloudProvider> = cx.cloud_client().list_cloud_providers().await?;
+    let cloud_providers: Vec<CloudProvider> = cx.cloud_client().list_cloud_regions().await?;
     let mut regions: Vec<Region> = vec![];
 
     for cloud_provider in cloud_providers {

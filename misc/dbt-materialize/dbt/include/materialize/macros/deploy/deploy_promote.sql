@@ -13,7 +13,7 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro deploy_promote(wait=False, poll_interval=15, dry_run=False) %}
+{% macro deploy_promote(wait=False, poll_interval=15, lag_threshold='1s', dry_run=False) %}
 {#
   Performs atomic deployment of current dbt targets to production,
   based on the deployment configuration specified in the dbt_project.yml file.
@@ -24,11 +24,16 @@
 
   ## Arguments
   - `wait` (boolean, optional): Waits for the deployment to be fully hydrated.
-      Defaults to false. It is recommended you call `deploy_await` manually and
-      run additional validation checks before promoting a deployment to production.
-  - `poll_interval` (integer): The interval, in seconds, between each readiness check.
-  - `dry_run` (boolean, optional): When True, prints out the commands that would
-    be executed as part of the deployment workflow (without executing them).
+    Defaults to false. We recommend calling `deploy_await` manually and running
+    additional validation checks before promoting a deployment.
+  - `poll_interval` (integer): The interval, in seconds, between each readiness
+    check. Default: '15s'.
+  - `lag_threshold` (string): The maximum lag threshold, which determines when
+    all objects in the environment are considered hydrated and it''s safe to
+    perform the cutover step. Default: '1s'.
+  - `dry_run` (boolean, optional): When `true`, prints out the sequence of
+    commands dbt would execute without actually promoting the deployment, for
+    validation.
 
   ## Returns
   None: This macro performs deployment actions but does not return a value.
@@ -62,8 +67,9 @@
 
 {% for cluster in clusters %}
     {% set deploy_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=True) %}
-    {% if not cluster_exists(cluster) %}
-        {{ exceptions.raise_compiler_error("Production cluster " ~ cluster ~ " does not exist") }}
+    {% set origin_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=False) %}
+    {% if not cluster_exists(origin_cluster) %}
+        {{ exceptions.raise_compiler_error("Production cluster " ~ origin_cluster ~ " does not exist") }}
     {% endif %}
     {% if not cluster_exists(deploy_cluster) %}
         {{ exceptions.raise_compiler_error("Deployment cluster " ~ deploy_cluster ~ " does not exist") }}
@@ -71,7 +77,7 @@
 {% endfor %}
 
 {% if wait %}
-    {{ deploy_await(poll_interval) }}
+    {{ deploy_await(poll_interval, lag_threshold) }}
 {% endif %}
 
 {% if not dry_run %}
@@ -86,12 +92,14 @@
 
     {% for cluster in clusters %}
         {% set deploy_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=True) %}
-        {{ log("Swapping clusters " ~ adapter.generate_final_cluster_name(cluster) ~ " and " ~ deploy_cluster, info=True) }}
-        ALTER CLUSTER {{ adapter.quote(cluster) }} SWAP WITH {{ adapter.quote(deploy_cluster) }};
+        {% set origin_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=False) %}
+        {{ log("Swapping clusters " ~ origin_cluster ~ " and " ~ deploy_cluster, info=True) }}
+        ALTER CLUSTER {{ adapter.quote(origin_cluster) }} SWAP WITH {{ adapter.quote(deploy_cluster) }};
     {% endfor %}
 
     COMMIT;
     {%- endcall %}
+    {{ tag_deployed_schemas(schemas) }}
 {% else %}
     {{ log("Starting dry run...", info=True) }}
     {% for schema in schemas %}
@@ -102,8 +110,9 @@
 
     {% for cluster in clusters %}
         {% set deploy_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=True) %}
+        {% set origin_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=False) %}
         {{ log("DRY RUN: Swapping clusters " ~ adapter.generate_final_cluster_name(cluster) ~ " and " ~ deploy_cluster, info=True) }}
-        {{ log("DRY RUN: ALTER CLUSTER " ~ adapter.quote(cluster) ~ " SWAP WITH " ~ adapter.quote(deploy_cluster), info=True) }}
+        {{ log("DRY RUN: ALTER CLUSTER " ~ adapter.quote(origin_cluster) ~ " SWAP WITH " ~ adapter.quote(deploy_cluster), info=True) }}
     {% endfor %}
     {{ log("Dry run completed. The statements above were **not** executed against Materialize.", info=True) }}
 {% endif %}
@@ -194,4 +203,32 @@
     {% else %}
         {{ log("No sinks to process.", info=True) }}
     {% endif %}
+{% endmacro %}
+
+{% macro tag_deployed_schemas(schemas) %}
+    {% set commit_sha = adapter.get_git_commit_sha() %}
+
+    {% set result = run_query("SELECT current_user, now();") %}
+    {% if result is not none and result.rows|length > 0 %}
+        {% set db_user = result.columns[0][0] %}
+        {% set deploy_time = result.columns[0][1] %}
+    {% else %}
+        {% set db_user = "unknown" %}
+        {% set deploy_time = "unknown" %}
+    {% endif %}
+
+    {% set schema_comment %}
+        Deployment by {{ db_user }} on {{ deploy_time }}
+        {%- if commit_sha is not none and commit_sha != '' %}
+            | Commit SHA: {{ commit_sha }}
+        {%- endif %}
+    {% endset %}
+
+    {% for schema in schemas %}
+        {{ log("Tagging schema: " ~ schema, info=True) }}
+        {% set comment_sql %}
+            COMMENT ON SCHEMA {{ adapter.quote(schema) }} IS {{ dbt.string_literal(schema_comment) }}
+        {% endset %}
+        {% do run_query(comment_sql) %}
+    {% endfor %}
 {% endmacro %}

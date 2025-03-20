@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::iter;
+use std::sync::LazyLock;
 
 use itertools::Itertools;
 use maplit::btreeset;
@@ -17,9 +18,8 @@ use mz_expr::CollectionPlan;
 use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
-use mz_repr::GlobalId;
+use mz_repr::CatalogItemId;
 use mz_sql_parser::ast::{Ident, QualifiedReplica};
-use once_cell::sync::Lazy;
 use tracing::debug;
 
 use crate::catalog::{
@@ -95,17 +95,17 @@ fn filter_requirements(
 }
 
 // The default item types that most statements require USAGE privileges for.
-static DEFAULT_ITEM_USAGE: Lazy<BTreeSet<CatalogItemType>> = Lazy::new(|| {
+static DEFAULT_ITEM_USAGE: LazyLock<BTreeSet<CatalogItemType>> = LazyLock::new(|| {
     btreeset! {CatalogItemType::Secret, CatalogItemType::Connection}
 });
 // CREATE statements require USAGE privileges on the default item types and USAGE privileges on
 // Types.
-pub static CREATE_ITEM_USAGE: Lazy<BTreeSet<CatalogItemType>> = Lazy::new(|| {
+pub static CREATE_ITEM_USAGE: LazyLock<BTreeSet<CatalogItemType>> = LazyLock::new(|| {
     let mut items = DEFAULT_ITEM_USAGE.clone();
     items.insert(CatalogItemType::Type);
     items
 });
-pub static EMPTY_ITEM_USAGE: Lazy<BTreeSet<CatalogItemType>> = Lazy::new(BTreeSet::new);
+pub static EMPTY_ITEM_USAGE: LazyLock<BTreeSet<CatalogItemType>> = LazyLock::new(BTreeSet::new);
 
 /// Errors that can occur due to an unauthorized action.
 #[derive(Debug, thiserror::Error)]
@@ -306,13 +306,8 @@ pub fn check_usage(
 
     // Certain statements depend on objects that haven't been created yet, like sub-sources, so we
     // need to filter those out.
-    let existing_resolved_ids = resolved_ids
-        .0
-        .iter()
-        .filter(|id| catalog.try_get_item(id).is_some())
-        .cloned()
-        .collect();
-    let existing_resolved_ids = ResolvedIds(existing_resolved_ids);
+    let existing_resolved_ids =
+        resolved_ids.retain_items(|item_id| catalog.try_get_item(item_id).is_some());
 
     let required_privileges = generate_usage_privileges(
         catalog,
@@ -341,8 +336,8 @@ pub fn check_usage(
 /// Checks if a session is authorized to execute a plan. If not, an error is returned.
 pub fn check_plan(
     catalog: &impl SessionCatalog,
-    // Map from connection IDs to authenticated roles. The roles may have been dropped concurrently.
-    active_conns: &BTreeMap<u32, RoleId>,
+    // Function mapping a connection ID to an authenticated role. The roles may have been dropped concurrently.
+    active_conns: impl FnOnce(u32) -> Option<RoleId>,
     session: &dyn SessionMetadata,
     plan: &Plan,
     target_cluster_id: Option<ClusterId>,
@@ -382,7 +377,7 @@ pub fn is_rbac_enabled_for_session(
 fn generate_rbac_requirements(
     catalog: &impl SessionCatalog,
     plan: &Plan,
-    active_conns: &BTreeMap<u32, RoleId>,
+    active_conns: impl FnOnce(u32) -> Option<RoleId>,
     target_cluster_id: Option<ClusterId>,
     role_id: RoleId,
 ) -> RbacRequirements {
@@ -392,7 +387,6 @@ fn generate_rbac_requirements(
             if_not_exists: _,
             connection: _,
             validate: _,
-            public_key_set: _,
         }) => RbacRequirements {
             privileges: vec![(
                 SystemObjectId::Object(name.qualifiers.clone().into()),
@@ -439,9 +433,19 @@ fn generate_rbac_requirements(
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
+        Plan::CreateNetworkPolicy(plan::CreateNetworkPolicyPlan { .. }) => RbacRequirements {
+            privileges: vec![(
+                SystemObjectId::System,
+                AclMode::CREATE_NETWORK_POLICY,
+                role_id,
+            )],
+            item_usage: &CREATE_ITEM_USAGE,
+            ..Default::default()
+        },
         Plan::CreateCluster(plan::CreateClusterPlan {
             name: _,
             variant: _,
+            workload_class: _,
         }) => RbacRequirements {
             privileges: vec![(SystemObjectId::System, AclMode::CREATE_CLUSTER, role_id)],
             item_usage: &CREATE_ITEM_USAGE,
@@ -477,7 +481,8 @@ fn generate_rbac_requirements(
                 .iter()
                 .flat_map(
                     |plan::CreateSourcePlanBundle {
-                         source_id: _,
+                         item_id: _,
+                         global_id: _,
                          plan:
                              plan::CreateSourcePlan {
                                  name,
@@ -487,6 +492,7 @@ fn generate_rbac_requirements(
                                  in_cluster,
                              },
                          resolved_ids: _,
+                         available_source_references: _,
                      }| {
                         generate_required_source_privileges(
                             name,
@@ -526,11 +532,8 @@ fn generate_rbac_requirements(
                 AclMode::CREATE,
                 role_id,
             )];
-            privileges.extend_from_slice(&generate_read_privileges(
-                catalog,
-                iter::once(sink.from),
-                role_id,
-            ));
+            let items = iter::once(sink.from).map(|gid| catalog.resolve_item_id(&gid));
+            privileges.extend_from_slice(&generate_read_privileges(catalog, items, role_id));
             privileges.push((
                 SystemObjectId::Object(in_cluster.into()),
                 AclMode::CREATE,
@@ -600,12 +603,14 @@ fn generate_rbac_requirements(
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
-        Plan::CreateIndex(plan::CreateIndexPlan {
+        Plan::CreateContinualTask(plan::CreateContinualTaskPlan {
             name,
-            index,
-            if_not_exists: _,
+            placeholder_id: _,
+            desc: _,
+            input_id: _,
+            with_snapshot: _,
+            continual_task,
         }) => RbacRequirements {
-            ownership: vec![ObjectId::Item(index.on)],
             privileges: vec![
                 (
                     SystemObjectId::Object(name.qualifiers.clone().into()),
@@ -613,7 +618,7 @@ fn generate_rbac_requirements(
                     role_id,
                 ),
                 (
-                    SystemObjectId::Object(index.cluster_id.into()),
+                    SystemObjectId::Object(continual_task.cluster_id.into()),
                     AclMode::CREATE,
                     role_id,
                 ),
@@ -621,6 +626,30 @@ fn generate_rbac_requirements(
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
+        Plan::CreateIndex(plan::CreateIndexPlan {
+            name,
+            index,
+            if_not_exists: _,
+        }) => {
+            let index_on_item = catalog.resolve_item_id(&index.on);
+            RbacRequirements {
+                ownership: vec![ObjectId::Item(index_on_item)],
+                privileges: vec![
+                    (
+                        SystemObjectId::Object(name.qualifiers.clone().into()),
+                        AclMode::CREATE,
+                        role_id,
+                    ),
+                    (
+                        SystemObjectId::Object(index.cluster_id.into()),
+                        AclMode::CREATE,
+                        role_id,
+                    ),
+                ],
+                item_usage: &CREATE_ITEM_USAGE,
+                ..Default::default()
+            }
+        }
         Plan::CreateType(plan::CreateTypePlan { name, typ: _ }) => RbacRequirements {
             privileges: vec![(
                 SystemObjectId::Object(name.qualifiers.clone().into()),
@@ -682,7 +711,10 @@ fn generate_rbac_requirements(
                                 role_id,
                             ))
                         }
-                        ObjectId::Cluster(_) | ObjectId::Database(_) | ObjectId::Role(_) => None,
+                        ObjectId::Cluster(_)
+                        | ObjectId::Database(_)
+                        | ObjectId::Role(_)
+                        | ObjectId::NetworkPolicy(_) => None,
                     })
                     .collect()
             };
@@ -702,15 +734,31 @@ fn generate_rbac_requirements(
             role_membership: role_ids.into_iter().cloned().collect(),
             ..Default::default()
         },
-        Plan::ShowCreate(plan::ShowCreatePlan { id, row: _ }) => RbacRequirements {
-            privileges: vec![(
-                SystemObjectId::Object(catalog.get_item(id).name().qualifiers.clone().into()),
-                AclMode::USAGE,
-                role_id,
-            )],
-            item_usage: &EMPTY_ITEM_USAGE,
-            ..Default::default()
-        },
+        Plan::ShowCreate(plan::ShowCreatePlan { id, row: _ }) => {
+            let container_id = match id {
+                ObjectId::Item(id) => Some(SystemObjectId::Object(
+                    catalog.get_item(id).name().qualifiers.clone().into(),
+                )),
+                ObjectId::Schema((database_id, _schema_id)) => match database_id {
+                    ResolvedDatabaseSpecifier::Ambient => None,
+                    ResolvedDatabaseSpecifier::Id(id) => Some(SystemObjectId::Object(id.into())),
+                },
+                ObjectId::Cluster(_)
+                | ObjectId::ClusterReplica(_)
+                | ObjectId::Database(_)
+                | ObjectId::Role(_)
+                | ObjectId::NetworkPolicy(_) => None,
+            };
+            let privileges = match container_id {
+                Some(id) => vec![(id, AclMode::USAGE, role_id)],
+                None => Vec::new(),
+            };
+            RbacRequirements {
+                privileges,
+                item_usage: &EMPTY_ITEM_USAGE,
+                ..Default::default()
+            }
+        }
         Plan::ShowColumns(plan::ShowColumnsPlan {
             id,
             select_plan,
@@ -740,12 +788,16 @@ fn generate_rbac_requirements(
         }
         Plan::Select(plan::SelectPlan {
             source,
+            select: _,
             when: _,
             finishing: _,
             copy_to: _,
         }) => {
-            let mut privileges =
-                generate_read_privileges(catalog, source.depends_on().into_iter(), role_id);
+            let items = source
+                .depends_on()
+                .into_iter()
+                .map(|gid| catalog.resolve_item_id(&gid));
+            let mut privileges = generate_read_privileges(catalog, items, role_id);
             if let Some(privilege) = generate_cluster_usage_privileges(
                 source.as_const().is_some(),
                 target_cluster_id,
@@ -767,8 +819,11 @@ fn generate_rbac_requirements(
             emit_progress: _,
             output: _,
         }) => {
-            let mut privileges =
-                generate_read_privileges(catalog, from.depends_on().into_iter(), role_id);
+            let items = from
+                .depends_on()
+                .into_iter()
+                .map(|gid| catalog.resolve_item_id(&gid));
+            let mut privileges = generate_read_privileges(catalog, items, role_id);
             if let Some(cluster_id) = target_cluster_id {
                 privileges.push((
                     SystemObjectId::Object(cluster_id.into()),
@@ -783,8 +838,10 @@ fn generate_rbac_requirements(
         }
         Plan::CopyFrom(plan::CopyFromPlan {
             id,
+            source: _,
             columns: _,
             params: _,
+            filter: _,
         }) => RbacRequirements {
             privileges: vec![
                 (
@@ -805,11 +862,12 @@ fn generate_rbac_requirements(
             format: _,
             max_file_size: _,
         }) => {
-            let mut privileges = generate_read_privileges(
-                catalog,
-                select_plan.source.depends_on().into_iter(),
-                role_id,
-            );
+            let items = select_plan
+                .source
+                .depends_on()
+                .into_iter()
+                .map(|gid| catalog.resolve_item_id(&gid));
+            let mut privileges = generate_read_privileges(catalog, items, role_id);
             if let Some(cluster_id) = target_cluster_id {
                 privileges.push((
                     SystemObjectId::Object(cluster_id.into()),
@@ -844,7 +902,7 @@ fn generate_rbac_requirements(
                     .depends_on()
                     .into_iter()
                     .map(|id| {
-                        let item = catalog.get_item(&id);
+                        let item = catalog.get_item_by_global_id(&id);
                         let schema_id: ObjectId = item.name().qualifiers.clone().into();
                         (SystemObjectId::Object(schema_id), AclMode::USAGE, role_id)
                     })
@@ -864,7 +922,7 @@ fn generate_rbac_requirements(
         Plan::ExplainSinkSchema(plan::ExplainSinkSchemaPlan { sink_from, .. }) => {
             RbacRequirements {
                 privileges: {
-                    let item = catalog.get_item(sink_from);
+                    let item = catalog.get_item_by_global_id(sink_from);
                     let schema_id: ObjectId = item.name().qualifiers.clone().into();
                     vec![(SystemObjectId::Object(schema_id), AclMode::USAGE, role_id)]
                 },
@@ -881,7 +939,7 @@ fn generate_rbac_requirements(
                 .depends_on()
                 .into_iter()
                 .map(|id| {
-                    let item = catalog.get_item(&id);
+                    let item = catalog.get_item_by_global_id(&id);
                     let schema_id: ObjectId = item.name().qualifiers.clone().into();
                     (SystemObjectId::Object(schema_id), AclMode::USAGE, role_id)
                 })
@@ -914,11 +972,12 @@ fn generate_rbac_requirements(
                 seen.insert((id.into(), role_id));
             }
 
+            let items = values
+                .depends_on()
+                .into_iter()
+                .map(|gid| catalog.resolve_item_id(&gid));
             privileges.extend_from_slice(&generate_read_privileges_inner(
-                catalog,
-                values.depends_on().into_iter(),
-                role_id,
-                &mut seen,
+                catalog, items, role_id, &mut seen,
             ));
 
             if let Some(privilege) = generate_cluster_usage_privileges(
@@ -947,6 +1006,7 @@ fn generate_rbac_requirements(
             id,
             name: _,
             options: _,
+            strategy: _,
         }) => RbacRequirements {
             ownership: vec![ObjectId::Cluster(*id)],
             item_usage: &CREATE_ITEM_USAGE,
@@ -976,25 +1036,31 @@ fn generate_rbac_requirements(
             ownership: vec![ObjectId::Item(*id)],
             ..Default::default()
         },
-        Plan::AlterSource(plan::AlterSourcePlan { id, action: _ }) => RbacRequirements {
-            ownership: vec![ObjectId::Item(*id)],
+        Plan::AlterSource(plan::AlterSourcePlan {
+            item_id,
+            ingestion_id: _,
+            action: _,
+        }) => RbacRequirements {
+            ownership: vec![ObjectId::Item(*item_id)],
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::AlterSink(plan::AlterSinkPlan {
-            id,
+            item_id,
+            global_id: _,
             sink,
             with_snapshot: _,
             in_cluster,
         }) => {
-            let mut privileges = generate_read_privileges(catalog, iter::once(sink.from), role_id);
+            let items = iter::once(sink.from).map(|gid| catalog.resolve_item_id(&gid));
+            let mut privileges = generate_read_privileges(catalog, items, role_id);
             privileges.push((
                 SystemObjectId::Object(in_cluster.into()),
                 AclMode::CREATE,
                 role_id,
             ));
             RbacRequirements {
-                ownership: vec![ObjectId::Item(*id)],
+                ownership: vec![ObjectId::Item(*item_id)],
                 privileges,
                 item_usage: &CREATE_ITEM_USAGE,
                 ..Default::default()
@@ -1034,16 +1100,6 @@ fn generate_rbac_requirements(
             object_type: _,
         }) => RbacRequirements {
             ownership: vec![ObjectId::Item(*id)],
-            ..Default::default()
-        },
-        Plan::AlterItemSwap(plan::AlterItemSwapPlan {
-            id_a,
-            id_b,
-            full_name_a: _,
-            full_name_b: _,
-            object_type: _,
-        }) => RbacRequirements {
-            ownership: vec![ObjectId::Item(*id_a), ObjectId::Item(*id_b)],
             ..Default::default()
         },
         Plan::AlterSchemaRename(plan::AlterSchemaRenamePlan {
@@ -1149,7 +1205,10 @@ fn generate_rbac_requirements(
                         role_id,
                     )]
                 }
-                ObjectId::Cluster(_) | ObjectId::Database(_) | ObjectId::Role(_) => Vec::new(),
+                ObjectId::Cluster(_)
+                | ObjectId::Database(_)
+                | ObjectId::Role(_)
+                | ObjectId::NetworkPolicy(_) => Vec::new(),
             };
             RbacRequirements {
                 role_membership: BTreeSet::from([*new_owner]),
@@ -1158,6 +1217,16 @@ fn generate_rbac_requirements(
                 ..Default::default()
             }
         }
+        Plan::AlterTableAddColumn(plan::AlterTablePlan { relation_id, .. }) => RbacRequirements {
+            ownership: vec![ObjectId::Item(*relation_id)],
+            item_usage: &CREATE_ITEM_USAGE,
+            ..Default::default()
+        },
+        Plan::AlterNetworkPolicy(plan::AlterNetworkPolicyPlan { id, .. }) => RbacRequirements {
+            ownership: vec![ObjectId::NetworkPolicy(*id)],
+            item_usage: &CREATE_ITEM_USAGE,
+            ..Default::default()
+        },
         Plan::ReadThenWrite(plan::ReadThenWritePlan {
             id,
             selection,
@@ -1199,11 +1268,12 @@ fn generate_rbac_requirements(
             //  PostgreSQL doesn't always do this.
             //  As a concrete example, we require SELECT and UPDATE privileges to execute
             //  `UPDATE t SET a = 42;`, while PostgreSQL only requires UPDATE privileges.
+            let items = selection
+                .depends_on()
+                .into_iter()
+                .map(|gid| catalog.resolve_item_id(&gid));
             privileges.extend_from_slice(&generate_read_privileges_inner(
-                catalog,
-                selection.depends_on().into_iter(),
-                role_id,
-                &mut seen,
+                catalog, items, role_id, &mut seen,
             ));
 
             if let Some(privilege) = generate_cluster_usage_privileges(
@@ -1268,7 +1338,10 @@ fn generate_rbac_requirements(
                                 role_id,
                             ))
                         }
-                        ObjectId::Cluster(_) | ObjectId::Database(_) | ObjectId::Role(_) => {}
+                        ObjectId::Cluster(_)
+                        | ObjectId::Database(_)
+                        | ObjectId::Role(_)
+                        | ObjectId::NetworkPolicy(_) => {}
                     },
                     SystemObjectId::System => {}
                 }
@@ -1350,10 +1423,9 @@ fn generate_rbac_requirements(
         Plan::SideEffectingFunc(func) => {
             let role_membership = match func {
                 SideEffectingFunc::PgCancelBackend { connection_id } => {
-                    match active_conns.get(connection_id) {
-                        Some(authenticated_role) => BTreeSet::from([*authenticated_role]),
-                        None => BTreeSet::new(),
-                    }
+                    active_conns(*connection_id)
+                        .map(|x| [x].into())
+                        .unwrap_or_default()
                 }
             };
             RbacRequirements {
@@ -1472,6 +1544,10 @@ fn ownership_err(
                     let name = catalog.resolve_full_name(item.name());
                     (item.item_type().into(), name.to_string())
                 }
+                ObjectId::NetworkPolicy(id) => (
+                    ObjectType::NetworkPolicy,
+                    catalog.get_network_policy(&id).name().to_string(),
+                ),
                 ObjectId::Role(_) => unreachable!("roles have no owner"),
             })
             .collect();
@@ -1517,7 +1593,7 @@ fn generate_required_source_privileges(
 /// For more details see: <https://www.postgresql.org/docs/15/rules-privileges.html>
 fn generate_read_privileges(
     catalog: &impl SessionCatalog,
-    ids: impl Iterator<Item = GlobalId>,
+    ids: impl Iterator<Item = CatalogItemId>,
     role_id: RoleId,
 ) -> Vec<(SystemObjectId, AclMode, RoleId)> {
     generate_read_privileges_inner(catalog, ids, role_id, &mut BTreeSet::new())
@@ -1525,7 +1601,7 @@ fn generate_read_privileges(
 
 fn generate_read_privileges_inner(
     catalog: &impl SessionCatalog,
-    ids: impl Iterator<Item = GlobalId>,
+    ids: impl Iterator<Item = CatalogItemId>,
     role_id: RoleId,
     seen: &mut BTreeSet<(ObjectId, RoleId)>,
 ) -> Vec<(SystemObjectId, AclMode, RoleId)> {
@@ -1540,9 +1616,11 @@ fn generate_read_privileges_inner(
                 privileges.push((SystemObjectId::Object(schema_id), AclMode::USAGE, role_id))
             }
             match item.item_type() {
-                CatalogItemType::View | CatalogItemType::MaterializedView => {
+                CatalogItemType::View
+                | CatalogItemType::MaterializedView
+                | CatalogItemType::ContinualTask => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::SELECT, role_id));
-                    views.push((item.references().0.clone().into_iter(), item.owner_id()));
+                    views.push((item.references().items().copied(), item.owner_id()));
                 }
                 CatalogItemType::Table | CatalogItemType::Source => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::SELECT, role_id));
@@ -1571,8 +1649,7 @@ fn generate_usage_privileges(
     item_types: &BTreeSet<CatalogItemType>,
 ) -> BTreeSet<(SystemObjectId, AclMode, RoleId)> {
     // Use a `BTreeSet` to remove duplicate privileges.
-    ids.0
-        .iter()
+    ids.items()
         .filter_map(move |id| {
             let item = catalog.get_item(id);
             if item_types.contains(&item.item_type()) {
@@ -1651,7 +1728,9 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
     const USAGE_CREATE_ACL_MODE: AclMode = AclMode::USAGE.union(AclMode::CREATE);
     const ALL_SYSTEM_PRIVILEGES: AclMode = AclMode::CREATE_ROLE
         .union(AclMode::CREATE_DB)
-        .union(AclMode::CREATE_CLUSTER);
+        .union(AclMode::CREATE_CLUSTER)
+        .union(AclMode::CREATE_NETWORK_POLICY);
+
     const EMPTY_ACL_MODE: AclMode = AclMode::empty();
     match object_type {
         SystemObjectType::Object(ObjectType::Table) => TABLE_ACL_MODE,
@@ -1665,10 +1744,12 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
         SystemObjectType::Object(ObjectType::Cluster) => USAGE_CREATE_ACL_MODE,
         SystemObjectType::Object(ObjectType::ClusterReplica) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::Secret) => AclMode::USAGE,
+        SystemObjectType::Object(ObjectType::NetworkPolicy) => AclMode::USAGE,
         SystemObjectType::Object(ObjectType::Connection) => AclMode::USAGE,
         SystemObjectType::Object(ObjectType::Database) => USAGE_CREATE_ACL_MODE,
         SystemObjectType::Object(ObjectType::Schema) => USAGE_CREATE_ACL_MODE,
         SystemObjectType::Object(ObjectType::Func) => EMPTY_ACL_MODE,
+        SystemObjectType::Object(ObjectType::ContinualTask) => AclMode::SELECT,
         SystemObjectType::System => ALL_SYSTEM_PRIVILEGES,
     }
 }
@@ -1686,7 +1767,8 @@ const fn default_builtin_object_acl_mode(object_type: ObjectType) -> AclMode {
         ObjectType::Table
         | ObjectType::View
         | ObjectType::MaterializedView
-        | ObjectType::Source => AclMode::SELECT,
+        | ObjectType::Source
+        | ObjectType::ContinualTask => AclMode::SELECT,
         ObjectType::Type | ObjectType::Schema => AclMode::USAGE,
         ObjectType::Sink
         | ObjectType::Index
@@ -1696,7 +1778,8 @@ const fn default_builtin_object_acl_mode(object_type: ObjectType) -> AclMode {
         | ObjectType::Secret
         | ObjectType::Connection
         | ObjectType::Database
-        | ObjectType::Func => AclMode::empty(),
+        | ObjectType::Func
+        | ObjectType::NetworkPolicy => AclMode::empty(),
     }
 }
 

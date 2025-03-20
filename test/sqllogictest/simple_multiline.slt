@@ -13,7 +13,7 @@ CREATE MATERIALIZED VIEW mv AS SELECT 1;
 COMPLETE 0
 
 simple multiline,conn=materialize,user=materialize
-EXPLAIN MATERIALIZED VIEW mv;
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
   Constant

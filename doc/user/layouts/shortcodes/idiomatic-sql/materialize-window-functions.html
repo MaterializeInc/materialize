@@ -1,0 +1,19 @@
+For [window functions](/sql/functions/#window-functions), when an input record
+in a partition (as determined by the `PARTITION BY` clause of your window
+function) is added/removed/changed, Materialize recomputes the results for the
+entire window partition. This means that when a new batch of input data arrives
+(that is, every second), **the amount of computation performed is proportional
+to the total size of the touched partitions**.
+
+For example, assume that in a given second, 20 input records change, and these
+records belong to **10** different partitions, where the average size of each
+partition is **100**. Then, amount of work to perform is proportional to
+computing the window function results for **10\*100=1000** rows.
+
+As a rule of thumb, if the total size of all touched window partitions is at
+most 1000000 rows per second, then the system should be able to keep up with the
+input data as it arrives. However, if your use case has higher performance
+requirements, consider rewriting your query to not use window functions. If your
+query cannot be rewritten without the window functions and the performance of
+window functions is insufficient for your use case, please [contact our
+team](/support/).

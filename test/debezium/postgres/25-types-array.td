@@ -25,11 +25,13 @@ $ schema-registry-wait topic=postgres.public.array_type
 
 > CREATE SOURCE array_type
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.array_type')
+
+> CREATE TABLE array_type_tbl FROM SOURCE array_type (REFERENCE "postgres.public.array_type")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
 # Cast to `text` to work around TD's lack of support for PG arrays
-> SELECT f1::text FROM array_type
+> SELECT f1::text FROM array_type_tbl
 f1
 ---
 {foo,NULL}

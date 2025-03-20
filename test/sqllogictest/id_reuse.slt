@@ -26,7 +26,9 @@ u3 public
 s4 mz_internal
 s5 information_schema
 s6 mz_unsafe
-u7 foo
+s7 mz_catalog_unstable
+s8 mz_introspection
+u9 foo
 
 statement ok
 DROP schema foo
@@ -46,7 +48,9 @@ u3 public
 s4 mz_internal
 s5 information_schema
 s6 mz_unsafe
-u8 bar
+s7 mz_catalog_unstable
+s8 mz_introspection
+u10 bar
 
 statement ok
 CREATE DATABASE foo
@@ -79,6 +83,7 @@ g1  mz_monitor
 g2  mz_monitor_redacted
 s1  mz_system
 s2  mz_support
+s3  mz_analytics
 u1  materialize
 u2  foo
 
@@ -98,6 +103,7 @@ g1  mz_monitor
 g2  mz_monitor_redacted
 s1  mz_system
 s2  mz_support
+s3  mz_analytics
 u1  materialize
 u3  bar
 
@@ -111,6 +117,7 @@ s1  mz_system
 s2  mz_catalog_server
 s3  mz_probe
 s4  mz_support
+s5  mz_analytics
 u1  quickstart
 u2  foo
 
@@ -127,5 +134,6 @@ s1  mz_system
 s2  mz_catalog_server
 s3  mz_probe
 s4  mz_support
+s5  mz_analytics
 u1  quickstart
 u3  bar

@@ -7,15 +7,20 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Test toxiproxy disruptions in the persist pubsub connection.
+"""
+
 from collections.abc import Callable
 from dataclasses import dataclass
 from textwrap import dedent
 
-from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
+from materialize.util import selected_by_name
 
 SERVICES = [
     Materialized(options=["--persist-pubsub-url=http://toxiproxy:6879"]),
@@ -67,10 +72,13 @@ disruptions = [
 ]
 
 
-def workflow_default(c: Composition) -> None:
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Test that the system is able to make progress in the face of PubSub disruptions."""
+    parser.add_argument("disruptions", nargs="*", default=[d.name for d in disruptions])
 
-    for disruption in disruptions:
+    args = parser.parse_args()
+
+    for disruption in selected_by_name(args.disruptions, disruptions):
         c.down(destroy_volumes=True)
         c.up("redpanda", "materialized")
         c.up("testdrive", persistent=True)
@@ -97,6 +105,8 @@ def workflow_default(c: Composition) -> None:
                 > CREATE SOURCE s1
                   FROM KAFKA CONNECTION kafka_conn
                   (TOPIC 'testdrive-pubsub-disruption-${testdrive.seed}')
+
+                > CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-pubsub-disruption-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
@@ -108,7 +118,7 @@ def workflow_default(c: Composition) -> None:
                 > CREATE MATERIALIZED VIEW v2 AS
                   SELECT COUNT(*) AS c1, COUNT(DISTINCT f1) AS c2, COUNT(DISTINCT f2) AS c3,
                          MIN(f1) AS min1, MIN(f2) AS min2, MAX(f1) AS max1, MAX(f2) AS max2
-                  FROM s1;
+                  FROM s1_tbl;
 
                 > UPDATE t1 SET f2 = 2;
                 $ kafka-ingest format=avro key-format=avro topic=pubsub-disruption schema=${schema} key-schema=${keyschema} start-iteration=1 repeat=1000000
@@ -142,7 +152,7 @@ def workflow_default(c: Composition) -> None:
                 > CREATE MATERIALIZED VIEW v4 AS
                   SELECT COUNT(*) AS c1, COUNT(DISTINCT f1) AS c2, COUNT(DISTINCT f2) AS c3,
                          MIN(f1) AS min1, MIN(f2) AS min2, MAX(f1) AS max1, MAX(f2) AS max2
-                  FROM s1;
+                  FROM s1_tbl;
 
                 """
             )

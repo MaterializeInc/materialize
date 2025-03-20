@@ -23,6 +23,7 @@ copyright_files=$(grep -vE \
     -e '(^|/)LICENSE$' \
     -e '(^|/)\.(docker|git|vscode|bazel)ignore$' \
     -e '(^|/)\.bazelrc$' \
+    -e '(^|/)\.bazelversion$' \
     -e '(^|/)\.gitattributes$' \
     -e '(^|/)\.github/(dependabot\.yml|CODEOWNERS)$' \
     -e '(^|/)\.gitmodules$' \
@@ -46,10 +47,6 @@ copyright_files=$(grep -vE \
     -e '^ci/builder/(ssh_known_hosts|crosstool-.+\.defconfig)$' \
     -e '^ci/www/public/_redirects$' \
     -e '^ci/test/lint-deps/' \
-    -e '^misc/cargo-vet/config.toml$' \
-    -e '^misc/cargo-vet/audits.toml$' \
-    -e '^misc/cargo-vet/imports.toml$' \
-    -e '^misc/cargo-vet/imports.lock$' \
     -e '^misc/completions/.*' \
     -e '^misc/python/MANIFEST\.in' \
     -e '^test/chbench/chbench' \
@@ -63,6 +60,7 @@ copyright_files=$(grep -vE \
     -e '^src/catalog/tests/snapshots/.*\.snap' \
     -e '^src/catalog/src/durable/upgrade/snapshots/.*' \
     -e '^src/catalog/src/durable/upgrade/persist/snapshots/.*\.snap' \
+    -e '^src/license-keys/src/license_keys/.*\.pub' \
     -e '^src/storage-types/src/snapshots/.*' \
     -e '^src/repr/src/adt/snapshots/.*' \
     -e '^src/environmentd/tests/testdata/timezones/.*\.csv' \

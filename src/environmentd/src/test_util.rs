@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::Duration;
 use std::{env, fs, iter};
 
@@ -24,7 +25,15 @@ use futures::Future;
 use headers::{Header, HeaderMapExt};
 use hyper::http::header::HeaderMap;
 use mz_adapter::TimestampExplanation;
+use mz_adapter_types::bootstrap_builtin_cluster_config::{
+    BootstrapBuiltinClusterConfig, ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+};
+
+use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_controller::ControllerConfig;
+use mz_dyncfg::ConfigUpdates;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::metrics::MetricsRegistry;
@@ -36,16 +45,14 @@ use mz_ore::tracing::{
     TracingHandle,
 };
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::cfg::{PersistConfig, CONSENSUS_CONNECTION_POOL_MAX_SIZE};
 use mz_persist_client::rpc::PersistGrpcPubSubServer;
 use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
 use mz_server_core::{ReloadTrigger, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::TxnWalTablesImpl;
 use mz_tracing::CloneableEnvFilter;
-use once_cell::sync::Lazy;
 use openssl::asn1::Asn1Time;
 use openssl::error::ErrorStack;
 use openssl::hash::MessageDigest;
@@ -76,8 +83,8 @@ use url::Url;
 
 use crate::{CatalogConfig, FronteggAuthentication, WebSocketAuth, WebSocketResponse};
 
-pub static KAFKA_ADDRS: Lazy<String> =
-    Lazy::new(|| env::var("KAFKA_ADDRS").unwrap_or_else(|_| "localhost:9092".into()));
+pub static KAFKA_ADDRS: LazyLock<String> =
+    LazyLock::new(|| env::var("KAFKA_ADDRS").unwrap_or_else(|_| "localhost:9092".into()));
 
 /// Entry point for creating and configuring an `environmentd` test harness.
 #[derive(Clone)]
@@ -92,10 +99,12 @@ pub struct TestHarness {
     storage_usage_collection_interval: Duration,
     storage_usage_retention_period: Option<Duration>,
     default_cluster_replica_size: String,
-    builtin_system_cluster_replica_size: String,
-    builtin_catalog_server_cluster_replica_size: String,
-    builtin_probe_cluster_replica_size: String,
-    builtin_support_cluster_replica_size: String,
+    builtin_system_cluster_config: BootstrapBuiltinClusterConfig,
+    builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig,
+    builtin_probe_cluster_config: BootstrapBuiltinClusterConfig,
+    builtin_support_cluster_config: BootstrapBuiltinClusterConfig,
+    builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig,
+
     propagate_crashes: bool,
     enable_tracing: bool,
     // This is currently unrelated to enable_tracing, and is used only to disable orchestrator
@@ -124,10 +133,26 @@ impl Default for TestHarness {
             storage_usage_collection_interval: Duration::from_secs(3600),
             storage_usage_retention_period: None,
             default_cluster_replica_size: "1".to_string(),
-            builtin_system_cluster_replica_size: "1".to_string(),
-            builtin_catalog_server_cluster_replica_size: "1".to_string(),
-            builtin_probe_cluster_replica_size: "1".to_string(),
-            builtin_support_cluster_replica_size: "1".to_string(),
+            builtin_system_cluster_config: BootstrapBuiltinClusterConfig {
+                size: "1".to_string(),
+                replication_factor: SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
+            builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig {
+                size: "1".to_string(),
+                replication_factor: CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
+            builtin_probe_cluster_config: BootstrapBuiltinClusterConfig {
+                size: "1".to_string(),
+                replication_factor: PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
+            builtin_support_cluster_config: BootstrapBuiltinClusterConfig {
+                size: "1".to_string(),
+                replication_factor: SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
+            builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig {
+                size: "1".to_string(),
+                replication_factor: ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
             propagate_crashes: false,
             enable_tracing: false,
             bootstrap_role: Some("materialize".into()),
@@ -183,11 +208,12 @@ impl TestHarness {
 
     /// Starts a runtime and returns a [`TestServerWithRuntime`].
     pub fn start_blocking(self) -> TestServerWithRuntime {
-        let runtime = Runtime::new().expect("failed to spawn runtime for test");
-        let runtime = Arc::new(runtime);
-        let server = runtime.block_on(self.start());
-
-        TestServerWithRuntime { runtime, server }
+        stacker::grow(mz_ore::stack::STACK_SIZE, || {
+            let runtime = Runtime::new().expect("failed to spawn runtime for test");
+            let runtime = Arc::new(runtime);
+            let server = runtime.block_on(self.start());
+            TestServerWithRuntime { runtime, server }
+        })
     }
 
     pub fn data_directory(mut self, data_directory: impl Into<PathBuf>) -> Self {
@@ -251,14 +277,24 @@ impl TestHarness {
         mut self,
         builtin_system_cluster_replica_size: String,
     ) -> Self {
-        self.builtin_system_cluster_replica_size = builtin_system_cluster_replica_size;
+        self.builtin_system_cluster_config.size = builtin_system_cluster_replica_size;
         self
     }
+
+    pub fn with_builtin_system_cluster_replication_factor(
+        mut self,
+        builtin_system_cluster_replication_factor: u32,
+    ) -> Self {
+        self.builtin_system_cluster_config.replication_factor =
+            builtin_system_cluster_replication_factor;
+        self
+    }
+
     pub fn with_builtin_catalog_server_cluster_replica_size(
         mut self,
         builtin_catalog_server_cluster_replica_size: String,
     ) -> Self {
-        self.builtin_catalog_server_cluster_replica_size =
+        self.builtin_catalog_server_cluster_config.size =
             builtin_catalog_server_cluster_replica_size;
         self
     }
@@ -361,8 +397,12 @@ impl Listeners {
                 ))
                 .await?;
             (
-                format!("{cockroach_url}?options=--search_path=consensus_{seed}"),
-                format!("{cockroach_url}?options=--search_path=tsoracle_{seed}"),
+                format!("{cockroach_url}?options=--search_path=consensus_{seed}")
+                    .parse()
+                    .expect("invalid consensus URI"),
+                format!("{cockroach_url}?options=--search_path=tsoracle_{seed}")
+                    .parse()
+                    .expect("invalid timestamp oracle URI"),
             )
         };
         let metrics_registry = config.metrics_registry.unwrap_or_else(MetricsRegistry::new);
@@ -386,15 +426,16 @@ impl Listeners {
         // Messing with the clock causes persist to expire leases, causing hangs and
         // panics. Is it possible/desirable to put this back somehow?
         let persist_now = SYSTEM_TIME.clone();
-        let mut persist_cfg = PersistConfig::new(
-            &crate::BUILD_INFO,
-            persist_now.clone(),
-            mz_dyncfgs::all_dyncfgs(),
-        );
-        persist_cfg.build_version = config.code_version;
+        let dyncfgs = mz_dyncfgs::all_dyncfgs();
+
+        let mut updates = ConfigUpdates::default();
         // Tune down the number of connections to make this all work a little easier
         // with local postgres.
-        persist_cfg.consensus_connection_pool_max_size = 1;
+        updates.add(&CONSENSUS_CONNECTION_POOL_MAX_SIZE, 1);
+        updates.apply(&dyncfgs);
+
+        let mut persist_cfg = PersistConfig::new(&crate::BUILD_INFO, persist_now.clone(), dyncfgs);
+        persist_cfg.build_version = config.code_version;
         // Stress persist more by writing rollups frequently
         persist_cfg.set_rollup_threshold(5);
 
@@ -444,12 +485,10 @@ impl Listeners {
                     batch_scheduled_delay: Duration::from_millis(5000),
                     max_export_timeout: Duration::from_secs(30),
                 }),
-                #[cfg(feature = "tokio-console")]
                 tokio_console: None,
                 sentry: None,
                 build_version: crate::BUILD_INFO.version,
                 build_sha: crate::BUILD_INFO.sha,
-                build_time: crate::BUILD_INFO.time,
                 registry: metrics_registry.clone(),
                 capture: config.capture,
             };
@@ -476,7 +515,9 @@ impl Listeners {
                     init_container_image: None,
                     deploy_generation: config.deploy_generation,
                     persist_location: PersistLocation {
-                        blob_uri: format!("file://{}/persist/blob", data_directory.display()),
+                        blob_uri: format!("file://{}/persist/blob", data_directory.display())
+                            .parse()
+                            .expect("invalid blob URI"),
                         consensus_uri,
                     },
                     persist_clients,
@@ -488,6 +529,7 @@ impl Listeners {
                         secrets_reader_local_file_dir: Some(data_directory.join("secrets")),
                         secrets_reader_kubernetes_context: None,
                         secrets_reader_aws_prefix: None,
+                        secrets_reader_name_prefix: None,
                     },
                     connection_context,
                 },
@@ -501,23 +543,22 @@ impl Listeners {
                 now: config.now,
                 environment_id: config.environment_id,
                 cors_allowed_origin: AllowOrigin::list([]),
-                cluster_replica_sizes: Default::default(),
+                cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
                 bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
-                bootstrap_builtin_system_cluster_replica_size: config
-                    .builtin_system_cluster_replica_size,
-                bootstrap_builtin_catalog_server_cluster_replica_size: config
-                    .builtin_catalog_server_cluster_replica_size,
-                bootstrap_builtin_probe_cluster_replica_size: config
-                    .builtin_probe_cluster_replica_size,
-                bootstrap_builtin_support_cluster_replica_size: config
-                    .builtin_support_cluster_replica_size,
+                bootstrap_builtin_system_cluster_config: config.builtin_system_cluster_config,
+                bootstrap_builtin_catalog_server_cluster_config: config
+                    .builtin_catalog_server_cluster_config,
+                bootstrap_builtin_probe_cluster_config: config.builtin_probe_cluster_config,
+                bootstrap_builtin_support_cluster_config: config.builtin_support_cluster_config,
+                bootstrap_builtin_analytics_cluster_config: config.builtin_analytics_cluster_config,
                 system_parameter_defaults: config.system_parameter_defaults,
                 availability_zones: Default::default(),
                 tracing_handle,
                 storage_usage_collection_interval: config.storage_usage_collection_interval,
                 storage_usage_retention_period: config.storage_usage_retention_period,
                 segment_api_key: None,
-                egress_ips: vec![],
+                segment_client_side: false,
+                egress_addresses: vec![],
                 aws_account_id: None,
                 aws_privatelink_availability_zones: None,
                 launchdarkly_sdk_key: None,
@@ -527,9 +568,8 @@ impl Listeners {
                 bootstrap_role: config.bootstrap_role,
                 http_host_name: Some(host_name),
                 internal_console_redirect_url: config.internal_console_redirect_url,
-                txn_wal_tables_cli: Some(TxnWalTablesImpl::Lazy),
                 tls_reload_certs,
-                read_only_controllers: false,
+                helm_chart_version: None,
             })
             .await?;
 
@@ -714,7 +754,7 @@ impl<'s, T, H> ConnectBuilder<'s, T, H> {
     ///
     /// For example, this will change the port we connect to, and the user we connect as.
     pub fn balancer(mut self) -> Self {
-        self.port = self.server.inner.balancer_sql_local_addr().port();
+        self.port = self.server.inner.sql_local_addr().port();
         self.pg_config.user("materialize");
         self
     }
@@ -918,7 +958,7 @@ impl TestServerWithRuntime {
     /// Return a [`postgres::Config`] for connecting to the __balancer__ SQL port of the running
     /// `environmentd` server.
     pub fn pg_config_balancer(&self) -> postgres::Config {
-        let local_addr = self.server.inner.balancer_sql_local_addr();
+        let local_addr = self.server.inner.sql_local_addr();
         let mut config = postgres::Config::new();
         config
             .host(&Ipv4Addr::LOCALHOST.to_string())
@@ -1049,6 +1089,7 @@ pub async fn get_explain_timestamp_determination(
 /// WARNING: If multiple tests use this, and the tests are run in parallel, then make sure the test
 /// use different postgres tables.
 pub async fn create_postgres_source_with_table<'a>(
+    server: &TestServer,
     mz_client: &Client,
     table_name: &str,
     table_schema: &str,
@@ -1057,6 +1098,10 @@ pub async fn create_postgres_source_with_table<'a>(
     Client,
     impl FnOnce(&'a Client, &'a Client) -> LocalBoxFuture<'a, ()>,
 ) {
+    server
+        .enable_feature_flags(&["enable_create_table_from_source"])
+        .await;
+
     let postgres_url = env::var("POSTGRES_URL")
         .map_err(|_| anyhow!("POSTGRES_URL environment variable is not set"))
         .unwrap();
@@ -1136,8 +1181,15 @@ pub async fn create_postgres_source_with_table<'a>(
             "CREATE SOURCE {source_name}
             FROM POSTGRES
             CONNECTION pgconn
-            (PUBLICATION '{source_name}')
-            FOR TABLES ({table_name});"
+            (PUBLICATION '{source_name}')"
+        ))
+        .await
+        .unwrap();
+    mz_client
+        .batch_execute(&format!(
+            "CREATE TABLE {table_name}
+            FROM SOURCE {source_name}
+            (REFERENCE {table_name});"
         ))
         .await
         .unwrap();

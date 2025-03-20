@@ -52,7 +52,7 @@ class SshPg(Check):
                 > CREATE SOURCE mz_source_ssh1
                   FROM POSTGRES CONNECTION pg_ssh1
                   (PUBLICATION 'mz_source_ssh')
-                  FOR TABLES (t_ssh1);
+                > CREATE TABLE t_ssh1 FROM SOURCE mz_source_ssh1 (REFERENCE t_ssh1);
                 """
             )
         )
@@ -72,8 +72,8 @@ class SshPg(Check):
 
                 > CREATE SOURCE mz_source_ssh2
                   FROM POSTGRES CONNECTION pg_ssh2
-                  (PUBLICATION 'mz_source_ssh')
-                  FOR TABLES (t_ssh2);
+                  (PUBLICATION 'mz_source_ssh');
+                > CREATE TABLE t_ssh2 FROM SOURCE mz_source_ssh2 (REFERENCE t_ssh2);
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO t_ssh1 VALUES (6), (7), (8), (9), (10);
@@ -92,8 +92,8 @@ class SshPg(Check):
 
                 > CREATE SOURCE mz_source_ssh3
                   FROM POSTGRES CONNECTION pg_ssh3
-                  (PUBLICATION 'mz_source_ssh')
-                  FOR TABLES (t_ssh3);
+                  (PUBLICATION 'mz_source_ssh');
+                > CREATE TABLE t_ssh3 FROM SOURCE mz_source_ssh3 (REFERENCE t_ssh3);
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO t_ssh1 VALUES (11), (12), (13), (14), (15);
@@ -144,13 +144,12 @@ class SshKafka(Check):
                 $ kafka-ingest topic=ssh1 format=bytes
                 one
 
-                >[version<7800] CREATE CONNECTION kafka_conn_ssh1
-                  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL ssh_tunnel_0);
-                >[version>=7800] CREATE CONNECTION kafka_conn_ssh1
+                > CREATE CONNECTION kafka_conn_ssh1
                   TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL ssh_tunnel_0, SECURITY PROTOCOL PLAINTEXT);
 
-                > CREATE SOURCE ssh1
-                  FROM KAFKA CONNECTION kafka_conn_ssh1 (TOPIC 'testdrive-ssh1-${testdrive.seed}')
+                > CREATE SOURCE ssh1_src
+                  FROM KAFKA CONNECTION kafka_conn_ssh1 (TOPIC 'testdrive-ssh1-${testdrive.seed}');
+                > CREATE TABLE ssh1 FROM SOURCE ssh1_src (REFERENCE "testdrive-ssh1-${testdrive.seed}")
                   FORMAT TEXT
                   ENVELOPE NONE;
                 """
@@ -162,13 +161,12 @@ class SshKafka(Check):
             Testdrive(schemas() + dedent(s))
             for s in [
                 """
-                >[version<7800] CREATE CONNECTION kafka_conn_ssh2
-                  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL ssh_tunnel_0);
-                >[version>=7800] CREATE CONNECTION kafka_conn_ssh2
+                > CREATE CONNECTION kafka_conn_ssh2
                   TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL ssh_tunnel_0, SECURITY PROTOCOL PLAINTEXT);
 
-                > CREATE SOURCE ssh2
-                  FROM KAFKA CONNECTION kafka_conn_ssh2 (TOPIC 'testdrive-ssh2-${testdrive.seed}')
+                > CREATE SOURCE ssh2_src
+                  FROM KAFKA CONNECTION kafka_conn_ssh2 (TOPIC 'testdrive-ssh2-${testdrive.seed}');
+                > CREATE TABLE ssh2 FROM SOURCE ssh2_src (REFERENCE "testdrive-ssh2-${testdrive.seed}")
                   FORMAT TEXT
                   ENVELOPE NONE;
 
@@ -179,13 +177,12 @@ class SshKafka(Check):
                 two
                 """,
                 """
-                >[version<7800] CREATE CONNECTION kafka_conn_ssh3
-                  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL ssh_tunnel_0);
-                >[version>=7800] CREATE CONNECTION kafka_conn_ssh3
+                > CREATE CONNECTION kafka_conn_ssh3
                   TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL ssh_tunnel_0, SECURITY PROTOCOL PLAINTEXT);
 
-                > CREATE SOURCE ssh3
-                  FROM KAFKA CONNECTION kafka_conn_ssh3 (TOPIC 'testdrive-ssh3-${testdrive.seed}')
+                > CREATE SOURCE ssh3_src
+                  FROM KAFKA CONNECTION kafka_conn_ssh3 (TOPIC 'testdrive-ssh3-${testdrive.seed}');
+                > CREATE TABLE ssh3 FROM SOURCE ssh3_src (REFERENCE "testdrive-ssh3-${testdrive.seed}")
                   FORMAT TEXT
                   ENVELOPE NONE;
 

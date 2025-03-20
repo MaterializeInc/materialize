@@ -7,13 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::env;
-
 fn main() {
-    env::set_var("PROTOC", mz_build_tools::protoc());
-
     let mut config = prost_build::Config::new();
-    config.btree_map(["."]);
+    config
+        .protoc_executable(mz_build_tools::protoc())
+        .btree_map(["."])
+        .type_attribute(".", "#[allow(missing_docs)]");
 
     tonic_build::configure()
         // Enabling `emit_rerun_if_changed` will rerun the build script when
@@ -37,6 +36,6 @@ fn main() {
         .extern_path(".mz_repr.relation_and_scalar", "::mz_repr")
         .extern_path(".mz_repr.row", "::mz_repr")
         .extern_path(".mz_repr.url", "::mz_repr::url")
-        .compile_with_config(config, &["cluster-client/src/client.proto"], &[".."])
+        .compile_protos_with_config(config, &["cluster-client/src/client.proto"], &[".."])
         .unwrap();
 }

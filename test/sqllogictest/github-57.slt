@@ -1,0 +1,34 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for incidents-and-escalations#57.
+
+statement ok
+with table_privileges as (
+ select
+   NULL as role,
+   t.schemaname as schema,
+   t.objectname as table,
+   pg_catalog.has_table_privilege(current_user, '"' || t.schemaname || '"' || '.' || '"' || t.objectname || '"',  'UPDATE') as update,
+   pg_catalog.has_table_privilege(current_user, '"' || t.schemaname || '"' || '.' || '"' || t.objectname || '"',  'SELECT') as select,
+   pg_catalog.has_table_privilege(current_user, '"' || t.schemaname || '"' || '.' || '"' || t.objectname || '"',  'INSERT') as insert,
+   pg_catalog.has_table_privilege(current_user, '"' || t.schemaname || '"' || '.' || '"' || t.objectname || '"',  'DELETE') as delete
+ from (
+   select schemaname, tablename as objectname from pg_catalog.pg_tables
+   union
+   select schemaname, viewname as objectname from pg_catalog.pg_views
+   union
+   select schemaname, matviewname as objectname from pg_catalog.pg_matviews
+ ) t
+ where t.schemaname !~ '^pg_'
+   and t.schemaname <> 'information_schema'
+   and pg_catalog.has_schema_privilege(current_user, t.schemaname, 'USAGE')
+)
+select t.*
+from table_privileges t

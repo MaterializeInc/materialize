@@ -33,6 +33,10 @@ pub enum PlanNotice {
         name: String,
         object_type: ObjectType,
     },
+    ColumnAlreadyExists {
+        column_name: String,
+        object_name: String,
+    },
     UpsertSinkKeyNotEnforced {
         key: Vec<ColumnName>,
         name: String,
@@ -78,6 +82,17 @@ impl fmt::Display for PlanNotice {
                     "{} {} does not exist, skipping",
                     object_type,
                     name.quoted()
+                )
+            }
+            PlanNotice::ColumnAlreadyExists {
+                column_name,
+                object_name,
+            } => {
+                write!(
+                    f,
+                    "column {} of relation {} already exists, skipping",
+                    column_name.quoted(),
+                    object_name.quoted()
                 )
             }
             PlanNotice::UpsertSinkKeyNotEnforced { .. } => {

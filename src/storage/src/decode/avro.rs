@@ -40,10 +40,9 @@ impl AvroDecoderState {
                 self.events_success += 1;
                 Ok(Some(row))
             }
-            Err(err) => Err(DecodeErrorKind::Text(format!(
-                "avro deserialization error: {}",
-                err.display_with_causes()
-            ))),
+            Err(err) => Err(DecodeErrorKind::Text(
+                format!("avro deserialization error: {}", err.display_with_causes()).into(),
+            )),
         };
         Ok(result)
     }

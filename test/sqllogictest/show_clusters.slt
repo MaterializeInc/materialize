@@ -15,7 +15,7 @@ mode standard
 reset-server
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = on;
+ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = on;
 ----
 COMPLETE 0
 
@@ -31,6 +31,8 @@ SELECT name, replicas FROM (SHOW CLUSTERS)
 bar
 r1 (1), r2 (1)
 foo
+NULL
+mz_analytics
 NULL
 mz_catalog_server
 r1 (2)

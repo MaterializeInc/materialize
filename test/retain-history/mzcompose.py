@@ -6,30 +6,32 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+
+"""Test the retain history feature."""
+
 import time
 from datetime import datetime
 from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.testdrive import Testdrive
 
 SERVICES = [
-    Cockroach(setup_materialize=True),
-    Materialized(propagate_crashes=True, external_cockroach=True),
+    CockroachOrPostgresMetadata(),
+    Materialized(propagate_crashes=True, external_metadata_store=True),
     Testdrive(no_reset=True, default_timeout="5s"),
 ]
 
 
 def workflow_default(c: Composition) -> None:
-    """Test the retain history feature."""
     setup(c)
     run_test_with_mv_on_table(c)
     run_test_with_mv_on_table_with_altered_retention(c)
     run_test_with_mv_on_counter_source(c)
     run_test_with_counter_source(c)
-    # TODO: #24479 needs to be fixed
+    # TODO: database-issues#7310 needs to be fixed
     # run_test_gh_24479(c)
     run_test_with_index(c)
     run_test_consistency(c)

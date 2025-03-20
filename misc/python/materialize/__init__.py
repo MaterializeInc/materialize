@@ -9,7 +9,7 @@
 
 """Package `materialize` is the top-level Python package for Materialize, Inc.
 
-While the primary product, [materialized], is written in Rust, various demos and
+While the primary product, [materialized][], is written in Rust, various demos and
 build tools are written in Python. This package enables the sharing of code
 between those scripts.
 

@@ -38,10 +38,15 @@ check_all_files_referenced_in_ci() {
 
 check_default_workflow_references_others() {
     RETURN=0
-    mapfile -t MZCOMPOSE_TEST_FILES < <(find ./test -name "mzcompose.py" \
+    MZCOMPOSE_TEST_FILES=()
+    while IFS= read -r file; do
+        MZCOMPOSE_TEST_FILES+=("$file")
+    done < <(find ./test -name "mzcompose.py" \
         -not -wholename "./test/canary-environment/mzcompose.py" `# Only run manually` \
         -not -wholename "./test/ssh-connection/mzcompose.py" `# Handled differently` \
         -not -wholename "./test/scalability/mzcompose.py" `# Other workflows are for manual usage` \
+        -not -wholename "./test/testdrive-old-kafka-src-syntax/mzcompose.py" `# Other workflow is run separately` \
+        -not -wholename "./test/terraform/mzcompose.py" `# Handled differently` \
     )
 
     for file in "${MZCOMPOSE_TEST_FILES[@]}"; do
@@ -78,5 +83,8 @@ try check_all_files_referenced_in_ci
 
 # ensure that each mzcompose file with more than one workflow loops over workflows in the default workflow
 try check_default_workflow_references_others
+
+# ensure that we can list the compositions without requiring environment variables to be set
+try env -i PATH="$PATH" MZ_DEV_CI_BUILDER="${MZ_DEV_CI_BUILDER:-local}" bin/mzcompose list-compositions > /dev/null
 
 try_status_report

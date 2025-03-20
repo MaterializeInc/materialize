@@ -1,0 +1,105 @@
+# Copyright 2020 sqlparser-rs contributors. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# This file is derived from the sqlparser-rs project, available at
+# https://github.com/andygrove/sqlparser-rs. It was incorporated
+# directly into Materialize on December 21, 2019.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License in the LICENSE file at the
+# root of this repository, or online at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+parse-statement
+CREATE CONTINUAL TASK foo (key int, val int) ON INPUT append_only AS (
+    DELETE FROM output WHERE key IN (SELECT key FROM inserts);
+    INSERT INTO output SELECT key, max(value) FROM inserts GROUP BY key;
+);
+----
+CREATE CONTINUAL TASK foo (key int4, val int4) ON INPUT append_only AS (DELETE FROM output WHERE key IN (SELECT key FROM inserts); INSERT INTO output SELECT key, max(value) FROM inserts GROUP BY key)
+=>
+CreateContinualTask(CreateContinualTaskStatement { name: Name(UnresolvedItemName([Ident("foo")])), columns: Some([CteMutRecColumnDef { name: Ident("key"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] } }, CteMutRecColumnDef { name: Ident("val"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] } }]), in_cluster: None, as_of: None, with_options: [], input: Name(UnresolvedItemName([Ident("append_only")])), stmts: [Delete(DeleteStatement { table_name: Name(UnresolvedItemName([Ident("output")])), alias: None, using: [], selection: Some(InSubquery { expr: Identifier([Ident("key")]), subquery: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("key")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("inserts")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, negated: false }) }), Insert(InsertStatement { table_name: Name(UnresolvedItemName([Ident("output")])), columns: [], source: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("key")]), alias: None }, Expr { expr: Function(Function { name: Name(UnresolvedItemName([Ident("max")])), args: Args { args: [Identifier([Ident("value")])], order_by: [] }, filter: None, over: None, distinct: false }), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("inserts")])), alias: None }, joins: [] }], selection: None, group_by: [Identifier([Ident("key")])], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }), returning: [] })], sugar: None })
+
+# Optional columns
+parse-statement
+CREATE CONTINUAL TASK foo ON INPUT bar AS ();
+----
+CREATE CONTINUAL TASK foo ON INPUT bar AS ()
+=>
+CreateContinualTask(CreateContinualTaskStatement { name: Name(UnresolvedItemName([Ident("foo")])), columns: None, in_cluster: None, as_of: None, with_options: [], input: Name(UnresolvedItemName([Ident("bar")])), stmts: [], sugar: None })
+
+# With snapshot
+parse-statement
+CREATE CONTINUAL TASK foo WITH (SNAPSHOT = false) ON INPUT bar AS ();
+----
+CREATE CONTINUAL TASK foo WITH (SNAPSHOT = false) ON INPUT bar AS ()
+=>
+CreateContinualTask(CreateContinualTaskStatement { name: Name(UnresolvedItemName([Ident("foo")])), columns: None, in_cluster: None, as_of: None, with_options: [ContinualTaskOption { name: Snapshot, value: Some(Value(Boolean(false))) }], input: Name(UnresolvedItemName([Ident("bar")])), stmts: [], sugar: None })
+
+parse-statement
+CREATE CONTINUAL TASK foo WITH (SNAPSHOT) ON INPUT bar AS ();
+----
+CREATE CONTINUAL TASK foo WITH (SNAPSHOT) ON INPUT bar AS ()
+=>
+CreateContinualTask(CreateContinualTaskStatement { name: Name(UnresolvedItemName([Ident("foo")])), columns: None, in_cluster: None, as_of: None, with_options: [ContinualTaskOption { name: Snapshot, value: None }], input: Name(UnresolvedItemName([Ident("bar")])), stmts: [], sugar: None })
+
+# Legacy with location (for CI upgrade tests)
+parse-statement
+CREATE CONTINUAL TASK foo ON INPUT bar WITH (SNAPSHOT = false) AS ();
+----
+CREATE CONTINUAL TASK foo WITH (SNAPSHOT = false) ON INPUT bar AS ()
+=>
+CreateContinualTask(CreateContinualTaskStatement { name: Name(UnresolvedItemName([Ident("foo")])), columns: None, in_cluster: None, as_of: None, with_options: [ContinualTaskOption { name: Snapshot, value: Some(Value(Boolean(false))) }], input: Name(UnresolvedItemName([Ident("bar")])), stmts: [], sugar: None })
+
+parse-statement
+CREATE CONTINUAL TASK "materialize"."public"."upsert" ("key" [s20 AS "pg_catalog"."int4"], "val" [s20 AS "pg_catalog"."int4"]) IN CLUSTER [u1] ON INPUT [u1 AS "materialize"."public"."append_only"] AS (
+    DELETE FROM "materialize"."public"."upsert" WHERE "key" IN (SELECT "key" FROM [u1 AS "materialize"."public"."append_only"]);
+    INSERT INTO "materialize"."public"."upsert" SELECT "key", "pg_catalog"."max"("val") FROM [u1 AS "materialize"."public"."append_only"] GROUP BY "key"
+) AS OF 4
+----
+CREATE CONTINUAL TASK materialize.public.upsert (key [s20 AS pg_catalog.int4], val [s20 AS pg_catalog.int4]) IN CLUSTER [u1] ON INPUT [u1 AS materialize.public.append_only] AS (DELETE FROM materialize.public.upsert WHERE key IN (SELECT key FROM [u1 AS materialize.public.append_only]); INSERT INTO materialize.public.upsert SELECT key, pg_catalog.max(val) FROM [u1 AS materialize.public.append_only] GROUP BY key) AS OF 4
+=>
+CreateContinualTask(CreateContinualTaskStatement { name: Name(UnresolvedItemName([Ident("materialize"), Ident("public"), Ident("upsert")])), columns: Some([CteMutRecColumnDef { name: Ident("key"), data_type: Other { name: Id("s20", UnresolvedItemName([Ident("pg_catalog"), Ident("int4")]), None), typ_mod: [] } }, CteMutRecColumnDef { name: Ident("val"), data_type: Other { name: Id("s20", UnresolvedItemName([Ident("pg_catalog"), Ident("int4")]), None), typ_mod: [] } }]), in_cluster: Some(Resolved("u1")), as_of: Some(4), with_options: [], input: Id("u1", UnresolvedItemName([Ident("materialize"), Ident("public"), Ident("append_only")]), None), stmts: [Delete(DeleteStatement { table_name: Name(UnresolvedItemName([Ident("materialize"), Ident("public"), Ident("upsert")])), alias: None, using: [], selection: Some(InSubquery { expr: Identifier([Ident("key")]), subquery: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("key")]), alias: None }], from: [TableWithJoins { relation: Table { name: Id("u1", UnresolvedItemName([Ident("materialize"), Ident("public"), Ident("append_only")]), None), alias: None }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, negated: false }) }), Insert(InsertStatement { table_name: Name(UnresolvedItemName([Ident("materialize"), Ident("public"), Ident("upsert")])), columns: [], source: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("key")]), alias: None }, Expr { expr: Function(Function { name: Name(UnresolvedItemName([Ident("pg_catalog"), Ident("max")])), args: Args { args: [Identifier([Ident("val")])], order_by: [] }, filter: None, over: None, distinct: false }), alias: None }], from: [TableWithJoins { relation: Table { name: Id("u1", UnresolvedItemName([Ident("materialize"), Ident("public"), Ident("append_only")]), None), alias: None }, joins: [] }], selection: None, group_by: [Identifier([Ident("key")])], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }), returning: [] })], sugar: None })
+
+parse-statement
+CREATE CONTINUAL TASK foo IN CLUSTER c WITH (SNAPSHOT = false) FROM TRANSFORM bar USING (SELECT baz::TIMESTAMPTZ FROM bar WHERE baz);
+----
+CREATE CONTINUAL TASK foo IN CLUSTER c WITH (SNAPSHOT = false) FROM TRANSFORM bar USING (SELECT baz::timestamptz FROM bar WHERE baz)
+=>
+CreateContinualTask(CreateContinualTaskStatement { name: Name(UnresolvedItemName([Ident("foo")])), columns: None, in_cluster: Some(Unresolved(Ident("c"))), as_of: None, with_options: [ContinualTaskOption { name: Snapshot, value: Some(Value(Boolean(false))) }], input: Name(UnresolvedItemName([Ident("bar")])), stmts: [Insert(InsertStatement { table_name: Name(UnresolvedItemName([Ident("foo")])), columns: [], source: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Cast { expr: Identifier([Ident("baz")]), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamptz")])), typ_mod: [] } }, alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("bar")])), alias: None }, joins: [] }], selection: Some(Identifier([Ident("baz")])), group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }), returning: [] })], sugar: Some(Transform { transform: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Cast { expr: Identifier([Ident("baz")]), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamptz")])), typ_mod: [] } }, alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("bar")])), alias: None }, joins: [] }], selection: Some(Identifier([Ident("baz")])), group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None } }) })
+
+parse-statement
+CREATE CONTINUAL TASK foo IN CLUSTER c WITH (SNAPSHOT = false) FROM RETAIN bar WHILE (col + INTERVAL '1h' < mz_now());
+----
+CREATE CONTINUAL TASK foo IN CLUSTER c WITH (SNAPSHOT = false) FROM RETAIN bar WHILE (col + INTERVAL '1h' < mz_now())
+=>
+CreateContinualTask(CreateContinualTaskStatement { name: Name(UnresolvedItemName([Ident("foo")])), columns: None, in_cluster: Some(Unresolved(Ident("c"))), as_of: None, with_options: [ContinualTaskOption { name: Snapshot, value: Some(Value(Boolean(false))) }], input: Name(UnresolvedItemName([Ident("bar")])), stmts: [Insert(InsertStatement { table_name: Name(UnresolvedItemName([Ident("foo")])), columns: [], source: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("bar")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: None, op: "<" }, expr1: Op { op: Op { namespace: None, op: "+" }, expr1: Identifier([Ident("col")]), expr2: Some(Value(Interval(IntervalValue { value: "1h", precision_high: Year, precision_low: Second, fsec_max_precision: None }))) }, expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("mz_now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false })) }), group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }), returning: [] }), Delete(DeleteStatement { table_name: Name(UnresolvedItemName([Ident("foo")])), alias: None, using: [], selection: Some(Not { expr: Op { op: Op { namespace: None, op: "<" }, expr1: Op { op: Op { namespace: None, op: "+" }, expr1: Identifier([Ident("col")]), expr2: Some(Value(Interval(IntervalValue { value: "1h", precision_high: Year, precision_low: Second, fsec_max_precision: None }))) }, expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("mz_now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false })) } }) })], sugar: Some(Retain { retain: Op { op: Op { namespace: None, op: "<" }, expr1: Op { op: Op { namespace: None, op: "+" }, expr1: Identifier([Ident("col")]), expr2: Some(Value(Interval(IntervalValue { value: "1h", precision_high: Year, precision_low: Second, fsec_max_precision: None }))) }, expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("mz_now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false })) } }) })
+
+parse-statement
+SHOW CONTINUAL TASKS;
+----
+SHOW CONTINUAL TASKS
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: ContinualTask { in_cluster: None }, from: None, filter: None }))
+
+parse-statement
+DROP CONTINUAL TASK foo;
+----
+DROP CONTINUAL TASK foo
+=>
+DropObjects(DropObjectsStatement { object_type: ContinualTask, if_exists: false, names: [Item(UnresolvedItemName([Ident("foo")]))], cascade: false })
+
+parse-statement
+COMMENT ON CONTINUAL TASK foo IS 'bar';
+----
+COMMENT ON CONTINUAL TASK foo IS 'bar'
+=>
+Comment(CommentStatement { object: ContinualTask { name: Name(UnresolvedItemName([Ident("foo")])) }, comment: Some("bar") })

@@ -12,11 +12,19 @@ cluster configured in Materialize.
 
 ## Syntax
 
-{{< diagram "show-cluster-replicas.svg" >}}
+```sql
+SHOW CLUSTER REPLICAS
+[LIKE <pattern> | WHERE <condition(s)>]
+```
+
+Option                        | Description
+------------------------------|------------
+**LIKE** \<pattern\>          | If specified, only show clusters that match the pattern.
+**WHERE** <condition(s)>      | If specified, only show clusters that match the condition(s).
 
 ## Examples
 
-```sql
+```mzsql
 SHOW CLUSTER REPLICAS;
 ```
 
@@ -27,7 +35,7 @@ SHOW CLUSTER REPLICAS;
  quickstart    | r1      | 25cc   | t     |
 ```
 
-```sql
+```mzsql
 SHOW CLUSTER REPLICAS WHERE cluster = 'quickstart';
 ```
 

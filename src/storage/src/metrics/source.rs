@@ -16,8 +16,8 @@
 
 use mz_ore::metric;
 use mz_ore::metrics::{
-    CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt, IntCounter, IntCounterVec,
-    IntGaugeVec, MetricsRegistry, UIntGaugeVec,
+    DeleteOnDropCounter, DeleteOnDropGauge, IntCounter, IntCounterVec, IntGaugeVec,
+    MetricsRegistry, UIntGaugeVec,
 };
 use mz_repr::GlobalId;
 use prometheus::core::{AtomicI64, AtomicU64};
@@ -33,9 +33,7 @@ pub mod postgres;
 #[derive(Clone, Debug)]
 pub(crate) struct GeneralSourceMetricDefs {
     // Source metrics
-    pub(crate) capability: UIntGaugeVec,
     pub(crate) resume_upper: IntGaugeVec,
-    pub(crate) inmemory_remap_bindings: UIntGaugeVec,
     pub(crate) commit_upper_ready_times: UIntGaugeVec,
     pub(crate) commit_upper_accepted_times: UIntGaugeVec,
 
@@ -58,21 +56,11 @@ impl GeneralSourceMetricDefs {
         Self {
             // TODO(guswynn): some of these metrics are not clear when subsources are involved, and
             // should be fixed
-            capability: registry.register(metric!(
-                name: "mz_capability",
-                help: "The current capability for this dataflow.",
-                var_labels: ["topic", "source_id", "worker_id"],
-            )),
             resume_upper: registry.register(metric!(
                 name: "mz_resume_upper",
                 // TODO(guswynn): should this also track the resumption frontier operator?
                 help: "The timestamp-domain resumption frontier chosen for a source's ingestion",
                 var_labels: ["source_id"],
-            )),
-            inmemory_remap_bindings: registry.register(metric!(
-                name: "mz_source_inmemory_remap_bindings",
-                help: "The number of in-memory remap bindings that reclocking a time needs to iterate over.",
-                var_labels: ["source_id", "worker_id"],
             )),
             commit_upper_ready_times: registry.register(metric!(
                 name: "mz_source_commit_upper_ready_times",
@@ -92,33 +80,33 @@ impl GeneralSourceMetricDefs {
             progress: registry.register(metric!(
                 name: "mz_source_progress",
                 help: "A timestamp gauge representing forward progess in the data shard",
-                var_labels: ["source_id", "output", "shard", "worker_id"],
+                var_labels: ["source_id", "shard", "worker_id"],
             )),
             row_inserts: registry.register(metric!(
                 name: "mz_source_row_inserts",
                 help: "A counter representing the actual number of rows being inserted to the data shard",
-                var_labels: ["source_id", "output", "shard", "worker_id"],
+                var_labels: ["source_id", "shard", "worker_id"],
             )),
             row_retractions: registry.register(metric!(
                 name: "mz_source_row_retractions",
                 help: "A counter representing the actual number of rows being retracted from the data shard",
-                var_labels: ["source_id", "output", "shard", "worker_id"],
+                var_labels: ["source_id", "shard", "worker_id"],
             )),
             error_inserts: registry.register(metric!(
                 name: "mz_source_error_inserts",
                 help: "A counter representing the actual number of errors being inserted to the data shard",
-                var_labels: ["source_id", "output", "shard", "worker_id"],
+                var_labels: ["source_id", "shard", "worker_id"],
             )),
             error_retractions: registry.register(metric!(
                 name: "mz_source_error_retractions",
                 help: "A counter representing the actual number of errors being retracted from the data shard",
-                var_labels: ["source_id", "output", "shard", "worker_id"],
+                var_labels: ["source_id", "shard", "worker_id"],
             )),
             persist_sink_processed_batches: registry.register(metric!(
                 name: "mz_source_processed_batches",
                 help: "A counter representing the number of persist sink batches with actual data \
                 we have successfully processed.",
-                var_labels: ["source_id", "output", "shard", "worker_id"],
+                var_labels: ["source_id", "shard", "worker_id"],
             )),
         }
     }
@@ -126,57 +114,43 @@ impl GeneralSourceMetricDefs {
 
 /// General metrics about sources that are not specific to the source type
 pub(crate) struct SourceMetrics {
-    /// Value of the capability associated with this source
-    pub(crate) capability: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     /// The resume_upper for a source.
-    pub(crate) resume_upper: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
-    /// The number of in-memory remap bindings that reclocking a time needs to iterate over.
-    pub(crate) inmemory_remap_bindings: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) resume_upper: DeleteOnDropGauge<AtomicI64, Vec<String>>,
     /// The number of ready remap bindings that are held in the reclock commit upper operator.
-    pub(crate) commit_upper_ready_times: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) commit_upper_ready_times: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     /// The number of accepted remap bindings that are held in the reclock commit upper operator.
-    pub(crate) commit_upper_accepted_times: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) commit_upper_accepted_times: DeleteOnDropGauge<AtomicU64, Vec<String>>,
 }
 
 impl SourceMetrics {
     /// Initializes source metrics for a given (source_id, worker_id)
     pub(crate) fn new(
         defs: &GeneralSourceMetricDefs,
-        source_name: &str,
         source_id: GlobalId,
         worker_id: usize,
     ) -> SourceMetrics {
-        let labels = &[
-            source_name.to_string(),
-            source_id.to_string(),
-            worker_id.to_string(),
-        ];
         SourceMetrics {
-            capability: defs.capability.get_delete_on_drop_gauge(labels.to_vec()),
             resume_upper: defs
                 .resume_upper
-                .get_delete_on_drop_gauge(vec![source_id.to_string()]),
-            inmemory_remap_bindings: defs
-                .inmemory_remap_bindings
-                .get_delete_on_drop_gauge(vec![source_id.to_string(), worker_id.to_string()]),
+                .get_delete_on_drop_metric(vec![source_id.to_string()]),
             commit_upper_ready_times: defs
                 .commit_upper_ready_times
-                .get_delete_on_drop_gauge(vec![source_id.to_string(), worker_id.to_string()]),
+                .get_delete_on_drop_metric(vec![source_id.to_string(), worker_id.to_string()]),
             commit_upper_accepted_times: defs
                 .commit_upper_accepted_times
-                .get_delete_on_drop_gauge(vec![source_id.to_string(), worker_id.to_string()]),
+                .get_delete_on_drop_metric(vec![source_id.to_string(), worker_id.to_string()]),
         }
     }
 }
 
 /// Source-specific metrics used by the `persist_sink`
 pub(crate) struct SourcePersistSinkMetrics {
-    pub(crate) progress: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
-    pub(crate) row_inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) row_retractions: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) error_inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) error_retractions: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) processed_batches: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) progress: DeleteOnDropGauge<AtomicI64, Vec<String>>,
+    pub(crate) row_inserts: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) row_retractions: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) error_inserts: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) error_retractions: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) processed_batches: DeleteOnDropCounter<AtomicU64, Vec<String>>,
 }
 
 impl SourcePersistSinkMetrics {
@@ -187,45 +161,38 @@ impl SourcePersistSinkMetrics {
         parent_source_id: GlobalId,
         worker_id: usize,
         shard_id: &mz_persist_client::ShardId,
-        output_index: usize,
     ) -> SourcePersistSinkMetrics {
         let shard = shard_id.to_string();
         SourcePersistSinkMetrics {
-            progress: defs.progress.get_delete_on_drop_gauge(vec![
+            progress: defs.progress.get_delete_on_drop_metric(vec![
                 parent_source_id.to_string(),
-                output_index.to_string(),
                 shard.clone(),
                 worker_id.to_string(),
             ]),
-            row_inserts: defs.row_inserts.get_delete_on_drop_counter(vec![
+            row_inserts: defs.row_inserts.get_delete_on_drop_metric(vec![
                 parent_source_id.to_string(),
-                output_index.to_string(),
                 shard.clone(),
                 worker_id.to_string(),
             ]),
-            row_retractions: defs.row_retractions.get_delete_on_drop_counter(vec![
+            row_retractions: defs.row_retractions.get_delete_on_drop_metric(vec![
                 parent_source_id.to_string(),
-                output_index.to_string(),
                 shard.clone(),
                 worker_id.to_string(),
             ]),
-            error_inserts: defs.error_inserts.get_delete_on_drop_counter(vec![
+            error_inserts: defs.error_inserts.get_delete_on_drop_metric(vec![
                 parent_source_id.to_string(),
-                output_index.to_string(),
                 shard.clone(),
                 worker_id.to_string(),
             ]),
-            error_retractions: defs.error_retractions.get_delete_on_drop_counter(vec![
+            error_retractions: defs.error_retractions.get_delete_on_drop_metric(vec![
                 parent_source_id.to_string(),
-                output_index.to_string(),
                 shard.clone(),
                 worker_id.to_string(),
             ]),
             processed_batches: defs
                 .persist_sink_processed_batches
-                .get_delete_on_drop_counter(vec![
+                .get_delete_on_drop_metric(vec![
                     parent_source_id.to_string(),
-                    output_index.to_string(),
                     shard,
                     worker_id.to_string(),
                 ]),
@@ -236,7 +203,7 @@ impl SourcePersistSinkMetrics {
 /// Metrics about committing offsets.
 pub(crate) struct OffsetCommitMetrics {
     /// The offset-domain resume_upper for a source.
-    pub(crate) offset_commit_failures: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) offset_commit_failures: DeleteOnDropCounter<AtomicU64, Vec<String>>,
 }
 
 impl OffsetCommitMetrics {
@@ -245,7 +212,7 @@ impl OffsetCommitMetrics {
         OffsetCommitMetrics {
             offset_commit_failures: defs
                 .offset_commit_failures
-                .get_delete_on_drop_counter(vec![source_id.to_string()]),
+                .get_delete_on_drop_metric(vec![source_id.to_string()]),
         }
     }
 }
@@ -260,9 +227,6 @@ pub(crate) struct SourceMetricDefs {
     pub(crate) kafka_source_defs: kafka::KafkaSourceMetricDefs,
     /// A cluster-wide counter shared across all sources.
     pub(crate) bytes_read: IntCounter,
-
-    // Additional metrics definitions;
-    pub(crate) channel_metric_defs: super::channel::ChannelMetricDefs,
 }
 
 impl SourceMetricDefs {
@@ -276,7 +240,6 @@ impl SourceMetricDefs {
                 name: "mz_bytes_read_total",
                 help: "Count of bytes read from sources",
             )),
-            channel_metric_defs: super::channel::ChannelMetricDefs::register_with(registry),
         }
     }
 }

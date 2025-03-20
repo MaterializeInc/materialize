@@ -4,7 +4,6 @@ description: "Learn more about Materialize"
 disable_list: true
 aliases:
   - /overview/what-is-materialize/
-  - /overview/
 menu:
   main:
     parent: get-started
@@ -12,15 +11,26 @@ menu:
     weight: 5
 ---
 
-Materialize is a **streaming database** purpose-built for low-latency
-applications. You can use it to process data at speeds and scales not possible
-in traditional databases, but without the cost, complexity, or development time
-of most streaming engines.
+Materialize is a real-time data integration platform that enables you to use SQL
+to transform, deliver, and act on fast changing data.
 
-If you need to speed up queries that run frequently, or trigger actions as
-soon as events happen, Materialize is a good fit. Rather than recalculate
-results from scratch, or serve stale cached results, Materialize continually
-ingests data and keeps results up-to-date as new data arrives.
+To keep results up-to-date as new data arrives, Materialize incrementally
+updates results as it ingests data rather than recalculating results from
+scratch.
+
+{{< callout primary_url="https://materialize.com/register/?utm_campaign=General&utm_source=documentation" primary_text="Get Started">}}
+
+## Try it out! 🚀
+
+1. Sign up for a [free trial
+   account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation)
+   on Materialize Cloud. Alternatively, both the [Self-managed Materialize](/self-managed/) and the
+   [Materialize Emulator Docker image](/get-started/install-materialize-emulator/)
+   are also available.
+2. Follow the quickstart guide to learn the basics.
+3. Connect your own data sources and start building.
+
+{{</ callout >}}
 
 ## Key features
 
@@ -35,8 +45,14 @@ to make a compromise between the freshness of the results, the cost of
 refreshing the view, and the complexity of the SQL statements you can use.
 
 In Materialize, you don't have to make such compromises. Materialize supports
-incrementally updated materialized views that are **always fresh**, even when
-using complex SQL statements, like multi-way joins with aggregations. How?
+incrementally updated view results that are **always fresh** (even when using
+complex SQL statements, like multi-way joins with aggregations) for *both*:
+
+- [Indexed views](/concepts/views/#indexes-on-views) and
+
+- [Materialized views](/concepts/views/#materialized-views).
+
+How?
 Its engine is built on [Timely](https://github.com/TimelyDataflow/timely-dataflow#timely-dataflow)
 and [Differential Dataflow](https://github.com/timelydataflow/differential-dataflow#differential-dataflow)
 — data processing frameworks backed by many years of research and optimized for
@@ -44,13 +60,41 @@ this exact purpose.
 
 ### Standard SQL support
 
-Materialize follows the SQL standard (SQL-92) implementation, so you interact
-with it like any relational database: using SQL. You can build complex
-analytical workloads using **[any type of join](/sql/join/)** (including
-non-windowed joins and joins on arbitrary conditions), but you can also
-leverage exciting new SQL patterns enabled by streaming like
-[**Change Data Capture (CDC)**](/integrations/#databases),
-[**temporal filters**](/sql/patterns/temporal-filters/), and [**subscriptions**](/sql/subscribe/).
+Like most databases, you interact with Materialize using **SQL**. You can build
+complex analytical
+workloads using **[any type of join](/sql/select/join/)** (including
+non-windowed joins and joins on arbitrary conditions) as well as leverage new
+SQL patterns enabled by streaming like [**Change Data Capture
+(CDC)**](/integrations/#databases), [**temporal
+filters**](/sql/patterns/temporal-filters/), and
+[**subscriptions**](/sql/subscribe/).
+
+{{% materialize-postgres-compatibility %}}
+
+### Real-time data ingestion
+
+Materialize provides **native connectors** that allow ingesting data from various external systems:
+
+{{< multilinkbox >}}
+{{< linkbox title="Message Brokers" >}}
+- [Kafka](/sql/create-source/kafka)
+- [Redpanda](/sql/create-source/kafka)
+- [Other message brokers](/integrations/#message-brokers)
+{{</ linkbox >}}
+{{< linkbox title="Databases (CDC)" >}}
+- [PostgreSQL](/sql/create-source/postgres)
+- [MySQL](/sql/create-source/mysql)
+- [Other databases](/integrations/#other-databases)
+{{</ linkbox >}}
+{{< linkbox title="Webhooks" >}}
+- [Amazon EventBridge](/ingest-data/webhooks/amazon-eventbridge/)
+- [Segment](/ingest-data/webhooks/segment/)
+- [Other webhooks](/sql/create-source/webhook)
+{{</ linkbox >}}
+{{</ multilinkbox >}}
+
+For more information, see [Ingest Data](/ingest-data/) and
+[Integrations](/integrations/).
 
 ### PostgreSQL wire-compatibility
 
@@ -61,7 +105,7 @@ tools in the data ecosystem that support PostgreSQL — like [dbt](/integrations
 
 Don't see the a tool that you’d like to use with Materialize listed under
 [Tools and integrations](/integrations/)? Let us know by submitting a
-[feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)!
+[feature request](https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests&labels=A-integration)!
 
 ### Strong consistency guarantees
 
@@ -75,5 +119,5 @@ depending on your consistency and performance requirements.
 
 ## Learn more
 
-- [Key concepts](/get-started/key-concepts)
+- [Key concepts](/concepts/)
 - [Get started with Materialize](/get-started/quickstart)

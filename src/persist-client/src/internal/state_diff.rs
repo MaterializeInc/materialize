@@ -15,8 +15,10 @@ use std::sync::Arc;
 use bytes::{Bytes, BytesMut};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
 use mz_persist::location::{SeqNo, VersionedData};
+use mz_persist_types::schema::SchemaId;
 use mz_persist_types::Codec64;
 use mz_proto::TryFromProtoError;
 use timely::progress::{Antichain, Timestamp};
@@ -26,9 +28,9 @@ use tracing::debug;
 use crate::critical::CriticalReaderId;
 use crate::internal::paths::PartialRollupKey;
 use crate::internal::state::{
-    CriticalReaderState, HollowBatch, HollowBlobRef, HollowRollup, LeasedReaderState,
-    ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, State, StateCollections,
-    WriterState,
+    CriticalReaderState, EncodedSchemas, HollowBatch, HollowBlobRef, HollowRollup,
+    LeasedReaderState, ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, State,
+    StateCollections, WriterState,
 };
 use crate::internal::trace::{FueledMergeRes, SpineId, ThinMerge, ThinSpineBatch, Trace};
 use crate::read::LeasedReaderId;
@@ -77,6 +79,7 @@ pub struct StateDiff<T> {
     pub(crate) leased_readers: Vec<StateFieldDiff<LeasedReaderId, LeasedReaderState<T>>>,
     pub(crate) critical_readers: Vec<StateFieldDiff<CriticalReaderId, CriticalReaderState<T>>>,
     pub(crate) writers: Vec<StateFieldDiff<WriterId, WriterState<T>>>,
+    pub(crate) schemas: Vec<StateFieldDiff<SchemaId, EncodedSchemas>>,
     pub(crate) since: Vec<StateFieldDiff<(), Antichain<T>>>,
     pub(crate) legacy_batches: Vec<StateFieldDiff<HollowBatch<T>, ()>>,
     pub(crate) hollow_batches: Vec<StateFieldDiff<SpineId, Arc<HollowBatch<T>>>>,
@@ -104,6 +107,7 @@ impl<T: Timestamp + Codec64> StateDiff<T> {
             leased_readers: Vec::default(),
             critical_readers: Vec::default(),
             writers: Vec::default(),
+            schemas: Vec::default(),
             since: Vec::default(),
             legacy_batches: Vec::default(),
             hollow_batches: Vec::default(),
@@ -147,6 +151,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
                     leased_readers: from_leased_readers,
                     critical_readers: from_critical_readers,
                     writers: from_writers,
+                    schemas: from_schemas,
                     trace: from_trace,
                 },
         } = from;
@@ -163,6 +168,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
                     leased_readers: to_leased_readers,
                     critical_readers: to_critical_readers,
                     writers: to_writers,
+                    schemas: to_schemas,
                     trace: to_trace,
                 },
         } = to;
@@ -190,6 +196,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
             &mut diffs.critical_readers,
         );
         diff_field_sorted_iter(from_writers.iter(), to_writers, &mut diffs.writers);
+        diff_field_sorted_iter(from_schemas.iter(), to_schemas, &mut diffs.schemas);
         diff_field_single(from_trace.since(), to_trace.since(), &mut diffs.since);
 
         let from_flat = from_trace.flatten();
@@ -376,6 +383,7 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
             leased_readers: diff_leased_readers,
             critical_readers: diff_critical_readers,
             writers: diff_writers,
+            schemas: diff_schemas,
             since: diff_since,
             legacy_batches: diff_legacy_batches,
             hollow_batches: diff_hollow_batches,
@@ -411,6 +419,7 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
             leased_readers,
             critical_readers,
             writers,
+            schemas,
             trace,
         } = &mut self.collections;
 
@@ -419,6 +428,7 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
         apply_diffs_map("leased_readers", diff_leased_readers, leased_readers)?;
         apply_diffs_map("critical_readers", diff_critical_readers, critical_readers)?;
         apply_diffs_map("writers", diff_writers, writers)?;
+        apply_diffs_map("schemas", diff_schemas, schemas)?;
 
         let structure_unchanged = diff_hollow_batches.is_empty()
             && diff_spine_batches.is_empty()
@@ -795,6 +805,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
         match apply_compaction_lenient(metrics, batches, &res.output) {
             Ok(batches) => {
                 let mut new_trace = Trace::default();
+                new_trace.roundtrip_structure = trace.roundtrip_structure;
                 new_trace.downgrade_since(trace.since());
                 for batch in batches {
                     // Ignore merge_reqs because whichever process generated
@@ -823,7 +834,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
 
     let batches = {
         let mut batches = BTreeMap::new();
-        trace.map_batches(|b| assert!(batches.insert(b.clone(), ()).is_none()));
+        trace.map_batches(|b| assert_none!(batches.insert(b.clone(), ())));
         apply_diffs_map("spine", diffs.clone(), &mut batches).map(|_ok| batches)
     };
 
@@ -844,6 +855,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
             // we can try to apply our diffs on top of these new (potentially) merged
             // batches.
             let mut reconstructed_spine = Trace::default();
+            reconstructed_spine.roundtrip_structure = trace.roundtrip_structure;
             trace.map_batches(|b| {
                 // Ignore merge_reqs because whichever process generated this
                 // diff is assigned the work.
@@ -851,13 +863,14 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
             });
 
             let mut batches = BTreeMap::new();
-            reconstructed_spine.map_batches(|b| assert!(batches.insert(b.clone(), ()).is_none()));
+            reconstructed_spine.map_batches(|b| assert_none!(batches.insert(b.clone(), ())));
             apply_diffs_map("spine", diffs, &mut batches)?;
             batches
         }
     };
 
     let mut new_trace = Trace::default();
+    new_trace.roundtrip_structure = trace.roundtrip_structure;
     new_trace.downgrade_since(trace.since());
     for (batch, ()) in batches {
         // Ignore merge_reqs because whichever process generated this diff is
@@ -1141,11 +1154,11 @@ impl ProtoStateFieldDiffs {
             // We expect one for the key.
             expected_data_slices += 1;
             // And 1 or 2 for val depending on the diff type.
-            match ProtoStateFieldDiffType::from_i32(*diff_type) {
-                Some(ProtoStateFieldDiffType::Insert) => expected_data_slices += 1,
-                Some(ProtoStateFieldDiffType::Update) => expected_data_slices += 2,
-                Some(ProtoStateFieldDiffType::Delete) => expected_data_slices += 1,
-                None => return Err(format!("unknown diff_type {}", diff_type)),
+            match ProtoStateFieldDiffType::try_from(*diff_type) {
+                Ok(ProtoStateFieldDiffType::Insert) => expected_data_slices += 1,
+                Ok(ProtoStateFieldDiffType::Update) => expected_data_slices += 2,
+                Ok(ProtoStateFieldDiffType::Delete) => expected_data_slices += 1,
+                Err(_) => return Err(format!("unknown diff_type {}", diff_type)),
             }
         }
         if expected_data_slices != self.data_lens.len() {
@@ -1200,9 +1213,9 @@ impl<'a> Iterator for ProtoStateFieldDiffsIter<'a> {
             self.data_offset = end;
             data
         };
-        let field = match ProtoStateField::from_i32(self.diffs.fields[self.diff_idx]) {
-            Some(x) => x,
-            None => {
+        let field = match ProtoStateField::try_from(self.diffs.fields[self.diff_idx]) {
+            Ok(x) => x,
+            Err(_) => {
                 return Some(Err(TryFromProtoError::unknown_enum_variant(format!(
                     "ProtoStateField({})",
                     self.diffs.fields[self.diff_idx]
@@ -1210,9 +1223,9 @@ impl<'a> Iterator for ProtoStateFieldDiffsIter<'a> {
             }
         };
         let diff_type =
-            match ProtoStateFieldDiffType::from_i32(self.diffs.diff_types[self.diff_idx]) {
-                Some(x) => x,
-                None => {
+            match ProtoStateFieldDiffType::try_from(self.diffs.diff_types[self.diff_idx]) {
+                Ok(x) => x,
+                Err(_) => {
                     return Some(Err(TryFromProtoError::unknown_enum_variant(format!(
                         "ProtoStateFieldDiffType({})",
                         self.diffs.diff_types[self.diff_idx]
@@ -1333,7 +1346,7 @@ mod tests {
                                 .into_iter()
                                 .flat_map(|p| p.batch.parts.clone())
                                 .collect();
-                            let output = HollowBatch::new(req.desc, parts, len, vec![]);
+                            let output = HollowBatch::new_run(req.desc, parts, len);
                             leader
                                 .collections
                                 .trace
@@ -1370,11 +1383,11 @@ mod tests {
 
     // Regression test for the apply_diffs_spine special case that sniffs out an
     // insert, applies it, and then lets the remaining diffs (if any) fall
-    // through to the rest of the code. See #15493.
+    // through to the rest of the code. See database-issues#4431.
     #[mz_ore::test]
     fn regression_15493_sniff_insert() {
         fn hb(lower: u64, upper: u64, len: usize) -> HollowBatch<u64> {
-            HollowBatch::new(
+            HollowBatch::new_run(
                 Description::new(
                     Antichain::from_elem(lower),
                     Antichain::from_elem(upper),
@@ -1382,7 +1395,6 @@ mod tests {
                 ),
                 Vec::new(),
                 len,
-                Vec::new(),
             )
         }
 
@@ -1483,7 +1495,7 @@ mod tests {
                     Antichain::from_elem(*upper),
                     Antichain::from_elem(*since),
                 );
-                HollowBatch::new(desc, Vec::new(), *len, Vec::new())
+                HollowBatch::new_run(desc, Vec::new(), *len)
             }
             let replacement = batch(&replacement);
             let batches = spine.iter().map(batch).collect::<Vec<_>>();
@@ -1522,7 +1534,7 @@ mod tests {
         testcase(
             (2, 4, 0, 100),
             &[(0, 3, 0, 1), (3, 4, 0, 0)],
-            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([0], [3], [0]), parts: [], len: 1, runs: [] }")
+            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([0], [3], [0]), parts: [], len: 1, runs: [], run_meta: [] }")
         );
 
         // Split batch at replacement lower (untouched batch before the split one)
@@ -1550,7 +1562,7 @@ mod tests {
         testcase(
             (0, 2, 0, 100),
             &[(0, 1, 0, 0), (1, 4, 0, 1)],
-            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([1], [4], [0]), parts: [], len: 1, runs: [] }")
+            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([1], [4], [0]), parts: [], len: 1, runs: [], run_meta: [] }")
         );
 
         // Split batch at replacement upper (untouched batch after the split one)

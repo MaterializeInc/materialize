@@ -13,24 +13,39 @@ from typing import Any
 
 import numpy as np
 
-from materialize.feature_benchmark.measurement import Measurement
+from materialize.feature_benchmark.measurement import (
+    Measurement,
+    MeasurementType,
+    MeasurementUnit,
+)
 
 
 class Aggregation:
     def __init__(self) -> None:
+        self.measurement_type: MeasurementType | None = None
         self._data: list[float] = []
+        self._unit: MeasurementUnit = MeasurementUnit.UNKNOWN
 
-    def append(self, measurement: Measurement) -> None:
+    def append_measurement(self, measurement: Measurement) -> None:
+        assert measurement.unit != MeasurementUnit.UNKNOWN, "Unknown unit"
+        self.measurement_type = measurement.type
+        self._unit = measurement.unit
         self._data.append(measurement.value)
 
     def aggregate(self) -> Any:
         if len(self._data) == 0:
             return None
-        else:
-            return self.func()([*self._data])
+
+        return self.func()([*self._data])
+
+    def unit(self) -> MeasurementUnit:
+        return self._unit
 
     def func(self) -> Callable:
-        assert False
+        raise NotImplementedError
+
+    def name(self) -> str:
+        return self.__class__.__name__
 
 
 class MinAggregation(Aggregation):
@@ -45,10 +60,13 @@ class MeanAggregation(Aggregation):
 
 class StdDevAggregation(Aggregation):
     def __init__(self, num_stdevs: float) -> None:
-        self._data = []
+        super().__init__()
         self._num_stdevs = num_stdevs
 
-    def aggregate(self) -> float:
+    def aggregate(self) -> float | None:
+        if len(self._data) == 0:
+            return None
+
         stdev: float = np.std(self._data, dtype=float)
         mean: float = np.mean(self._data, dtype=float)
         val = mean - (stdev * self._num_stdevs)
@@ -56,7 +74,10 @@ class StdDevAggregation(Aggregation):
 
 
 class NormalDistributionAggregation(Aggregation):
-    def aggregate(self) -> statistics.NormalDist:
+    def aggregate(self) -> statistics.NormalDist | None:
+        if len(self._data) == 0:
+            return None
+
         return statistics.NormalDist(
             mu=np.mean(self._data, dtype=float), sigma=np.std(self._data, dtype=float)
         )
@@ -64,4 +85,7 @@ class NormalDistributionAggregation(Aggregation):
 
 class NoAggregation(Aggregation):
     def aggregate(self) -> Any:
+        if len(self._data) == 0:
+            return None
+
         return self._data[0]

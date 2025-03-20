@@ -145,16 +145,30 @@ pub enum UpsertStyle {
     Default(KeyEnvelope),
     /// `ENVELOPE DEBEZIUM UPSERT`
     Debezium { after_idx: usize },
+    /// `ENVELOPE UPSERT` where any decode errors will get serialized into a
+    /// ScalarType::Record column named `error_column`, and all value columns are
+    /// nullable. The key shape depends on the independent `KeyEnvelope`.
+    ValueErrInline {
+        key_envelope: KeyEnvelope,
+        error_column: String,
+    },
 }
 
 impl RustType<ProtoUpsertStyle> for UpsertStyle {
     fn into_proto(&self) -> ProtoUpsertStyle {
-        use proto_upsert_style::{Kind, ProtoDebezium};
+        use proto_upsert_style::{Kind, ProtoDebezium, ProtoValueErrInline};
         ProtoUpsertStyle {
             kind: Some(match self {
                 UpsertStyle::Default(e) => Kind::Default(e.into_proto()),
                 UpsertStyle::Debezium { after_idx } => Kind::Debezium(ProtoDebezium {
                     after_idx: after_idx.into_proto(),
+                }),
+                UpsertStyle::ValueErrInline {
+                    key_envelope,
+                    error_column,
+                } => Kind::ValueErrorInline(ProtoValueErrInline {
+                    key_envelope: Some(key_envelope.into_proto()),
+                    error_column: error_column.clone(),
                 }),
             }),
         }
@@ -169,6 +183,15 @@ impl RustType<ProtoUpsertStyle> for UpsertStyle {
             Kind::Default(e) => UpsertStyle::Default(e.into_rust()?),
             Kind::Debezium(d) => UpsertStyle::Debezium {
                 after_idx: d.after_idx.into_rust()?,
+            },
+            Kind::ValueErrorInline(e) => UpsertStyle::ValueErrInline {
+                key_envelope: e
+                    .key_envelope
+                    .ok_or_else(|| {
+                        TryFromProtoError::missing_field("ProtoValueErrInline::key_envelope")
+                    })?
+                    .into_rust()?,
+                error_column: e.error_column.clone(),
             },
         })
     }
@@ -249,30 +272,32 @@ impl UnplannedSourceEnvelope {
             | UnplannedSourceEnvelope::Upsert {
                 style: UpsertStyle::Default(key_envelope),
                 ..
+            }
+            | UnplannedSourceEnvelope::Upsert {
+                style:
+                    UpsertStyle::ValueErrInline {
+                        key_envelope,
+                        error_column: _,
+                    },
             } => {
-                let key_desc = match key_desc {
-                    Some(desc) if !desc.is_empty() => desc,
-                    _ => {
-                        return Ok((
-                            self.into_source_envelope(None, None, None),
-                            value_desc.concat(metadata_desc),
-                        ))
-                    }
+                let (key_arity, key_desc) = match key_desc {
+                    Some(desc) if !desc.is_empty() => (Some(desc.arity()), Some(desc)),
+                    _ => (None, None),
                 };
-                let key_arity = key_desc.arity();
 
-                let (keyed, key) = match key_envelope {
-                    KeyEnvelope::None => (value_desc, None),
-                    KeyEnvelope::Flattened => {
+                // Compute any key relation and key indices
+                let (key_desc, key) = match (key_desc, key_arity, key_envelope) {
+                    (_, _, KeyEnvelope::None) => (None, None),
+                    (Some(key_desc), Some(key_arity), KeyEnvelope::Flattened) => {
                         // Add the key columns as a key.
-                        let key_indices: Vec<usize> = (0..key_desc.arity()).collect();
+                        let key_indices: Vec<usize> = (0..key_arity).collect();
                         let key_desc = key_desc.with_key(key_indices.clone());
-                        (key_desc.concat(value_desc), Some(key_indices))
+                        (Some(key_desc), Some(key_indices))
                     }
-                    KeyEnvelope::Named(key_name) => {
+                    (Some(key_desc), Some(key_arity), KeyEnvelope::Named(key_name)) => {
                         let key_desc = {
                             // if the key has multiple objects, nest them as a record inside of a single name
-                            if key_desc.arity() > 1 {
+                            if key_arity > 1 {
                                 let key_type = key_desc.typ();
                                 let key_as_record = RelationType::new(vec![ColumnType {
                                     nullable: false,
@@ -299,12 +324,20 @@ impl UnplannedSourceEnvelope {
                             }
                             _ => unreachable!(),
                         };
-                        (key_desc.concat(value_desc), key)
+                        (Some(key_desc), key)
                     }
+                    (None, _, _) => (None, None),
+                    (_, None, _) => (None, None),
                 };
-                let desc = keyed.concat(metadata_desc);
+
+                let value_desc = compute_envelope_value_desc(&self, value_desc);
+                // Add value-related columns and metadata columns after any key columns.
+                let desc = match key_desc {
+                    Some(key_desc) => key_desc.concat(value_desc).concat(metadata_desc),
+                    None => value_desc.concat(metadata_desc),
+                };
                 (
-                    self.into_source_envelope(key, Some(key_arity), Some(desc.arity())),
+                    self.into_source_envelope(key, key_arity, Some(desc.arity())),
                     desc,
                 )
             }
@@ -398,5 +431,47 @@ impl RustType<ProtoKeyEnvelope> for KeyEnvelope {
             Kind::Flattened(()) => KeyEnvelope::Flattened,
             Kind::Named(name) => KeyEnvelope::Named(name),
         })
+    }
+}
+
+/// Compute the resulting value relation given the decoded value relation and the envelope
+/// style. If the ValueErrInline upsert style is used this will add an error column to the
+/// beginning of the relation and make all value fields nullable.
+fn compute_envelope_value_desc(
+    source_envelope: &UnplannedSourceEnvelope,
+    value_desc: RelationDesc,
+) -> RelationDesc {
+    match &source_envelope {
+        UnplannedSourceEnvelope::Upsert {
+            style:
+                UpsertStyle::ValueErrInline {
+                    key_envelope: _,
+                    error_column,
+                },
+        } => {
+            let mut names = Vec::with_capacity(value_desc.arity() + 1);
+            names.push(error_column.as_str().into());
+            names.extend(value_desc.iter_names().cloned());
+
+            let mut types = Vec::with_capacity(value_desc.arity() + 1);
+            types.push(ColumnType {
+                nullable: true,
+                scalar_type: ScalarType::Record {
+                    fields: [(
+                        "description".into(),
+                        ColumnType {
+                            nullable: true,
+                            scalar_type: ScalarType::String,
+                        },
+                    )]
+                    .into(),
+                    custom_id: None,
+                },
+            });
+            types.extend(value_desc.iter_types().map(|t| t.clone().nullable(true)));
+            let relation_type = RelationType::new(types);
+            RelationDesc::new(relation_type, names)
+        }
+        _ => value_desc,
     }
 }

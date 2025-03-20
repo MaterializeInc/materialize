@@ -9,8 +9,9 @@
 
 
 from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.materialized import Materialized
 from materialize.zippy.crdb_capabilities import CockroachIsRunning
-from materialize.zippy.framework import Action, Capability
+from materialize.zippy.framework import Action, Capability, State
 from materialize.zippy.mz_capabilities import MzIsRunning
 
 
@@ -19,11 +20,28 @@ class BackupAndRestore(Action):
     def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning, CockroachIsRunning}
 
-    def run(self, c: Composition) -> None:
-        # Required because of #22762
+    def run(self, c: Composition, state: State) -> None:
+        # TODO: Support and test azurite backups
+        if c.blob_store() == "azurite":
+            return
+
+        # Required because of database-issues#6880
         c.kill("storaged")
 
-        c.backup_crdb()
-        c.restore_mz()
+        c.backup()
+        with c.override(
+            Materialized(
+                name=state.mz_service,
+                external_blob_store=True,
+                blob_store_is_azure=c.blob_store() == "azurite",
+                external_metadata_store=True,
+                deploy_generation=state.deploy_generation,
+                system_parameter_defaults=state.system_parameter_defaults,
+                sanity_restart=False,
+                restart="on-failure",
+                metadata_store="cockroach",
+            )
+        ):
+            c.restore(state.mz_service)
 
         c.up("storaged")

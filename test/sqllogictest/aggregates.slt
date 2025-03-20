@@ -10,7 +10,7 @@
 mode cockroach
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_table_keys = true
+ALTER SYSTEM SET unsafe_enable_table_keys = true
 ----
 COMPLETE 0
 
@@ -175,12 +175,12 @@ SELECT sum(column1) FROM (VALUES (NULL::numeric), (NULL))
 ----
 NULL
 
-query TTT colnames
+query TTTT colnames
 SHOW COLUMNS FROM t
 ----
-name  nullable  type
- a    true      integer
- b    true      integer
+name  nullable  type     comment
+ a    true      integer  (empty)
+ b    true      integer  (empty)
 
 # Tests on int8 sums to make sure we handle overflow and underflow correctly
 
@@ -225,7 +225,7 @@ SELECT a, sum(b) from agg_pk group by a order by a
 3 4
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a, sum(b) from agg_pk group by a
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT a, sum(b) from agg_pk group by a
 ----
 Explained Query:
   Project (#0, #3) // { arity: 2 }
@@ -246,7 +246,7 @@ SELECT a, sum(c) from agg_pk group by a order by a
 3 5
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a, sum(c) from agg_pk group by a
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT a, sum(c) from agg_pk group by a
 ----
 Explained Query:
   Project (#0, #3) // { arity: 2 }
@@ -364,7 +364,7 @@ SELECT v, variance(k) FILTER (WHERE k > 5), stddev(k) FILTER (WHERE k > 5) FROM 
 NULL  NULL  NULL
 
 
-# Multiple tests related to distinctness of aggregates on constants (issue #2535)
+# Multiple tests related to distinctness of aggregates on constants (issue database-issues#887)
 query I rowsort
 select count(distinct column1) from (values (1)) _;
 ----
@@ -719,9 +719,13 @@ EOF
 
 # Should include only one sum(*) aggregate.
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR SELECT stddev(x), sum(x) FROM t_variance;
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT stddev(x), sum(x) FROM t_variance;
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[sum((#0 * #0)), sum(#0), count(#0)]
+        ReadStorage materialize.public.t_variance
   Return
     Project (#4, #3)
       Map (sqrtf64(case when ((#0) IS NULL OR (#1) IS NULL OR (case when (#2 = 0) then null else #2 end) IS NULL OR (case when (0 = (#2 - 1)) then null else (#2 - 1) end) IS NULL) then null else greatest(((#0 - ((#1 * #1) / bigint_to_double(case when (#2 = 0) then null else #2 end))) / bigint_to_double(case when (0 = (#2 - 1)) then null else (#2 - 1) end)), 0) end))
@@ -735,10 +739,6 @@ Explained Query:
                   Get l0
               Constant
                 - ()
-  With
-    cte l0 =
-      Reduce aggregates=[sum((#0 * #0)), sum(#0), count(#0)]
-        ReadStorage materialize.public.t_variance
 
 Source materialize.public.t_variance
 

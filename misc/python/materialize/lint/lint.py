@@ -37,8 +37,11 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="Lint the code",
     )
-    parser.add_argument("--print-duration", action="store_true")
+    parser.add_argument(
+        "--print-duration", action=argparse.BooleanOptionalAction, default=True
+    )
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--offline", action="store_true")
     return parser.parse_args()
 
 
@@ -46,8 +49,9 @@ def main() -> int:
     args = parse_args()
     print_duration = args.print_duration
     verbose_output = args.verbose
+    offline = args.offline
 
-    manager = LintManager(print_duration, verbose_output)
+    manager = LintManager(print_duration, verbose_output, offline)
     return_code = manager.run()
     return return_code
 
@@ -57,9 +61,10 @@ def prefix(ci: str = "---") -> str:
 
 
 class LintManager:
-    def __init__(self, print_duration: bool, verbose_output: bool):
+    def __init__(self, print_duration: bool, verbose_output: bool, offline: bool):
         self.print_duration = print_duration
         self.verbose_output = verbose_output
+        self.offline = offline
 
     def run(self) -> int:
         failed_checks = self.run_and_validate_if_no_previous_failures(
@@ -120,7 +125,7 @@ class LintManager:
         status_printer_thread.start()
 
         for lint_file in lint_files:
-            thread = LintingThread(checks_path, lint_file)
+            thread = LintingThread(checks_path, lint_file, offline=self.offline)
             thread.start()
             threads.append(thread)
 
@@ -131,9 +136,9 @@ class LintManager:
 
         failed_checks = []
 
-        for thread in threads:
+        for thread in sorted(threads, key=lambda thread: thread.duration):
             formatted_duration = (
-                f" in {thread.duration.total_seconds():.2f}s"
+                f" [{thread.duration.total_seconds():5.2f}s]"
                 if self.print_duration
                 else ""
             )
@@ -152,20 +157,25 @@ class LintManager:
 
 
 class LintingThread(threading.Thread):
-    def __init__(self, checks_path: Path, lint_file: str):
+    def __init__(self, checks_path: Path, lint_file: str, offline: bool):
         super().__init__(target=self.run_single_script, args=(checks_path, lint_file))
         self.name = lint_file
+        self.offline = offline
         self.output: str = ""
         self.success = False
         self.duration: timedelta | None = None
 
     def run_single_script(self, directory_path: Path, file_name: str) -> None:
         start_time = datetime.now()
+        command = [str(directory_path / file_name)]
+
+        if self.offline:
+            command.append("--offline")
 
         try:
             # Note that coloring gets lost (e.g., in git diff)
             proc = subprocess.Popen(
-                directory_path / file_name,
+                command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
             )

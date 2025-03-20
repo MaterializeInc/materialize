@@ -9,6 +9,9 @@
 
 mod copy_to_s3_oneshot;
 mod correction;
-mod persist_sink;
+mod correction_v2;
+mod materialized_view;
 mod refresh;
 mod subscribe;
+
+pub(crate) use correction::ConsolidatingVec;

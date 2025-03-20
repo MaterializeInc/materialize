@@ -47,12 +47,12 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
   )
 
 > CREATE SOURCE pg_source1
-  FROM POSTGRES CONNECTION pg_conn_1 (PUBLICATION 'mz_source')
-  FOR TABLES (table_a);
+  FROM POSTGRES CONNECTION pg_conn_1 (PUBLICATION 'mz_source');
+> CREATE TABLE table_a FROM SOURCE pg_source1 (REFERENCE table_a);
 
 > CREATE SOURCE pg_source2
-  FROM POSTGRES CONNECTION pg_conn_2 (PUBLICATION 'mz_source')
-  FOR TABLES (table_b);
+  FROM POSTGRES CONNECTION pg_conn_2 (PUBLICATION 'mz_source');
+> CREATE TABLE table_b FROM SOURCE pg_source2 (REFERENCE table_b);
 
 > CREATE TABLE t (a int);
 > INSERT INTO t VALUES (1);

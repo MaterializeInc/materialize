@@ -27,8 +27,10 @@ $ kafka-ingest format=avro topic=avro-bad-json schema=${writer} timestamp=1
 > CREATE SOURCE avro_bad_json
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-bad-json-${testdrive.seed}')
+
+> CREATE TABLE avro_bad_json_tbl FROM SOURCE avro_bad_json (REFERENCE "testdrive-avro-bad-json-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${reader}'
   ENVELOPE NONE
 
-! SELECT * FROM avro_bad_json
+! SELECT * FROM avro_bad_json_tbl
 contains: (got __debezium_unavailable_value)

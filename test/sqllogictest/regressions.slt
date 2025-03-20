@@ -21,6 +21,6 @@ INSERT INTO t (a, b, c) VALUES (0, 'test', 1)
 statement ok
 INSERT INTO t (a, b, c) VALUES (3, 'test', 1)
 
-# Regression test for #5003
+# Regression test for database-issues#1555
 statement error Evaluation error: division by zero
 SELECT recip - 1 FROM (SELECT b, 1/a as recip, max(c) from t GROUP BY b, 1/a)

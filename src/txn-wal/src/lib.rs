@@ -121,12 +121,13 @@
 //! #
 //! # tokio::runtime::Runtime::new().unwrap().block_on(async {
 //! # let client = PersistClient::new_for_tests().await;
+//! # let dyncfgs = mz_txn_wal::all_dyncfgs(client.dyncfgs().clone());
 //! # let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 //! # mz_ore::test::init_logging();
 //! // Open a txn shard, initializing it if necessary.
 //! let txns_id = ShardId::new();
 //! let mut txns = TxnsHandle::<String, (), u64, i64>::open(
-//!     0u64, client.clone(), metrics, txns_id, StringSchema.into(), UnitSchema.into()
+//!     0u64, client.clone(), dyncfgs, metrics, txns_id
 //! ).await;
 //!
 //! // Register data shards to the txn set.
@@ -207,7 +208,7 @@ use std::fmt::Write;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
-use mz_dyncfg::{Config, ConfigSet};
+use mz_dyncfg::ConfigSet;
 use mz_ore::instrument;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::error::UpperMismatch;
@@ -222,6 +223,7 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, error};
 
 use crate::proto::ProtoIdBatch;
+use crate::txns::DataWriteApply;
 
 pub mod metrics;
 pub mod operator;
@@ -265,18 +267,11 @@ mod proto {
 /// Adds the full set of all txn-wal `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
-        .add(&crate::INIT_FORGET_ALL)
         .add(&crate::operator::DATA_SHARD_RETRYER_CLAMP)
         .add(&crate::operator::DATA_SHARD_RETRYER_INITIAL_BACKOFF)
         .add(&crate::operator::DATA_SHARD_RETRYER_MULTIPLIER)
+        .add(&crate::txns::APPLY_ENSURE_SCHEMA_MATCH)
 }
-
-/// Used by storage controller as a temporary escape hatch for #25992.
-pub const INIT_FORGET_ALL: Config<bool> = Config::new(
-    "persist_txn_init_forget_all",
-    false,
-    "Whether to call forget_all (true) or empty txn and apply_eager (false) at boot",
-);
 
 /// A reasonable default implementation of [TxnsCodec].
 ///
@@ -314,9 +309,10 @@ impl TxnsCodec for TxnsCodecDefault {
     fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool> {
         let stats = stats
             .key
-            .col::<String>("")
+            .col("")?
+            .try_as_string()
             .map_err(|err| error!("unexpected stats type: {}", err))
-            .ok()??;
+            .ok()?;
         let data_id_str = data_id.to_string();
         Some(stats.lower <= data_id_str && stats.upper >= data_id_str)
     }
@@ -336,7 +332,7 @@ where
     F: Fn() -> S,
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + TotalOrder + Codec64,
+    T: Timestamp + Lattice + TotalOrder + Codec64 + Sync,
     D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
 {
     fn debug_sep<'a, T: Debug + 'a>(sep: &str, xs: impl IntoIterator<Item = &'a T>) -> String {
@@ -400,7 +396,7 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
     F: Fn() -> S,
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
     D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
 {
     let name = name();
@@ -440,13 +436,13 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
 /// to get the same answer.)
 #[instrument(level = "debug", fields(shard=%data_write.shard_id(), ts=?commit_ts))]
 async fn apply_caa<K, V, T, D>(
-    data_write: &mut WriteHandle<K, V, T, D>,
+    data_write: &mut DataWriteApply<K, V, T, D>,
     batch_raws: &Vec<&[u8]>,
     commit_ts: T,
 ) where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
     D: Semigroup + Ord + Codec64 + Send + Sync,
 {
     let mut batches = batch_raws
@@ -475,6 +471,11 @@ async fn apply_caa<K, V, T, D>(
             }
             return;
         }
+
+        // Make sure we're using the same schema to CaA these batches as what
+        // they were written with.
+        data_write.maybe_replace_with_batch_schema(&batches).await;
+
         debug!(
             "CaA data {:.9} apply b={:?} t={:?} [{:?},{:?})",
             data_write.shard_id().to_string(),
@@ -528,7 +529,7 @@ pub(crate) async fn cads<T, O, C>(
     txns_since: &mut SinceHandle<C::Key, C::Val, T, i64, O>,
     new_since_ts: T,
 ) where
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
     O: Opaque + Debug + Codec64,
     C: TxnsCodec,
 {
@@ -550,7 +551,7 @@ pub(crate) async fn cads<T, O, C>(
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
     use std::sync::Mutex;
@@ -573,7 +574,7 @@ pub mod tests {
     where
         K: Debug + Codec + Clone,
         V: Debug + Codec + Clone,
-        T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+        T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
         D: Debug + Semigroup + Ord + Codec64 + Send + Sync + Clone,
         O: Opaque + Debug + Codec64,
         C: TxnsCodec,
@@ -587,10 +588,7 @@ pub mod tests {
 
     /// A [`Txn`] wrapper that exposes extra functionality for tests.
     #[derive(Debug)]
-    pub struct TestTxn<K, V, T, D>
-    where
-        T: Timestamp + Lattice + Codec64,
-    {
+    pub struct TestTxn<K, V, T, D> {
         txn: Txn<K, V, T, D>,
         /// A copy of every write to use in tests.
         writes: BTreeMap<ShardId, Vec<(K, V, D)>>,
@@ -600,7 +598,7 @@ pub mod tests {
     where
         K: Debug + Codec + Clone,
         V: Debug + Codec + Clone,
-        T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+        T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
         D: Debug + Semigroup + Ord + Codec64 + Send + Sync + Clone,
     {
         pub(crate) fn new() -> Self {

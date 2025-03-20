@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import argparse
 import inspect
+import json
 import os
+import shlex
 import subprocess
 import sys
 import webbrowser
@@ -43,6 +45,8 @@ from materialize.ui import UIError
 
 RECOMMENDED_MIN_MEM = 7 * 1024**3  # 7GiB
 RECOMMENDED_MIN_CPUS = 2
+
+JUNIT_ERROR_DETAILS_SEPARATOR = "###---###"
 
 
 def main(argv: list[str]) -> None:
@@ -108,6 +112,7 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
     CpCommand.register(parser, subparsers)
     CreateCommand.register(parser, subparsers)
     DescribeCommand().register(parser, subparsers)
+    DescriptionCommand().register(parser, subparsers)
     DownCommand().register(parser, subparsers)
     EventsCommand.register(parser, subparsers)
     ExecCommand.register(parser, subparsers)
@@ -332,6 +337,11 @@ class DescribeCommand(Command):
 
         name_width = min(max(len(name) for name, _ in workflows), 16)
 
+        if composition.description:
+            print("Description:")
+            print(composition.description)
+            print()
+
         print("Services:")
         for name in sorted(composition.compose["services"]):
             print(f"    {name}")
@@ -354,12 +364,27 @@ class DescribeCommand(Command):
         )
 
 
+class DescriptionCommand(Command):
+    name = "description"
+    help = "fetch the Python code description from mzcompose.py"
+
+    def run(self, args: argparse.Namespace) -> None:
+        composition = load_composition(args)
+        print(composition.description)
+
+
 class SqlCommand(Command):
     name = "sql"
     help = "connect a SQL shell to a running materialized service"
 
     def configure(self, parser: argparse.ArgumentParser) -> None:
-        parser.add_argument("service", metavar="SERVICE", help="the service to target")
+        parser.add_argument(
+            "service",
+            metavar="SERVICE",
+            nargs="?",
+            default="materialized",
+            help="the service to target",
+        )
 
     def run(self, args: argparse.Namespace) -> None:
         composition = load_composition(args)
@@ -389,6 +414,40 @@ class SqlCommand(Command):
                     "materialize",
                 ],
                 docker_args=["--interactive", f"--network={composition.name}_default"],
+                env={"PGCLIENTENCODING": "utf-8"},
+            )
+        elif image == "materialize/postgres":
+            deps = composition.repo.resolve_dependencies(
+                [composition.repo.images["psql"]]
+            )
+            deps.acquire()
+            deps["psql"].run(
+                [
+                    "-h",
+                    service.get("hostname", args.service),
+                    "-U",
+                    "postgres",
+                    "postgres",
+                ],
+                docker_args=["--interactive", f"--network={composition.name}_default"],
+                env={"PGPASSWORD": "postgres", "PGCLIENTENCODING": "utf-8"},
+            )
+        elif image == "cockroachdb/cockroach" or args.service == "postgres-metadata":
+            deps = composition.repo.resolve_dependencies(
+                [composition.repo.images["psql"]]
+            )
+            deps.acquire()
+            deps["psql"].run(
+                [
+                    "-h",
+                    service.get("hostname", args.service),
+                    "-p" "26257",
+                    "-U",
+                    "root",
+                    "root",
+                ],
+                docker_args=["--interactive", f"--network={composition.name}_default"],
+                env={"PGCLIENTENCODING": "utf-8"},
             )
         elif image == "mysql":
             deps = composition.repo.resolve_dependencies(
@@ -412,7 +471,7 @@ class SqlCommand(Command):
             )
         else:
             raise UIError(
-                f"cannot connect SQL shell to non-materialized service {args.service!r}"
+                f"cannot connect SQL shell to unhandled service {args.service!r}"
             )
 
 
@@ -464,7 +523,7 @@ class DockerComposeCommand(Command):
             return
 
         composition = load_composition(args)
-        ui.header("Collecting mzbuild images")
+        ui.section("Collecting mzbuild images")
         for d in composition.dependencies:
             ui.say(d.spec())
 
@@ -623,7 +682,16 @@ To see the available workflows, run:
             # test analytics, even if the workflow doesn't define more granular
             # test cases.
             with composition.test_case(f"workflow-{args.workflow}"):
-                composition.workflow(args.workflow, *args.unknown_subargs[1:])
+                ci_extra_args = json.loads(os.getenv("CI_EXTRA_ARGS", "{}"))
+                buildkite_step_key = os.getenv("BUILDKITE_STEP_KEY")
+                extra_args = (
+                    shlex.split(ci_extra_args[buildkite_step_key])
+                    if buildkite_step_key and buildkite_step_key in ci_extra_args
+                    else []
+                )
+                composition.workflow(
+                    args.workflow, *args.unknown_subargs[1:], *extra_args
+                )
 
             if self.shall_generate_junit_report(args.find):
                 junit_suite = self.generate_junit_suite(composition)
@@ -640,6 +708,8 @@ To see the available workflows, run:
         return composition not in {
             # sqllogictest already generates a proper junit.xml file
             "sqllogictest",
+            # testdrive already generates a proper junit.xml file
+            "testdrive",
             # not a test, run as post-command, and should not overwrite an existing junit.xml from a previous test
             "get-cloud-hostname",
         }
@@ -687,7 +757,17 @@ To see the available workflows, run:
                     # do not provide the duration when multiple errors are derived from a test execution
                     elapsed_sec=None,
                 )
-                test_case.add_error_info(message=error.message, output=error.details)
+
+                error_details_data = error.details
+                if error.additional_details is not None:
+                    error_details_data = (error_details_data or "") + (
+                        f"{JUNIT_ERROR_DETAILS_SEPARATOR}{error.additional_details_header or 'Additional details'}"
+                        f"{JUNIT_ERROR_DETAILS_SEPARATOR}{error.additional_details}"
+                    )
+
+                test_case.add_error_info(
+                    message=error.message, output=error_details_data
+                )
                 junit_suite.test_cases.append(test_case)
 
     def write_junit_report_to_file(self, junit_suite: junit_xml.TestSuite) -> Path:

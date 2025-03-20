@@ -67,24 +67,25 @@ use std::borrow::Cow;
 use std::clone::Clone;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
+use std::net::IpAddr;
 use std::string::ToString;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use derivative::Derivative;
 use im::OrdMap;
 use mz_build_info::BuildInfo;
 use mz_dyncfg::{ConfigSet, ConfigType, ConfigUpdates, ConfigVal};
-use mz_ore::cast::CastFrom;
 use mz_persist_client::cfg::{CRDB_CONNECT_TIMEOUT, CRDB_TCP_USER_TIMEOUT};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::bytes::ByteSize;
 use mz_repr::user::ExternalUserMetadata;
-use mz_storage_types::controller::TxnWalTablesImpl;
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
-use once_cell::sync::Lazy;
 use serde::Serialize;
+use thiserror::Error;
+use tracing::error;
 use uncased::UncasedStr;
 
 use crate::ast::Ident;
@@ -128,7 +129,7 @@ pub enum VarInput<'a> {
 
 impl<'a> VarInput<'a> {
     /// Converts the variable input to an owned vector of strings.
-    fn to_vec(&self) -> Vec<String> {
+    pub fn to_vec(&self) -> Vec<String> {
         match self {
             VarInput::Flat(v) => vec![v.to_string()],
             VarInput::SqlSet(values) => values.into_iter().map(|v| v.to_string()).collect(),
@@ -178,7 +179,12 @@ pub trait Var: Debug {
     /// "Invisible" parameters return `VarErrors`.
     ///
     /// Variables marked as `internal` are only visible for the system user.
-    fn visible(&self, user: &User, system_vars: Option<&SystemVars>) -> Result<(), VarError>;
+    fn visible(&self, user: &User, system_vars: &SystemVars) -> Result<(), VarError>;
+
+    /// Reports whether the variable is only visible in unsafe mode.
+    fn is_unsafe(&self) -> bool {
+        self.name().starts_with("unsafe_")
+    }
 
     /// Upcast `self` to a `dyn Var`, useful when working with multiple different implementors of
     /// [`Var`].
@@ -305,9 +311,9 @@ impl SessionVar {
     pub fn value_dyn(&self) -> &dyn Value {
         self.local_value
             .as_deref()
-            .or_else(|| self.staged_value.as_deref())
-            .or_else(|| self.session_value.as_deref())
-            .or_else(|| self.default_value.as_deref())
+            .or(self.staged_value.as_deref())
+            .or(self.session_value.as_deref())
+            .or(self.default_value.as_deref())
             .unwrap_or(self.definition.value.value())
     }
 
@@ -348,9 +354,26 @@ impl Var for SessionVar {
     fn visible(
         &self,
         user: &User,
-        system_vars: Option<&super::vars::SystemVars>,
+        system_vars: &super::vars::SystemVars,
     ) -> Result<(), super::vars::VarError> {
         self.definition.visible(user, system_vars)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MzVersion {
+    /// Inputs to computed variables.
+    build_info: &'static BuildInfo,
+    /// Helm chart version
+    helm_chart_version: Option<String>,
+}
+
+impl MzVersion {
+    pub fn new(build_info: &'static BuildInfo, helm_chart_version: Option<String>) -> Self {
+        MzVersion {
+            build_info,
+            helm_chart_version,
+        }
     }
 }
 
@@ -363,14 +386,18 @@ pub struct SessionVars {
     /// The set of all session variables.
     vars: OrdMap<&'static UncasedStr, SessionVar>,
     /// Inputs to computed variables.
-    build_info: &'static BuildInfo,
+    mz_version: MzVersion,
     /// Information about the user associated with this Session.
     user: User,
 }
 
 impl SessionVars {
     /// Creates a new [`SessionVars`] without considering the System or Role defaults.
-    pub fn new_unchecked(build_info: &'static BuildInfo, user: User) -> SessionVars {
+    pub fn new_unchecked(
+        build_info: &'static BuildInfo,
+        user: User,
+        helm_chart_version: Option<String>,
+    ) -> SessionVars {
         use definitions::*;
 
         let vars = [
@@ -392,13 +419,13 @@ impl SessionVars {
             &WELCOME_MESSAGE,
         ]
         .into_iter()
-        .chain(SystemVars::SESSION_VARS.iter().map(|(_name, var)| *var))
+        .chain(SESSION_SYSTEM_VARS.iter().map(|(_name, var)| *var))
         .map(|var| (var.name, SessionVar::new(var.clone())))
         .collect();
 
         SessionVars {
             vars,
-            build_info,
+            mz_version: MzVersion::new(build_info, helm_chart_version),
             user,
         }
     }
@@ -423,13 +450,19 @@ impl SessionVars {
         self.vars
             .values()
             .map(|v| v.as_var())
-            .chain([self.build_info as &dyn Var, &self.user])
+            .chain([&self.mz_version as &dyn Var, &self.user])
     }
 
     /// Returns an iterator over configuration parameters (and their current
     /// values for this session) that are expected to be sent to the client when
     /// a new connection is established or when their value changes.
     pub fn notify_set(&self) -> impl Iterator<Item = &dyn Var> {
+        // WARNING: variables in this set are not checked for visibility, and
+        // are assumed to be visible for all sessions.
+        //
+        // This is fixible with some elbow grease, but at the moment it seems
+        // unlikely that we'll have a variable in the notify set that shouldn't
+        // be visible to all sessions.
         [
             &APPLICATION_NAME,
             &CLIENT_ENCODING,
@@ -449,14 +482,14 @@ impl SessionVars {
             &SEARCH_PATH,
         ]
         .into_iter()
-        .map(|p| self.get(None, p.name()).expect("SystemVars known to exist"))
+        .map(|v| self.vars[v.name].as_var())
         // Including `mz_version` in the notify set is a Materialize
         // extension. Doing so allows applications to detect whether they
         // are talking to Materialize or PostgreSQL without an additional
         // network roundtrip. This is known to be safe because CockroachDB
         // has an analogous extension [0].
         // [0]: https://github.com/cockroachdb/cockroach/blob/369c4057a/pkg/sql/pgwire/conn.go#L1840
-        .chain(std::iter::once(self.build_info.as_var()))
+        .chain(std::iter::once(self.mz_version.as_var()))
     }
 
     /// Resets all variables to their default value.
@@ -477,12 +510,12 @@ impl SessionVars {
     /// named accessor to access the variable with its true Rust type. For
     /// example, `self.get("sql_safe_updates").value()` returns the string
     /// `"true"` or `"false"`, while `self.sql_safe_updates()` returns a bool.
-    pub fn get(&self, system_vars: Option<&SystemVars>, name: &str) -> Result<&dyn Var, VarError> {
+    pub fn get(&self, system_vars: &SystemVars, name: &str) -> Result<&dyn Var, VarError> {
         let name = compat_translate_name(name);
 
         let name = UncasedStr::new(name);
         if name == MZ_VERSION_NAME {
-            Ok(self.build_info)
+            Ok(&self.mz_version)
         } else if name == IS_SUPERUSER_NAME {
             Ok(&self.user)
         } else {
@@ -523,7 +556,7 @@ impl SessionVars {
     /// not exist, an error is returned.
     pub fn set(
         &mut self,
-        system_vars: Option<&SystemVars>,
+        system_vars: &SystemVars,
         name: &str,
         input: VarInput,
         local: bool,
@@ -574,7 +607,7 @@ impl SessionVars {
     /// requires, this function returns an error.
     pub fn reset(
         &mut self,
-        system_vars: Option<&SystemVars>,
+        system_vars: &SystemVars,
         name: &str,
         local: bool,
     ) -> Result<(), VarError> {
@@ -645,7 +678,7 @@ impl SessionVars {
 
     /// Returns the build info.
     pub fn build_info(&self) -> &'static BuildInfo {
-        self.build_info
+        self.mz_version.build_info
     }
 
     /// Returns the value of the `client_encoding` configuration parameter.
@@ -667,6 +700,12 @@ impl SessionVars {
     pub fn cluster_replica(&self) -> Option<&str> {
         self.expect_value::<Option<String>>(&CLUSTER_REPLICA)
             .as_deref()
+    }
+
+    /// Returns the value of the `current_object_missing_warnings` configuration
+    /// parameter.
+    pub fn current_object_missing_warnings(&self) -> bool {
+        *self.expect_value::<bool>(&CURRENT_OBJECT_MISSING_WARNINGS)
     }
 
     /// Returns the value of the `DateStyle` configuration parameter.
@@ -696,7 +735,7 @@ impl SessionVars {
 
     /// Returns the value of the `mz_version` configuration parameter.
     pub fn mz_version(&self) -> String {
-        self.build_info.value()
+        self.mz_version.value()
     }
 
     /// Returns the value of the `search_path` configuration parameter.
@@ -808,8 +847,21 @@ impl SessionVars {
     }
 
     pub fn set_cluster(&mut self, cluster: String) {
-        self.set(None, CLUSTER.name(), VarInput::Flat(&cluster), false)
-            .expect("setting cluster from string succeeds");
+        let var = self
+            .vars
+            .get_mut(UncasedStr::new(CLUSTER.name()))
+            .expect("cluster variable must exist");
+        var.set(VarInput::Flat(&cluster), false)
+            .expect("setting cluster must succeed");
+    }
+
+    pub fn set_local_transaction_isolation(&mut self, transaction_isolation: IsolationLevel) {
+        let var = self
+            .vars
+            .get_mut(UncasedStr::new(TRANSACTION_ISOLATION.name()))
+            .expect("transaction_isolation variable must exist");
+        var.set(VarInput::Flat(transaction_isolation.as_str()), true)
+            .expect("setting transaction isolation must succeed");
     }
 
     pub fn get_statement_logging_sample_rate(&self) -> Numeric {
@@ -831,7 +883,7 @@ impl SessionVars {
     }
 }
 
-// TODO(#27285) remove together with `compat_translate`
+// TODO(database-issues#8069) remove together with `compat_translate`
 pub const OLD_CATALOG_SERVER_CLUSTER: &str = "mz_introspection";
 pub const OLD_AUTO_ROUTE_CATALOG_QUERIES: &str = "auto_route_introspection_queries";
 
@@ -841,7 +893,7 @@ pub const OLD_AUTO_ROUTE_CATALOG_QUERIES: &str = "auto_route_introspection_queri
 /// This method was introduced to gracefully handle the rename of the `mz_introspection` cluster to
 /// `mz_cluster_server`. The plan is to remove it once all users have migrated to the new name. The
 /// debug logs will be helpful for checking this in production.
-// TODO(#27285) remove this after sufficient time has passed
+// TODO(database-issues#8069) remove this after sufficient time has passed
 fn compat_translate<'a, 'b>(name: &'a str, input: VarInput<'b>) -> (&'a str, VarInput<'b>) {
     if name == CLUSTER.name() {
         if let Ok(value) = CLUSTER.parse(input) {
@@ -911,7 +963,7 @@ impl SystemVar {
     pub fn value_dyn(&self) -> &dyn Value {
         self.persisted_value
             .as_deref()
-            .or_else(|| self.dynamic_default.as_deref())
+            .or(self.dynamic_default.as_deref())
             .unwrap_or(self.definition.default_value())
     }
 
@@ -979,186 +1031,50 @@ impl Var for SystemVar {
         self.definition.type_name()
     }
 
-    fn visible(
-        &self,
-        user: &User,
-        system_vars: Option<&super::vars::SystemVars>,
-    ) -> Result<(), super::vars::VarError> {
+    fn visible(&self, user: &User, system_vars: &SystemVars) -> Result<(), VarError> {
         self.definition.visible(user, system_vars)
     }
 }
 
-#[derive(Debug, Copy, Clone)]
-pub struct ConnectionCounter {
-    pub current: u64,
-    // Callers must ensure this is always <= limit.
-    pub superuser_reserved: u64,
-    pub limit: u64,
-}
-
-impl ConnectionCounter {
-    pub fn new(limit: u64, superuser_reserved: u64) -> Self {
-        ConnectionCounter {
-            current: 0,
-            limit,
-            superuser_reserved,
-        }
-    }
-
-    fn assert(&self) {
-        self.non_reserved_remaining();
-        self.reserved_remaining();
-        self.non_reserved_limit();
-    }
-
-    /// Whether a non-reserved connection is available.
-    pub fn non_reserved_available(&self) -> bool {
-        self.non_reserved_remaining() > 0
-    }
-
-    /// Whether a reserved connection is available.
-    pub fn reserved_available(&self) -> bool {
-        self.reserved_remaining() > 0
-    }
-
-    /// The number of non-reserved connections available.
-    pub fn non_reserved_remaining(&self) -> u64 {
-        // Saturate because there can be more connections than non-reserved slots.
-        self.non_reserved_limit().saturating_sub(self.current)
-    }
-
-    /// The number of reserved connections available.
-    pub fn reserved_remaining(&self) -> u64 {
-        // Panic because there should never be more connections than the total limit.
-        self.limit.checked_sub(self.current).expect("underflow")
-    }
-
-    /// The total limit for non-reserved connections.
-    pub fn non_reserved_limit(&self) -> u64 {
-        // Panic because superuser_reserved should always be <= limit.
-        self.limit
-            .checked_sub(self.superuser_reserved)
-            .expect("underflow")
-    }
-
-    /// The total limit for reserved connections.
-    pub fn reserved_limit(&self) -> u64 {
-        self.limit
-    }
-}
-
-#[derive(Debug)]
-pub enum ConnectionError {
-    /// There were too many connections
-    TooManyConnections { current: u64, limit: u64 },
-}
-
-#[derive(Debug)]
-pub struct DropConnection {
-    pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
-}
-
-impl Drop for DropConnection {
-    fn drop(&mut self) {
-        let mut connections = self.active_connection_count.lock().expect("lock poisoned");
-        assert_ne!(connections.current, 0);
-        connections.current -= 1;
-        connections.assert();
-    }
-}
-
-impl DropConnection {
-    pub fn new_connection(
-        user: &User,
-        active_connection_count: Arc<Mutex<ConnectionCounter>>,
-    ) -> Result<Option<Self>, ConnectionError> {
-        Ok(if user.limit_max_connections() {
-            {
-                let mut connections = active_connection_count.lock().expect("lock poisoned");
-                if user.is_external_admin() {
-                    if !connections.reserved_available() {
-                        return Err(ConnectionError::TooManyConnections {
-                            current: connections.current,
-                            limit: connections.reserved_limit(),
-                        });
-                    }
-                } else if !connections.non_reserved_available() {
-                    return Err(ConnectionError::TooManyConnections {
-                        current: connections.current,
-                        limit: connections.non_reserved_limit(),
-                    });
-                }
-                connections.current += 1;
-                connections.assert();
-            }
-            Some(DropConnection {
-                active_connection_count,
-            })
-        } else {
-            None
-        })
-    }
+#[derive(Debug, Error)]
+pub enum NetworkPolicyError {
+    #[error("Access denied for address {0}")]
+    AddressDenied(IpAddr),
 }
 
 /// On disk variables.
 ///
 /// See the [`crate::session::vars`] module documentation for more details on the
 /// Materialize configuration model.
-#[derive(Debug, Clone)]
+#[derive(Derivative, Clone)]
+#[derivative(Debug)]
 pub struct SystemVars {
     /// Allows "unsafe" parameters to be set.
     allow_unsafe: bool,
     /// Set of all [`SystemVar`]s.
     vars: BTreeMap<&'static UncasedStr, SystemVar>,
+    /// External components interested in when a [`SystemVar`] gets updated.
+    #[derivative(Debug = "ignore")]
+    callbacks: BTreeMap<String, Vec<Arc<dyn Fn(&SystemVars) + Send + Sync>>>,
 
-    active_connection_count: Arc<Mutex<ConnectionCounter>>,
     /// NB: This is intentionally disconnected from the one that is plumbed around to persist and
-    /// the controllers. This is so we can explictly control and reason about when changes to config
+    /// the controllers. This is so we can explicitly control and reason about when changes to config
     /// values are propagated to the rest of the system.
     dyncfgs: ConfigSet,
 }
 
 impl Default for SystemVars {
     fn default() -> Self {
-        Self::new(Arc::new(Mutex::new(ConnectionCounter::new(0, 0))))
+        Self::new()
     }
 }
 
 impl SystemVars {
-    /// Set of [`SystemVar`]s that can also get set at a per-Session level.
-    ///
-    /// TODO(parkmycar): Instead of a separate list, make this a field on VarDefinition.
-    const SESSION_VARS: Lazy<BTreeMap<&'static UncasedStr, &'static VarDefinition>> =
-        Lazy::new(|| {
-            [
-                &APPLICATION_NAME,
-                &CLIENT_ENCODING,
-                &CLIENT_MIN_MESSAGES,
-                &CLUSTER,
-                &CLUSTER_REPLICA,
-                &DATABASE,
-                &DATE_STYLE,
-                &EXTRA_FLOAT_DIGITS,
-                &INTEGER_DATETIMES,
-                &INTERVAL_STYLE,
-                &REAL_TIME_RECENCY_TIMEOUT,
-                &SEARCH_PATH,
-                &STANDARD_CONFORMING_STRINGS,
-                &STATEMENT_TIMEOUT,
-                &IDLE_IN_TRANSACTION_SESSION_TIMEOUT,
-                &TIMEZONE,
-                &TRANSACTION_ISOLATION,
-                &MAX_QUERY_RESULT_SIZE,
-            ]
-            .into_iter()
-            .map(|var| (UncasedStr::new(var.name()), var))
-            .collect()
-        });
-
-    pub fn new(active_connection_count: Arc<Mutex<ConnectionCounter>>) -> Self {
+    pub fn new() -> Self {
         let system_vars = vec![
             &MAX_KAFKA_CONNECTIONS,
             &MAX_POSTGRES_CONNECTIONS,
+            &MAX_MYSQL_CONNECTIONS,
             &MAX_AWS_PRIVATELINK_CONNECTIONS,
             &MAX_TABLES,
             &MAX_SOURCES,
@@ -1172,6 +1088,9 @@ impl SystemVars {
             &MAX_OBJECTS_PER_SCHEMA,
             &MAX_SECRETS,
             &MAX_ROLES,
+            &MAX_CONTINUAL_TASKS,
+            &MAX_NETWORK_POLICIES,
+            &MAX_RULES_PER_NETWORK_POLICY,
             &MAX_RESULT_SIZE,
             &MAX_COPY_FROM_SIZE,
             &ALLOWED_CLUSTER_REPLICA_SIZES,
@@ -1202,7 +1121,6 @@ impl SystemVars {
             &STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO,
             &STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS,
             &PERSIST_FAST_PATH_LIMIT,
-            &TXN_WAL_TABLES,
             &METRICS_RETENTION,
             &UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP,
             &ENABLE_RBAC_CHECKS,
@@ -1220,6 +1138,7 @@ impl SystemVars {
             &MYSQL_SOURCE_TCP_KEEPALIVE,
             &MYSQL_SOURCE_SNAPSHOT_MAX_EXECUTION_TIME,
             &MYSQL_SOURCE_SNAPSHOT_LOCK_WAIT_TIMEOUT,
+            &MYSQL_SOURCE_CONNECT_TIMEOUT,
             &SSH_CHECK_INTERVAL,
             &SSH_CONNECT_TIMEOUT,
             &SSH_KEEPALIVES_IDLE,
@@ -1229,17 +1148,19 @@ impl SystemVars {
             &KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT,
             &KAFKA_FETCH_METADATA_TIMEOUT,
             &KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT,
-            &KAFKA_DEFAULT_METADATA_FETCH_INTERVAL,
             &ENABLE_LAUNCHDARKLY,
             &MAX_CONNECTIONS,
+            &NETWORK_POLICY,
             &SUPERUSER_RESERVED_CONNECTIONS,
             &KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES,
             &KEEP_N_SINK_STATUS_HISTORY_ENTRIES,
             &KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES,
+            &REPLICA_STATUS_HISTORY_RETENTION_WINDOW,
             &ARRANGEMENT_EXERT_PROPORTIONALITY,
             &ENABLE_STORAGE_SHARD_FINALIZATION,
             &ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE,
             &ENABLE_DEFAULT_CONNECTION_VALIDATION,
+            &ENABLE_REDUCE_REDUCTION,
             &MIN_TIMESTAMP_INTERVAL,
             &MAX_TIMESTAMP_INTERVAL,
             &LOGGING_FILTER,
@@ -1262,13 +1183,16 @@ impl SystemVars {
             &cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY,
             &cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT,
             &cluster_scheduling::CLUSTER_ALWAYS_USE_DISK,
+            &cluster_scheduling::CLUSTER_ALTER_CHECK_READY_INTERVAL,
             &cluster_scheduling::CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL,
             &cluster_scheduling::CLUSTER_SECURITY_CONTEXT_ENABLED,
+            &cluster_scheduling::CLUSTER_REFRESH_MV_COMPACTION_ESTIMATE,
             &grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT,
             &STATEMENT_LOGGING_MAX_SAMPLE_RATE,
             &STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE,
             &STATEMENT_LOGGING_TARGET_DATA_RATE,
             &STATEMENT_LOGGING_MAX_DATA_CREDIT,
+            &ENABLE_INTERNAL_STATEMENT_LOGGING,
             &OPTIMIZER_STATS_TIMEOUT,
             &OPTIMIZER_ONESHOT_STATS_TIMEOUT,
             &PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE,
@@ -1278,6 +1202,8 @@ impl SystemVars {
             &PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL,
             &PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER,
             &USER_STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION,
+            &FORCE_SOURCE_TABLE_SYNTAX,
+            &OPTIMIZER_E2E_LATENCY_WARNING_THRESHOLD,
         ];
 
         let dyncfgs = mz_dyncfgs::all_dyncfgs();
@@ -1285,28 +1211,28 @@ impl SystemVars {
             .entries()
             .map(|cfg| match cfg.default() {
                 ConfigVal::Bool(default) => {
-                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), true)
+                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
                 }
                 ConfigVal::U32(default) => {
-                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), true)
+                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
                 }
                 ConfigVal::Usize(default) => {
-                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), true)
+                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
                 }
                 ConfigVal::OptUsize(default) => {
-                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), true)
+                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
                 }
                 ConfigVal::F64(default) => {
-                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), true)
+                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
                 }
                 ConfigVal::String(default) => {
-                    VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), true)
+                    VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
                 }
                 ConfigVal::Duration(default) => {
-                    VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), true)
+                    VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
                 }
                 ConfigVal::Json(default) => {
-                    VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), true)
+                    VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
                 }
             })
             .collect();
@@ -1316,20 +1242,19 @@ impl SystemVars {
             // Include all of our feature flags.
             .chain(definitions::FEATURE_FLAGS.iter().copied())
             // Include the subset of Session variables we allow system defaults for.
-            .chain(Self::SESSION_VARS.values().copied())
+            .chain(SESSION_SYSTEM_VARS.values().copied())
             .cloned()
             // Include Persist configs.
-            .chain(dyncfg_vars.into_iter())
+            .chain(dyncfg_vars)
             .map(|var| (var.name, SystemVar::new(var)))
             .collect();
 
-        let mut vars = SystemVars {
+        let vars = SystemVars {
             vars,
-            active_connection_count,
+            callbacks: BTreeMap::new(),
             allow_unsafe: false,
             dyncfgs,
         };
-        vars.refresh_internal_state();
 
         vars
     }
@@ -1385,7 +1310,7 @@ impl SystemVars {
         self.vars
             .values()
             .map(|v| v.as_var())
-            .filter(|v| !Self::SESSION_VARS.contains_key(UncasedStr::new(v.name())))
+            .filter(|v| !SESSION_SYSTEM_VARS.contains_key(UncasedStr::new(v.name())))
     }
 
     /// Returns an iterator over the configuration parameters and their current
@@ -1400,12 +1325,14 @@ impl SystemVars {
         self.vars
             .values()
             .map(|v| v.as_var())
-            .filter(|v| Self::SESSION_VARS.contains_key(UncasedStr::new(v.name())))
+            .filter(|v| SESSION_SYSTEM_VARS.contains_key(UncasedStr::new(v.name())))
     }
 
     /// Returns whether or not this parameter can be modified by a superuser.
     pub fn user_modifiable(&self, name: &str) -> bool {
-        Self::SESSION_VARS.contains_key(UncasedStr::new(name)) || name == ENABLE_RBAC_CHECKS.name()
+        SESSION_SYSTEM_VARS.contains_key(UncasedStr::new(name))
+            || name == ENABLE_RBAC_CHECKS.name()
+            || name == NETWORK_POLICY.name()
     }
 
     /// Returns a [`Var`] representing the configuration parameter with the
@@ -1483,7 +1410,7 @@ impl SystemVars {
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .and_then(|v| v.set(input))?;
-        self.propagate_var_change(name);
+        self.notify_callbacks(name);
         Ok(result)
     }
 
@@ -1527,7 +1454,7 @@ impl SystemVars {
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .and_then(|v| v.set_default(input))?;
-        self.propagate_var_change(name);
+        self.notify_callbacks(name);
         Ok(result)
     }
 
@@ -1554,7 +1481,7 @@ impl SystemVars {
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .map(|v| v.reset())?;
-        self.propagate_var_change(name);
+        self.notify_callbacks(name);
         Ok(result)
     }
 
@@ -1572,28 +1499,30 @@ impl SystemVars {
             .collect()
     }
 
-    /// Propagate a change to the parameter named `name` to our state.
-    fn propagate_var_change(&mut self, name: &str) {
-        if name == MAX_CONNECTIONS.name || name == SUPERUSER_RESERVED_CONNECTIONS.name {
-            let limit = *self.expect_value::<u32>(&MAX_CONNECTIONS);
-            let superuser_reserved = *self.expect_value::<u32>(&SUPERUSER_RESERVED_CONNECTIONS);
-            // If superuser_reserved > max_connections, prefer max_connections.
-            let superuser_reserved = std::cmp::min(limit, superuser_reserved);
-            let mut connections = self.active_connection_count.lock().expect("lock poisoned");
-            connections.assert();
-            connections.limit = u64::cast_from(limit);
-            connections.superuser_reserved = u64::cast_from(superuser_reserved);
-            connections.assert();
-        }
+    /// Registers a closure that will get called when the value for the
+    /// specified [`VarDefinition`] changes.
+    ///
+    /// The callback is guaranteed to be called at least once.
+    pub fn register_callback(
+        &mut self,
+        var: &VarDefinition,
+        callback: Arc<dyn Fn(&SystemVars) + Send + Sync>,
+    ) {
+        self.callbacks
+            .entry(var.name().to_string())
+            .or_default()
+            .push(callback);
+        self.notify_callbacks(var.name());
     }
 
-    /// Make sure that the internal state matches the SystemVars. Generally
-    /// only needed when initializing, `set`, `set_default`, and `reset`
-    /// are responsible for keeping the internal state in sync with
-    /// the affected SystemVars.
-    fn refresh_internal_state(&mut self) {
-        self.propagate_var_change(MAX_CONNECTIONS.name.as_str());
-        self.propagate_var_change(SUPERUSER_RESERVED_CONNECTIONS.name.as_str());
+    /// Notify any external components interested in this variable.
+    fn notify_callbacks(&self, name: &str) {
+        // Get the callbacks interested in this variable.
+        if let Some(callbacks) = self.callbacks.get(name) {
+            for callback in callbacks {
+                (callback)(self);
+            }
+        }
     }
 
     /// Returns the system default for the [`CLUSTER`] session variable. To know the active cluster
@@ -1610,6 +1539,11 @@ impl SystemVars {
     /// Returns the value of the `max_postgres_connections` configuration parameter.
     pub fn max_postgres_connections(&self) -> u32 {
         *self.expect_value(&MAX_POSTGRES_CONNECTIONS)
+    }
+
+    /// Returns the value of the `max_mysql_connections` configuration parameter.
+    pub fn max_mysql_connections(&self) -> u32 {
+        *self.expect_value(&MAX_MYSQL_CONNECTIONS)
     }
 
     /// Returns the value of the `max_aws_privatelink_connections` configuration parameter.
@@ -1675,6 +1609,21 @@ impl SystemVars {
     /// Returns the value of the `max_roles` configuration parameter.
     pub fn max_roles(&self) -> u32 {
         *self.expect_value(&MAX_ROLES)
+    }
+
+    /// Returns the value of the `max_continual_tasks` configuration parameter.
+    pub fn max_continual_tasks(&self) -> u32 {
+        *self.expect_value(&MAX_CONTINUAL_TASKS)
+    }
+
+    /// Returns the value of the `max_network_policies` configuration parameter.
+    pub fn max_network_policies(&self) -> u32 {
+        *self.expect_value(&MAX_NETWORK_POLICIES)
+    }
+
+    /// Returns the value of the `max_network_policies` configuration parameter.
+    pub fn max_rules_per_network_policy(&self) -> u32 {
+        *self.expect_value(&MAX_RULES_PER_NETWORK_POLICY)
     }
 
     /// Returns the value of the `max_result_size` configuration parameter.
@@ -1780,10 +1729,6 @@ impl SystemVars {
         *self.expect_value(&PERSIST_FAST_PATH_LIMIT)
     }
 
-    pub fn txn_wal_tables(&self) -> TxnWalTablesImpl {
-        *self.expect_value(&TXN_WAL_TABLES)
-    }
-
     /// Returns the `pg_source_connect_timeout` configuration parameter.
     pub fn pg_source_connect_timeout(&self) -> Duration {
         *self.expect_value(&PG_SOURCE_CONNECT_TIMEOUT)
@@ -1852,6 +1797,11 @@ impl SystemVars {
         *self.expect_value(&MYSQL_SOURCE_SNAPSHOT_LOCK_WAIT_TIMEOUT)
     }
 
+    /// Returns the `mysql_source_connect_timeout` configuration parameter.
+    pub fn mysql_source_connect_timeout(&self) -> Duration {
+        *self.expect_value(&MYSQL_SOURCE_CONNECT_TIMEOUT)
+    }
+
     /// Returns the `ssh_check_interval` configuration parameter.
     pub fn ssh_check_interval(&self) -> Duration {
         *self.expect_value(&SSH_CHECK_INTERVAL)
@@ -1873,7 +1823,7 @@ impl SystemVars {
     }
 
     /// Returns the `kafka_socket_timeout` configuration parameter.
-    pub fn kafka_socket_timeout(&self) -> Duration {
+    pub fn kafka_socket_timeout(&self) -> Option<Duration> {
         *self.expect_value(&KAFKA_SOCKET_TIMEOUT)
     }
 
@@ -1893,13 +1843,8 @@ impl SystemVars {
     }
 
     /// Returns the `kafka_progress_record_fetch_timeout` configuration parameter.
-    pub fn kafka_progress_record_fetch_timeout(&self) -> Duration {
+    pub fn kafka_progress_record_fetch_timeout(&self) -> Option<Duration> {
         *self.expect_value(&KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT)
-    }
-
-    /// Returns the `kafka_default_metadata_fetch_interval` configuration parameter.
-    pub fn kafka_default_metadata_fetch_interval(&self) -> Duration {
-        *self.expect_value(&KAFKA_DEFAULT_METADATA_FETCH_INTERVAL)
     }
 
     /// Returns the `crdb_connect_timeout` configuration parameter.
@@ -2006,6 +1951,10 @@ impl SystemVars {
         *self.expect_value(&MAX_CONNECTIONS)
     }
 
+    pub fn default_network_policy_name(&self) -> String {
+        self.expect_value::<String>(&NETWORK_POLICY).clone()
+    }
+
     /// Returns the `superuser_reserved_connections` configuration parameter.
     pub fn superuser_reserved_connections(&self) -> u32 {
         *self.expect_value(&SUPERUSER_RESERVED_CONNECTIONS)
@@ -2023,6 +1972,10 @@ impl SystemVars {
         *self.expect_value(&KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES)
     }
 
+    pub fn replica_status_history_retention_window(&self) -> Duration {
+        *self.expect_value(&REPLICA_STATUS_HISTORY_RETENTION_WINDOW)
+    }
+
     /// Returns the `arrangement_exert_proportionality` configuration parameter.
     pub fn arrangement_exert_proportionality(&self) -> u32 {
         *self.expect_value(&ARRANGEMENT_EXERT_PROPORTIONALITY)
@@ -2035,6 +1988,10 @@ impl SystemVars {
 
     pub fn enable_consolidate_after_union_negate(&self) -> bool {
         *self.expect_value(&ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE)
+    }
+
+    pub fn enable_reduce_reduction(&self) -> bool {
+        *self.expect_value(&ENABLE_REDUCE_REDUCTION)
     }
 
     /// Returns the `enable_default_connection_validation` configuration parameter.
@@ -2136,12 +2093,20 @@ impl SystemVars {
         *self.expect_value(&cluster_scheduling::CLUSTER_ALWAYS_USE_DISK)
     }
 
+    pub fn cluster_alter_check_ready_interval(&self) -> Duration {
+        *self.expect_value(&cluster_scheduling::CLUSTER_ALTER_CHECK_READY_INTERVAL)
+    }
+
     pub fn cluster_check_scheduling_policies_interval(&self) -> Duration {
         *self.expect_value(&cluster_scheduling::CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL)
     }
 
     pub fn cluster_security_context_enabled(&self) -> bool {
         *self.expect_value(&cluster_scheduling::CLUSTER_SECURITY_CONTEXT_ENABLED)
+    }
+
+    pub fn cluster_refresh_mv_compaction_estimate(&self) -> Duration {
+        *self.expect_value(&cluster_scheduling::CLUSTER_REFRESH_MV_COMPACTION_ESTIMATE)
     }
 
     /// Returns the `privatelink_status_update_quota_per_minute` configuration parameter.
@@ -2165,6 +2130,11 @@ impl SystemVars {
     /// Returns the `statement_logging_default_sample_rate` configuration parameter.
     pub fn statement_logging_default_sample_rate(&self) -> Numeric {
         *self.expect_value(&STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE)
+    }
+
+    /// Returns the `enable_internal_statement_logging` configuration parameter.
+    pub fn enable_internal_statement_logging(&self) -> bool {
+        *self.expect_value(&ENABLE_INTERNAL_STATEMENT_LOGGING)
     }
 
     /// Returns the `optimizer_stats_timeout` configuration parameter.
@@ -2207,11 +2177,24 @@ impl SystemVars {
         *self.expect_value(&USER_STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION)
     }
 
+    pub fn force_source_table_syntax(&self) -> bool {
+        *self.expect_value(&FORCE_SOURCE_TABLE_SYNTAX)
+    }
+
+    pub fn optimizer_e2e_latency_warning_threshold(&self) -> Duration {
+        *self.expect_value(&OPTIMIZER_E2E_LATENCY_WARNING_THRESHOLD)
+    }
+
     /// Returns whether the named variable is a compute configuration parameter
     /// (things that go in `ComputeParameters` and are sent to replicas via `UpdateConfiguration`
     /// commands).
     pub fn is_compute_config_var(&self, name: &str) -> bool {
         name == MAX_RESULT_SIZE.name() || self.is_dyncfg_var(name) || is_tracing_var(name)
+    }
+
+    /// Returns whether the named variable is a metrics configuration parameter
+    pub fn is_metrics_config_var(&self, name: &str) -> bool {
+        self.is_dyncfg_var(name)
     }
 
     /// Returns whether the named variable is a storage configuration parameter.
@@ -2230,6 +2213,7 @@ impl SystemVars {
             || name == MYSQL_SOURCE_TCP_KEEPALIVE.name()
             || name == MYSQL_SOURCE_SNAPSHOT_MAX_EXECUTION_TIME.name()
             || name == MYSQL_SOURCE_SNAPSHOT_LOCK_WAIT_TIMEOUT.name()
+            || name == MYSQL_SOURCE_CONNECT_TIMEOUT.name()
             || name == ENABLE_STORAGE_SHARD_FINALIZATION.name()
             || name == SSH_CHECK_INTERVAL.name()
             || name == SSH_CONNECT_TIMEOUT.name()
@@ -2240,7 +2224,6 @@ impl SystemVars {
             || name == KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT.name()
             || name == KAFKA_FETCH_METADATA_TIMEOUT.name()
             || name == KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT.name()
-            || name == KAFKA_DEFAULT_METADATA_FETCH_INTERVAL.name()
             || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
             || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION.name()
             || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY.name()
@@ -2318,6 +2301,37 @@ pub fn is_http_config_var(name: &str) -> bool {
     name == WEBHOOK_CONCURRENT_REQUEST_LIMIT.name()
 }
 
+/// Set of [`SystemVar`]s that can also get set at a per-Session level.
+///
+/// TODO(parkmycar): Instead of a separate list, make this a field on VarDefinition.
+static SESSION_SYSTEM_VARS: LazyLock<BTreeMap<&'static UncasedStr, &'static VarDefinition>> =
+    LazyLock::new(|| {
+        [
+            &APPLICATION_NAME,
+            &CLIENT_ENCODING,
+            &CLIENT_MIN_MESSAGES,
+            &CLUSTER,
+            &CLUSTER_REPLICA,
+            &CURRENT_OBJECT_MISSING_WARNINGS,
+            &DATABASE,
+            &DATE_STYLE,
+            &EXTRA_FLOAT_DIGITS,
+            &INTEGER_DATETIMES,
+            &INTERVAL_STYLE,
+            &REAL_TIME_RECENCY_TIMEOUT,
+            &SEARCH_PATH,
+            &STANDARD_CONFORMING_STRINGS,
+            &STATEMENT_TIMEOUT,
+            &IDLE_IN_TRANSACTION_SESSION_TIMEOUT,
+            &TIMEZONE,
+            &TRANSACTION_ISOLATION,
+            &MAX_QUERY_RESULT_SIZE,
+        ]
+        .into_iter()
+        .map(|var| (UncasedStr::new(var.name()), var))
+        .collect()
+    });
+
 // Provides a wrapper to express that a particular `ServerVar` is meant to be used as a feature
 /// flag.
 #[derive(Debug)]
@@ -2326,61 +2340,33 @@ pub struct FeatureFlag {
     pub feature_desc: &'static str,
 }
 
-impl Var for FeatureFlag {
-    fn name(&self) -> &'static str {
-        self.flag.name()
-    }
-
-    fn value(&self) -> String {
-        self.flag.value()
-    }
-
-    fn description(&self) -> &'static str {
-        self.flag.description()
-    }
-
-    fn type_name(&self) -> Cow<'static, str> {
-        self.flag.type_name()
-    }
-
-    fn visible(&self, user: &User, system_vars: Option<&SystemVars>) -> Result<(), VarError> {
-        self.flag.visible(user, system_vars)
-    }
-}
-
 impl FeatureFlag {
-    pub fn enabled(
-        &self,
-        system_vars: Option<&SystemVars>,
-        feature: Option<String>,
-        detail: Option<String>,
-    ) -> Result<(), VarError> {
-        match system_vars {
-            Some(system_vars) if *system_vars.expect_value::<bool>(self.flag) => Ok(()),
-            _ => Err(VarError::RequiresFeatureFlag {
-                feature: feature.unwrap_or(self.feature_desc.to_string()),
-                detail,
-                name_hint: system_vars
-                    .map(|s| {
-                        if s.allow_unsafe {
-                            Some(self.flag.name)
-                        } else {
-                            None
-                        }
-                    })
-                    .flatten(),
-            }),
+    /// Returns an error unless the feature flag is enabled in the provided
+    /// `system_vars`.
+    pub fn require(&'static self, system_vars: &SystemVars) -> Result<(), VarError> {
+        match *system_vars.expect_value::<bool>(self.flag) {
+            true => Ok(()),
+            false => Err(VarError::RequiresFeatureFlag { feature_flag: self }),
         }
     }
 }
 
-impl Var for BuildInfo {
+impl PartialEq for FeatureFlag {
+    fn eq(&self, other: &FeatureFlag) -> bool {
+        self.flag.name() == other.flag.name()
+    }
+}
+
+impl Eq for FeatureFlag {}
+
+impl Var for MzVersion {
     fn name(&self) -> &'static str {
         MZ_VERSION_NAME.as_str()
     }
 
     fn value(&self) -> String {
-        self.human_version()
+        self.build_info
+            .human_version(self.helm_chart_version.clone())
     }
 
     fn description(&self) -> &'static str {
@@ -2391,7 +2377,7 @@ impl Var for BuildInfo {
         String::type_name()
     }
 
-    fn visible(&self, _: &User, _: Option<&SystemVars>) -> Result<(), VarError> {
+    fn visible(&self, _: &User, _: &SystemVars) -> Result<(), VarError> {
         Ok(())
     }
 }
@@ -2413,7 +2399,7 @@ impl Var for User {
         bool::type_name()
     }
 
-    fn visible(&self, _: &User, _: Option<&SystemVars>) -> Result<(), VarError> {
+    fn visible(&self, _: &User, _: &SystemVars) -> Result<(), VarError> {
         Ok(())
     }
 }

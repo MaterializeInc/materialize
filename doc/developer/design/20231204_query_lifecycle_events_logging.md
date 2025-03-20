@@ -2,7 +2,7 @@
 
 - Associated:
 * Initial [conceptual doc](https://www.notion.so/materialize/A-Model-for-Materialize-s-Operation-831f0a35782547518a8c05617dc087ca?showMoveTo=true&saveParent=true) from Frank
-* [Epic](https://github.com/MaterializeInc/materialize/issues/23314) in GH.
+* [Epic](https://github.com/MaterializeInc/database-issues/issues/7014) in GH.
 
 ## The Problem
 

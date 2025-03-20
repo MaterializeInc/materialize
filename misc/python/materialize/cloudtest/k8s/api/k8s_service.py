@@ -12,6 +12,7 @@ import logging
 from typing import Any
 
 import pg8000
+import requests
 import sqlparse
 from kubernetes.client import V1Service
 from pg8000 import Connection, Cursor
@@ -99,3 +100,9 @@ class K8sService(K8sResource):
             LOGGER.info(f"> {sql}")
             cursor.execute(sql)
             return cursor.fetchall()
+
+    def http_get(self, path: str) -> Any:
+        url = f"http://localhost:{self.node_port('internalhttp')}/{path}"
+        response = requests.get(url)
+        response.raise_for_status()
+        return response.text

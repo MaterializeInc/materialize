@@ -10,7 +10,7 @@
 //! Metrics for kafka sinks.
 
 use mz_ore::metric;
-use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt, IntGaugeVec, MetricsRegistry, UIntGaugeVec};
+use mz_ore::metrics::{DeleteOnDropGauge, IntGaugeVec, MetricsRegistry, UIntGaugeVec};
 use mz_repr::GlobalId;
 use prometheus::core::{AtomicI64, AtomicU64};
 
@@ -51,6 +51,8 @@ pub(crate) struct KafkaSinkMetricDefs {
     pub rdkafka_disconnects: IntGaugeVec,
     /// The number of outstanding progress records that need to be read before the sink can resume.
     pub outstanding_progress_records: UIntGaugeVec,
+    /// The number of progress records consumed while resuming the sink.
+    pub consumed_progress_records: UIntGaugeVec,
     /// The number of partitions this sink is publishing to.
     pub partition_count: UIntGaugeVec,
 }
@@ -142,6 +144,11 @@ impl KafkaSinkMetricDefs {
                 help: "The number of outstanding progress records that need to be read before the sink can resume.",
                 var_labels: ["sink_id"],
             )),
+            consumed_progress_records: registry.register(metric!(
+                name: "mz_sink_consumed_progress_records",
+                help: "The number of progress records consumed by the sink.",
+                var_labels: ["sink_id"],
+            )),
             partition_count: registry.register(metric!(
                 name: "mz_sink_partition_count",
                 help: "The number of partitions this sink is publishing to.",
@@ -154,41 +161,43 @@ impl KafkaSinkMetricDefs {
 /// Metrics reported by librdkafka
 pub(crate) struct KafkaSinkMetrics {
     /// The current number of messages in producer queues.
-    pub rdkafka_msg_cnt: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub rdkafka_msg_cnt: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     /// The current total size of messages in producer queues.
-    pub rdkafka_msg_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub rdkafka_msg_size: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     /// The total number of messages transmitted (produced) to brokers.
-    pub rdkafka_txmsgs: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub rdkafka_txmsgs: DeleteOnDropGauge<AtomicI64, Vec<String>>,
     /// The total number of bytes transmitted (produced) to brokers.
-    pub rdkafka_txmsg_bytes: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub rdkafka_txmsg_bytes: DeleteOnDropGauge<AtomicI64, Vec<String>>,
     /// The total number of requests sent to brokers.
-    pub rdkafka_tx: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub rdkafka_tx: DeleteOnDropGauge<AtomicI64, Vec<String>>,
     /// The total number of bytes transmitted to brokers.
-    pub rdkafka_tx_bytes: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub rdkafka_tx_bytes: DeleteOnDropGauge<AtomicI64, Vec<String>>,
     /// The number of requests awaiting transmission across all brokers.
-    pub rdkafka_outbuf_cnt: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub rdkafka_outbuf_cnt: DeleteOnDropGauge<AtomicI64, Vec<String>>,
     /// The number of messages awaiting transmission across all brokers.
-    pub rdkafka_outbuf_msg_cnt: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub rdkafka_outbuf_msg_cnt: DeleteOnDropGauge<AtomicI64, Vec<String>>,
     /// The number of requests in-flight across all brokers that are awaiting a response.
-    pub rdkafka_waitresp_cnt: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub rdkafka_waitresp_cnt: DeleteOnDropGauge<AtomicI64, Vec<String>>,
     /// The number of messages in-flight across all brokers that are awaiting a response.
-    pub rdkafka_waitresp_msg_cnt: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub rdkafka_waitresp_msg_cnt: DeleteOnDropGauge<AtomicI64, Vec<String>>,
     /// The total number of transmission errors across all brokers.
-    pub rdkafka_txerrs: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub rdkafka_txerrs: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     /// The total number of request retries across all brokers.
-    pub rdkafka_txretries: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub rdkafka_txretries: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     /// The total number of requests that timed out across all brokers.
-    pub rdkafka_req_timeouts: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub rdkafka_req_timeouts: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     /// The number of connection attempts, including successful and failed attempts, and name
     /// resolution failures across all brokers.
-    pub rdkafka_connects: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub rdkafka_connects: DeleteOnDropGauge<AtomicI64, Vec<String>>,
     /// The number of disconnections, whether triggered by the broker, the network, the load
     /// balancer, or something else across all brokers.
-    pub rdkafka_disconnects: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub rdkafka_disconnects: DeleteOnDropGauge<AtomicI64, Vec<String>>,
     /// The number of outstanding progress records that need to be read before the sink can resume.
-    pub outstanding_progress_records: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub outstanding_progress_records: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    /// The number of progress records consumed while resuming the sink.
+    pub consumed_progress_records: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     /// The number of partitions this sink is publishing to.
-    pub partition_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub partition_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
 }
 
 impl KafkaSinkMetrics {
@@ -198,53 +207,56 @@ impl KafkaSinkMetrics {
         Self {
             rdkafka_msg_cnt: defs
                 .rdkafka_msg_cnt
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             rdkafka_msg_size: defs
                 .rdkafka_msg_size
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             rdkafka_txmsgs: defs
                 .rdkafka_txmsgs
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             rdkafka_txmsg_bytes: defs
                 .rdkafka_txmsg_bytes
-                .get_delete_on_drop_gauge(labels.to_vec()),
-            rdkafka_tx: defs.rdkafka_tx.get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
+            rdkafka_tx: defs.rdkafka_tx.get_delete_on_drop_metric(labels.to_vec()),
             rdkafka_tx_bytes: defs
                 .rdkafka_tx_bytes
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             rdkafka_outbuf_cnt: defs
                 .rdkafka_outbuf_cnt
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             rdkafka_outbuf_msg_cnt: defs
                 .rdkafka_outbuf_msg_cnt
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             rdkafka_waitresp_cnt: defs
                 .rdkafka_waitresp_cnt
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             rdkafka_waitresp_msg_cnt: defs
                 .rdkafka_waitresp_msg_cnt
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             rdkafka_txerrs: defs
                 .rdkafka_txerrs
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             rdkafka_txretries: defs
                 .rdkafka_txretries
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             rdkafka_req_timeouts: defs
                 .rdkafka_req_timeouts
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             rdkafka_connects: defs
                 .rdkafka_connects
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             rdkafka_disconnects: defs
                 .rdkafka_disconnects
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             outstanding_progress_records: defs
                 .outstanding_progress_records
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
+            consumed_progress_records: defs
+                .consumed_progress_records
+                .get_delete_on_drop_metric(labels.to_vec()),
             partition_count: defs
                 .partition_count
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
         }
     }
 }

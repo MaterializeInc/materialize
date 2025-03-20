@@ -7,12 +7,20 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Test that the Kafka <-> Materialize connection (source + sink) can survive
+network problems and interruptions using Toxiyproxy.
+"""
+
+import argparse
 import random
 
-from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
@@ -22,6 +30,8 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
+    Redpanda(),
+    Mz(app_password=""),
     Materialized(),
     Clusterd(),
     Toxiproxy(),
@@ -29,19 +39,37 @@ SERVICES = [
 ]
 
 
-def workflow_default(c: Composition) -> None:
-    for name in c.workflows:
+def parse_args(parser: WorkflowArgumentParser) -> argparse.Namespace:
+    parser.add_argument(
+        "--redpanda",
+        action="store_true",
+        help="run against Redpanda instead of the Confluent Platform",
+    )
+
+    return parser.parse_args()
+
+
+def get_kafka_services(redpanda: bool) -> list[str]:
+    return ["redpanda"] if redpanda else ["zookeeper", "kafka", "schema-registry"]
+
+
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    def process(name: str) -> None:
         if name == "default":
-            continue
+            return
         with c.test_case(name):
-            c.workflow(name)
+            c.workflow(name, *parser.args)
+
+    c.test_parts(list(c.workflows.keys()), process)
 
 
 #
 # Test the kafka sink resumption logic in the presence of networking problems
 #
-def workflow_sink_networking(c: Composition) -> None:
-    c.up("zookeeper", "kafka", "schema-registry", "materialized", "toxiproxy")
+def workflow_sink_networking(c: Composition, parser: WorkflowArgumentParser) -> None:
+    args = parse_args(parser)
+    c.up(*(["materialized", "toxiproxy"] + get_kafka_services(args.redpanda)))
+    c.setup_quickstart_cluster()
 
     seed = random.getrandbits(16)
     for i, failure_mode in enumerate(
@@ -69,18 +97,57 @@ def workflow_sink_networking(c: Composition) -> None:
         c.kill("toxiproxy")
 
 
-def workflow_source_resumption(c: Composition) -> None:
+def workflow_sink_kafka_restart(c: Composition, parser: WorkflowArgumentParser) -> None:
+    args = parse_args(parser)
+
+    # Sleeping for 5s before the transaction commits virtually guarantees that
+    # there will be an open transaction when the Kafka/Redpanda service is
+    # killed, which lets us tests whether open transactions for the same
+    # producer ID are properly aborted after a broker restart.
+    with c.override(
+        Materialized(
+            environment_extra=["FAILPOINTS=kafka_sink_commit_transaction=sleep(5000)"]
+        )
+    ):
+        c.up(*(["materialized"] + get_kafka_services(args.redpanda)))
+        c.setup_quickstart_cluster()
+
+        seed = random.getrandbits(16)
+        c.run_testdrive_files(
+            "--no-reset",
+            "--max-errors=1",
+            f"--seed={seed}",
+            f"--temp-dir=/share/tmp/kafka-resumption-{seed}",
+            "--default-timeout=40s",
+            "sink-kafka-restart/setup.td",
+        )
+        c.kill("redpanda" if args.redpanda else "kafka")
+        c.up("redpanda" if args.redpanda else "kafka")
+        c.run_testdrive_files(
+            "--no-reset",
+            "--max-errors=1",
+            f"--seed={seed}",
+            f"--temp-dir=/share/tmp/kafka-resumption-{seed}",
+            "--default-timeout=40s",
+            "sink-kafka-restart/verify.td",
+            "sink-kafka-restart/cleanup.td",
+        )
+
+
+def workflow_source_resumption(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Test creating sources in a remote clusterd process."""
+    args = parse_args(parser)
 
     with c.override(
         Testdrive(no_reset=True, consistent_seed=True),
     ):
-        c.up("materialized", "zookeeper", "kafka", "clusterd")
+        c.up(*(["materialized", "clusterd"] + get_kafka_services(args.redpanda)))
+        c.setup_quickstart_cluster()
 
         c.run_testdrive_files("source-resumption/setup.td")
         c.run_testdrive_files("source-resumption/verify.td")
 
-        # Disabled due to https://github.com/MaterializeInc/materialize/issues/20819
+        # Disabled due to https://github.com/MaterializeInc/database-issues/issues/6271
         # assert (
         #    find_source_resume_upper(
         #        c,
@@ -100,7 +167,7 @@ def workflow_source_resumption(c: Composition) -> None:
         # the first clusterd instance ingested 3 messages, so our
         # upper is at the 4th offset (0-indexed)
 
-        # Disabled due to https://github.com/MaterializeInc/materialize/issues/20819
+        # Disabled due to https://github.com/MaterializeInc/database-issues/issues/6271
         # assert (
         #    find_source_resume_upper(
         #        c,
@@ -127,10 +194,12 @@ def find_source_resume_upper(c: Composition, partition_id: str) -> int | None:
     return None
 
 
-def workflow_sink_queue_full(c: Composition) -> None:
-    """Similar to the sink-networking workflow, but with 11 million rows (more then the 11 million defined as queue.buffering.max.messages) and only creating the sink after these rows are ingested into Mz. Triggers #24936"""
+def workflow_sink_queue_full(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Similar to the sink-networking workflow, but with 11 million rows (more then the 11 million defined as queue.buffering.max.messages) and only creating the sink after these rows are ingested into Mz. Triggers database-issues#7442"""
+    args = parse_args(parser)
     seed = random.getrandbits(16)
-    c.up("zookeeper", "kafka", "schema-registry", "materialized", "toxiproxy")
+    c.up(*(["materialized", "toxiproxy"] + get_kafka_services(args.redpanda)))
+    c.setup_quickstart_cluster()
     c.run_testdrive_files(
         "--no-reset",
         "--max-errors=1",

@@ -225,16 +225,16 @@ fn test_role_id_parsing() {
     assert_eq!(s, role_id.to_string());
 
     let s = "p23";
-    assert!(s.parse::<RoleId>().is_err());
+    mz_ore::assert_err!(s.parse::<RoleId>());
 
     let s = "d23";
-    assert!(s.parse::<RoleId>().is_err());
+    mz_ore::assert_err!(s.parse::<RoleId>());
 
     let s = "asfje90uf23i";
-    assert!(s.parse::<RoleId>().is_err());
+    mz_ore::assert_err!(s.parse::<RoleId>());
 
     let s = "";
-    assert!(s.parse::<RoleId>().is_err());
+    mz_ore::assert_err!(s.parse::<RoleId>());
 }
 
 #[mz_ore::test]
@@ -263,7 +263,7 @@ fn test_role_id_binary() {
         RoleId::decode_binary(&role_id.encode_binary()).unwrap()
     );
 
-    assert!(RoleId::decode_binary(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 0]).is_err())
+    mz_ore::assert_err!(RoleId::decode_binary(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 0]))
 }
 
 #[mz_ore::test]

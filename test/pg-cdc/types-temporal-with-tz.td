@@ -42,8 +42,9 @@ CREATE PUBLICATION mz_source_time FOR TABLE time_table;
 CREATE PUBLICATION mz_source_timestamp FOR TABLE timestamp_table;
 
 > CREATE SOURCE mz_source_timestamp
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_timestamp')
-  FOR ALL TABLES;
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_timestamp');
+
+> CREATE TABLE timestamp_table FROM SOURCE mz_source_timestamp (REFERENCE timestamp_table);
 
 > SELECT COUNT(*) > 0 FROM timestamp_table;
 true
@@ -64,8 +65,9 @@ INSERT INTO timestamp_table SELECT * FROM timestamp_table;
 
 > DROP SOURCE mz_source_timestamp CASCADE;
 
+> CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_time');
+
 # Mz does not support TIME WITH TIME ZOINE
-! CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_time')
-  FOR ALL TABLES;
+! CREATE TABLE timestamp_table FROM SOURCE mz_source (REFERENCE time_table);
 contains:type "pg_catalog.timetz" does not exist

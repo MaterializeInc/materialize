@@ -1,0 +1,299 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for database-issues#8261 and database-issues#8463.
+
+# The setup is based on https://github.com/MaterializeInc/RQG/blob/main/conf/mz/simple.sql
+
+statement ok
+DROP TABLE IF EXISTS t1 CASCADE;
+
+statement ok
+DROP TABLE IF EXISTS t2 CASCADE;
+
+statement ok
+DROP TABLE IF EXISTS t3 CASCADE;
+
+statement ok
+CREATE TABLE t1 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL);
+
+statement ok
+CREATE INDEX t1i1 ON t1(f1);
+
+statement ok
+CREATE INDEX t1i2 ON t1(f2, f1);
+
+# one NULL row in t1
+
+statement ok
+INSERT INTO t1 VALUES (NULL, 0);
+
+# values 1 and 2 have 2 rows each in t1
+
+statement ok
+INSERT INTO t1 VALUES (1, 1);
+
+statement ok
+INSERT INTO t1 VALUES (1, 1);
+
+statement ok
+INSERT INTO t1 VALUES (2, 2);
+
+statement ok
+INSERT INTO t1 VALUES (2, 2);
+
+statement ok
+INSERT INTO t1 VALUES (3, 3);
+
+statement ok
+INSERT INTO t1 VALUES (4, 4);
+
+statement ok
+INSERT INTO t1 VALUES (5, 5);
+
+statement ok
+INSERT INTO t1 VALUES (6, 6);
+
+statement ok
+INSERT INTO t1 VALUES (7, 7);
+
+statement ok
+INSERT INTO t1 VALUES (8, 8);
+
+# value 9 not present in either table
+
+statement ok
+CREATE TABLE t2 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL);
+
+statement ok
+CREATE INDEX t2i1 ON t2(f1);
+
+statement ok
+CREATE INDEX i2i2 ON t2(f2, f1);
+
+# two NULL rows in t2
+
+statement ok
+INSERT INTO t2 VALUES (NULL, 0);
+
+statement ok
+INSERT INTO t2 VALUES (NULL, 0);
+
+statement ok
+INSERT INTO t2 VALUES (1, 1);
+
+# value 2 has 2 rows in t2
+
+statement ok
+INSERT INTO t2 VALUES (2, 2);
+
+statement ok
+INSERT INTO t2 VALUES (2, 2);
+
+# value 3 has no rows in t2
+
+statement ok
+INSERT INTO t2 VALUES (4, 4);
+
+statement ok
+INSERT INTO t2 VALUES (5, 5);
+
+statement ok
+INSERT INTO t2 VALUES (6, 6);
+
+statement ok
+INSERT INTO t2 VALUES (7, 7);
+
+statement ok
+INSERT INTO t2 VALUES (8, 8);
+
+# value 9 not present in either table
+
+statement ok
+CREATE TABLE t3 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL);
+
+statement ok
+CREATE MATERIALIZED VIEW pk1 AS SELECT DISTINCT ON (f1) f1 , f2 FROM t1 WHERE f1 IS NOT NULL AND f2 IS NOT NULL;
+
+statement ok
+CREATE MATERIALIZED VIEW pk2 AS SELECT DISTINCT ON (f1) f1 , f2 FROM t2 WHERE f1 IS NOT NULL AND f2 IS NOT NULL;
+
+statement ok
+CREATE MATERIALIZED VIEW pk3 AS SELECT DISTINCT ON (f1) f1 , f2 FROM t3 WHERE f1 IS NOT NULL AND f2 IS NOT NULL;
+
+# database-issues#8261
+query RRRIR
+SELECT (a1.f1) AS c1, (a2.f1) AS c2, (a1.f2) AS c3, (count(a1.f2)) AS agg1, (max(a1.f1 + a1.f1)) AS agg2
+FROM
+    pk2 AS a1
+        RIGHT JOIN
+            (
+                    SELECT avg(a2.f1) AS f1, count(a1.f1) AS f2
+                    FROM pk1 AS a1 RIGHT JOIN pk1 AS a2 ON (NULLIF (a2.f2, a1.f1) = a2.f2 + a2.f2 + a2.f1)
+                    WHERE
+                        a2.f2 + a2.f1 IS NOT NULL AND a2.f2 NOT IN ( 4, 9, 9 )
+                            AND
+                        a1.f2
+                        NOT IN (
+                        SELECT agg1 AS x1
+                        FROM
+                            (
+                                        SELECT
+                                            (a1.f1) AS c1,
+                                            (a2.f1) AS c2,
+                                            (a1.f2) AS c3,
+                                            (avg(NULLIF (a2.f2, a2.f2))) AS agg1,
+                                            (max(a2.f2)) AS agg2
+                                        FROM
+                                            (
+                                                        SELECT a1.f1 AS f1, a1.f2 AS f2
+                                                        FROM t2 AS a1 LEFT JOIN t2 AS a2 USING(f1)
+                                                        WHERE
+                                                            a2.f2 + a2.f2 IS NULL
+                                                                OR
+                                                            NOT (NULLIF (a2.f1, a2.f1) IN ( 6, 9, 4, 5, 1 ))
+                                                                AND
+                                                            NOT (a1.f2 + a2.f2 IS NULL)
+                                                                AND
+                                                            a1.f2 < a2.f1
+                                                        ORDER BY 1, 2
+                                                    )
+                                                    AS a1
+                                                LEFT JOIN t2 AS a2 USING(f2)
+                                        WHERE a2.f2 NOT IN ( 6, 0, 0 ) AND a2.f2 IS NOT NULL AND a2.f2 IN ( 4, 5 )
+                                        GROUP BY 1, 2, 3
+                                        UNION
+                                            SELECT DISTINCT
+                                                (a2.f2) AS c1,
+                                                (a1.f2) AS c2,
+                                                (NULLIF (a1.f2, a1.f2)) AS c3,
+                                                (avg(a1.f1 + a2.f2)) AS agg1,
+                                                (avg(DISTINCT a1.f1)) AS agg2
+                                            FROM
+                                                (
+                                                            SELECT
+                                                                count(a1.f2) AS f1,
+                                                                min(a2.f1 + NULLIF (a1.f2, a2.f2)) AS f2
+                                                            FROM
+                                                                pk1 AS a1
+                                                                    JOIN
+                                                                        t2 AS a2
+                                                                        ON
+                                                                            (
+                                                                                NOT
+                                                                                (
+                                                                                    NULLIF (a1.f2, a1.f2)
+                                                                                    NOT IN (
+                                                                                    4, 9, 3, 5
+                                                                                    )
+                                                                                )
+                                                                            )
+                                                            WHERE
+                                                                a1.f2 IS NULL
+                                                                    OR
+                                                                NULLIF (a1.f2, a2.f2) = a2.f2
+                                                                    AND
+                                                                a1.f1 + a1.f2 IN ( 7, 0, 4, 6 )
+                                                            ORDER BY 1, 2
+                                                        )
+                                                        AS a1
+                                                    JOIN t2 AS a2 USING(f1)
+                                            WHERE
+                                                a1.f2 IS NULL
+                                                    OR
+                                                NULLIF (a2.f2, a1.f1) IS NOT NULL
+                                                    AND
+                                                NOT (NOT (NOT (a1.f2 + NULLIF (a1.f2, a2.f2) IN ( 7, 8 ))))
+                                                    AND
+                                                NULLIF (a2.f2, a2.f2) < a1.f1 + NULLIF (a1.f1, a1.f2)
+                                                    AND
+                                                NOT (a1.f2 > NULLIF (a2.f2, a1.f1))
+                                            GROUP BY 1, 2, 3
+                                    )
+                                    AS dt
+                        ORDER BY 1
+                        )
+                    ORDER BY 1, 2
+                    LIMIT 1
+                )
+                AS a2
+            ON (NULLIF (a2.f2, a1.f2) = a1.f2)
+WHERE
+    a1.f1
+    NOT IN (
+    SELECT c1 AS x1
+    FROM
+        (
+                    SELECT
+                        (NULLIF (a1.f2, a2.f2)) AS c1,
+                        (NULLIF (a2.f1, a2.f1)) AS c2,
+                        (a2.f1) AS c3,
+                        (min(a2.f2)) AS agg1,
+                        (min(a2.f2 + a1.f1)) AS agg2
+                    FROM t1 AS a1 LEFT JOIN (SELECT * FROM (VALUES (1, 2)) AS pk1 (f1, f2)) AS a2 USING(f1, f2)
+                    WHERE a2.f2 < a1.f2 OR a1.f2 + a2.f2 > a1.f2 + a2.f2
+                    GROUP BY 1, 2, 3
+                    EXCEPT ALL
+                        SELECT
+                            (a1.f2) AS c1,
+                            (a1.f2 + a1.f2) AS c2,
+                            (a2.f2 + a2.f1) AS c3,
+                            (max(a1.f1 + a2.f1)) AS agg1,
+                            (max(a2.f2 + a2.f2)) AS agg2
+                        FROM
+                            pk1 AS a1
+                                JOIN
+                                    (
+                                            SELECT a1.f2 AS f1, NULLIF (a2.f2, a2.f2) AS f2
+                                            FROM pk1 AS a1 RIGHT JOIN t1 AS a2 ON (NULLIF (a2.f1, a2.f2) IS NULL)
+                                            WHERE
+                                                a1.f1 IS NOT NULL AND NULLIF (a2.f1, a2.f1) NOT IN ( 9, 6, 4 )
+                                                    AND
+                                                NULLIF (a2.f1, a2.f2) NOT IN ( 9, 1 )
+                                            ORDER BY 1, 2
+                                            LIMIT 1
+                                            OFFSET 4
+                                        )
+                                        AS a2
+                                    ON (a2.f2 + a2.f2 + a1.f2 < a2.f2)
+                        WHERE a2.f2 + a1.f1 + a1.f2 > a1.f2 + a1.f2 + a1.f1 OR a2.f1 = a2.f2
+                        GROUP BY 1, 2, 3
+                )
+                AS dt
+    ORDER BY 1
+    )
+        AND
+    a2.f2 NOT IN ( 1, 2, 6, 7 )
+        OR
+    NOT (NOT (a2.f2 + a1.f1 = a1.f2))
+GROUP BY 1, 2, 3;
+----
+NULL
+4.571
+NULL
+0
+NULL
+
+# database-issues#8463
+query RR
+SELECT
+    a1.f1 AS c3,
+    a1.f2
+FROM
+    (SELECT 1 AS f1, 2 AS f2) AS a1
+RIGHT JOIN (
+    SELECT avg(a2.f2) AS f1, min(a1.f2) AS f2
+    FROM pk2 AS a1
+    LEFT JOIN pk2 AS a2 USING(f1)
+    WHERE a2.f1 IS NULL
+) AS a2
+ON (NULLIF (a1.f2, a2.f2) = a1.f1 + a2.f2);
+----
+NULL
+NULL

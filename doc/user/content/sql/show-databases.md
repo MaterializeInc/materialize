@@ -10,7 +10,15 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-databases.svg" >}}
+```sql
+SHOW DATABASES
+[LIKE <pattern> | WHERE <condition(s)>]
+```
+
+Option                        | Description
+------------------------------|------------
+**LIKE** \<pattern\>          | If specified, only show databases that match the pattern.
+**WHERE** <condition(s)>      | If specified, only show databases that match the condition(s).
 
 ## Details
 
@@ -20,10 +28,10 @@ menu:
 
 ## Examples
 
-```sql
+```mzsql
 CREATE DATABASE my_db;
 ```
-```sql
+```mzsql
 SHOW DATABASES;
 ```
 ```nofmt

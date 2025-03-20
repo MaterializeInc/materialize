@@ -17,11 +17,13 @@ XYZ
 
 > CREATE SOURCE envelope_none_bytes
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-envelope-none-bytes-${testdrive.seed}')
+
+> CREATE TABLE envelope_none_bytes_tbl FROM SOURCE envelope_none_bytes (REFERENCE "testdrive-envelope-none-bytes-${testdrive.seed}")
   FORMAT BYTES
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE NONE
 
-> SELECT COUNT(*) FROM envelope_none_bytes
+> SELECT COUNT(*) FROM envelope_none_bytes_tbl
 10000
 
 $ kafka-create-topic topic=envelope-none-text
@@ -32,9 +34,11 @@ XYZ
 
 > CREATE SOURCE envelope_none_text
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-envelope-none-text-${testdrive.seed}')
+
+> CREATE TABLE envelope_none_text_tbl FROM SOURCE envelope_none_text (REFERENCE "testdrive-envelope-none-text-${testdrive.seed}")
   FORMAT TEXT
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE NONE
 
-> SELECT COUNT(*) FROM envelope_none_text
+> SELECT COUNT(*) FROM envelope_none_text_tbl
 10000

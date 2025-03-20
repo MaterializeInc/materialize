@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use differential_dataflow::Hashable;
+use futures::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_repr::GlobalId;
@@ -33,10 +34,6 @@ use timely::dataflow::{Scope, Stream};
 use tracing::{error, info};
 
 use crate::internal_control::{InternalCommandSender, InternalStorageCommand};
-
-/// How long to wait before initiating a `SuspendAndRestart` command, to
-/// prevent hot restart loops.
-const SUSPEND_AND_RESTART_DELAY: Duration = Duration::from_secs(30);
 
 /// The namespace of the update. The `Ord` impl matter here, later variants are
 /// displayed over earlier ones.
@@ -118,7 +115,7 @@ impl PerWorkerHealthStatus {
                     // HealthStatusUpdate::Ceased is currently unused, so just
                     // treat it as if it were a normal error.
                     //
-                    // TODO: redesign ceased status #25768
+                    // TODO: redesign ceased status database-issues#7687
                     HealthStatusUpdate::Ceased { error } => {
                         if Some(error) > namespaced_errors.get(ns).as_deref() {
                             namespaced_errors.insert(*ns, error.to_string());
@@ -215,16 +212,14 @@ impl<'a> From<&'a OverallStatus> for Status {
 
 #[derive(Debug)]
 struct HealthState {
-    id: GlobalId,
     healths: PerWorkerHealthStatus,
     last_reported_status: Option<OverallStatus>,
     halt_with: Option<(StatusNamespace, HealthStatusUpdate)>,
 }
 
 impl HealthState {
-    fn new(id: GlobalId, worker_count: usize) -> HealthState {
+    fn new(worker_count: usize) -> HealthState {
         HealthState {
-            id,
             healths: PerWorkerHealthStatus {
                 errors_by_worker: vec![Default::default(); worker_count],
             },
@@ -237,10 +232,9 @@ impl HealthState {
 /// A trait that lets a user configure the `health_operator` with custom
 /// behavior. This is mostly useful for testing, and the [`DefaultWriter`]
 /// should be the correct implementation for everyone.
-#[async_trait::async_trait(?Send)]
 pub trait HealthOperator {
     /// Record a new status.
-    async fn record_new_status(
+    fn record_new_status(
         &self,
         collection_id: GlobalId,
         ts: DateTime<Utc>,
@@ -254,7 +248,7 @@ pub trait HealthOperator {
         // some use of persist. For now we just leave it and ignore it in tests.
         write_namespaced_map: bool,
     );
-    async fn send_halt(&self, id: GlobalId, error: Option<(StatusNamespace, HealthStatusUpdate)>);
+    fn send_halt(&self, id: GlobalId, error: Option<(StatusNamespace, HealthStatusUpdate)>);
 
     /// Optionally override the chosen worker index. Default is semi-random.
     /// Only useful for tests.
@@ -265,13 +259,12 @@ pub trait HealthOperator {
 
 /// A default `HealthOperator` for use in normal cases.
 pub struct DefaultWriter {
-    pub command_tx: Rc<RefCell<dyn InternalCommandSender>>,
+    pub command_tx: InternalCommandSender,
     pub updates: Rc<RefCell<Vec<StatusUpdate>>>,
 }
 
-#[async_trait::async_trait(?Send)]
 impl HealthOperator for DefaultWriter {
-    async fn record_new_status(
+    fn record_new_status(
         &self,
         collection_id: GlobalId,
         ts: DateTime<Utc>,
@@ -295,13 +288,13 @@ impl HealthOperator for DefaultWriter {
             } else {
                 BTreeMap::new()
             },
+            replica_id: None,
         });
     }
 
-    async fn send_halt(&self, id: GlobalId, error: Option<(StatusNamespace, HealthStatusUpdate)>) {
+    fn send_halt(&self, id: GlobalId, error: Option<(StatusNamespace, HealthStatusUpdate)>) {
         self.command_tx
-            .borrow_mut()
-            .broadcast(InternalStorageCommand::SuspendAndRestart {
+            .send(InternalStorageCommand::SuspendAndRestart {
                 // Suspend and restart is expected to operate on the primary object and
                 // not any of the sub-objects
                 id,
@@ -313,10 +306,9 @@ impl HealthOperator for DefaultWriter {
 /// A health message consumed by the `health_operator`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct HealthStatusMessage {
-    /// The index of the object this message describes.
-    ///
-    /// Useful for sub-objects like sub-sources.
-    pub index: usize,
+    /// The object that this status message is about. When None, it refers to the entire ingestion
+    /// as a whole. When Some, it refers to a specific subsource.
+    pub id: Option<GlobalId>,
     /// The namespace of the health update.
     pub namespace: StatusNamespace,
     /// The update itself.
@@ -328,7 +320,7 @@ pub struct HealthStatusMessage {
 ///
 /// Only one worker will be active and write to the status shard.
 ///
-/// The `OutputIndex` values that come across `health_stream` must be a strict subset of thosema,
+/// The `OutputIndex` values that come across `health_stream` must be a strict subset of those in
 /// `configs`'s keys.
 pub(crate) fn health_operator<'g, G, P>(
     scope: &Child<'g, G, mz_repr::Timestamp>,
@@ -342,12 +334,13 @@ pub(crate) fn health_operator<'g, G, P>(
     object_type: &'static str,
     // An indexed stream of health updates. Indexes are configured in `configs`.
     health_stream: &Stream<G, HealthStatusMessage>,
-    // A map of index to collection id that we intend to report on.
-    configs: BTreeMap<usize, GlobalId>,
     // An impl of `HealthOperator` that configures the output behavior of this operator.
     health_operator_impl: P,
     // Whether or not we should actually write namespaced errors in the `details` column.
     write_namespaced_map: bool,
+    // How long to wait before initiating a `SuspendAndRestart` command, to
+    // prevent hot restart loops.
+    suspend_and_restart_delay: Duration,
 ) -> PressOnDropButton
 where
     G: Scope<Timestamp = ()>,
@@ -365,7 +358,7 @@ where
     } else {
         // We'll route all the work to a single arbitrary worker;
         // there's not much to do, and we need a global view.
-        usize::cast_from(configs.keys().next().hashed()) % worker_count
+        usize::cast_from(mark_starting.iter().next().hashed()) % worker_count
     };
 
     let is_active_worker = chosen_worker_id == healthcheck_worker_id;
@@ -381,49 +374,47 @@ where
     );
 
     let button = health_op.build(move |mut _capabilities| async move {
-        let mut health_states: BTreeMap<_, _> = configs
-            .into_iter()
-            .map(|(output_idx, id)| (output_idx, HealthState::new(id, worker_count)))
+        let mut health_states: BTreeMap<_, _> = mark_starting
+            .iter()
+            .copied()
+            .chain([halting_id])
+            .map(|id| (id, HealthState::new(worker_count)))
             .collect();
 
         // Write the initial starting state to the status shard for all managed objects
         if is_active_worker {
-            for state in health_states.values_mut() {
-                if mark_starting.contains(&state.id) {
+            for (id, state) in health_states.iter_mut() {
+                if mark_starting.contains(id) {
                     let status = OverallStatus::Starting;
                     let timestamp = mz_ore::now::to_datetime(now());
-                    health_operator_impl
-                        .record_new_status(
-                            state.id,
-                            timestamp,
-                            (&status).into(),
-                            status.error(),
-                            &status.hints(),
-                            status.errors().unwrap_or(&BTreeMap::new()),
-                            write_namespaced_map,
-                        )
-                        .await;
+                    health_operator_impl.record_new_status(
+                        *id,
+                        timestamp,
+                        (&status).into(),
+                        status.error(),
+                        &status.hints(),
+                        status.errors().unwrap_or(&BTreeMap::new()),
+                        write_namespaced_map,
+                    );
 
                     state.last_reported_status = Some(status);
                 }
             }
         }
 
-        let mut outputs_seen = BTreeMap::<usize, BTreeSet<_>>::new();
+        let mut outputs_seen = BTreeMap::<GlobalId, BTreeSet<_>>::new();
         while let Some(event) = input.next().await {
             if let AsyncEvent::Data(_cap, rows) = event {
                 for (worker_id, message) in rows {
                     let HealthStatusMessage {
-                        index: output_index,
+                        id,
                         namespace: ns,
                         update: health_event,
                     } = message;
+                    let id = id.unwrap_or(halting_id);
                     let HealthState {
-                        id,
-                        healths,
-                        halt_with,
-                        ..
-                    } = match health_states.get_mut(&output_index) {
+                        healths, halt_with, ..
+                    } = match health_states.get_mut(&id) {
                         Some(health) => health,
                         // This is a health status update for a sub-object_type that we did not request to
                         // be generated, which means it doesn't have a GlobalId and should not be
@@ -434,7 +425,7 @@ where
                     // Its important to track `new_round` per-namespace, so namespaces are reasoned
                     // about in `merge_update` independently.
                     let new_round = outputs_seen
-                        .entry(output_index)
+                        .entry(id)
                         .or_insert_with(BTreeSet::new)
                         .insert(ns.clone());
 
@@ -454,15 +445,12 @@ where
 
                 let mut halt_with_outer = None;
 
-                while let Some((output_index, _)) = outputs_seen.pop_first() {
+                while let Some((id, _)) = outputs_seen.pop_first() {
                     let HealthState {
-                        id,
                         healths,
                         last_reported_status,
                         halt_with,
-                    } = health_states
-                        .get_mut(&output_index)
-                        .expect("known to exist");
+                    } = health_states.get_mut(&id).expect("known to exist");
 
                     let new_status = healths.decide_status();
 
@@ -474,24 +462,22 @@ where
                         );
 
                         let timestamp = mz_ore::now::to_datetime(now());
-                        health_operator_impl
-                            .record_new_status(
-                                *id,
-                                timestamp,
-                                (&new_status).into(),
-                                new_status.error(),
-                                &new_status.hints(),
-                                new_status.errors().unwrap_or(&BTreeMap::new()),
-                                write_namespaced_map,
-                            )
-                            .await;
+                        health_operator_impl.record_new_status(
+                            id,
+                            timestamp,
+                            (&new_status).into(),
+                            new_status.error(),
+                            &new_status.hints(),
+                            new_status.errors().unwrap_or(&BTreeMap::new()),
+                            write_namespaced_map,
+                        );
 
                         *last_reported_status = Some(new_status.clone());
                     }
 
                     // Set halt with if None.
                     if halt_with_outer.is_none() && halt_with.is_some() {
-                        halt_with_outer = Some((*id, halt_with.clone()));
+                        halt_with_outer = Some((id, halt_with.clone()));
                     }
                 }
 
@@ -512,10 +498,10 @@ where
                     info!(
                         "Broadcasting suspend-and-restart \
                         command because of {:?} after {:?} delay",
-                        halt_with, SUSPEND_AND_RESTART_DELAY
+                        halt_with, suspend_and_restart_delay
                     );
-                    tokio::time::sleep(SUSPEND_AND_RESTART_DELAY).await;
-                    health_operator_impl.send_halt(id, halt_with).await;
+                    tokio::time::sleep(suspend_and_restart_delay).await;
+                    health_operator_impl.send_halt(id, halt_with);
                 }
             }
         }
@@ -566,7 +552,7 @@ impl HealthStatusUpdate {
         }
     }
 
-    // TODO: redesign ceased status #25768
+    // TODO: redesign ceased status database-issues#7687
     // Generates a ceasing [`HealthStatusUpdate`] with `update`.
     // pub(crate) fn ceasing(error: String) -> Self {
     //     HealthStatusUpdate::Ceased { error }
@@ -621,7 +607,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 1,
                     namespace: StatusNamespace::Generator,
-                    input_index: 0,
+                    id: None,
                     update: HealthStatusUpdate::running(),
                 }),
                 AssertStatus(vec![StatusToAssert {
@@ -638,7 +624,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 1,
                     namespace: StatusNamespace::Generator,
-                    input_index: 1,
+                    id: Some(GlobalId::User(1)),
                     update: HealthStatusUpdate::running(),
                 }),
                 AssertStatus(vec![StatusToAssert {
@@ -649,7 +635,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 0,
                     namespace: StatusNamespace::Generator,
-                    input_index: 1,
+                    id: Some(GlobalId::User(1)),
                     update: HealthStatusUpdate::stalled("uhoh".to_string(), None),
                 }),
                 AssertStatus(vec![StatusToAssert {
@@ -663,7 +649,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 0,
                     namespace: StatusNamespace::Generator,
-                    input_index: 1,
+                    id: Some(GlobalId::User(1)),
                     update: HealthStatusUpdate::running(),
                 }),
                 AssertStatus(vec![StatusToAssert {
@@ -703,7 +689,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 0,
                     namespace: StatusNamespace::Generator,
-                    input_index: 1,
+                    id: Some(GlobalId::User(1)),
                     update: HealthStatusUpdate::stalled("uhoh".to_string(), None),
                 }),
                 AssertStatus(vec![StatusToAssert {
@@ -742,7 +728,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 0,
                     namespace: StatusNamespace::Generator,
-                    input_index: 0,
+                    id: None,
                     update: HealthStatusUpdate::stalled("uhoh".to_string(), None),
                 }),
                 AssertStatus(vec![StatusToAssert {
@@ -755,7 +741,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 0,
                     namespace: StatusNamespace::Kafka,
-                    input_index: 0,
+                    id: None,
                     update: HealthStatusUpdate::stalled("uhoh".to_string(), None),
                 }),
                 AssertStatus(vec![StatusToAssert {
@@ -769,7 +755,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 0,
                     namespace: StatusNamespace::Kafka,
-                    input_index: 0,
+                    id: None,
                     update: HealthStatusUpdate::running(),
                 }),
                 AssertStatus(vec![StatusToAssert {
@@ -782,7 +768,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 0,
                     namespace: StatusNamespace::Generator,
-                    input_index: 0,
+                    id: None,
                     update: HealthStatusUpdate::running(),
                 }),
                 AssertStatus(vec![StatusToAssert {
@@ -818,7 +804,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 0,
                     namespace: StatusNamespace::Ssh,
-                    input_index: 0,
+                    id: None,
                     update: HealthStatusUpdate::stalled("uhoh".to_string(), None),
                 }),
                 AssertStatus(vec![StatusToAssert {
@@ -831,7 +817,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 0,
                     namespace: StatusNamespace::Ssh,
-                    input_index: 0,
+                    id: None,
                     update: HealthStatusUpdate::stalled("uhoh2".to_string(), None),
                 }),
                 AssertStatus(vec![StatusToAssert {
@@ -844,7 +830,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 0,
                     namespace: StatusNamespace::Ssh,
-                    input_index: 0,
+                    id: None,
                     update: HealthStatusUpdate::running(),
                 }),
                 // We haven't starting running yet, as a `Default` namespace hasn't told us.
@@ -856,7 +842,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 0,
                     namespace: StatusNamespace::Generator,
-                    input_index: 0,
+                    id: None,
                     update: HealthStatusUpdate::running(),
                 }),
                 AssertStatus(vec![StatusToAssert {
@@ -890,7 +876,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 0,
                     namespace: StatusNamespace::Generator,
-                    input_index: 0,
+                    id: None,
                     update: HealthStatusUpdate::stalled(
                         "uhoh".to_string(),
                         Some("hint1".to_string()),
@@ -906,7 +892,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 1,
                     namespace: StatusNamespace::Generator,
-                    input_index: 0,
+                    id: None,
                     update: HealthStatusUpdate::stalled(
                         "uhoh2".to_string(),
                         Some("hint2".to_string()),
@@ -924,7 +910,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 1,
                     namespace: StatusNamespace::Generator,
-                    input_index: 0,
+                    id: None,
                     update: HealthStatusUpdate::stalled(
                         "uhoh2".to_string(),
                         Some("hint3".to_string()),
@@ -942,7 +928,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 0,
                     namespace: StatusNamespace::Generator,
-                    input_index: 0,
+                    id: None,
                     update: HealthStatusUpdate::running(),
                 }),
                 AssertStatus(vec![StatusToAssert {
@@ -956,7 +942,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 1,
                     namespace: StatusNamespace::Generator,
-                    input_index: 0,
+                    id: None,
                     update: HealthStatusUpdate::running(),
                 }),
                 AssertStatus(vec![StatusToAssert {
@@ -970,6 +956,8 @@ mod tests {
 
     // The below is ALL test infrastructure for the above
 
+    use mz_ore::assert_err;
+    use timely::container::CapacityContainerBuilder;
     use timely::dataflow::operators::exchange::Exchange;
     use timely::dataflow::Scope;
     use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
@@ -1002,7 +990,7 @@ mod tests {
     struct TestUpdate {
         worker_id: u64,
         namespace: StatusNamespace,
-        input_index: usize,
+        id: Option<GlobalId>,
         update: HealthStatusUpdate,
     }
 
@@ -1020,9 +1008,8 @@ mod tests {
         input_mapping: BTreeMap<GlobalId, usize>,
     }
 
-    #[async_trait::async_trait(?Send)]
     impl HealthOperator for TestWriter {
-        async fn record_new_status(
+        fn record_new_status(
             &self,
             collection_id: GlobalId,
             _ts: DateTime<Utc>,
@@ -1054,11 +1041,7 @@ mod tests {
             });
         }
 
-        async fn send_halt(
-            &self,
-            _id: GlobalId,
-            _error: Option<(StatusNamespace, HealthStatusUpdate)>,
-        ) {
+        fn send_halt(&self, _id: GlobalId, _error: Option<(StatusNamespace, HealthStatusUpdate)>) {
             // Not yet unit-tested
             unimplemented!()
         }
@@ -1109,12 +1092,12 @@ mod tests {
                                 *inputs.first_key_value().unwrap().0,
                                 "source_test",
                                 &input,
-                                inputs.iter().map(|(id, index)| (*index, *id)).collect(),
                                 TestWriter {
                                     sender: out_tx,
                                     input_mapping: inputs,
                                 },
                                 write_namespaced_map,
+                                Duration::from_secs(5),
                             )));
                         });
                 });
@@ -1156,7 +1139,7 @@ mod tests {
                     }
 
                     // Assert that nothing is left in the channel.
-                    assert!(out_rx.try_recv().is_err());
+                    assert_err!(out_rx.try_recv());
                 }
             },
         )
@@ -1174,7 +1157,7 @@ mod tests {
         mut input: UnboundedReceiver<TestUpdate>,
     ) -> Stream<G, HealthStatusMessage> {
         let mut iterator = AsyncOperatorBuilder::new("iterator".to_string(), scope.clone());
-        let (mut output_handle, output) = iterator.new_output();
+        let (output_handle, output) = iterator.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
         let index = scope.index();
         iterator.build(|mut caps| async move {
@@ -1184,24 +1167,22 @@ mod tests {
             }
             let mut capability = Some(caps.pop().unwrap());
             while let Some(element) = input.recv().await {
-                output_handle
-                    .give(
-                        capability.as_ref().unwrap(),
-                        (
-                            element.worker_id,
-                            element.input_index,
-                            element.namespace,
-                            element.update,
-                        ),
-                    )
-                    .await;
+                output_handle.give(
+                    capability.as_ref().unwrap(),
+                    (
+                        element.worker_id,
+                        element.id,
+                        element.namespace,
+                        element.update,
+                    ),
+                );
             }
 
             capability.take();
         });
 
         let output = output.exchange(|d| d.0).map(|d| HealthStatusMessage {
-            index: d.1,
+            id: d.1,
             namespace: d.2,
             update: d.3,
         });

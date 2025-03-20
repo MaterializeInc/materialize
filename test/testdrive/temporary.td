@@ -107,7 +107,7 @@ contains:table "mz_temp.temp_t" already exists
 
 > SHOW INDEXES ON temp_t
 
-# Blocked on https://github.com/MaterializeInc/materialize/issues/3105.
+# Blocked on https://github.com/MaterializeInc/database-issues/issues/1017.
 #
 # > CREATE TEMPORARY DEFAULT INDEX ON temp_t
 #
@@ -204,7 +204,7 @@ $ set schema={
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
-contains:Expected DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET, [OR REPLACE] [TEMPORARY] VIEW, or [OR REPLACE] MATERIALIZED VIEW after CREATE, found SOURCE
+contains:Expected TABLE, or VIEW after CREATE TEMPORARY, found SOURCE
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
@@ -214,7 +214,7 @@ contains:Expected DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, TABLE, SECR
 ! CREATE TEMPORARY SINK data_sink FROM data
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-sink-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-contains:Expected DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET, [OR REPLACE] [TEMPORARY] VIEW, or [OR REPLACE] MATERIALIZED VIEW after CREATE, found SINK
+contains:Expected TABLE, or VIEW after CREATE TEMPORARY, found SINK
 
 #####################################################################
 

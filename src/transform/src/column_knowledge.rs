@@ -18,8 +18,8 @@ use mz_expr::{
     func, EvalError, LetRecLimit, MirRelationExpr, MirScalarExpr, UnaryFunc, RECURSION_LIMIT,
 };
 use mz_ore::cast::CastFrom;
-use mz_ore::soft_panic_or_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
+use mz_ore::{assert_none, soft_panic_or_log};
 use mz_repr::{ColumnType, Datum, RelationType, Row, ScalarType};
 
 use crate::{TransformCtx, TransformError};
@@ -45,13 +45,17 @@ impl CheckedRecursion for ColumnKnowledge {
 }
 
 impl crate::Transform for ColumnKnowledge {
+    fn name(&self) -> &'static str {
+        "ColumnKnowledge"
+    }
+
     /// Transforms an expression through accumulated knowledge.
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "column_knowledge")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         expr: &mut MirRelationExpr,
         _: &mut TransformCtx,
@@ -121,7 +125,7 @@ impl ColumnKnowledge {
                         let id = mz_expr::Id::Local(id.clone());
                         let knowledge_new = vec![DatumKnowledge::bottom(); value.arity()];
                         let knowledge_old = knowledge.insert(id, knowledge_new);
-                        assert!(knowledge_old.is_none());
+                        assert_none!(knowledge_old);
                     }
 
                     // Sum up the arity of all ids in the enclosing LetRec node.
@@ -805,7 +809,7 @@ fn optimize(
                     if matches!(&knowledge, DatumKnowledge::Lit { .. }) {
                         e.reduce(column_types);
                     } else if func == &UnaryFunc::IsNull(func::IsNull) && !knowledge.nullable() {
-                        *e = MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool);
+                        *e = MirScalarExpr::literal_false();
                     };
                     DatumKnowledge::from(&*e)
                 }

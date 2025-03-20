@@ -19,12 +19,17 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use chrono::Utc;
 use headers::Authorization;
-use hyper::client::HttpConnector;
+use http_body_util::BodyExt;
+use hyper::body::Incoming;
 use hyper::http::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use hyper::http::uri::Scheme;
-use hyper::{body, Body, Request, Response, StatusCode, Uri};
-use hyper_openssl::HttpsConnector;
+use hyper::{Request, Response, StatusCode, Uri};
+use hyper_openssl::client::legacy::HttpsConnector;
+use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::rt::TokioExecutor;
+use itertools::Itertools;
 use jsonwebtoken::{self, DecodingKey, EncodingKey};
 use mz_environmentd::test_util::{self, make_header, make_pg_tls, Ca};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
@@ -32,11 +37,13 @@ use mz_frontegg_auth::{
     Authenticator as FronteggAuthentication, AuthenticatorConfig as FronteggConfig, ClaimMetadata,
     ClaimTokenType, Claims, DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
 };
-use mz_frontegg_mock::{ApiToken, FronteggMockServer, TenantApiTokenConfig, UserConfig};
-use mz_ore::assert_contains;
+use mz_frontegg_mock::{
+    models::ApiToken, models::TenantApiTokenConfig, models::UserConfig, FronteggMockServer,
+};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
+use mz_ore::{assert_contains, assert_err, assert_none, assert_ok};
 use mz_sql::names::PUBLIC_ROLE_NAME;
 use mz_sql::session::user::{HTTP_DEFAULT_USER, SYSTEM_USER};
 use openssl::error::ErrorStack;
@@ -125,9 +132,10 @@ enum TestCase<'a> {
 
 fn assert_http_rejected() -> Assert<Box<dyn Fn(Option<StatusCode>, String)>> {
     Assert::Err(Box::new(|code, message| {
-        const ALLOWED_MESSAGES: [&str; 2] = [
+        const ALLOWED_MESSAGES: [&str; 3] = [
             "Connection reset by peer",
             "connection closed before message completed",
+            "invalid HTTP version parsed",
         ];
         assert_eq!(code, None);
         if !ALLOWED_MESSAGES
@@ -231,9 +239,9 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                     configure: &Box<
                         dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + 'a,
                     >,
-                ) -> hyper::Result<Response<Body>> {
-                    hyper::Client::builder()
-                        .build::<_, Body>(make_http_tls(configure))
+                ) -> Result<Response<Incoming>, hyper_util::client::legacy::Error> {
+                    hyper_util::client::legacy::Client::builder(TokioExecutor::new())
+                        .build(make_http_tls(configure))
                         .request({
                             let mut req = Request::post(uri);
                             for (k, v) in headers.iter() {
@@ -243,14 +251,13 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                                 "Content-Type",
                                 HeaderValue::from_static("application/json"),
                             );
-                            req.body(Body::from(json!({ "query": query }).to_string()))
-                                .unwrap()
+                            req.body(json!({ "query": query }).to_string()).unwrap()
                         })
                         .await
                 }
 
                 async fn assert_success_response(
-                    res: hyper::Result<Response<Body>>,
+                    res: Result<Response<Incoming>, hyper_util::client::legacy::Error>,
                     expected_rows: Vec<Vec<String>>,
                 ) {
                     #[derive(Deserialize)]
@@ -261,7 +268,7 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                     struct Response {
                         results: Vec<Result>,
                     }
-                    let body = body::to_bytes(res.unwrap().into_body()).await.unwrap();
+                    let body = res.unwrap().into_body().collect().await.unwrap().to_bytes();
                     let res: Response = serde_json::from_slice(&body).unwrap();
                     assert_eq!(res.results[0].rows, expected_rows)
                 }
@@ -304,11 +311,16 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                     Assert::Err(check) => {
                         let (code, message) = match res {
                             Ok(mut res) => {
-                                let body = body::to_bytes(res.body_mut()).await.unwrap();
+                                let body = res.body_mut().collect().await.unwrap().to_bytes();
                                 let body = String::from_utf8_lossy(&body[..]).into_owned();
                                 (Some(res.status()), body)
                             }
-                            Err(e) => (None, e.to_string()),
+                            Err(e) => {
+                                let e: &dyn std::error::Error = &e;
+                                let errors = std::iter::successors(Some(e), |&e| e.source());
+                                let message = errors.map(|e| e.to_string()).join(": ");
+                                (None, message)
+                            }
                         };
                         check(code, message)
                     }
@@ -427,6 +439,8 @@ async fn test_auth_expiry() {
     let initial_api_tokens = vec![ApiToken {
         client_id: client_id.clone(),
         secret: secret.clone(),
+        description: None,
+        created_at: Utc::now(),
     }];
     let roles = Vec::new();
     let users = BTreeMap::from([(
@@ -462,6 +476,7 @@ async fn test_auth_expiry() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
@@ -547,6 +562,8 @@ async fn test_auth_base_require_tls_frontegg() {
     let initial_api_tokens = vec![ApiToken {
         client_id: client_id.clone(),
         secret: secret.clone(),
+        description: None,
+        created_at: Utc::now(),
     }];
     let system_password = Uuid::new_v4().to_string();
     let system_client_id = Uuid::new_v4();
@@ -554,6 +571,8 @@ async fn test_auth_base_require_tls_frontegg() {
     let system_initial_api_tokens = vec![ApiToken {
         client_id: system_client_id.clone(),
         secret: system_secret.clone(),
+        description: None,
+        created_at: Utc::now(),
     }];
     let service_user_client_id = Uuid::new_v4();
     let service_user_secret = Uuid::new_v4();
@@ -594,6 +613,8 @@ async fn test_auth_base_require_tls_frontegg() {
             ApiToken {
                 client_id: service_user_client_id.clone(),
                 secret: service_user_secret.clone(),
+                description: None,
+                created_at: Utc::now(),
             },
             TenantApiTokenConfig {
                 tenant_id,
@@ -601,12 +622,17 @@ async fn test_auth_base_require_tls_frontegg() {
                 metadata: Some(ClaimMetadata {
                     user: Some("svc".into()),
                 }),
+                description: None,
+                created_at: Utc::now(),
+                created_by_user_id: client_id,
             },
         ),
         (
             ApiToken {
                 client_id: service_system_user_client_id.clone(),
                 secret: service_system_user_secret.clone(),
+                description: None,
+                created_at: Utc::now(),
             },
             TenantApiTokenConfig {
                 tenant_id,
@@ -614,6 +640,9 @@ async fn test_auth_base_require_tls_frontegg() {
                 metadata: Some(ClaimMetadata {
                     user: Some("mz_system".into()),
                 }),
+                description: None,
+                created_at: Utc::now(),
+                created_by_user_id: client_id,
             },
         ),
     ]);
@@ -731,6 +760,7 @@ async fn test_auth_base_require_tls_frontegg() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
@@ -1285,8 +1315,8 @@ async fn test_auth_base_disable_tls() {
                     // Connecting to an HTTP server via HTTPS does not yield
                     // a graceful error message. This could plausibly change
                     // due to OpenSSL or Hyper refactorings.
-                    assert!(code.is_none());
-                    assert_contains!(message, "ssl3_get_record:wrong version number");
+                    assert_none!(code);
+                    assert_contains!(message, "packet length too long");
                 })),
             },
             // System user cannot login via external ports.
@@ -1342,13 +1372,21 @@ async fn test_auth_base_require_tls() {
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
-            // Test that specifying an mzcloud header does nothing and uses the default
-            // user.
+            // Test that specifies a username/password in the mzcloud header should use the username
+            TestCase::Http {
+                user_to_auth_as: frontegg_user,
+                user_reported_by_system: frontegg_user,
+                scheme: Scheme::HTTPS,
+                headers: &frontegg_header_basic,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // Test that has no headers should use the default user
             TestCase::Http {
                 user_to_auth_as: &*HTTP_DEFAULT_USER.name,
                 user_reported_by_system: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTPS,
-                headers: &frontegg_header_basic,
+                headers: &no_headers,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -1456,7 +1494,7 @@ async fn test_auth_intermediate_ca_no_intermediary() {
                 headers: &HeaderMap::new(),
                 configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
                 assert: Assert::Err(Box::new(|code, message| {
-                    assert!(code.is_none());
+                    assert_none!(code);
                     assert_contains!(message, "unable to get local issuer certificate");
                 })),
             },
@@ -1545,6 +1583,7 @@ async fn test_auth_admin_non_superuser() {
 
     let frontegg_user = "user@_.com";
     let admin_frontegg_user = "admin@_.com";
+    let created_at = Utc::now();
 
     let admin_role = "mzadmin";
 
@@ -1556,7 +1595,12 @@ async fn test_auth_admin_non_superuser() {
                 email: frontegg_user.to_string(),
                 password,
                 tenant_id,
-                initial_api_tokens: vec![ApiToken { client_id, secret }],
+                initial_api_tokens: vec![ApiToken {
+                    client_id,
+                    secret,
+                    description: None,
+                    created_at,
+                }],
                 roles: Vec::new(),
                 auth_provider: None,
                 verified: None,
@@ -1573,6 +1617,8 @@ async fn test_auth_admin_non_superuser() {
                 initial_api_tokens: vec![ApiToken {
                     client_id: admin_client_id,
                     secret: admin_secret,
+                    description: None,
+                    created_at: Utc::now(),
                 }],
                 roles: vec![admin_role.to_string()],
                 auth_provider: None,
@@ -1600,6 +1646,7 @@ async fn test_auth_admin_non_superuser() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let password_prefix = "mzp_";
@@ -1681,6 +1728,7 @@ async fn test_auth_admin_superuser() {
 
     let frontegg_user = "user@_.com";
     let admin_frontegg_user = "admin@_.com";
+    let created_at = Utc::now();
 
     let admin_role = "mzadmin";
 
@@ -1692,7 +1740,12 @@ async fn test_auth_admin_superuser() {
                 email: frontegg_user.to_string(),
                 password,
                 tenant_id,
-                initial_api_tokens: vec![ApiToken { client_id, secret }],
+                initial_api_tokens: vec![ApiToken {
+                    client_id,
+                    secret,
+                    description: None,
+                    created_at,
+                }],
                 roles: Vec::new(),
                 auth_provider: None,
                 verified: None,
@@ -1709,6 +1762,8 @@ async fn test_auth_admin_superuser() {
                 initial_api_tokens: vec![ApiToken {
                     client_id: admin_client_id,
                     secret: admin_secret,
+                    description: None,
+                    created_at: Utc::now(),
                 }],
                 roles: vec![admin_role.to_string()],
                 auth_provider: None,
@@ -1736,6 +1791,7 @@ async fn test_auth_admin_superuser() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let password_prefix = "mzp_";
@@ -1817,6 +1873,7 @@ async fn test_auth_admin_superuser_revoked() {
 
     let frontegg_user = "user@_.com";
     let admin_frontegg_user = "admin@_.com";
+    let created_at = Utc::now();
 
     let admin_role = "mzadmin";
 
@@ -1828,7 +1885,12 @@ async fn test_auth_admin_superuser_revoked() {
                 email: frontegg_user.to_string(),
                 password,
                 tenant_id,
-                initial_api_tokens: vec![ApiToken { client_id, secret }],
+                initial_api_tokens: vec![ApiToken {
+                    client_id,
+                    secret,
+                    description: None,
+                    created_at,
+                }],
                 roles: Vec::new(),
                 auth_provider: None,
                 verified: None,
@@ -1845,6 +1907,8 @@ async fn test_auth_admin_superuser_revoked() {
                 initial_api_tokens: vec![ApiToken {
                     client_id: admin_client_id,
                     secret: admin_secret,
+                    description: None,
+                    created_at: Utc::now(),
                 }],
                 roles: vec![admin_role.to_string()],
                 auth_provider: None,
@@ -1872,6 +1936,7 @@ async fn test_auth_admin_superuser_revoked() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let password_prefix = "mzp_";
@@ -1962,6 +2027,7 @@ async fn test_auth_deduplication() {
     let password = Uuid::new_v4().to_string();
     let client_id = Uuid::new_v4();
     let secret = Uuid::new_v4();
+    let created_at = Utc::now();
 
     let frontegg_user = "user@_.com";
 
@@ -1972,7 +2038,12 @@ async fn test_auth_deduplication() {
             email: frontegg_user.to_string(),
             password,
             tenant_id,
-            initial_api_tokens: vec![ApiToken { client_id, secret }],
+            initial_api_tokens: vec![ApiToken {
+                client_id,
+                secret,
+                description: None,
+                created_at,
+            }],
             roles: Vec::new(),
             auth_provider: None,
             verified: None,
@@ -1998,6 +2069,7 @@ async fn test_auth_deduplication() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
@@ -2127,6 +2199,7 @@ async fn test_refresh_task_metrics() {
     let password = Uuid::new_v4().to_string();
     let client_id = Uuid::new_v4();
     let secret = Uuid::new_v4();
+    let created_at = Utc::now();
 
     let frontegg_user = "user@_.com";
 
@@ -2137,7 +2210,12 @@ async fn test_refresh_task_metrics() {
             email: frontegg_user.to_string(),
             password,
             tenant_id,
-            initial_api_tokens: vec![ApiToken { client_id, secret }],
+            initial_api_tokens: vec![ApiToken {
+                client_id,
+                secret,
+                description: None,
+                created_at,
+            }],
             roles: Vec::new(),
             auth_provider: None,
             verified: None,
@@ -2163,6 +2241,7 @@ async fn test_refresh_task_metrics() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
@@ -2259,6 +2338,7 @@ async fn test_superuser_can_alter_cluster() {
     let admin_password = Uuid::new_v4().to_string();
     let admin_client_id = Uuid::new_v4();
     let admin_secret = Uuid::new_v4();
+    let created_at = Utc::now();
 
     let frontegg_user = "user@_.com";
     let admin_frontegg_user = "admin@_.com";
@@ -2273,7 +2353,12 @@ async fn test_superuser_can_alter_cluster() {
                 email: frontegg_user.to_string(),
                 password,
                 tenant_id,
-                initial_api_tokens: vec![ApiToken { client_id, secret }],
+                initial_api_tokens: vec![ApiToken {
+                    client_id,
+                    secret,
+                    description: None,
+                    created_at,
+                }],
                 roles: Vec::new(),
                 auth_provider: None,
                 verified: None,
@@ -2290,6 +2375,8 @@ async fn test_superuser_can_alter_cluster() {
                 initial_api_tokens: vec![ApiToken {
                     client_id: admin_client_id,
                     secret: admin_secret,
+                    description: None,
+                    created_at: Utc::now(),
                 }],
                 roles: vec![admin_role.to_string()],
                 auth_provider: None,
@@ -2317,6 +2404,7 @@ async fn test_superuser_can_alter_cluster() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let password_prefix = "mzp_";
@@ -2398,6 +2486,7 @@ async fn test_refresh_dropped_session() {
     let password = Uuid::new_v4().to_string();
     let client_id = Uuid::new_v4();
     let secret = Uuid::new_v4();
+    let created_at = Utc::now();
 
     let frontegg_user = "user@_.com";
 
@@ -2408,7 +2497,12 @@ async fn test_refresh_dropped_session() {
             email: frontegg_user.to_string(),
             password,
             tenant_id,
-            initial_api_tokens: vec![ApiToken { client_id, secret }],
+            initial_api_tokens: vec![ApiToken {
+                client_id,
+                secret,
+                description: None,
+                created_at,
+            }],
             roles: Vec::new(),
             auth_provider: None,
             verified: None,
@@ -2434,6 +2528,7 @@ async fn test_refresh_dropped_session() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
@@ -2561,13 +2656,19 @@ async fn test_refresh_dropped_session_lru() {
         let password = Uuid::new_v4().to_string();
         let client_id = Uuid::new_v4();
         let secret = Uuid::new_v4();
+        let created_at = Utc::now();
 
         let user = UserConfig {
             id: Uuid::new_v4(),
             email: email.to_string(),
             password,
             tenant_id,
-            initial_api_tokens: vec![ApiToken { client_id, secret }],
+            initial_api_tokens: vec![ApiToken {
+                client_id,
+                secret,
+                description: None,
+                created_at,
+            }],
             roles: Vec::new(),
             auth_provider: None,
             verified: None,
@@ -2605,6 +2706,7 @@ async fn test_refresh_dropped_session_lru() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
@@ -2752,6 +2854,7 @@ async fn test_transient_auth_failures() {
     let password = Uuid::new_v4().to_string();
     let client_id = Uuid::new_v4();
     let secret = Uuid::new_v4();
+    let created_at = Utc::now();
 
     let frontegg_user = "user@_.com";
 
@@ -2762,7 +2865,12 @@ async fn test_transient_auth_failures() {
             email: frontegg_user.to_string(),
             password,
             tenant_id,
-            initial_api_tokens: vec![ApiToken { client_id, secret }],
+            initial_api_tokens: vec![ApiToken {
+                client_id,
+                secret,
+                description: None,
+                created_at,
+            }],
             roles: Vec::new(),
             auth_provider: None,
             verified: None,
@@ -2788,6 +2896,7 @@ async fn test_transient_auth_failures() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
@@ -2830,7 +2939,7 @@ async fn test_transient_auth_failures() {
             Ok(b.set_verify(SslVerifyMode::NONE))
         })))
         .await;
-    assert!(result.is_err());
+    assert_err!(result);
 
     // Re-enable auth.
     frontegg_server.enable_auth.store(true, Ordering::Relaxed);
@@ -2869,6 +2978,7 @@ async fn test_transient_auth_failure_on_refresh() {
     let password = Uuid::new_v4().to_string();
     let client_id = Uuid::new_v4();
     let secret = Uuid::new_v4();
+    let created_at = Utc::now();
 
     let frontegg_user = "user@_.com";
 
@@ -2879,7 +2989,12 @@ async fn test_transient_auth_failure_on_refresh() {
             email: frontegg_user.to_string(),
             password,
             tenant_id,
-            initial_api_tokens: vec![ApiToken { client_id, secret }],
+            initial_api_tokens: vec![ApiToken {
+                client_id,
+                secret,
+                description: None,
+                created_at,
+            }],
             roles: Vec::new(),
             auth_provider: None,
             verified: None,
@@ -2905,6 +3020,7 @@ async fn test_transient_auth_failure_on_refresh() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
@@ -2964,7 +3080,7 @@ async fn test_transient_auth_failure_on_refresh() {
     assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 2);
 
     // Our client should have been closed since auth refresh failed.
-    assert!(pg_client.query_one("SELECT 1", &[]).await.is_err());
+    assert_err!(pg_client.query_one("SELECT 1", &[]).await);
 
     // Re-enable auth.
     frontegg_server.enable_auth.store(true, Ordering::Relaxed);
@@ -2980,6 +3096,6 @@ async fn test_transient_auth_failure_on_refresh() {
         })))
         .await
         .unwrap();
-    assert!(pg_client2.query_one("SELECT 1", &[]).await.is_ok());
+    assert_ok!(pg_client2.query_one("SELECT 1", &[]).await);
     assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 3);
 }

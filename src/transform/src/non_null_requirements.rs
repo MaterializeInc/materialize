@@ -26,6 +26,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::{zip_eq, Either, Itertools};
 use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
+use mz_ore::assert_none;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
 use crate::TransformCtx;
@@ -51,12 +52,16 @@ impl CheckedRecursion for NonNullRequirements {
 }
 
 impl crate::Transform for NonNullRequirements {
+    fn name(&self) -> &'static str {
+        "NonNullRequirements"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "non_null_requirements")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
@@ -123,7 +128,7 @@ impl NonNullRequirements {
                     // Seed the gets map with an empty vector for each ID.
                     for id in ids.iter() {
                         let prior = gets.insert(Id::Local(*id), vec![]);
-                        assert!(prior.is_none());
+                        assert_none!(prior);
                     }
 
                     // Descend into the body with the supplied columns.
@@ -165,7 +170,7 @@ impl NonNullRequirements {
                     {
                         // A null value was introduced in a marked column;
                         // the entire expression can be zeroed out.
-                        relation.take_safely();
+                        relation.take_safely(None);
                         Ok(())
                     } else {
                         // For each column, if it must be non-null, extract the expression's

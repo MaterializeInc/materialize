@@ -16,6 +16,7 @@ query T rowsort
 SELECT rolname FROM pg_roles ORDER BY oid
 ----
 materialize
+mz_analytics
 mz_monitor
 mz_monitor_redacted
 mz_support

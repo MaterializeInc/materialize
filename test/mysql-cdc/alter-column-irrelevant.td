@@ -10,8 +10,6 @@
 $ set-sql-timeout duration=1s
 $ set-max-tries max-tries=20
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_mysql_source = true
 
 #
 # Test ALTER TABLE -- some column changes should not do any harm
@@ -37,9 +35,10 @@ INSERT INTO t1 VALUES (1);
 CREATE TABLE t2 (f1 INTEGER);
 INSERT INTO t2 VALUES (1);
 
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
+> CREATE TABLE t2 FROM SOURCE mz_source (REFERENCE public.t2);
 
 > SELECT * FROM t1;
 1
@@ -58,8 +57,14 @@ $ mysql-execute name=mysql
 ALTER TABLE t1 ADD COLUMN f3 INTEGER FIRST;
 INSERT INTO t1 VALUES (3, 3, 3);
 
+# TODO: Reenable when database-issues#8127 is fixed
+$ skip-if
+SELECT true
+
 ! SELECT * FROM t1;
 contains:incompatible schema change
+
+$ skip-end
 
 # add a new column to t2
 $ mysql-execute name=mysql

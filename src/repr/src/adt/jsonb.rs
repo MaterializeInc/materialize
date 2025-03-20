@@ -85,7 +85,7 @@ use serde::ser::{Serialize, SerializeMap, SerializeSeq, SerializeStruct, Seriali
 
 use crate::adt::jsonb::vec_stack::VecStack;
 use crate::adt::numeric::Numeric;
-use crate::{strconv, Datum, Row, RowPacker};
+use crate::{strconv, Datum, Row, RowPacker, SharedRow};
 
 /// An owned JSON value backed by a [`Row`].
 ///
@@ -101,9 +101,6 @@ pub struct Jsonb {
 
 impl Jsonb {
     /// Constructs a new `Jsonb` from a [`serde_json::Value`].
-    ///
-    /// Errors if any of the contained integers cannot be represented exactly as
-    /// an [`f64`].
     pub fn from_serde_json(val: serde_json::Value) -> Result<Self, anyhow::Error> {
         let mut row = Row::default();
         JsonbPacker::new(&mut row.packer()).pack_serde_json(val)?;
@@ -112,12 +109,15 @@ impl Jsonb {
 
     /// Parses a `Jsonb` from a byte slice `buf`.
     ///
-    /// Errors if the slice is not valid JSON or if any of the contained
-    /// integers cannot be represented exactly as an [`f64`].
+    /// Errors if the slice is not valid JSON.
     pub fn from_slice(buf: &[u8]) -> Result<Jsonb, anyhow::Error> {
-        let mut row = Row::default();
-        JsonbPacker::new(&mut row.packer()).pack_slice(buf)?;
-        Ok(Jsonb { row })
+        let binding = SharedRow::get();
+        let mut row_builder = binding.borrow_mut();
+        let mut packer = row_builder.packer();
+        JsonbPacker::new(&mut packer).pack_slice(buf)?;
+        Ok(Jsonb {
+            row: row_builder.clone(),
+        })
     }
 
     /// Constructs a [`JsonbRef`] that references the JSON in this `Jsonb`.
@@ -138,6 +138,11 @@ impl Jsonb {
     /// Consumes this `Jsonb` and returns the underlying [`Row`].
     pub fn into_row(self) -> Row {
         self.row
+    }
+
+    /// Returns a reference to the underlying [`Row`].
+    pub fn row(&self) -> &Row {
+        &self.row
     }
 }
 
@@ -160,7 +165,7 @@ impl fmt::Display for Jsonb {
 /// A borrowed JSON value.
 ///
 /// `JsonbRef` is to [`Jsonb`] as [`&str`](prim@str) is to [`String`].
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct JsonbRef<'a> {
     datum: Datum<'a>,
 }
@@ -237,9 +242,6 @@ impl<'a, 'row> JsonbPacker<'a, 'row> {
     }
 
     /// Packs a [`serde_json::Value`].
-    ///
-    /// Errors if any of the contained integers cannot be represented exactly as
-    /// an [`f64`].
     pub fn pack_serde_json(self, val: serde_json::Value) -> Result<(), serde_json::Error> {
         let mut commands = vec![];
         Collector(&mut commands).deserialize(val)?;
@@ -249,8 +251,7 @@ impl<'a, 'row> JsonbPacker<'a, 'row> {
 
     /// Parses and packs a JSON-formatted byte slice.
     ///
-    /// Errors if the slice is not valid JSON or if any of the contained
-    /// integers cannot be represented exactly as an [`f64`].
+    /// Errors if the slice is not valid JSON.
     pub fn pack_slice(self, buf: &[u8]) -> Result<(), serde_json::Error> {
         let mut commands = vec![];
         let mut deserializer = serde_json::Deserializer::from_slice(buf);
@@ -262,8 +263,7 @@ impl<'a, 'row> JsonbPacker<'a, 'row> {
 
     /// Parses and packs a JSON-formatted string.
     ///
-    /// Errors if the string is not valid JSON or if any of the contained
-    /// integers cannot be represented exactly as an [`f64`].
+    /// Errors if the string is not valid JSON.
     pub fn pack_str(self, s: &str) -> Result<(), serde_json::Error> {
         let mut commands = vec![];
         let mut deserializer = serde_json::Deserializer::from_str(s);
@@ -281,6 +281,86 @@ impl<'a, 'row> JsonbPacker<'a, 'row> {
 // See the comments in `JsonbDatum::Serialize` and `Collector::visit_map` for
 // details.
 const SERDE_JSON_NUMBER_TOKEN: &str = "$serde_json::private::Number";
+
+// To support arbitrary-precision numbers, serde_json pretends the JSON
+// contained a map like the following:
+//
+//     {"$serde_json::private::Number": "NUMBER AS STRING"}
+//
+// The code here sniffs out that special map and emits just the numeric
+// value.
+
+#[derive(Debug)]
+pub(crate) enum KeyClass<'de> {
+    Number,
+    MapKey(Cow<'de, str>),
+}
+
+pub(crate) struct KeyClassifier;
+
+impl<'de> DeserializeSeed<'de> for KeyClassifier {
+    type Value = KeyClass<'de>;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_str(self)
+    }
+}
+
+impl<'de> Visitor<'de> for KeyClassifier {
+    type Value = KeyClass<'de>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("a string key")
+    }
+
+    #[inline]
+    fn visit_borrowed_str<E>(self, key: &'de str) -> Result<Self::Value, E> {
+        match key {
+            SERDE_JSON_NUMBER_TOKEN => Ok(KeyClass::Number),
+            _ => Ok(KeyClass::MapKey(Cow::Borrowed(key))),
+        }
+    }
+
+    #[inline]
+    fn visit_str<E>(self, key: &str) -> Result<Self::Value, E> {
+        match key {
+            SERDE_JSON_NUMBER_TOKEN => Ok(KeyClass::Number),
+            _ => Ok(KeyClass::MapKey(Cow::Owned(key.to_owned()))),
+        }
+    }
+}
+
+pub(crate) struct NumberParser;
+
+impl<'de> DeserializeSeed<'de> for NumberParser {
+    type Value = OrderedDecimal<Numeric>;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_str(self)
+    }
+}
+
+impl<'de> Visitor<'de> for NumberParser {
+    type Value = OrderedDecimal<Numeric>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("a valid number")
+    }
+
+    #[inline]
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        strconv::parse_numeric(value).map_err(de::Error::custom)
+    }
+}
 
 #[derive(Debug)]
 enum Command<'de> {
@@ -377,86 +457,6 @@ impl<'a, 'de> Visitor<'de> for Collector<'a, 'de> {
     where
         V: MapAccess<'de>,
     {
-        // To support arbitrary-precision numbers, serde_json pretends the JSON
-        // contained a map like the following:
-        //
-        //     {"$serde_json::private::Number": "NUMBER AS STRING"}
-        //
-        // The code here sniffs out that special map and emits just the numeric
-        // value.
-
-        #[derive(Debug)]
-        enum KeyClass<'de> {
-            Number,
-            MapKey(Cow<'de, str>),
-        }
-
-        struct KeyClassifier;
-
-        impl<'de> DeserializeSeed<'de> for KeyClassifier {
-            type Value = KeyClass<'de>;
-
-            fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                deserializer.deserialize_str(self)
-            }
-        }
-
-        impl<'de> Visitor<'de> for KeyClassifier {
-            type Value = KeyClass<'de>;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a string key")
-            }
-
-            #[inline]
-            fn visit_borrowed_str<E>(self, key: &'de str) -> Result<Self::Value, E> {
-                match key {
-                    SERDE_JSON_NUMBER_TOKEN => Ok(KeyClass::Number),
-                    _ => Ok(KeyClass::MapKey(Cow::Borrowed(key))),
-                }
-            }
-
-            #[inline]
-            fn visit_str<E>(self, key: &str) -> Result<Self::Value, E> {
-                match key {
-                    SERDE_JSON_NUMBER_TOKEN => Ok(KeyClass::Number),
-                    _ => Ok(KeyClass::MapKey(Cow::Owned(key.to_owned()))),
-                }
-            }
-        }
-
-        struct NumberParser;
-
-        impl<'de> DeserializeSeed<'de> for NumberParser {
-            type Value = OrderedDecimal<Numeric>;
-
-            fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                deserializer.deserialize_str(self)
-            }
-        }
-
-        impl<'de> Visitor<'de> for NumberParser {
-            type Value = OrderedDecimal<Numeric>;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a valid number")
-            }
-
-            #[inline]
-            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                strconv::parse_numeric(value).map_err(de::Error::custom)
-            }
-        }
-
         match visitor.next_key_seed(KeyClassifier)? {
             Some(KeyClass::Number) => {
                 let n = visitor.next_value_seed(NumberParser)?;

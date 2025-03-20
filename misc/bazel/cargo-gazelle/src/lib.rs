@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{self, Debug, Write};
+use std::rc::Rc;
 
 use crate::platforms::PlatformVariant;
 use crate::targets::RustTarget;
@@ -25,19 +26,17 @@ pub mod targets;
 ///
 /// This includes an auto-generated header, `load(...)` statements, and all
 /// Bazel targets.
-pub struct BazelBuildFile<'a> {
+pub struct BazelBuildFile {
     pub header: header::BazelHeader,
-    pub targets: Vec<&'a dyn RustTarget>,
+    pub targets: Vec<Box<dyn RustTarget>>,
 }
 
-impl<'a> fmt::Display for BazelBuildFile<'a> {
+impl fmt::Display for BazelBuildFile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.header.format(f)?;
-        writeln!(f)?;
-
         for target in &self.targets {
-            target.format(f)?;
             writeln!(f)?;
+            target.format(f)?;
         }
         Ok(())
     }
@@ -60,6 +59,13 @@ impl<T: ToBazelDefinition> ToBazelDefinition for Option<T> {
             Some(val) => val.format(writer),
             None => Ok(()),
         }
+    }
+}
+
+impl ToBazelDefinition for bool {
+    fn format(&self, writer: &mut dyn fmt::Write) -> Result<(), fmt::Error> {
+        let bazel_str = if *self { "True" } else { "False" };
+        writer.write_str(bazel_str)
     }
 }
 
@@ -190,10 +196,10 @@ impl<T: ToBazelDefinition> ToBazelDefinition for Field<T> {
 /// let deps: List<QuotedString> = List::new(vec![QuotedString::new("tokio")]);
 /// assert_eq!(deps.to_bazel_definition(), "[\"tokio\"]");
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct List<T> {
     items: Vec<T>,
-    objects: Vec<Box<dyn ToBazelDefinition>>,
+    objects: Vec<Rc<dyn ToBazelDefinition>>,
 }
 
 impl<T> List<T> {
@@ -215,7 +221,7 @@ impl<T> List<T> {
     /// TODO(parkmcar): This feels a bit off, maybe the API should be something like
     /// `LinkedList`?
     pub fn concat_other(mut self, other: impl ToBazelDefinition + 'static) -> Self {
-        self.objects.push(Box::new(other));
+        self.objects.push(Rc::new(other));
         self
     }
 
@@ -237,6 +243,11 @@ impl<T> List<T> {
     /// Returns an iterator over all of the `items`.
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.items.iter()
+    }
+
+    /// Returns if this [`List`] is empty.
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty() && self.objects.is_empty()
     }
 }
 
@@ -411,6 +422,38 @@ impl ToBazelDefinition for FileGroup {
             let mut w = w.indent();
             self.name.format(&mut w)?;
             self.files.format(&mut w)?;
+        }
+        writeln!(w, ")")?;
+
+        Ok(())
+    }
+}
+
+/// A Bazel [`alias`](https://bazel.build/reference/be/general#alias)
+#[derive(Debug)]
+pub struct Alias {
+    name: Field<QuotedString>,
+    actual: Field<QuotedString>,
+}
+
+impl Alias {
+    pub fn new<N: Into<String>, A: Into<String>>(name: N, actual: A) -> Self {
+        let name = Field::new("name", QuotedString::new(name.into()));
+        let actual = Field::new("actual", QuotedString::new(actual.into()));
+
+        Alias { name, actual }
+    }
+}
+
+impl ToBazelDefinition for Alias {
+    fn format(&self, writer: &mut dyn fmt::Write) -> Result<(), fmt::Error> {
+        let mut w = AutoIndentingWriter::new(writer);
+
+        writeln!(w, "alias(")?;
+        {
+            let mut w = w.indent();
+            self.name.format(&mut w)?;
+            self.actual.format(&mut w)?;
         }
         writeln!(w, ")")?;
 

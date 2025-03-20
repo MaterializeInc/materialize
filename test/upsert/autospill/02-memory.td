@@ -17,6 +17,8 @@ $ kafka-create-topic topic=autospill
   FROM KAFKA CONNECTION conn (TOPIC
   'testdrive-autospill-${testdrive.seed}'
   )
+
+> CREATE TABLE autospill_tbl FROM SOURCE autospill (REFERENCE "testdrive-autospill-${testdrive.seed}")
   KEY FORMAT TEXT VALUE FORMAT TEXT
   ENVELOPE UPSERT
 
@@ -25,12 +27,12 @@ $ kafka-ingest format=bytes topic=autospill key-format=bytes key-terminator=:
 bird:goose
 animal:whale
 
-> SELECT count(*) from autospill;
+> SELECT count(*) from autospill_tbl;
 2
 
 > SELECT
   SUM(u.bytes_indexed) > 0
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name = 'autospill'
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  WHERE t.name = 'autospill_tbl'
 true

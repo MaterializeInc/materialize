@@ -177,11 +177,20 @@ impl<'a> Explain<'a> for MirRelationExpr {
 
     type Text = ExplainSinglePlan<'a, MirRelationExpr>;
 
+    type VerboseText = ExplainSinglePlan<'a, MirRelationExpr>;
+
     type Json = ExplainSinglePlan<'a, MirRelationExpr>;
 
     type Dot = UnsupportedFormat;
 
     fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
+        self.as_explain_single_plan(context)
+    }
+
+    fn explain_verbose_text(
+        &'a mut self,
+        context: &'a Self::Context,
+    ) -> Result<Self::VerboseText, ExplainError> {
         self.as_explain_single_plan(context)
     }
 
@@ -222,7 +231,7 @@ pub fn enforce_linear_chains(expr: &mut MirRelationExpr) -> Result<(), ExplainEr
 
     if expr.is_recursive() {
         // `linear_chains` is not implemented for WMR, see
-        // https://github.com/MaterializeInc/materialize/issues/19012
+        // https://github.com/MaterializeInc/database-issues/issues/5631
         return Err(LinearChainsPlusRecursive);
     }
 
@@ -239,7 +248,7 @@ pub fn enforce_linear_chains(expr: &mut MirRelationExpr) -> Result<(), ExplainEr
                 //     .map(|id| LocalId::new(1000_u64 + u64::cast_from(id_map.len()) + id))
                 //     .unwrap();
                 let id = id_gen.next().unwrap();
-                let value = input.take_safely();
+                let value = input.take_safely(None);
                 // generate a `let $fresh_id = $body in $fresh_id` to replace this input
                 let mut binding = MirRelationExpr::Let {
                     id,

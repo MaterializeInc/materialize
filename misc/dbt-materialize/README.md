@@ -11,9 +11,9 @@ For a complete step-by-step guide on how to use dbt and Materialize, check the
 `pip` (optionally using a virtual environment), run:
 
 ```nofmt
-python3 -m venv dbt-venv         # create the virtual environment
-source dbt-venv/bin/activate     # activate the virtual environment
-pip install dbt-materialize      # install the adapter
+python3 -m venv dbt-venv                  # create the virtual environment
+source dbt-venv/bin/activate              # activate the virtual environment
+pip install dbt-core dbt-materialize      # install dbt-core and the adapter
 ```
 
 ## Requirements
@@ -128,7 +128,7 @@ Not supported. Support is not planned for the near term.
 A huge thank you to [Josh Wills](https://github.com/jwills), who created the
 original version of this adapter. 🤠
 
-[#5266]: https://github.com/MaterializeInc/materialize/issues/5266
+[#5266]: https://github.com/MaterializeInc/database-issues/issues/1623
 [dbt]: https://www.getdbt.com/
 [index]: https://materialize.com/docs/sql/create-index/
 [Materialize]: http://materialize.com

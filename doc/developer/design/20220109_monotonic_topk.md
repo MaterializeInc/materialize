@@ -1,13 +1,13 @@
 # Monotonic TopK Rendering: Current State and Potential Improvements
 
 Created at: December 16, 2022 5:35 PM;
-GitHub epic: https://github.com/MaterializeInc/materialize/issues/16698
+GitHub epic: https://github.com/MaterializeInc/database-issues/issues/4838
 
 ## Summary
 This document aims at capturing a high-level understanding of `TopK` rendering code as well as propose potential improvements in rendering monotonic top-k plans with strategies that that are more efficient when k is small, as is common in practice.
 
 ## Goals
-Presently, our rendering of `TopK` plans treats three cases: `MonotonicTop1Plan`, `MonotonicTopKPlan`, and `BasicTopKPlan`. Taking a step back, there seem to be at least two aspects to consider in our rendering options: monotonicity and boundedness. Monotonicity is an input property that allows us to come up with more specialized rendering for `TopK` plans, since we do not have to account for retractions and can thus not maintain as much state. Boundedness can refer to the input or to the output sizes. It has been observed in issue [#14444](https://github.com/MaterializeInc/materialize/issues/14444) that input size boundedness can be exploited to simplify `TopK` chains. Output size boundedness is exploited in the rendering of `MonotonicTop1Plan` as well as `MonotonicTopKPlan`. However, there may be opportunities to improve the rendering even further, especially for small k, of `MonotonicTopKPlan`.
+Presently, our rendering of `TopK` plans treats three cases: `MonotonicTop1Plan`, `MonotonicTopKPlan`, and `BasicTopKPlan`. Taking a step back, there seem to be at least two aspects to consider in our rendering options: monotonicity and boundedness. Monotonicity is an input property that allows us to come up with more specialized rendering for `TopK` plans, since we do not have to account for retractions and can thus not maintain as much state. Boundedness can refer to the input or to the output sizes. It has been observed in issue [#14444](https://github.com/MaterializeInc/database-issues/issues/4127) that input size boundedness can be exploited to simplify `TopK` chains. Output size boundedness is exploited in the rendering of `MonotonicTop1Plan` as well as `MonotonicTopKPlan`. However, there may be opportunities to improve the rendering even further, especially for small k, of `MonotonicTopKPlan`.
 
 ## Non-Goals
 
@@ -54,7 +54,7 @@ The behavior above is concretely implemented by a feedback operator, triggered b
 - Update (1 row) work: $O(\log n)$
     - Argument: Similar to the above, but observing that we only need to propagate now 1 row through the reduction.
 - Note that in this strategy, memory consumption is minimal, which is a great property to have.
-- However, the implementation currently suffers from excessive memory allocation: https://github.com/MaterializeInc/materialize/issues/7354. An interesting fix has been suggested in [this PR](https://github.com/MaterializeInc/materialize/pull/16782).
+- However, the implementation currently suffers from excessive memory allocation: https://github.com/MaterializeInc/database-issues/issues/2296. An interesting fix has been suggested in [this PR](https://github.com/MaterializeInc/materialize/pull/16782).
 
 ## Alternatives: Potential Improvements
 

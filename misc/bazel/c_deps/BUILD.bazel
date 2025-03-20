@@ -36,7 +36,6 @@ build_test(
         "@lz4//:lz4",
         "@openssl//:openssl",
         "@protobuf//:protoc",
-        "@protobuf//:protobuf",
         "@zlib//:zlib",
         "@zstd//:zstd",
     ],

@@ -7,12 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# To ensure we get statistics in time
-$ set-sql-timeout duration=180s
-
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
-ALTER SYSTEM SET kafka_default_metadata_fetch_interval = 1000
+ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true
 ALTER SYSTEM SET storage_statistics_collection_interval = 1000
 ALTER SYSTEM SET storage_statistics_interval = 2000
 
@@ -42,10 +38,12 @@ one
 > CREATE SOURCE remote1
   IN CLUSTER storage_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-remote1-${testdrive.seed}')
+> CREATE TABLE remote1_tbl FROM SOURCE remote1 (REFERENCE "testdrive-remote1-${testdrive.seed}")
   FORMAT TEXT
 > CREATE SOURCE remote2
   IN CLUSTER storage_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-remote2-${testdrive.seed}')
+> CREATE TABLE remote2_tbl FROM SOURCE remote2 (REFERENCE "testdrive-remote2-${testdrive.seed}")
   FORMAT TEXT
 
 > CREATE SOURCE webhook_text IN CLUSTER storage_cluster FROM WEBHOOK
@@ -54,22 +52,32 @@ one
 $ webhook-append database=materialize schema=public name=webhook_text
 a
 
-> SELECT * from remote1
+> SELECT * from remote1_tbl
 one
-> SELECT * from remote2
+> SELECT * from remote2_tbl
 one
+
+# The `CREATE TABLE ... FROM SOURCE` commands caused a recreation of the
+# respective source dataflows, during which we might have lost the
+# statistics about committed updates from the snapshot. Ingest some more data
+# to ensure we see some `updates_committed`.
+
+$ kafka-ingest format=bytes topic=remote1
+two
+$ kafka-ingest format=bytes topic=remote2
+two
 
 > SELECT s.name,
   SUM(u.updates_committed) > 0,
-  SUM(u.messages_received),
+  SUM(u.messages_received) >= 2,
   SUM(u.offset_known),
   SUM(u.offset_committed)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('remote1', 'remote2')
   GROUP BY s.id, s.name
-remote1 true 1 1 1
-remote2 true 1 1 1
+remote1 true true 2 2
+remote2 true true 2 2
 
 > SELECT s.name,
   SUM(u.updates_committed)

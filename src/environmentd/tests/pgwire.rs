@@ -18,8 +18,8 @@ use bytes::BytesMut;
 use fallible_iterator::FallibleIterator;
 use mz_adapter::session::DEFAULT_DATABASE_NAME;
 use mz_environmentd::test_util::{self, PostgresErrorExt};
-use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
+use mz_ore::{assert_err, assert_ok};
 use mz_pgrepr::{Numeric, Record};
 use postgres::binary_copy::BinaryCopyOutIter;
 use postgres::error::SqlState;
@@ -49,9 +49,12 @@ fn test_bind_params() {
         .unwrap()
         .get::<_, bool>(0));
 
-    // Just ensure it does not panic (see #2498).
+    // Just ensure it does not panic (see database-issues#871).
     client
-        .query("EXPLAIN PLAN FOR SELECT $1::int", &[&42_i32])
+        .query(
+            "EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT $1::int",
+            &[&42_i32],
+        )
         .unwrap();
 
     // Ensure that a type hint provided by the client is respected.
@@ -112,7 +115,7 @@ fn test_bind_params() {
         .query_one("CREATE VIEW v AS SELECT $3", &[])
         .unwrap_db_error();
     // TODO(benesch): this should be `UNDEFINED_PARAMETER`, but blocked
-    // on #3147.
+    // on database-issues#1031.
     assert_eq!(err.message(), "there is no parameter $3");
     assert_eq!(err.code(), &SqlState::INTERNAL_ERROR);
 
@@ -220,6 +223,27 @@ async fn test_conn_startup() {
         }
     }
 
+    // Connecting to a nonexistent database should work, and creating that
+    // database should work.
+    {
+        let (notice_tx, mut notice_rx) = mpsc::unbounded_channel();
+        server
+            .connect()
+            .options("--current_object_missing_warnings=off --welcome_message=off")
+            .notice_callback(move |notice| notice_tx.send(notice).unwrap())
+            .dbname("newdb2")
+            .await
+            .unwrap();
+
+        // Execute a query to ensure startup notices are flushed.
+        client.batch_execute("SELECT 1").await.unwrap();
+
+        drop(client);
+        if let Some(n) = notice_rx.recv().await {
+            panic!("unexpected notice generated: {n:#?}");
+        }
+    }
+
     // Connecting to an existing database should work.
     {
         let client = server.connect().dbname("newdb").await.unwrap();
@@ -293,7 +317,12 @@ async fn test_conn_startup() {
         };
         let mut fields: Vec<_> = error
             .fields()
-            .map(|f| Ok((f.type_(), f.value().to_owned())))
+            .map(|f| {
+                Ok((
+                    f.type_(),
+                    String::from_utf8_lossy(f.value_bytes()).into_owned(),
+                ))
+            })
             .collect()
             .unwrap();
         fields.sort_by_key(|(ty, _value)| *ty);
@@ -349,9 +378,9 @@ fn test_conn_user() {
 fn test_simple_query_no_hang() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
-    assert!(client.simple_query("asdfjkl;").is_err());
-    // This will hang if #2880 is not fixed.
-    assert!(client.simple_query("SELECT 1").is_ok());
+    assert_err!(client.simple_query("asdfjkl;"));
+    // This will hang if database-issues#972 is not fixed.
+    assert_ok!(client.simple_query("SELECT 1"));
 }
 
 #[mz_ore::test]
@@ -448,7 +477,9 @@ fn test_arrays() {
     let message = client
         .simple_query("SELECT ARRAY[ARRAY[1], ARRAY[NULL::int], ARRAY[2]]")
         .unwrap()
-        .into_first();
+        .into_iter()
+        .find(|m| matches!(m, SimpleQueryMessage::Row(_)))
+        .unwrap();
     match message {
         SimpleQueryMessage::Row(row) => {
             assert_eq!(row.get(0).unwrap(), "{{1},{NULL},{2}}");
@@ -459,7 +490,9 @@ fn test_arrays() {
     let message = client
         .simple_query("SELECT ARRAY[ROW(1,2), ROW(3,4), ROW(5,6)]")
         .unwrap()
-        .into_first();
+        .into_iter()
+        .find(|m| matches!(m, SimpleQueryMessage::Row(_)))
+        .unwrap();
     match message {
         SimpleQueryMessage::Row(row) => {
             assert_eq!(row.get(0).unwrap(), r#"{"(1,2)","(3,4)","(5,6)"}"#);
@@ -550,10 +583,10 @@ fn test_pgtest_mz() {
     pg_test_inner(
         dir,
         &[
-            "enable_raise_statement",
-            "enable_unorchestrated_cluster_replicas",
-            "enable_unsafe_functions",
             "enable_copy_to_expr",
+            "enable_raise_statement",
+            "unsafe_enable_unorchestrated_cluster_replicas",
+            "unsafe_enable_unsafe_functions",
         ],
     );
 }

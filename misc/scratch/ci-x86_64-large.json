@@ -1,0 +1,8 @@
+{
+    "name": "m7a.8xlarge as used by CI",
+    "launch_script": "true",
+    "instance_type": "m7a.8xlarge",
+    "ami": "ami-09d56f8956ab235b3",
+    "size_gb": 250,
+    "tags": {}
+}

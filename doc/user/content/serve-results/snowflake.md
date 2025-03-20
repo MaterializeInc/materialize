@@ -12,7 +12,7 @@ menu:
 Snowflake continuously using the Snowflake connector for Kafka. We should also
 document that approach."
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 This guide walks you through the steps required to bulk-export results from
 Materialize to Snowflake using Amazon S3 as the intermediate object store.

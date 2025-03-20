@@ -25,7 +25,7 @@ $ set schema={
     }
 
 # Ensure we rehydrate properly
-> SELECT * from upsert
+> SELECT * from upsert_tbl
 key           f1       f2
 ---------------------------
 fish          fish     1001
@@ -39,34 +39,34 @@ mammalmore    moose    2
     SUM(u.bytes_indexed) > 0,
     SUM(u.records_indexed),
     bool_and(u.rehydration_latency IS NOT NULL)
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('upsert')
-  GROUP BY s.name
-  ORDER BY s.name
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  WHERE t.name IN ('upsert_tbl')
+  GROUP BY t.name
+  ORDER BY t.name
 true 3 true
 
 # Save the size of the rehydrated state.
 $ set-from-sql var=rehydrated-state-bytes
 SELECT
     (SUM(u.bytes_indexed))::text
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('upsert')
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  WHERE t.name IN ('upsert_tbl')
 
 # Ensure we process updates correctly.
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
-{"key": "fish"} {"f1": "longerfish", "f2": 9000}
+{"key": "fish"} {"f1": "muchlongerfish", "f2": 9000}
 
-> SELECT * from upsert
+> SELECT * from upsert_tbl
 key           f1                  f2
 --------------------------------------
-fish          longerfish          9000
+fish          muchlongerfish      9000
 birdmore      geese               56
 mammalmore    moose               2
 
 # Wait for the value's new stats to propagate. We can't
-# just check that the `longerfish` value is larger here,
+# just check that the `muchlongerfish` value is larger here,
 # because the rehydrated value may be more costly. This
 # means we have to do this in 2 steps, like this.
 #
@@ -75,39 +75,40 @@ mammalmore    moose               2
 > SELECT
     SUM(u.bytes_indexed) != ${rehydrated-state-bytes},
     SUM(u.records_indexed)
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('upsert')
-  GROUP BY s.name
-  ORDER BY s.name
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  WHERE t.name IN ('upsert_tbl')
+  GROUP BY t.name
+  ORDER BY t.name
 true 3
 
 $ set-from-sql var=state-bytes
 SELECT
     (SUM(u.bytes_indexed))::text
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('upsert')
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  WHERE t.name IN ('upsert_tbl')
 
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "fish"} {"f1": "MUCHMUCHMUCHLONGERVALUE", "f2": 9000}
 
-> SELECT
-    SUM(u.bytes_indexed) > ${state-bytes},
-    SUM(u.records_indexed)
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('upsert')
-  GROUP BY s.name
-  ORDER BY s.name
-true 3
+# TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/8802 is fixed
+# > SELECT
+#     SUM(u.bytes_indexed) > ${state-bytes},
+#     SUM(u.records_indexed)
+#   FROM mz_tables t
+#   JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+#   WHERE t.name IN ('upsert_tbl')
+#   GROUP BY t.name
+#   ORDER BY t.name
+# true 3
 
 
 # Ensure deletes work.
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "fish"}
 
-> SELECT * from upsert
+> SELECT * from upsert_tbl
 key           f1                  f2
 --------------------------------------
 birdmore      geese               56
@@ -115,9 +116,9 @@ mammalmore    moose               2
 
 > SELECT
     SUM(u.records_indexed)
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('upsert')
-  GROUP BY s.name
-  ORDER BY s.name
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  WHERE t.name IN ('upsert_tbl')
+  GROUP BY t.name
+  ORDER BY t.name
 2

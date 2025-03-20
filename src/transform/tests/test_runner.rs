@@ -51,7 +51,7 @@ mod tests {
             let features = OptimizerFeatures::default();
             let typecheck_ctx = typecheck::empty_context();
             let mut df_meta = DataflowMetainfo::default();
-            let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+            let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None);
 
             #[allow(deprecated)]
             Optimizer::logical_optimizer(&mut transform_ctx)
@@ -141,6 +141,7 @@ mod tests {
                     raw_plans: false,
                     raw_syntax: false,
                     subtree_size: false,
+                    equivalences: false,
                     timing: false,
                     types: format_contains("types"),
                     ..ExplainConfig::default()
@@ -162,7 +163,7 @@ mod tests {
                 };
 
                 Explainable(&mut rel.clone())
-                    .explain(&ExplainFormat::Text, &context)
+                    .explain(&ExplainFormat::VerboseText, &context)
                     .unwrap()
             }
         }
@@ -178,7 +179,7 @@ mod tests {
         let features = OptimizerFeatures::default();
         let typecheck_ctx = typecheck::empty_context();
         let mut df_meta = DataflowMetainfo::default();
-        let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+        let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None);
         let mut rel = parse_relation(s, cat, args)?;
         for t in args.get("apply").cloned().unwrap_or_else(Vec::new).iter() {
             get_transform(t)?.transform(&mut rel, &mut transform_ctx)?;
@@ -266,8 +267,8 @@ mod tests {
         // transforms?
         match name {
             "CanonicalizeMfp" => Ok(Box::new(mz_transform::canonicalize_mfp::CanonicalizeMfp)),
-            "ColumnKnowledge" => Ok(Box::new(
-                mz_transform::column_knowledge::ColumnKnowledge::default(),
+            "EquivalencePropagation" => Ok(Box::new(
+                mz_transform::equivalence_propagation::EquivalencePropagation::default(),
             )),
             "Demand" => Ok(Box::new(mz_transform::demand::Demand::default())),
             "Fusion" => Ok(Box::new(mz_transform::fusion::Fusion)),
@@ -355,7 +356,8 @@ mod tests {
             let features = OptimizerFeatures::default();
             let typecheck_ctx = typecheck::empty_context();
             let mut df_meta = DataflowMetainfo::default();
-            let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+            let mut transform_ctx =
+                TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None);
 
             #[allow(deprecated)]
             let optimizer = Optimizer::logical_optimizer(&mut transform_ctx);
@@ -389,7 +391,8 @@ mod tests {
             let features = OptimizerFeatures::default();
             let typecheck_ctx = typecheck::empty_context();
             let mut df_meta = DataflowMetainfo::default();
-            let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+            let mut transform_ctx =
+                TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None);
 
             let log_optimizer = Optimizer::logical_cleanup_pass(&mut transform_ctx, true);
             let phys_optimizer = Optimizer::physical_optimizer(&mut transform_ctx);
@@ -560,16 +563,18 @@ mod explain {
     impl<'a> Explain<'a> for Explainable<'a, MirRelationExpr> {
         type Context = ExplainContext<'a>;
 
-        type Text = ExplainSinglePlan<'a, MirRelationExpr>;
+        type Text = UnsupportedFormat;
+
+        type VerboseText = ExplainSinglePlan<'a, MirRelationExpr>;
 
         type Json = UnsupportedFormat;
 
         type Dot = UnsupportedFormat;
 
-        fn explain_text(
+        fn explain_verbose_text(
             &'a mut self,
             context: &'a Self::Context,
-        ) -> Result<Self::Text, ExplainError> {
+        ) -> Result<Self::VerboseText, ExplainError> {
             self.as_explain_single_plan(context)
         }
     }

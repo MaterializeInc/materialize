@@ -10,16 +10,15 @@
 //! Types and traits related to reporting changing collections out of `dataflow`.
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
 use std::fmt::Debug;
+use std::time::Duration;
 
 use mz_dyncfg::ConfigSet;
-use mz_ore::num::NonNeg;
-use mz_persist_types::ShardId;
+use mz_expr::MirScalarExpr;
 use mz_pgcopy::CopyFormatParams;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::bytes::ByteSize;
-use mz_repr::{GlobalId, RelationDesc};
+use mz_repr::{CatalogItemId, GlobalId, RelationDesc};
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -30,15 +29,17 @@ use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
-use crate::connections::{ConnectionContext, KafkaConnection};
+use crate::connections::{ConnectionContext, KafkaConnection, KafkaTopicOptions};
 use crate::controller::{AlterError, CollectionMetadata};
 use crate::AlterCompatible;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.sinks.rs"));
 
+pub mod s3_oneshot_sink;
+
 /// A sink for updates to a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct StorageSinkDesc<S: StorageSinkDescFillState, T = mz_repr::Timestamp> {
+pub struct StorageSinkDesc<S, T = mz_repr::Timestamp> {
     pub from: GlobalId,
     pub from_desc: RelationDesc,
     pub connection: StorageSinkConnection,
@@ -46,12 +47,12 @@ pub struct StorageSinkDesc<S: StorageSinkDescFillState, T = mz_repr::Timestamp> 
     pub version: u64,
     pub envelope: SinkEnvelope,
     pub as_of: Antichain<T>,
-    pub status_id: Option<<S as StorageSinkDescFillState>::StatusId>,
-    pub from_storage_metadata: <S as StorageSinkDescFillState>::StorageMetadata,
+    pub from_storage_metadata: S,
+    pub to_storage_metadata: S,
 }
 
-impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + PartialOrder>
-    AlterCompatible for StorageSinkDesc<S, T>
+impl<S: Debug + PartialEq, T: Debug + PartialEq + PartialOrder> AlterCompatible
+    for StorageSinkDesc<S, T>
 {
     /// Determines if `self` is compatible with another `StorageSinkDesc`, in
     /// such a way that it is possible to turn `self` into `other` through a
@@ -74,11 +75,11 @@ impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + Par
             connection,
             envelope,
             version: _,
-            // The as of of the descriptions may differ.
+            // The as-of of the descriptions may differ.
             as_of: _,
-            status_id,
             from_storage_metadata,
             with_snapshot,
+            to_storage_metadata,
         } = self;
 
         let compatibility_checks = [
@@ -89,11 +90,16 @@ impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + Par
                 "connection",
             ),
             (envelope == &other.envelope, "envelope"),
-            (status_id == &other.status_id, "status_id"),
-            (with_snapshot == &other.with_snapshot, "with_snapshot"),
+            // This can legally change from true to false once the snapshot has been
+            // written out.
+            (*with_snapshot || !other.with_snapshot, "with_snapshot"),
             (
                 from_storage_metadata == &other.from_storage_metadata,
                 "from_storage_metadata",
+            ),
+            (
+                to_storage_metadata == &other.to_storage_metadata,
+                "to_storage_metadata",
             ),
         ];
 
@@ -113,26 +119,7 @@ impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + Par
     }
 }
 
-pub trait StorageSinkDescFillState {
-    type StatusId: Debug + Clone + Serialize + for<'a> Deserialize<'a> + Eq + PartialEq;
-    type StorageMetadata: Debug + Clone + Serialize + for<'a> Deserialize<'a> + Eq + PartialEq;
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct MetadataUnfilled;
-impl StorageSinkDescFillState for MetadataUnfilled {
-    type StatusId = GlobalId;
-    type StorageMetadata = ();
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct MetadataFilled;
-impl StorageSinkDescFillState for MetadataFilled {
-    type StatusId = ShardId;
-    type StorageMetadata = CollectionMetadata;
-}
-
-impl Arbitrary for StorageSinkDesc<MetadataFilled, mz_repr::Timestamp> {
+impl Arbitrary for StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
@@ -143,10 +130,10 @@ impl Arbitrary for StorageSinkDesc<MetadataFilled, mz_repr::Timestamp> {
             any::<StorageSinkConnection>(),
             any::<SinkEnvelope>(),
             any::<Option<mz_repr::Timestamp>>(),
-            any::<Option<ShardId>>(),
             any::<CollectionMetadata>(),
             any::<bool>(),
             any::<u64>(),
+            any::<CollectionMetadata>(),
         )
             .prop_map(
                 |(
@@ -155,10 +142,10 @@ impl Arbitrary for StorageSinkDesc<MetadataFilled, mz_repr::Timestamp> {
                     connection,
                     envelope,
                     as_of,
-                    status_id,
                     from_storage_metadata,
                     with_snapshot,
                     version,
+                    to_storage_metadata,
                 )| {
                     StorageSinkDesc {
                         from,
@@ -167,17 +154,20 @@ impl Arbitrary for StorageSinkDesc<MetadataFilled, mz_repr::Timestamp> {
                         envelope,
                         version,
                         as_of: Antichain::from_iter(as_of),
-                        status_id,
                         from_storage_metadata,
                         with_snapshot,
+                        to_storage_metadata,
                     }
                 },
             )
+            .prop_filter("identical source and sink", |desc| {
+                desc.from_storage_metadata != desc.to_storage_metadata
+            })
             .boxed()
     }
 }
 
-impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<MetadataFilled, mz_repr::Timestamp> {
+impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoStorageSinkDesc {
         ProtoStorageSinkDesc {
             connection: Some(self.connection.into_proto()),
@@ -185,8 +175,8 @@ impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<MetadataFilled, mz_repr:
             from_desc: Some(self.from_desc.into_proto()),
             envelope: Some(self.envelope.into_proto()),
             as_of: Some(self.as_of.into_proto()),
-            status_id: self.status_id.into_proto(),
             from_storage_metadata: Some(self.from_storage_metadata.into_proto()),
+            to_storage_metadata: Some(self.to_storage_metadata.into_proto()),
             with_snapshot: self.with_snapshot,
             version: self.version,
         }
@@ -207,12 +197,14 @@ impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<MetadataFilled, mz_repr:
             as_of: proto
                 .as_of
                 .into_rust_if_some("ProtoStorageSinkDesc::as_of")?,
-            status_id: proto.status_id.into_rust()?,
             from_storage_metadata: proto
                 .from_storage_metadata
                 .into_rust_if_some("ProtoStorageSinkDesc::from_storage_metadata")?,
             with_snapshot: proto.with_snapshot,
             version: proto.version,
+            to_storage_metadata: proto
+                .to_storage_metadata
+                .into_rust_if_some("ProtoStorageSinkDesc::to_storage_metadata")?,
         })
     }
 }
@@ -309,7 +301,7 @@ impl RustType<ProtoStorageSinkConnection> for StorageSinkConnection {
 
 impl<C: ConnectionAccess> StorageSinkConnection<C> {
     /// returns an option to not constrain ourselves in the future
-    pub fn connection_id(&self) -> Option<GlobalId> {
+    pub fn connection_id(&self) -> Option<CatalogItemId> {
         use StorageSinkConnection::*;
         match self {
             Kafka(KafkaSinkConnection { connection_id, .. }) => Some(*connection_id),
@@ -384,39 +376,9 @@ impl KafkaSinkCompressionType {
     }
 }
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
-pub struct KafkaSinkTopicOptions {
-    /// The replication factor for the topic.
-    /// If `None`, the broker default will be used.
-    pub replication_factor: Option<NonNeg<i32>>,
-    /// The number of partitions to create.
-    /// If `None`, the broker default will be used.
-    pub partition_count: Option<NonNeg<i32>>,
-    /// The initial configuration parameters for the topic.
-    pub topic_config: BTreeMap<String, String>,
-}
-
-impl RustType<ProtoKafkaSinkTopicOptions> for KafkaSinkTopicOptions {
-    fn into_proto(&self) -> ProtoKafkaSinkTopicOptions {
-        ProtoKafkaSinkTopicOptions {
-            replication_factor: self.replication_factor.map(|f| *f),
-            partition_count: self.partition_count.map(|f| *f),
-            topic_config: self.topic_config.clone(),
-        }
-    }
-
-    fn from_proto(proto: ProtoKafkaSinkTopicOptions) -> Result<Self, TryFromProtoError> {
-        Ok(KafkaSinkTopicOptions {
-            replication_factor: proto.replication_factor.map(NonNeg::try_from).transpose()?,
-            partition_count: proto.partition_count.map(NonNeg::try_from).transpose()?,
-            topic_config: proto.topic_config,
-        })
-    }
-}
-
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
-    pub connection_id: GlobalId,
+    pub connection_id: CatalogItemId,
     pub connection: C::Kafka,
     pub format: KafkaSinkFormat<C>,
     /// A natural key of the sinked relation (view or source).
@@ -426,14 +388,16 @@ pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
     /// The index of the column containing message headers value, if any.
     pub headers_index: Option<usize>,
     pub value_desc: RelationDesc,
+    /// An expression that, if present, computes a hash value that should be
+    /// used to determine the partition for each message.
+    pub partition_by: Option<MirScalarExpr>,
     pub topic: String,
     /// Options to use when creating the topic if it doesn't already exist.
-    pub topic_options: KafkaSinkTopicOptions,
-    /// Options to use when creating the progress topic if it doesn't already exist.
-    pub progress_topic_options: KafkaSinkTopicOptions,
+    pub topic_options: KafkaTopicOptions,
     pub compression_type: KafkaSinkCompressionType,
     pub progress_group_id: KafkaIdStyle,
     pub transactional_id: KafkaIdStyle,
+    pub topic_metadata_refresh_interval: Duration,
 }
 
 impl KafkaSinkConnection {
@@ -520,12 +484,13 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
             key_desc_and_indices,
             headers_index,
             value_desc,
+            partition_by,
             topic,
             compression_type,
             progress_group_id,
             transactional_id,
             topic_options,
-            progress_topic_options,
+            topic_metadata_refresh_interval,
         } = self;
 
         let compatibility_checks = [
@@ -545,6 +510,7 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
             ),
             (headers_index == &other.headers_index, "headers_index"),
             (value_desc == &other.value_desc, "value_desc"),
+            (partition_by == &other.partition_by, "partition_by"),
             (topic == &other.topic, "topic"),
             (
                 compression_type == &other.compression_type,
@@ -560,8 +526,8 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
             ),
             (topic_options == &other.topic_options, "topic_config"),
             (
-                progress_topic_options == &other.progress_topic_options,
-                "progress_topic_options",
+                topic_metadata_refresh_interval == &other.topic_metadata_refresh_interval,
+                "topic_metadata_refresh_interval",
             ),
         ];
         for (compatible, field) in compatibility_checks {
@@ -592,12 +558,13 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             key_desc_and_indices,
             headers_index,
             value_desc,
+            partition_by,
             topic,
             compression_type,
             progress_group_id,
             transactional_id,
             topic_options,
-            progress_topic_options,
+            topic_metadata_refresh_interval,
         } = self;
         KafkaSinkConnection {
             connection_id,
@@ -607,12 +574,13 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             key_desc_and_indices,
             headers_index,
             value_desc,
+            partition_by,
             topic,
             compression_type,
             progress_group_id,
             transactional_id,
             topic_options,
-            progress_topic_options,
+            topic_metadata_refresh_interval,
         }
     }
 }
@@ -664,6 +632,7 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
             relation_key_indices: self.relation_key_indices.into_proto(),
             headers_index: self.headers_index.into_proto(),
             value_desc: Some(self.value_desc.into_proto()),
+            partition_by: self.partition_by.into_proto(),
             topic: self.topic.clone(),
             compression_type: Some(match self.compression_type {
                 KafkaSinkCompressionType::None => CompressionType::None(()),
@@ -675,7 +644,9 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
             progress_group_id: Some(self.progress_group_id.into_proto()),
             transactional_id: Some(self.transactional_id.into_proto()),
             topic_options: Some(self.topic_options.into_proto()),
-            progress_topic_options: Some(self.progress_topic_options.into_proto()),
+            topic_metadata_refresh_interval: Some(
+                self.topic_metadata_refresh_interval.into_proto(),
+            ),
         }
     }
 
@@ -697,6 +668,7 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
             value_desc: proto
                 .value_desc
                 .into_rust_if_some("ProtoKafkaSinkConnectionV2::value_desc")?,
+            partition_by: proto.partition_by.into_rust()?,
             topic: proto.topic,
             compression_type: match proto.compression_type {
                 Some(CompressionType::None(())) => KafkaSinkCompressionType::None,
@@ -720,31 +692,61 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
                 Some(topic_options) => topic_options.into_rust()?,
                 None => Default::default(),
             },
-            progress_topic_options: match proto.progress_topic_options {
-                Some(progress_topic_options) => progress_topic_options.into_rust()?,
-                None => Default::default(),
-            },
+            topic_metadata_refresh_interval: proto
+                .topic_metadata_refresh_interval
+                .into_rust_if_some("ProtoKafkaSinkConnectionV2::topic_metadata_refresh_interval")?,
         })
     }
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum KafkaSinkFormat<C: ConnectionAccess = InlinedConnection> {
-    Avro {
-        key_schema: Option<String>,
-        value_schema: String,
-        csr_connection: C::Csr,
-        key_compatibility_level: Option<mz_ccsr::CompatibilityLevel>,
-        value_compatibility_level: Option<mz_ccsr::CompatibilityLevel>,
-    },
-    Json,
+pub struct KafkaSinkFormat<C: ConnectionAccess = InlinedConnection> {
+    pub key_format: Option<KafkaSinkFormatType<C>>,
+    pub value_format: KafkaSinkFormatType<C>,
 }
 
-impl<C: ConnectionAccess> KafkaSinkFormat<C> {
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum KafkaSinkFormatType<C: ConnectionAccess = InlinedConnection> {
+    Avro {
+        schema: String,
+        compatibility_level: Option<mz_ccsr::CompatibilityLevel>,
+        csr_connection: C::Csr,
+    },
+    Json,
+    Text,
+    Bytes,
+}
+
+impl<C: ConnectionAccess> KafkaSinkFormatType<C> {
     pub fn get_format_name(&self) -> &str {
         match self {
             Self::Avro { .. } => "avro",
             Self::Json => "json",
+            Self::Text => "text",
+            Self::Bytes => "bytes",
+        }
+    }
+}
+
+impl<C: ConnectionAccess> KafkaSinkFormat<C> {
+    pub fn get_format_name<'a>(&'a self) -> Cow<'a, str> {
+        // For legacy reasons, if the key-format is none or the key & value formats are
+        // both the same (either avro or json), we return the value format name,
+        // otherwise we return a composite name.
+        match &self.key_format {
+            None => self.value_format.get_format_name().into(),
+            Some(key_format) => match (key_format, &self.value_format) {
+                (KafkaSinkFormatType::Avro { .. }, KafkaSinkFormatType::Avro { .. }) => {
+                    "avro".into()
+                }
+                (KafkaSinkFormatType::Json, KafkaSinkFormatType::Json) => "json".into(),
+                (keyf, valuef) => format!(
+                    "key-{}-value-{}",
+                    keyf.get_format_name(),
+                    valuef.get_format_name()
+                )
+                .into(),
+            },
         }
     }
 
@@ -753,49 +755,76 @@ impl<C: ConnectionAccess> KafkaSinkFormat<C> {
             return Ok(());
         }
 
-        match (self, other) {
+        match (&self.value_format, &other.value_format) {
             (
-                Self::Avro {
-                    key_schema,
-                    value_schema,
+                KafkaSinkFormatType::Avro {
+                    schema,
+                    compatibility_level: _,
                     csr_connection,
-                    key_compatibility_level: _,
-                    value_compatibility_level: _,
                 },
-                Self::Avro {
-                    key_schema: other_key_schema,
-                    value_schema: other_value_schema,
+                KafkaSinkFormatType::Avro {
+                    schema: other_schema,
+                    compatibility_level: _,
                     csr_connection: other_csr_connection,
-                    key_compatibility_level: _,
-                    value_compatibility_level: _,
                 },
             ) => {
-                let compatibility_checks = [
-                    (key_schema == other_key_schema, "key_schema"),
-                    (value_schema == other_value_schema, "value_schema"),
-                    (
-                        csr_connection
-                            .alter_compatible(id, other_csr_connection)
-                            .is_ok(),
-                        "csr_connection",
-                    ),
-                ];
-                for (compatible, field) in compatibility_checks {
-                    if !compatible {
-                        tracing::warn!(
-                            "KafkaSinkAvroFormatState::Avro incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
-                            self,
-                            other
-                        );
+                if schema != other_schema
+                    || csr_connection
+                        .alter_compatible(id, other_csr_connection)
+                        .is_err()
+                {
+                    tracing::warn!(
+                        "KafkaSinkFormat::Avro incompatible at value_format:\nself:\n{:#?}\n\nother\n{:#?}",
+                        self,
+                        other
+                    );
 
-                        return Err(AlterError { id });
-                    }
+                    return Err(AlterError { id });
                 }
             }
             (s, o) => {
                 if s != o {
                     tracing::warn!(
-                        "KafkaSinkFormat incompatible\nself:\n{:#?}\n\nother:{:#?}",
+                        "KafkaSinkFormat incompatible at value_format:\nself:\n{:#?}\n\nother:{:#?}",
+                        s,
+                        o
+                    );
+                    return Err(AlterError { id });
+                }
+            }
+        }
+
+        match (&self.key_format, &other.key_format) {
+            (
+                Some(KafkaSinkFormatType::Avro {
+                    schema,
+                    compatibility_level: _,
+                    csr_connection,
+                }),
+                Some(KafkaSinkFormatType::Avro {
+                    schema: other_schema,
+                    compatibility_level: _,
+                    csr_connection: other_csr_connection,
+                }),
+            ) => {
+                if schema != other_schema
+                    || csr_connection
+                        .alter_compatible(id, other_csr_connection)
+                        .is_err()
+                {
+                    tracing::warn!(
+                        "KafkaSinkFormat::Avro incompatible at key_format:\nself:\n{:#?}\n\nother\n{:#?}",
+                        self,
+                        other
+                    );
+
+                    return Err(AlterError { id });
+                }
+            }
+            (s, o) => {
+                if s != o {
+                    tracing::warn!(
+                        "KafkaSinkFormat incompatible at key_format\nself:\n{:#?}\n\nother:{:#?}",
                         s,
                         o
                     );
@@ -812,27 +841,96 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkFormat, R>
     for KafkaSinkFormat<ReferencedConnection>
 {
     fn into_inline_connection(self, r: R) -> KafkaSinkFormat {
-        match self {
-            Self::Avro {
-                key_schema,
-                value_schema,
-                csr_connection,
-                key_compatibility_level,
-                value_compatibility_level,
-            } => KafkaSinkFormat::Avro {
-                key_schema,
-                value_schema,
-                csr_connection: r.resolve_connection(csr_connection).unwrap_csr(),
-                key_compatibility_level,
-                value_compatibility_level,
-            },
-            Self::Json => KafkaSinkFormat::Json,
+        KafkaSinkFormat {
+            key_format: self.key_format.map(|f| f.into_inline_connection(&r)),
+            value_format: self.value_format.into_inline_connection(&r),
         }
     }
 }
 
+impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkFormatType, R>
+    for KafkaSinkFormatType<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> KafkaSinkFormatType {
+        match self {
+            KafkaSinkFormatType::Avro {
+                schema,
+                compatibility_level,
+                csr_connection,
+            } => KafkaSinkFormatType::Avro {
+                schema,
+                compatibility_level,
+                csr_connection: r.resolve_connection(csr_connection).unwrap_csr(),
+            },
+            KafkaSinkFormatType::Json => KafkaSinkFormatType::Json,
+            KafkaSinkFormatType::Text => KafkaSinkFormatType::Text,
+            KafkaSinkFormatType::Bytes => KafkaSinkFormatType::Bytes,
+        }
+    }
+}
+
+impl RustType<ProtoKafkaSinkFormatType> for KafkaSinkFormatType {
+    fn into_proto(&self) -> ProtoKafkaSinkFormatType {
+        use proto_kafka_sink_format_type::Type;
+        ProtoKafkaSinkFormatType {
+            r#type: Some(match self {
+                Self::Avro {
+                    schema,
+                    compatibility_level,
+                    csr_connection,
+                } => Type::Avro(proto_kafka_sink_format_type::ProtoKafkaSinkAvroFormat {
+                    schema: schema.clone(),
+                    compatibility_level: csr_compat_level_to_proto(compatibility_level),
+                    csr_connection: Some(csr_connection.into_proto()),
+                }),
+                Self::Json => Type::Json(()),
+                Self::Text => Type::Text(()),
+                Self::Bytes => Type::Bytes(()),
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoKafkaSinkFormatType) -> Result<Self, TryFromProtoError> {
+        use proto_kafka_sink_format_type::Type;
+        let r#type = proto
+            .r#type
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoKafkaSinkFormatType::type"))?;
+
+        Ok(match r#type {
+            Type::Avro(proto) => Self::Avro {
+                schema: proto.schema,
+                compatibility_level: csr_compat_level_from_proto(proto.compatibility_level),
+                csr_connection: proto
+                    .csr_connection
+                    .into_rust_if_some("ProtoKafkaSinkFormatType::csr_connection")?,
+            },
+            Type::Json(()) => Self::Json,
+            Type::Text(()) => Self::Text,
+            Type::Bytes(()) => Self::Bytes,
+        })
+    }
+}
+
+impl RustType<ProtoKafkaSinkFormat> for KafkaSinkFormat {
+    fn into_proto(&self) -> ProtoKafkaSinkFormat {
+        ProtoKafkaSinkFormat {
+            key_format: self.key_format.as_ref().map(|f| f.into_proto()),
+            value_format: Some(self.value_format.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoKafkaSinkFormat) -> Result<Self, TryFromProtoError> {
+        Ok(KafkaSinkFormat {
+            key_format: proto.key_format.into_rust()?,
+            value_format: proto
+                .value_format
+                .into_rust_if_some("ProtoKafkaSinkFormat::value_format")?,
+        })
+    }
+}
+
 fn csr_compat_level_to_proto(compatibility_level: &Option<mz_ccsr::CompatibilityLevel>) -> i32 {
-    use proto_kafka_sink_format::proto_kafka_sink_avro_format::CompatibilityLevel as ProtoCompatLevel;
+    use proto_kafka_sink_format_type::proto_kafka_sink_avro_format::CompatibilityLevel as ProtoCompatLevel;
     match compatibility_level {
         Some(level) => match level {
             mz_ccsr::CompatibilityLevel::Backward => ProtoCompatLevel::Backward,
@@ -849,67 +947,21 @@ fn csr_compat_level_to_proto(compatibility_level: &Option<mz_ccsr::Compatibility
 }
 
 fn csr_compat_level_from_proto(val: i32) -> Option<mz_ccsr::CompatibilityLevel> {
-    use proto_kafka_sink_format::proto_kafka_sink_avro_format::CompatibilityLevel as ProtoCompatLevel;
-    match ProtoCompatLevel::from_i32(val) {
-        Some(ProtoCompatLevel::Backward) => Some(mz_ccsr::CompatibilityLevel::Backward),
-        Some(ProtoCompatLevel::BackwardTransitive) => {
+    use proto_kafka_sink_format_type::proto_kafka_sink_avro_format::CompatibilityLevel as ProtoCompatLevel;
+    match ProtoCompatLevel::try_from(val) {
+        Ok(ProtoCompatLevel::Backward) => Some(mz_ccsr::CompatibilityLevel::Backward),
+        Ok(ProtoCompatLevel::BackwardTransitive) => {
             Some(mz_ccsr::CompatibilityLevel::BackwardTransitive)
         }
-        Some(ProtoCompatLevel::Forward) => Some(mz_ccsr::CompatibilityLevel::Forward),
-        Some(ProtoCompatLevel::ForwardTransitive) => {
+        Ok(ProtoCompatLevel::Forward) => Some(mz_ccsr::CompatibilityLevel::Forward),
+        Ok(ProtoCompatLevel::ForwardTransitive) => {
             Some(mz_ccsr::CompatibilityLevel::ForwardTransitive)
         }
-        Some(ProtoCompatLevel::Full) => Some(mz_ccsr::CompatibilityLevel::Full),
-        Some(ProtoCompatLevel::FullTransitive) => Some(mz_ccsr::CompatibilityLevel::FullTransitive),
-        Some(ProtoCompatLevel::None) => Some(mz_ccsr::CompatibilityLevel::None),
-        Some(ProtoCompatLevel::Unset) => None,
-        None => None,
-    }
-}
-
-impl RustType<ProtoKafkaSinkFormat> for KafkaSinkFormat {
-    fn into_proto(&self) -> ProtoKafkaSinkFormat {
-        use proto_kafka_sink_format::Kind;
-        ProtoKafkaSinkFormat {
-            kind: Some(match self {
-                Self::Avro {
-                    key_schema,
-                    value_schema,
-                    csr_connection,
-                    key_compatibility_level,
-                    value_compatibility_level,
-                } => Kind::Avro(proto_kafka_sink_format::ProtoKafkaSinkAvroFormat {
-                    key_schema: key_schema.clone(),
-                    value_schema: value_schema.clone(),
-                    csr_connection: Some(csr_connection.into_proto()),
-                    key_compatibility_level: csr_compat_level_to_proto(key_compatibility_level),
-                    value_compatibility_level: csr_compat_level_to_proto(value_compatibility_level),
-                }),
-                Self::Json => Kind::Json(()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoKafkaSinkFormat) -> Result<Self, TryFromProtoError> {
-        use proto_kafka_sink_format::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoKafkaSinkFormat::kind"))?;
-
-        Ok(match kind {
-            Kind::Avro(proto) => Self::Avro {
-                key_schema: proto.key_schema,
-                value_schema: proto.value_schema,
-                csr_connection: proto
-                    .csr_connection
-                    .into_rust_if_some("ProtoKafkaSinkAvroFormat::csr_connection")?,
-                key_compatibility_level: csr_compat_level_from_proto(proto.key_compatibility_level),
-                value_compatibility_level: csr_compat_level_from_proto(
-                    proto.value_compatibility_level,
-                ),
-            },
-            Kind::Json(()) => Self::Json,
-        })
+        Ok(ProtoCompatLevel::Full) => Some(mz_ccsr::CompatibilityLevel::Full),
+        Ok(ProtoCompatLevel::FullTransitive) => Some(mz_ccsr::CompatibilityLevel::FullTransitive),
+        Ok(ProtoCompatLevel::None) => Some(mz_ccsr::CompatibilityLevel::None),
+        Ok(ProtoCompatLevel::Unset) => None,
+        Err(_) => None,
     }
 }
 

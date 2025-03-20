@@ -90,9 +90,9 @@ pub trait OreFutureExt {
         Self::Output: Send + 'static;
 
     /// Like [`FutureExt::catch_unwind`], but can unwind panics even if
-    /// [`set_abort_on_panic`] has been called.
+    /// [`panic::install_enhanced_handler`] has been called.
     ///
-    /// [`set_abort_on_panic`]: crate::panic::set_abort_on_panic
+    /// [`panic::install_enhanced_handler`]: crate::panic::install_enhanced_handler
     fn ore_catch_unwind(self) -> OreCatchUnwind<Self>
     where
         Self: Sized + UnwindSafe;

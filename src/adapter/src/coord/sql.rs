@@ -21,7 +21,7 @@ use mz_sql_parser::ast::{Raw, Statement};
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
 use crate::catalog::Catalog;
 use crate::coord::appends::BuiltinTableAppendNotify;
-use crate::coord::Coordinator;
+use crate::coord::{Coordinator, Message};
 use crate::session::{Session, TransactionStatus};
 use crate::util::describe;
 use crate::{metrics, AdapterError, ExecuteContext, ExecuteResponse};
@@ -175,9 +175,9 @@ impl Coordinator {
                 desc.param_types.iter().map(|ty| Some(ty.clone())).collect(),
             )?;
             if &current_desc != desc {
-                Err(AdapterError::ChangedPlan(format!(
-                    "cached plan must not change result type",
-                )))
+                Err(AdapterError::ChangedPlan(
+                    "cached plan must not change result type".to_string(),
+                ))
             } else {
                 Ok(Some(current_revision))
             }
@@ -192,6 +192,12 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
     ) -> TransactionStatus<mz_repr::Timestamp> {
+        // This function is *usually* called when transactions end, but it can fail to be called in
+        // some cases (for example if the session's role id was dropped, then we return early and
+        // don't go through the normal sequence_end_transaction path). The `Command::Commit` handler
+        // and `AdapterClient::end_transaction` protect against this by each executing their parts
+        // of this function. Thus, if this function changes, ensure that the changes are propogated
+        // to either of those components.
         self.clear_connection(session.conn_id()).await;
         session.clear_transaction()
     }
@@ -201,6 +207,7 @@ impl Coordinator {
         self.staged_cancellation.remove(conn_id);
         self.retire_compute_sinks_for_conn(conn_id, ActiveComputeSinkRetireReason::Finished)
             .await;
+        self.retire_cluster_reconfigurations_for_conn(conn_id).await;
 
         // Release this transaction's compaction hold on collections.
         if let Some(txn_reads) = self.txn_read_holds.remove(conn_id) {
@@ -209,6 +216,19 @@ impl Coordinator {
             // Make it explicit that we're dropping these read holds. Dropping
             // them will release them at the Coordinator.
             drop(txn_reads);
+        }
+
+        if let Some(_guard) = self
+            .active_conns
+            .get_mut(conn_id)
+            .expect("must exist for active session")
+            .deferred_lock
+            .take()
+        {
+            // If there are waiting deferred statements, process one.
+            if !self.serialized_ddl.is_empty() {
+                let _ = self.internal_cmd_tx.send(Message::DeferredStatementReady);
+            }
         }
     }
 
@@ -243,7 +263,7 @@ impl Coordinator {
                     .with_label_values(&[session_type])
                     .inc();
 
-                self.builtin_table_update().execute(vec![update]).await
+                self.builtin_table_update().execute(vec![update]).await.0
             }
             ActiveComputeSink::CopyTo(_) => {
                 self.metrics

@@ -10,6 +10,7 @@
 //! Implementation of [Consensus] backed by Postgres.
 
 use std::fmt::Formatter;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,17 +19,29 @@ use async_stream::try_stream;
 use async_trait::async_trait;
 use bytes::Bytes;
 use deadpool_postgres::tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
+use deadpool_postgres::tokio_postgres::Config;
 use deadpool_postgres::{Object, PoolError};
 use futures_util::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::url::SensitiveUrl;
 use mz_postgres_client::metrics::PostgresClientMetrics;
 use mz_postgres_client::{PostgresClient, PostgresClientConfig, PostgresClientKnobs};
+use postgres_protocol::escape::escape_identifier;
 use tokio_postgres::error::SqlState;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::error::Error;
 use crate::location::{CaSResult, Consensus, ExternalError, ResultStream, SeqNo, VersionedData};
+
+const SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS consensus (
+    shard text NOT NULL,
+    sequence_number bigint NOT NULL,
+    data bytea NOT NULL,
+    PRIMARY KEY(shard, sequence_number)
+)
+";
 
 // These `sql_stats_automatic_collection_enabled` are for the cost-based
 // optimizer but all the queries against this table are single-table and very
@@ -36,14 +49,15 @@ use crate::location::{CaSResult, Consensus, ExternalError, ResultStream, SeqNo, 
 // really get us anything. OTOH, the background jobs that crdb creates to
 // collect these stats fill up the jobs table (slowing down all sorts of
 // things).
-const SCHEMA: &str = "
-CREATE TABLE IF NOT EXISTS consensus (
-    shard text NOT NULL,
-    sequence_number bigint NOT NULL,
-    data bytea NOT NULL,
-    PRIMARY KEY(shard, sequence_number)
-) WITH (sql_stats_automatic_collection_enabled = false);
-";
+const CRDB_SCHEMA_OPTIONS: &str = "WITH (sql_stats_automatic_collection_enabled = false)";
+// The `consensus` table creates and deletes rows at a high frequency, generating many
+// tombstoned rows. If Cockroach's GC interval is set high (the default is 25h) and
+// these tombstones accumulate, scanning over the table will take increasingly and
+// prohibitively long.
+//
+// See: https://github.com/MaterializeInc/database-issues/issues/4001
+// See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
+const CRDB_CONFIGURE_ZONE: &str = "ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600";
 
 impl ToSql for SeqNo {
     fn to_sql(
@@ -84,7 +98,7 @@ impl<'a> FromSql<'a> for SeqNo {
 /// Configuration to connect to a Postgres backed implementation of [Consensus].
 #[derive(Clone, Debug)]
 pub struct PostgresConsensusConfig {
-    url: String,
+    url: SensitiveUrl,
     knobs: Arc<dyn PostgresClientKnobs>,
     metrics: PostgresClientMetrics,
 }
@@ -101,12 +115,12 @@ impl PostgresConsensusConfig {
 
     /// Returns a new [PostgresConsensusConfig] for use in production.
     pub fn new(
-        url: &str,
+        url: &SensitiveUrl,
         knobs: Box<dyn PostgresClientKnobs>,
         metrics: PostgresClientMetrics,
     ) -> Result<Self, Error> {
         Ok(PostgresConsensusConfig {
-            url: url.to_string(),
+            url: url.clone(),
             knobs: Arc::from(knobs),
             metrics,
         })
@@ -123,7 +137,7 @@ impl PostgresConsensusConfig {
     /// [1]: https://docs.rs/tokio-postgres/latest/tokio_postgres/config/struct.Config.html#url
     pub fn new_for_test() -> Result<Option<Self>, Error> {
         let url = match std::env::var(Self::EXTERNAL_TESTS_POSTGRES_URL) {
-            Ok(url) => url,
+            Ok(url) => SensitiveUrl::from_str(&url).map_err(|e| e.to_string())?,
             Err(_) => {
                 if mz_ore::env::is_var_truthy("CI") {
                     panic!("CI is supposed to run this test but something has gone wrong!");
@@ -185,29 +199,44 @@ impl PostgresConsensus {
     /// Open a Postgres [Consensus] instance with `config`, for the collection
     /// named `shard`.
     pub async fn open(config: PostgresConsensusConfig) -> Result<Self, ExternalError> {
+        // don't need to unredact here because we just want to pull out the username
+        let pg_config: Config = config.url.to_string().parse()?;
+        let role = pg_config.get_user().unwrap();
+        let create_schema = format!(
+            "CREATE SCHEMA IF NOT EXISTS consensus AUTHORIZATION {}",
+            escape_identifier(role),
+        );
+
         let postgres_client = PostgresClient::open(config.into())?;
 
         let client = postgres_client.get_connection().await?;
 
-        // The `consensus` table creates and deletes rows at a high frequency, generating many
-        // tombstoned rows. If Cockroach's GC interval is set high (the default is 25h) and
-        // these tombstones accumulate, scanning over the table will take increasingly and
-        // prohibitively long.
-        //
-        // See: https://github.com/MaterializeInc/materialize/issues/13975
-        // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
-        match client
+        let crdb_mode = match client
             .batch_execute(&format!(
-                "{} {}",
-                SCHEMA, "ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600;",
+                "{}; {}{}; {};",
+                create_schema, SCHEMA, CRDB_SCHEMA_OPTIONS, CRDB_CONFIGURE_ZONE,
             ))
             .await
         {
-            Ok(()) => {}
+            Ok(()) => true,
             Err(e) if e.code() == Some(&SqlState::INSUFFICIENT_PRIVILEGE) => {
                 warn!("unable to ALTER TABLE consensus, this is expected and OK when connecting with a read-only user");
+                true
+            }
+            Err(e)
+                if e.code() == Some(&SqlState::INVALID_PARAMETER_VALUE)
+                    || e.code() == Some(&SqlState::SYNTAX_ERROR) =>
+            {
+                info!("unable to initiate consensus with CRDB params, this is expected and OK when running against Postgres: {:?}", e);
+                false
             }
             Err(e) => return Err(e.into()),
+        };
+
+        if !crdb_mode {
+            client
+                .batch_execute(&format!("{}; {};", create_schema, SCHEMA))
+                .await?;
         }
 
         Ok(PostgresConsensus { postgres_client })
@@ -220,7 +249,31 @@ impl PostgresConsensus {
         // this could be a TRUNCATE if we're confident the db won't reuse any state
         let client = self.get_connection().await?;
         client.execute("DROP TABLE consensus", &[]).await?;
-        client.execute(SCHEMA, &[]).await?;
+        let crdb_mode = match client
+            .batch_execute(&format!(
+                "{}{}; {}",
+                SCHEMA, CRDB_SCHEMA_OPTIONS, CRDB_CONFIGURE_ZONE,
+            ))
+            .await
+        {
+            Ok(()) => true,
+            Err(e) if e.code() == Some(&SqlState::INSUFFICIENT_PRIVILEGE) => {
+                warn!("unable to ALTER TABLE consensus, this is expected and OK when connecting with a read-only user");
+                true
+            }
+            Err(e)
+                if e.code() == Some(&SqlState::INVALID_PARAMETER_VALUE)
+                    || e.code() == Some(&SqlState::SYNTAX_ERROR) =>
+            {
+                info!("unable to initiate consensus with CRDB params, this is expected and OK when running against Postgres: {:?}", e);
+                false
+            }
+            Err(e) => return Err(e.into()),
+        };
+
+        if !crdb_mode {
+            client.execute(SCHEMA, &[]).await?;
+        }
         Ok(())
     }
 
@@ -399,6 +452,7 @@ impl Consensus for PostgresConsensus {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_err;
     use tracing::info;
     use uuid::Uuid;
 
@@ -441,12 +495,9 @@ mod tests {
 
         assert_eq!(consensus.head(&key).await, Ok(None));
 
-        Ok(())
-    }
-
-    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-    async fn postgres_consensus_blocking() -> Result<(), ExternalError> {
+        // This should be a separate postgres_consensus_blocking test, but nextest makes it
+        // difficult since we can't specify that both tests touch the consensus table and thus
+        // interfere with each other.
         let config = match PostgresConsensusConfig::new_for_test()? {
             Some(config) => config,
             None => {
@@ -466,7 +517,7 @@ mod tests {
         // And finally, we should see the next connect time out.
         let conn3 = consensus.get_connection().await;
 
-        assert!(conn3.is_err());
+        assert_err!(conn3);
 
         Ok(())
     }

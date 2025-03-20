@@ -73,6 +73,12 @@ pub static SOFT_ASSERTIONS: AtomicBool = {
 #[cfg(any(miri, target_arch = "wasm32"))]
 pub static SOFT_ASSERTIONS: AtomicBool = AtomicBool::new(true);
 
+/// Returns if soft assertions are enabled.
+#[inline(always)]
+pub fn soft_assertions_enabled() -> bool {
+    SOFT_ASSERTIONS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Asserts that a condition is true if soft assertions are enabled.
 ///
 /// Soft assertions have a small runtime cost even when disabled. See
@@ -80,7 +86,7 @@ pub static SOFT_ASSERTIONS: AtomicBool = AtomicBool::new(true);
 #[macro_export]
 macro_rules! soft_assert_no_log {
     ($cond:expr $(, $($arg:tt)+)?) => {{
-        if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+        if $crate::assert::soft_assertions_enabled() {
             assert!($cond$(, $($arg)+)?);
         }
     }}
@@ -93,7 +99,7 @@ macro_rules! soft_assert_no_log {
 #[macro_export]
 macro_rules! soft_assert_eq_no_log {
     ($cond:expr, $($arg:tt)+) => {{
-        if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+        if $crate::assert::soft_assertions_enabled() {
             assert_eq!($cond, $($arg)+);
         }
     }}
@@ -106,7 +112,7 @@ macro_rules! soft_assert_eq_no_log {
 #[macro_export]
 macro_rules! soft_assert_ne_no_log {
     ($cond:expr, $($arg:tt)+) => {{
-        if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+        if $crate::assert::soft_assertions_enabled() {
             assert_ne!($cond, $($arg)+);
         }
     }}
@@ -117,7 +123,7 @@ macro_rules! soft_assert_ne_no_log {
 #[macro_export]
 macro_rules! soft_assert_or_log {
     ($cond:expr, $($arg:tt)+) => {{
-        if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+        if $crate::assert::soft_assertions_enabled() {
             assert!($cond, $($arg)+);
         } else if !$cond {
             ::tracing::error!($($arg)+)
@@ -131,7 +137,7 @@ macro_rules! soft_assert_or_log {
 #[macro_export]
 macro_rules! soft_assert_eq_or_log {
     ($left:expr, $right:expr) => {{
-        if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+        if $crate::assert::soft_assertions_enabled() {
             assert_eq!($left, $right);
         } else {
             // Borrowed from [`std::assert_eq`].
@@ -148,7 +154,7 @@ macro_rules! soft_assert_eq_or_log {
         }
     }};
     ($left:expr, $right:expr, $($arg:tt)+) => {{
-        if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+        if $crate::assert::soft_assertions_enabled() {
             assert_eq!($left, $right, $($arg)+);
         } else {
             // Borrowed from [`std::assert_eq`].
@@ -172,7 +178,7 @@ macro_rules! soft_assert_eq_or_log {
 #[macro_export]
 macro_rules! soft_assert_ne_or_log {
     ($left:expr, $right:expr) => {{
-        if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+        if $crate::assert::soft_assertions_enabled() {
             assert_ne!($left, $right);
         } else {
             // Borrowed from [`std::assert_ne`].
@@ -189,7 +195,7 @@ macro_rules! soft_assert_ne_or_log {
         }
     }};
     ($left:expr, $right:expr, $($arg:tt)+) => {{
-        if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+        if $crate::assert::soft_assertions_enabled() {
             assert_ne!($left, $right, $($arg)+);
         } else {
             // Borrowed from [`std::assert_ne`].
@@ -212,7 +218,7 @@ macro_rules! soft_assert_ne_or_log {
 #[macro_export]
 macro_rules! soft_panic_or_log {
     ($($arg:tt)+) => {{
-        if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+        if $crate::assert::soft_assertions_enabled() {
             panic!($($arg)+);
         } else {
             ::tracing::error!($($arg)+)
@@ -224,7 +230,7 @@ macro_rules! soft_panic_or_log {
 #[macro_export]
 macro_rules! soft_panic_no_log {
     ($($arg:tt)+) => {{
-        if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+        if $crate::assert::soft_assertions_enabled() {
             panic!($($arg)+);
         }
     }}
@@ -289,6 +295,145 @@ macro_rules! assert_contains {
     }};
 }
 
+/// Asserts that the provided expression, that returns an `Option`, is `None`.
+///
+/// # Motivation
+///
+/// The standard pattern for asserting a value is `None` using the `assert!` macro is:
+///
+/// ```
+/// # let x: Option<usize> = None;
+/// assert!(x.is_none());
+/// ```
+///
+/// The issue with this pattern is when the assertion fails it only prints `false`
+/// and not the value contained in the `Some(_)` variant which makes debugging difficult.
+///
+/// # Examples
+///
+/// ### Basic Use
+///
+/// ```should_panic
+/// use mz_ore::assert_none;
+/// assert_none!(Some(42));
+/// ```
+///
+/// ### With extra message
+///
+/// ```should_panic
+/// use mz_ore::assert_none;
+/// let other_val = 100;
+/// assert_none!(Some(42), "ohh noo! x {other_val}");
+/// ```
+///
+#[macro_export]
+macro_rules! assert_none {
+    ($val:expr, $($msg:tt)+) => {{
+        if let Some(y) = &$val {
+            panic!("assertion failed: expected None found Some({y:?}), {}", format!($($msg)+));
+        }
+    }};
+    ($val:expr) => {{
+        if let Some(y) = &$val {
+            panic!("assertion failed: expected None found Some({y:?})");
+        }
+    }}
+}
+
+/// Asserts that the provided expression, that returns a `Result`, is `Ok`.
+///
+/// # Motivation
+///
+/// The standard pattern for asserting a value is `Ok` using the `assert!` macro is:
+///
+/// ```
+/// # let x: Result<usize, usize> = Ok(42);
+/// assert!(x.is_ok());
+/// ```
+///
+/// The issue with this pattern is when the assertion fails it only prints `false`
+/// and not the value contained in the `Err(_)` variant which makes debugging difficult.
+///
+/// # Examples
+///
+/// ### Basic Use
+///
+/// ```should_panic
+/// use mz_ore::assert_ok;
+/// let error: Result<usize, usize> = Err(42);
+/// assert_ok!(error);
+/// ```
+///
+/// ### With extra message
+///
+/// ```should_panic
+/// use mz_ore::assert_ok;
+/// let other_val = 100;
+/// let error: Result<usize, usize> = Err(42);
+/// assert_ok!(error, "ohh noo! x {other_val}");
+/// ```
+///
+#[macro_export]
+macro_rules! assert_ok {
+    ($val:expr, $($msg:tt)+) => {{
+        if let Err(y) = &$val {
+            panic!("assertion failed: expected Ok found Err({y:?}), {}", format!($($msg)+));
+        }
+    }};
+    ($val:expr) => {{
+        if let Err(y) = &$val {
+            panic!("assertion failed: expected Ok found Err({y:?})");
+        }
+    }}
+}
+
+/// Asserts that the provided expression, that returns a `Result`, is `Err`.
+///
+/// # Motivation
+///
+/// The standard pattern for asserting a value is `Err` using the `assert!` macro is:
+///
+/// ```
+/// # let x: Result<usize, usize> = Err(42);
+/// assert!(x.is_err());
+/// ```
+///
+/// The issue with this pattern is when the assertion fails it only prints `false`
+/// and not the value contained in the `Ok(_)` variant which makes debugging difficult.
+///
+/// # Examples
+///
+/// ### Basic Use
+///
+/// ```should_panic
+/// use mz_ore::assert_err;
+/// let error: Result<usize, usize> = Ok(42);
+/// assert_err!(error);
+/// ```
+///
+/// ### With extra message
+///
+/// ```should_panic
+/// use mz_ore::assert_err;
+/// let other_val = 100;
+/// let error: Result<usize, usize> = Ok(42);
+/// assert_err!(error, "ohh noo! x {other_val}");
+/// ```
+///
+#[macro_export]
+macro_rules! assert_err {
+    ($val:expr, $($msg:tt)+) => {{
+        if let Ok(y) = &$val {
+            panic!("assertion failed: expected Err found Ok({y:?}), {}", format!($($msg)+));
+        }
+    }};
+    ($val:expr) => {{
+        if let Ok(y) = &$val {
+            panic!("assertion failed: expected Err found Ok({y:?})");
+        }
+    }}
+}
+
 #[cfg(test)]
 mod tests {
     #[crate::test]
@@ -307,5 +452,51 @@ mod tests {
  right: `\"yellow\"`")]
     fn test_assert_contains_fail() {
         assert_contains!("hello", "yellow");
+    }
+
+    #[crate::test]
+    #[should_panic(expected = "assertion failed: expected None found Some(42)")]
+    fn test_assert_none_fail() {
+        assert_none!(Some(42));
+    }
+
+    #[crate::test]
+    #[should_panic(expected = "assertion failed: expected None found Some(42), ohh no!")]
+    fn test_assert_none_fail_with_msg() {
+        assert_none!(Some(42), "ohh no!");
+    }
+
+    #[crate::test]
+    fn test_assert_ok() {
+        assert_ok!(Ok::<_, usize>(42));
+    }
+
+    #[crate::test]
+    #[should_panic(expected = "assertion failed: expected Ok found Err(42)")]
+    fn test_assert_ok_fail() {
+        assert_ok!(Err::<usize, _>(42));
+    }
+
+    #[crate::test]
+    #[should_panic(expected = "assertion failed: expected Ok found Err(42), ohh no!")]
+    fn test_assert_ok_fail_with_msg() {
+        assert_ok!(Err::<usize, _>(42), "ohh no!");
+    }
+
+    #[crate::test]
+    fn test_assert_err() {
+        assert_err!(Err::<usize, _>(42));
+    }
+
+    #[crate::test]
+    #[should_panic(expected = "assertion failed: expected Err found Ok(42)")]
+    fn test_assert_err_fail() {
+        assert_err!(Ok::<_, usize>(42));
+    }
+
+    #[crate::test]
+    #[should_panic(expected = "assertion failed: expected Err found Ok(42), ohh no!")]
+    fn test_assert_err_fail_with_msg() {
+        assert_err!(Ok::<_, usize>(42), "ohh no!");
     }
 }

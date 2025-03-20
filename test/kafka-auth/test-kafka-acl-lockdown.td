@@ -48,6 +48,8 @@ banana
   FROM KAFKA CONNECTION kafka_good_progress_topic (
     TOPIC 'testdrive-data-${testdrive.seed}'
   )
+
+> CREATE TABLE broken_tbl FROM SOURCE broken (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT TEXT
 
 > SELECT EXISTS (
@@ -69,9 +71,11 @@ true
     TOPIC 'testdrive-data-${testdrive.seed}',
     GROUP ID PREFIX 'lockdown-'
   )
+
+> CREATE TABLE working_source_tbl FROM SOURCE working_source (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT TEXT
 
-> SELECT * FROM working_source
+> SELECT * FROM working_source_tbl
 banana
 
 $ set-from-sql var=conn-id

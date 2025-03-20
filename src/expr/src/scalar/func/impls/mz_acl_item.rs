@@ -70,7 +70,7 @@ sqlfunc!(
                         .collect(),
                 )
             })
-            .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string()))
+            .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string().into()))
     }
 );
 
@@ -79,7 +79,7 @@ sqlfunc!(
     fn mz_validate_privileges(privileges: String) -> Result<bool, EvalError> {
         AclMode::parse_multiple_privileges(&privileges)
             .map(|_| true)
-            .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string()))
+            .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string().into()))
     }
 );
 
@@ -88,10 +88,9 @@ sqlfunc!(
     fn mz_validate_role_privilege(privilege: String) -> Result<bool, EvalError> {
         let privilege_upper = privilege.to_uppercase();
         if privilege_upper != "MEMBER" && privilege_upper != "USAGE" {
-            Err(EvalError::InvalidPrivileges(format!(
-                "{}",
-                privilege.quoted()
-            )))
+            Err(EvalError::InvalidPrivileges(
+                format!("{}", privilege.quoted()).into(),
+            ))
         } else {
             Ok(true)
         }

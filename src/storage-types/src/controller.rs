@@ -9,12 +9,14 @@
 
 use std::error::Error;
 use std::fmt::{self, Debug, Display};
+use std::str::FromStr;
 
 use itertools::Itertools;
+use mz_ore::assert_none;
+use mz_ore::url::SensitiveUrl;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_persist_types::columnar::Data;
-use mz_persist_types::dyn_struct::DynStruct;
-use mz_persist_types::stats::{PartStats, StructStats};
+use mz_persist_types::schema::SchemaId;
+use mz_persist_types::stats::PartStats;
 use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
 use mz_persist_types::{PersistLocation, ShardId};
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
@@ -41,8 +43,6 @@ pub struct CollectionMetadata {
     pub remap_shard: Option<ShardId>,
     /// The persist shard containing the contents of this storage collection.
     pub data_shard: ShardId,
-    /// The persist shard containing the status updates for this storage collection.
-    pub status_shard: Option<ShardId>,
     /// The `RelationDesc` that describes the contents of the `data_shard`.
     pub relation_desc: RelationDesc,
     /// The shard id of the txn-wal shard, if `self.data_shard` is managed
@@ -51,11 +51,7 @@ pub struct CollectionMetadata {
 }
 
 impl crate::AlterCompatible for CollectionMetadata {
-    fn alter_compatible(
-        &self,
-        id: mz_repr::GlobalId,
-        other: &Self,
-    ) -> Result<(), self::AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), self::AlterError> {
         if self == other {
             return Ok(());
         }
@@ -67,7 +63,6 @@ impl crate::AlterCompatible for CollectionMetadata {
             persist_location: _,
             remap_shard,
             data_shard,
-            status_shard,
             relation_desc,
             txns_shard,
         } = self;
@@ -75,7 +70,6 @@ impl crate::AlterCompatible for CollectionMetadata {
         let compatibility_checks = [
             (remap_shard == &other.remap_shard, "remap_shard"),
             (data_shard == &other.data_shard, "data_shard"),
-            (status_shard == &other.status_shard, "status_shard"),
             (relation_desc == &other.relation_desc, "relation_desc"),
             (txns_shard == &other.txns_shard, "txns_shard"),
         ];
@@ -99,11 +93,10 @@ impl crate::AlterCompatible for CollectionMetadata {
 impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
     fn into_proto(&self) -> ProtoCollectionMetadata {
         ProtoCollectionMetadata {
-            blob_uri: self.persist_location.blob_uri.clone(),
-            consensus_uri: self.persist_location.consensus_uri.clone(),
+            blob_uri: self.persist_location.blob_uri.to_string_unredacted(),
+            consensus_uri: self.persist_location.consensus_uri.to_string_unredacted(),
             data_shard: self.data_shard.to_string(),
             remap_shard: self.remap_shard.map(|s| s.to_string()),
-            status_shard: self.status_shard.map(|s| s.to_string()),
             relation_desc: Some(self.relation_desc.into_proto()),
             txns_shard: self.txns_shard.map(|x| x.to_string()),
         }
@@ -112,8 +105,8 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
     fn from_proto(value: ProtoCollectionMetadata) -> Result<Self, TryFromProtoError> {
         Ok(CollectionMetadata {
             persist_location: PersistLocation {
-                blob_uri: value.blob_uri,
-                consensus_uri: value.consensus_uri,
+                blob_uri: SensitiveUrl::from_str(&value.blob_uri)?,
+                consensus_uri: SensitiveUrl::from_str(&value.consensus_uri)?,
             },
             remap_shard: value
                 .remap_shard
@@ -123,10 +116,6 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
                 .data_shard
                 .parse()
                 .map_err(TryFromProtoError::InvalidShardId)?,
-            status_shard: value
-                .status_shard
-                .map(|s| s.parse().map_err(TryFromProtoError::InvalidShardId))
-                .transpose()?,
             relation_desc: value
                 .relation_desc
                 .into_rust_if_some("ProtoCollectionMetadata::relation_desc")?,
@@ -165,7 +154,7 @@ impl RustType<ProtoDurableCollectionMetadata> for DurableCollectionMetadata {
 pub enum StorageError<T> {
     /// The source identifier was re-created after having been dropped,
     /// or installed with a different description.
-    SourceIdReused(GlobalId),
+    CollectionIdReused(GlobalId),
     /// The sink identifier was re-created after having been dropped, or
     /// installed with a different description.
     SinkIdReused(GlobalId),
@@ -203,7 +192,19 @@ pub enum StorageError<T> {
     /// Collection metadata already exists for ID.
     CollectionMetadataAlreadyExists(GlobalId),
     /// Some other collection is already writing to this persist shard.
-    PersistShardAlreadyInUse(String),
+    PersistShardAlreadyInUse(ShardId),
+    /// Raced with some other process while trying to evolve the schema of a Persist shard.
+    PersistSchemaEvolveRace {
+        global_id: GlobalId,
+        shard_id: ShardId,
+        schema_id: SchemaId,
+        relation_desc: RelationDesc,
+    },
+    /// We tried to evolve the schema of a Persist shard in an invalid way.
+    PersistInvalidSchemaEvolve {
+        global_id: GlobalId,
+        shard_id: ShardId,
+    },
     /// Txn WAL shard already exists.
     TxnWalShardAlreadyExists,
     /// The item that a subsource refers to is unexpectedly missing from the
@@ -219,12 +220,15 @@ pub enum StorageError<T> {
     /// A generic error that happens during operations of the storage controller.
     // TODO(aljoscha): Get rid of this!
     Generic(anyhow::Error),
+    /// We are in read-only mode and were asked to do a something that requires
+    /// writing.
+    ReadOnly,
 }
 
 impl<T: Debug + Display + 'static> Error for StorageError<T> {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::SourceIdReused(_) => None,
+            Self::CollectionIdReused(_) => None,
             Self::SinkIdReused(_) => None,
             Self::IdentifierMissing(_) => None,
             Self::IdentifierInvalid(_) => None,
@@ -240,11 +244,14 @@ impl<T: Debug + Display + 'static> Error for StorageError<T> {
             Self::ShuttingDown(_) => None,
             Self::CollectionMetadataAlreadyExists(_) => None,
             Self::PersistShardAlreadyInUse(_) => None,
+            Self::PersistSchemaEvolveRace { .. } => None,
+            Self::PersistInvalidSchemaEvolve { .. } => None,
             Self::TxnWalShardAlreadyExists => None,
             Self::MissingSubsourceReference { .. } => None,
             Self::RtrTimeout(_) => None,
             Self::RtrDropFailure(_) => None,
             Self::Generic(err) => err.source(),
+            Self::ReadOnly => None,
         }
     }
 }
@@ -253,7 +260,7 @@ impl<T: fmt::Display + 'static> fmt::Display for StorageError<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("storage error: ")?;
         match self {
-            Self::SourceIdReused(id) => write!(
+            Self::CollectionIdReused(id) => write!(
                 f,
                 "source identifier was re-created after having been dropped: {id}"
             ),
@@ -312,6 +319,22 @@ impl<T: fmt::Display + 'static> fmt::Display for StorageError<T> {
             Self::PersistShardAlreadyInUse(shard) => {
                 write!(f, "persist shard already in use: {shard}")
             }
+            Self::PersistSchemaEvolveRace {
+                global_id,
+                shard_id,
+                ..
+            } => {
+                write!(f, "persist raced when trying to evolve the schema of a shard: {global_id}, {shard_id}")
+            }
+            Self::PersistInvalidSchemaEvolve {
+                global_id,
+                shard_id,
+            } => {
+                write!(
+                    f,
+                    "persist shard evolved in an invalid way: {global_id}, {shard_id}"
+                )
+            }
             Self::TxnWalShardAlreadyExists => {
                 write!(f, "txn WAL already exists")
             }
@@ -331,6 +354,7 @@ impl<T: fmt::Display + 'static> fmt::Display for StorageError<T> {
                 "real-time source dropped before ingesting the upstream system's visible frontier"
             ),
             Self::Generic(err) => std::fmt::Display::fmt(err, f),
+            Self::ReadOnly => write!(f, "cannot write in read-only mode"),
         }
     }
 }
@@ -366,55 +390,16 @@ impl<T> From<DataflowError> for StorageError<T> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, num_enum::IntoPrimitive)]
-#[repr(u64)]
-pub enum TxnWalTablesImpl {
-    Eager = 1,
-    Lazy = 2,
-}
-
-impl std::fmt::Display for TxnWalTablesImpl {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TxnWalTablesImpl::Eager => f.write_str("eager"),
-            TxnWalTablesImpl::Lazy => f.write_str("lazy"),
-        }
-    }
-}
-
-impl std::str::FromStr for TxnWalTablesImpl {
-    type Err = Box<(dyn std::error::Error + Send + Sync + 'static)>;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "off" | "eager" => Ok(TxnWalTablesImpl::Eager),
-            "lazy" => Ok(TxnWalTablesImpl::Lazy),
-            _ => Err(s.into()),
-        }
-    }
-}
-
-impl TryFrom<u64> for TxnWalTablesImpl {
-    type Error = u64;
-
-    fn try_from(value: u64) -> Result<Self, Self::Error> {
-        match value {
-            0 | 1 => Ok(TxnWalTablesImpl::Eager),
-            2 => Ok(TxnWalTablesImpl::Lazy),
-            _ => Err(value),
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct TxnsCodecRow;
 
 impl TxnsCodecRow {
     pub fn desc() -> RelationDesc {
-        RelationDesc::empty()
+        RelationDesc::builder()
             .with_column("shard_id", ScalarType::String.nullable(false))
             .with_column("ts", ScalarType::UInt64.nullable(false))
             .with_column("batch", ScalarType::Bytes.nullable(true))
+            .finish()
     }
 }
 
@@ -452,7 +437,7 @@ impl TxnsCodec for TxnsCodecRow {
         let ts = datums.next().expect("valid entry");
         let ts = u64::to_le_bytes(ts.unwrap_uint64());
         let batch = datums.next().expect("valid entry");
-        assert!(datums.next().is_none());
+        assert_none!(datums.next());
         if batch.is_null() {
             TxnsEntry::Register(data_id, ts)
         } else {
@@ -461,14 +446,18 @@ impl TxnsCodec for TxnsCodecRow {
     }
 
     fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool> {
-        fn col<'a, T: Data>(stats: &'a StructStats, col: &str) -> Option<&'a T::Stats> {
-            stats
-                .col::<T>(col)
-                .map_err(|err| error!("unexpected stats type for col {}: {}", col, err))
-                .ok()?
-        }
-        let stats = col::<Option<DynStruct>>(&stats.key, "ok")?;
-        let stats = col::<String>(&stats.some, "shard_id")?;
+        let stats = stats
+            .key
+            .col("key")?
+            .try_as_optional_struct()
+            .map_err(|err| error!("unexpected stats type for col 'key': {}", err))
+            .ok()?;
+        let stats = stats
+            .some
+            .col("shard_id")?
+            .try_as_string()
+            .map_err(|err| error!("unexpected stats type for col 'shard_id': {}", err))
+            .ok()?;
         let data_id_str = data_id.to_string();
         Some(stats.lower <= data_id_str && stats.upper >= data_id_str)
     }

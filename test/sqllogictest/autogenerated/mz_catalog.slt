@@ -57,6 +57,13 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 1  id  text
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_cluster_replica_frontiers' ORDER BY position
+----
+1  object_id  text
+2  replica_id  text
+3  write_frontier  mz_timestamp
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_cluster_replica_sizes' ORDER BY position
 ----
 1  size  text
@@ -90,6 +97,8 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 7  replication_factor  uint4
 8  disk  boolean
 9  availability_zones  list
+10  introspection_debugging  boolean
+11  introspection_interval  interval
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_columns' ORDER BY position
@@ -139,6 +148,8 @@ query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_egress_ips' ORDER BY position
 ----
 1  egress_ip  text
+2  prefix_length  integer
+3  cidr  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_functions' ORDER BY position
@@ -188,6 +199,13 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 2  topic  text
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_kafka_sources' ORDER BY position
+----
+1  id  text
+2  group_id_prefix  text
+3  topic            text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_list_types' ORDER BY position
 ----
 1  id  text
@@ -226,7 +244,8 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 4  name  text
 5  type  text
 6  owner_id  text
-7  privileges  mz_aclitem[]
+7  cluster_id  text
+8  privileges  mz_aclitem[]
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_pseudo_types' ORDER BY position
@@ -242,7 +261,14 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 4  name  text
 5  type  text
 6  owner_id  text
-7  privileges  mz_aclitem[]
+7  cluster_id  text
+8  privileges  mz_aclitem[]
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_recent_storage_usage' ORDER BY position
+----
+1  object_id  text
+2  size_bytes  uint8
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_roles' ORDER BY position
@@ -305,10 +331,12 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 7  size  text
 8  envelope_type  text
 9  format  text
-10  cluster_id  text
-11  owner_id  text
-12  create_sql  text
-13  redacted_create_sql  text
+10  key_format  text
+11  value_format  text
+12  cluster_id  text
+13  owner_id  text
+14  create_sql  text
+15  redacted_create_sql  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_sources' ORDER BY position
@@ -352,6 +380,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 6  privileges  mz_aclitem[]
 7  create_sql  text
 8  redacted_create_sql  text
+9  source_id  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_timezone_abbreviations' ORDER BY position
@@ -399,6 +428,7 @@ mz_array_types
 mz_audit_events
 mz_aws_privatelink_connections
 mz_base_types
+mz_cluster_replica_frontiers
 mz_cluster_replica_sizes
 mz_cluster_replicas
 mz_clusters
@@ -412,12 +442,14 @@ mz_index_columns
 mz_indexes
 mz_kafka_connections
 mz_kafka_sinks
+mz_kafka_sources
 mz_list_types
 mz_map_types
 mz_materialized_views
 mz_objects
 mz_operators
 mz_pseudo_types
+mz_recent_storage_usage
 mz_relations
 mz_role_members
 mz_role_parameters

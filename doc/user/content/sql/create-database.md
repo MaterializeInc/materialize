@@ -38,10 +38,10 @@ details](../namespaces/#database-details).
 
 ## Examples
 
-```sql
+```mzsql
 CREATE DATABASE IF NOT EXISTS my_db;
 ```
-```sql
+```mzsql
 SHOW DATABASES;
 ```
 ```nofmt

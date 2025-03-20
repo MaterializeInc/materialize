@@ -26,15 +26,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
 use std::num::NonZeroI64;
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::future::BoxFuture;
-use futures::stream::{Peekable, StreamExt};
 use mz_build_info::BuildInfo;
-use mz_cluster_client::ReplicaId;
+use mz_cluster_client::metrics::ControllerMetrics;
+use mz_cluster_client::{ReplicaId, WallclockLagFn};
 use mz_compute_client::controller::{
-    ComputeController, ComputeControllerResponse, ComputeControllerTimestamp,
+    ComputeController, ComputeControllerResponse, ComputeControllerTimestamp, PeekNotification,
 };
-use mz_compute_client::protocol::response::{PeekResponse, SubscribeBatch};
+use mz_compute_client::protocol::response::SubscribeBatch;
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_controller_types::WatchSetId;
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, ServiceProcessMetrics};
@@ -48,23 +49,22 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistLocation;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
-use mz_repr::global_id::TransientIdGen;
-use mz_repr::{GlobalId, TimestampManipulation};
+use mz_repr::{Datum, GlobalId, Row, TimestampManipulation};
 use mz_service::secrets::SecretsReaderCliArgs;
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
 };
-use mz_storage_client::controller::{StorageController, StorageMetadata, StorageTxn};
+use mz_storage_client::controller::{
+    IntrospectionType, StorageController, StorageMetadata, StorageTxn,
+};
 use mz_storage_client::storage_collections::{self, StorageCollections};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::{StorageError, TxnWalTablesImpl};
+use mz_storage_types::controller::StorageError;
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use serde::Serialize;
 use timely::progress::{Antichain, Timestamp};
-use tokio::sync::mpsc::{self, UnboundedSender};
-use tokio::time::{self, Duration, Interval, MissedTickBehavior};
-use tokio_stream::wrappers::UnboundedReceiverStream;
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
 pub mod clusters;
@@ -110,12 +110,12 @@ pub struct ControllerConfig {
 /// Responses that [`Controller`] can produce.
 #[derive(Debug)]
 pub enum ControllerResponse<T = mz_repr::Timestamp> {
-    /// The worker's response to a specified (by connection id) peek.
+    /// Notification of a worker's response to a specified (by connection id) peek.
     ///
     /// Additionally, an `OpenTelemetryContext` to forward trace information
     /// back into coord. This allows coord traces to be children of work
     /// done in compute!
-    PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
+    PeekNotification(Uuid, PeekNotification, OpenTelemetryContext),
     /// The worker's next response to a specified subscribe.
     SubscribeResponse(GlobalId, SubscribeBatch<T>),
     /// The worker's next response to a specified copy to.
@@ -139,16 +139,14 @@ enum Readiness<T> {
     Storage,
     /// The compute controller is ready.
     Compute,
-    /// The metrics channel is ready.
-    Metrics,
-    /// Frontiers are ready for recording.
-    Frontiers,
+    /// A batch of metric data is ready.
+    Metrics((ReplicaId, Vec<ServiceProcessMetrics>)),
     /// An internally-generated message is ready to be returned.
     Internal(ControllerResponse<T>),
 }
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
-pub struct Controller<T = mz_repr::Timestamp> {
+pub struct Controller<T: ComputeControllerTimestamp = mz_repr::Timestamp> {
     pub storage: Box<dyn StorageController<Timestamp = T>>,
     pub storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
     pub compute: ComputeController<T>,
@@ -171,17 +169,14 @@ pub struct Controller<T = mz_repr::Timestamp> {
     /// Tasks for collecting replica metrics.
     metrics_tasks: BTreeMap<ReplicaId, AbortOnDropHandle<()>>,
     /// Sender for the channel over which replica metrics are sent.
-    metrics_tx: UnboundedSender<(ReplicaId, Vec<ServiceProcessMetrics>)>,
+    metrics_tx: mpsc::UnboundedSender<(ReplicaId, Vec<ServiceProcessMetrics>)>,
     /// Receiver for the channel over which replica metrics are sent.
-    metrics_rx: Peekable<UnboundedReceiverStream<(ReplicaId, Vec<ServiceProcessMetrics>)>>,
-    /// Periodic notification to record frontiers.
-    frontiers_ticker: Interval,
+    metrics_rx: mpsc::UnboundedReceiver<(ReplicaId, Vec<ServiceProcessMetrics>)>,
+    /// A function providing the current wallclock time.
+    now: NowFn,
 
     /// The URL for Persist PubSub.
     persist_pubsub_url: String,
-    /// Whether to use the new txn-wal tables implementation or the legacy
-    /// one.
-    txn_wal_tables: TxnWalTablesImpl,
 
     /// Arguments for secrets readers.
     secrets_args: SecretsReaderCliArgs,
@@ -229,7 +224,7 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
     /// Returns the state of the [`Controller`] formatted as JSON.
     ///
     /// The returned value is not guaranteed to be stable and may change at any point in time.
-    pub fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
+    pub async fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
         // Note: We purposefully use the `Debug` formatting for the value of all fields in the
         // returned object as a tradeoff between usability and stability. `serde_json` will fail
         // to serialize an object if the keys aren't strings, so `Debug` formatting the values
@@ -249,15 +244,16 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
             metrics_tasks: _,
             metrics_tx: _,
             metrics_rx: _,
-            frontiers_ticker: _,
+            now: _,
             persist_pubsub_url: _,
-            txn_wal_tables: _,
             secrets_args: _,
             unfulfilled_watch_sets_by_object: _,
             unfulfilled_watch_sets,
             watch_set_id_gen: _,
             immediate_watch_sets,
         } = self;
+
+        let compute = compute.dump().await?;
 
         let unfulfilled_watch_sets: BTreeMap<_, _> = unfulfilled_watch_sets
             .iter()
@@ -277,7 +273,7 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
         }
 
         let map = serde_json::Map::from_iter([
-            field("compute", compute.dump()?)?,
+            field("compute", compute)?,
             field("deploy_generation", deploy_generation)?,
             field("read_only", read_only)?,
             field("readiness", format!("{readiness:?}"))?,
@@ -294,7 +290,7 @@ where
     ComputeGrpcClient: ComputeClient<T>,
 {
     pub fn update_orchestrator_scheduling_config(
-        &mut self,
+        &self,
         config: mz_orchestrator::scheduling_config::ServiceSchedulingConfig,
     ) {
         self.orchestrator.update_scheduling_config(config);
@@ -312,23 +308,6 @@ where
     /// Reports whether the controller is in read only mode.
     pub fn read_only(&self) -> bool {
         self.read_only
-    }
-
-    /// Allow this controller and instances controlled by it to write to
-    /// external systems.
-    pub fn allow_writes(&mut self) {
-        if !self.read_only {
-            // Already transitioned out of read-only mode!
-            return;
-        }
-
-        self.read_only = false;
-
-        self.compute.allow_writes();
-        // TODO: Storage does not yet understand the concept of read-only
-        // instances.
-
-        self.remove_past_generation_replicas_in_background();
     }
 
     /// Returns `Some` if there is an immediately available
@@ -367,11 +346,8 @@ where
                     () = self.compute.ready() => {
                         self.readiness = Readiness::Compute;
                     }
-                    _ = Pin::new(&mut self.metrics_rx).peek() => {
-                        self.readiness = Readiness::Metrics;
-                    }
-                    _ = self.frontiers_ticker.tick() => {
-                        self.readiness = Readiness::Frontiers;
+                    Some(metrics) = self.metrics_rx.recv() => {
+                        self.readiness = Readiness::Metrics(metrics);
                     }
                 }
             }
@@ -396,8 +372,8 @@ where
         objects.retain(|id| {
             let frontier = self
                 .compute
-                .find_collection(*id)
-                .map(|s| s.write_frontier())
+                .collection_frontiers(*id, None)
+                .map(|f| f.write_frontier)
                 .expect("missing compute dependency");
             frontier.less_equal(&t)
         });
@@ -479,11 +455,11 @@ where
 
     /// Process a pending response from the storage controller. If necessary,
     /// return a higher-level response to our client.
-    async fn process_storage_response(
+    fn process_storage_response(
         &mut self,
         storage_metadata: &StorageMetadata,
     ) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
-        let maybe_response = self.storage.process(storage_metadata).await?;
+        let maybe_response = self.storage.process(storage_metadata)?;
         Ok(maybe_response.and_then(
             |mz_storage_client::controller::Response::FrontierUpdates(r)| {
                 self.handle_frontier_updates(&r)
@@ -493,14 +469,12 @@ where
 
     /// Process a pending response from the compute controller. If necessary,
     /// return a higher-level response to our client.
-    async fn process_compute_response(
-        &mut self,
-    ) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
-        let response = self.compute.process(&mut *self.storage).await;
+    fn process_compute_response(&mut self) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
+        let response = self.compute.process(&mut *self.storage);
 
         let response = response.and_then(|r| match r {
-            ComputeControllerResponse::PeekResponse(uuid, peek, otel_ctx) => {
-                Some(ControllerResponse::PeekResponse(uuid, peek, otel_ctx))
+            ComputeControllerResponse::PeekNotification(uuid, peek, otel_ctx) => {
+                Some(ControllerResponse::PeekNotification(uuid, peek, otel_ctx))
             }
             ComputeControllerResponse::SubscribeResponse(id, tail) => {
                 Some(ControllerResponse::SubscribeResponse(id, tail))
@@ -523,23 +497,15 @@ where
     /// This method is **not** guaranteed to be cancellation safe. It **must**
     /// be awaited to completion.
     #[mz_ore::instrument(level = "debug")]
-    pub async fn process(
+    pub fn process(
         &mut self,
         storage_metadata: &StorageMetadata,
     ) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
         match mem::take(&mut self.readiness) {
             Readiness::NotReady => Ok(None),
-            Readiness::Storage => self.process_storage_response(storage_metadata).await,
-            Readiness::Compute => self.process_compute_response().await,
-            Readiness::Metrics => Ok(self
-                .metrics_rx
-                .next()
-                .await
-                .map(|(id, metrics)| ControllerResponse::ComputeReplicaMetrics(id, metrics))),
-            Readiness::Frontiers => {
-                self.record_frontiers().await;
-                Ok(None)
-            }
+            Readiness::Storage => self.process_storage_response(storage_metadata),
+            Readiness::Compute => self.process_compute_response(),
+            Readiness::Metrics((id, metrics)) => self.process_replica_metrics(id, metrics),
             Readiness::Internal(message) => Ok(Some(message)),
         }
     }
@@ -585,14 +551,43 @@ where
         (!(finished.is_empty())).then(|| ControllerResponse::WatchSetFinished(finished))
     }
 
-    async fn record_frontiers(&mut self) {
-        let compute_frontiers = self.compute.collection_frontiers();
-        self.storage.record_frontiers(compute_frontiers).await;
+    fn process_replica_metrics(
+        &mut self,
+        id: ReplicaId,
+        metrics: Vec<ServiceProcessMetrics>,
+    ) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
+        self.record_replica_metrics(id, &metrics);
+        Ok(Some(ControllerResponse::ComputeReplicaMetrics(id, metrics)))
+    }
 
-        let compute_replica_frontiers = self.compute.replica_write_frontiers();
+    fn record_replica_metrics(&mut self, replica_id: ReplicaId, metrics: &[ServiceProcessMetrics]) {
+        if self.read_only() {
+            return;
+        }
+
+        let now = mz_ore::now::to_datetime((self.now)());
+        let now_tz = now.try_into().expect("must fit");
+
+        let replica_id = replica_id.to_string();
+        let mut row = Row::default();
+        let updates = metrics
+            .iter()
+            .zip(0..)
+            .map(|(m, process_id)| {
+                row.packer().extend(&[
+                    Datum::String(&replica_id),
+                    Datum::UInt64(process_id),
+                    m.cpu_nano_cores.into(),
+                    m.memory_bytes.into(),
+                    m.disk_usage_bytes.into(),
+                    Datum::TimestampTz(now_tz),
+                ]);
+                (row.clone(), 1)
+            })
+            .collect();
+
         self.storage
-            .record_replica_frontiers(compute_replica_frontiers)
-            .await;
+            .append_introspection_updates(IntrospectionType::ReplicaMetricsHistory, updates);
     }
 
     /// Determine the "real-time recency" timestamp for all `ids`.
@@ -606,7 +601,7 @@ where
     /// If no items in `ids` connect to external systems, this function will
     /// return `Ok(T::minimum)`.
     pub async fn determine_real_time_recent_timestamp(
-        &mut self,
+        &self,
         ids: BTreeSet<GlobalId>,
         timeout: Duration,
     ) -> Result<BoxFuture<'static, Result<T, StorageError<T>>>, StorageError<T>> {
@@ -641,24 +636,31 @@ where
         config: ControllerConfig,
         envd_epoch: NonZeroI64,
         read_only: bool,
-        transient_id_gen: Arc<TransientIdGen>,
-        // Whether to use the new txn-wal tables implementation or the
-        // legacy one.
-        txn_wal_tables: TxnWalTablesImpl,
         storage_txn: &dyn StorageTxn<T>,
     ) -> Self {
         if read_only {
             tracing::info!("starting controllers in read-only mode!");
         }
 
+        let now_fn = config.now.clone();
+        let wallclock_lag: WallclockLagFn<_> = Arc::new(move |time: &T| {
+            let now = mz_repr::Timestamp::new(now_fn());
+            let time_ts: mz_repr::Timestamp = time.clone().into();
+            let lag_ts = now.saturating_sub(time_ts);
+            Duration::from(lag_ts)
+        });
+
+        let controller_metrics = ControllerMetrics::new(&config.metrics_registry);
+
         let txns_metrics = Arc::new(TxnMetrics::new(&config.metrics_registry));
         let collections_ctl = storage_collections::StorageCollectionsImpl::new(
             config.persist_location.clone(),
             Arc::clone(&config.persist_clients),
+            &config.metrics_registry,
             config.now.clone(),
             Arc::clone(&txns_metrics),
             envd_epoch,
-            txn_wal_tables,
+            read_only,
             config.connection_context.clone(),
             storage_txn,
         )
@@ -671,11 +673,13 @@ where
             config.build_info,
             config.persist_location,
             config.persist_clients,
-            config.now,
+            config.now.clone(),
+            Arc::clone(&wallclock_lag),
             Arc::clone(&txns_metrics),
             envd_epoch,
-            config.metrics_registry.clone(),
-            txn_wal_tables,
+            read_only,
+            &config.metrics_registry,
+            controller_metrics.clone(),
             config.connection_context,
             storage_txn,
             Arc::clone(&collections_ctl),
@@ -688,33 +692,28 @@ where
             storage_collections,
             envd_epoch,
             read_only,
-            transient_id_gen,
-            config.metrics_registry.clone(),
+            &config.metrics_registry,
+            controller_metrics,
+            config.now.clone(),
+            wallclock_lag,
         );
         let (metrics_tx, metrics_rx) = mpsc::unbounded_channel();
 
-        let mut frontiers_ticker = time::interval(Duration::from_secs(1));
-        frontiers_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-        let mut this = Self {
+        let this = Self {
             storage: Box::new(storage_controller),
             storage_collections: collections_ctl,
             compute: compute_controller,
             clusterd_image: config.clusterd_image,
             init_container_image: config.init_container_image,
             deploy_generation: config.deploy_generation,
-            // We initialize to true, but then call `allow_writes()` below,
-            // based on our input. This way we avoid having the same logic in
-            // two places.
-            read_only: true,
+            read_only,
             orchestrator: config.orchestrator.namespace("cluster"),
             readiness: Readiness::NotReady,
             metrics_tasks: BTreeMap::new(),
             metrics_tx,
-            metrics_rx: UnboundedReceiverStream::new(metrics_rx).peekable(),
-            frontiers_ticker,
+            metrics_rx,
+            now: config.now,
             persist_pubsub_url: config.persist_pubsub_url,
-            txn_wal_tables,
             secrets_args: config.secrets_args,
             unfulfilled_watch_sets_by_object: BTreeMap::new(),
             unfulfilled_watch_sets: BTreeMap::new(),
@@ -722,11 +721,8 @@ where
             immediate_watch_sets: Vec::new(),
         };
 
-        // We have some logic that we want to run both when initialized with
-        // `read_only = false` _and_ when later transitioning out of read-only
-        // mode. This way we keep that logic in one place.
-        if !read_only {
-            this.allow_writes();
+        if !this.read_only {
+            this.remove_past_generation_replicas_in_background();
         }
 
         this

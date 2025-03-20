@@ -7,7 +7,6 @@ menu:
     parent: reference
     weight: 100
 disable_list: true
-disable_toc: true
 ---
 
 This page details Materialize's supported SQL [functions](#functions) and [operators](#operators).
@@ -34,7 +33,7 @@ canceling a query running on another connection.
 Materialize offers only limited support for these functions. They may be called
 only at the top level of a `SELECT` statement, like so:
 
-```sql
+```mzsql
 SELECT side_effecting_function(arg, ...);
 ```
 
@@ -44,17 +43,17 @@ clauses to the `SELECT` statement (e.g., `FROM`, `WHERE`).
 
 Side-effecting functions are marked as such in the table below.
 
-{{< fnlist >}}
+{{% fnlist %}}
 
 ## Operators
 
-### Generic
+### Generic operators
 
 Operator | Computes
 ---------|---------
 `val::type` | Cast of `val` as `type` ([docs](cast))
 
-### Boolean
+### Boolean operators
 
 Operator | Computes
 ---------|---------
@@ -81,7 +80,7 @@ Operator | Computes
 `a LIKE match_expr [ ESCAPE escape_char ]` | `a` matches `match_expr`, using [SQL LIKE matching](https://www.postgresql.org/docs/13/functions-matching.html#FUNCTIONS-LIKE)
 `a ILIKE match_expr [ ESCAPE escape_char ]` | `a` matches `match_expr`, using case-insensitive [SQL LIKE matching](https://www.postgresql.org/docs/13/functions-matching.html#FUNCTIONS-LIKE)
 
-### Numbers
+### Numbers operators
 
 Operator | Computes
 ---------|---------
@@ -97,7 +96,7 @@ Operator | Computes
 `<<`| Bitwise left shift
 `>>`| Bitwise right shift
 
-### String
+### String operators
 
 Operator | Computes
 ---------|---------
@@ -119,7 +118,7 @@ Materialize regular expressions are similar to, but not identical to, PostgreSQL
 regular expressions.
 {{< /warning >}}
 
-### Time-like
+### Time-like operators
 
 Operation | Computes
 ----------|------------
@@ -134,15 +133,15 @@ Operation | Computes
 [`time`](../types/time) `-` [`interval`](../types/interval) | `time`
 [`time`](../types/time) `-` [`time`](../types/time) | [`interval`](../types/interval)
 
-### JSON
+### JSON operators
 
 {{% json-operators %}}
 
-### Map
+### Map operators
 
 {{% map-operators %}}
 
-### List
+### List operators
 
 List operators are [polymorphic](../types/list/#polymorphism).
 

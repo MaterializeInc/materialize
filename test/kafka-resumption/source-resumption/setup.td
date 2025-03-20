@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
+ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true
 
 $ kafka-create-topic topic=topic
 
@@ -34,6 +34,9 @@ three
   FROM KAFKA CONNECTION conn (
     TOPIC 'testdrive-topic-${testdrive.seed}'
   )
+
+> CREATE TABLE topic_tbl
+  FROM SOURCE topic (REFERENCE "testdrive-topic-${testdrive.seed}")
   FORMAT BYTES
   INCLUDE OFFSET
   ENVELOPE NONE

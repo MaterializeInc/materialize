@@ -18,7 +18,7 @@ import time
 from threading import Thread
 
 CLUSTERD_COMMAND_RE = re.compile(
-    r"--internal-http-listen-addr=(?P<socket>[^ ]*).*--opentelemetry-resource=cluster_id=(?P<cluster_id>[^ ]*).*--opentelemetry-resource=replica_id=(?P<replica_id>[^ ]*).*/(?P<process>[0-9]+)\.pid"
+    r"--internal-http-listen-addr=(?P<socket>[^ ]*).*--log-prefix=(?P<logprefix>[^ ]*)"
 )
 
 
@@ -100,7 +100,7 @@ def main() -> int:
                                     match.group("socket"),
                                     "http:/prof/heap",
                                 ],
-                                f"-cluster-{match.group('cluster_id')}-replica-{match.group('replica_id')}-process-{match.group('process')}",
+                                f"-{match.group('logprefix')}",
                             ),
                         )
                     )

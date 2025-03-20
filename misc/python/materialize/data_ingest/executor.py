@@ -8,12 +8,14 @@
 # by the Apache License, Version 2.0.
 
 import json
+import random
 import time
 from typing import Any
 
 import confluent_kafka  # type: ignore
-import pg8000
+import psycopg
 import pymysql
+import pymysql.cursors
 from confluent_kafka.admin import AdminClient  # type: ignore
 from confluent_kafka.schema_registry import Schema, SchemaRegistryClient  # type: ignore
 from confluent_kafka.schema_registry.avro import AvroSerializer  # type: ignore
@@ -21,8 +23,8 @@ from confluent_kafka.serialization import (  # type: ignore
     MessageField,
     SerializationContext,
 )
-from pg8000.exceptions import InterfaceError
 from pg8000.native import identifier
+from psycopg.errors import OperationalError
 
 from materialize.data_ingest.data_type import Backend
 from materialize.data_ingest.field import Field, formatted_value
@@ -35,12 +37,13 @@ from materialize.mzcompose.services.mysql import MySql
 class Executor:
     num_transactions: int
     ports: dict[str, int]
-    mz_conn: pg8000.Connection
+    mz_conn: psycopg.Connection
     fields: list[Field]
     database: str
     schema: str
     cluster: str | None
     logging_exe: Any | None
+    mz_service: str | None = None
 
     def __init__(
         self,
@@ -49,6 +52,7 @@ class Executor:
         database: str = "",
         schema: str = "public",
         cluster: str | None = None,
+        mz_service: str | None = None,
     ) -> None:
         self.num_transactions = 0
         self.ports = ports
@@ -56,15 +60,23 @@ class Executor:
         self.database = database
         self.schema = schema
         self.cluster = cluster
+        self.mz_service = mz_service
         self.logging_exe = None
         self.reconnect()
 
     def reconnect(self) -> None:
-        self.mz_conn = pg8000.connect(
+        mz_service = self.mz_service
+        if not mz_service:
+            mz_service = (
+                random.choice(["materialized", "materialized2"])
+                if "materialized2" in self.ports
+                else "materialized"
+            )
+        self.mz_conn = psycopg.connect(
             host="localhost",
-            port=self.ports["materialized"],
+            port=self.ports[mz_service],
             user="materialize",
-            database=self.database,
+            dbname=self.database,
         )
         self.mz_conn.autocommit = True
 
@@ -74,14 +86,18 @@ class Executor:
     def run(self, transaction: Transaction, logging_exe: Any | None = None) -> None:
         raise NotImplementedError
 
-    def execute(self, cur: pg8000.Cursor, query: str) -> None:
+    def execute(self, cur: psycopg.Cursor | pymysql.cursors.Cursor, query: str) -> None:
         if self.logging_exe is not None:
             self.logging_exe.log(query)
 
         try:
-            cur.execute(query)
-        except InterfaceError:
-            # Can happen after Mz disruptions if we running queries against Mz
+            (
+                cur.execute(query.encode())
+                if isinstance(cur, psycopg.Cursor)
+                else cur.execute(query)
+            )
+        except OperationalError:
+            # Can happen after Mz disruptions if we are running queries against Mz
             print("Network error, retrying")
             time.sleep(0.01)
             self.reconnect()
@@ -93,7 +109,7 @@ class Executor:
 
     def execute_with_retry_on_error(
         self,
-        cur: pg8000.Cursor,
+        cur: psycopg.Cursor,
         query: str,
         required_error_message_substrs: list[str],
         max_tries: int = 5,
@@ -142,8 +158,9 @@ class KafkaExecutor(Executor):
         database: str,
         schema: str = "public",
         cluster: str | None = None,
+        mz_service: str | None = None,
     ):
-        super().__init__(ports, fields, database, schema, cluster)
+        super().__init__(ports, fields, database, schema, cluster, mz_service)
 
         self.topic = f"data-ingest-{num}"
         self.table = f"kafka_table{num}"
@@ -225,7 +242,6 @@ class KafkaExecutor(Executor):
 
         self.producer = confluent_kafka.Producer(kafka_conf)
 
-        self.mz_conn.autocommit = True
         with self.mz_conn.cursor() as cur:
             self.execute_with_retry_on_error(
                 cur,
@@ -239,7 +255,6 @@ class KafkaExecutor(Executor):
                     "Topic does not exist",
                 ],
             )
-        self.mz_conn.autocommit = False
 
     def run(self, transaction: Transaction, logging_exe: Any | None = None) -> None:
         self.logging_exe = logging_exe
@@ -302,8 +317,9 @@ class MySqlExecutor(Executor):
         database: str,
         schema: str = "public",
         cluster: str | None = None,
+        mz_service: str | None = None,
     ):
-        super().__init__(ports, fields, database, schema, cluster)
+        super().__init__(ports, fields, database, schema, cluster, mz_service)
         self.table = f"mytable{num}"
         self.source = f"mysql_source{num}"
         self.num = num
@@ -319,26 +335,25 @@ class MySqlExecutor(Executor):
         )
 
         values = [
-            f"{identifier(field.name)} {str(field.data_type.name(Backend.MYSQL)).lower()}"
+            f"`{field.name}` {str(field.data_type.name(Backend.MYSQL)).lower()}"
             for field in self.fields
         ]
         keys = [field.name for field in self.fields if field.is_key]
 
         self.mysql_conn.autocommit(True)
         with self.mysql_conn.cursor() as cur:
-            self.execute(cur, f"DROP TABLE IF EXISTS {identifier(self.table)};")
+            self.execute(cur, f"DROP TABLE IF EXISTS `{self.table}`;")
             primary_key = (
-                f", PRIMARY KEY ({', '.join([identifier(key) for key in keys])})"
+                f", PRIMARY KEY ({', '.join([f'`{key}`' for key in keys])})"
                 if keys
                 else ""
             )
             self.execute(
                 cur,
-                f"CREATE TABLE {identifier(self.table)} ({', '.join(values)} {primary_key});",
+                f"CREATE TABLE `{self.table}` ({', '.join(values)} {primary_key});",
             )
         self.mysql_conn.autocommit(False)
 
-        self.mz_conn.autocommit = True
         with self.mz_conn.cursor() as cur:
             self.execute(
                 cur,
@@ -356,9 +371,14 @@ class MySqlExecutor(Executor):
                 f"""CREATE SOURCE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.source)}
                     {f"IN CLUSTER {identifier(self.cluster)}" if self.cluster else ""}
                     FROM MYSQL CONNECTION mysql{self.num}
-                    FOR TABLES (mysql.{identifier(self.table)} AS {identifier(self.table)})""",
+                    """,
             )
-        self.mz_conn.autocommit = False
+            self.execute(
+                cur,
+                f"""CREATE TABLE {identifier(self.table)}
+                    FROM SOURCE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.source)}
+                    (REFERENCE mysql.{identifier(self.table)})""",
+            )
 
     def run(self, transaction: Transaction, logging_exe: Any | None = None) -> None:
         self.logging_exe = logging_exe
@@ -371,7 +391,7 @@ class MySqlExecutor(Executor):
                         )
                         self.execute(
                             cur,
-                            f"""INSERT INTO {identifier(self.table)}
+                            f"""INSERT INTO `{self.table}`
                                 VALUES ({values_str})
                             """,
                         )
@@ -380,17 +400,15 @@ class MySqlExecutor(Executor):
                             str(formatted_value(value)) for value in row.values
                         )
                         ", ".join(
-                            identifier(field.name)
-                            for field in row.fields
-                            if field.is_key
+                            f"`{field.name}`" for field in row.fields if field.is_key
                         )
                         update_str = ", ".join(
-                            f"{identifier(field.name)} = VALUES({identifier(field.name)})"
+                            f"`{field.name}` = VALUES(`{field.name}`)"
                             for field in row.fields
                         )
                         self.execute(
                             cur,
-                            f"""INSERT INTO {identifier(self.table)}
+                            f"""INSERT INTO `{self.table}`
                                 VALUES ({values_str})
                                 ON DUPLICATE KEY
                                 UPDATE {update_str}
@@ -398,13 +416,13 @@ class MySqlExecutor(Executor):
                         )
                     elif row.operation == Operation.DELETE:
                         cond_str = " AND ".join(
-                            f"{identifier(field.name)} = {formatted_value(value)}"
+                            f"`{field.name}` = {formatted_value(value)}"
                             for field, value in zip(row.fields, row.values)
                             if field.is_key
                         )
                         self.execute(
                             cur,
-                            f"""DELETE FROM {identifier(self.table)}
+                            f"""DELETE FROM `{self.table}`
                                 WHERE {cond_str}
                             """,
                         )
@@ -414,7 +432,7 @@ class MySqlExecutor(Executor):
 
 
 class PgExecutor(Executor):
-    pg_conn: pg8000.Connection
+    pg_conn: psycopg.Connection
     table: str
     source: str
     num: int
@@ -427,15 +445,16 @@ class PgExecutor(Executor):
         database: str,
         schema: str = "public",
         cluster: str | None = None,
+        mz_service: str | None = None,
     ):
-        super().__init__(ports, fields, database, schema, cluster)
+        super().__init__(ports, fields, database, schema, cluster, mz_service)
         self.table = f"table{num}"
         self.source = f"postgres_source{num}"
         self.num = num
 
     def create(self, logging_exe: Any | None = None) -> None:
         self.logging_exe = logging_exe
-        self.pg_conn = pg8000.connect(
+        self.pg_conn = psycopg.connect(
             host="localhost",
             user="postgres",
             password="postgres",
@@ -459,12 +478,11 @@ class PgExecutor(Executor):
                     ALTER TABLE {identifier(self.table)} REPLICA IDENTITY FULL;
                     CREATE USER postgres{self.num} WITH SUPERUSER PASSWORD 'postgres';
                     ALTER USER postgres{self.num} WITH replication;
-                    DROP PUBLICATION IF EXISTS postgres_source;
-                    CREATE PUBLICATION postgres_source FOR ALL TABLES;""",
+                    DROP PUBLICATION IF EXISTS {self.source};
+                    CREATE PUBLICATION {self.source} FOR ALL TABLES;""",
             )
         self.pg_conn.autocommit = False
 
-        self.mz_conn.autocommit = True
         with self.mz_conn.cursor() as cur:
             self.execute(cur, f"CREATE SECRET pgpass{self.num} AS 'postgres'")
             self.execute(
@@ -479,10 +497,15 @@ class PgExecutor(Executor):
                 cur,
                 f"""CREATE SOURCE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.source)}
                     {f"IN CLUSTER {identifier(self.cluster)}" if self.cluster else ""}
-                    FROM POSTGRES CONNECTION pg{self.num} (PUBLICATION 'postgres_source')
-                    FOR TABLES ({identifier(self.table)} AS {identifier(self.table)})""",
+                    FROM POSTGRES CONNECTION pg{self.num} (PUBLICATION '{self.source}')
+                    """,
             )
-        self.mz_conn.autocommit = False
+            self.execute(
+                cur,
+                f"""CREATE TABLE {identifier(self.table)}
+                    FROM SOURCE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.source)}
+                    (REFERENCE {identifier(self.table)})""",
+            )
 
     def run(self, transaction: Transaction, logging_exe: Any | None = None) -> None:
         self.logging_exe = logging_exe
@@ -552,8 +575,9 @@ class KafkaRoundtripExecutor(Executor):
         database: str,
         schema: str = "public",
         cluster: str | None = None,
+        mz_service: str | None = None,
     ):
-        super().__init__(ports, fields, database, schema, cluster)
+        super().__init__(ports, fields, database, schema, cluster, mz_service)
         self.table_original = f"table_rt_source{num}"
         self.table = f"table_rt{num}"
         self.topic = f"data-ingest-rt-{num}"
@@ -568,7 +592,6 @@ class KafkaRoundtripExecutor(Executor):
         ]
         keys = [field.name for field in self.fields if field.is_key]
 
-        self.mz_conn.autocommit = True
         with self.mz_conn.cursor() as cur:
             self.execute(cur, f"DROP TABLE IF EXISTS {identifier(self.table_original)}")
             self.execute(
@@ -579,7 +602,9 @@ class KafkaRoundtripExecutor(Executor):
             )
             self.execute(
                 cur,
-                f"""CREATE SINK {identifier(self.database)}.{identifier(self.schema)}.sink{self.num} FROM {identifier(self.table_original)}
+                f"""CREATE SINK {identifier(self.database)}.{identifier(self.schema)}.sink{self.num}
+                    {f"IN CLUSTER {identifier(self.cluster)}" if self.cluster else ""}
+                    FROM {identifier(self.table_original)}
                     INTO KAFKA CONNECTION kafka_conn (TOPIC '{self.topic}')
                     KEY ({", ".join([identifier(key) for key in keys])})
                     FORMAT AVRO
@@ -602,7 +627,6 @@ class KafkaRoundtripExecutor(Executor):
                     "Topic does not exist",
                 ],
             )
-        self.mz_conn.autocommit = False
 
     def run(self, transaction: Transaction, logging_exe: Any | None = None) -> None:
         self.logging_exe = logging_exe
@@ -643,7 +667,6 @@ class KafkaRoundtripExecutor(Executor):
                                     f"{identifier(field.name)} = {formatted_value(value)}"
                                     for field, value in non_key_values
                                 )
-                                self.mz_conn.autocommit = True
                                 self.execute(
                                     cur,
                                     f"""UPDATE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.table_original)}
@@ -651,7 +674,6 @@ class KafkaRoundtripExecutor(Executor):
                                         WHERE {cond_str}
                                     """,
                                 )
-                                self.mz_conn.autocommit = False
                         else:
                             values_str = ", ".join(
                                 str(formatted_value(value)) for value in row.values
@@ -669,15 +691,12 @@ class KafkaRoundtripExecutor(Executor):
                             for field, value in zip(row.fields, row.values)
                             if field.is_key
                         )
-                        self.mz_conn.autocommit = True
                         self.execute(
                             cur,
                             f"""DELETE FROM {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.table_original)}
                                 WHERE {cond_str}
                             """,
                         )
-                        self.mz_conn.autocommit = False
                         self.known_keys.discard(key_values)
                     else:
                         raise ValueError(f"Unexpected operation {row.operation}")
-        self.mz_conn.commit()

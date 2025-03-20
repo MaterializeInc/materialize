@@ -50,11 +50,15 @@ def __create_values(
             is_pg_compatible=_date_time_data_type.is_max_value_pg_compatible,
         )
 
-        for index, value in enumerate(_date_time_data_type.further_values):
+        for index, value_and_characteristics in enumerate(
+            _date_time_data_type.further_values
+        ):
+            value = value_and_characteristics[0]
+            characteristics = value_and_characteristics[1]
             _values_of_type.add_raw_value(
                 f"'{value}{timezone_value_suffix}'",
                 f"VAL_{index + 1}{timezone_column_suffix}",
-                set(),
+                characteristics,
             )
 
     if _timezone is None:

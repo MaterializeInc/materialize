@@ -26,11 +26,20 @@ impl<'a> Explain<'a> for DataflowDescription<Plan> {
 
     type Text = ExplainMultiPlan<'a, Plan>;
 
+    type VerboseText = ExplainMultiPlan<'a, Plan>;
+
     type Json = ExplainMultiPlan<'a, Plan>;
 
     type Dot = UnsupportedFormat;
 
     fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
+        self.as_explain_multi_plan(context)
+    }
+
+    fn explain_verbose_text(
+        &'a mut self,
+        context: &'a Self::Context,
+    ) -> Result<Self::VerboseText, ExplainError> {
         self.as_explain_multi_plan(context)
     }
 
@@ -69,7 +78,7 @@ impl<'a> DataflowDescription<Plan> {
         let sources = self
             .source_imports
             .iter_mut()
-            .map(|(id, (source_desc, _))| {
+            .map(|(id, (source_desc, _, _upper))| {
                 let op = source_desc.arguments.operators.as_ref();
                 ExplainSource::new(*id, op, context.config.filter_pushdown)
             })
@@ -88,11 +97,20 @@ impl<'a> Explain<'a> for DataflowDescription<OptimizedMirRelationExpr> {
 
     type Text = ExplainMultiPlan<'a, MirRelationExpr>;
 
+    type VerboseText = ExplainMultiPlan<'a, MirRelationExpr>;
+
     type Json = ExplainMultiPlan<'a, MirRelationExpr>;
 
     type Dot = UnsupportedFormat;
 
     fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
+        self.as_explain_multi_plan(context)
+    }
+
+    fn explain_verbose_text(
+        &'a mut self,
+        context: &'a Self::Context,
+    ) -> Result<Self::VerboseText, ExplainError> {
         self.as_explain_multi_plan(context)
     }
 
@@ -137,7 +155,7 @@ impl<'a> DataflowDescription<OptimizedMirRelationExpr> {
         let sources = self
             .source_imports
             .iter_mut()
-            .map(|(id, (source_desc, _))| {
+            .map(|(id, (source_desc, _, _upper))| {
                 let op = source_desc.arguments.operators.as_ref();
                 ExplainSource::new(*id, op, context.config.filter_pushdown)
             })
@@ -151,7 +169,7 @@ impl<'a> DataflowDescription<OptimizedMirRelationExpr> {
     }
 }
 
-/// TODO(#25239): Add documentation.
+/// TODO(database-issues#7533): Add documentation.
 pub fn export_ids_for<P, S, T>(dd: &DataflowDescription<P, S, T>) -> BTreeMap<GlobalId, GlobalId> {
     let mut map = BTreeMap::<GlobalId, GlobalId>::default();
 

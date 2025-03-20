@@ -16,7 +16,7 @@ specifier token inside of double-quotes to emit it literally.
 
 #### RFC 2822 format
 
-```sql
+```mzsql
 SELECT to_char(TIMESTAMPTZ '2019-11-26 15:56:46 +00:00', 'Dy, Mon DD YYYY HH24:MI:SS +0000') AS formatted
 ```
 ```nofmt
@@ -30,7 +30,7 @@ SELECT to_char(TIMESTAMPTZ '2019-11-26 15:56:46 +00:00', 'Dy, Mon DD YYYY HH24:M
 Normally the `W` in "Welcome" would be converted to the week number, so we must quote it.
 The "to" doesn't match any format specifiers, so quotes are optional.
 
-```sql
+```mzsql
 SELECT to_char(TIMESTAMPTZ '2019-11-26 15:56:46 +00:00', '"Welcome" to Mon, YYYY') AS formatted
 ```
 ```nofmt
@@ -41,7 +41,7 @@ SELECT to_char(TIMESTAMPTZ '2019-11-26 15:56:46 +00:00', '"Welcome" to Mon, YYYY
 
 #### Ordinal modifiers
 
-```sql
+```mzsql
 SELECT to_char(TIMESTAMPTZ '2019-11-1 15:56:46 +00:00', 'Dth of Mon') AS formatted
 ```
 ```nofmt

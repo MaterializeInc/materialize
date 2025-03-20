@@ -84,31 +84,34 @@ use std::convert::Infallible;
 use std::rc::Rc;
 use std::time::Duration;
 
-use differential_dataflow::Collection;
+use differential_dataflow::AsCollection;
 use itertools::Itertools as _;
 use mz_expr::{EvalError, MirScalarExpr};
+use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_postgres_util::desc::PostgresTableDesc;
-use mz_postgres_util::{simple_query_opt, PostgresError};
-use mz_repr::{Datum, Diff, Row};
-use mz_sql_parser::ast::{display::AstDisplay, Ident};
-use mz_storage_types::errors::SourceErrorDetails;
+use mz_postgres_util::{simple_query_opt, Client, PostgresError};
+use mz_repr::{Datum, Diff, GlobalId, Row};
+use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::Ident;
+use mz_storage_types::errors::{DataflowError, SourceError, SourceErrorDetails};
 use mz_storage_types::sources::postgres::CastType;
 use mz_storage_types::sources::{
-    MzOffset, PostgresSourceConnection, SourceExport, SourceTimestamp,
+    MzOffset, PostgresSourceConnection, SourceExport, SourceExportDetails, SourceTimestamp,
 };
 use mz_timely_util::builder_async::PressOnDropButton;
 use serde::{Deserialize, Serialize};
+use timely::container::CapacityContainerBuilder;
+use timely::dataflow::operators::core::Partition;
 use timely::dataflow::operators::{Concat, Map, ToStream};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
-use tokio_postgres::Client;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::{ProgressStatisticsUpdate, SourceRender};
-use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
+use crate::source::types::{Probe, ProgressStatisticsUpdate, SourceRender, StackedCollection};
+use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 mod replication;
 mod snapshot;
@@ -123,91 +126,99 @@ impl SourceRender for PostgresSourceConnection {
     fn render<G: Scope<Timestamp = MzOffset>>(
         self,
         scope: &mut G,
-        config: RawSourceCreationConfig,
+        config: &RawSourceCreationConfig,
         resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
-        Option<Stream<G, Infallible>>,
+        BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
+        Stream<G, Infallible>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
+        Option<Stream<G, Probe<MzOffset>>>,
         Vec<PressOnDropButton>,
     ) {
-        // Determined which collections need to be snapshot and which already have been.
-        let subsource_resume_uppers: BTreeMap<_, _> = config
-            .source_resume_uppers
-            .iter()
-            .map(|(id, upper)| {
-                assert!(
-                    config.source_exports.contains_key(id),
-                    "all source resume uppers must be present in source exports"
-                );
-
-                (
-                    *id,
-                    Antichain::from_iter(upper.iter().map(MzOffset::decode_row)),
-                )
-            })
-            .collect();
-
-        // Collect the tables that we will be ingesting.
+        // Collect the source outputs that we will be exporting into a per-table map.
         let mut table_info = BTreeMap::new();
-        for SourceExport {
-            ingestion_output, ..
-        } in config.source_exports.values()
-        {
-            // Output index 0 is the primary source which is not a table.
-            if *ingestion_output == 0 {
-                continue;
-            }
-
-            // The output index is 1 greater than the publication details' index
-            // to account for the primary output being at index 0.
-            let table_idx = *ingestion_output - 1;
-            let desc = self.publication_details.tables[table_idx].clone();
-
-            // Tables are indexed by their native index, but table casts are
-            // indexed by the output index.
-            let casts = self.table_casts[ingestion_output].clone();
-            table_info.insert(desc.oid, (*ingestion_output, desc.clone(), casts.clone()));
+        for (idx, (id, export)) in config.source_exports.iter().enumerate() {
+            let SourceExport {
+                details,
+                storage_metadata: _,
+                data_config: _,
+            } = export;
+            let details = match details {
+                SourceExportDetails::Postgres(details) => details,
+                // This is an export that doesn't need any data output to it.
+                SourceExportDetails::None => continue,
+                _ => panic!("unexpected source export details: {:?}", details),
+            };
+            let desc = details.table.clone();
+            let casts = details.column_casts.clone();
+            let resume_upper = Antichain::from_iter(
+                config
+                    .source_resume_uppers
+                    .get(id)
+                    .expect("all source exports must be present in source resume uppers")
+                    .iter()
+                    .map(MzOffset::decode_row),
+            );
+            let output = SourceOutputInfo {
+                desc,
+                casts,
+                resume_upper,
+            };
+            table_info
+                .entry(output.desc.oid)
+                .or_insert_with(BTreeMap::new)
+                .insert(idx, output);
         }
 
         let metrics = config.metrics.get_postgres_source_metrics(config.id);
 
-        let (snapshot_updates, rewinds, snapshot_stats, snapshot_err, snapshot_token) =
+        let (snapshot_updates, rewinds, slot_ready, snapshot_stats, snapshot_err, snapshot_token) =
             snapshot::render(
                 scope.clone(),
                 config.clone(),
                 self.clone(),
-                subsource_resume_uppers.clone(),
                 table_info.clone(),
                 metrics.snapshot_metrics.clone(),
             );
 
-        let (repl_updates, uppers, stats_stream, repl_err, repl_token) = replication::render(
-            scope.clone(),
-            config,
-            self,
-            subsource_resume_uppers,
-            table_info,
-            &rewinds,
-            resume_uppers,
-            metrics,
-        );
+        let (repl_updates, uppers, stats_stream, probe_stream, repl_err, repl_token) =
+            replication::render(
+                scope.clone(),
+                config.clone(),
+                self,
+                table_info,
+                &rewinds,
+                &slot_ready,
+                resume_uppers,
+                metrics,
+            );
 
         let stats_stream = stats_stream.concat(&snapshot_stats);
 
-        let updates = snapshot_updates.concat(&repl_updates).map(|(output, res)| {
-            let res = res.map(|row| SourceMessage {
-                key: Row::default(),
-                value: row,
-                metadata: Row::default(),
-            });
-            (output, res)
-        });
+        let updates = snapshot_updates.concat(&repl_updates);
+        let partition_count = u64::cast_from(config.source_exports.len());
+        let data_streams: Vec<_> = updates
+            .inner
+            .partition::<CapacityContainerBuilder<_>, _, _>(
+                partition_count,
+                |((output, data), time, diff): &(
+                    (usize, Result<SourceMessage, DataflowError>),
+                    MzOffset,
+                    Diff,
+                )| {
+                    let output = u64::cast_from(*output);
+                    (output, (data.clone(), time.clone(), diff.clone()))
+                },
+            );
+        let mut data_collections = BTreeMap::new();
+        for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
+            data_collections.insert(*id, data_stream.as_collection());
+        }
 
         let init = std::iter::once(HealthStatusMessage {
-            index: 0,
+            id: None,
             namespace: Self::STATUS_NAMESPACE,
             update: HealthStatusUpdate::Running,
         })
@@ -235,7 +246,7 @@ impl SourceRender for PostgresSourceConnection {
             };
 
             HealthStatusMessage {
-                index: 0,
+                id: None,
                 namespace: namespace.clone(),
                 update,
             }
@@ -244,13 +255,21 @@ impl SourceRender for PostgresSourceConnection {
         let health = init.concat(&errs);
 
         (
-            updates,
-            Some(uppers),
+            data_collections,
+            uppers,
             health,
             stats_stream,
+            probe_stream,
             vec![snapshot_token, repl_token],
         )
     }
+}
+
+#[derive(Clone, Debug)]
+struct SourceOutputInfo {
+    desc: PostgresTableDesc,
+    casts: Vec<(CastType, MirScalarExpr)>,
+    resume_upper: Antichain<MzOffset>,
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
@@ -271,6 +290,8 @@ pub enum TransientError {
         requested_lsn: MzOffset,
         available_lsn: MzOffset,
     },
+    #[error("replication slot already exists")]
+    ReplicationSlotAlreadyExists,
     #[error("stream ended prematurely")]
     ReplicationEOF,
     #[error("unexpected replication message")]
@@ -323,17 +344,34 @@ pub enum DefiniteError {
     InvalidUTF8(Vec<u8>),
     #[error("failed to cast raw column: {0}")]
     CastError(#[source] EvalError),
+    #[error("unexpected binary data in replication stream")]
+    UnexpectedBinaryData,
 }
 
-impl From<DefiniteError> for SourceReaderError {
+impl From<DefiniteError> for DataflowError {
     fn from(err: DefiniteError) -> Self {
-        SourceReaderError {
-            inner: SourceErrorDetails::Other(err.to_string()),
-        }
+        let m = err.to_string().into();
+        DataflowError::SourceError(Box::new(SourceError {
+            error: match &err {
+                DefiniteError::SlotCompactedPastResumePoint(_, _) => SourceErrorDetails::Other(m),
+                DefiniteError::TableTruncated => SourceErrorDetails::Other(m),
+                DefiniteError::TableDropped => SourceErrorDetails::Other(m),
+                DefiniteError::PublicationDropped(_) => SourceErrorDetails::Initialization(m),
+                DefiniteError::InvalidReplicationSlot => SourceErrorDetails::Initialization(m),
+                DefiniteError::MissingColumn => SourceErrorDetails::Other(m),
+                DefiniteError::InvalidCopyInput => SourceErrorDetails::Other(m),
+                DefiniteError::InvalidTimelineId { .. } => SourceErrorDetails::Initialization(m),
+                DefiniteError::MissingToast => SourceErrorDetails::Other(m),
+                DefiniteError::DefaultReplicaIdentity => SourceErrorDetails::Other(m),
+                DefiniteError::IncompatibleSchema(_) => SourceErrorDetails::Other(m),
+                DefiniteError::InvalidUTF8(_) => SourceErrorDetails::Other(m),
+                DefiniteError::CastError(_) => SourceErrorDetails::Other(m),
+                DefiniteError::UnexpectedBinaryData => SourceErrorDetails::Other(m),
+            },
+        }))
     }
 }
 
-/// Ensures the replication slot of this connection is created.
 async fn ensure_replication_slot(client: &Client, slot: &str) -> Result<(), TransientError> {
     // Note: Using unchecked here is okay because we're using it in a SQL query.
     let slot = Ident::new_unchecked(slot).to_ast_string();
@@ -392,8 +430,8 @@ async fn fetch_slot_metadata(
 
 /// Fetch the `pg_current_wal_lsn`, used to report metrics.
 async fn fetch_max_lsn(client: &Client) -> Result<MzOffset, TransientError> {
-    let query = format!("SELECT pg_current_wal_lsn()",);
-    let row = simple_query_opt(client, &query).await?;
+    let query = "SELECT pg_current_wal_lsn()";
+    let row = simple_query_opt(client, query).await?;
 
     match row.and_then(|row| {
         row.get("pg_current_wal_lsn")

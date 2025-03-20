@@ -9,9 +9,9 @@
 
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET enable_refresh_every_mvs = true
-
-$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET enable_cluster_schedule_refresh = true
+ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true
+ALTER SYSTEM SET cluster_refresh_mv_compaction_estimate = 0
 
 > CREATE DATABASE materialized_view_refresh_options;
 > SET DATABASE = materialized_view_refresh_options;
@@ -270,7 +270,7 @@ ALTER SYSTEM SET enable_cluster_schedule_refresh = true
 3
 
 # Test that MVs that advance to the empty frontier do not retain read holds on
-# their inputs. Regression test for #24469.
+# their inputs. Regression test for database-issues#7308.
 
 > CREATE TABLE t4 (x int)
 > CREATE MATERIALIZED VIEW mv7 WITH (REFRESH AT CREATION) AS SELECT * FROM t4
@@ -369,10 +369,9 @@ r2 true
 > CREATE MATERIALIZED VIEW mv9 WITH (REFRESH AT mz_now()::text::int8 + 1000000) AS
   SELECT x*x FROM t3;
 
-# Check that all operators have hydrated. Ideally, we'd want to check `mz_hydration_statuses`, but that is
-# currently wrong for REFRESH MVs, see https://github.com/MaterializeInc/materialize/issues/25518
+# Check that all operators have hydrated.
 > SELECT DISTINCT hydrated
-  FROM mz_internal.mz_compute_operator_hydration_statuses h JOIN mz_objects o ON (h.object_id = o.id)
+  FROM mz_internal.mz_hydration_statuses h JOIN mz_objects o ON (h.object_id = o.id)
   WHERE name = 'mv9';
 true
 
@@ -382,7 +381,7 @@ true
   SELECT DISTINCT x, y FROM t2, t3;
 
 > SELECT DISTINCT hydrated
-  FROM mz_internal.mz_compute_operator_hydration_statuses h JOIN mz_objects o ON (h.object_id = o.id)
+  FROM mz_internal.mz_hydration_statuses h JOIN mz_objects o ON (h.object_id = o.id)
   WHERE name = 'mv10';
 true
 
@@ -408,6 +407,9 @@ true
 # And then the cluster should compute MV results.
 > SELECT * FROM mv11;
 4
+
+# Seems to take a while in k8s
+$ set-max-tries max-tries=50
 
 # The cluster should be turned off at some point.
 > SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'scheduled_cluster';
@@ -518,11 +520,11 @@ DROP CLUSTER REPLICA scheduled_cluster.unbilled;
 > SELECT * FROM mv11;
 3
 
-## REHYDRATION TIME ESTIMATE
+## HYDRATION TIME ESTIMATE
 
-> CREATE CLUSTER c_schedule_6 (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '995 seconds'));
+> CREATE CLUSTER c_schedule_6 (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '995 seconds'));
 > CREATE CLUSTER c_schedule_7 (SIZE = '1');
-> ALTER CLUSTER c_schedule_7 SET (SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '995 seconds'));
+> ALTER CLUSTER c_schedule_7 SET (SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '995 seconds'));
 
 # Create MVs whose first refresh is 1000 seconds from now.
 > CREATE MATERIALIZED VIEW mv13
@@ -534,7 +536,7 @@ DROP CLUSTER REPLICA scheduled_cluster.unbilled;
   WITH (REFRESH AT mz_now()::string::int8 + 1000 * 1000)
   AS SELECT count(*) FROM t2;
 
-# Should be turned on soon due to the REHYDRATION TIME ESTIMATE.
+# Should be turned on soon due to the HYDRATION TIME ESTIMATE.
 > SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_6';
 1
 > SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_7';
@@ -622,6 +624,79 @@ true <null>
   WHERE mv.id = mvr.materialized_view_id AND name = 'mv1';
 8000
 
+# Negative test for `mz_hydration_statuses`, a regression test for database-issues#7621.
+#
+# It's hard to observe the bug before the first hydration, so we make the first
+# hydration quick to just get it over with, and then we make the next hydration
+# slow, and try to catch the bug there.
+
+> CREATE CLUSTER cluster_to_be_bricked SIZE = '1', REPLICATION FACTOR = 1;
+> CREATE TABLE t6 (a int);
+> INSERT INTO t6 VALUES (1);
+> CREATE MATERIALIZED VIEW mv_long_hydration
+  IN CLUSTER cluster_to_be_bricked
+  WITH (REFRESH EVERY '1 day') AS
+  SELECT mz_unsafe.mz_sleep(a)
+  FROM t6;
+
+# Wait for the first hydration to complete
+> SELECT * FROM mv_long_hydration;
+<null>
+
+> SELECT hydrated
+  FROM mz_internal.mz_hydration_statuses JOIN mz_materialized_views ON (object_id = id)
+  WHERE name = 'mv_long_hydration';
+true
+
+# Make the next hydration take 1000000 ms.
+> INSERT INTO t6 VALUES (1000000);
+
+# Restart the cluster to force a hydration.
+> ALTER CLUSTER cluster_to_be_bricked SET (REPLICATION FACTOR 0);
+> ALTER CLUSTER cluster_to_be_bricked SET (REPLICATION FACTOR 1);
+
+# Give the following hydration status query some time to wrongly turn to true if there is a bug.
+> SELECT mz_unsafe.mz_sleep(3);
+<null>
+
+> SELECT hydrated
+  FROM mz_internal.mz_hydration_statuses JOIN mz_materialized_views ON (object_id = id)
+  WHERE name = 'mv_long_hydration';
+false
+
+> DROP MATERIALIZED VIEW mv_long_hydration;
+
+> SELECT
+    name,
+    now() - INTERVAL '30 minutes' < last_completed_refresh,
+    next_refresh > now() - INTERVAL '6 seconds'
+  FROM mz_internal.mz_materialized_view_refreshes mvr, mz_catalog.mz_materialized_views mv
+  WHERE
+    mv.id = mvr.materialized_view_id
+  ORDER BY name;
+mv1 true true
+mv10 <null> true
+mv11 true true
+mv12 <null> true
+mv13 <null> true
+mv14 <null> true
+mv14_at_const true <null>
+mv15_ats_const true <null>
+mv16_every_const true <null>
+mv17_before_first <null> true
+mv18_no_replica <null> false
+mv19 true true
+mv2 true true
+mv3 true true
+mv4 true <null>
+mv5 true true
+mv6 true true
+mv7 true <null>
+mv8 true true
+mv9 <null> true
+mv_at_creation true <null>
+mv_no_rep true true
+
 # ----------------------------------------
 # Cleanup
 # ----------------------------------------
@@ -633,3 +708,4 @@ true <null>
 > DROP CLUSTER c_schedule_6;
 > DROP CLUSTER c_schedule_7;
 > DROP CLUSTER cluster_no_replica;
+> DROP CLUSTER cluster_to_be_bricked;

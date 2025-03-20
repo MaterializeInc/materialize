@@ -35,7 +35,10 @@ pub enum RegionSubcommand {
     },
     /// Disable a region.
     #[clap(hide = true)]
-    Disable,
+    Disable {
+        #[clap(long)]
+        hard: bool,
+    },
     /// List all regions.
     #[clap(alias = "ls")]
     List,
@@ -50,7 +53,7 @@ pub async fn run(cx: Context, cmd: RegionCommand) -> Result<(), Error> {
             version,
             environmentd_extra_arg,
         } => mz::command::region::enable(cx, version, environmentd_extra_arg).await,
-        RegionSubcommand::Disable => mz::command::region::disable(cx).await,
+        RegionSubcommand::Disable { hard } => mz::command::region::disable(cx, hard).await,
         RegionSubcommand::List => mz::command::region::list(cx).await,
         RegionSubcommand::Show => mz::command::region::show(cx).await,
     }

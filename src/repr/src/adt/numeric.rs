@@ -14,6 +14,7 @@
 
 use std::error::Error;
 use std::fmt;
+use std::sync::LazyLock;
 
 use anyhow::bail;
 use dec::{Context, Decimal};
@@ -21,7 +22,6 @@ use mz_lowertest::MzReflect;
 use mz_ore::cast;
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -51,7 +51,7 @@ pub const NUMERIC_AGG_MAX_PRECISION: u8 = NUMERIC_AGG_WIDTH * 3;
 /// A double-width version of [`Numeric`] for use in aggregations.
 pub type NumericAgg = Decimal<NUMERIC_AGG_WIDTH_USIZE>;
 
-static CX_DATUM: Lazy<Context<Numeric>> = Lazy::new(|| {
+static CX_DATUM: LazyLock<Context<Numeric>> = LazyLock::new(|| {
     let mut cx = Context::<Numeric>::default();
     cx.set_max_exponent(isize::from(NUMERIC_DATUM_MAX_PRECISION - 1))
         .unwrap();
@@ -59,7 +59,7 @@ static CX_DATUM: Lazy<Context<Numeric>> = Lazy::new(|| {
         .unwrap();
     cx
 });
-static CX_AGG: Lazy<Context<NumericAgg>> = Lazy::new(|| {
+static CX_AGG: LazyLock<Context<NumericAgg>> = LazyLock::new(|| {
     let mut cx = Context::<NumericAgg>::default();
     cx.set_max_exponent(isize::from(NUMERIC_AGG_MAX_PRECISION - 1))
         .unwrap();
@@ -67,12 +67,12 @@ static CX_AGG: Lazy<Context<NumericAgg>> = Lazy::new(|| {
         .unwrap();
     cx
 });
-static U128_SPLITTER_DATUM: Lazy<Numeric> = Lazy::new(|| {
+static U128_SPLITTER_DATUM: LazyLock<Numeric> = LazyLock::new(|| {
     let mut cx = Numeric::context();
     // 1 << 128
     cx.parse("340282366920938463463374607431768211456").unwrap()
 });
-static U128_SPLITTER_AGG: Lazy<NumericAgg> = Lazy::new(|| {
+static U128_SPLITTER_AGG: LazyLock<NumericAgg> = LazyLock::new(|| {
     let mut cx = NumericAgg::context();
     // 1 << 128
     cx.parse("340282366920938463463374607431768211456").unwrap()
@@ -601,7 +601,7 @@ fn test_twos_comp_numeric_primitive() {
 fn test_twos_complement_to_numeric_fail() {
     fn inner(b: &mut [u8]) {
         let r = twos_complement_be_to_numeric(b, 0);
-        assert!(r.is_err());
+        mz_ore::assert_err!(r);
     }
     // 17-byte signed digit's max value exceeds 39 digits of precision
     let mut e = [0xFF; Numeric::TWOS_COMPLEMENT_BYTE_WIDTH];
@@ -828,6 +828,7 @@ impl FixedSizeCodec<Numeric> for PackedNumeric {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
@@ -839,14 +840,14 @@ mod tests {
         #[mz_ore::test]
         fn numeric_max_scale_protobuf_roundtrip(expect in any::<NumericMaxScale>()) {
             let actual = protobuf_roundtrip::<_, ProtoNumericMaxScale>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
 
         #[mz_ore::test]
         fn optional_numeric_max_scale_protobuf_roundtrip(expect in any::<Option<NumericMaxScale>>()) {
             let actual = protobuf_roundtrip::<_, ProtoOptionalNumericMaxScale>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }
@@ -856,11 +857,11 @@ mod tests {
     fn smoketest_packed_numeric_roundtrips() {
         let og = PackedNumeric::from_value(Numeric::from(-42));
         let bytes = og.as_bytes();
-        let rnd = PackedNumeric::from_bytes(&bytes).expect("valid");
+        let rnd = PackedNumeric::from_bytes(bytes).expect("valid");
         assert_eq!(og, rnd);
 
         // Returns an error if the size of the slice is invalid.
-        assert!(PackedNumeric::from_bytes(&[0, 0, 0, 0]).is_err());
+        mz_ore::assert_err!(PackedNumeric::from_bytes(&[0, 0, 0, 0]));
     }
 
     #[mz_ore::test]

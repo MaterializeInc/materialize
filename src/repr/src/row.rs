@@ -43,11 +43,9 @@ use crate::adt::range::{
 };
 use crate::adt::timestamp::CheckedTimestamp;
 use crate::scalar::{arb_datum, DatumKind};
-use crate::{Datum, Timestamp};
+use crate::{Datum, RelationDesc, Timestamp};
 
-pub mod collection;
-pub(crate) mod encoding;
-pub(crate) mod encoding2;
+pub(crate) mod encode;
 pub mod iter;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.row.rs"));
@@ -108,7 +106,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.row.rs"));
 /// Rows are dynamically sized, but up to a fixed size their data is stored in-line.
 /// It is best to re-use a `Row` across multiple `Row` creation calls, as this
 /// avoids the allocations involved in `Row::new()`.
-#[derive(Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Row {
     data: CompactBytes,
 }
@@ -116,12 +114,25 @@ pub struct Row {
 impl Row {
     const SIZE: usize = CompactBytes::MAX_INLINE;
 
-    /// A variant of `Row::from_proto` that allows for reuse of internal allocs.
-    pub fn decode_from_proto(&mut self, proto: &ProtoRow) -> Result<(), String> {
+    /// A variant of `Row::from_proto` that allows for reuse of internal allocs
+    /// and validates the decoding against a provided [`RelationDesc`].
+    pub fn decode_from_proto(
+        &mut self,
+        proto: &ProtoRow,
+        desc: &RelationDesc,
+    ) -> Result<(), String> {
         let mut packer = self.packer();
-        for d in proto.datums.iter() {
+        for (col_idx, _, _) in desc.iter_all() {
+            let d = match proto.datums.get(col_idx.to_raw()) {
+                Some(x) => x,
+                None => {
+                    packer.push(Datum::Null);
+                    continue;
+                }
+            };
             packer.try_push_proto(d)?;
         }
+
         Ok(())
     }
 
@@ -151,7 +162,7 @@ impl Row {
     /// This method clears the existing contents of the row, but retains the
     /// allocation.
     pub fn packer(&mut self) -> RowPacker<'_> {
-        self.data.clear();
+        self.clear();
         RowPacker { row: self }
     }
 
@@ -221,6 +232,11 @@ impl Row {
         inline_size.saturating_add(heap_size)
     }
 
+    /// The length of the encoded row in bytes. Does not include the size of the `Row` struct itself.
+    pub fn data_len(&self) -> usize {
+        self.data.len()
+    }
+
     /// Returns the total capacity in bytes used by this row.
     pub fn byte_capacity(&self) -> usize {
         self.data.capacity()
@@ -230,6 +246,12 @@ impl Row {
     #[inline]
     pub fn as_row_ref(&self) -> &RowRef {
         RowRef::from_slice(self.data.as_slice())
+    }
+
+    /// Clear the contents of the [`Row`], leaving any allocation in place.
+    #[inline]
+    fn clear(&mut self) {
+        self.data.clear();
     }
 }
 
@@ -268,6 +290,13 @@ impl Clone for Row {
 
     fn clone_from(&mut self, source: &Self) {
         self.data.clone_from(&source.data);
+    }
+}
+
+// Row's `Hash` implementation defers to `RowRef` to ensure they hash equivalently.
+impl std::hash::Hash for Row {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_row_ref().hash(state)
     }
 }
 
@@ -386,10 +415,143 @@ mod columnation {
     }
 }
 
+mod columnar {
+    use columnar::{
+        AsBytes, Clear, Columnar, Container, FromBytes, HeapSize, Index, IndexAs, Len, Push,
+    };
+    use mz_ore::cast::CastFrom;
+
+    use crate::{Row, RowRef};
+
+    #[derive(Copy, Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+    pub struct Rows<BC = Vec<u64>, VC = Vec<u8>> {
+        /// Bounds container; provides indexed access to offsets.
+        pub bounds: BC,
+        /// Values container; provides slice access to bytes.
+        pub values: VC,
+    }
+
+    impl Columnar for Row {
+        type Ref<'a> = &'a RowRef;
+        fn copy_from(&mut self, other: Self::Ref<'_>) {
+            self.clear();
+            self.data.extend_from_slice(other.data());
+        }
+        fn into_owned(other: Self::Ref<'_>) -> Self {
+            other.to_owned()
+        }
+        type Container = Rows;
+    }
+
+    impl<'b, BC: Container<u64>> Container<Row> for Rows<BC, &'b [u8]> {
+        type Borrowed<'a>
+            = Rows<BC::Borrowed<'a>, &'a [u8]>
+        where
+            Self: 'a;
+        fn borrow<'a>(&'a self) -> Self::Borrowed<'a> {
+            Rows {
+                bounds: self.bounds.borrow(),
+                values: self.values,
+            }
+        }
+    }
+    impl<BC: Container<u64>> Container<Row> for Rows<BC, Vec<u8>> {
+        type Borrowed<'a>
+            = Rows<BC::Borrowed<'a>, &'a [u8]>
+        where
+            BC: 'a;
+        fn borrow<'a>(&'a self) -> Self::Borrowed<'a> {
+            Rows {
+                bounds: self.bounds.borrow(),
+                values: self.values.borrow(),
+            }
+        }
+    }
+
+    impl<'a, BC: AsBytes<'a>, VC: AsBytes<'a>> AsBytes<'a> for Rows<BC, VC> {
+        fn as_bytes(&self) -> impl Iterator<Item = (u64, &'a [u8])> {
+            self.bounds.as_bytes().chain(self.values.as_bytes())
+        }
+    }
+    impl<'a, BC: FromBytes<'a>, VC: FromBytes<'a>> FromBytes<'a> for Rows<BC, VC> {
+        fn from_bytes(bytes: &mut impl Iterator<Item = &'a [u8]>) -> Self {
+            Self {
+                bounds: FromBytes::from_bytes(bytes),
+                values: FromBytes::from_bytes(bytes),
+            }
+        }
+    }
+
+    impl<BC: Len, VC> Len for Rows<BC, VC> {
+        #[inline(always)]
+        fn len(&self) -> usize {
+            self.bounds.len()
+        }
+    }
+
+    impl<'a, BC: Len + IndexAs<u64>> Index for Rows<BC, &'a [u8]> {
+        type Ref = &'a RowRef;
+        #[inline(always)]
+        fn get(&self, index: usize) -> Self::Ref {
+            let lower = if index == 0 {
+                0
+            } else {
+                self.bounds.index_as(index - 1)
+            };
+            let upper = self.bounds.index_as(index);
+            let lower = usize::cast_from(lower);
+            let upper = usize::cast_from(upper);
+            RowRef::from_slice(&self.values[lower..upper])
+        }
+    }
+    impl<'a, BC: Len + IndexAs<u64>> Index for &'a Rows<BC, Vec<u8>> {
+        type Ref = &'a RowRef;
+        #[inline(always)]
+        fn get(&self, index: usize) -> Self::Ref {
+            let lower = if index == 0 {
+                0
+            } else {
+                self.bounds.index_as(index - 1)
+            };
+            let upper = self.bounds.index_as(index);
+            let lower = usize::cast_from(lower);
+            let upper = usize::cast_from(upper);
+            RowRef::from_slice(&self.values[lower..upper])
+        }
+    }
+
+    impl<BC: Push<u64>> Push<&Row> for Rows<BC> {
+        #[inline(always)]
+        fn push(&mut self, item: &Row) {
+            self.values.extend_from_slice(item.data.as_slice());
+            self.bounds.push(u64::cast_from(self.values.len()));
+        }
+    }
+    impl<BC: Push<u64>> Push<&RowRef> for Rows<BC> {
+        fn push(&mut self, item: &RowRef) {
+            self.values.extend_from_slice(item.data());
+            self.bounds.push(u64::cast_from(self.values.len()));
+        }
+    }
+    impl<BC: Clear, VC: Clear> Clear for Rows<BC, VC> {
+        fn clear(&mut self) {
+            self.bounds.clear();
+            self.values.clear();
+        }
+    }
+    impl<BC: HeapSize, VC: HeapSize> HeapSize for Rows<BC, VC> {
+        fn heap_size(&self) -> (usize, usize) {
+            let (l0, c0) = self.bounds.heap_size();
+            let (l1, c1) = self.values.heap_size();
+            (l0 + l1, c0 + c1)
+        }
+    }
+}
+
 /// A contiguous slice of bytes that are row data.
 ///
 /// A [`RowRef`] is to [`Row`] as [`prim@str`] is to [`String`].
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct RowRef([u8]);
 
@@ -427,6 +589,11 @@ impl RowRef {
             data: &self.0,
             offset: 0,
         }
+    }
+
+    /// Return the byte length of this [`RowRef`].
+    pub fn byte_len(&self) -> usize {
+        self.0.len()
     }
 
     /// For debugging only.
@@ -642,7 +809,10 @@ enum Tag {
     StringHuge,
     Uuid,
     Array,
-    List,
+    ListTiny,
+    ListShort,
+    ListLong,
+    ListHuge,
     Dict,
     JsonNull,
     Dummy,
@@ -794,14 +964,14 @@ fn read_untagged_bytes<'a>(data: &'a [u8], offset: &mut usize) -> &'a [u8] {
 /// and it was only written with a `String` tag if it was indeed UTF-8.
 unsafe fn read_lengthed_datum<'a>(data: &'a [u8], offset: &mut usize, tag: Tag) -> Datum<'a> {
     let len = match tag {
-        Tag::BytesTiny | Tag::StringTiny => usize::from(read_byte(data, offset)),
-        Tag::BytesShort | Tag::StringShort => {
+        Tag::BytesTiny | Tag::StringTiny | Tag::ListTiny => usize::from(read_byte(data, offset)),
+        Tag::BytesShort | Tag::StringShort | Tag::ListShort => {
             usize::from(u16::from_le_bytes(read_byte_array(data, offset)))
         }
-        Tag::BytesLong | Tag::StringLong => {
+        Tag::BytesLong | Tag::StringLong | Tag::ListLong => {
             usize::cast_from(u32::from_le_bytes(read_byte_array(data, offset)))
         }
-        Tag::BytesHuge | Tag::StringHuge => {
+        Tag::BytesHuge | Tag::StringHuge | Tag::ListHuge => {
             usize::cast_from(u64::from_le_bytes(read_byte_array(data, offset)))
         }
         _ => unreachable!(),
@@ -812,6 +982,9 @@ unsafe fn read_lengthed_datum<'a>(data: &'a [u8], offset: &mut usize, tag: Tag) 
         Tag::BytesTiny | Tag::BytesShort | Tag::BytesLong | Tag::BytesHuge => Datum::Bytes(bytes),
         Tag::StringTiny | Tag::StringShort | Tag::StringLong | Tag::StringHuge => {
             Datum::String(str::from_utf8_unchecked(bytes))
+        }
+        Tag::ListTiny | Tag::ListShort | Tag::ListLong | Tag::ListHuge => {
+            Datum::List(DatumList { data: bytes })
         }
         _ => unreachable!(),
     }
@@ -1149,7 +1322,11 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         | Tag::StringTiny
         | Tag::StringShort
         | Tag::StringLong
-        | Tag::StringHuge => read_lengthed_datum(data, offset, tag),
+        | Tag::StringHuge
+        | Tag::ListTiny
+        | Tag::ListShort
+        | Tag::ListLong
+        | Tag::ListHuge => read_lengthed_datum(data, offset, tag),
         Tag::Uuid => Datum::Uuid(Uuid::from_bytes(read_byte_array(data, offset))),
         Tag::Array => {
             // See the comment in `Row::push_array` for details on the encoding
@@ -1163,10 +1340,6 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
                 dims: ArrayDimensions { data: dims },
                 elements: DatumList { data },
             })
-        }
-        Tag::List => {
-            let bytes = read_untagged_bytes(data, offset);
-            Datum::List(DatumList { data: bytes })
         }
         Tag::Dict => {
             let bytes = read_untagged_bytes(data, offset);
@@ -1272,19 +1445,19 @@ where
     D: Vector<u8>,
 {
     match tag {
-        Tag::BytesTiny | Tag::StringTiny => {
+        Tag::BytesTiny | Tag::StringTiny | Tag::ListTiny => {
             let len = bytes.len().to_le_bytes();
             data.push(len[0]);
         }
-        Tag::BytesShort | Tag::StringShort => {
+        Tag::BytesShort | Tag::StringShort | Tag::ListShort => {
             let len = bytes.len().to_le_bytes();
             data.extend_from_slice(&len[0..2]);
         }
-        Tag::BytesLong | Tag::StringLong => {
+        Tag::BytesLong | Tag::StringLong | Tag::ListLong => {
             let len = bytes.len().to_le_bytes();
             data.extend_from_slice(&len[0..4]);
         }
-        Tag::BytesHuge | Tag::StringHuge => {
+        Tag::BytesHuge | Tag::StringHuge | Tag::ListHuge => {
             let len = bytes.len().to_le_bytes();
             data.extend_from_slice(&len);
         }
@@ -1348,7 +1521,7 @@ where
 // This function is inspired by `NaiveDateTime::timestamp_nanos`,
 // with extra checking.
 fn checked_timestamp_nanos(dt: NaiveDateTime) -> Option<i64> {
-    let subsec_nanos = dt.timestamp_subsec_nanos();
+    let subsec_nanos = dt.and_utc().timestamp_subsec_nanos();
     if subsec_nanos >= 1_000_000_000 {
         return None;
     }
@@ -1400,6 +1573,10 @@ where
 
     (64 - n_sign_bits + 7) / 8
 }
+
+const TINY: usize = 1 << 8;
+const SHORT: usize = 1 << 16;
+const LONG: usize = 1 << 32;
 
 fn push_datum<D>(data: &mut D, datum: Datum)
 where
@@ -1512,9 +1689,9 @@ where
         }
         Datum::Bytes(bytes) => {
             let tag = match bytes.len() {
-                0..=255 => Tag::BytesTiny,
-                256..=65535 => Tag::BytesShort,
-                65536..=4294967295 => Tag::BytesLong,
+                0..TINY => Tag::BytesTiny,
+                TINY..SHORT => Tag::BytesShort,
+                SHORT..LONG => Tag::BytesLong,
                 _ => Tag::BytesHuge,
             };
             data.push(tag.into());
@@ -1522,13 +1699,23 @@ where
         }
         Datum::String(string) => {
             let tag = match string.len() {
-                0..=255 => Tag::StringTiny,
-                256..=65535 => Tag::StringShort,
-                65536..=4294967295 => Tag::StringLong,
+                0..TINY => Tag::StringTiny,
+                TINY..SHORT => Tag::StringShort,
+                SHORT..LONG => Tag::StringLong,
                 _ => Tag::StringHuge,
             };
             data.push(tag.into());
             push_lengthed_bytes(data, string.as_bytes(), tag);
+        }
+        Datum::List(list) => {
+            let tag = match list.data.len() {
+                0..TINY => Tag::ListTiny,
+                TINY..SHORT => Tag::ListShort,
+                SHORT..LONG => Tag::ListLong,
+                _ => Tag::ListHuge,
+            };
+            data.push(tag.into());
+            push_lengthed_bytes(data, list.data, tag);
         }
         Datum::Uuid(u) => {
             data.push(Tag::Uuid.into());
@@ -1541,10 +1728,6 @@ where
             data.push(array.dims.ndims());
             data.extend_from_slice(array.dims.data);
             push_untagged_bytes(data, array.elements.data);
-        }
-        Datum::List(list) => {
-            data.push(Tag::List.into());
-            push_untagged_bytes(data, list.data);
         }
         Datum::Map(dict) => {
             data.push(Tag::Dict.into());
@@ -1680,9 +1863,9 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::Bytes(bytes) => {
             // We use a variable length representation of slice length.
             let bytes_for_length = match bytes.len() {
-                0..=255 => 1,
-                256..=65535 => 2,
-                65536..=4294967295 => 4,
+                0..TINY => 1,
+                TINY..SHORT => 2,
+                SHORT..LONG => 4,
                 _ => 8,
             };
             1 + bytes_for_length + bytes.len()
@@ -1690,9 +1873,9 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::String(string) => {
             // We use a variable length representation of slice length.
             let bytes_for_length = match string.len() {
-                0..=255 => 1,
-                256..=65535 => 2,
-                65536..=4294967295 => 4,
+                0..TINY => 1,
+                TINY..SHORT => 2,
+                SHORT..LONG => 4,
                 _ => 8,
             };
             1 + bytes_for_length + string.len()
@@ -1851,16 +2034,73 @@ impl RowPacker<'_> {
     where
         F: FnOnce(&mut RowPacker) -> R,
     {
-        self.row.data.push(Tag::List.into());
+        // First, assume that the list will fit in 255 bytes, and thus the length will fit in
+        // 1 byte. If not, we'll fix it up later.
         let start = self.row.data.len();
-        // write a dummy len, will fix it up later
-        self.row.data.extend_from_slice(&[0; size_of::<u64>()]);
+        self.row.data.push(Tag::ListTiny.into());
+        // Write a dummy len, will fix it up later.
+        self.row.data.push(0);
 
         let out = f(self);
 
-        let len = u64::cast_from(self.row.data.len() - start - size_of::<u64>());
-        // fix up the len
-        self.row.data[start..start + size_of::<u64>()].copy_from_slice(&len.to_le_bytes());
+        // The `- 1 - 1` is for the tag and the len.
+        let len = self.row.data.len() - start - 1 - 1;
+        // We now know the real len.
+        if len < TINY {
+            // If the len fits in 1 byte, we just need to fix up the len.
+            self.row.data[start + 1] = len.to_le_bytes()[0];
+        } else {
+            // Note: We move this code path into its own function, so that the common case can be
+            // inlined.
+            long_list(&mut self.row.data, start, len);
+        }
+
+        /// 1. Fix up the tag.
+        /// 2. Move the actual data a bit (for which we also need to make room at the end).
+        /// 3. Fix up the len.
+        /// `data`: The row's backing data.
+        /// `start`: where `push_list_with` started writing in `data`.
+        /// `len`: the length of the data, excluding the tag and the length.
+        #[cold]
+        fn long_list(data: &mut CompactBytes, start: usize, len: usize) {
+            // `len_len`: the length of the length. (Possible values are: 2, 4, 8. 1 is handled
+            // elsewhere.) The other parameters are the same as for `long_list`.
+            let long_list_inner = |data: &mut CompactBytes, len_len| {
+                // We'll need memory for the new, bigger length, so make the `CompactBytes` bigger.
+                // The `- 1` is because the old length was 1 byte.
+                const ZEROS: [u8; 8] = [0; 8];
+                data.extend_from_slice(&ZEROS[0..len_len - 1]);
+                // Move the data to the end of the `CompactBytes`, to make space for the new length.
+                // Originally, it started after the 1-byte tag and the 1-byte length, now it will
+                // start after the 1-byte tag and the len_len-byte length.
+                //
+                // Note that this is the only operation in `long_list` whose cost is proportional
+                // to `len`. Since `len` is at least 256 here, the other operations' cost are
+                // negligible. `copy_within` is a memmove, which is probably a fair bit faster per
+                // Datum than a Datum encoding in the `f` closure.
+                data.copy_within(start + 1 + 1..start + 1 + 1 + len, start + 1 + len_len);
+                // Write the new length.
+                data[start + 1..start + 1 + len_len]
+                    .copy_from_slice(&len.to_le_bytes()[0..len_len]);
+            };
+            match len {
+                0..TINY => {
+                    unreachable!()
+                }
+                TINY..SHORT => {
+                    data[start] = Tag::ListShort.into();
+                    long_list_inner(data, 2);
+                }
+                SHORT..LONG => {
+                    data[start] = Tag::ListLong.into();
+                    long_list_inner(data, 4);
+                }
+                _ => {
+                    data[start] = Tag::ListHuge.into();
+                    long_list_inner(data, 8);
+                }
+            };
+        }
 
         out
     }
@@ -1926,7 +2166,7 @@ impl RowPacker<'_> {
     /// the cardinality of the array as described by `dims`, or if the
     /// number of dimensions exceeds [`MAX_ARRAY_DIMENSIONS`]. If an error
     /// occurs, the packer's state will be unchanged.
-    pub fn push_array<'a, I, D>(
+    pub fn try_push_array<'a, I, D>(
         &mut self,
         dims: &[ArrayDimension],
         iter: I,
@@ -1934,6 +2174,36 @@ impl RowPacker<'_> {
     where
         I: IntoIterator<Item = D>,
         D: Borrow<Datum<'a>>,
+    {
+        // SAFETY: The function returns the exact number of elements pushed into the array.
+        unsafe {
+            self.push_array_with_unchecked(dims, |packer| {
+                let mut nelements = 0;
+                for datum in iter {
+                    packer.push(datum);
+                    nelements += 1;
+                }
+                Ok::<_, InvalidArrayError>(nelements)
+            })
+        }
+    }
+
+    /// Convenience function to construct an array from a function. The function must return the
+    /// number of elements it pushed into the array. It is undefined behavior if the function returns
+    /// a number different to the number of elements it pushed.
+    ///
+    /// Returns an error if the number of elements pushed by `f` does not match
+    /// the cardinality of the array as described by `dims`, or if the
+    /// number of dimensions exceeds [`MAX_ARRAY_DIMENSIONS`], or if `f` errors. If an error
+    /// occurs, the packer's state will be unchanged.
+    pub unsafe fn push_array_with_unchecked<F, E>(
+        &mut self,
+        dims: &[ArrayDimension],
+        f: F,
+    ) -> Result<(), E>
+    where
+        F: FnOnce(&mut RowPacker) -> Result<usize, E>,
+        E: From<InvalidArrayError>,
     {
         // Arrays are encoded as follows.
         //
@@ -1947,7 +2217,7 @@ impl RowPacker<'_> {
         // u8    element data, where elements are encoded in row-major order
 
         if dims.len() > usize::from(MAX_ARRAY_DIMENSIONS) {
-            return Err(InvalidArrayError::TooManyDimensions(dims.len()));
+            return Err(InvalidArrayError::TooManyDimensions(dims.len()).into());
         }
 
         let start = self.row.data.len();
@@ -1969,11 +2239,13 @@ impl RowPacker<'_> {
         // Write elements.
         let off = self.row.data.len();
         self.row.data.extend_from_slice(&[0; size_of::<u64>()]);
-        let mut nelements = 0;
-        for datum in iter {
-            self.push(*datum.borrow());
-            nelements += 1;
-        }
+        let nelements = match f(self) {
+            Ok(nelements) => nelements,
+            Err(e) => {
+                self.row.data.truncate(start);
+                return Err(e);
+            }
+        };
         let len = u64::cast_from(self.row.data.len() - off - size_of::<u64>());
         self.row.data[off..off + size_of::<u64>()].copy_from_slice(&len.to_le_bytes());
 
@@ -1988,7 +2260,8 @@ impl RowPacker<'_> {
             return Err(InvalidArrayError::WrongCardinality {
                 actual: nelements,
                 expected: cardinality,
-            });
+            }
+            .into());
         }
 
         Ok(())
@@ -1997,7 +2270,7 @@ impl RowPacker<'_> {
     /// Pushes an [`Array`] that is built from a closure.
     ///
     /// __WARNING__: This is fairly "sharp" tool that is easy to get wrong. You
-    /// should prefer [`RowPacker::push_array`] when possible.
+    /// should prefer [`RowPacker::try_push_array`] when possible.
     ///
     /// Returns an error if the number of elements pushed does not match
     /// the cardinality of the array as described by `dims`, or if the
@@ -2425,6 +2698,20 @@ impl RowArena {
         }
     }
 
+    /// Creates a `RowArena` with a hint of how many rows will be created in the arena, to avoid
+    /// reallocations of its internal vector.
+    pub fn with_capacity(capacity: usize) -> Self {
+        RowArena {
+            inner: RefCell::new(Vec::with_capacity(capacity)),
+        }
+    }
+
+    /// Does a `reserve` on the underlying `Vec`. Call this when you expect `additional` more datums
+    /// to be created in this arena.
+    pub fn reserve(&self, additional: usize) {
+        self.inner.borrow_mut().reserve(additional);
+    }
+
     /// Take ownership of `bytes` for the lifetime of the arena.
     #[allow(clippy::transmute_ptr_to_ptr)]
     pub fn push_bytes<'a>(&'a self, bytes: Vec<u8>) -> &'a [u8] {
@@ -2536,6 +2823,11 @@ impl RowArena {
         f(&mut row.packer())?;
         Ok(self.push_unary_row(row))
     }
+
+    /// Clear the contents of the arena.
+    pub fn clear(&self) {
+        self.inner.borrow_mut().clear();
+    }
 }
 
 impl Default for RowArena {
@@ -2596,6 +2888,20 @@ impl SharedRow {
         row_packer.extend(iter);
         row_builder.clone()
     }
+
+    /// Calls the provided closure with a [`RowPacker`] writing the shared row.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the row is already borrowed elsewhere.
+    pub fn pack_with<F, R>(&mut self, f: F) -> R
+    where
+        for<'a> F: FnOnce(&'a mut RowPacker<'a>) -> R,
+    {
+        let mut borrow = self.borrow_mut();
+        let mut packer = borrow.packer();
+        (f)(&mut packer)
+    }
 }
 
 impl std::ops::Deref for SharedRow {
@@ -2609,6 +2915,7 @@ impl std::ops::Deref for SharedRow {
 #[cfg(test)]
 mod tests {
     use chrono::{DateTime, NaiveDate};
+    use mz_ore::assert_none;
 
     use crate::ScalarType;
 
@@ -2738,7 +3045,7 @@ mod tests {
         let mut row = Row::default();
         let mut packer = row.packer();
         packer
-            .push_array(&[DIM], vec![Datum::Int32(1), Datum::Int32(2)])
+            .try_push_array(&[DIM], vec![Datum::Int32(1), Datum::Int32(2)])
             .unwrap();
         let arr1 = row.unpack_first().unwrap_array();
         assert_eq!(arr1.dims().into_iter().collect::<Vec<_>>(), vec![DIM]);
@@ -2770,7 +3077,7 @@ mod tests {
         let mut row = Row::default();
         let mut packer = row.packer();
         packer
-            .push_array(
+            .try_push_array(
                 &[
                     ArrayDimension {
                         lower_bound: 1,
@@ -2798,7 +3105,7 @@ mod tests {
         let max_dims = usize::from(MAX_ARRAY_DIMENSIONS);
 
         // An array with one too many dimensions should be rejected.
-        let res = row.packer().push_array(
+        let res = row.packer().try_push_array(
             &vec![
                 ArrayDimension {
                     lower_bound: 1,
@@ -2814,7 +3121,7 @@ mod tests {
         // An array with exactly the maximum allowable dimensions should be
         // accepted.
         row.packer()
-            .push_array(
+            .try_push_array(
                 &vec![
                     ArrayDimension {
                         lower_bound: 1,
@@ -2830,7 +3137,7 @@ mod tests {
     #[mz_ore::test]
     fn test_array_wrong_cardinality() {
         let mut row = Row::default();
-        let res = row.packer().push_array(
+        let res = row.packer().try_push_array(
             &[
                 ArrayDimension {
                     lower_bound: 1,
@@ -3040,5 +3347,57 @@ mod tests {
 
         let e = test_range_errors_inner(vec![vec![Datum::Int32(2)], vec![Datum::Int32(1)]]);
         assert_eq!(e, Err(InvalidRangeError::MisorderedRangeBounds));
+    }
+
+    /// Lists have a variable-length encoding for their lengths. We test each case here.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // slow
+    fn test_list_encoding() {
+        fn test_list_encoding_inner(len: usize) {
+            let list_elem = |i: usize| {
+                if i % 2 == 0 {
+                    Datum::False
+                } else {
+                    Datum::True
+                }
+            };
+            let mut row = Row::default();
+            {
+                // Push some stuff.
+                let mut packer = row.packer();
+                packer.push(Datum::String("start"));
+                packer.push_list_with(|packer| {
+                    for i in 0..len {
+                        packer.push(list_elem(i));
+                    }
+                });
+                packer.push(Datum::String("end"));
+            }
+            // Check that we read back exactly what we pushed.
+            let mut row_it = row.iter();
+            assert_eq!(row_it.next().unwrap(), Datum::String("start"));
+            match row_it.next().unwrap() {
+                Datum::List(list) => {
+                    let mut list_it = list.iter();
+                    for i in 0..len {
+                        assert_eq!(list_it.next().unwrap(), list_elem(i));
+                    }
+                    assert_none!(list_it.next());
+                }
+                _ => panic!("expected Datum::List"),
+            }
+            assert_eq!(row_it.next().unwrap(), Datum::String("end"));
+            assert_none!(row_it.next());
+        }
+
+        test_list_encoding_inner(0);
+        test_list_encoding_inner(1);
+        test_list_encoding_inner(10);
+        test_list_encoding_inner(TINY - 1); // tiny
+        test_list_encoding_inner(TINY + 1); // short
+        test_list_encoding_inner(SHORT + 1); // long
+
+        // The biggest one takes 40 s on my laptop, probably not worth it.
+        //test_list_encoding_inner(LONG + 1); // huge
     }
 }

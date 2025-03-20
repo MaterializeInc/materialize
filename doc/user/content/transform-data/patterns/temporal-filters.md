@@ -9,24 +9,46 @@ menu:
     parent: 'sql-patterns'
 ---
 
-A _temporal filter_ is a `WHERE` or `HAVING` clause which uses the [`mz_now()`](/sql/functions/now_and_mz_now) function.
-This function returns Materialize's current virtual timestamp, which works to keep up with real time as data is processed.
-Applying a temporal filter reduces the working dataset, saving memory resources and focusing results on the recent past.
+A **temporal filter** is a query condition/predicate that uses the
+[`mz_now()`](/sql/functions/now_and_mz_now) function to filter data based on a
+time-related condition. Using a temporal filter reduces the working dataset,
+saving memory resources and focusing on results that meet the condition.
 
-Here is a typical temporal filter that considers records whose timestamps are within the last 5 minutes.
+In Materialize, you implement temporal filters using the
+[`mz_now()`](/sql/functions/now_and_mz_now) function (which returns
+Materialize's current virtual timestamp) in a `WHERE` or `HAVING` clause;
+specifically, you compare [`mz_now()`](/sql/functions/now_and_mz_now) to a
+numeric or timestamp column expression. As
+[`mz_now()`](/sql/functions/now_and_mz_now) progresses (every millisecond),
+records for which the condition is no longer true are retracted from the working
+dataset while records for which the condition becomes true are included in the
+working dataset. When using temporal filters, Materialize must be prepared to
+retract updates in the near future and will need resources to maintain these
+retractions.
 
-```sql
+For example, the following temporal filter reduces the working dataset to those
+records whose event timestamp column (`event_ts`) is no more than 5 minutes ago:
+
+```mzsql
 WHERE mz_now() <= event_ts + INTERVAL '5min'
 ```
 
-Consider this diagram that shows a record `B` falling out of the result set as time moves forward:
-
-![temporal filter diagram](/images/temporal-filter.svg)
-
 {{< note >}}
 It may feel more natural to write this filter as the equivalent `WHERE event_ts >= mz_now() - INTERVAL '5min'`.
-However, there are currently no valid operators for the [`mz_timestamp` type](/sql/types/mz_timestamp) that would allow this.
+However, there are currently no valid operators for the [`mz_timestamp`
+type](/sql/types/mz_timestamp) that would allow this.  See [Requirements](#requirements).
 {{< /note >}}
+
+The following diagram shows record `B` falling out of the result set as time
+moves forward:
+
+- In the first timeline, record `B` occurred less than 5 minutes ago (occurred
+  less than 5 minutes from `mz_now()`).
+
+- In the second timeline, as `mz_now()` progresses, record `B` occurred more
+  than 5 minutes from `mz_now()`.
+
+![temporal filter diagram](/images/temporal-filter.svg)
 
 ## Requirements
 
@@ -54,7 +76,7 @@ Other systems use this term differently because they cannot achieve a continuous
 In this case, we will filter a table to only include only records from the last 30 seconds.
 
 1. First, create a table called `events` and a view of the most recent 30 seconds of events.
-    ```sql
+    ```mzsql
     --Create a table of timestamped events.
     CREATE TABLE events (
         content TEXT,
@@ -69,12 +91,12 @@ In this case, we will filter a table to only include only records from the last 
     ```
 
 1. Next, subscribe to the results of the view.
-    ```sql
+    ```mzsql
     COPY (SUBSCRIBE (SELECT ts, content FROM last_30_sec)) TO STDOUT;
     ```
 
 1. In a separate session, insert a record.
-    ```sql
+    ```mzsql
     INSERT INTO events VALUES ('hello', now());
     ```
 
@@ -94,19 +116,19 @@ This example uses a `tasks` table with a time to live for each task.
 Materialize then helps perform actions according to each task's expiration time.
 
 1. First, create a table:
-    ```sql
+    ```mzsql
     CREATE TABLE tasks (name TEXT, created_ts TIMESTAMP, ttl INTERVAL);
     ```
 
 1. Add some tasks to track:
-    ```sql
+    ```mzsql
     INSERT INTO tasks VALUES ('send_email', now(), INTERVAL '5 minutes');
     INSERT INTO tasks VALUES ('time_to_eat', now(), INTERVAL '1 hour');
     INSERT INTO tasks VALUES ('security_block', now(), INTERVAL '1 day');
     ```
 
 1. Create a view using a temporal filter **over the expiration time**. For our example, the expiration time represents the sum between the task's `created_ts` and its `ttl`.
-    ```sql
+    ```mzsql
     CREATE MATERIALIZED VIEW tracking_tasks AS
     SELECT
       name,
@@ -119,21 +141,21 @@ Materialize then helps perform actions according to each task's expiration time.
 You can now:
 
 - Query the remaining time for a row:
-  ```sql
+  ```mzsql
     SELECT expiration_time - now() AS remaining_ttl
     FROM tracking_tasks
     WHERE name = 'time_to_eat';
   ```
 
 - Check if a particular row is still available:
-  ```sql
+  ```mzsql
   SELECT true
   FROM tracking_tasks
   WHERE name = 'security_block';
   ```
 
 - Trigger an external process when a row expires:
-  ```sql
+  ```mzsql
     INSERT INTO tasks VALUES ('send_email', now(), INTERVAL '5 seconds');
     COPY( SUBSCRIBE tracking_tasks WITH (SNAPSHOT = false) ) TO STDOUT;
 
@@ -148,16 +170,16 @@ You can now:
 
 Suppose you want to count the number of records in each 1 minute time window, grouped by an `id` column.
 You don't care to receive every update as it happens; instead, you would prefer Materialize to emit a single result at the end of each window.
-Materialize [date functions](/sql/functions/#date-and-time-func) are helpful for use cases like this where you want to bucket records into time windows.
+Materialize [date functions](/sql/functions/#date-and-time-functions) are helpful for use cases like this where you want to bucket records into time windows.
 
 The strategy for this example is to put an initial temporal filter on the input (say, 30 days) to bound it, use the [`date_bin` function](/sql/functions/date-bin) to bin records into 1 minute windows, use a second temporal filter to emit results at the end of the window, and finally apply a third temporal filter shorter than the first (say, 7 days) to set how long results should persist in Materialize.
 
 1. First, create a table for the input records.
-    ```sql
+    ```mzsql
     CREATE TABLE input (id INT, event_ts TIMESTAMP);
     ```
 1. Create a view that filters the input for the most recent 30 days and buckets records into 1 minute windows.
-    ```sql
+    ```mzsql
     CREATE VIEW
         input_recent_bucketed
         AS
@@ -174,7 +196,7 @@ The strategy for this example is to put an initial temporal filter on the input 
             WHERE mz_now() <= event_ts + INTERVAL '30 days';
     ```
 1. Create the final output view that does the aggregation and maintains 7 days worth of results.
-    ```sql
+    ```mzsql
     CREATE MATERIALIZED VIEW output
         AS
             SELECT
@@ -190,11 +212,11 @@ The strategy for this example is to put an initial temporal filter on the input 
     ```
     This `WHERE` clause means "the result for a 1-minute window should come into effect when `mz_now()` reaches `window_end` and be removed 7 days later". Without the latter constraint, records in the result set would receive strange updates as records expire from the initial 30 day filter on the input.
 1. Subscribe to the `output`.
-    ```sql
+    ```mzsql
     COPY (SUBSCRIBE (SELECT * FROM output)) TO STDOUT;
     ```
 1. In a different session, insert some records.
-    ```sql
+    ```mzsql
     INSERT INTO input VALUES (1, now());
     -- wait a moment
     INSERT INTO input VALUES (1, now());
@@ -223,7 +245,7 @@ How can you account for late arriving data in Materialize?
 
 Consider the temporal filter for the most recent hour's worth of records.
 
-```sql
+```mzsql
 WHERE mz_now() <= event_ts + INTERVAL '1hr'
 ```
 
@@ -251,7 +273,7 @@ However, the values in the `content` column are not correlated with insertion ti
 Temporal filters that consist of arithmetic, date math, and comparisons are eligible for pushdown, including all the examples in this page.
 However, more complex filters might not be. You can check whether the filters in your query can be pushed down by using [the `filter_pushdown` option](/sql/explain-plan/#output-modifiers) in an `EXPLAIN` statement. For example:
 
-```sql
+```mzsql
 EXPLAIN WITH(filter_pushdown)
 SELECT count(*)
 FROM events

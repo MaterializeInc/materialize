@@ -32,9 +32,10 @@ use futures::stream::{BoxStream, FuturesUnordered, TryStreamExt};
 use itertools::Itertools;
 use libc::{SIGABRT, SIGBUS, SIGILL, SIGSEGV, SIGTRAP};
 use maplit::btreemap;
+use mz_orchestrator::scheduling_config::ServiceSchedulingConfig;
 use mz_orchestrator::{
-    CpuLimit, MemoryLimit, NamespacedOrchestrator, Orchestrator, Service, ServiceConfig,
-    ServiceEvent, ServiceProcessMetrics, ServiceStatus,
+    CpuLimit, DiskLimit, MemoryLimit, NamespacedOrchestrator, Orchestrator, Service, ServiceConfig,
+    ServiceEvent, ServicePort, ServiceProcessMetrics, ServiceStatus,
 };
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::error::ErrorExt;
@@ -48,7 +49,7 @@ use sysinfo::{Pid, PidExt, Process, ProcessExt, ProcessRefreshKind, System, Syst
 use tokio::fs::remove_dir_all;
 use tokio::net::{TcpListener, UnixStream};
 use tokio::process::{Child, Command};
-use tokio::sync::broadcast::{self, Sender};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time::{self, Duration};
 use tokio::{fs, io, select};
 use tracing::{debug, error, info, warn};
@@ -254,47 +255,301 @@ impl ProcessOrchestrator {
 
 impl Orchestrator for ProcessOrchestrator {
     fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator> {
-        let (service_event_tx, _) = broadcast::channel(16384);
         let mut namespaces = self.namespaces.lock().expect("lock poisoned");
         Arc::clone(namespaces.entry(namespace.into()).or_insert_with(|| {
-            Arc::new(NamespacedProcessOrchestrator {
+            let config = Arc::new(NamespacedProcessOrchestratorConfig {
                 namespace: namespace.into(),
                 image_dir: self.image_dir.clone(),
                 suppress_output: self.suppress_output,
                 metadata_dir: self.metadata_dir.clone(),
                 command_wrapper: self.command_wrapper.clone(),
-                services: Arc::new(Mutex::new(BTreeMap::new())),
-                service_event_tx,
-                system: Mutex::new(System::new()),
                 propagate_crashes: self.propagate_crashes,
                 tcp_proxy: self.tcp_proxy.clone(),
                 scratch_directory: self.scratch_directory.clone(),
                 launch_spec: self.launch_spec,
+            });
+
+            let services = Arc::new(Mutex::new(BTreeMap::new()));
+            let (service_event_tx, service_event_rx) = broadcast::channel(16384);
+            let (command_tx, command_rx) = mpsc::unbounded_channel();
+
+            let worker = OrchestratorWorker {
+                config: Arc::clone(&config),
+                services: Arc::clone(&services),
+                service_event_tx,
+                system: System::new(),
+                command_rx,
+            }
+            .spawn();
+
+            Arc::new(NamespacedProcessOrchestrator {
+                config,
+                services,
+                service_event_rx,
+                command_tx,
+                scheduling_config: Default::default(),
+                _worker: worker,
             })
         }))
     }
 }
 
+/// Configuration for a [`NamespacedProcessOrchestrator`].
 #[derive(Debug)]
-struct NamespacedProcessOrchestrator {
+struct NamespacedProcessOrchestratorConfig {
     namespace: String,
     image_dir: PathBuf,
     suppress_output: bool,
     metadata_dir: PathBuf,
     command_wrapper: Vec<String>,
-    services: Arc<Mutex<BTreeMap<String, Vec<ProcessState>>>>,
-    service_event_tx: Sender<ServiceEvent>,
-    system: Mutex<System>,
     propagate_crashes: bool,
     tcp_proxy: Option<ProcessOrchestratorTcpProxyConfig>,
     scratch_directory: PathBuf,
     launch_spec: LaunchSpec,
 }
 
+impl NamespacedProcessOrchestratorConfig {
+    fn full_id(&self, id: &str) -> String {
+        format!("{}-{}", self.namespace, id)
+    }
+
+    fn service_run_dir(&self, id: &str) -> PathBuf {
+        self.metadata_dir.join(&self.full_id(id))
+    }
+
+    fn service_scratch_dir(&self, id: &str) -> PathBuf {
+        self.scratch_directory.join(&self.full_id(id))
+    }
+}
+
+#[derive(Debug)]
+struct NamespacedProcessOrchestrator {
+    config: Arc<NamespacedProcessOrchestratorConfig>,
+    services: Arc<Mutex<BTreeMap<String, Vec<ProcessState>>>>,
+    service_event_rx: broadcast::Receiver<ServiceEvent>,
+    command_tx: mpsc::UnboundedSender<WorkerCommand>,
+    scheduling_config: std::sync::RwLock<ServiceSchedulingConfig>,
+    _worker: AbortOnDropHandle<()>,
+}
+
+impl NamespacedProcessOrchestrator {
+    fn send_command(&self, cmd: WorkerCommand) {
+        self.command_tx.send(cmd).expect("worker task not dropped");
+    }
+}
+
 #[async_trait]
 impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
+    fn ensure_service(
+        &self,
+        id: &str,
+        config: ServiceConfig,
+    ) -> Result<Box<dyn Service>, anyhow::Error> {
+        let always_use_disk = self
+            .scheduling_config
+            .read()
+            .expect("poisoned")
+            .always_use_disk;
+
+        let service = ProcessService {
+            run_dir: self.config.service_run_dir(id),
+            scale: config.scale,
+        };
+        // Determining whether to enable disk is subtle because we need to
+        // support historical sizes in the managed service and custom sizes in
+        // self hosted deployments.
+        let disk = {
+            // Whether the user specified `DISK = TRUE` when creating the
+            // replica OR whether the feature flag to force disk is enabled.
+            let user_requested_disk = config.disk || always_use_disk;
+            // Whether the cluster replica size map provided by the
+            // administrator explicitly indicates that the size does not support
+            // disk.
+            let size_disables_disk = config.disk_limit == Some(DiskLimit::ZERO);
+            // Enable disk if the user requested it and the size does not
+            // disable it.
+            //
+            // Arguably we should not allow the user to request disk with sizes
+            // that have a zero disk limit, but configuring disk on a replica by
+            // replica basis is a legacy option that we hope to remove someday.
+            user_requested_disk && !size_disables_disk
+        };
+
+        let config = EnsureServiceConfig {
+            image: config.image,
+            args: config.args,
+            ports: config.ports,
+            memory_limit: config.memory_limit,
+            cpu_limit: config.cpu_limit,
+            scale: config.scale,
+            labels: config.labels,
+            disk,
+        };
+
+        self.send_command(WorkerCommand::EnsureService {
+            id: id.to_string(),
+            config,
+        });
+
+        Ok(Box::new(service))
+    }
+
+    fn drop_service(&self, id: &str) -> Result<(), anyhow::Error> {
+        self.send_command(WorkerCommand::DropService { id: id.to_string() });
+        Ok(())
+    }
+
+    async fn list_services(&self) -> Result<Vec<String>, anyhow::Error> {
+        let (result_tx, result_rx) = oneshot::channel();
+        self.send_command(WorkerCommand::ListServices { result_tx });
+
+        result_rx.await.expect("worker task not dropped")
+    }
+
+    fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
+        let mut initial_events = vec![];
+        let mut service_event_rx = {
+            let services = self.services.lock().expect("lock poisoned");
+            for (service_id, process_states) in &*services {
+                for (process_id, process_state) in process_states.iter().enumerate() {
+                    initial_events.push(ServiceEvent {
+                        service_id: service_id.clone(),
+                        process_id: u64::cast_from(process_id),
+                        status: process_state.status.into(),
+                        time: process_state.status_time,
+                    });
+                }
+            }
+            self.service_event_rx.resubscribe()
+        };
+        Box::pin(stream! {
+            for event in initial_events {
+                yield Ok(event);
+            }
+            loop {
+                yield service_event_rx.recv().await.err_into();
+            }
+        })
+    }
+
     async fn fetch_service_metrics(
         &self,
+        id: &str,
+    ) -> Result<Vec<ServiceProcessMetrics>, anyhow::Error> {
+        let (result_tx, result_rx) = oneshot::channel();
+        self.send_command(WorkerCommand::FetchServiceMetrics {
+            id: id.to_string(),
+            result_tx,
+        });
+
+        result_rx.await.expect("worker task not dropped")
+    }
+
+    fn update_scheduling_config(
+        &self,
+        config: mz_orchestrator::scheduling_config::ServiceSchedulingConfig,
+    ) {
+        *self.scheduling_config.write().expect("poisoned") = config;
+    }
+}
+
+/// Commands sent from a [`NamespacedProcessOrchestrator`] to its
+/// [`OrchestratorWorker`].
+///
+/// Commands for which the caller expects a result include a `result_tx` on which the
+/// [`OrchestratorWorker`] will deliver the result.
+enum WorkerCommand {
+    EnsureService {
+        id: String,
+        config: EnsureServiceConfig,
+    },
+    DropService {
+        id: String,
+    },
+    ListServices {
+        result_tx: oneshot::Sender<Result<Vec<String>, anyhow::Error>>,
+    },
+    FetchServiceMetrics {
+        id: String,
+        result_tx: oneshot::Sender<Result<Vec<ServiceProcessMetrics>, anyhow::Error>>,
+    },
+}
+
+/// Describes the desired state of a process.
+struct EnsureServiceConfig {
+    /// An opaque identifier for the executable or container image to run.
+    ///
+    /// Often names a container on Docker Hub or a path on the local machine.
+    pub image: String,
+    /// A function that generates the arguments for each process of the service
+    /// given the assigned listen addresses for each named port.
+    pub args: Box<dyn Fn(&BTreeMap<String, String>) -> Vec<String> + Send + Sync>,
+    /// Ports to expose.
+    pub ports: Vec<ServicePort>,
+    /// An optional limit on the memory that the service can use.
+    pub memory_limit: Option<MemoryLimit>,
+    /// An optional limit on the CPU that the service can use.
+    pub cpu_limit: Option<CpuLimit>,
+    /// The number of copies of this service to run.
+    pub scale: u16,
+    /// Arbitrary key–value pairs to attach to the service in the orchestrator
+    /// backend.
+    ///
+    /// The orchestrator backend may apply a prefix to the key if appropriate.
+    pub labels: BTreeMap<String, String>,
+    /// Whether scratch disk space should be allocated for the service.
+    pub disk: bool,
+}
+
+/// A task executing blocking work for a [`NamespacedProcessOrchestrator`] in the background.
+///
+/// This type exists to enable making [`NamespacedProcessOrchestrator::ensure_service`] and
+/// [`NamespacedProcessOrchestrator::drop_service`] non-blocking, allowing invocation of these
+/// methods in latency-sensitive contexts.
+///
+/// Note that, apart from `ensure_service` and `drop_service`, this worker also handles blocking
+/// orchestrator calls that query service state (such as `list_services`). These need to be
+/// sequenced through the worker loop to ensure they linearize as expected. For example, we want to
+/// ensure that a `list_services` result contains exactly those services that were previously
+/// created with `ensure_service` and not yet dropped with `drop_service`.
+struct OrchestratorWorker {
+    config: Arc<NamespacedProcessOrchestratorConfig>,
+    services: Arc<Mutex<BTreeMap<String, Vec<ProcessState>>>>,
+    service_event_tx: broadcast::Sender<ServiceEvent>,
+    system: System,
+    command_rx: mpsc::UnboundedReceiver<WorkerCommand>,
+}
+
+impl OrchestratorWorker {
+    fn spawn(self) -> AbortOnDropHandle<()> {
+        let name = format!("process-orchestrator:{}", self.config.namespace);
+        mz_ore::task::spawn(|| name, self.run()).abort_on_drop()
+    }
+
+    async fn run(mut self) {
+        while let Some(cmd) = self.command_rx.recv().await {
+            use WorkerCommand::*;
+            let result = match cmd {
+                EnsureService { id, config } => self.ensure_service(id, config).await,
+                DropService { id } => self.drop_service(&id).await,
+                ListServices { result_tx } => {
+                    let _ = result_tx.send(self.list_services().await);
+                    Ok(())
+                }
+                FetchServiceMetrics { id, result_tx } => {
+                    let _ = result_tx.send(self.fetch_service_metrics(&id));
+                    Ok(())
+                }
+            };
+
+            if let Err(error) = result {
+                panic!("process orchestrator worker failed: {error}");
+            }
+        }
+    }
+
+    fn fetch_service_metrics(
+        &mut self,
         id: &str,
     ) -> Result<Vec<ServiceProcessMetrics>, anyhow::Error> {
         let pids: Vec<_> = {
@@ -305,14 +560,14 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             service.iter().map(|p| p.pid()).collect()
         };
 
-        let mut system = self.system.lock().expect("lock poisoned");
         let mut metrics = vec![];
         for pid in pids {
             let (cpu_nano_cores, memory_bytes) = match pid {
                 None => (None, None),
                 Some(pid) => {
-                    system.refresh_process_specifics(pid, ProcessRefreshKind::new().with_cpu());
-                    match system.process(pid) {
+                    self.system
+                        .refresh_process_specifics(pid, ProcessRefreshKind::new().with_cpu());
+                    match self.system.process(pid) {
                         None => (None, None),
                         Some(process) => {
                             // Justification for `unwrap`:
@@ -345,33 +600,26 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
 
     async fn ensure_service(
         &self,
-        id: &str,
-        ServiceConfig {
+        id: String,
+        EnsureServiceConfig {
             image,
-            init_container_image: _,
             args,
             ports: ports_in,
             memory_limit,
             cpu_limit,
             scale,
             labels,
-            // Scheduling constraints are entirely ignored by the process orchestrator.
-            availability_zones: _,
-            other_replicas_selector: _,
-            replicas_selector: _,
             disk,
-            disk_limit: _,
-            node_selector: _,
-        }: ServiceConfig<'_>,
-    ) -> Result<Box<dyn Service>, anyhow::Error> {
-        let full_id = format!("{}-{}", self.namespace, id);
+        }: EnsureServiceConfig,
+    ) -> Result<(), anyhow::Error> {
+        let full_id = self.config.full_id(&id);
 
-        let run_dir = self.metadata_dir.join(&full_id);
+        let run_dir = self.config.service_run_dir(&id);
         fs::create_dir_all(&run_dir)
             .await
             .context("creating run directory")?;
         let scratch_dir = if disk {
-            let scratch_dir = self.scratch_directory.join(&full_id);
+            let scratch_dir = self.config.service_scratch_dir(&id);
             fs::create_dir_all(&scratch_dir)
                 .await
                 .context("creating scratch directory")?;
@@ -382,7 +630,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
 
         {
             let mut services = self.services.lock().expect("lock poisoned");
-            let process_states = services.entry(id.to_string()).or_default();
+            let process_states = services.entry(id.clone()).or_default();
 
             // Create the state for new processes.
             let mut new_process_states = vec![];
@@ -391,7 +639,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                 let mut ports = vec![];
                 let mut tcp_proxy_addrs = BTreeMap::new();
                 for port in &ports_in {
-                    let tcp_proxy_listener = match &self.tcp_proxy {
+                    let tcp_proxy_listener = match &self.config.tcp_proxy {
                         None => None,
                         Some(tcp_proxy) => {
                             let listener = StdTcpListener::bind((tcp_proxy.listen_addr, 0))
@@ -421,12 +669,12 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                         scratch_dir: scratch_dir.clone(),
                         i,
                         image: image.clone(),
-                        args,
+                        args: &args,
                         ports,
                         memory_limit,
                         cpu_limit,
                         disk,
-                        launch_spec: self.launch_spec,
+                        launch_spec: self.config.launch_spec,
                     }),
                 );
 
@@ -447,13 +695,13 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
 
         self.maybe_write_prometheus_service_discovery_file().await;
 
-        Ok(Box::new(ProcessService { run_dir, scale }))
+        Ok(())
     }
 
     async fn drop_service(&self, id: &str) -> Result<(), anyhow::Error> {
-        let full_id = format!("{}-{}", self.namespace, id);
-        let run_dir = self.metadata_dir.join(&full_id);
-        let scratch_dir = self.scratch_directory.join(&full_id);
+        let full_id = self.config.full_id(id);
+        let run_dir = self.config.service_run_dir(id);
+        let scratch_dir = self.config.service_scratch_dir(id);
 
         // Drop the supervisor for the service, if it exists. If this service
         // was under supervision, this will kill all processes associated with
@@ -506,8 +754,8 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
 
     async fn list_services(&self) -> Result<Vec<String>, anyhow::Error> {
         let mut services = vec![];
-        let namespace_prefix = format!("{}-", self.namespace);
-        let mut entries = fs::read_dir(&self.metadata_dir).await?;
+        let namespace_prefix = format!("{}-", self.config.namespace);
+        let mut entries = fs::read_dir(&self.config.metadata_dir).await?;
         while let Some(entry) = entries.next_entry().await? {
             let filename = entry
                 .file_name()
@@ -520,41 +768,6 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         Ok(services)
     }
 
-    fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
-        let mut initial_events = vec![];
-        let mut service_event_rx = {
-            let services = self.services.lock().expect("lock poisoned");
-            for (service_id, process_states) in &*services {
-                for (process_id, process_state) in process_states.iter().enumerate() {
-                    initial_events.push(ServiceEvent {
-                        service_id: service_id.clone(),
-                        process_id: u64::cast_from(process_id),
-                        status: process_state.status.into(),
-                        time: process_state.status_time,
-                    });
-                }
-            }
-            self.service_event_tx.subscribe()
-        };
-        Box::pin(stream! {
-            for event in initial_events {
-                yield Ok(event);
-            }
-            loop {
-                yield service_event_rx.recv().await.err_into();
-            }
-        })
-    }
-
-    fn update_scheduling_config(
-        &self,
-        _config: mz_orchestrator::scheduling_config::ServiceSchedulingConfig,
-    ) {
-        // This orchestrator ignores scheduling constraints.
-    }
-}
-
-impl NamespacedProcessOrchestrator {
     fn supervise_service_process(
         &self,
         ServiceProcessConfig {
@@ -571,15 +784,15 @@ impl NamespacedProcessOrchestrator {
             launch_spec,
         }: ServiceProcessConfig,
     ) -> impl Future<Output = ()> {
-        let suppress_output = self.suppress_output;
-        let propagate_crashes = self.propagate_crashes;
-        let command_wrapper = self.command_wrapper.clone();
-        let image = self.image_dir.join(image);
+        let suppress_output = self.config.suppress_output;
+        let propagate_crashes = self.config.propagate_crashes;
+        let command_wrapper = self.config.command_wrapper.clone();
+        let image = self.config.image_dir.join(image);
         let pid_file = run_dir.join(format!("{i}.pid"));
-        let full_id = format!("{}-{}", self.namespace, id);
+        let full_id = self.config.full_id(&id);
 
         let state_updater = ProcessStateUpdater {
-            namespace: self.namespace.clone(),
+            namespace: self.config.namespace.clone(),
             id,
             i,
             services: Arc::clone(&self.services),
@@ -674,7 +887,7 @@ impl NamespacedProcessOrchestrator {
             targets: Vec<String>,
         }
 
-        let Some(tcp_proxy) = &self.tcp_proxy else {
+        let Some(tcp_proxy) = &self.config.tcp_proxy else {
             return;
         };
         let Some(dir) = &tcp_proxy.prometheus_service_discovery_dir else {
@@ -688,7 +901,7 @@ impl NamespacedProcessOrchestrator {
                 for (i, state) in states.iter().enumerate() {
                     for (name, addr) in &state.tcp_proxy_addrs {
                         let mut labels = btreemap! {
-                            "mz_orchestrator_namespace".into() => self.namespace.clone(),
+                            "mz_orchestrator_namespace".into() => self.config.namespace.clone(),
                             "mz_orchestrator_service_id".into() => id.clone(),
                             "mz_orchestrator_port".into() => name.clone(),
                             "mz_orchestrator_ordinal".into() => i.to_string(),
@@ -706,12 +919,12 @@ impl NamespacedProcessOrchestrator {
             }
         }
 
-        let path = dir.join(Path::new(&self.namespace).with_extension("json"));
+        let path = dir.join(Path::new(&self.config.namespace).with_extension("json"));
         let contents = serde_json::to_vec_pretty(&static_configs).expect("valid json");
         if let Err(e) = fs::write(&path, &contents).await {
             warn!(
                 "{}: failed to write prometheus service discovery file: {}",
-                self.namespace,
+                self.config.namespace,
                 e.display_with_causes()
             );
         }
@@ -914,7 +1127,7 @@ struct ProcessStateUpdater {
     id: String,
     i: usize,
     services: Arc<Mutex<BTreeMap<String, Vec<ProcessState>>>>,
-    service_event_tx: Sender<ServiceEvent>,
+    service_event_tx: broadcast::Sender<ServiceEvent>,
 }
 
 impl ProcessStateUpdater {
@@ -965,8 +1178,8 @@ enum ProcessStatus {
 impl From<ProcessStatus> for ServiceStatus {
     fn from(status: ProcessStatus) -> ServiceStatus {
         match status {
-            ProcessStatus::NotReady => ServiceStatus::NotReady(None),
-            ProcessStatus::Ready { .. } => ServiceStatus::Ready,
+            ProcessStatus::NotReady => ServiceStatus::Offline(None),
+            ProcessStatus::Ready { .. } => ServiceStatus::Online,
         }
     }
 }

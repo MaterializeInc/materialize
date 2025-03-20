@@ -7,13 +7,39 @@
 
 use std::collections::BTreeMap;
 use std::ops::AddAssign;
-use std::time::Duration;
 
 use lgalloc::{FileStats, SizeClassStats};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::{raw, MetricsRegistry};
 use paste::paste;
 use prometheus::core::{AtomicU64, GenericGauge};
+use tracing::error;
+
+use crate::MetricsUpdate;
+
+/// Error during FileStats
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub struct Error {
+    /// Kind of error
+    #[from]
+    pub kind: ErrorKind,
+}
+
+/// Kind of error during FileStats
+#[derive(Debug, thiserror::Error)]
+pub enum ErrorKind {
+    /// Failed to get file stats
+    #[error("Failed to get file stats: {0}")]
+    FileStatsFailed(String),
+}
+
+impl Error {
+    /// Create a new error
+    pub fn new(kind: ErrorKind) -> Error {
+        Error { kind }
+    }
+}
 
 /// An accumulator for [`FileStats`].
 #[derive(Default)]
@@ -56,8 +82,7 @@ macro_rules! metrics_size_class {
         @file $(($f_name:ident, $f_metric:ident, $f_desc:expr)),*
     ) => {
         paste! {
-            struct LgMetrics {
-                stats: lgalloc::LgAllocStats,
+            pub(crate) struct LgMetrics {
                 size_class: BTreeMap<usize, LgMetricsSC>,
                 $($metric: raw::UIntGaugeVec,)*
                 $($f_metric: raw::UIntGaugeVec,)*
@@ -70,7 +95,6 @@ macro_rules! metrics_size_class {
                 fn new(registry: &MetricsRegistry) -> Self {
                     Self {
                         size_class: BTreeMap::default(),
-                        stats: lgalloc::LgAllocStats::default(),
                         $($metric: registry.register(mz_ore::metric!(
                             name: concat!(stringify!($namespace), "_", stringify!($metric)),
                             help: $desc,
@@ -92,23 +116,29 @@ macro_rules! metrics_size_class {
                         }
                     })
                 }
-                fn update(&mut self) {
-                    let mut stats = std::mem::take(&mut self.stats);
-                    lgalloc::lgalloc_stats(&mut stats);
+                fn update(&mut self) -> Result<(), Error> {
+                    let stats = lgalloc::lgalloc_stats();
                     for sc in &stats.size_class {
                         let sc_stats = self.get_size_class(sc.size_class);
                         $(sc_stats.$metric.set(($conv)(u64::cast_from(sc.$name), sc));)*
                     }
                     let mut accums = BTreeMap::new();
-                    for file_stat in &stats.file_stats {
-                        let accum: &mut FileStatsAccum = accums.entry(file_stat.size_class).or_default();
-                        accum.add_assign(file_stat);
+                    match &stats.file_stats {
+                        Ok(file_stats) => {
+                            for file_stat in file_stats {
+                                let accum: &mut FileStatsAccum = accums.entry(file_stat.size_class).or_default();
+                                accum.add_assign(file_stat);
+                            }
+                        }
+                        Err(err) => {
+                            return Err(Error::new(ErrorKind::FileStatsFailed(err.to_string())));
+                        }
                     }
                     for (size_class, accum) in accums {
                         let sc_stats = self.get_size_class(size_class);
                         $(sc_stats.$f_metric.set(u64::cast_from(accum.$f_name));)*
                     }
-                    self.stats = stats;
+                    Ok(())
                 }
             }
         }
@@ -155,16 +185,14 @@ metrics_size_class! {
 }
 
 /// Register a task to read lgalloc stats.
-#[allow(clippy::unused_async)]
-pub async fn register_metrics_into(metrics_registry: &MetricsRegistry) {
-    let mut lgmetrics = LgMetrics::new(metrics_registry);
+pub(crate) fn register_metrics_into(metrics_registry: &MetricsRegistry) -> LgMetrics {
+    LgMetrics::new(metrics_registry)
+}
 
-    mz_ore::task::spawn(|| "lgalloc_stats_update", async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(30));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            interval.tick().await;
-            lgmetrics.update();
-        }
-    });
+impl MetricsUpdate for LgMetrics {
+    type Error = Error;
+    const NAME: &'static str = "lgalloc";
+    fn update(&mut self) -> Result<(), Self::Error> {
+        self.update()
+    }
 }

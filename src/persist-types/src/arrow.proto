@@ -1,0 +1,84 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+// BE CAREFUL! Unlike other Materialize Protos, Persist's messages need to
+// be forward-compatible and roundtrip losslessly between versions. Consider
+// making your Proto changes in a release before you populate non-default values,
+// or guard the code changes behind a feature flag.
+
+syntax = "proto3";
+
+package mz_persist_types.arrow;
+
+import "google/protobuf/empty.proto";
+
+message ProtoArrayData {
+  DataType data_type = 1;
+  uint64 length = 2;
+  uint64 offset = 3;
+
+  repeated Buffer buffers = 4;
+  repeated ProtoArrayData children = 5;
+
+  BooleanBuffer nulls = 6;
+}
+
+message DataType {
+  message Struct {
+    repeated Field children = 1;
+  }
+
+  message Map {
+    Field value = 1;
+    bool sorted = 2;
+  }
+
+  // Protobuf tags [1, 15] get encoded in a single byte, so order these by
+  // what is most common.
+  oneof kind {
+    google.protobuf.Empty string = 1;
+    google.protobuf.Empty binary = 2;
+    int32 fixed_binary = 3;
+    google.protobuf.Empty int32 = 4;
+    google.protobuf.Empty int64 = 5;
+    google.protobuf.Empty uint32 = 6;
+    google.protobuf.Empty uint64 = 7;
+    google.protobuf.Empty float32 = 8;
+    google.protobuf.Empty float64 = 9;
+    Struct struct = 10;
+    Field list = 11;
+    google.protobuf.Empty uint8 = 12;
+    google.protobuf.Empty boolean = 13;
+
+    // Note: 14 and 15 are intentionally unused. It's a bet that future
+    // Persist folks will maybe want to add a new array type and leverage
+    // the single byte optimization.
+
+    google.protobuf.Empty null = 16;
+    google.protobuf.Empty int8 = 17;
+    google.protobuf.Empty int16 = 18;
+    google.protobuf.Empty uint16 = 19;
+    Map map = 20;
+  }
+}
+
+message Field {
+  string name = 1;
+  bool nullable = 2;
+  DataType data_type = 3;
+}
+
+message Buffer {
+  bytes data = 1;
+}
+
+message BooleanBuffer {
+  Buffer buffer = 1;
+  uint64 length = 2;
+}

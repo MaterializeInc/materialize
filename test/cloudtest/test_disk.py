@@ -26,7 +26,7 @@ def test_disk_replica(mz: MaterializeApplication) -> None:
 
             > CREATE CLUSTER testdrive_no_reset_disk_cluster1
                 REPLICAS (r1 (
-                    SIZE '1', DISK = true
+                    SIZE '1-no-disk', DISK = true
                 ))
 
             > CREATE CONNECTION IF NOT EXISTS kafka TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
@@ -34,13 +34,15 @@ def test_disk_replica(mz: MaterializeApplication) -> None:
             > CREATE SOURCE source1
               IN CLUSTER testdrive_no_reset_disk_cluster1
               FROM KAFKA CONNECTION kafka
-              (TOPIC 'testdrive-test-${testdrive.seed}')
+              (TOPIC 'testdrive-test-${testdrive.seed}');
+
+            > CREATE TABLE source1_tbl FROM SOURCE source1 (REFERENCE "testdrive-test-${testdrive.seed}")
               KEY FORMAT TEXT
               VALUE FORMAT TEXT
               ENVELOPE UPSERT;
 
 
-            > SELECT * FROM source1;
+            > SELECT * FROM source1_tbl;
             key           text
             ------------------
             key1          val1
@@ -49,7 +51,7 @@ def test_disk_replica(mz: MaterializeApplication) -> None:
             $ kafka-ingest key-format=bytes format=bytes topic=test
             key1:val3
 
-            > SELECT * FROM source1;
+            > SELECT * FROM source1_tbl;
             key           text
             ------------------
             key1          val3
@@ -62,8 +64,8 @@ def test_disk_replica(mz: MaterializeApplication) -> None:
         "SELECT r.cluster_id, r.id as replica_id FROM mz_cluster_replicas r, mz_clusters c WHERE c.id = r.cluster_id AND c.name = 'testdrive_no_reset_disk_cluster1';"
     )[0]
 
-    source_global_id = mz.environmentd.sql_query(
-        "SELECT id FROM mz_sources WHERE name = 'source1';"
+    source_tbl_global_id = mz.environmentd.sql_query(
+        "SELECT id FROM mz_tables WHERE name = 'source1_tbl';"
     )[0][0]
 
     # verify that the replica's scratch directory contains data files for source1
@@ -77,7 +79,7 @@ def test_disk_replica(mz: MaterializeApplication) -> None:
         "-c",
         "ls /scratch/storage/upsert",
     )
-    assert source_global_id in on_disk_sources
+    assert source_tbl_global_id in on_disk_sources
 
 
 def test_always_use_disk_replica(mz: MaterializeApplication) -> None:
@@ -98,20 +100,22 @@ def test_always_use_disk_replica(mz: MaterializeApplication) -> None:
             key2:val2
 
             > CREATE CLUSTER disk_cluster2
-                REPLICAS (r1 (SIZE '1'))
+                REPLICAS (r1 (SIZE '1-no-disk'))
 
             > CREATE CONNECTION IF NOT EXISTS kafka TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
             > CREATE SOURCE source1
               IN CLUSTER disk_cluster2
               FROM KAFKA CONNECTION kafka
-              (TOPIC 'testdrive-test-${testdrive.seed}')
+              (TOPIC 'testdrive-test-${testdrive.seed}');
+
+            > CREATE TABLE source1_tbl FROM SOURCE source1 (REFERENCE "testdrive-test-${testdrive.seed}")
               KEY FORMAT TEXT
               VALUE FORMAT TEXT
               ENVELOPE UPSERT;
 
 
-            > SELECT * FROM source1;
+            > SELECT * FROM source1_tbl;
             key           text
             ------------------
             key1          val1
@@ -120,7 +124,7 @@ def test_always_use_disk_replica(mz: MaterializeApplication) -> None:
             $ kafka-ingest key-format=bytes format=bytes topic=test
             key1:val3
 
-            > SELECT * FROM source1;
+            > SELECT * FROM source1_tbl;
             key           text
             ------------------
             key1          val3
@@ -133,8 +137,8 @@ def test_always_use_disk_replica(mz: MaterializeApplication) -> None:
         "SELECT r.cluster_id, r.id as replica_id FROM mz_cluster_replicas r, mz_clusters c WHERE c.id = r.cluster_id AND c.name = 'disk_cluster2';"
     )[0]
 
-    source_global_id = mz.environmentd.sql_query(
-        "SELECT id FROM mz_sources WHERE name = 'source1';"
+    source_tbl_global_id = mz.environmentd.sql_query(
+        "SELECT id FROM mz_tables WHERE name = 'source1_tbl';"
     )[0][0]
 
     # verify that the replica's scratch directory contains data files for source1
@@ -148,7 +152,7 @@ def test_always_use_disk_replica(mz: MaterializeApplication) -> None:
         "-c",
         "ls /scratch/storage/upsert",
     )
-    assert source_global_id in on_disk_sources
+    assert source_tbl_global_id in on_disk_sources
 
 
 def test_no_disk_replica(mz: MaterializeApplication) -> None:
@@ -164,7 +168,7 @@ def test_no_disk_replica(mz: MaterializeApplication) -> None:
 
             > CREATE CLUSTER no_disk_cluster1
                 REPLICAS (r1 (
-                    SIZE '1', DISK = false
+                    SIZE '1-no-disk', DISK = false
                 ))
 
             > CREATE CONNECTION IF NOT EXISTS kafka
@@ -173,13 +177,15 @@ def test_no_disk_replica(mz: MaterializeApplication) -> None:
             > CREATE SOURCE no_disk_source1
               IN CLUSTER no_disk_cluster1
               FROM KAFKA CONNECTION kafka
-              (TOPIC 'testdrive-test-no-disk-${testdrive.seed}')
+              (TOPIC 'testdrive-test-no-disk-${testdrive.seed}');
+
+            > CREATE TABLE no_disk_source1_tbl FROM SOURCE no_disk_source1 (REFERENCE "testdrive-test-no-disk-${testdrive.seed}")
               KEY FORMAT TEXT
               VALUE FORMAT TEXT
               ENVELOPE UPSERT;
 
 
-            > SELECT * FROM no_disk_source1;
+            > SELECT * FROM no_disk_source1_tbl;
             key           text
             ------------------
             key1          val1
@@ -188,7 +194,7 @@ def test_no_disk_replica(mz: MaterializeApplication) -> None:
             $ kafka-ingest key-format=bytes format=bytes topic=test-no-disk
             key1:val3
 
-            > SELECT * FROM no_disk_source1;
+            > SELECT * FROM no_disk_source1_tbl;
             key           text
             ------------------
             key1          val3

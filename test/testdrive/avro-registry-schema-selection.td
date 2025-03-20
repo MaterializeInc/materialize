@@ -35,11 +35,13 @@ $ kafka-ingest format=avro topic=schema-strategy-test schema=${second-writer-sch
 > CREATE SOURCE schema_strategy_test_inline
   IN CLUSTER schema_strategy_test_inline_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-schema-strategy-test-${testdrive.seed}')
+
+> CREATE TABLE schema_strategy_test_inline_tbl FROM SOURCE schema_strategy_test_inline (REFERENCE "testdrive-schema-strategy-test-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE STRATEGY INLINE '${reader-schema}'
   ENVELOPE NONE
 
-> SELECT * FROM schema_strategy_test_inline
+> SELECT * FROM schema_strategy_test_inline_tbl
 a
 ---
 0
@@ -49,11 +51,13 @@ a
 > CREATE SOURCE schema_strategy_test_id
   IN CLUSTER schema_strategy_test_id_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-schema-strategy-test-${testdrive.seed}')
+
+> CREATE TABLE schema_strategy_test_id_tbl FROM SOURCE schema_strategy_test_id (REFERENCE "testdrive-schema-strategy-test-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE STRATEGY ID ${id1}
   ENVELOPE NONE
 
-> SELECT * FROM schema_strategy_test_id
+> SELECT * FROM schema_strategy_test_id_tbl
 a b
 ---
 0 1
@@ -63,11 +67,13 @@ a b
 > CREATE SOURCE schema_strategy_test_id2
   IN CLUSTER schema_strategy_test_id2_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-schema-strategy-test-${testdrive.seed}')
+
+> CREATE TABLE schema_strategy_test_id2_tbl FROM SOURCE schema_strategy_test_id2 (REFERENCE "testdrive-schema-strategy-test-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE STRATEGY ID ${id2}
   ENVELOPE NONE
 
-> SELECT * FROM schema_strategy_test_id2
+> SELECT * FROM schema_strategy_test_id2_tbl
 a b c
 -----
 0 1 <null>
@@ -77,11 +83,13 @@ a b c
 > CREATE SOURCE schema_strategy_test_latest
   IN CLUSTER schema_strategy_test_latest_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-schema-strategy-test-${testdrive.seed}')
+
+> CREATE TABLE schema_strategy_test_latest_tbl FROM SOURCE schema_strategy_test_latest (REFERENCE "testdrive-schema-strategy-test-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE STRATEGY LATEST
   ENVELOPE NONE
 
-> SELECT * FROM schema_strategy_test_latest
+> SELECT * FROM schema_strategy_test_latest_tbl
 a b c
 -----
 0 1 <null>

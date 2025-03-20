@@ -1,0 +1,310 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Operator configuration for orchestrating Materialize
+operator:
+  image:
+    # -- The Docker repository for the operator image
+    repository: materialize/orchestratord
+    # -- The tag/version of the operator image to be used
+    tag: v0.138.0-dev.0
+    # -- Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images
+    pullPolicy: IfNotPresent
+
+
+  args:
+    # -- Log filtering settings for startup logs
+    startupLogFilter: "INFO,mz_orchestratord=TRACE"
+    enableInternalStatementLogging: true
+
+  features:
+    # -- Whether to enable environmentd rbac checks
+    # TODO: this is not yet supported in the helm chart
+    authentication: false
+
+  # Cloud provider configuration
+  cloudProvider:
+    # -- Specifies cloud provider. Valid values are 'aws', 'gcp', 'azure' , 'generic', or 'local'
+    type: "local"
+
+    # -- Common cloud provider settings
+    region: "kind"
+
+    # Provider-specific configurations
+    providers:
+      # AWS Configuration
+      aws:
+        enabled: false
+        # -- When using AWS, accountID is required
+        accountID: ""
+        iam:
+          roles:
+            # -- ARN of the IAM role for environmentd
+            environment: ""
+            # -- ARN for CREATE CONNECTION feature
+            connection: ""
+
+      # -- GCP Configuration (placeholder for future use)
+      gcp:
+        enabled: false
+        # TODO: Add any other additions for GCP-specific configurations
+
+  clusters:
+    # @ignored
+    sizes:
+      mz_probe:
+        workers: 1
+        scale: 1
+        cpu_exclusive: false
+        cpu_limit: 0.1
+        credits_per_hour: "0.00"
+        disk_limit: "1552MiB"
+        memory_limit: "776MiB"
+      25cc:
+        workers: 1
+        scale: 1
+        cpu_exclusive: false
+        cpu_limit: 0.5
+        credits_per_hour: "0.25"
+        disk_limit: "7762MiB"
+        memory_limit: "3881MiB"
+      50cc:
+        workers: 1
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 1
+        credits_per_hour: "0.5"
+        disk_limit: "15525MiB"
+        memory_limit: "7762MiB"
+      100cc:
+        workers: 2
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 2
+        credits_per_hour: "1"
+        disk_limit: "31050MiB"
+        memory_limit: "15525MiB"
+      200cc:
+        workers: 4
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 4
+        credits_per_hour: "2"
+        disk_limit: "62100MiB"
+        memory_limit: "31050MiB"
+      300cc:
+        workers: 6
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 6
+        credits_per_hour: "3"
+        disk_limit: "93150MiB"
+        memory_limit: "46575MiB"
+      400cc:
+        workers: 8
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 8
+        credits_per_hour: "4"
+        disk_limit: "124201MiB"
+        memory_limit: "62100MiB"
+      600cc:
+        workers: 12
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 12
+        credits_per_hour: "6"
+        disk_limit: "186301MiB"
+        memory_limit: "93150MiB"
+      800cc:
+        workers: 16
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 16
+        credits_per_hour: "8"
+        disk_limit: "248402MiB"
+        memory_limit: "124201MiB"
+      1200cc:
+        workers: 24
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 24
+        credits_per_hour: "12"
+        disk_limit: "372603MiB"
+        memory_limit: "186301MiB"
+      1600cc:
+        workers: 31
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 31
+        credits_per_hour: "16"
+        disk_limit: "481280MiB"
+        memory_limit: "240640MiB"
+      3200cc:
+        workers: 62
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 62
+        credits_per_hour: "32"
+        disk_limit: "962560MiB"
+        memory_limit: "481280MiB"
+      6400cc:
+        workers: 62
+        scale: 2
+        cpu_exclusive: true
+        cpu_limit: 62
+        credits_per_hour: "64"
+        disk_limit: "962560MiB"
+        memory_limit: "481280MiB"
+    defaultSizes:
+      default: 25cc
+      system: 25cc
+      probe: mz_probe
+      support: 25cc
+      catalogServer: 25cc
+      analytics: 25cc
+    defaultReplicationFactor:
+      system: 0
+      probe: 0
+      support: 0
+      analytics: 0
+
+  # Node selector to use for the operator pod
+  nodeSelector: {}
+  resources:
+    # -- Resources requested by the operator for CPU and memory
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    # -- Resource limits for the operator's CPU and memory
+    limits:
+      memory: 512Mi
+
+  # -- Which secrets controller to use for storing secrets.
+  # Valid values are 'kubernetes' and 'aws-secrets-manager'.
+  # Setting 'aws-secrets-manager' requires a configured AWS cloud provider
+  # and IAM role for the environment with Secrets Manager permissions.
+  secretsController: kubernetes
+
+environmentd:
+  # -- Node selector to use for environmentd pods spawned by the operator
+  nodeSelector: {}
+
+clusterd:
+  # -- Node selector to use for clusterd pods spawned by the operator
+  nodeSelector: {}
+
+balancerd:
+  # -- Flag to indicate whether to create balancerd pods for the environments
+  enabled: true
+  # -- Node selector to use for balancerd pods spawned by the operator
+  nodeSelector: {}
+
+console:
+  # -- Flag to indicate whether to create console pods for the environments
+  enabled: true
+  # -- Override the mapping of environmentd versions to console versions
+  imageTagMapOverride: {}
+  # -- Node selector to use for console pods spawned by the operator
+  nodeSelector: {}
+
+# RBAC (Role-Based Access Control) settings
+rbac:
+  # -- Whether to create necessary RBAC roles and bindings
+  create: true
+
+# -- Optionally use a non-default kubernetes scheduler.
+schedulerName:
+
+# Service account settings
+serviceAccount:
+  # -- Whether to create a new service account for the operator
+  create: true
+  # -- The name of the service account to be created
+  name: "orchestratord"
+
+# Observability settings (disabled in this case)
+observability:
+  # -- Whether to enable observability features
+  enabled: true
+  podMetrics:
+    # -- Whether to enable the pod metrics scraper which populates the
+    # Environment Overview Monitoring tab in the web console (requires
+    # metrics-server to be installed)
+    enabled: false
+  prometheus:
+    scrapeAnnotations:
+      # -- Whether to annotate pods with common keys used for prometheus scraping.
+      enabled: true
+
+telemetry:
+  enabled: true
+  segmentApiKey: hMWi3sZ17KFMjn2sPWo9UJGpOQqiba4A
+  segmentClientSide: true
+
+# Network policies configuration
+networkPolicies:
+  # -- Whether to enable network policies for securing communication between pods
+  enabled: false
+  # -- Whether to enable internal communication between Materialize pods
+  internal:
+    enabled: false
+  # -- Whether to enable ingress to the SQL and HTTP interfaces
+  # on environmentd or balancerd
+  ingress:
+    enabled: false
+    cidrs:
+    - 0.0.0.0/0
+  # -- egress from Materialize pods to sources and sinks
+  egress:
+    enabled: false
+    cidrs:
+    - 0.0.0.0/0
+
+tls:
+  defaultCertificateSpecs: {}
+    #balancerdExternal:
+    #  dnsNames:
+    #    - balancerd
+    #  issuerRef:
+    #    name: dns01
+    #    kind: ClusterIssuer
+    #consoleExternal:
+    #  dnsNames:
+    #    - console
+    #  issuerRef:
+    #    name: dns01
+    #    kind: ClusterIssuer
+    #internal:
+    #  issuerRef:
+    #    name: dns01
+    #    kind: ClusterIssuer
+
+# Storage configuration
+storage:
+  storageClass:
+    # -- Set to false to use an existing StorageClass instead.
+    # Refer to the [Kubernetes StorageClass documentation](https://kubernetes.io/docs/concepts/storage/storage-classes/)
+    create: false
+
+    # -- Name of the StorageClass to create/use: eg "openebs-lvm-instance-store-ext4"
+    name: ""
+
+    # -- CSI driver to use, eg "local.csi.openebs.io"
+    provisioner: ""
+
+    # -- Parameters for the CSI driver
+    parameters:
+      storage: "lvm"
+      fsType: "ext4"
+      volgroup: "instance-store-vg"
+
+    allowVolumeExpansion: false
+    reclaimPolicy: Delete
+    volumeBindingMode: WaitForFirstConsumer

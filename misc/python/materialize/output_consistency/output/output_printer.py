@@ -11,20 +11,34 @@ import sys
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
-from materialize.output_consistency.execution.test_summary import ConsistencyTestSummary
+from materialize.output_consistency.execution.query_output_mode import (
+    QueryOutputMode,
+)
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )
-from materialize.output_consistency.output.base_output_printer import BaseOutputPrinter
+from materialize.output_consistency.output.base_output_printer import (
+    BaseOutputPrinter,
+    OutputPrinterMode,
+)
 from materialize.output_consistency.output.reproduction_code_printer import (
     ReproductionCodePrinter,
 )
+from materialize.output_consistency.status.test_summary import ConsistencyTestSummary
 from materialize.output_consistency.validation.validation_message import ValidationError
 
 
 class OutputPrinter(BaseOutputPrinter):
-    def __init__(self, input_data: ConsistencyTestInputData):
-        self.reproduction_code_printer = ReproductionCodePrinter(input_data)
+    def __init__(
+        self,
+        input_data: ConsistencyTestInputData,
+        query_output_mode: QueryOutputMode,
+        print_mode: OutputPrinterMode = OutputPrinterMode.PRINT,
+    ):
+        super().__init__(print_mode=print_mode)
+        self.reproduction_code_printer = ReproductionCodePrinter(
+            input_data, query_output_mode
+        )
 
     def print_sql(self, sql: str) -> None:
         self._print_executable(sql)
@@ -44,6 +58,8 @@ class OutputPrinter(BaseOutputPrinter):
         self._print_text(summary.get())
         self.start_section("Operation and function statistics", collapsed=True)
         self._print_text(summary.get_function_and_operation_stats())
+        self.start_section("Used ignore entries", collapsed=True)
+        self._print_text(summary.format_used_ignore_entries())
 
     def print_status(self, status_message: str) -> None:
         self._print_text(status_message)

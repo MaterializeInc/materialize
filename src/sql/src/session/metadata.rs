@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::fmt::Debug;
+use std::net::IpAddr;
 
 use mz_adapter_types::connection::ConnectionId;
 use mz_repr::role_id::RoleId;
@@ -21,6 +22,8 @@ pub trait SessionMetadata: Debug + Sync {
     fn vars(&self) -> &SessionVars;
     /// Returns the connection ID associated with the session.
     fn conn_id(&self) -> &ConnectionId;
+    /// Returns the client address associated with the session.
+    fn client_ip(&self) -> Option<&IpAddr>;
     /// Returns the current transaction's PlanContext. Panics if there is not a
     /// current transaction.
     fn pcx(&self) -> &PlanContext;

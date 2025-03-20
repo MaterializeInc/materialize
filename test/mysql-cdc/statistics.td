@@ -17,8 +17,6 @@ ALTER SYSTEM SET storage_statistics_interval = 2000
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_mysql_source = true
 
 > CREATE CONNECTION mysqc TO MYSQL (
     HOST mysql,
@@ -38,7 +36,8 @@ INSERT INTO t1 VALUES ('one');
 
 > CREATE CLUSTER stats_cluster SIZE '${arg.default-replica-size}'
 
-> CREATE SOURCE mz_source IN CLUSTER stats_cluster FROM MYSQL CONNECTION mysqc FOR TABLES (public.t1);
+> CREATE SOURCE mz_source IN CLUSTER stats_cluster FROM MYSQL CONNECTION mysqc;
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
 
 > SELECT COUNT(*) > 0 FROM t1;
 true

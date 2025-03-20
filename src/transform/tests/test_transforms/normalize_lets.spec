@@ -60,14 +60,14 @@ With Mutually Recursive
     Filter #0 > 0
       Get t0
 ----
-Return
-  Union
-    Get l0
-    Get l0
 With
   cte l0 =
     Filter (#0 > 0)
       Get t0
+Return
+  Union
+    Get l0
+    Get l0
 
 # Promote non-recursive Let bindings up the tree.
 apply pipeline=normalize_lets
@@ -94,24 +94,24 @@ Project (#0, #2)
           Project (#1, #0)
             Get t0
 ----
-Return
-  Project (#0, #2)
-    CrossJoin
-      Get l2
-      Get l2
 With
-  cte l2 =
-    Union
-      Get l1
-      Get l1
+  cte l0 =
+    Project (#1, #0)
+      Get t0
   cte l1 =
     Project (#0, #3)
       CrossJoin
         Get l0
         Get l0
-  cte l0 =
-    Project (#1, #0)
-      Get t0
+  cte l2 =
+    Union
+      Get l1
+      Get l1
+Return
+  Project (#0, #2)
+    CrossJoin
+      Get l2
+      Get l2
 
 # Promote LetRec nodes up the tree.
 apply pipeline=normalize_lets
@@ -133,23 +133,23 @@ Map ("return_inner")
                 Get l0
               Get t0
 ----
-Return
-  Map ("return_inner")
-    Get l1
 With Mutually Recursive
   cte l1 =
-    Return
-      Filter (#0 < 100)
-        Union
-          Filter (#0 < 20)
-            Get l1
-          Get l0
     With Mutually Recursive
       cte l0 =
         Union
           Filter (#0 < 10)
             Get l0
           Get t0
+    Return
+      Filter (#0 < 100)
+        Union
+          Filter (#0 < 20)
+            Get l1
+          Get l0
+Return
+  Map ("return_inner")
+    Get l1
 
 # Don't inline Let bindings with multiple references.
 apply pipeline=normalize_lets
@@ -164,16 +164,16 @@ With
     Filter #0 > 0
       Get t0
 ----
+With
+  cte l0 =
+    Filter (#0 > 0)
+      Get t0
 Return
   Union
     Project (#1)
       Get l0
     Project (#0)
       Get l0
-With
-  cte l0 =
-    Filter (#0 > 0)
-      Get t0
 
 # Fuse an outer Let into an inner LetRec.
 apply pipeline=normalize_lets
@@ -196,21 +196,21 @@ With
     Map (null::bigint)
       Get t0
 ----
-Return
-  Return
-    Union
-      Get l2
-      Get l2
-  With
-    cte l2 =
-      Filter (#0 > 0)
-        Get l1
 With Mutually Recursive
+  cte l0 =
+    Map (null)
+      Get t0
   cte l1 =
     Union
       Get l0
       Get l0
       Get l1
-  cte l0 =
-    Map (null)
-      Get t0
+Return
+  With
+    cte l2 =
+      Filter (#0 > 0)
+        Get l1
+  Return
+    Union
+      Get l2
+      Get l2

@@ -54,7 +54,7 @@ user and set the transactional isolation to serializable on connection using
 
 ```bash
 # Using the options connection string parameter
-psql "postgres://<MZ_USER>@<MZ_HOST>:6875/materialize?sslmode=require&options=--cluster%3Dprod%20--transaction_isolation%3Dserializable
+psql "postgres://<MZ_USER>@<MZ_HOST>:6875/materialize?sslmode=require&options=--cluster%3Dprod%20--transaction_isolation%3Dserializable"
 ```
 
 ```bash
@@ -73,7 +73,7 @@ psql \
 
 {{< note >}}
 As we work on extending the coverage of `pg_catalog` in Materialize,
-some DataGrip features might not work as expected {{% gh 9720 %}}.
+some DataGrip features might not work as expected.
 {{< /note >}}
 
 To connect to Materialize using [DataGrip](https://www.jetbrains.com/help/datagrip/connecting-to-a-database.html),
@@ -101,7 +101,7 @@ automatically download and install the most recent version.
 #### Connect to a specific cluster
 
 By default, Materialize connects to the [pre-installed `default` cluster](/sql/show-clusters/#pre-installed-clusters).
-To connect to a specific [cluster](/get-started/key-concepts/#clusters), you must
+To connect to a specific [cluster](/concepts/clusters), you must
 define a bootstrap query in the connection initialization settings.
 
 <br>
@@ -113,7 +113,7 @@ define a bootstrap query in the connection initialization settings.
 1. Under **Bootstrap queries**, click **Configure** and add a new SQL query that
 sets the active cluster for the connection:
 
-    ```sql
+    ```mzsql
     SET cluster = other_cluster;
     ```
 
@@ -121,11 +121,26 @@ Alternatively, you can change the default value of the `cluster` configuration
 parameter for a specific user (i.e. role) using the [`ALTER
 ROLE...SET`](/sql/alter-role) command.
 
+#### Show system objects
+
+By default, DBeaver hides system catalog objects in the database explorer. This
+includes tables, views, and other objects in the `mz_catalog` and `mz_internal`
+schemas.
+
+To show system objects in the database explorer:
+
+1. Right-click on the database connection in the **Database Navigator**.
+1. Click on **Edit Connection**.
+1. In the **Connection settings** tab, select **General**.
+1. Next to the **Navigator view**, click **Customize**.
+1. In the **Navigator settings** dialog, check the **Show system objects** checkbox.
+1. Click **OK**.
+
 ### TablePlus
 
 {{< note >}}
 As we work on extending the coverage of `pg_catalog` in Materialize,
-some TablePlus features might not work as expected {{% gh 19891 %}}.
+some TablePlus features might not work as expected.
 {{< /note >}}
 
 To connect to Materialize using [TablePlus](https://tableplus.com/),
@@ -138,7 +153,7 @@ Materialize console.
 ### `psql`
 
 {{< warning >}}
-Not all features of `psql` are supported by Materialize yet, including some backslash meta-commands {{% gh 9721 %}}.
+Not all features of `psql` are supported by Materialize yet, including some backslash meta-commands.
 {{< /warning >}}
 
 {{< tabs >}}

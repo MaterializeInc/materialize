@@ -1,0 +1,100 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+package mz_expr.scalar.func.format;
+
+import "google/protobuf/empty.proto";
+
+message ProtoDateTimeFormat {
+  repeated ProtoDateTimeFormatNode nodes = 1;
+}
+
+message ProtoDateTimeFormatNode {
+  message ProtoField {
+    ProtoDateTimeField field = 1;
+    bool fill = 2;
+    ProtoOrdinalMode ordinal = 3;
+  }
+
+  oneof kind {
+    ProtoField field = 1;
+    uint32 literal = 2;
+  }
+}
+
+message ProtoDateTimeField {
+  message ProtoIndicator {
+    bool dots = 1;
+    bool caps = 2;
+  }
+
+  message ProtoName {
+    bool abbrev = 1;
+    ProtoWordCaps caps = 2;
+  }
+
+  message ProtoDayName {}
+
+  oneof kind {
+    google.protobuf.Empty hour12 = 1;
+    google.protobuf.Empty hour24 = 2;
+    google.protobuf.Empty minute = 3;
+    google.protobuf.Empty second = 4;
+    google.protobuf.Empty millisecond = 5;
+    google.protobuf.Empty microsecond = 6;
+    google.protobuf.Empty seconds_past_midnight = 7;
+    ProtoIndicator meridiem = 8;
+    google.protobuf.Empty year1 = 9;
+    google.protobuf.Empty year2 = 10;
+    google.protobuf.Empty year3 = 11;
+    bool year4 = 12;
+    google.protobuf.Empty iso_year1 = 13;
+    google.protobuf.Empty iso_year2 = 14;
+    google.protobuf.Empty iso_year3 = 15;
+    google.protobuf.Empty iso_year4 = 16;
+    ProtoIndicator era = 17;
+    ProtoName month_name = 18;
+    google.protobuf.Empty month_of_year = 19;
+    ProtoName day_name = 20;
+    google.protobuf.Empty day_of_week = 21;
+    google.protobuf.Empty iso_day_of_week = 22;
+    google.protobuf.Empty day_of_month = 23;
+    google.protobuf.Empty day_of_year = 24;
+    google.protobuf.Empty iso_day_of_year = 25;
+    google.protobuf.Empty week_of_month = 26;
+    google.protobuf.Empty week_of_year = 27;
+    google.protobuf.Empty iso_week_of_year = 28;
+    google.protobuf.Empty century = 29;
+    google.protobuf.Empty julian_day = 30;
+    google.protobuf.Empty quarter = 31;
+    bool month_in_roman_numerals = 32;
+    bool timezone = 33;
+    google.protobuf.Empty timezone_hours = 34;
+    google.protobuf.Empty timezone_minutes = 35;
+    google.protobuf.Empty timezone_offset = 36;
+  }
+}
+
+message ProtoWordCaps {
+  oneof kind {
+    google.protobuf.Empty all_caps = 1;
+    google.protobuf.Empty first_caps = 2;
+    google.protobuf.Empty no_caps = 3;
+  }
+}
+
+message ProtoOrdinalMode {
+  oneof kind {
+    google.protobuf.Empty none = 1;
+    google.protobuf.Empty lower = 2;
+    google.protobuf.Empty upper = 3;
+  }
+}

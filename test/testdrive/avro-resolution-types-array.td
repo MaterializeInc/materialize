@@ -31,14 +31,16 @@ $ kafka-ingest format=avro topic=resolution-arrays schema=${array-int} timestamp
 > CREATE SOURCE resolution_arrays
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-resolution-arrays-${testdrive.seed}')
+
+> CREATE TABLE resolution_arrays_tbl FROM SOURCE resolution_arrays (REFERENCE "testdrive-resolution-arrays-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
 $ kafka-ingest format=avro topic=resolution-arrays schema=${array-double} timestamp=2
 {"f1": [ 234.345 ] }
 
-! SELECT f1[0] FROM resolution_arrays
+! SELECT f1[0] FROM resolution_arrays_tbl
 contains:Writer schema has type `Double`, but reader schema has type `Int` for field `schema_array.f1`
 
-! SELECT f1[0] FROM resolution_arrays
+! SELECT f1[0] FROM resolution_arrays_tbl
 contains:failed to resolve Avro schema (id =

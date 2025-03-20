@@ -11,15 +11,17 @@
 
 use std::sync::Arc;
 
+use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
 use http::header::HOST;
 use http::HeaderValue;
-use hyper::client::HttpConnector;
 use hyper::Uri;
-use hyper::{Body, Client};
 use hyper_tls::HttpsConnector;
+use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::client::legacy::Client;
+use hyper_util::rt::TokioExecutor;
 
 pub(crate) struct ConsoleProxyConfig {
     /// Hyper http client, supports https.
@@ -39,7 +41,7 @@ impl ConsoleProxyConfig {
             url = new.to_string();
         }
         Self {
-            client: Client::builder().build(HttpsConnector::new()),
+            client: Client::builder(TokioExecutor::new()).build(HttpsConnector::new()),
             url,
             route_prefix,
         }

@@ -24,7 +24,10 @@ use crate::internal::metrics::Metrics;
 // In-memory cache for [Blob].
 #[derive(Debug)]
 pub struct BlobMemCache {
-    cfg: ConfigSet,
+    /// [`ConfigSet`] of dynamic configs.
+    cfg: Arc<ConfigSet>,
+    /// Number of 'workers' or threads in the current process, used for dynamic sizing.
+    num_workers: usize,
     metrics: Arc<Metrics>,
     cache: Mutex<lru::Lru<String, SegmentedBytes>>,
     blob: Arc<dyn Blob>,
@@ -32,23 +35,35 @@ pub struct BlobMemCache {
 
 pub(crate) const BLOB_CACHE_MEM_LIMIT_BYTES: Config<usize> = Config::new(
     "persist_blob_cache_mem_limit_bytes",
-    // This initial value was tuned via a one-time experiment that showed an
-    // environment running our demo "auction" source + mv got 90%+ cache hits
-    // with a 1 MiB cache. This doesn't scale up to prod data sizes and doesn't
-    // help with multi-process replicas, but the memory usage seems
-    // unobjectionable enough to have it for the cases that it does help.
-    1024 * 1024,
+    // 128MiB
+    128 * 1024 * 1024,
     "Capacity of in-mem blob cache in bytes (Materialize).",
+);
+
+pub(crate) const BLOB_CACHE_SCALE_WITH_THREADS: Config<bool> = Config::new(
+    "persist_blob_cache_scale_with_threads",
+    false,
+    "Whether or not the size of the in-mem blob cache scales with the number of threads in the current process (Materialize).",
+);
+
+pub(crate) const BLOB_CACHE_SCALE_FACTOR_BYTES: Config<usize> = Config::new(
+    "persist_blob_cache_scale_factor_bytes",
+    // 32MiB
+    32 * 1024 * 1024,
+    "Scale factor for the in-mem blob cache, in bytes, if scaling with threads (Materialize).",
 );
 
 impl BlobMemCache {
     pub fn new(cfg: &PersistConfig, metrics: Arc<Metrics>, blob: Arc<dyn Blob>) -> Arc<dyn Blob> {
         let eviction_metrics = Arc::clone(&metrics);
-        let cache = lru::Lru::new(BLOB_CACHE_MEM_LIMIT_BYTES.get(cfg), move |_, _, _| {
+        let capacity_bytes =
+            BlobMemCache::get_capacity_bytes(&cfg.configs, cfg.isolated_runtime_worker_threads);
+        let cache = lru::Lru::new(capacity_bytes, move |_, _, _| {
             eviction_metrics.blob_cache_mem.evictions.inc()
         });
         let blob = BlobMemCache {
-            cfg: cfg.configs.clone(),
+            cfg: Arc::clone(&cfg.configs),
+            num_workers: cfg.isolated_runtime_worker_threads,
             metrics,
             cache: Mutex::new(cache),
             blob,
@@ -57,7 +72,8 @@ impl BlobMemCache {
     }
 
     fn resize_and_update_size_metrics(&self, cache: &mut lru::Lru<String, SegmentedBytes>) {
-        cache.update_capacity(BLOB_CACHE_MEM_LIMIT_BYTES.get(&self.cfg));
+        let capacity_bytes = BlobMemCache::get_capacity_bytes(&self.cfg, self.num_workers);
+        cache.update_capacity(capacity_bytes);
         self.metrics
             .blob_cache_mem
             .size_blobs
@@ -66,6 +82,20 @@ impl BlobMemCache {
             .blob_cache_mem
             .size_bytes
             .set(u64::cast_from(cache.entry_weight()));
+    }
+
+    fn get_capacity_bytes(cfg: &Arc<ConfigSet>, num_workers: usize) -> usize {
+        // Note(parkmycar): To prevent regressing the size of the cache in
+        // small processes we use the static size as a minimum.
+        let static_size = BLOB_CACHE_MEM_LIMIT_BYTES.get(cfg);
+
+        if BLOB_CACHE_SCALE_WITH_THREADS.get(cfg) {
+            let per_thread_const = BLOB_CACHE_SCALE_FACTOR_BYTES.get(cfg);
+            let dynamic_size = num_workers.saturating_mul(per_thread_const);
+            std::cmp::max(dynamic_size, static_size)
+        } else {
+            static_size
+        }
     }
 }
 
@@ -379,6 +409,7 @@ mod lru {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_none;
     use proptest::arbitrary::any;
     use proptest::proptest;
     use proptest_derive::Arbitrary;
@@ -491,7 +522,7 @@ mod tests {
         assert_eq!(cache.keys(), &["e", "d"]);
 
         // Remove a non-existent element.
-        assert!(cache.remove("f").is_none());
+        assert_none!(cache.remove("f"));
         assert_eq!(cache.entry_count(), 2);
         assert_eq!(cache.entry_weight(), 2);
         assert_eq!(cache.keys(), &["e", "d"]);

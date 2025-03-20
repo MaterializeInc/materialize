@@ -7,16 +7,24 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Introduce a second Mz instance while a concurrent workload is running for the
+purpose of exercising fencing.
+"""
+
+import argparse
 import random
 import time
 from concurrent import futures
 from dataclasses import dataclass
 from enum import Enum
 
-from materialize.mzcompose.composition import Composition
-from materialize.mzcompose.services.cockroach import Cockroach
+from materialize import buildkite
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.azure import Azurite
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
 
 
 class Operation(Enum):
@@ -81,17 +89,27 @@ WORKLOADS = [
 
 SERVICES = [
     Minio(setup_materialize=True),
-    Cockroach(setup_materialize=True),
+    Azurite(),
+    CockroachOrPostgresMetadata(),
     # Overriden below
     Materialized(name="mz_first"),
     Materialized(name="mz_second"),
 ]
 
 
-def workflow_default(c: Composition) -> None:
-    """Introduce a second Mz instance while a concurrent workload is running for the purpose of exercising fencing."""
-    for workload in WORKLOADS:
-        run_workload(c, workload)
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument(
+        "--azurite", action="store_true", help="Use Azurite as blob store instead of S3"
+    )
+    args = parser.parse_args()
+
+    workloads = buildkite.shard_list(WORKLOADS, lambda w: w.name)
+    print(
+        f"Workloads in shard with index {buildkite.get_parallelism_index()}: {[w.name for w in workloads]}"
+    )
+
+    for workload in workloads:
+        run_workload(c, workload, args)
 
 
 def execute_operation(
@@ -124,26 +142,26 @@ def execute_operation(
                 cursor.execute("BEGIN")
                 for i in range(transaction_size):
                     cursor.execute(
-                        f"INSERT INTO table{table_id} VALUES ({id}, {i}, '{mz_service}')"
+                        f"INSERT INTO table{table_id} VALUES ({id}, {i}, '{mz_service}')".encode()
                     )
                 cursor.execute("COMMIT")
             else:
                 cursor.execute(
-                    f"INSERT INTO table{table_id} VALUES ({id}, 0, '{mz_service}')"
+                    f"INSERT INTO table{table_id} VALUES ({id}, 0, '{mz_service}')".encode()
                 )
         except Exception as e:
             str_e = str(e)
             if "running docker compose failed" in str_e:
                 # The query targeted a Mz container that is not up
                 return None
-            elif "network error" in str_e:
+            elif "server closed the connection unexpectedly" in str_e:
                 # Container died while query was in progress
                 return None
-            elif "Can't create a connection to host" in str_e:
+            elif "Connection refused" in str_e:
                 # Container died before the SQL connection was established
                 return None
             else:
-                assert False, f"unexpected exception: {e}"
+                raise RuntimeError(f"unexpected exception: {e}")
 
         # No error, so we assume the INSERT successfully committed
         return SuccessfulCommit(
@@ -151,12 +169,12 @@ def execute_operation(
         )
 
 
-def run_workload(c: Composition, workload: Workload) -> None:
+def run_workload(c: Composition, workload: Workload, args: argparse.Namespace) -> None:
     print(f"+++ Running workload {workload.name} ...")
     c.silent = True
 
     c.down(destroy_volumes=True)
-    c.up("minio", "cockroach")
+    c.up(c.metadata_store())
 
     mzs = {
         "mz_first": workload.txn_wal_first,
@@ -167,12 +185,10 @@ def run_workload(c: Composition, workload: Workload) -> None:
         *[
             Materialized(
                 name=mz_name,
-                external_cockroach=True,
-                external_minio=True,
+                external_metadata_store=True,
+                external_blob_store=True,
+                blob_store_is_azure=args.azurite,
                 sanity_restart=False,
-                additional_system_parameter_defaults={
-                    "persist_txn_tables": mzs[mz_name]
-                },
             )
             for mz_name in mzs
         ]
@@ -232,6 +248,7 @@ def run_workload(c: Composition, workload: Workload) -> None:
             "unable to confirm leadership" in mz_first_log.stdout
             or "unexpected fence epoch" in mz_first_log.stdout
             or "fenced by new catalog upper" in mz_first_log.stdout
+            or "fenced by envd" in mz_first_log.stdout
         )
 
         print("+++ Verifying committed transactions ...")
@@ -246,7 +263,7 @@ def run_workload(c: Composition, workload: Workload) -> None:
                     FROM {target}{commit.table_id}
                     WHERE id = {commit.row_id}
                     GROUP BY id
-                    """
+                    """.encode()
                 )
                 result = cursor.fetchall()
                 assert len(result) == 1

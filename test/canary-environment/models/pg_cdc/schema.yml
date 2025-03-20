@@ -14,16 +14,16 @@ sources:
     schema: public_pg_cdc
     tables:
       - name: pg_cdc_progress
-        tests:
+        data_tests:
           - makes_progress
-      - name: people
-        tests:
+      - name: pg_people
+        data_tests:
           - makes_progress
-      - name: relationships
-        tests:
+      - name: pg_relationships
+        data_tests:
           - makes_progress
 
 models:
-    - name: wmr
-      tests:
+    - name: pg_wmr
+      data_tests:
         - makes_progress

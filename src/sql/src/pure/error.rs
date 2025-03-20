@@ -12,7 +12,7 @@ use std::sync::Arc;
 use mz_ccsr::ListError;
 use mz_repr::adt::system::Oid;
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{ReferencedSubsources, UnresolvedItemName};
+use mz_sql_parser::ast::{ExternalReferences, UnresolvedItemName};
 use mz_storage_types::errors::{ContextCreationError, CsrConnectError};
 
 use crate::names::{FullItemName, PartialItemName};
@@ -22,6 +22,8 @@ use crate::names::{FullItemName, PartialItemName};
 pub enum PgSourcePurificationError {
     #[error("CREATE SOURCE specifies DETAILS option")]
     UserSpecifiedDetails,
+    #[error("{0} option is unnecessary when no tables are added")]
+    UnnecessaryOptionsWithoutReferences(String),
     #[error("PUBLICATION {0} is empty")]
     EmptyPublication(String),
     #[error("database {database} missing referenced schemas")]
@@ -30,7 +32,7 @@ pub enum PgSourcePurificationError {
         schemas: Vec<String>,
     },
     #[error("missing TABLES specification")]
-    RequiresReferencedSubsources,
+    RequiresExternalReferences,
     #[error("insufficient privileges")]
     UserLacksUsageOnSchemas { user: String, schemas: Vec<String> },
     #[error("insufficient privileges")]
@@ -43,7 +45,9 @@ pub enum PgSourcePurificationError {
     UnrecognizedTypes { cols: Vec<(String, Oid)> },
     #[error("{0} is not a POSTGRES CONNECTION")]
     NotPgConnection(FullItemName),
-    #[error("POSTGRES CONNECTION must specify PUBLICATION")]
+    #[error("{0} is not a YUGABYTE CONNECTION")]
+    NotYugabyteConnection(FullItemName),
+    #[error("CONNECTION must specify PUBLICATION")]
     ConnectionMissingPublication,
     #[error("PostgreSQL server has insufficient number of replication slots available")]
     InsufficientReplicationSlotsAvailable { count: usize },
@@ -105,7 +109,7 @@ impl PgSourcePurificationError {
                 "If trying to use the output of SHOW CREATE SOURCE, remove the DETAILS option."
                     .into(),
             ),
-            Self::RequiresReferencedSubsources => {
+            Self::RequiresExternalReferences => {
                 Some("provide a FOR TABLES (..), FOR SCHEMAS (..), or FOR ALL TABLES clause".into())
             }
             Self::UnrecognizedTypes {
@@ -119,6 +123,10 @@ impl PgSourcePurificationError {
                 "you might be able to wait for other sources to finish snapshotting and try again".into()
             ),
             Self::ReplicationDisabled => Some("set max_wal_senders to a value > 0".into()),
+            Self::UnnecessaryOptionsWithoutReferences(option) => Some(format!(
+                "Remove the {} option, as no tables are being added.",
+                option
+            )),
             _ => None,
         }
     }
@@ -128,13 +136,15 @@ impl PgSourcePurificationError {
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum KafkaSourcePurificationError {
     #[error("{} is only valid for multi-output sources", .0.to_ast_string())]
-    ReferencedSubsources(ReferencedSubsources),
+    ReferencedSubsources(ExternalReferences),
     #[error("KAFKA CONNECTION without TOPIC")]
     ConnectionMissingTopic,
     #[error("{0} is not a KAFKA CONNECTION")]
     NotKafkaConnection(FullItemName),
     #[error("failed to create and connect Kafka consumer")]
     KafkaConsumerError(String),
+    #[error("Referenced kafka connection uses a different topic '{0}' than specified: '{1}'")]
+    WrongKafkaTopic(String, UnresolvedItemName),
 }
 
 impl KafkaSourcePurificationError {
@@ -161,6 +171,10 @@ pub enum LoadGeneratorSourcePurificationError {
     ForTables,
     #[error("multi-output sources require a FOR TABLES (..) or FOR ALL TABLES statement")]
     MultiOutputRequiresForAllTables,
+    #[error("multi-output sources require an external reference")]
+    MultiOutputRequiresExternalReference,
+    #[error("Referenced load generator is different '{0}' than specified: '{1}'")]
+    WrongLoadGenerator(String, UnresolvedItemName),
 }
 
 impl LoadGeneratorSourcePurificationError {
@@ -235,6 +249,8 @@ pub enum MySqlSourcePurificationError {
     UserLacksPrivileges(Vec<(String, String)>),
     #[error("CREATE SOURCE specifies DETAILS option")]
     UserSpecifiedDetails,
+    #[error("{0} option is unnecessary when no tables are added")]
+    UnnecessaryOptionsWithoutReferences(String),
     #[error("{0} is not a MYSQL CONNECTION")]
     NotMySqlConnection(FullItemName),
     #[error("Invalid MySQL system replication settings")]
@@ -243,14 +259,17 @@ pub enum MySqlSourcePurificationError {
     UnrecognizedTypes { cols: Vec<(String, String, String)> },
     #[error("duplicated column name references in table {0}: {1:?}")]
     DuplicatedColumnNames(String, Vec<String>),
-    #[error("Reference to columns not currently being added")]
-    DanglingColumns { items: Vec<UnresolvedItemName> },
+    #[error("{option_name} refers to table not currently being added")]
+    DanglingColumns {
+        option_name: String,
+        items: Vec<UnresolvedItemName>,
+    },
     #[error("Invalid MySQL table reference: {0}")]
     InvalidTableReference(String),
-    #[error("No tables found")]
+    #[error("No tables found for provided reference")]
     EmptyDatabase,
     #[error("missing TABLES specification")]
-    RequiresReferencedSubsources,
+    RequiresExternalReferences,
     #[error("No tables found in referenced schemas")]
     NoTablesFoundForSchemas(Vec<String>),
 }
@@ -267,7 +286,10 @@ impl MySqlSourcePurificationError {
                     ", "
                 )
             )),
-            Self::DanglingColumns { items } => Some(format!(
+            Self::DanglingColumns {
+                option_name: _,
+                items,
+            } => Some(format!(
                 "the following columns are referenced but not added: {}",
                 itertools::join(items, ", ")
             )),
@@ -308,7 +330,7 @@ impl MySqlSourcePurificationError {
             Self::ReplicationSettingsError(_) => {
                 Some("Set the necessary MySQL database system settings.".into())
             }
-            Self::RequiresReferencedSubsources => {
+            Self::RequiresExternalReferences => {
                 Some("provide a FOR TABLES (..), FOR SCHEMAS (..), or FOR ALL TABLES clause".into())
             }
             Self::InvalidTableReference(_) => Some(
@@ -316,7 +338,7 @@ impl MySqlSourcePurificationError {
             ),
             Self::UnrecognizedTypes { cols: _ } => Some(
                 "Check the docs -- some types can be supported using the TEXT COLUMNS option to \
-                ingest their values as text, or ignored using IGNORE COLUMNS."
+                ingest their values as text, or ignored using EXCLUDE COLUMNS."
                     .into(),
             ),
             Self::EmptyDatabase => Some(
@@ -324,6 +346,10 @@ impl MySqlSourcePurificationError {
                 the user does not have privileges on the intended tables."
                     .into(),
             ),
+            Self::UnnecessaryOptionsWithoutReferences(option) => Some(format!(
+                "Remove the {} option, as no tables are being added.",
+                option
+            )),
             _ => None,
         }
     }

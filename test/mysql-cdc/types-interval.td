@@ -9,8 +9,6 @@
 
 # MySQL specifies that pg type INTERVAL is mapped to TIME in MySQL.
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_mysql_source = true
 
 #
 # Test the INTERVAL type
@@ -35,9 +33,9 @@ CREATE TABLE t1 (f1 TIME(6));
 
 INSERT INTO t1 VALUES (TIME '23:59:59')
 
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
 
 > SELECT COUNT(*) > 0 FROM t1;
 true
@@ -67,9 +65,9 @@ contains: error decoding value
 
 > DROP SOURCE mz_source CASCADE;
 
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
 
 ! SELECT * FROM t1;
 contains: error decoding value

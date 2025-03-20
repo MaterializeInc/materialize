@@ -48,7 +48,7 @@ class TypedVersionBase(Version):
 
     @classmethod
     def parse(cls: type[T], version: str, drop_dev_suffix: bool = False) -> T:
-        """Parses a version string with prefix, for example: v0.45.0-dev (f01773cb1)"""
+        """Parses a version string with prefix, for example: v0.45.0-dev (f01773cb1) or v0.115.0-dev.0"""
         expected_prefix = cls.get_prefix()
         if not version.startswith(expected_prefix):
             raise ValueError(
@@ -62,7 +62,7 @@ class TypedVersionBase(Version):
             # Hash ignored
 
         if drop_dev_suffix:
-            version = version.replace("-dev", "")
+            version, _, _ = version.partition("-dev")
 
         return super().parse(version)
 
@@ -86,6 +86,9 @@ class TypedVersionBase(Version):
     def __str__(self) -> str:
         return f"{self.get_prefix()}{self.str_without_prefix()}"
 
+    def is_dev_version(self) -> bool:
+        return self.prerelease is not None
+
 
 class MzVersion(TypedVersionBase):
     """Version of Materialize, can be parsed from version string, SQL, cargo"""
@@ -96,7 +99,7 @@ class MzVersion(TypedVersionBase):
 
     @classmethod
     def parse_mz(cls: type[T], version: str, drop_dev_suffix: bool = False) -> T:
-        """Parses a version string with prefix, for example: v0.45.0-dev (f01773cb1)"""
+        """Parses a version string with prefix, for example: v0.45.0-dev (f01773cb1) or v0.115.0-dev.0"""
         return cls.parse(version=version, drop_dev_suffix=drop_dev_suffix)
 
     @classmethod

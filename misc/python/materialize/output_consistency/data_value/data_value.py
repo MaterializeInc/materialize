@@ -9,6 +9,9 @@
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.data_value.source_column_identifier import (
+    SourceColumnIdentifier,
+)
 from materialize.output_consistency.execution.sql_dialect_adjuster import (
     SqlDialectAdjuster,
 )
@@ -20,7 +23,8 @@ from materialize.output_consistency.expression.expression_characteristics import
     ExpressionCharacteristics,
 )
 from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
-from materialize.output_consistency.selection.selection import DataRowSelection
+from materialize.output_consistency.query.data_source import DataSource
+from materialize.output_consistency.selection.row_selection import DataRowSelection
 
 
 class DataValue(LeafExpression):
@@ -32,7 +36,8 @@ class DataValue(LeafExpression):
         data_type: DataType,
         value_identifier: str,
         characteristics: set[ExpressionCharacteristics],
-        is_postgres_compatible: bool = True,
+        is_null_value: bool,
+        is_pg_compatible: bool = True,
     ):
         column_name = (
             f"{data_type.internal_identifier.lower()}_{value_identifier.lower()}"
@@ -42,11 +47,14 @@ class DataValue(LeafExpression):
             data_type,
             characteristics,
             ValueStorageLayout.HORIZONTAL,
-            False,
-            False,
+            data_source=DataSource(table_index=None),
+            is_aggregate=False,
+            is_expect_error=False,
         )
         self.value = value
-        self.is_postgres_compatible = is_postgres_compatible
+        self.vertical_table_indices: set[int] = set()
+        self.is_null_value = is_null_value
+        self.is_pg_compatible = is_pg_compatible
 
     def resolve_return_type_spec(self) -> ReturnTypeSpec:
         return self.data_type.resolve_return_type_spec(self.own_characteristics)
@@ -61,6 +69,14 @@ class DataValue(LeafExpression):
         self, row_selection: DataRowSelection
     ) -> set[ExpressionCharacteristics]:
         return self.own_characteristics
+
+    def collect_vertical_table_indices(self) -> set[int]:
+        return self.vertical_table_indices
+
+    def get_source_column_identifier(self) -> SourceColumnIdentifier:
+        source_column_identifier = super().get_source_column_identifier()
+        assert source_column_identifier is not None
+        return source_column_identifier
 
     def __str__(self) -> str:
         return f"DataValue (column='{self.column_name}', value={self.value}, type={self.data_type})"

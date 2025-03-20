@@ -10,13 +10,19 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-indexes.svg" >}}
+```mzsql
+SHOW INDEXES [ FROM <schema_name> | ON <object_name> ]
+[ IN CLUSTER <cluster_name> ]
+[ LIKE <pattern> | WHERE <condition(s)> ]
+```
 
-Field | Use
-------|-----
-_schema&lowbar;name_ | The schema to show objects from. Defaults to first resolvable schema in the search path if neither `on_name` nor `cluster_name` are specified. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
-_on&lowbar;name_ | The name of the object whose indexes you want to show. If omitted, all indexes in the schema are shown.
-_cluster&lowbar;name_ | The cluster to show indexes from. If omitted, indexes from all clusters are shown.
+Option                        | Description
+------------------------------|------------
+**FROM** <schema_name>        | If specified, only show indexes from the specified schema. Defaults to first resolvable schema in the search path if neither `ON <object_name>` nor `IN CLUSTER <cluster_name>` are specified. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+**ON** <object_name>          | If specified, only show indexes for the specified object.
+**IN CLUSTER** <cluster_name> | If specified, only show indexes from the specified cluster.
+**LIKE** \<pattern\>          | If specified, only show indexes that match the pattern.
+**WHERE** <condition(s)>      | If specified, only show indexes that match the condition(s).
 
 ## Details
 
@@ -34,12 +40,12 @@ Field | Meaning
 ------|--------
 **name** | The name of the index.
 **on** | The name of the table, source, or view the index belongs to.
-**cluster** | The name of the [cluster](/get-started/key-concepts/#clusters) containing the index.
+**cluster** | The name of the [cluster](/concepts/clusters/) containing the index.
 **key** | A text array describing the expressions in the index key.
 
 ## Examples
 
-```sql
+```mzsql
 SHOW VIEWS;
 ```
 ```nofmt
@@ -49,7 +55,7 @@ SHOW VIEWS;
  my_materialized_view
 ```
 
-```sql
+```mzsql
 SHOW INDEXES ON my_materialized_view;
 ```
 ```nofmt

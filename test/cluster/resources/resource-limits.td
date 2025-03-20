@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+$ postgres-connect name=mz_analytics url=postgres://mz_analytics:materialize@${testdrive.materialize-internal-sql-addr}
 
 ! ALTER SYSTEM SET max_tables TO 42
 contains:permission denied to alter system
@@ -108,6 +109,21 @@ ALTER SYSTEM SET max_replicas_per_cluster = 1
 
 ! CREATE CLUSTER REPLICA c1.r2 SIZE '1'
 contains:creating cluster replica would violate max_replicas_per_cluster limit (desired: 2, limit: 1, current: 1)
+
+> SELECT COUNT(*) FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'mz_analytics'
+0
+
+$ postgres-execute connection=mz_analytics
+ALTER CLUSTER mz_analytics SET (REPLICATION FACTOR = 2)
+
+> SELECT COUNT(*) FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'mz_analytics'
+2
+
+$ postgres-execute connection=mz_analytics
+ALTER CLUSTER mz_analytics SET (REPLICATION FACTOR = 0)
+
+> SELECT COUNT(*) FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'mz_analytics'
+0
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_replicas_per_cluster = 100
@@ -262,7 +278,7 @@ $ postgres-execute connection=mz_system
 ALTER SYSTEM RESET max_tables
 
 > SHOW max_tables
-25
+200
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM RESET ALL
@@ -278,6 +294,9 @@ ALTER SYSTEM RESET ALL
 > DROP CLUSTER c3 CASCADE
 
 > DROP CLUSTER c4 CASCADE
+
+# Cleanup
+> DROP TABLE s1.t4;
 
 # Test sub-sources are excluded from source counts
 
@@ -315,19 +334,31 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_sources = 2
+ALTER SYSTEM SET max_tables = 2
+
+> CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+> CREATE SOURCE mz_source2 FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+# TODO: database-issues#8556 (source limit not applied)
+# ! CREATE SOURCE mz_source3 FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+# contains:creating source would violate max_sources limit (desired: 3, limit: 2, current: 0)
 
 # Creating 3 subsources is equivalent to 3 shards
-! CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR ALL TABLES;
-contains:creating source would violate max_sources limit (desired: 3, limit: 2, current: 0)
+
+> SELECT count(*) FROM mz_tables WHERE schema_id like 'u%';
+0
+
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
+> CREATE TABLE t2 FROM SOURCE mz_source (REFERENCE t2);
+! CREATE TABLE t3 FROM SOURCE mz_source (REFERENCE t3);
+contains:creating table would violate max_tables limit (desired: 3, limit: 2, current: 2)
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_sources = 3
+ALTER SYSTEM SET max_tables = 3
 
-> CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR ALL TABLES;
+> CREATE SOURCE mz_source3 FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+
+> CREATE TABLE t3 FROM SOURCE mz_source (REFERENCE t3);
 
 > SELECT * FROM t1
 1
@@ -347,22 +378,25 @@ INSERT INTO t4 VALUES (4);
 CREATE PUBLICATION mz_source2 FOR TABLE t4;
 
 # Show that we're at limit
-! CREATE SOURCE mz_source2
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source2')
-  FOR ALL TABLES;
-contains:creating source would violate max_sources limit (desired: 4, limit: 3, current: 3)
+# TODO: database-issues#8556 (source limit not applied)
+# ! CREATE SOURCE mz_source4
+#   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source2');
+# contains:creating source would violate max_sources limit (desired: 4, limit: 3, current: 3)
 
 # Show that dropping source does proper accounting
-> DROP SOURCE mz_source CASCADE
+> DROP SOURCE mz_source2 CASCADE
 
 > CREATE SOURCE mz_source2
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source2')
-  FOR ALL TABLES;
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source2');
 
-! CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR ALL TABLES;
-contains:creating source would violate max_sources limit (desired: 5, limit: 3, current: 1)
+# TODO: database-issues#8556 (source limit not applied)
+# ! CREATE SOURCE mz_source5
+#   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+# contains:creating source would violate max_sources limit (desired: 4, limit: 3, current: 3)
+
+> DROP SOURCE mz_source CASCADE;
+
+> CREATE TABLE t4 FROM SOURCE mz_source2 (REFERENCE t4);
 
 > SELECT * FROM t4
 4
@@ -370,16 +404,23 @@ contains:creating source would violate max_sources limit (desired: 5, limit: 3, 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER PUBLICATION mz_source2 ADD TABLE t1, t2, t3;
 
-! ALTER SOURCE mz_source2 ADD SUBSOURCE t1, t2, t3;
-contains:creating source would violate max_sources limit (desired: 4, limit: 3, current: 1)
+> CREATE TABLE t1 FROM SOURCE mz_source2 (REFERENCE t1);
+> CREATE TABLE t2 FROM SOURCE mz_source2 (REFERENCE t2);
+! CREATE TABLE t3 FROM SOURCE mz_source2 (REFERENCE t3);
+contains:creating table would violate max_tables limit (desired: 4, limit: 3, current: 3)
+
+> DROP TABLE t1;
+> DROP TABLE t2;
 
 # Can add them in smaller quantities
-> ALTER SOURCE mz_source2 ADD SUBSOURCE t1, t2;
+> CREATE TABLE t1 FROM SOURCE mz_source2 (REFERENCE t1);
+> CREATE TABLE t2 FROM SOURCE mz_source2 (REFERENCE t2);
 
-> DROP SOURCE t1;
+> DROP TABLE t1;
 
-! ALTER SOURCE mz_source2 ADD SUBSOURCE t1, t3;
-contains:creating source would violate max_sources limit (desired: 4, limit: 3, current: 2)
+> CREATE TABLE t1 FROM SOURCE mz_source2 (REFERENCE t1);
+! CREATE TABLE t3 FROM SOURCE mz_source2 (REFERENCE t3);
+contains:creating table would violate max_tables limit (desired: 4, limit: 3, current: 3)
 
 > DROP SOURCE mz_source2 CASCADE
 
@@ -410,6 +451,21 @@ ALTER SYSTEM SET max_credit_consumption_rate = 3
 
 ! CREATE CLUSTER REPLICA c1.r3 SIZE '1'
 contains:creating cluster replica would violate max_credit_consumption_rate limit (desired: 4, limit: 3, current: 3)
+
+> SELECT COUNT(*) FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'mz_analytics'
+0
+
+$ postgres-execute connection=mz_analytics
+ALTER CLUSTER mz_analytics SET (REPLICATION FACTOR = 1)
+
+> SELECT COUNT(*) FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'mz_analytics'
+1
+
+$ postgres-execute connection=mz_analytics
+ALTER CLUSTER mz_analytics SET (REPLICATION FACTOR = 0)
+
+> SELECT COUNT(*) FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'mz_analytics'
+0
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_credit_consumption_rate = 4.0

@@ -38,12 +38,16 @@ use crate::TransformCtx;
 pub struct CanonicalizeMfp;
 
 impl crate::Transform for CanonicalizeMfp {
+    fn name(&self) -> &'static str {
+        "CanonicalizeMfp"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "canonicalize_mfp")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
@@ -55,7 +59,7 @@ impl crate::Transform for CanonicalizeMfp {
 }
 
 impl CanonicalizeMfp {
-    /// Extract and optimzie MFPs.
+    /// Extract and optimize MFPs.
     pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
         let mut mfp = MapFilterProject::extract_non_errors_from_expr_mut(relation);
         // Optimize MFP, e.g., perform CSE Push MFPs through `Negate` operators,

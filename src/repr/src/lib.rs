@@ -32,10 +32,12 @@ mod scalar;
 pub mod adt;
 pub mod antichain;
 pub mod bytes;
+pub mod catalog_item_id;
 pub mod explain;
 pub mod fixed_length;
 pub mod global_id;
 pub mod namespaces;
+pub mod network_policy_id;
 pub mod optimize;
 pub mod refresh_schedule;
 pub mod role_id;
@@ -45,18 +47,17 @@ pub mod timestamp;
 pub mod url;
 pub mod user;
 
+pub use crate::catalog_item_id::CatalogItemId;
 pub use crate::datum_vec::{DatumVec, DatumVecBorrow};
 pub use crate::diff::Diff;
 pub use crate::global_id::GlobalId;
 pub use crate::relation::{
-    ColumnName, ColumnType, NotNullViolation, ProtoColumnName, ProtoColumnType, ProtoRelationDesc,
-    ProtoRelationType, RelationDesc, RelationType,
+    arb_relation_desc_diff, arb_relation_desc_projection, arb_row_for_relation, ColumnIndex,
+    ColumnName, ColumnType, NotNullViolation, PropRelationDescDiff, ProtoColumnName,
+    ProtoColumnType, ProtoRelationDesc, ProtoRelationType, RelationDesc, RelationDescBuilder,
+    RelationType, RelationVersion, RelationVersionSelector, VersionedRelationDesc,
 };
-pub use crate::row::collection::{ProtoRowCollection, RowCollection, SortedRowCollectionIter};
-pub use crate::row::encoding::{
-    DatumDecoderT, DatumEncoderT, DatumToPersist, DatumToPersistFn, RowDecoder, RowEncoder,
-};
-pub use crate::row::encoding2::{RowColumnarDecoder, RowColumnarEncoder};
+pub use crate::row::encode::{preserves_order, RowColumnarDecoder, RowColumnarEncoder};
 pub use crate::row::iter::{IntoRowIterator, RowIterator};
 pub use crate::row::{
     datum_list_size, datum_size, datums_size, read_datum, row_size, DatumList, DatumMap,

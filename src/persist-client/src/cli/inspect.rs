@@ -12,17 +12,20 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::pin::pin;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
-use bytes::BufMut;
+use bytes::{BufMut, Bytes};
 use differential_dataflow::difference::{IsZero, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use futures_util::{StreamExt, TryStreamExt};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_ore::url::SensitiveUrl;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist_types::codec_impls::TodoSchema;
 use mz_persist_types::{Codec, Codec64, Opaque};
@@ -34,7 +37,7 @@ use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
 use crate::cli::args::{make_blob, make_consensus, StateArgs, NO_COMMIT, READ_ALL_BUILD_INFO};
 use crate::error::CodecConcreteType;
-use crate::fetch::{Cursor, EncodedPart};
+use crate::fetch::EncodedPart;
 use crate::internal::encoding::{Rollup, UntypedState};
 use crate::internal::paths::{
     BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey, WriterKey,
@@ -294,7 +297,7 @@ pub struct BlobBatchPartArgs {
     /// place. e.g. for S3, sign into SSO, set AWS_PROFILE and AWS_REGION appropriately, with a blob
     /// URI scoped to the environment's bucket prefix.
     #[clap(long)]
-    blob_uri: String,
+    blob_uri: SensitiveUrl,
 
     /// Number of updates to output. Default is unbounded.
     #[clap(long, default_value = "18446744073709551615")]
@@ -329,7 +332,7 @@ impl fmt::Debug for PrettyBytes<'_> {
 
 /// Fetches the updates in a blob batch part
 pub async fn blob_batch_part(
-    blob_uri: &str,
+    blob_uri: &SensitiveUrl,
     shard_id: ShardId,
     partial_key: String,
     limit: usize,
@@ -358,15 +361,19 @@ pub async fn blob_batch_part(
         desc,
         updates: Vec::new(),
     };
-    let mut cursor = Cursor::default();
-    while let Some(((k, v, t, d), _)) = cursor.pop(&encoded_part) {
+    let records = encoded_part.normalize(&metrics.columnar);
+    for ((k, v), t, d) in records
+        .records()
+        .expect("only implemented for records")
+        .iter()
+    {
         if out.updates.len() > limit {
             break;
         }
         out.updates.push(BatchPartUpdate {
             k: format!("{:?}", PrettyBytes(k)),
             v: format!("{:?}", PrettyBytes(v)),
-            t,
+            t: u64::from_le_bytes(t),
             d: i64::from_le_bytes(d),
         });
     }
@@ -390,7 +397,9 @@ async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
 
     let mut updates = Vec::new();
     for batch in state.collections.trace.batches() {
-        for part in batch.parts.iter() {
+        let mut part_stream =
+            pin!(batch.part_stream(shard_id, &*state_versions.blob, &*state_versions.metrics));
+        while let Some(part) = part_stream.try_next().await? {
             tracing::info!("fetching {}", part.printable_name());
             let encoded_part = EncodedPart::fetch(
                 &shard_id,
@@ -399,12 +408,13 @@ async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
                 &shard_metrics,
                 &state_versions.metrics.read.snapshot,
                 &batch.desc,
-                part,
+                &part,
             )
             .await
             .expect("part exists");
-            let mut cursor = Cursor::default();
-            while let Some(((k, v, mut t, d), _)) = cursor.pop(&encoded_part) {
+            let part = encoded_part.normalize(&state_versions.metrics.columnar);
+            for ((k, v), t, d) in part.records().expect("codec records").iter() {
+                let mut t = <u64 as Codec64>::decode(t);
                 t.advance_by(as_of);
                 let d = <i64 as Codec64>::decode(d);
                 updates.push(((k.to_owned(), v.to_owned()), t, d));
@@ -430,7 +440,7 @@ pub struct BlobArgs {
     /// place. e.g. for S3, sign into SSO, set AWS_PROFILE and AWS_REGION appropriately, with a blob
     /// URI scoped to the environment's bucket prefix.
     #[clap(long)]
-    blob_uri: String,
+    blob_uri: SensitiveUrl,
 }
 
 #[derive(Debug, Default, serde::Serialize)]
@@ -442,7 +452,7 @@ struct BlobCounts {
 }
 
 /// Fetches the blob count for given path
-pub async fn blob_counts(blob_uri: &str) -> Result<impl serde::Serialize, anyhow::Error> {
+pub async fn blob_counts(blob_uri: &SensitiveUrl) -> Result<impl serde::Serialize, anyhow::Error> {
     let cfg = PersistConfig::new_default_configs(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let blob = make_blob(&cfg, blob_uri, NO_COMMIT, metrics).await?;
@@ -472,7 +482,7 @@ pub async fn blob_counts(blob_uri: &str) -> Result<impl serde::Serialize, anyhow
 }
 
 /// Rummages through S3 to find the latest rollup for each shard, then calculates summary stats.
-pub async fn shard_stats(blob_uri: &str) -> anyhow::Result<()> {
+pub async fn shard_stats(blob_uri: &SensitiveUrl) -> anyhow::Result<()> {
     let cfg = PersistConfig::new_default_configs(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let blob = make_blob(&cfg, blob_uri, NO_COMMIT, metrics).await?;
@@ -532,12 +542,8 @@ pub async fn shard_stats(blob_uri: &str) -> anyhow::Result<()> {
             if b.is_empty() {
                 empty_batches += 1;
             }
-            for run in b.runs() {
-                let largest_part = run
-                    .iter()
-                    .map(|p| p.encoded_size_bytes())
-                    .max()
-                    .unwrap_or(0);
+            for (_meta, run) in b.runs() {
+                let largest_part = run.iter().map(|p| p.max_part_bytes()).max().unwrap_or(0);
                 runs += 1;
                 longest_run = longest_run.max(run.len());
                 byte_width += largest_part;
@@ -592,8 +598,13 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
             known_writers.insert(writer_id.clone());
         }
         for batch in v.collections.trace.batches() {
-            for batch_part in &batch.parts {
-                match batch_part {
+            // TODO: this may end up refetching externally-stored runs once per batch...
+            // but if we have enough parts for this to be a problem, we may need to track a more
+            // efficient state representation.
+            let mut parts =
+                pin!(batch.part_stream(shard_id, &*state_versions.blob, &*state_versions.metrics));
+            while let Some(batch_part) = parts.next().await {
+                match &*batch_part? {
                     BatchPart::Hollow(x) => known_parts.insert(x.key.clone()),
                     BatchPart::Inline { .. } => continue,
                 };
@@ -609,10 +620,7 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
     // versions are also considered live
     let minimum_version = WriterKey::for_version(&state_versions.cfg.build_version);
     for (part, writer) in all_parts {
-        let is_unreferenced = match writer {
-            WriterKey::Id(writer) => !known_writers.contains(&writer),
-            version @ WriterKey::Version(_) => version < minimum_version,
-        };
+        let is_unreferenced = writer < minimum_version;
         if is_unreferenced && !known_parts.contains(&part) {
             unreferenced_blobs.batch_parts.insert(part);
         }
@@ -639,7 +647,7 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
     let consensus =
         make_consensus(&cfg, &args.consensus_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
     let blob = make_blob(&cfg, &args.blob_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
-    let isolated_runtime = Arc::new(IsolatedRuntime::default());
+    let isolated_runtime = Arc::new(IsolatedRuntime::new(&metrics_registry, None));
     let state_cache = Arc::new(StateCache::new(
         &cfg,
         Arc::clone(&metrics),
@@ -680,13 +688,13 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
 /// return static Codec names, and rebind the names if/when we get a CodecMismatch, so we can convince
 /// the type system and our safety checks that we really can read the data.
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Default, Debug, PartialEq, Eq)]
 pub(crate) struct K;
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Default, Debug, PartialEq, Eq)]
 pub(crate) struct V;
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Default, Debug, PartialEq, Eq)]
 struct T;
-#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Default, Debug, Clone, Eq, PartialEq, PartialOrd, Ord)]
 struct D(i64);
 
 pub(crate) static KVTD_CODECS: Mutex<(String, String, String, String, Option<CodecConcreteType>)> =
@@ -712,8 +720,17 @@ impl Codec for K {
     {
     }
 
-    fn decode(_buf: &[u8]) -> Result<Self, String> {
+    fn decode(_buf: &[u8], _schema: &TodoSchema<K>) -> Result<Self, String> {
         Ok(Self)
+    }
+
+    fn encode_schema(_schema: &Self::Schema) -> Bytes {
+        Bytes::new()
+    }
+
+    fn decode_schema(buf: &Bytes) -> Self::Schema {
+        assert_eq!(*buf, Bytes::new());
+        TodoSchema::default()
     }
 }
 
@@ -731,8 +748,17 @@ impl Codec for V {
     {
     }
 
-    fn decode(_buf: &[u8]) -> Result<Self, String> {
+    fn decode(_buf: &[u8], _schema: &TodoSchema<V>) -> Result<Self, String> {
         Ok(Self)
+    }
+
+    fn encode_schema(_schema: &Self::Schema) -> Bytes {
+        Bytes::new()
+    }
+
+    fn decode_schema(buf: &Bytes) -> Self::Schema {
+        assert_eq!(*buf, Bytes::new());
+        TodoSchema::default()
     }
 }
 
@@ -750,8 +776,17 @@ impl Codec for T {
     {
     }
 
-    fn decode(_buf: &[u8]) -> Result<Self, String> {
+    fn decode(_buf: &[u8], _schema: &TodoSchema<T>) -> Result<Self, String> {
         Ok(Self)
+    }
+
+    fn encode_schema(_schema: &Self::Schema) -> Bytes {
+        Bytes::new()
+    }
+
+    fn decode_schema(buf: &Bytes) -> Self::Schema {
+        assert_eq!(*buf, Bytes::new());
+        TodoSchema::default()
     }
 }
 

@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Run SQLancer against Materialize: Automated testing to find logic bugs in
+database systems: https://github.com/sqlancer/sqlancer
+"""
+
 import argparse
 import random
 from threading import Thread
@@ -61,7 +66,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     seed = args.seed or random.randint(0, 2**31)
 
-    print("~~~ Run in progress")
+    print("--- Run in progress")
     result = c.run(
         "sqlancer",
         "--random-seed",

@@ -13,6 +13,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::LazyLock;
 
 use itertools::Itertools;
 use mz_expr::func;
@@ -21,13 +22,12 @@ use mz_ore::str::StrExt;
 use mz_pgrepr::oid;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, ColumnType, Datum, RelationType, Row, ScalarBaseType, ScalarType};
-use once_cell::sync::Lazy;
 
 use crate::ast::{SelectStatement, Statement};
 use crate::catalog::{CatalogType, TypeCategory, TypeReference};
 use crate::names::{self, ResolvedItemName};
 use crate::plan::error::PlanError;
-use crate::plan::expr::{
+use crate::plan::hir::{
     AggregateFunc, BinaryFunc, CoercibleScalarExpr, CoercibleScalarType, ColumnOrder,
     HirRelationExpr, HirScalarExpr, ScalarWindowFunc, TableFunc, UnaryFunc, UnmaterializableFunc,
     ValueWindowFunc, VariadicFunc,
@@ -1009,7 +1009,8 @@ where
         let arg_types: Vec<_> = types
             .into_iter()
             .map(|ty| match ty {
-                CoercibleScalarType::Coerced(ty) => ecx.humanize_scalar_type(&ty),
+                // This will be used in error msgs, therefore we call with `postgres_compat` false.
+                CoercibleScalarType::Coerced(ty) => ecx.humanize_scalar_type(&ty, false),
                 CoercibleScalarType::Record(_) => "record".to_string(),
                 CoercibleScalarType::Uncoerced => "unknown".to_string(),
             })
@@ -1656,7 +1657,7 @@ macro_rules! builtins {
                 assert_eq!(imp.return_is_set, expect_set_return, "wrong set return value for func with oid {}", imp.oid);
             }
             let old = builtins.insert($name, func);
-            assert!(old.is_none(), "duplicate entry in builtins list {:?}", old);
+            mz_ore::assert_none!(old, "duplicate entry in builtins list");
         )+
         builtins
     }};
@@ -1762,7 +1763,7 @@ macro_rules! privilege_fn {
 }
 
 /// Correlates a built-in function name to its implementations.
-pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
+pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use ParamType::*;
     use ScalarBaseType::*;
     let mut builtins = builtins! {
@@ -1809,7 +1810,8 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 let elem_type = match elem_type.array_of_self_elem_type() {
                     Ok(elem_type) => elem_type,
                     Err(elem_type) => bail_unsupported!(
-                        format!("array_fill on {}", ecx.humanize_scalar_type(&elem_type))
+                        // This will be used in error msgs, therefore we call with `postgres_compat` false.
+                        format!("array_fill on {}", ecx.humanize_scalar_type(&elem_type, false))
                     ),
                 };
 
@@ -1825,7 +1827,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 let elem_type = match elem_type.array_of_self_elem_type() {
                     Ok(elem_type) => elem_type,
                     Err(elem_type) => bail_unsupported!(
-                        format!("array_fill on {}", ecx.humanize_scalar_type(&elem_type))
+                        format!("array_fill on {}", ecx.humanize_scalar_type(&elem_type, false))
                     ),
                 };
 
@@ -1865,6 +1867,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("avg")) => Float64, 2104;
             params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("avg")) => Float64, 2105;
             params!(Interval) => Operation::nullary(|_ecx| catalog_name_only!("avg")) => Interval, 2106;
+        },
+        "bit_count" => Scalar {
+            params!(Bytes) => UnaryFunc::BitCountBytes(func::BitCountBytes) => Int64, 6163;
         },
         "bit_length" => Scalar {
             params!(Bytes) => UnaryFunc::BitLengthBytes(func::BitLengthBytes) => Int32, 1810;
@@ -1910,7 +1915,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                         // concat uses nonstandard bool -> string casts
                         // to match historical baggage in PostgreSQL.
                         ScalarType::Bool => expr.call_unary(UnaryFunc::CastBoolToStringNonstandard(func::CastBoolToStringNonstandard)),
-                        // TODO(#7572): remove call to PadChar
+                        // TODO(see <materialize#7572>): remove call to PadChar
                         ScalarType::Char { length } => expr.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
                         _ => typeconv::to_string(ecx, expr)
                     });
@@ -1930,7 +1935,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                         // concat uses nonstandard bool -> string casts
                         // to match historical baggage in PostgreSQL.
                         ScalarType::Bool => expr.call_unary(UnaryFunc::CastBoolToStringNonstandard(func::CastBoolToStringNonstandard)),
-                        // TODO(#7572): remove call to PadChar
+                        // TODO(see <materialize#7572>): remove call to PadChar
                         ScalarType::Char { length } => expr.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
                         _ => typeconv::to_string(ecx, expr)
                     });
@@ -2084,6 +2089,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                         ELSE coalesce((SELECT pg_catalog.concat(coalesce(mz_internal.mz_type_name($1), name), mz_internal.mz_render_typmod($1, $2)) FROM mz_catalog.mz_types WHERE oid = $1), '???')
                     END"
             ) => String, 1081;
+        },
+        "get_bit" => Scalar {
+            params!(Bytes, Int32) => BinaryFunc::GetBit => Int32, 723;
         },
         "get_byte" => Scalar {
             params!(Bytes, Int32) => BinaryFunc::GetByte => Int32, 721;
@@ -2314,6 +2322,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "pg_column_size" => Scalar {
             params!(Any) => UnaryFunc::PgColumnSize(func::PgColumnSize) => Int32, 1269;
         },
+        "pg_size_pretty" => Scalar {
+            params!(Numeric) => UnaryFunc::PgSizePretty(func::PgSizePretty) => String, 3166;
+        },
         "mz_row_size" => Scalar {
             params!(Any) => Operation::unary(|ecx, e| {
                 let s = ecx.scalar_type(&e);
@@ -2511,7 +2522,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 let name = match ecx.scalar_type(&exprs[0]) {
                     CoercibleScalarType::Uncoerced => "unknown".to_string(),
                     CoercibleScalarType::Record(_) => "record".to_string(),
-                    CoercibleScalarType::Coerced(ty) => ecx.humanize_scalar_type(&ty),
+                    CoercibleScalarType::Coerced(ty) => ecx.humanize_scalar_type(&ty, true),
                 };
 
                 // For consistency with other functions, verify that
@@ -2699,7 +2710,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         // https://www.postgresql.org/docs/current/functions-json.html
         "to_jsonb" => Scalar {
             params!(Any) => Operation::unary(|ecx, e| {
-                // TODO(#7572): remove this
+                // TODO(see <materialize#7572>): remove this
                 let e = match ecx.scalar_type(&e) {
                     ScalarType::Char { length } => e.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
                     _ => e,
@@ -3014,7 +3025,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 let elem_type = match elem_type.array_of_self_elem_type() {
                     Ok(elem_type) => elem_type,
                     Err(elem_type) => bail_unsupported!(
-                        format!("array_agg on {}", ecx.humanize_scalar_type(&elem_type))
+                        format!("array_agg on {}", ecx.humanize_scalar_type(&elem_type, false))
                     ),
                 };
 
@@ -3037,6 +3048,8 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "count" => Aggregate {
             params!() => Operation::nullary(|_ecx| {
                 // COUNT(*) is equivalent to COUNT(true).
+                // This is mirrored in `AggregateExpr::is_count_asterisk`, so if you modify this,
+                // then attend to that code also (in both HIR and MIR).
                 Ok((HirScalarExpr::literal_true(), AggregateFunc::Count))
             }) => Int64, 2803;
             params!(Any) => AggregateFunc::Count => Int64, 2147;
@@ -3053,7 +3066,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(Float32) => AggregateFunc::MaxFloat32 => Float32, 2119;
             params!(Float64) => AggregateFunc::MaxFloat64 => Float64, 2120;
             params!(String) => AggregateFunc::MaxString => String, 2129;
-            // TODO(#7572): make this its own function
+            // TODO(see <materialize#7572>): make this its own function
             params!(Char) => AggregateFunc::MaxString => Char, 2244;
             params!(Date) => AggregateFunc::MaxDate => Date, 2122;
             params!(Timestamp) => AggregateFunc::MaxTimestamp => Timestamp, 2126;
@@ -3074,7 +3087,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(Float32) => AggregateFunc::MinFloat32 => Float32, 2135;
             params!(Float64) => AggregateFunc::MinFloat64 => Float64, 2136;
             params!(String) => AggregateFunc::MinString => String, 2145;
-            // TODO(#7572): make this its own function
+            // TODO(see <materialize#7572>): make this its own function
             params!(Char) => AggregateFunc::MinString => Char, 2245;
             params!(Date) => AggregateFunc::MinDate => Date, 2138;
             params!(Timestamp) => AggregateFunc::MinTimestamp => Timestamp, 2142;
@@ -3085,7 +3098,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "jsonb_agg" => Aggregate {
             params!(Any) => Operation::unary_ordered(|ecx, e, order_by| {
-                // TODO(#7572): remove this
+                // TODO(see <materialize#7572>): remove this
                 let e = match ecx.scalar_type(&e) {
                     ScalarType::Char { length } => e.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
                     _ => e,
@@ -3105,7 +3118,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "jsonb_object_agg" => Aggregate {
             params!(Any, Any) => Operation::binary_ordered(|ecx, key, val, order_by| {
-                // TODO(#7572): remove this
+                // TODO(see <materialize#7572>): remove this
                 let key = match ecx.scalar_type(&key) {
                     ScalarType::Char { length } => key.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
                     _ => key,
@@ -3462,12 +3475,13 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
     builtins
 });
 
-pub static INFORMATION_SCHEMA_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
-    use ParamType::*;
-    builtins! {
-        "_pg_expandarray" => Table {
-            // See: https://github.com/postgres/postgres/blob/16e3ad5d143795b05a21dc887c2ab384cce4bcb8/src/backend/catalog/information_schema.sql#L43
-            params!(ArrayAny) => sql_impl_table_func("
+pub static INFORMATION_SCHEMA_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> =
+    LazyLock::new(|| {
+        use ParamType::*;
+        builtins! {
+            "_pg_expandarray" => Table {
+                // See: https://github.com/postgres/postgres/blob/16e3ad5d143795b05a21dc887c2ab384cce4bcb8/src/backend/catalog/information_schema.sql#L43
+                params!(ArrayAny) => sql_impl_table_func("
                     SELECT
                         $1[s] AS x,
                         s - pg_catalog.array_lower($1, 1) + 1 AS n
@@ -3476,11 +3490,11 @@ pub static INFORMATION_SCHEMA_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Laz
                         pg_catalog.array_upper($1, 1),
                         1) as g(s)
                 ") => ReturnType::set_of(RecordAny), oid::FUNC_PG_EXPAND_ARRAY;
+            }
         }
-    }
-});
+    });
 
-pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
+pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use ParamType::*;
     use ScalarBaseType::*;
     builtins! {
@@ -3538,6 +3552,10 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "concat_agg" => Aggregate {
             params!(Any) => Operation::unary(|_ecx, _e| bail_unsupported!("concat_agg")) => String, oid::FUNC_CONCAT_AGG_OID;
         },
+        "crc32" => Scalar {
+            params!(String) => UnaryFunc::Crc32String(func::Crc32String) => UInt32, oid::FUNC_CRC32_STRING_OID;
+            params!(Bytes) => UnaryFunc::Crc32Bytes(func::Crc32Bytes) => UInt32, oid::FUNC_CRC32_BYTES_OID;
+        },
         "datediff" => Scalar {
             params!(String, Timestamp, Timestamp) => VariadicFunc::DateDiffTimestamp => Int64, oid::FUNC_DATEDIFF_TIMESTAMP;
             params!(String, TimestampTz, TimestampTz) => VariadicFunc::DateDiffTimestampTz => Int64, oid::FUNC_DATEDIFF_TIMESTAMPTZ;
@@ -3550,15 +3568,15 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(String, String, String) => sql_impl_func("has_cluster_privilege(mz_internal.mz_role_oid($1), $2, $3)") => Bool, oid::FUNC_HAS_CLUSTER_PRIVILEGE_TEXT_TEXT_TEXT_OID;
             params!(Oid, String, String) => sql_impl_func(&format!("
                 CASE
-                -- We need to validate the name and privileges to return a proper error before
-                -- anything else.
-                WHEN mz_unsafe.mz_error_if_null(
-                    (SELECT name FROM mz_clusters WHERE name = $2),
-                    'error cluster \"' || $2 || '\" does not exist'
-                ) IS NULL
-                OR NOT mz_internal.mz_validate_privileges($3)
+                -- We must first check $2 to avoid a potentially null error message (an error itself).
+                WHEN $2 IS NULL
+                THEN NULL
+                -- Validate the cluster name in order to return a proper error.
+                WHEN NOT EXISTS (SELECT name FROM mz_clusters WHERE name = $2)
+                THEN mz_unsafe.mz_error_if_null(NULL::boolean, 'error cluster \"' || $2 || '\" does not exist')
+                -- Validate the privileges and other arguments.
+                WHEN NOT mz_internal.mz_validate_privileges($3)
                 OR $1 IS NULL
-                OR $2 IS NULL
                 OR $3 IS NULL
                 OR $1 NOT IN (SELECT oid FROM mz_catalog.mz_roles)
                 THEN NULL
@@ -3652,6 +3670,10 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(String, String) => sql_impl_func("has_type_privilege(current_user, $1, $2)") => Bool, 3142;
             params!(Oid, String) => sql_impl_func("has_type_privilege(current_user, $1, $2)") => Bool, 3143;
         },
+        "kafka_murmur2" => Scalar {
+            params!(String) => UnaryFunc::KafkaMurmur2String(func::KafkaMurmur2String) => Int32, oid::FUNC_KAFKA_MURMUR2_STRING_OID;
+            params!(Bytes) => UnaryFunc::KafkaMurmur2Bytes(func::KafkaMurmur2Bytes) => Int32, oid::FUNC_KAFKA_MURMUR2_BYTES_OID;
+        },
         "list_agg" => Aggregate {
             params!(Any) => Operation::unary_ordered(|ecx, e, order_by| {
                 if let ScalarType::Char {.. }  = ecx.scalar_type(&e) {
@@ -3705,7 +3727,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "map_agg" => Aggregate {
             params!(String, Any) => Operation::binary_ordered(|ecx, key, val, order_by| {
                 let (value_type, val) = match ecx.scalar_type(&val) {
-                    // TODO(#7572): remove this
+                    // TODO(see <materialize#7572>): remove this
                     ScalarType::Char { length } => (ScalarType::Char { length }, val.call_unary(UnaryFunc::PadChar(func::PadChar { length }))),
                     typ => (typ, val),
                 };
@@ -3739,7 +3761,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 let err = || {
                     Err(sql_err!(
                         "function map_build({}) does not exist",
-                        ecx.humanize_scalar_type(&ty.clone())
+                        ecx.humanize_scalar_type(&ty.clone(), false)
                     ))
                 };
 
@@ -3799,14 +3821,17 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(String, String) => Operation::binary(move |_ecx, regex, haystack| {
                 let regex = match regex.into_literal_string() {
                     None => sql_bail!("regexp_extract requires a string literal as its first argument"),
-                    Some(regex) => mz_expr::AnalyzedRegex::new(regex).map_err(|e| sql_err!("analyzing regex: {}", e))?,
+                    Some(regex) => mz_expr::AnalyzedRegex::new(&regex).map_err(|e| sql_err!("analyzing regex: {}", e))?,
                 };
                 let column_names = regex
                     .capture_groups_iter()
                     .map(|cg| {
                         cg.name.clone().unwrap_or_else(|| format!("column{}", cg.index)).into()
                     })
-                    .collect();
+                    .collect::<Vec<_>>();
+                if column_names.is_empty(){
+                    sql_bail!("regexp_extract must specify at least one capture group");
+                }
                 Ok(TableFuncPlan {
                     expr: HirRelationExpr::CallTable {
                         func: TableFunc::RegexpExtract(regex),
@@ -3827,6 +3852,13 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     column_names: vec![]
                 })
             }) => ReturnType::none(true), oid::FUNC_REPEAT_OID;
+        },
+        "seahash" => Scalar {
+            params!(String) => UnaryFunc::SeahashString(func::SeahashString) => UInt32, oid::FUNC_SEAHASH_STRING_OID;
+            params!(Bytes) => UnaryFunc::SeahashBytes(func::SeahashBytes) => UInt32, oid::FUNC_SEAHASH_BYTES_OID;
+        },
+        "starts_with" => Scalar {
+            params!(String, String) => BinaryFunc::StartsWith => Bool, 3696;
         },
         "timezone_offset" => Scalar {
             params!(String, TimestampTz) => BinaryFunc::TimezoneOffset => RecordAny, oid::FUNC_TIMEZONE_OFFSET;
@@ -3877,7 +3909,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
     }
 });
 
-pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
+pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use ParamType::*;
     use ScalarBaseType::*;
     builtins! {
@@ -4264,7 +4296,7 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
     }
 });
 
-pub static MZ_UNSAFE_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
+pub static MZ_UNSAFE_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use ParamType::*;
     use ScalarBaseType::*;
     builtins! {
@@ -4383,7 +4415,7 @@ fn array_to_string(
 }
 
 /// Correlates an operator with all of its implementations.
-pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
+pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use BinaryFunc::*;
     use ParamType::*;
     use ScalarBaseType::*;
@@ -4706,7 +4738,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(ListElementAnyCompatible, ListAnyCompatible) => ElementListConcat => ListAnyCompatible, oid::OP_CONCAT_ELEMENY_LIST_OID;
         },
 
-        // JSON, MAP, RANGE
+        // JSON, MAP, RANGE, LIST, ARRAY
         "->" => Scalar {
             params!(Jsonb, Int64) => JsonbGetInt64 { stringify: false } => Jsonb, 3212;
             params!(Jsonb, String) => JsonbGetString { stringify: false } => Jsonb, 3211;
@@ -4740,8 +4772,14 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
                 Ok(lhs.call_binary(rhs, BinaryFunc::RangeContainsElem { elem_type, rev: false }))
             }) => Bool, 3889;
             params!(RangeAny, RangeAny) => Operation::binary(|_ecx, lhs, rhs| {
-                Ok(lhs.call_binary(rhs, BinaryFunc::RangeContainsRange {  rev: false }))
+                Ok(lhs.call_binary(rhs, BinaryFunc::RangeContainsRange { rev: false }))
             }) => Bool, 3890;
+            params!(ArrayAny, ArrayAny) => Operation::binary(|_ecx, lhs, rhs| {
+                Ok(lhs.call_binary(rhs, BinaryFunc::ArrayContainsArray { rev: false }))
+            }) => Bool, 2751;
+            params!(ListAny, ListAny) => Operation::binary(|_ecx, lhs, rhs| {
+                Ok(lhs.call_binary(rhs, BinaryFunc::ListContainsList { rev: false }))
+            }) => Bool, oid::OP_CONTAINS_LIST_LIST_OID;
         },
         "<@" => Scalar {
             params!(Jsonb, Jsonb) => Operation::binary(|_ecx, lhs, rhs| {
@@ -4770,6 +4808,12 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(RangeAny, RangeAny) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(rhs.call_binary(lhs, BinaryFunc::RangeContainsRange { rev: true }))
             }) => Bool, 3892;
+            params!(ArrayAny, ArrayAny) => Operation::binary(|_ecx, lhs, rhs| {
+                Ok(lhs.call_binary(rhs, BinaryFunc::ArrayContainsArray { rev: true }))
+            }) => Bool, 2752;
+            params!(ListAny, ListAny) => Operation::binary(|_ecx, lhs, rhs| {
+                Ok(lhs.call_binary(rhs, BinaryFunc::ListContainsList { rev: true }))
+            }) => Bool, oid::OP_IS_CONTAINED_LIST_LIST_OID;
         },
         "?" => Scalar {
             params!(Jsonb, String) => JsonbContainsString => Bool, 3247;

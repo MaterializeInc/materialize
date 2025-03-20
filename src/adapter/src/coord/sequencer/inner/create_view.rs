@@ -37,6 +37,8 @@ use crate::session::Session;
 use crate::{catalog, AdapterNotice, ExecuteContext};
 
 impl Staged for CreateViewStage {
+    type Ctx = ExecuteContext;
+
     fn validity(&mut self) -> &mut PlanValidity {
         match self {
             Self::Optimize(stage) => &mut stage.validity,
@@ -80,7 +82,7 @@ impl Coordinator {
         resolved_ids: ResolvedIds,
     ) {
         let stage = return_if_err!(
-            self.create_view_validate(ctx.session(), plan, resolved_ids, ExplainContext::None),
+            self.create_view_validate(plan, resolved_ids, ExplainContext::None),
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
@@ -113,7 +115,7 @@ impl Coordinator {
         let optimizer_trace = OptimizerTrace::new(stage.paths());
 
         // Not used in the EXPLAIN path so it's OK to generate a dummy value.
-        let resolved_ids = ResolvedIds(Default::default());
+        let resolved_ids = ResolvedIds::empty();
 
         let explain_ctx = ExplainContext::Plan(ExplainPlanContext {
             broken,
@@ -125,7 +127,7 @@ impl Coordinator {
             optimizer_trace,
         });
         let stage = return_if_err!(
-            self.create_view_validate(ctx.session(), plan, resolved_ids, explain_ctx),
+            self.create_view_validate(plan, resolved_ids, explain_ctx),
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
@@ -148,6 +150,7 @@ impl Coordinator {
         let CatalogItem::View(item) = self.catalog().get_entry(&id).item() else {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
+        let gid = item.global_id();
 
         let create_sql = item.create_sql.clone();
         let plan_result = self
@@ -172,12 +175,12 @@ impl Coordinator {
             config,
             format,
             stage,
-            replan: Some(id),
+            replan: Some(gid),
             desc: None,
             optimizer_trace,
         });
         let stage = return_if_err!(
-            self.create_view_validate(ctx.session(), plan, resolved_ids, explain_ctx),
+            self.create_view_validate(plan, resolved_ids, explain_ctx),
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
@@ -210,7 +213,7 @@ impl Coordinator {
 
         let explain = match stage {
             ExplainStage::RawPlan => explain_plan(
-                view.raw_expr.clone(),
+                view.raw_expr.as_ref().clone(),
                 format,
                 &config,
                 &features,
@@ -240,7 +243,6 @@ impl Coordinator {
     #[instrument]
     fn create_view_validate(
         &mut self,
-        session: &Session,
         plan: plan::CreateViewPlan,
         resolved_ids: ResolvedIds,
         // An optional context set iff the state machine is initiated from
@@ -261,13 +263,8 @@ impl Coordinator {
         self.validate_timeline_context(expr_depends_on.iter().copied())?;
         self.validate_system_column_references(*ambiguous_columns, &expr_depends_on)?;
 
-        let validity = PlanValidity {
-            transient_revision: self.catalog().transient_revision(),
-            dependency_ids: expr_depends_on.clone(),
-            cluster_id: None,
-            replica_id: None,
-            role_metadata: session.role_metadata().clone(),
-        };
+        let validity =
+            PlanValidity::require_transient_revision(self.catalog().transient_revision());
 
         Ok(CreateViewStage::Optimize(CreateViewOptimize {
             validity,
@@ -287,7 +284,8 @@ impl Coordinator {
             explain_ctx,
         }: CreateViewOptimize,
     ) -> Result<StageResult<Box<CreateViewStage>>, AdapterError> {
-        let id = self.catalog_mut().allocate_user_id().await?;
+        let id_ts = self.get_catalog_write_ts().await;
+        let (item_id, global_id) = self.catalog_mut().allocate_user_id(id_ts).await?;
 
         // Collect optimizer parameters.
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
@@ -318,14 +316,15 @@ impl Coordinator {
                             if let ExplainContext::Plan(explain_ctx) = explain_ctx {
                                 CreateViewStage::Explain(CreateViewExplain {
                                     validity,
-                                    id,
+                                    id: global_id,
                                     plan,
                                     explain_ctx,
                                 })
                             } else {
                                 CreateViewStage::Finish(CreateViewFinish {
                                     validity,
-                                    id,
+                                    item_id,
+                                    global_id,
                                     plan,
                                     optimized_expr,
                                     resolved_ids,
@@ -337,7 +336,7 @@ impl Coordinator {
                         Err(err) => {
                             let ExplainContext::Plan(explain_ctx) = explain_ctx else {
                                 // In `sequence_~` contexts, immediately return the error.
-                                return Err(err.into());
+                                return Err(err);
                             };
 
                             if explain_ctx.broken {
@@ -347,13 +346,13 @@ impl Coordinator {
                                 tracing::error!("error while handling EXPLAIN statement: {}", err);
                                 CreateViewStage::Explain(CreateViewExplain {
                                     validity,
-                                    id,
+                                    id: global_id,
                                     plan,
                                     explain_ctx,
                                 })
                             } else {
                                 // In regular `EXPLAIN` contexts, immediately return the error.
-                                return Err(err.into());
+                                return Err(err);
                             }
                         }
                     };
@@ -369,7 +368,8 @@ impl Coordinator {
         &mut self,
         session: &Session,
         CreateViewFinish {
-            id,
+            item_id,
+            global_id,
             plan:
                 plan::CreateViewPlan {
                     name,
@@ -377,6 +377,7 @@ impl Coordinator {
                         plan::View {
                             create_sql,
                             expr: raw_expr,
+                            dependencies,
                             column_names,
                             temporary,
                         },
@@ -397,19 +398,21 @@ impl Coordinator {
                     .collect(),
             ),
             catalog::Op::CreateItem {
-                id,
+                id: item_id,
                 name: name.clone(),
                 item: CatalogItem::View(View {
                     create_sql: create_sql.clone(),
-                    raw_expr,
+                    global_id,
+                    raw_expr: raw_expr.into(),
                     desc: RelationDesc::new(optimized_expr.typ(), column_names.clone()),
-                    optimized_expr,
+                    optimized_expr: optimized_expr.into(),
                     conn_id: if temporary {
                         Some(session.conn_id().clone())
                     } else {
                         None
                     },
                     resolved_ids: resolved_ids.clone(),
+                    dependencies: dependencies.clone(),
                 }),
                 owner_id: *session.current_role_id(),
             },

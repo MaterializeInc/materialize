@@ -32,13 +32,13 @@ use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::thread::JoinOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{GlobalId, Row, RowIterator, ScalarType};
+use mz_repr::{CatalogItemId, Row, RowIterator, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{EnvironmentId, SessionCatalog};
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::SUPPORT_USER;
-use mz_sql::session::vars::{OwnedVarInput, Var, CLUSTER};
+use mz_sql::session::vars::{OwnedVarInput, SystemVars, Var, CLUSTER};
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use prometheus::Histogram;
 use serde_json::json;
@@ -47,9 +47,7 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
-use crate::command::{
-    CatalogDump, CatalogSnapshot, Command, ExecuteResponse, GetVariablesResponse, Response,
-};
+use crate::command::{CatalogDump, CatalogSnapshot, Command, ExecuteResponse, Response};
 use crate::coord::{Coordinator, ExecuteContextExtra};
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
@@ -147,7 +145,7 @@ impl Client {
         // We use the system clock to determine when a session connected to Materialize. This is not
         // intended to be 100% accurate and correct, so we don't burden the timestamp oracle with
         // generating a more correct timestamp.
-        Session::new(self.build_info, config)
+        Session::new(self.build_info, config, self.metrics().session_metrics())
     }
 
     /// Upgrades this client to a session client.
@@ -164,6 +162,7 @@ impl Client {
         let conn_id = session.conn_id().clone();
         let secret_key = session.secret_key();
         let uuid = session.uuid();
+        let client_ip = session.client_ip();
         let application_name = session.application_name().into();
         let notice_tx = session.retain_notice_transmitter();
 
@@ -187,6 +186,7 @@ impl Client {
             conn_id: conn_id.clone(),
             secret_key,
             uuid,
+            client_ip: client_ip.copied(),
             application_name,
             notice_tx,
         });
@@ -212,11 +212,6 @@ impl Client {
             catalog,
         } = response;
 
-        // Before we do ANYTHING, we need to wait for our BuiltinTable writes to complete. We wait
-        // for the writes here, as opposed to during the Startup command, because we don't want to
-        // block the coordinator on a Builtin Table write.
-        write_notify.await;
-
         let session = client.session();
         session.initialize_role_metadata(role_id);
         let vars_mut = session.vars_mut();
@@ -231,11 +226,16 @@ impl Client {
             .vars_mut()
             .end_transaction(EndTransactionAction::Commit);
 
+        // Stash the future that notifies us of builtin table writes completing, we'll block on
+        // this future before allowing queries from this session against relevant relations.
+        //
+        // Note: We stash the future as opposed to waiting on it here to prevent blocking session
+        // creation on builtin table updates. This improves the latency for session creation and
+        // reduces scheduling load on any dataflows that read from these builtin relations, since
+        // it allows updates to be batched.
+        session.set_builtin_table_updates(write_notify);
+
         let catalog = catalog.for_session(session);
-        if catalog.active_database().is_none() {
-            let db = session.vars().database().into();
-            session.add_notice(AdapterNotice::UnknownSessionDatabase(db));
-        }
 
         let cluster_active = session.vars().cluster().to_string();
         if session.vars().welcome_message() {
@@ -256,6 +256,7 @@ impl Client {
   Cluster: {}
   Database: {}
   {}
+  Session UUID: {}
 
 Issue a SQL query to get started. Need help?
   View documentation: https://materialize.com/s/docs
@@ -274,7 +275,15 @@ Issue a SQL query to get started. Need help?
                         schemas.iter().map(|id| id.to_string()).join(", ")
                     ),
                 },
+                session.uuid(),
             )));
+        }
+
+        if session.vars().current_object_missing_warnings() {
+            if catalog.active_database().is_none() {
+                let db = session.vars().database().into();
+                session.add_notice(AdapterNotice::UnknownSessionDatabase(db));
+            }
         }
 
         // Users stub their toe on their default cluster not existing, so we provide a notice to
@@ -283,14 +292,16 @@ Issue a SQL query to get started. Need help?
             .vars()
             .inspect(CLUSTER.name())
             .expect("cluster should exist");
-        if catalog.resolve_cluster(Some(&cluster_active)).is_err() {
+        if session.vars().current_object_missing_warnings()
+            && catalog.resolve_cluster(Some(&cluster_active)).is_err()
+        {
             let cluster_notice = 'notice: {
-                // If the user provided a cluster via a connection configuration parameter, do not
-                // notify them if that cluster does not exist. We omit the notice here because even
-                // if they were to update the role or system default, it would not make a
-                // difference since the connection parameter takes precedence over the defaults.
                 if cluster_var.inspect_session_value().is_some() {
-                    break 'notice None;
+                    break 'notice Some(AdapterNotice::DefaultClusterDoesNotExist {
+                        name: cluster_active,
+                        kind: "session",
+                        suggested_action: "Pick an extant cluster with SET CLUSTER = name. Run SHOW CLUSTERS to see available clusters.".into(),
+                    });
                 }
 
                 let role_default = catalog.get_role(catalog.active_role_id());
@@ -309,7 +320,7 @@ Issue a SQL query to get started. Need help?
                     // If there is no default, suggest a Role default.
                     None => Some(AdapterNotice::DefaultClusterDoesNotExist {
                         name: cluster_active,
-                        kind: None,
+                        kind: "system",
                         suggested_action: format!(
                             "Set a default cluster for the current role {alter_role}."
                         ),
@@ -317,7 +328,7 @@ Issue a SQL query to get started. Need help?
                     // If the default does not exist, suggest to change it.
                     Some(_) => Some(AdapterNotice::DefaultClusterDoesNotExist {
                         name: cluster_active,
-                        kind: Some("role"),
+                        kind: "role",
                         suggested_action: format!(
                             "Change the default cluster for the current role {alter_role}."
                         ),
@@ -334,7 +345,7 @@ Issue a SQL query to get started. Need help?
     }
 
     /// Cancels the query currently running on the specified connection.
-    pub fn cancel_request(&mut self, conn_id: ConnectionIdType, secret_key: u32) {
+    pub fn cancel_request(&self, conn_id: ConnectionIdType, secret_key: u32) {
         self.send(Command::CancelRequest {
             conn_id,
             secret_key,
@@ -351,8 +362,11 @@ Issue a SQL query to get started. Need help?
         let conn_id = self.new_conn_id()?;
         let session = self.new_session(SessionConfig {
             conn_id,
+            uuid: Uuid::new_v4(),
             user: SUPPORT_USER.name.clone(),
+            client_ip: None,
             external_metadata_rx: None,
+            helm_chart_version: None,
         });
         let mut session_client = self.startup(session).await?;
 
@@ -414,6 +428,13 @@ Issue a SQL query to get started. Need help?
             .map_err(|_| anyhow::anyhow!("failed to receive webhook response"))?;
 
         response
+    }
+
+    /// Gets the current value of all system variables.
+    pub async fn get_system_vars(&self) -> SystemVars {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::GetSystemVars { tx });
+        rx.await.expect("coordinator unexpectedly gone")
     }
 
     #[instrument(level = "debug")]
@@ -624,18 +645,25 @@ impl SessionClient {
         result
     }
 
-    /// Ends a transaction.
+    /// Ends a transaction. Even if an error is returned, guarantees that the transaction in the
+    /// session and Coordinator has cleared its state.
     #[instrument(level = "debug")]
     pub async fn end_transaction(
         &mut self,
         action: EndTransactionAction,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.send(|tx, session| Command::Commit {
-            action,
-            session,
-            tx,
-        })
-        .await
+        let res = self
+            .send(|tx, session| Command::Commit {
+                action,
+                session,
+                tx,
+            })
+            .await;
+        // Commit isn't guaranteed to set the session's state to anything specific, so clear it
+        // here. It's safe to ignore the returned `TransactionStatus` because that doesn't contain
+        // any data that the Coordinator must act on for correctness.
+        let _ = self.session().clear_transaction();
+        res
     }
 
     /// Fails a transaction.
@@ -658,7 +686,7 @@ impl SessionClient {
     ///
     /// No authorization is performed, so access to this function must be limited to internal
     /// servers or superusers.
-    pub async fn dump_catalog(&mut self) -> Result<CatalogDump, AdapterError> {
+    pub async fn dump_catalog(&self) -> Result<CatalogDump, AdapterError> {
         let catalog = self.catalog_snapshot().await;
         catalog.dump().map_err(AdapterError::from)
     }
@@ -668,7 +696,7 @@ impl SessionClient {
     ///
     /// No authorization is performed, so access to this function must be limited to internal
     /// servers or superusers.
-    pub async fn check_catalog(&mut self) -> Result<(), serde_json::Value> {
+    pub async fn check_catalog(&self) -> Result<(), serde_json::Value> {
         let catalog = self.catalog_snapshot().await;
         catalog.check_consistency()
     }
@@ -678,7 +706,7 @@ impl SessionClient {
     ///
     /// No authorization is performed, so access to this function must be limited to internal
     /// servers or superusers.
-    pub async fn check_coordinator(&mut self) -> Result<(), serde_json::Value> {
+    pub async fn check_coordinator(&self) -> Result<(), serde_json::Value> {
         self.send_without_session(|tx| Command::CheckConsistency { tx })
             .await
             .map_err(|inconsistencies| {
@@ -688,27 +716,13 @@ impl SessionClient {
             })
     }
 
-    pub async fn dump_coordinator_state(&mut self) -> Result<serde_json::Value, anyhow::Error> {
+    pub async fn dump_coordinator_state(&self) -> Result<serde_json::Value, anyhow::Error> {
         self.send_without_session(|tx| Command::Dump { tx }).await
-    }
-
-    /// Allow the controller (and clusters they control) to now affect changes
-    /// to external systems.
-    ///
-    /// No authorization is performed, so access to this function must be
-    /// limited to internal servers or superusers.
-    pub async fn controller_allow_writes(&mut self) -> Result<bool, anyhow::Error> {
-        self.send_without_session(|tx| Command::ControllerAllowWrites { tx })
-            .await
     }
 
     /// Tells the coordinator a statement has finished execution, in the cases
     /// where we have no other reason to communicate with the coordinator.
-    pub fn retire_execute(
-        &mut self,
-        data: ExecuteContextExtra,
-        reason: StatementEndedExecutionReason,
-    ) {
+    pub fn retire_execute(&self, data: ExecuteContextExtra, reason: StatementEndedExecutionReason) {
         if !data.is_trivial() {
             let cmd = Command::RetireExecute { data, reason };
             self.inner().send(cmd);
@@ -722,7 +736,7 @@ impl SessionClient {
     /// ones.
     pub async fn insert_rows(
         &mut self,
-        id: GlobalId,
+        id: CatalogItemId,
         columns: Vec<usize>,
         rows: Vec<Row>,
         ctx_extra: ExecuteContextExtra,
@@ -736,7 +750,6 @@ impl SessionClient {
 
         // Collect optimizer parameters.
         let optimizer_config = optimize::OptimizerConfig::from(conn_catalog.system_vars());
-        // Build an optimizer for this VIEW.
         let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
 
         let result: Result<_, AdapterError> =
@@ -752,10 +765,8 @@ impl SessionClient {
     }
 
     /// Gets the current value of all system variables.
-    pub async fn get_system_vars(&mut self) -> Result<GetVariablesResponse, AdapterError> {
-        let conn_id = self.session().conn_id().clone();
-        self.send_without_session(|tx| Command::GetSystemVars { conn_id, tx })
-            .await
+    pub async fn get_system_vars(&self) -> SystemVars {
+        self.inner().get_system_vars().await
     }
 
     /// Updates the specified system variables to the specified values.
@@ -871,7 +882,6 @@ impl SessionClient {
                 | Command::RetireExecute { .. }
                 | Command::CheckConsistency { .. }
                 | Command::Dump { .. } => {}
-                Command::ControllerAllowWrites { .. } => {}
             };
             cmd
         });
@@ -885,11 +895,13 @@ impl SessionClient {
                     drop(guarded_rx);
 
                     let res = res.expect("sender dropped");
-                    let status = if res.result.is_ok() {
-                        "success"
-                    } else {
-                        "error"
-                    };
+                    let status = res.result.is_ok().then_some("success").unwrap_or("error");
+                    if let Err(err) = res.result.as_ref() {
+                        if name_hint.should_trace_errors() {
+                            tracing::warn!(?err, ?name_hint, "adapter response error");
+                        }
+                    }
+
                     if let Some(typ) = typ {
                         inner_client
                             .metrics

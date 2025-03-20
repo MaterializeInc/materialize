@@ -12,5 +12,5 @@ syntax = "proto3";
 package mz_repr.url;
 
 message ProtoUrl {
-    string url = 1;
+  string url = 1;
 }

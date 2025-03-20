@@ -14,9 +14,9 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
-use http::StatusCode;
 use mz_ore::retry::{Retry, RetryResult};
 use mz_persist_client::{PersistLocation, ShardId};
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
 use crate::action::{ControlFlow, State};
@@ -185,8 +185,19 @@ async fn check_catalog_state(state: &State) -> Result<(), anyhow::Error> {
         .and_then(|storage_metadata| storage_metadata.unfinalized_shards);
 
     // Load the on-disk catalog and dump its state.
+
+    // Make sure the version is parseable.
+    let _: semver::Version = state.build_info.version.parse().expect("invalid version");
+
     let maybe_disk_catalog = state
-        .with_catalog_copy(system_parameter_defaults, |catalog| catalog.state().clone())
+        .with_catalog_copy(
+            system_parameter_defaults,
+            state.build_info,
+            &state.materialize.bootstrap_args,
+            // The expression cache can be taxing on the CPU and is unnecessary for consistency checks.
+            Some(false),
+            |catalog| catalog.state().clone(),
+        )
         .await
         .map_err(|e| anyhow!("failed to read on-disk catalog state: {e}"))?
         .map(|catalog| {

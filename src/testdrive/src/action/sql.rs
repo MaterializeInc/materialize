@@ -65,6 +65,7 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
         | CreateMaterializedView(_)
         | CreateView(_)
         | CreateTable(_)
+        | CreateTableFromSource(_)
         | CreateIndex(_)
         | CreateType(_)
         | CreateRole(_)
@@ -139,7 +140,15 @@ fn rewrite_result(
     writeln!(buf, "{}", columns.join(" "))?;
     writeln!(buf, "----")?;
     for row in content {
-        writeln!(buf, "{}", row.join(" "))?;
+        let mut formatted_row = Vec::<String>::new();
+        for value in row {
+            if value.is_empty() || value.contains(|x: char| char::is_ascii_whitespace(&x)) {
+                formatted_row.push("\"".to_owned() + &value + "\"");
+            } else {
+                formatted_row.push(value);
+            }
+        }
+        writeln!(buf, "{}", formatted_row.join(" "))?;
     }
     state.rewrites.push(Rewrite {
         content: buf,
@@ -346,7 +355,7 @@ pub async fn run_fail_sql(
     cmd: FailSqlCommand,
     state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
-    use Statement::{AlterSink, Commit, Fetch, Rollback};
+    use Statement::{AlterSink, Commit, CreateConnection, Fetch, Rollback};
 
     let stmts = mz_sql_parser::parser::parse_statements(&cmd.query)
         .map_err(|e| format!("unable to parse SQL: {}: {}", cmd.query, e));
@@ -385,6 +394,7 @@ pub async fn run_fail_sql(
         // FETCH should not be retried because it consumes data on each response.
         Some(Fetch(_)) => false,
         Some(AlterSink(_)) => false,
+        Some(CreateConnection(_)) => false,
         Some(_) => true,
     };
 

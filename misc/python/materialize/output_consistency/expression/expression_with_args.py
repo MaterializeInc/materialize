@@ -31,7 +31,8 @@ from materialize.output_consistency.operation.return_type_spec import (
     InputArgTypeHints,
     ReturnTypeSpec,
 )
-from materialize.output_consistency.selection.selection import DataRowSelection
+from materialize.output_consistency.selection.row_selection import DataRowSelection
+from materialize.util import stable_int_hash
 
 
 class ExpressionWithArgs(Expression):
@@ -55,18 +56,28 @@ class ExpressionWithArgs(Expression):
         self.return_type_spec = operation.return_type_spec
         self.args = args
 
+    def hash(self) -> int:
+        return stable_int_hash(
+            self.operation.to_pattern(self.count_args()),
+            *[str(arg.hash()) for arg in self.args],
+        )
+
     def count_args(self) -> int:
         return len(self.args)
 
     def has_args(self) -> bool:
         return self.count_args() > 0
 
-    def to_sql(self, sql_adjuster: SqlDialectAdjuster, is_root_level: bool) -> str:
+    def to_sql(
+        self, sql_adjuster: SqlDialectAdjuster, include_alias: bool, is_root_level: bool
+    ) -> str:
         sql: str = self.pattern
 
         for arg in self.args:
             sql = sql.replace(
-                EXPRESSION_PLACEHOLDER, arg.to_sql(sql_adjuster, False), 1
+                EXPRESSION_PLACEHOLDER,
+                arg.to_sql(sql_adjuster, include_alias, False),
+                1,
             )
 
         if len(self.args) != self.pattern.count(EXPRESSION_PLACEHOLDER):
@@ -136,6 +147,14 @@ class ExpressionWithArgs(Expression):
 
         return leaves
 
+    def collect_vertical_table_indices(self) -> set[int]:
+        vertical_table_indices = set()
+
+        for arg in self.args:
+            vertical_table_indices.update(arg.collect_vertical_table_indices())
+
+        return vertical_table_indices
+
     def is_leaf(self) -> bool:
         return False
 
@@ -164,6 +183,15 @@ class ExpressionWithArgs(Expression):
 
         return False
 
+    def operation_to_pattern(self) -> str:
+        return self.operation.to_pattern(self.count_args())
+
+    def recursively_mark_as_shared(self) -> None:
+        super().recursively_mark_as_shared()
+
+        for arg in self.args:
+            arg.recursively_mark_as_shared()
+
 
 def _determine_storage_layout(args: list[Expression]) -> ValueStorageLayout:
     mutual_storage_layout: ValueStorageLayout | None = None
@@ -182,7 +210,7 @@ def _determine_storage_layout(args: list[Expression]) -> ValueStorageLayout:
             )
 
     if mutual_storage_layout is None:
-        # use this as default (but it should not matter as expressions are expected to always have at least one arg)
-        return ValueStorageLayout.HORIZONTAL
+        # use this as default (in case there are no args)
+        return ValueStorageLayout.ANY
 
     return mutual_storage_layout

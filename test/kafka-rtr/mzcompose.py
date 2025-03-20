@@ -7,16 +7,23 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Functional test for Kafka with real-time recency enabled. Queries should block
+until results are available instead of returning out of date results.
+"""
+
 import random
 import threading
 import time
 from textwrap import dedent
 
-from pg8000 import Cursor
+from psycopg import Cursor
 
+from materialize import buildkite
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
@@ -27,6 +34,7 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
+    Mz(app_password=""),
     Materialized(),
     Toxiproxy(),
     Testdrive(no_reset=True, seed=1),
@@ -34,12 +42,17 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    for name in c.workflows:
+    def process(name: str) -> None:
         if name == "default":
-            continue
-
+            return
+        # TODO: Reenable when database-issues#8657 is fixed
+        if name == "multithreaded":
+            return
         with c.test_case(name):
             c.workflow(name)
+
+    workflows = buildkite.shard_list(list(c.workflows), lambda w: w)
+    c.test_parts(workflows, process)
 
 
 #
@@ -48,10 +61,10 @@ def workflow_default(c: Composition) -> None:
 def workflow_simple(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("zookeeper", "kafka", "schema-registry", "materialized", "toxiproxy")
+    c.setup_quickstart_cluster()
 
     seed = random.getrandbits(16)
     c.run_testdrive_files(
-        "--no-reset",
         "--max-errors=1",
         f"--seed={seed}",
         f"--temp-dir=/share/tmp/kafka-resumption-{seed}",
@@ -64,6 +77,7 @@ def workflow_simple(c: Composition) -> None:
 def workflow_resumption(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("zookeeper", "kafka", "schema-registry", "materialized", "toxiproxy")
+    c.setup_quickstart_cluster()
 
     priv_cursor = c.sql_cursor(service="materialized", user="mz_system", port=6877)
     priv_cursor.execute("ALTER SYSTEM SET allow_real_time_recency = true;")
@@ -77,8 +91,8 @@ def workflow_resumption(c: Composition) -> None:
             """
             SELECT sum(count)
               FROM (
-                  SELECT count(*) FROM input_1
-                  UNION ALL SELECT count(*) FROM input_2
+                  SELECT count(*) FROM input_1_tbl
+                  UNION ALL SELECT count(*) FROM input_2_tbl
                   UNION ALL SELECT count(*) FROM t
               ) AS x;"""
         )
@@ -110,7 +124,6 @@ def workflow_resumption(c: Composition) -> None:
         print(f"Running failure mode {failure_mode}...")
 
         c.run_testdrive_files(
-            "--no-reset",
             f"--seed={seed}{i}",
             f"--temp-dir=/share/tmp/kafka-resumption-{seed}",
             "resumption/toxiproxy-setup.td",  # without toxify
@@ -122,7 +135,6 @@ def workflow_resumption(c: Composition) -> None:
         t1.start()
         time.sleep(10)
         c.run_testdrive_files(
-            "--no-reset",
             "resumption/toxiproxy-restore-connection.td",
         )
         t1.join()
@@ -137,7 +149,6 @@ def workflow_resumption(c: Composition) -> None:
         c.up("toxiproxy")
 
         c.run_testdrive_files(
-            "--no-reset",
             "resumption/mz-reset.td",
         )
 
@@ -145,6 +156,7 @@ def workflow_resumption(c: Composition) -> None:
 def workflow_multithreaded(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("zookeeper", "kafka", "schema-registry", "materialized")
+    c.setup_quickstart_cluster()
     c.up("testdrive", persistent=True)
 
     value = [201]
@@ -176,8 +188,8 @@ def workflow_multithreaded(c: Composition) -> None:
                 """
                 SELECT sum(count)
                   FROM (
-                      SELECT count(*) FROM input_1
-                      UNION ALL SELECT count(*) FROM input_2
+                      SELECT count(*) FROM input_1_tbl
+                      UNION ALL SELECT count(*) FROM input_2_tbl
                       UNION ALL SELECT count(*) FROM t
                   ) AS x;"""
             )
@@ -204,12 +216,16 @@ def workflow_multithreaded(c: Composition) -> None:
         > CREATE CONNECTION IF NOT EXISTS kafka_conn_1 TO KAFKA (BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT);
         > CREATE CONNECTION IF NOT EXISTS kafka_conn_2 TO KAFKA (BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT);
 
-        > CREATE SOURCE input_1 (city, state, zip)
+        > CREATE SOURCE input_1
           FROM KAFKA CONNECTION kafka_conn_1 (TOPIC 'testdrive-input_1-${testdrive.seed}')
+
+        > CREATE TABLE input_1_tbl (city, state, zip) FROM SOURCE input_1 (REFERENCE "testdrive-input_1-${testdrive.seed}")
           FORMAT CSV WITH 3 COLUMNS
 
-        > CREATE SOURCE input_2 (city, state, zip)
+        > CREATE SOURCE input_2
           FROM KAFKA CONNECTION kafka_conn_2 (TOPIC 'testdrive-input_2-${testdrive.seed}')
+
+        > CREATE TABLE input_2_tbl (city, state, zip) FROM SOURCE input_2 (REFERENCE "testdrive-input_2-${testdrive.seed}")
           FORMAT CSV WITH 3 COLUMNS
 
         > CREATE TABLE t (a int);
@@ -218,8 +234,8 @@ def workflow_multithreaded(c: Composition) -> None:
         > CREATE MATERIALIZED VIEW sum AS
           SELECT sum(count)
           FROM (
-              SELECT count(*) FROM input_1
-              UNION ALL SELECT count(*) FROM input_2
+              SELECT count(*) FROM input_1_tbl
+              UNION ALL SELECT count(*) FROM input_2_tbl
               UNION ALL SELECT count(*) FROM t
           ) AS x;
     """

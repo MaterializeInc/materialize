@@ -193,6 +193,7 @@ impl RustType<ProtoCharLength> for CharLength {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
@@ -202,7 +203,7 @@ mod tests {
         #[mz_ore::test]
         fn char_length_protobuf_roundtrip(expect in any::<CharLength>()) {
             let actual = protobuf_roundtrip::<_, ProtoCharLength>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }

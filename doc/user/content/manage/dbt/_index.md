@@ -5,12 +5,12 @@ aliases:
   - /guides/dbt/
   - /third-party/dbt/
   - /integrations/dbt/
-  - /manage/dbt/
 menu:
   main:
-    parent: manage-dbt
-    name: "Overview"
-    weight: 5
+    parent: manage
+    weight: 10
+    identifier: "manage-dbt"
+
 ---
 
 {{< note >}}
@@ -37,13 +37,13 @@ need to:
    (optionally using a virtual environment):
 
     ```bash
-    python3 -m venv dbt-venv         # create the virtual environment
-    source dbt-venv/bin/activate     # activate the virtual environment
-    pip install dbt-materialize      # install the adapter
+    python3 -m venv dbt-venv                  # create the virtual environment
+    source dbt-venv/bin/activate              # activate the virtual environment
+    pip install dbt-core dbt-materialize      # install dbt-core and the adapter
     ```
 
-    The installation will include `dbt-core` and the `dbt-postgres` dependency.
-    To check that the plugin was successfully installed, run:
+    The installation will include the `dbt-postgres` dependency. To check that
+    the plugin was successfully installed, run:
 
     ```bash
     dbt --version
@@ -73,6 +73,11 @@ create a `profiles.yml` file, if it doesn't exist. To help you get started, the
 `dbt init` project includes sample models to run the [Materialize quickstart](/get-started/quickstart/).
 
 ### Connect to Materialize
+
+{{< note >}}
+As a best practice, we strongly recommend using [service accounts](/manage/access-control/create-service-accounts)
+to connect external applications, like dbt, to Materialize.
+{{</ note >}}
 
 dbt manages all your connection configurations (or, profiles) in a file called
 [`profiles.yml`](https://docs.getdbt.com/dbt-cli/configure-your-profile). By
@@ -104,6 +109,8 @@ default, this file is located under `~/.dbt/`.
           threads: 1
           host: <host>
           port: 6875
+          # Materialize user or service account (recommended)
+          # to connect as
           user: <user@domain.com>
           pass: <password>
           database: materialize
@@ -161,7 +168,7 @@ In Materialize, a [source](/sql/create-source) describes an **external** system
 you want to read data from, and provides details about how to decode and
 interpret that data. You can instruct dbt to create a source using the custom
 `source` materialization. Once a source has been defined, it can be referenced
-from another model using the dbt [`ref()`](https://docs.getdbt.com/reference/dbt-jinja-functions/source)
+from another model using the dbt [`ref()`](https://docs.getdbt.com/reference/dbt-jinja-functions/ref)
 or [`source()`](https://docs.getdbt.com/reference/dbt-jinja-functions/source) functions.
 
 {{< note >}}
@@ -175,7 +182,7 @@ exposed** in dbt, and need to exist before you run any `source` models.
 Create a [Kafka source](/sql/create-source/kafka/).
 
 **Filename:** sources/kafka_topic_a.sql
-```sql
+```mzsql
 {{ config(materialized='source') }}
 
 FROM KAFKA CONNECTION kafka_connection (TOPIC 'topic_a')
@@ -193,7 +200,7 @@ database.schema.kafka_topic_a
 Create a [PostgreSQL source](/sql/create-source/postgres/).
 
 **Filename:** sources/pg.sql
-```sql
+```mzsql
 {{ config(materialized='source') }}
 
 FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
@@ -225,7 +232,7 @@ models in, you should additionally force a dependency on the parent source
 model (`pg`), as described in the [dbt documentation](https://docs.getdbt.com/reference/dbt-jinja-functions/ref#forcing-dependencies).
 
 **Filename:** staging/dep_subsources.sql
-```sql
+```mzsql
 -- depends_on: {{ ref('pg') }}
 {{ config(materialized='view') }}
 
@@ -251,7 +258,7 @@ database.schema.table_b
 Create a [MySQL source](/sql/create-source/mysql/).
 
 **Filename:** sources/mysql.sql
-```sql
+```mzsql
 {{ config(materialized='source') }}
 
 FROM MYSQL CONNECTION mysql_connection
@@ -283,7 +290,7 @@ models in, you should additionally force a dependency on the parent source
 model (`mysql`), as described in the [dbt documentation](https://docs.getdbt.com/reference/dbt-jinja-functions/ref#forcing-dependencies).
 
 **Filename:** staging/dep_subsources.sql
-```sql
+```mzsql
 -- depends_on: {{ ref('mysql') }}
 {{ config(materialized='view') }}
 
@@ -309,7 +316,7 @@ database.schema.table_b
 Create a [webhook source](/sql/create-source/webhook/).
 
 **Filename:** sources/webhook.sql
-```sql
+```mzsql
 {{ config(materialized='source') }}
 
 FROM WEBHOOK
@@ -338,50 +345,204 @@ database.schema.webhook
 
 In dbt, a [model](https://docs.getdbt.com/docs/building-a-dbt-project/building-models#getting-started)
 is a `SELECT` statement that encapsulates a data transformation you want to run
-on top of your database.
+on top of your database. When you use dbt with Materialize, **your models stay
+up-to-date** without manual or configured refreshes. This allows you to
+efficiently transform streaming data using the same thought process you'd use
+for batch transformations against any other database.
 
-When you use dbt with Materialize, **your models stay up-to-date** without
-manual or configured refreshes. This allows you to efficiently transform
-streaming data using the same thought process you'd use for batch
-transformations on top of any other database.
+Depending on your usage patterns, you can transform data using [`view`](#views)
+or [`materialized_view`](#materialized-views) models. For guidance and best
+practices on when to use views and materialized views in Materialize, see
+[Indexed views vs. materialized views](/concepts/views/#indexed-views-vs-materialized-views).
 
 #### Views
 
-dbt models are materialized as `views` by default, so to create a [view](/sql/create-view)
-in Materialize you can simply provide the SQL statement in the model (and skip
-the `materialized` configuration parameter).
+dbt models are materialized as [views](/sql/create-view) by default. Although
+this means you can skip the `materialized` configuration in the model
+definition to create views in Materialize, we recommend explicitly setting the
+materialization type for maintainability.
 
 **Filename:** models/view_a.sql
-```sql
+```mzsql
+{{ config(materialized='view') }}
+
+SELECT
+    col_a, ...
+-- Reference model dependencies using the dbt ref() function
+FROM {{ ref('kafka_topic_a') }}
+```
+
+The model above will be compiled to the following SQL statement:
+
+```mzsql
+CREATE VIEW database.schema.view_a AS
+SELECT
+    col_a, ...
+FROM database.schema.kafka_topic_a;
+```
+
+The resulting view **will not** keep results incrementally updated without an
+index (see [Creating an index on a view](#creating-an-index-on-a-view)). Once a
+`view` model has been defined, it can be referenced from another model using
+the dbt [`ref()`](https://docs.getdbt.com/reference/dbt-jinja-functions/ref)
+function.
+
+##### Creating an index on a view
+
+{{< tip >}}
+For guidance and best practices on how to use indexes in Materialize, see
+[Indexes on views](/concepts/indexes/#indexes-on-views).
+{{</ tip >}}
+
+To keep results **up-to-date** in Materialize, you can create [indexes](/concepts/indexes/)
+on view models using the [`index` configuration](#indexes). This
+allows you to bypass the need for maintaining complex incremental logic or
+re-running dbt to refresh your models.
+
+**Filename:** models/view_a.sql
+```mzsql
+{{ config(materialized='view',
+          indexes=[{'columns': ['col_a'], 'cluster': 'cluster_a'}]) }}
+
 SELECT
     col_a, ...
 FROM {{ ref('kafka_topic_a') }}
 ```
 
-The model above would be compiled to `database.schema.view_a`. One thing to note
-here is that the model depends on the Kafka source defined above. To express
-this dependency and track the **lineage** of your project, you can use the dbt
-[`ref()`](https://docs.getdbt.com/reference/dbt-jinja-functions/ref) function.
+The model above will be compiled to the following SQL statements:
+
+```mzsql
+CREATE VIEW database.schema.view_a AS
+SELECT
+    col_a, ...
+FROM database.schema.kafka_topic_a;
+
+CREATE INDEX database.schema.view_a_idx IN CLUSTER cluster_a ON view_a (col_a);
+```
+
+As new data arrives, indexes keep view results **incrementally updated** in
+memory within a [cluster](/concepts/clusters/). Indexes help optimize query
+performance and make queries against views fast and computationally free.
 
 #### Materialized views
 
-This is where Materialize goes beyond dbt's incremental models (and traditional
-databases), with [materialized views](/sql/create-materialized-view)
-that **continuously update** as the underlying data changes:
+To materialize a model as a [materialized view](/concepts/views/#materialized-views),
+set the `materialized` configuration to `materialized_view`.
 
 **Filename:** models/materialized_view_a.sql
-```sql
+```mzsql
 {{ config(materialized='materialized_view') }}
+
+SELECT
+    col_a, ...
+-- Reference model dependencies using the dbt ref() function
+FROM {{ ref('view_a') }}
+```
+
+The model above will be compiled to the following SQL statement:
+
+```mzsql
+CREATE MATERIALIZED VIEW database.schema.materialized_view_a AS
+SELECT
+    col_a, ...
+FROM database.schema.view_a;
+```
+
+The resulting materialized view will keep results **incrementally updated** in
+durable storage as new data arrives. Once a `materialized_view` model has been
+defined, it can be referenced from another model using the dbt [`ref()`](https://docs.getdbt.com/reference/dbt-jinja-functions/ref)
+function.
+
+##### Creating an index on a materialized view
+
+{{< tip >}}
+For guidance and best practices on how to use indexes in Materialize, see
+[Indexes on materialized views](/concepts/views/#indexes-on-materialized-views).
+{{</ tip >}}
+
+With a materialized view, your models are kept **up-to-date** in Materialize as
+new data arrives. This allows you to bypass the need for maintaining complex
+incremental logic or re-run dbt to refresh your models.
+
+These results are **incrementally updated** in durable storage — which makes
+them available across clusters — but aren't optimized for performance. To make
+results also available in memory within a [cluster](/concepts/clusters/), you
+can create [indexes](/concepts/indexes/) on materialized view models using the
+[`index` configuration](#indexes).
+
+**Filename:** models/materialized_view_a.sql
+```mzsql
+{{ config(materialized='materialized_view')
+          indexes=[{'columns': ['col_a'], 'cluster': 'cluster_b'}]) }}
 
 SELECT
     col_a, ...
 FROM {{ ref('view_a') }}
 ```
 
-The model above would be compiled to `database.schema.materialized_view_a`.
-Here, the model depends on the view defined above, and is referenced as such
-via the dbt [ref()](https://docs.getdbt.com/reference/dbt-jinja-functions/ref)
-function.
+The model above will be compiled to the following SQL statements:
+
+```mzsql
+CREATE MATERIALIZED VIEW database.schema.materialized_view_a AS
+SELECT
+    col_a, ...
+FROM database.schema.view_a;
+
+CREATE INDEX database.schema.materialized_view_a_idx IN CLUSTER cluster_b ON materialized_view_a (col_a);
+```
+
+As new data arrives, results are **incrementally updated** in durable storage
+and also accessible in memory within the [cluster](/concepts/clusters/) the
+index is created in. Indexes help optimize query performance and make queries
+against materialized views faster.
+
+##### Using refresh strategies
+
+{{< tip >}}
+For guidance and best practices on how to use refresh strategies in Materialize,
+see [Refresh strategies](/sql/create-materialized-view/#refresh-strategies).
+{{</ tip >}}
+
+{{< private-preview />}}
+
+For data that doesn't require up-to-the-second freshness, or that can be
+accessed using different patterns to optimize for performance and cost
+(e.g., hot vs. cold data), it might be appropriate to use a non-default
+[refresh strategy](/sql/create-materialized-view/#refresh-strategies).
+
+To configure a refresh strategy in a materialized view model, use the
+[`refresh_interval` configuration](#configuration-refresh-strategies).
+Materialized view models configured with a refresh strategy must be deployed in
+a [scheduled cluster](/sql/create-cluster/#scheduling) for cost savings to be
+significant — so you must also specify a valid scheduled `cluster` using the
+[`cluster` configuration](#configuration).
+
+**Filename:** models/materialized_view_refresh.sql
+```mzsql
+{{ config(materialized='materialized_view', cluster='my_scheduled_cluster', refresh_interval={'at_creation': True, 'every': '1 day', 'aligned_to': '2024-10-22T10:40:33+00:00'}) }}
+
+SELECT
+    col_a, ...
+FROM {{ ref('view_a') }}
+```
+
+The model above will be compiled to the following SQL statement:
+
+```mzsql
+CREATE MATERIALIZED VIEW database.schema.materialized_view_refresh
+IN CLUSTER my_scheduled_cluster
+WITH (
+  -- Refresh at creation, so the view is populated ahead of
+  -- the first user-specified refresh time
+  REFRESH AT CREATION,
+  -- Refresh every day at 10PM UTC
+  REFRESH EVERY '1 day' ALIGNED TO '2024-10-22T10:40:33+00:00'
+) AS
+SELECT ...;
+```
+
+Materialized views configured with a refresh strategy are **not incrementally
+maintained** and must recompute their results from scratch on every refresh.
 
 ### Sinks
 
@@ -394,7 +555,7 @@ can instruct dbt to create a sink using the custom `sink` materialization.
 Create a [Kafka sink](/sql/create-sink).
 
 **Filename:** sinks/kafka_topic_c.sql
-```sql
+```mzsql
 {{ config(materialized='sink') }}
 
 FROM {{ ref('materialized_view_a') }}
@@ -415,29 +576,51 @@ database.schema.kafka_topic_c
 
 #### Clusters
 
-Use the `cluster` option to specify the [cluster](/sql/create-cluster/) in which
-a `materialized view`, `index`, `source`, or `sink` model is created. If
-unspecified, the default cluster for the connection is used.
+Use the `cluster` option to specify the [cluster](/sql/create-cluster/ "pools of
+compute resources (CPU, memory, and scratch disk space)") in which a
+`materialized_view`, `source`, `sink` model, or `index` configuration is
+created. If unspecified, the default cluster for the connection is used.
 
-```sql
+```mzsql
 {{ config(materialized='materialized_view', cluster='cluster_a') }}
+```
+
+To dynamically generate the name of a cluster (e.g., based on the target
+environment), you can override the `generate_cluster_name` macro with your
+custom logic under the directory defined by [macro-paths](https://docs.getdbt.com/reference/project-configs/macro-paths)
+in `dbt_project.yml`.
+
+**Filename:** macros/generate_cluster_name.sql
+```mzsql
+{% macro generate_cluster_name(custom_cluster_name) -%}
+    {%- if target.name == 'prod' -%}
+        {{ custom_cluster_name }}
+    {%- else -%}
+        {{ target.name }}_{{ custom_cluster_name }}
+    {%- endif -%}
+{%- endmacro %}
 ```
 
 #### Databases
 
 Use the `database` option to specify the [database](/sql/namespaces/#database-details)
-in which a `source`, `view`, `materialized view` or `sink` is created. If
+in which a `source`, `view`, `materialized_view` or `sink` is created. If
 unspecified, the default database for the connection is used.
 
-```sql
+```mzsql
 {{ config(materialized='materialized_view', database='database_a') }}
 ```
 
 #### Indexes
 
-Use the `indexes` option to define a list of [indexes](/sql/create-index/) on
-`source`, `view`, `table` or `materialized view` materializations. Each index
-option can have the following components:
+Use the `indexes` configuration to define a list of [indexes](/concepts/indexes/) on
+`source`, `view`, `table` or `materialized view` materializations. In
+Materialize, [indexes](/concepts/indexes/) on a view maintain view results in
+memory within a [cluster](/concepts/clusters/ "pools of compute resources (CPU,
+memory, and scratch disk space)"). As the underlying data changes, indexes
+**incrementally update** the view results in memory.
+
+Each `index` configuration can have the following components:
 
 Component                            | Value     | Description
 -------------------------------------|-----------|--------------------------------------------------
@@ -448,17 +631,36 @@ Component                            | Value     | Description
 
 ##### Creating a multi-column index
 
-```sql
+```mzsql
 {{ config(materialized='view',
           indexes=[{'columns': ['col_a','col_b'], 'cluster': 'cluster_a'}]) }}
 ```
 
 ##### Creating a default index
 
-```sql
+```mzsql
 {{ config(materialized='view',
     indexes=[{'default': True}]) }}
 ```
+
+### Configuration: refresh strategies {#configuration-refresh-strategies}
+
+{{< private-preview />}}
+
+**Minimum requirements:** `dbt-materialize` v1.7.3+
+
+Use the `refresh_interval` configuration to define [refresh strategies](#using-refresh-strategies)
+for materialized view models.
+
+The `refresh_interval` configuration can have the following components:
+
+Component       | Value    | Description
+----------------|----------|--------------------------------------------------
+`at`            | `string` | The specific time to refresh the materialized view at, using the [refresh at](/sql/create-materialized-view/#refresh-at) strategy.
+`at_creation`   | `bool`   | Default: `false`. Whether to trigger a first refresh when the materialized view is created.
+`every`         | `string` | The regular interval to refresh the materialized view at, using the [refresh every](/sql/create-materialized-view/#refresh-every) strategy.
+`aligned_to`    | `string` | The _phase_ of the regular interval to refresh the materialized view at, using the [refresh every](/sql/create-materialized-view/#refresh-every) strategy. If unspecified, defaults to the time when the materialized view is created.
+`on_commit`     | `bool`   | Default: `false`. Whether to use the default [refresh on commit](/sql/create-materialized-view/#refresh-on-commit) strategy. Setting this component to `true` is equivalent to **not specifying** `refresh_interval` in the configuration block, so we recommend only using it for the special case of parametrizing the configuration option (e.g., in macros).
 
 ### Configuration: model contracts and constraints {#configuration-contracts}
 
@@ -514,7 +716,7 @@ types are supported.
 A `not_null` constraint will be compiled to an [`ASSERT NOT NULL`](/sql/create-materialized-view/#non-null-assertions)
 option for the specified columns of the materialize view.
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW model_with_constraints
 WITH (
         ASSERT NOT NULL col_with_constraints
@@ -541,8 +743,13 @@ SELECT NULL AS col_with_constraints,
    SQL client connected to Materialize, double-check that all objects have been
    created:
 
-    ```sql
+    ```mzsql
     SHOW SOURCES [FROM database.schema];
+    ```
+
+    <p></p>
+
+    ```nofmt
            name
     -------------------
      mysql_table_a
@@ -550,13 +757,31 @@ SELECT NULL AS col_with_constraints,
      postgres_table_a
      postgres_table_b
      kafka_topic_a
+    ```
 
+    <p></p>
+
+    ```mzsql
     SHOW VIEWS;
+    ```
+
+    <p></p>
+
+    ```nofmt
            name
     -------------------
      view_a
+    ```
 
-     SHOW MATERIALIZED VIEWS;
+    <p></p>
+
+    ```mzsql
+    SHOW MATERIALIZED VIEWS;
+    ```
+
+    <p></p>
+
+    ```nofmt
            name
     -------------------
      materialized_view_a
@@ -633,14 +858,28 @@ trigger **real-time alerts** downstream.
    SQL client connected to Materialize, that the schema storing the tests has been
    created, as well as the test materialized views:
 
-    ```sql
+    ```mzsql
     SHOW SCHEMAS;
+    ```
+
+    <p></p>
+
+    ```nofmt
            name
     -------------------
      public
      public_etl_failure
+    ```
 
-    SHOW MATERIALIZED VIEWS FROM public_etl_failure;;
+    <p></p>
+
+    ```mzsql
+    SHOW MATERIALIZED VIEWS FROM public_etl_failure;
+    ```
+
+    <p></p>
+
+    ```nofmt
            name
     -------------------
      not_null_col_a
@@ -719,7 +958,7 @@ For "use-at-your-own-risk" workarounds, see [`dbt-core` #4226](https://github.co
 
     As an alternative, you can configure `persist-docs` in the config block of your models:
 
-    ```sql
+    ```mzsql
     {{ config(
         materialized=materialized_view,
         persist_docs={"relation": true, "columns": true}
@@ -730,8 +969,12 @@ For "use-at-your-own-risk" workarounds, see [`dbt-core` #4226](https://github.co
   files is persisted to Materialize in the [mz_internal.mz_comments](/sql/system-catalog/mz_internal/#mz_comments)
   system catalog table on every `dbt run`:
 
-    ```sql
+    ```mzsql
       SELECT * FROM mz_internal.mz_comments;
+    ```
+    <p></p>
+
+    ```nofmt
 
         id  |    object_type    | object_sub_id |              comment
       ------+-------------------+---------------+----------------------------------

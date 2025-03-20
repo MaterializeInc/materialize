@@ -9,7 +9,12 @@
 
 > ALTER SECRET secret2 RENAME TO secret3;
 
-> SHOW SECRETS;
+>[version<11400] SHOW SECRETS;
 pgpass
 secret1
 secret3
+
+>[version>=11400] SHOW SECRETS;
+pgpass ""
+secret1 ""
+secret3 ""

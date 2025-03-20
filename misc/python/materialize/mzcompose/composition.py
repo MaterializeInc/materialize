@@ -14,6 +14,7 @@ documentation][user-docs].
 
 [user-docs]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/mzbuild.md
 """
+
 import argparse
 import copy
 import importlib
@@ -24,7 +25,6 @@ import json
 import os
 import re
 import selectors
-import ssl
 import subprocess
 import sys
 import threading
@@ -36,17 +36,21 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from inspect import Traceback, getframeinfo, getmembers, isfunction, stack
 from tempfile import TemporaryFile
-from typing import Any, TextIO, cast
+from typing import Any, TextIO, TypeVar, cast
 
-import pg8000
+import psycopg
 import sqlparse
 import yaml
-from pg8000 import Connection, Cursor
+from psycopg import Connection, Cursor
 
-from materialize import MZ_ROOT, mzbuild, spawn, ui
-from materialize.mzcompose import loader
+from materialize import MZ_ROOT, buildkite, mzbuild, spawn, ui
+from materialize.mzcompose import cluster_replica_size_map, loader
 from materialize.mzcompose.service import Service
-from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.materialized import (
+    LEADER_STATUS_HEALTHCHECK,
+    DeploymentStatus,
+    Materialized,
+)
 from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.mzcompose.test_result import (
     FailedTestExecutionError,
@@ -87,9 +91,7 @@ class WorkflowArgumentParser(argparse.ArgumentParser):
         args: Sequence[str] | None = None,
         namespace: argparse.Namespace | None = None,
     ) -> tuple[argparse.Namespace, list[str]]:
-        if args is None:
-            args = self.args
-        return super().parse_known_args(args, namespace)
+        return super().parse_known_args(args or self.args, namespace)
 
 
 class Composition:
@@ -124,7 +126,6 @@ class Composition:
             raise UnknownCompositionError(name)
 
         self.compose: dict[str, Any] = {
-            "version": "3.7",
             "services": {},
         }
 
@@ -216,6 +217,11 @@ class Composition:
                         image.rd.arch = Arch.AARCH64
                     else:
                         raise ValueError(f"Unknown platform {config['platform']}")
+                if config.get("publish") is not None:
+                    # Override whether an image is expected to be published, so
+                    # that we will build it in CI instead of failing.
+                    image.publish = config["publish"]
+                    del config["publish"]
                 images.append(image)
 
             if "propagate_uid_gid" in config:
@@ -228,14 +234,23 @@ class Composition:
                 if self.preserve_ports and not ":" in str(port):
                     # If preserving ports, bind the container port to the same
                     # host port, assuming the host port is available.
-                    ports[i] = f"{port}:{port}"
-                elif ":" in str(port) and not config.get("allow_host_ports", False):
+                    ports[i] = f"127.0.0.1:{port}:{port}"
+                elif ":" in str(port).removeprefix("127.0.0.1::") and not config.get(
+                    "allow_host_ports", False
+                ):
                     # Raise an error for host-bound ports, unless
                     # `allow_host_ports` is `True`
                     raise UIError(
-                        "programming error: disallowed host port in service {name!r}",
+                        f"programming error: disallowed host port in service {name!r}: {port}",
                         hint='Add `"allow_host_ports": True` to the service config to disable this check.',
                     )
+                elif not str(port).startswith("127.0.0.1:"):
+                    # Only bind to localhost, otherwise the service is
+                    # available to anyone with network access to us
+                    if ":" in str(port):
+                        ports[i] = f"127.0.0.1:{port}"
+                    else:
+                        ports[i] = f"127.0.0.1::{port}"
 
             if "allow_host_ports" in config:
                 config.pop("allow_host_ports")
@@ -280,6 +295,7 @@ class Composition:
         check: bool = True,
         max_tries: int = 1,
         silent: bool = False,
+        environment: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess:
         """Invoke `docker compose` on the rendered composition.
 
@@ -319,6 +335,7 @@ class Composition:
             file = TemporaryFile(mode="w")
             os.set_inheritable(file.fileno(), True)
             yaml.dump(self.compose, file)
+            os.fsync(file.fileno())
             self.files[thread_id] = file
 
         cmd = [
@@ -345,6 +362,7 @@ class Composition:
                         stderr=subprocess.PIPE,
                         text=True,
                         bufsize=1,
+                        env=environment,
                     )
                     if stdin is not None:
                         p.stdin.write(stdin)  # type: ignore
@@ -361,17 +379,22 @@ class Composition:
                     while running:
                         running = False
                         for key, val in sel.select():
-                            c = key.fileobj.read(1024)  # type: ignore
-                            if not c:
+                            output = ""
+                            while True:
+                                new_output = key.fileobj.read(1024)  # type: ignore
+                                if not new_output:
+                                    break
+                                output += new_output
+                            if not output:
                                 continue
                             # Keep running as long as stdout or stderr have any content
                             running = True
                             if key.fileobj is p.stdout:
-                                print(c, end="", flush=True)
-                                stdout_result += c
+                                print(output, end="", flush=True)
+                                stdout_result += output
                             else:
-                                print(c, end="", file=sys.stderr, flush=True)
-                                stderr_result += c
+                                print(output, end="", file=sys.stderr, flush=True)
+                                stderr_result += output
                     p.wait()
                     retcode = p.poll()
                     assert retcode is not None
@@ -392,6 +415,7 @@ class Composition:
                         input=stdin,
                         text=True,
                         bufsize=1,
+                        env=environment,
                     )
             except subprocess.CalledProcessError as e:
                 if e.stdout and not capture_and_print:
@@ -452,7 +476,7 @@ class Composition:
             name: The name of the workflow to run.
             args: The arguments to pass to the workflow function.
         """
-        ui.header(f"Running workflow {name}")
+        print(f"--- Running workflow {name}")
         func = self.workflows[name]
         parser = WorkflowArgumentParser(name, inspect.getdoc(func), list(args))
         try:
@@ -473,7 +497,9 @@ class Composition:
             loader.composition_path = None
 
     @contextmanager
-    def override(self, *services: "Service") -> Iterator[None]:
+    def override(
+        self, *services: "Service", fail_on_new_service: bool = True
+    ) -> Iterator[None]:
         """Temporarily update the composition with the specified services.
 
         The services must already exist in the composition. They restored to
@@ -493,6 +519,9 @@ class Composition:
         # Update the composition with the new service definitions.
         deps = self._munge_services([(s.name, cast(dict, s.config)) for s in services])
         for service in services:
+            assert (
+                not fail_on_new_service or service.name in self.compose["services"]
+            ), f"Service {service.name} not found in SERVICES: {list(self.compose['services'].keys())}"
             self.compose["services"][service.name] = service.config
 
         # Re-acquire dependencies, as the override may have swapped an `image`
@@ -627,21 +656,28 @@ class Composition:
         self,
         service: str | None = None,
         user: str = "materialize",
+        database: str = "materialize",
         port: int | None = None,
         password: str | None = None,
-        ssl_context: ssl.SSLContext | None = None,
+        sslmode: str = "disable",
+        startup_params: dict[str, str] = {},
     ) -> Connection:
         if service is None:
             service = "materialized"
 
         """Get a connection (with autocommit enabled) to the materialized service."""
         port = self.port(service, port) if port else self.default_port(service)
-        conn = pg8000.connect(
+        print(" ".join([f"-c {key}={val}" for key, val in startup_params.items()]))
+        conn = psycopg.connect(
             host="localhost",
+            dbname=database,
             user=user,
             password=password,
             port=port,
-            ssl_context=ssl_context,
+            sslmode=sslmode,
+            options=" ".join(
+                [f"-c {key}={val}" for key, val in startup_params.items()]
+            ),
         )
         conn.autocommit = True
         return conn
@@ -650,12 +686,16 @@ class Composition:
         self,
         service: str | None = None,
         user: str = "materialize",
+        database: str = "materialize",
         port: int | None = None,
         password: str | None = None,
-        ssl_context: ssl.SSLContext | None = None,
+        sslmode: str = "disable",
+        startup_params: dict[str, str] = {},
     ) -> Cursor:
         """Get a cursor to run SQL queries against the materialized service."""
-        conn = self.sql_connection(service, user, port, password, ssl_context)
+        conn = self.sql_connection(
+            service, user, database, port, password, sslmode, startup_params
+        )
         return conn.cursor()
 
     def sql(
@@ -663,32 +703,34 @@ class Composition:
         sql: str,
         service: str | None = None,
         user: str = "materialize",
+        database: str = "materialize",
         port: int | None = None,
         password: str | None = None,
         print_statement: bool = True,
     ) -> None:
         """Run a batch of SQL statements against the materialized service."""
         with self.sql_cursor(
-            service=service, user=user, port=port, password=password
+            service=service, user=user, database=database, port=port, password=password
         ) as cursor:
             for statement in sqlparse.split(sql):
                 if print_statement:
                     print(f"> {statement}")
-                cursor.execute(statement)
+                cursor.execute(statement.encode())
 
     def sql_query(
         self,
         sql: str,
         service: str | None = None,
         user: str = "materialize",
+        database: str = "materialize",
         port: int | None = None,
         password: str | None = None,
     ) -> Any:
         """Execute and return results of a SQL query."""
         with self.sql_cursor(
-            service=service, user=user, port=port, password=password
+            service=service, user=user, database=database, port=port, password=password
         ) as cursor:
-            cursor.execute(sql)
+            cursor.execute(sql.encode())
             return cursor.fetchall()
 
     def query_mz_version(self, service: str | None = None) -> str:
@@ -734,7 +776,7 @@ class Composition:
         return self.invoke(
             "run",
             *(["--entrypoint", entrypoint] if entrypoint else []),
-            *(f"-e{k}={v}" for k, v in env_extra.items()),
+            *(f"-e{k}" for k in env_extra.keys()),
             *(["--detach"] if detach else []),
             *(["--rm"] if rm else []),
             service,
@@ -744,19 +786,31 @@ class Composition:
             capture_and_print=capture_and_print,
             stdin=stdin,
             check=check,
+            environment=os.environ | env_extra,
         )
 
     def run_testdrive_files(
         self,
         *args: str,
         rm: bool = False,
+        mz_service: str | None = None,
     ) -> subprocess.CompletedProcess:
+        if mz_service is not None:
+            args = tuple(
+                list(args)
+                + [
+                    f"--materialize-url=postgres://materialize@{mz_service}:6875",
+                    f"--materialize-internal-url=postgres://mz_system@{mz_service}:6877",
+                ]
+            )
+        environment = {"CLUSTER_REPLICA_SIZES": json.dumps(cluster_replica_size_map())}
         return self.run(
             "testdrive",
             *args,
             rm=rm,
             # needed for sufficient error information in the junit.xml while still printing to stdout during execution
             capture_and_print=True,
+            env_extra=environment,
         )
 
     def exec(
@@ -771,6 +825,7 @@ class Composition:
         check: bool = True,
         workdir: str | None = None,
         env_extra: dict[str, str] = {},
+        silent: bool = False,
     ) -> subprocess.CompletedProcess:
         """Execute a one-off command in a service's running container
 
@@ -802,6 +857,7 @@ class Composition:
             capture_and_print=capture_and_print,
             stdin=stdin,
             check=check,
+            silent=silent,
         )
 
     def pull_if_variable(self, services: list[str], max_tries: int = 2) -> None:
@@ -863,10 +919,12 @@ class Composition:
                 service["command"] = []
             self.files = {}
 
+        self.capture_logs()
         self.invoke(
             "up",
             *(["--detach"] if detach else []),
             *(["--wait"] if wait else []),
+            *(["--quiet-pull"] if ui.env_is_truthy("CI") else []),
             *services,
             max_tries=max_tries,
         )
@@ -885,20 +943,20 @@ class Composition:
             )
             exclusion_clause = f"name NOT IN ({excluded_items})"
 
-        # starting sources are currently expected if no new data is produced, see #21980
+        # starting sources are currently expected if no new data is produced, see database-issues#6605
         results = self.sql_query(
             f"""
             SELECT name, status, error, details
             FROM mz_internal.mz_source_statuses
             WHERE NOT(
-                status IN ('running', 'starting') OR
+                status IN ('running', 'starting', 'paused') OR
                 (type = 'progress' AND status = 'created')
             )
             AND {exclusion_clause}
             """
         )
         for name, status, error, details in results:
-            return f"Source {name} is expected to be running/created, but is {status}, error: {error}, details: {details}"
+            return f"Source {name} is expected to be running/created/paused, but is {status}, error: {error}, details: {details}"
 
         results = self.sql_query(
             f"""
@@ -918,11 +976,11 @@ class Composition:
             JOIN mz_cluster_replicas
             ON mz_internal.mz_cluster_replica_statuses.replica_id = mz_cluster_replicas.id
             JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id
-            WHERE status NOT IN ('ready', 'not-ready')
+            WHERE status NOT IN ('online', 'offline')
             """
         )
         for cluster_name, replica_name, status, reason in results:
-            return f"Cluster replica {cluster_name}.{replica_name} is expected to be ready/not-ready, but is {status}, reason: {reason}"
+            return f"Cluster replica {cluster_name}.{replica_name} is expected to be online/offline, but is {status}, reason: {reason}"
 
         return None
 
@@ -944,46 +1002,16 @@ class Composition:
                 Materialized(
                     image=f"materialize/materialized:{version}",
                     environment_extra=["MZ_DEPLOY_GENERATION=1"],
-                    healthcheck=[
-                        "CMD",
-                        "curl",
-                        "-f",
-                        "localhost:6878/api/leader/status",
-                    ],
+                    healthcheck=LEADER_STATUS_HEALTHCHECK,
                 )
             ):
                 self.up("materialized")
-                while True:
-                    result = json.loads(
-                        self.exec(
-                            "materialized",
-                            "curl",
-                            "localhost:6878/api/leader/status",
-                            capture=True,
-                        ).stdout
-                    )
-                    if result["status"] == "ReadyToPromote":
-                        return
-                    assert (
-                        result["status"] == "Initializing"
-                    ), f"Unexpected status {result}"
-                    print("Not ready yet, waiting 1 s")
-                    time.sleep(1)
+                self.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE)
                 if rollback:
                     with self.override(Materialized()):
                         self.up("materialized")
                 else:
-                    result = json.loads(
-                        self.exec(
-                            "materialized",
-                            "curl",
-                            "-X",
-                            "POST",
-                            "localhost:6878/api/leader/promote",
-                            capture=True,
-                        ).stdout
-                    )
-                    assert result["result"] == "Success", f"Unexpected result {result}"
+                    self.promote_mz()
             self.sql("SELECT 1")
 
             NUM_RETRIES = 60
@@ -1041,6 +1069,39 @@ class Composition:
                 "Sanity Restart skipped because Mz not in services or `sanity_restart` label not set"
             )
 
+    def metadata_store(self) -> str:
+        for name in ["cockroach", "postgres-metadata"]:
+            if name in self.compose["services"]:
+                return name
+        raise RuntimeError(
+            f"No external metadata store found: {self.compose['services']}"
+        )
+
+    def blob_store(self) -> str:
+        for name in ["azurite", "minio"]:
+            if name in self.compose["services"]:
+                print(f"BLOB STORE IS: {name}")
+                return name
+        raise RuntimeError(f"No external blob store found: {self.compose['services']}")
+
+    def setup_quickstart_cluster(self, replicas: int = 2) -> None:
+        replica_names = [f"r{replica_id}" for replica_id in range(0, 2)]
+        replica_string = ",".join(
+            f"{replica_name} (SIZE '4')" for replica_name in replica_names
+        )
+        self.sql(
+            f"""
+            DROP CLUSTER quickstart CASCADE;
+            CREATE CLUSTER quickstart REPLICAS ({replica_string});
+            GRANT ALL PRIVILEGES ON CLUSTER quickstart TO materialize;
+            DROP CLUSTER IF EXISTS singlereplica;
+            CREATE CLUSTER singlereplica SIZE '4', REPLICATION FACTOR 1;
+            GRANT ALL PRIVILEGES ON CLUSTER singlereplica TO materialize;
+            """,
+            user="mz_system",
+            port=6877,
+        )
+
     def capture_logs(self, *services: str) -> None:
         # Capture logs into services.log since they will be lost otherwise
         # after dowing a composition.
@@ -1049,7 +1110,13 @@ class Composition:
         time = os.path.getmtime(path) if os.path.isfile(path) else 0
         with open(path, "a") as f:
             self.invoke(
-                "logs", "--no-color", "--since", str(time), *services, capture=f
+                "logs",
+                "--no-color",
+                "--timestamps",
+                "--since",
+                str(time),
+                *services,
+                capture=f,
             )
 
     def down(
@@ -1283,7 +1350,7 @@ class Composition:
         elif "GiB" in mem_str:
             mem_float = mem_float * 10**9
         else:
-            assert False, f"Unable to parse {mem_str}"
+            raise RuntimeError(f"Unable to parse {mem_str}")
         return round(mem_float)
 
     def testdrive(
@@ -1294,7 +1361,8 @@ class Composition:
         args: list[str] = [],
         caller: Traceback | None = None,
         mz_service: str | None = None,
-    ) -> None:
+        quiet: bool = False,
+    ) -> subprocess.CompletedProcess:
         """Run a string as a testdrive script.
 
         Args:
@@ -1310,19 +1378,33 @@ class Composition:
         args = args + [f"--source={caller.filename}:{caller.lineno}"]
 
         if mz_service is not None:
-            args += [
+            args = args + [
                 f"--materialize-url=postgres://materialize@{mz_service}:6875",
                 f"--materialize-internal-url=postgres://mz_system@{mz_service}:6877",
                 f"--persist-consensus-url=postgres://root@{mz_service}:26257?options=--search_path=consensus",
             ]
 
         if persistent:
-            self.exec(service, *args, stdin=input, capture_and_print=True)
+            return self.exec(
+                service,
+                *args,
+                stdin=input,
+                capture_and_print=not quiet,
+                capture=quiet,
+                capture_stderr=quiet,
+            )
         else:
             assert (
                 mz_service is None
             ), "testdrive(mz_service = ...) can only be used with persistent Testdrive containers."
-            self.run(service, *args, stdin=input, capture_and_print=True)
+            return self.run(
+                service,
+                *args,
+                stdin=input,
+                capture_and_print=not quiet,
+                capture=quiet,
+                capture_stderr=quiet,
+            )
 
     def enable_minio_versioning(self) -> None:
         self.up("minio")
@@ -1340,7 +1422,7 @@ class Composition:
 
         self.exec("mc", "mc", "version", "enable", "persist/persist")
 
-    def backup_crdb(self) -> None:
+    def backup_cockroach(self) -> None:
         self.up("mc", persistent=True)
         self.exec("mc", "mc", "mb", "--ignore-existing", "persist/crdb-backup")
         self.exec(
@@ -1357,8 +1439,8 @@ class Composition:
             """,
         )
 
-    def restore_mz(self) -> None:
-        self.kill("materialized")
+    def restore_cockroach(self, mz_service: str = "materialized") -> None:
+        self.kill(mz_service)
         self.exec(
             "cockroach",
             "cockroach",
@@ -1374,7 +1456,9 @@ class Composition:
                 DROP EXTERNAL CONNECTION backup_bucket;
             """,
         )
-        self.run(
+        self.up("persistcli", persistent=True)
+        self.exec(
+            "persistcli",
             "persistcli",
             "admin",
             "--commit",
@@ -1382,7 +1466,111 @@ class Composition:
             f"--blob-uri={minio_blob_uri()}",
             "--consensus-uri=postgres://root@cockroach:26257?options=--search_path=consensus",
         )
-        self.up("materialized")
+        self.up(mz_service)
+
+    def backup_postgres(self) -> None:
+        backup = self.exec(
+            "postgres-metadata",
+            "pg_dumpall",
+            "--user",
+            "postgres",
+            capture=True,
+        ).stdout
+        with open("backup.sql", "w") as f:
+            f.write(backup)
+
+    def restore_postgres(self, mz_service: str = "materialized") -> None:
+        self.kill(mz_service)
+        self.kill("postgres-metadata")
+        self.rm("postgres-metadata")
+        self.up("postgres-metadata")
+        with open("backup.sql") as f:
+            backup = f.read()
+        self.exec(
+            "postgres-metadata",
+            "psql",
+            "--user",
+            "postgres",
+            "--file",
+            "-",
+            stdin=backup,
+        )
+        self.up("persistcli", persistent=True)
+        self.exec(
+            "persistcli",
+            "persistcli",
+            "admin",
+            "--commit",
+            "restore-blob",
+            f"--blob-uri={minio_blob_uri()}",
+            "--consensus-uri=postgres://root@postgres-metadata:26257?options=--search_path=consensus",
+        )
+        self.up(mz_service)
+
+    def backup(self) -> None:
+        if self.metadata_store() == "cockroach":
+            self.backup_cockroach()
+        else:
+            self.backup_postgres()
+
+    def restore(self, mz_service: str = "materialized") -> None:
+        if self.metadata_store() == "cockroach":
+            self.restore_cockroach(mz_service)
+        else:
+            self.restore_postgres(mz_service)
+
+    def await_mz_deployment_status(
+        self,
+        status: DeploymentStatus,
+        mz_service: str = "materialized",
+        timeout: int | None = None,
+        sleep_time: float | None = 1.0,
+    ) -> None:
+        timeout = timeout or (1800 if ui.env_is_truthy("CI_COVERAGE_ENABLED") else 900)
+        print(
+            f"Awaiting {mz_service} deployment status {status.value} for {timeout}s",
+            end="",
+        )
+
+        result = {}
+        timeout_time = time.time() + timeout
+        while time.time() < timeout_time:
+            try:
+                result = json.loads(
+                    self.exec(
+                        mz_service,
+                        "curl",
+                        "-s",
+                        "localhost:6878/api/leader/status",
+                        capture=True,
+                        silent=True,
+                    ).stdout
+                )
+                if result["status"] == status.value:
+                    print(" Reached!")
+                    return
+            except:
+                pass
+            print(".", end="")
+            if sleep_time:
+                time.sleep(sleep_time)
+        raise UIError(
+            f"Timed out waiting for {mz_service} to reach Mz deployment status {status.value}, still in status {result.get('status')}"
+        )
+
+    def promote_mz(self, mz_service: str = "materialized") -> None:
+        result = json.loads(
+            self.exec(
+                mz_service,
+                "curl",
+                "-s",
+                "-X",
+                "POST",
+                "localhost:6878/api/leader/promote",
+                capture=True,
+            ).stdout
+        )
+        assert result["result"] == "Success", f"Unexpected result {result}"
 
     def cloud_hostname(self, quiet: bool = False) -> str:
         """Uses the mz command line tool to get the hostname of the cloud instance"""
@@ -1394,3 +1582,50 @@ class Composition:
         # It is necessary to append the 'https://' protocol; otherwise, urllib can't parse it correctly.
         cloud_hostname = urllib.parse.urlparse("https://" + cloud_url).hostname
         return str(cloud_hostname)
+
+    T = TypeVar("T")
+
+    def test_parts(self, parts: list[T], process_func: Callable[[T], Any]) -> None:
+        from materialize.test_analytics.config.test_analytics_db_config import (
+            create_test_analytics_config,
+        )
+        from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
+
+        priority: dict[str, int] = {}
+        test_analytics: TestAnalyticsDb | None = None
+
+        if buildkite.is_in_buildkite():
+            print("~~~ Fetching part priorities")
+            test_analytics_config = create_test_analytics_config(self)
+            test_analytics = TestAnalyticsDb(test_analytics_config)
+            try:
+                priority = test_analytics.builds.get_part_priorities(timeout=15)
+                print(f"Priorities: {priority}")
+            except Exception as e:
+                print(f"Failed to fetch part priorities, using default order: {e}")
+
+        sorted_parts = sorted(
+            parts, key=lambda part: priority.get(str(part), 0), reverse=True
+        )
+        exceptions: list[Exception] = []
+
+        try:
+            for part in sorted_parts:
+                try:
+                    process_func(part)
+                except Exception as e:
+                    if buildkite.is_in_buildkite():
+                        assert test_analytics
+                        test_analytics.builds.add_build_job_failure(str(part))
+                    # raise
+                    # We could also keep running, but then runtime is still
+                    # slow when a test fails, and the annotation only shows up
+                    # after the test finished:
+                    exceptions.append(e)
+        finally:
+            if buildkite.is_in_buildkite():
+                assert test_analytics
+                test_analytics.database_connector.submit_update_statements()
+        if exceptions:
+            print(f"Further exceptions were raised:\n{exceptions[1:]}")
+            raise exceptions[0]

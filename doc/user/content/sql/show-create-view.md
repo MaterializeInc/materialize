@@ -10,15 +10,15 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-create-view.svg" >}}
+```sql
+SHOW CREATE VIEW <view_name>
+```
 
-Field | Use
-------|-----
-_view&lowbar;name_ | The view you want to use. You can find available view names through [`SHOW VIEWS`](../show-views).
+For available view names, see [`SHOW VIEWS`](/sql/show-views).
 
 ## Examples
 
-```sql
+```mzsql
 SHOW CREATE VIEW my_view;
 ```
 ```nofmt

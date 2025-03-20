@@ -9,26 +9,40 @@
 
 //! Logic related to executing catalog transactions.
 
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+use std::time::Duration;
+
+use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
+use mz_adapter_types::dyncfgs::{
+    ENABLE_0DT_DEPLOYMENT, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT,
+    WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL, WITH_0DT_DEPLOYMENT_MAX_WAIT,
+};
 use mz_audit_log::{
-    CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, IdFullNameV1, ObjectType,
-    SchedulingDecisionsWithReasonsV1, VersionedEvent,
+    CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, IdFullNameV1, IdNameV1,
+    ObjectType, SchedulingDecisionsWithReasonsV2, VersionedEvent, VersionedStorageUsage,
 };
 use mz_catalog::builtin::BuiltinLog;
-use mz_catalog::durable::Transaction;
+use mz_catalog::durable::{NetworkPolicy, Transaction};
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogItem, ClusterConfig, StateDiff, StateUpdate, StateUpdateKind, TemporaryItem,
+    CatalogItem, ClusterConfig, DataSourceDesc, SourceReferences, StateDiff, StateUpdate,
+    StateUpdateKind, TemporaryItem,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
 use mz_controller_types::{ClusterId, ReplicaId};
+use mz_ore::collections::HashSet;
 use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
+use mz_persist_types::ShardId;
 use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, PrivilegeMap};
+use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::GlobalId;
+use mz_repr::{strconv, CatalogItemId, ColumnName, ColumnType, GlobalId};
+use mz_sql::ast::RawDataType;
 use mz_sql::catalog::{
     CatalogDatabase, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogRole,
     CatalogSchema, DefaultPrivilegeAclItem, DefaultPrivilegeObject, RoleAttributes, RoleMembership,
@@ -38,20 +52,20 @@ use mz_sql::names::{
     CommentObjectId, DatabaseId, FullItemName, ObjectId, QualifiedItemName,
     ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, SystemObjectId,
 };
+use mz_sql::plan::{NetworkPolicyRule, PlanError};
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
-use mz_sql::session::vars::Value as VarValue;
-use mz_sql::session::vars::{OwnedVarInput, Var, TXN_WAL_TABLES};
+use mz_sql::session::vars::OwnedVarInput;
+use mz_sql::session::vars::{Value as VarValue, VarInput};
 use mz_sql::{rbac, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{QualifiedReplica, Value};
-use mz_storage_client::controller::StorageController;
-use mz_storage_types::controller::TxnWalTablesImpl;
-use std::collections::{BTreeMap, BTreeSet};
+use mz_storage_client::storage_collections::StorageCollections;
 use tracing::{info, trace};
 
 use crate::catalog::{
-    catalog_type_to_audit_object_type, is_reserved_name, is_reserved_role_name,
-    object_type_to_audit_object_type, system_object_type_to_audit_object_type, BuiltinTableUpdate,
-    Catalog, CatalogState, UpdatePrivilegeVariant,
+    catalog_type_to_audit_object_type, comment_id_to_audit_object_type, is_reserved_name,
+    is_reserved_role_name, object_type_to_audit_object_type,
+    system_object_type_to_audit_object_type, BuiltinTableUpdate, Catalog, CatalogState,
+    UpdatePrivilegeVariant,
 };
 use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::coord::ConnMeta;
@@ -61,7 +75,7 @@ use crate::AdapterError;
 #[derive(Debug, Clone)]
 pub enum Op {
     AlterRetainHistory {
-        id: GlobalId,
+        id: CatalogItemId,
         value: Option<Value>,
         window: CompactionWindow,
     },
@@ -70,6 +84,19 @@ pub enum Op {
         name: String,
         attributes: RoleAttributes,
         vars: RoleVars,
+    },
+    AlterNetworkPolicy {
+        id: NetworkPolicyId,
+        rules: Vec<NetworkPolicyRule>,
+        name: String,
+        owner_id: RoleId,
+    },
+    AlterAddColumn {
+        id: CatalogItemId,
+        new_global_id: GlobalId,
+        name: ColumnName,
+        typ: ColumnType,
+        sql: RawDataType,
     },
     CreateDatabase {
         name: String,
@@ -87,22 +114,26 @@ pub enum Op {
     CreateCluster {
         id: ClusterId,
         name: String,
-        introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
+        introspection_sources: Vec<&'static BuiltinLog>,
         owner_id: RoleId,
         config: ClusterConfig,
     },
     CreateClusterReplica {
         cluster_id: ClusterId,
-        id: ReplicaId,
         name: String,
         config: ReplicaConfig,
         owner_id: RoleId,
         reason: ReplicaCreateDropReason,
     },
     CreateItem {
-        id: GlobalId,
+        id: CatalogItemId,
         name: QualifiedItemName,
         item: CatalogItem,
+        owner_id: RoleId,
+    },
+    CreateNetworkPolicy {
+        rules: Vec<NetworkPolicyRule>,
+        name: String,
         owner_id: RoleId,
     },
     Comment {
@@ -129,7 +160,7 @@ pub enum Op {
         to_name: String,
     },
     RenameItem {
-        id: GlobalId,
+        id: CatalogItemId,
         current_full_name: FullItemName,
         to_name: String,
     },
@@ -163,15 +194,19 @@ pub enum Op {
         name: String,
         config: ClusterConfig,
     },
+    UpdateClusterReplicaConfig {
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+        config: ReplicaConfig,
+    },
     UpdateItem {
-        id: GlobalId,
+        id: CatalogItemId,
         name: QualifiedItemName,
         to_item: CatalogItem,
     },
-    UpdateStorageUsage {
-        shard_id: Option<String>,
-        size_bytes: u64,
-        collection_timestamp: EpochMillis,
+    UpdateSourceReferences {
+        source_id: CatalogItemId,
+        references: SourceReferences,
     },
     UpdateSystemConfiguration {
         name: String,
@@ -181,20 +216,16 @@ pub enum Op {
         name: String,
     },
     ResetAllSystemConfiguration,
-    /// Performs updates to weird builtin tables, such as `mz_ssh_tunnel_connections` and
-    /// `mz_cluster_replica_statuses`. Their contents are not fully derived from catalog state.
-    /// `mz_ssh_tunnel_connections` is derived from the secrets controller, however, it still must
-    /// be kept in-sync with the catalog state. Storing the contents of the table in the durable
-    /// catalog would simplify the situation, but then we'd have to somehow encode public keys the
-    /// CREATE SQL of connections, which is annoying. In order to successfully balance all of these
-    /// constraints, we handle all updates to the table separately. `mz_cluster_replica_statuses`
-    /// is ephemeral state and should be a builtin source.
+    /// Performs updates to the storage usage table, which probably should be a builtin source.
     ///
-    /// TODO(jkosh44) In a multi-writer or high availability catalog world, this will not work. If
-    /// a process crashes after updating the durable catalog but before updating the builtin table,
-    /// then another listening catalog will never know to update the builtin table.
-    WeirdBuiltinTableUpdates {
-        builtin_table_update: BuiltinTableUpdate,
+    /// TODO(jkosh44) In a multi-writer or high availability catalog world, this
+    /// might not work. If a process crashes after collecting storage usage events
+    /// but before updating the builtin table, then another listening catalog
+    /// will never know to update the builtin table.
+    WeirdStorageUsageUpdates {
+        object_id: Option<String>,
+        size_bytes: u64,
+        collection_timestamp: EpochMillis,
     },
     /// Performs a dry run of the commit, but errors with
     /// [`AdapterError::TransactionDryRun`].
@@ -214,7 +245,8 @@ pub enum DropObjectInfo {
     Database(DatabaseId),
     Schema((ResolvedDatabaseSpecifier, SchemaSpecifier)),
     Role(RoleId),
-    Item(GlobalId),
+    Item(CatalogItemId),
+    NetworkPolicy(NetworkPolicyId),
 }
 
 impl DropObjectInfo {
@@ -231,7 +263,8 @@ impl DropObjectInfo {
             ObjectId::Database(database_id) => DropObjectInfo::Database(database_id),
             ObjectId::Schema(schema) => DropObjectInfo::Schema(schema),
             ObjectId::Role(role_id) => DropObjectInfo::Role(role_id),
-            ObjectId::Item(global_id) => DropObjectInfo::Item(global_id),
+            ObjectId::Item(item_id) => DropObjectInfo::Item(item_id),
+            ObjectId::NetworkPolicy(policy_id) => DropObjectInfo::NetworkPolicy(policy_id),
         }
     }
 
@@ -246,7 +279,10 @@ impl DropObjectInfo {
             DropObjectInfo::Database(database_id) => ObjectId::Database(database_id.clone()),
             DropObjectInfo::Schema(schema) => ObjectId::Schema(schema.clone()),
             DropObjectInfo::Role(role_id) => ObjectId::Role(role_id.clone()),
-            DropObjectInfo::Item(global_id) => ObjectId::Item(global_id.clone()),
+            DropObjectInfo::Item(item_id) => ObjectId::Item(item_id.clone()),
+            DropObjectInfo::NetworkPolicy(network_policy_id) => {
+                ObjectId::NetworkPolicy(network_policy_id.clone())
+            }
         }
     }
 }
@@ -269,7 +305,7 @@ impl ReplicaCreateDropReason {
         self,
     ) -> (
         CreateOrDropClusterReplicaReasonV1,
-        Option<SchedulingDecisionsWithReasonsV1>,
+        Option<SchedulingDecisionsWithReasonsV2>,
     ) {
         let (reason, scheduling_policies) = match self {
             ReplicaCreateDropReason::Manual => (CreateOrDropClusterReplicaReasonV1::Manual, None),
@@ -297,15 +333,15 @@ impl Catalog {
         !item.is_temporary()
     }
 
-    /// Gets GlobalIds of temporary items to be created, checks for name collisions
+    /// Gets [`CatalogItemId`]s of temporary items to be created, checks for name collisions
     /// within a connection id.
     fn temporary_ids(
         &self,
         ops: &[Op],
         temporary_drops: BTreeSet<(&ConnectionId, String)>,
-    ) -> Result<Vec<GlobalId>, Error> {
+    ) -> Result<BTreeSet<CatalogItemId>, Error> {
         let mut creating = BTreeSet::new();
-        let mut temporary_ids = Vec::with_capacity(ops.len());
+        let mut temporary_ids = BTreeSet::new();
         for op in ops.iter() {
             if let Op::CreateItem {
                 id,
@@ -324,7 +360,7 @@ impl Catalog {
                         );
                     } else {
                         creating.insert((conn_id, &name.item));
-                        temporary_ids.push(id.clone());
+                        temporary_ids.insert(id.clone());
                     }
                 }
             }
@@ -337,7 +373,9 @@ impl Catalog {
         &mut self,
         // n.b. this is an option to prevent us from needing to build out a
         // dummy impl of `StorageController` for tests.
-        storage_controller: Option<&mut dyn StorageController<Timestamp = mz_repr::Timestamp>>,
+        storage_collections: Option<
+            &mut Arc<dyn StorageCollections<Timestamp = mz_repr::Timestamp> + Send + Sync>,
+        >,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         ops: Vec<Op>,
@@ -349,7 +387,7 @@ impl Catalog {
             )))
         });
 
-        let drop_ids: BTreeSet<GlobalId> = ops
+        let drop_ids: BTreeSet<CatalogItemId> = ops
             .iter()
             .filter_map(|op| match op {
                 Op::DropObjects(drop_object_infos) => {
@@ -374,6 +412,11 @@ impl Catalog {
                 }
             })
             .collect();
+        let dropped_global_ids = drop_ids
+            .iter()
+            .flat_map(|item_id| self.get_global_ids(item_id))
+            .collect();
+
         let temporary_ids = self.temporary_ids(&ops, temporary_drops)?;
         let mut builtin_table_updates = vec![];
         let mut audit_events = vec![];
@@ -386,7 +429,7 @@ impl Catalog {
         let mut state = self.state.clone();
 
         Self::transact_inner(
-            storage_controller,
+            storage_collections,
             oracle_write_ts,
             session,
             ops,
@@ -402,7 +445,7 @@ impl Catalog {
         // process if this fails, because we have to restart envd due to
         // indeterminate catalog state, which we only reconcile during catalog
         // init.
-        tx.commit()
+        tx.commit(oracle_write_ts)
             .await
             .unwrap_or_terminate("catalog storage transaction commit must succeed");
 
@@ -413,7 +456,7 @@ impl Catalog {
         self.transient_revision += 1;
 
         // Drop in-memory planning metadata.
-        let dropped_notices = self.drop_plans_and_metainfos(&drop_ids);
+        let dropped_notices = self.drop_plans_and_metainfos(&dropped_global_ids);
         if self.state.system_config().enable_mz_notices() {
             // Generate retractions for the Builtin tables.
             self.state().pack_optimizer_notices(
@@ -437,11 +480,13 @@ impl Catalog {
     /// - If the only element of `ops` is [`Op::TransactionDryRun`].
     #[instrument(name = "catalog::transact_inner")]
     async fn transact_inner(
-        storage_controller: Option<&mut dyn StorageController<Timestamp = mz_repr::Timestamp>>,
+        storage_collections: Option<
+            &mut Arc<dyn StorageCollections<Timestamp = mz_repr::Timestamp> + Send + Sync>,
+        >,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         mut ops: Vec<Op>,
-        temporary_ids: Vec<GlobalId>,
+        temporary_ids: BTreeSet<CatalogItemId>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         audit_events: &mut Vec<VersionedEvent>,
         tx: &mut Transaction<'_>,
@@ -460,6 +505,7 @@ impl Catalog {
 
         let mut storage_collections_to_create = BTreeSet::new();
         let mut storage_collections_to_drop = BTreeSet::new();
+        let mut storage_collections_to_register = BTreeMap::new();
 
         for op in ops {
             let (weird_builtin_table_update, temporary_item_updates) = Self::transact_op(
@@ -472,6 +518,7 @@ impl Catalog {
                 state,
                 &mut storage_collections_to_create,
                 &mut storage_collections_to_drop,
+                &mut storage_collections_to_register,
             )
             .await?;
 
@@ -491,41 +538,41 @@ impl Catalog {
             // separately for updating state and builtin tables.
             // TODO(jkosh44) Some more thought needs to be given as to how temporary tables work
             // in a multi-subscriber catalog world.
+            let op_id = tx.op_id().into();
             let temporary_item_updates =
                 temporary_item_updates
                     .into_iter()
                     .map(|(item, diff)| StateUpdate {
                         kind: StateUpdateKind::TemporaryItem(item),
-                        ts: tx.op_id().into(),
+                        ts: op_id,
                         diff,
                     });
 
-            let mut updates: Vec<_> = tx.get_op_updates().collect();
+            let mut updates: Vec<_> = tx.get_and_commit_op_updates();
             updates.extend(temporary_item_updates);
-            let op_builtin_table_updates = state.apply_updates(updates);
+            let op_builtin_table_updates = state.apply_updates(updates)?;
             let op_builtin_table_updates =
                 state.resolve_builtin_table_updates(op_builtin_table_updates);
             builtin_table_updates.extend(op_builtin_table_updates);
-            tx.commit_op();
         }
 
         if dry_run_ops.is_empty() {
-            // `storage_controller` should only be `None` for tests.
-            if let Some(c) = storage_controller {
+            // `storage_collections` should only be `None` for tests.
+            if let Some(c) = storage_collections {
                 c.prepare_state(
                     tx,
                     storage_collections_to_create,
                     storage_collections_to_drop,
+                    storage_collections_to_register,
                 )
                 .await?;
             }
 
-            let updates = tx.get_op_updates().collect();
-            let op_builtin_table_updates = state.apply_updates(updates);
+            let updates = tx.get_and_commit_op_updates();
+            let op_builtin_table_updates = state.apply_updates(updates)?;
             let op_builtin_table_updates =
                 state.resolve_builtin_table_updates(op_builtin_table_updates);
             builtin_table_updates.extend(op_builtin_table_updates);
-            tx.commit_op();
 
             Ok(())
         } else {
@@ -548,12 +595,13 @@ impl Catalog {
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         op: Op,
-        temporary_ids: &Vec<GlobalId>,
+        temporary_ids: &BTreeSet<CatalogItemId>,
         audit_events: &mut Vec<VersionedEvent>,
         tx: &mut Transaction<'_>,
         state: &CatalogState,
         storage_collections_to_create: &mut BTreeSet<GlobalId>,
         storage_collections_to_drop: &mut BTreeSet<GlobalId>,
+        storage_collections_to_register: &mut BTreeMap<GlobalId, ShardId>,
     ) -> Result<(Option<BuiltinTableUpdate>, Vec<(TemporaryItem, StateDiff)>), AdapterError> {
         let mut weird_builtin_table_update = None;
         let mut temporary_item_updates = Vec::new();
@@ -636,6 +684,62 @@ impl Catalog {
 
                 info!("update role {name} ({id})");
             }
+            Op::AlterNetworkPolicy {
+                id,
+                rules,
+                name,
+                owner_id: _owner_id,
+            } => {
+                let existing_policy = state.get_network_policy(&id).clone();
+                let mut policy: NetworkPolicy = existing_policy.into();
+                policy.rules = rules;
+                if is_reserved_name(&name) {
+                    return Err(AdapterError::Catalog(Error::new(
+                        ErrorKind::ReservedNetworkPolicyName(name),
+                    )));
+                }
+                tx.update_network_policy(id, policy.clone())?;
+
+                CatalogState::add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Alter,
+                    ObjectType::NetworkPolicy,
+                    EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                        id: id.to_string(),
+                        name: name.clone(),
+                    }),
+                )?;
+
+                info!("update network policy {name} ({id})");
+            }
+            Op::AlterAddColumn {
+                id,
+                new_global_id,
+                name,
+                typ,
+                sql,
+            } => {
+                let mut new_entry = state.get_entry(&id).clone();
+                let version = new_entry.item.add_column(name, typ, sql)?;
+                // All versions of a table share the same shard, so it shouldn't matter what
+                // GlobalId we use here.
+                let shard_id = state
+                    .storage_metadata()
+                    .get_collection_shard(new_entry.latest_global_id())?;
+
+                // TODO(alter_table): Support adding columns to sources.
+                let CatalogItem::Table(table) = &mut new_entry.item else {
+                    return Err(AdapterError::Unsupported("adding columns to non-Table"));
+                };
+                table.collections.insert(version, new_global_id);
+
+                tx.update_item(id, new_entry.into())?;
+                storage_collections_to_register.insert(new_global_id, shard_id);
+            }
             Op::CreateDatabase { name, owner_id } => {
                 let database_owner_privileges = vec![rbac::owner_privilege(
                     mz_sql::catalog::ObjectType::Database,
@@ -683,13 +787,19 @@ impl Catalog {
                 )
                 .collect();
 
-                let (database_id, _) =
-                    tx.insert_user_database(&name, owner_id, database_privileges.clone())?;
+                let temporary_oids: HashSet<_> = state.get_temporary_oids().collect();
+                let (database_id, _) = tx.insert_user_database(
+                    &name,
+                    owner_id,
+                    database_privileges.clone(),
+                    &temporary_oids,
+                )?;
                 let (schema_id, _) = tx.insert_user_schema(
                     database_id,
                     DEFAULT_SCHEMA,
                     owner_id,
                     schema_privileges.clone(),
+                    &temporary_oids,
                 )?;
                 CatalogState::add_to_audit_log(
                     &state.system_configuration,
@@ -755,8 +865,13 @@ impl Catalog {
                 let privileges: Vec<_> =
                     merge_mz_acl_items(owner_privileges.into_iter().chain(default_privileges))
                         .collect();
-                let (schema_id, _) =
-                    tx.insert_user_schema(database_id, &schema_name, owner_id, privileges.clone())?;
+                let (schema_id, _) = tx.insert_user_schema(
+                    database_id,
+                    &schema_name,
+                    owner_id,
+                    privileges.clone(),
+                    &state.get_temporary_oids().collect(),
+                )?;
                 CatalogState::add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
@@ -785,6 +900,7 @@ impl Catalog {
                     attributes.clone(),
                     membership.clone(),
                     vars.clone(),
+                    &state.get_temporary_oids().collect(),
                 )?;
                 CatalogState::add_to_audit_log(
                     &state.system_configuration,
@@ -829,6 +945,21 @@ impl Catalog {
                 let privileges: Vec<_> =
                     merge_mz_acl_items(owner_privileges.into_iter().chain(default_privileges))
                         .collect();
+                let introspection_source_ids: Vec<_> = introspection_sources
+                    .iter()
+                    .map(|introspection_source| {
+                        Transaction::allocate_introspection_source_index_id(
+                            &id,
+                            introspection_source.variant,
+                        )
+                    })
+                    .collect();
+
+                let introspection_sources = introspection_sources
+                    .into_iter()
+                    .zip_eq(introspection_source_ids)
+                    .map(|(log, (item_id, gid))| (log, item_id, gid))
+                    .collect();
 
                 tx.insert_user_cluster(
                     id,
@@ -837,6 +968,7 @@ impl Catalog {
                     owner_id,
                     privileges.clone(),
                     config.clone().into(),
+                    &state.get_temporary_oids().collect(),
                 )?;
                 CatalogState::add_to_audit_log(
                     &state.system_configuration,
@@ -855,7 +987,6 @@ impl Catalog {
             }
             Op::CreateClusterReplica {
                 cluster_id,
-                id,
                 name,
                 config,
                 owner_id,
@@ -867,7 +998,8 @@ impl Catalog {
                     )));
                 }
                 let cluster = state.get_cluster(cluster_id);
-                tx.insert_cluster_replica(cluster_id, id, &name, config.clone().into(), owner_id)?;
+                let id =
+                    tx.insert_cluster_replica(cluster_id, &name, config.clone().into(), owner_id)?;
                 if let ReplicaLocation::Managed(ManagedReplicaLocation {
                     size,
                     disk,
@@ -877,8 +1009,8 @@ impl Catalog {
                 }) = &config.location
                 {
                     let (reason, scheduling_policies) = reason.into_audit_log();
-                    let details = EventDetails::CreateClusterReplicaV2(
-                        mz_audit_log::CreateClusterReplicaV2 {
+                    let details = EventDetails::CreateClusterReplicaV3(
+                        mz_audit_log::CreateClusterReplicaV3 {
                             cluster_id: cluster_id.to_string(),
                             cluster_name: cluster.name.clone(),
                             replica_id: Some(id.to_string()),
@@ -911,8 +1043,31 @@ impl Catalog {
             } => {
                 state.check_unstable_dependencies(&item)?;
 
-                if item.is_storage_collection() {
-                    storage_collections_to_create.insert(id);
+                match &item {
+                    CatalogItem::Table(table) => {
+                        let gids: Vec<_> = table.global_ids().collect();
+                        assert_eq!(gids.len(), 1);
+                        storage_collections_to_create.extend(gids);
+                    }
+                    CatalogItem::Source(source) => {
+                        storage_collections_to_create.insert(source.global_id());
+                    }
+                    CatalogItem::MaterializedView(mv) => {
+                        storage_collections_to_create.insert(mv.global_id());
+                    }
+                    CatalogItem::ContinualTask(ct) => {
+                        storage_collections_to_create.insert(ct.global_id());
+                    }
+                    CatalogItem::Sink(sink) => {
+                        storage_collections_to_create.insert(sink.global_id());
+                    }
+                    CatalogItem::Log(_)
+                    | CatalogItem::View(_)
+                    | CatalogItem::Index(_)
+                    | CatalogItem::Type(_)
+                    | CatalogItem::Func(_)
+                    | CatalogItem::Secret(_)
+                    | CatalogItem::Connection(_) => (),
                 }
 
                 let system_user = session.map_or(false, |s| s.user().is_system_user());
@@ -953,6 +1108,8 @@ impl Catalog {
                 )
                 .collect();
 
+                let temporary_oids = state.get_temporary_oids().collect();
+
                 if item.is_temporary() {
                     if name.qualifiers.database_spec != ResolvedDatabaseSpecifier::Ambient
                         || name.qualifiers.schema_spec != SchemaSpecifier::Temporary
@@ -961,9 +1118,7 @@ impl Catalog {
                             ErrorKind::InvalidTemporarySchema,
                         )));
                     }
-                    // TODO(jkosh44) This OID allocation is not correct. The temporary OID is not
-                    // saved durably, meaning we may allocate it twice.
-                    let oid = tx.allocate_oid()?;
+                    let oid = tx.allocate_oid(&temporary_oids)?;
                     let item = TemporaryItem {
                         id,
                         oid,
@@ -975,10 +1130,12 @@ impl Catalog {
                     temporary_item_updates.push((item, StateDiff::Addition));
                 } else {
                     if let Some(temp_id) =
-                        item.uses().iter().find(|id| match state.try_get_entry(id) {
-                            Some(entry) => entry.item().is_temporary(),
-                            None => temporary_ids.contains(id),
-                        })
+                        item.uses()
+                            .iter()
+                            .find(|id| match state.try_get_entry(*id) {
+                                Some(entry) => entry.item().is_temporary(),
+                                None => temporary_ids.contains(id),
+                            })
                     {
                         let temp_item = state.get_entry(temp_id);
                         return Err(AdapterError::Catalog(Error::new(
@@ -997,14 +1154,17 @@ impl Catalog {
                     }
                     let schema_id = name.qualifiers.schema_spec.clone().into();
                     let item_type = item.typ();
-                    let serialized_item = item.to_serialized();
+                    let (create_sql, global_id, versions) = item.to_serialized();
                     tx.insert_user_item(
                         id,
+                        global_id,
                         schema_id,
                         &name.item,
-                        serialized_item,
+                        create_sql,
                         owner_id,
                         privileges.clone(),
+                        &temporary_oids,
+                        versions,
                     )?;
                     info!(
                         "create {} {} ({})",
@@ -1020,18 +1180,51 @@ impl Catalog {
                     );
                     let details = match &item {
                         CatalogItem::Source(s) => {
-                            EventDetails::CreateSourceSinkV3(mz_audit_log::CreateSourceSinkV3 {
+                            let cluster_id = match s.data_source {
+                                // Ingestion exports don't have their own cluster, but
+                                // run on their ingestion's cluster.
+                                DataSourceDesc::IngestionExport { ingestion_id, .. } => {
+                                    match state.get_entry(&ingestion_id).cluster_id() {
+                                        Some(cluster_id) => Some(cluster_id.to_string()),
+                                        None => None,
+                                    }
+                                }
+                                _ => match item.cluster_id() {
+                                    Some(cluster_id) => Some(cluster_id.to_string()),
+                                    None => None,
+                                },
+                            };
+
+                            EventDetails::CreateSourceSinkV4(mz_audit_log::CreateSourceSinkV4 {
                                 id: id.to_string(),
+                                cluster_id,
                                 name,
                                 external_type: s.source_type().to_string(),
                             })
                         }
                         CatalogItem::Sink(s) => {
-                            EventDetails::CreateSourceSinkV3(mz_audit_log::CreateSourceSinkV3 {
+                            EventDetails::CreateSourceSinkV4(mz_audit_log::CreateSourceSinkV4 {
                                 id: id.to_string(),
+                                cluster_id: Some(s.cluster_id.to_string()),
                                 name,
                                 external_type: s.sink_type().to_string(),
                             })
+                        }
+                        CatalogItem::Index(i) => {
+                            EventDetails::CreateIndexV1(mz_audit_log::CreateIndexV1 {
+                                id: id.to_string(),
+                                name,
+                                cluster_id: i.cluster_id.to_string(),
+                            })
+                        }
+                        CatalogItem::MaterializedView(mv) => {
+                            EventDetails::CreateMaterializedViewV1(
+                                mz_audit_log::CreateMaterializedViewV1 {
+                                    id: id.to_string(),
+                                    name,
+                                    cluster_id: mv.cluster_id.to_string(),
+                                },
+                            )
                         }
                         _ => EventDetails::IdFullNameV1(IdFullNameV1 {
                             id: id.to_string(),
@@ -1050,12 +1243,109 @@ impl Catalog {
                     )?;
                 }
             }
+            Op::CreateNetworkPolicy {
+                rules,
+                name,
+                owner_id,
+            } => {
+                if state.network_policies_by_name.contains_key(&name) {
+                    return Err(AdapterError::PlanError(PlanError::Catalog(
+                        SqlCatalogError::NetworkPolicyAlreadyExists(name),
+                    )));
+                }
+                if is_reserved_name(&name) {
+                    return Err(AdapterError::Catalog(Error::new(
+                        ErrorKind::ReservedNetworkPolicyName(name),
+                    )));
+                }
+
+                let owner_privileges = vec![rbac::owner_privilege(
+                    mz_sql::catalog::ObjectType::NetworkPolicy,
+                    owner_id,
+                )];
+                let default_privileges = state
+                    .default_privileges
+                    .get_applicable_privileges(
+                        owner_id,
+                        None,
+                        None,
+                        mz_sql::catalog::ObjectType::NetworkPolicy,
+                    )
+                    .map(|item| item.mz_acl_item(owner_id));
+                let privileges: Vec<_> =
+                    merge_mz_acl_items(owner_privileges.into_iter().chain(default_privileges))
+                        .collect();
+
+                let temporary_oids: HashSet<_> = state.get_temporary_oids().collect();
+                let id = tx.insert_user_network_policy(
+                    name.clone(),
+                    rules,
+                    privileges,
+                    owner_id,
+                    &temporary_oids,
+                )?;
+
+                CatalogState::add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Create,
+                    ObjectType::NetworkPolicy,
+                    EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                        id: id.to_string(),
+                        name: name.clone(),
+                    }),
+                )?;
+
+                info!("created network policy {name} ({id})");
+            }
             Op::Comment {
                 object_id,
                 sub_component,
                 comment,
             } => {
-                tx.update_comment(object_id, sub_component, comment.clone())?;
+                tx.update_comment(object_id, sub_component, comment)?;
+                let entry = state.get_comment_id_entry(&object_id);
+                let should_log = entry
+                    .map(|entry| Self::should_audit_log_item(entry.item()))
+                    // Things that aren't catalog entries can't be temp, so should be logged.
+                    .unwrap_or(true);
+                // TODO: We need a conn_id to resolve schema names. This means that system-initiated
+                // comments won't be logged for now.
+                if let (Some(conn_id), true) =
+                    (session.map(|session| session.conn_id()), should_log)
+                {
+                    CatalogState::add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Comment,
+                        comment_id_to_audit_object_type(object_id),
+                        EventDetails::IdNameV1(IdNameV1 {
+                            // CommentObjectIds don't have a great string representation, but debug will do for now.
+                            id: format!("{object_id:?}"),
+                            name: state.comment_id_to_audit_log_name(object_id, conn_id),
+                        }),
+                    )?;
+                }
+            }
+            Op::UpdateSourceReferences {
+                source_id,
+                references,
+            } => {
+                tx.update_source_references(
+                    source_id,
+                    references
+                        .references
+                        .into_iter()
+                        .map(|reference| reference.into())
+                        .collect(),
+                    references.updated_at,
+                )?;
             }
             Op::DropObjects(drop_object_infos) => {
                 // Generate all of the objects that need to get dropped.
@@ -1069,8 +1359,8 @@ impl Catalog {
                     delta
                         .items
                         .iter()
-                        .copied()
-                        .partition(|id| !state.get_entry(id).item().is_temporary());
+                        .map(|id| id)
+                        .partition(|id| !state.get_entry(*id).item().is_temporary());
                 tx.remove_items(&durable_items_to_drop)?;
                 temporary_item_updates.extend(temporary_items_to_drop.into_iter().map(|id| {
                     let entry = state.get_entry(&id);
@@ -1081,7 +1371,11 @@ impl Catalog {
                     let entry = state.get_entry(&item_id);
 
                     if entry.item().is_storage_collection() {
-                        storage_collections_to_drop.insert(item_id);
+                        storage_collections_to_drop.extend(entry.global_ids());
+                    }
+
+                    if state.source_references.contains_key(&item_id) {
+                        tx.remove_source_references(item_id)?;
                     }
 
                     if Self::should_audit_log_item(entry.item()) {
@@ -1174,7 +1468,7 @@ impl Catalog {
                 }
 
                 // Drop any roles.
-                tx.remove_roles(&delta.roles)?;
+                tx.remove_user_roles(&delta.roles)?;
 
                 for role_id in delta.roles {
                     let role = state
@@ -1198,6 +1492,31 @@ impl Catalog {
                     info!("drop role {}", role.name());
                 }
 
+                // Drop any network policies.
+                tx.remove_network_policies(&delta.network_policies)?;
+
+                for network_policy_id in delta.network_policies {
+                    let policy = state
+                        .network_policies_by_id
+                        .get(&network_policy_id)
+                        .expect("catalog out of sync");
+
+                    CatalogState::add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Drop,
+                        ObjectType::NetworkPolicy,
+                        EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                            id: policy.id.to_string(),
+                            name: policy.name.clone(),
+                        }),
+                    )?;
+                    info!("drop network policy {}", policy.name.clone());
+                }
+
                 // Drop any replicas.
                 let replicas = delta.replicas.keys().copied().collect();
                 tx.remove_cluster_replicas(&replicas)?;
@@ -1208,7 +1527,7 @@ impl Catalog {
 
                     let (reason, scheduling_policies) = reason.into_audit_log();
                     let details =
-                        EventDetails::DropClusterReplicaV2(mz_audit_log::DropClusterReplicaV2 {
+                        EventDetails::DropClusterReplicaV3(mz_audit_log::DropClusterReplicaV3 {
                             cluster_id: cluster_id.to_string(),
                             cluster_name: cluster.name.clone(),
                             replica_id: Some(replica_id.to_string()),
@@ -1343,6 +1662,11 @@ impl Catalog {
                             let mut database = state.get_database(id).clone();
                             update_privilege_fn(&mut database.privileges);
                             tx.update_database(*id, database.into())?;
+                        }
+                        ObjectId::NetworkPolicy(id) => {
+                            let mut policy = state.get_network_policy(id).clone();
+                            update_privilege_fn(&mut policy.privileges);
+                            tx.update_network_policy(*id, policy.into())?;
                         }
                         ObjectId::Schema((database_spec, schema_spec)) => {
                             let schema_id = schema_spec.clone().into();
@@ -1832,6 +2156,21 @@ impl Catalog {
                             temporary_item_updates.push((new_entry.into(), StateDiff::Addition));
                         }
                     }
+                    ObjectId::NetworkPolicy(id) => {
+                        let mut policy = state.get_network_policy(id).clone();
+                        if id.is_system() {
+                            return Err(AdapterError::Catalog(Error::new(
+                                ErrorKind::ReadOnlyNetworkPolicy(policy.name),
+                            )));
+                        }
+                        Self::update_privilege_owners(
+                            &mut policy.privileges,
+                            policy.owner_id,
+                            new_owner,
+                        );
+                        policy.owner_id = new_owner;
+                        tx.update_network_policy(*id, policy.into())?;
+                    }
                     ObjectId::Role(_) => unreachable!("roles have no owner"),
                 }
                 let object_type = state.get_object_type(&id);
@@ -1855,6 +2194,38 @@ impl Catalog {
                 cluster.config = config;
                 tx.update_cluster(id, cluster.into())?;
                 info!("update cluster {}", name);
+
+                CatalogState::add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Alter,
+                    ObjectType::Cluster,
+                    EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                        id: id.to_string(),
+                        name,
+                    }),
+                )?;
+            }
+            Op::UpdateClusterReplicaConfig {
+                replica_id,
+                cluster_id,
+                config,
+            } => {
+                let replica = state.get_cluster_replica(cluster_id, replica_id).to_owned();
+                info!("update replica {}", replica.name);
+                tx.update_cluster_replica(
+                    replica_id,
+                    mz_catalog::durable::ClusterReplica {
+                        cluster_id,
+                        replica_id,
+                        name: replica.name.clone(),
+                        config: config.clone().into(),
+                        owner_id: replica.owner_id,
+                    },
+                )?;
             }
             Op::UpdateItem { id, name, to_item } => {
                 let mut entry = state.get_entry(&id).clone();
@@ -1885,48 +2256,106 @@ impl Catalog {
 
                 Self::log_update(state, &id);
             }
-            Op::UpdateStorageUsage {
-                shard_id,
-                size_bytes,
-                collection_timestamp,
-            } => {
-                tx.insert_storage_usage_event(shard_id, size_bytes, collection_timestamp)?;
-            }
             Op::UpdateSystemConfiguration { name, value } => {
                 let parsed_value = state.parse_system_configuration(&name, value.borrow())?;
-                tx.upsert_system_config(&name, parsed_value)?;
-                // This mirrors the `txn_wal_tables` "system var" into the catalog
+                tx.upsert_system_config(&name, parsed_value.clone())?;
+                // This mirrors the `enable_0dt_deployment` "system var" into the catalog
                 // storage "config" collection so that we can toggle the flag with
                 // Launch Darkly, but use it in boot before Launch Darkly is available.
-                if name == TXN_WAL_TABLES.name() {
-                    let txn_wal_tables =
-                        TxnWalTablesImpl::parse(value.borrow()).expect("parsing succeeded above");
-                    tx.set_txn_wal_tables(txn_wal_tables)?;
+                if name == ENABLE_0DT_DEPLOYMENT.name() {
+                    let enable_0dt_deployment =
+                        strconv::parse_bool(&parsed_value).expect("parsing succeeded above");
+                    tx.set_enable_0dt_deployment(enable_0dt_deployment)?;
+                } else if name == WITH_0DT_DEPLOYMENT_MAX_WAIT.name() {
+                    let with_0dt_deployment_max_wait =
+                        Duration::parse(VarInput::Flat(&parsed_value))
+                            .expect("parsing succeeded above");
+                    tx.set_0dt_deployment_max_wait(with_0dt_deployment_max_wait)?;
+                } else if name == WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name() {
+                    let with_0dt_deployment_ddl_check_interval =
+                        Duration::parse(VarInput::Flat(&parsed_value))
+                            .expect("parsing succeeded above");
+                    tx.set_0dt_deployment_ddl_check_interval(
+                        with_0dt_deployment_ddl_check_interval,
+                    )?;
+                } else if name == ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT.name() {
+                    let panic_after_timeout =
+                        strconv::parse_bool(&parsed_value).expect("parsing succeeded above");
+                    tx.set_enable_0dt_deployment_panic_after_timeout(panic_after_timeout)?;
                 }
+
+                CatalogState::add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Alter,
+                    ObjectType::System,
+                    EventDetails::SetV1(mz_audit_log::SetV1 {
+                        name,
+                        value: Some(value.borrow().to_vec().join(", ")),
+                    }),
+                )?;
             }
             Op::ResetSystemConfiguration { name } => {
                 tx.remove_system_config(&name);
-                // This mirrors the `txn_wal_tables` "system var" into the catalog
+                // This mirrors the `enable_0dt_deployment` "system var" into the catalog
                 // storage "config" collection so that we can toggle the flag with
                 // Launch Darkly, but use it in boot before Launch Darkly is available.
-                if name == TXN_WAL_TABLES.name() {
-                    tx.reset_txn_wal_tables()?;
+                if name == ENABLE_0DT_DEPLOYMENT.name() {
+                    tx.reset_enable_0dt_deployment()?;
+                } else if name == WITH_0DT_DEPLOYMENT_MAX_WAIT.name() {
+                    tx.reset_0dt_deployment_max_wait()?;
+                } else if name == WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name() {
+                    tx.reset_0dt_deployment_ddl_check_interval()?;
                 }
+
+                CatalogState::add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Alter,
+                    ObjectType::System,
+                    EventDetails::SetV1(mz_audit_log::SetV1 { name, value: None }),
+                )?;
             }
             Op::ResetAllSystemConfiguration => {
                 tx.clear_system_configs();
-                tx.reset_txn_wal_tables()?;
+                tx.reset_enable_0dt_deployment()?;
+                tx.reset_0dt_deployment_max_wait()?;
+                tx.reset_0dt_deployment_ddl_check_interval()?;
+
+                CatalogState::add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Alter,
+                    ObjectType::System,
+                    EventDetails::ResetAllV1,
+                )?;
             }
-            Op::WeirdBuiltinTableUpdates {
-                builtin_table_update,
+            Op::WeirdStorageUsageUpdates {
+                object_id,
+                size_bytes,
+                collection_timestamp,
             } => {
+                let id = tx.allocate_storage_usage_ids()?;
+                let metric =
+                    VersionedStorageUsage::new(id, object_id, size_bytes, collection_timestamp);
+                let builtin_table_update = state.pack_storage_usage_update(metric, 1);
+                let builtin_table_update = state.resolve_builtin_table_update(builtin_table_update);
                 weird_builtin_table_update = Some(builtin_table_update);
             }
         };
         Ok((weird_builtin_table_update, temporary_item_updates))
     }
 
-    fn log_update(state: &CatalogState, id: &GlobalId) {
+    fn log_update(state: &CatalogState, id: &CatalogItemId) {
         let entry = state.get_entry(id);
         info!(
             "update {} {} ({})",
@@ -2015,7 +2444,8 @@ pub(crate) struct ObjectsToDrop {
     pub clusters: BTreeSet<ClusterId>,
     pub replicas: BTreeMap<ReplicaId, (ClusterId, ReplicaCreateDropReason)>,
     pub roles: BTreeSet<RoleId>,
-    pub items: Vec<GlobalId>,
+    pub items: Vec<CatalogItemId>,
+    pub network_policies: BTreeSet<NetworkPolicyId>,
 }
 
 impl ObjectsToDrop {
@@ -2113,6 +2543,17 @@ impl ObjectsToDrop {
                 }
 
                 self.items.push(item_id);
+            }
+            DropObjectInfo::NetworkPolicy(network_policy_id) => {
+                let policy = state.get_network_policy(&network_policy_id);
+                let name = &policy.name;
+                if network_policy_id.is_system() {
+                    return Err(AdapterError::Catalog(Error::new(
+                        ErrorKind::ReadOnlyNetworkPolicy(name.clone()),
+                    )));
+                }
+
+                self.network_policies.insert(network_policy_id);
             }
         }
 

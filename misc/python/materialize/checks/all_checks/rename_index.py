@@ -37,13 +37,6 @@ class RenameIndex(Check):
                 > INSERT INTO rename_index_table VALUES (3,3);
                 """,
                 """
-                # When upgrading from old version without roles the indexes are
-                # owned by default_role, thus we have to change the owner
-                # before altering them:
-                $[version>=4700] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-                ALTER INDEX rename_index_index1 OWNER TO materialize;
-                ALTER INDEX rename_index_index2 OWNER TO materialize;
-
                 > INSERT INTO rename_index_table VALUES (4,4);
                 > CREATE MATERIALIZED VIEW rename_index_view3 AS SELECT f2 FROM rename_index_table WHERE f2 > 0;
                 > ALTER INDEX rename_index_index2 RENAME TO rename_index_index3;
@@ -58,8 +51,8 @@ class RenameIndex(Check):
             dedent(
                 f"""
                 > SHOW INDEXES ON rename_index_table;
-                rename_index_index2 rename_index_table {self._default_cluster()} {{f2}}
-                rename_index_index3 rename_index_table {self._default_cluster()} {{f2}}
+                rename_index_index2 rename_index_table {self._default_cluster()} {{f2}} ""
+                rename_index_index3 rename_index_table {self._default_cluster()} {{f2}} ""
 
                 > SELECT * FROM rename_index_view1;
                 1

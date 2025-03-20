@@ -7,13 +7,20 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Runs a randomized parallel workload stressing all parts of Materialize, can
+mostly find panics and unexpected errors. See zippy for a sequential randomized
+tests which can verify correctness.
+"""
 
+import os
 import random
 
 import requests
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.service import Service
+from materialize.mzcompose.services.azure import Azurite
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -42,8 +49,10 @@ SERVICES = [
     ),
     SchemaRegistry(),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
+    Azurite(),
     Mc(),
     Materialized(),
+    Materialized(name="materialized2"),
     Service("sqlsmith", {"mzbuild": "sqlsmith"}),
     Service(
         name="persistcli",
@@ -65,6 +74,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "zookeeper",
         "kafka",
         "schema-registry",
+        # Still required for backups/s3 testing even when we use Azurite as blob store
         "minio",
         "materialized",
     ]
@@ -76,16 +86,19 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     with c.override(
         Materialized(
-            restart="on-failure",
-            external_minio="toxiproxy",
-            external_cockroach="toxiproxy",
+            # TODO: Retry with toxiproxy on azurite
+            external_blob_store=True,
+            blob_store_is_azure=args.azurite,
+            external_metadata_store="toxiproxy",
             ports=["6975:6875", "6976:6876", "6977:6877"],
             sanity_restart=sanity_restart,
+            metadata_store="cockroach",
         ),
         Toxiproxy(seed=random.randrange(2**63)),
     ):
         toxiproxy_start(c)
         c.up(*service_names)
+
         c.up("mc", persistent=True)
         c.exec(
             "mc",
@@ -102,6 +115,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         ports = {s: c.default_port(s) for s in service_names}
         ports["http"] = c.port("materialized", 6876)
         ports["mz_system"] = c.port("materialized", 6877)
+        if scenario == Scenario.ZeroDowntimeDeploy:
+            ports["materialized2"] = 7075
+            ports["http2"] = 7076
+            ports["mz_system2"] = 7077
         # try:
         run(
             "localhost",
@@ -112,9 +129,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             scenario,
             args.threads,
             args.naughty_identifiers,
+            args.replicas,
             c,
+            args.azurite,
             sanity_restart,
         )
+        # Don't wait for potentially hanging threads that we are ignoring
+        os._exit(0)
         # TODO: Only ignore errors that will be handled by parallel-workload, not others
         # except Exception:
         #     print("--- Execution of parallel-workload failed")
@@ -149,6 +170,16 @@ def toxiproxy_start(c: Composition) -> None:
     )
     assert r.status_code == 201, r
     r = requests.post(
+        f"http://localhost:{port}/proxies",
+        json={
+            "name": "azurite",
+            "listen": "0.0.0.0:10000",
+            "upstream": "azurite:10000",
+            "enabled": True,
+        },
+    )
+    assert r.status_code == 201, r
+    r = requests.post(
         f"http://localhost:{port}/proxies/cockroach/toxics",
         json={
             "name": "cockroach",
@@ -161,6 +192,15 @@ def toxiproxy_start(c: Composition) -> None:
         f"http://localhost:{port}/proxies/minio/toxics",
         json={
             "name": "minio",
+            "type": "latency",
+            "attributes": {"latency": 0, "jitter": 100},
+        },
+    )
+    assert r.status_code == 200, r
+    r = requests.post(
+        f"http://localhost:{port}/proxies/minio/toxics",
+        json={
+            "name": "azurite",
             "type": "latency",
             "attributes": {"latency": 0, "jitter": 100},
         },

@@ -92,7 +92,7 @@ impl LazyUnaryFunc for MapLength {
         let count = a.unwrap_map().iter().count();
         match count.try_into() {
             Ok(c) => Ok(Datum::Int32(c)),
-            Err(_) => Err(EvalError::Int32OutOfRange(count.to_string())),
+            Err(_) => Err(EvalError::Int32OutOfRange(count.to_string().into())),
         }
     }
 
@@ -161,7 +161,7 @@ impl LazyUnaryFunc for MapBuildFromRecordList {
             }
         }
 
-        let map = temp_storage.make_datum(|packer| packer.push_dict(map.into_iter()));
+        let map = temp_storage.make_datum(|packer| packer.push_dict(map));
         Ok(map)
     }
 

@@ -24,6 +24,8 @@ from dbt_common.semver import versions_compatible
 from dbt.adapters.events.logging import AdapterLogger
 from dbt.adapters.postgres import PostgresConnectionManager, PostgresCredentials
 
+from .__version__ import version as __version__
+
 # If you bump this version, bump it in README.md too.
 SUPPORTED_MATERIALIZE_VERSIONS = ">=0.68.0"
 
@@ -45,6 +47,18 @@ def connect(**kwargs):
         # dbt prints notices to stdout, which is very distracting because dbt
         # can establish many new connections during `dbt run`.
         "--welcome_message=off",
+        # Disable warnings about the session's default database or cluster not
+        # existing, as these get quite spammy, especially with multiple threads.
+        #
+        # Details: it's common for the default cluster for the role dbt is
+        # connecting as (often `quickstart`) to be absent. For many dbt
+        # deployments, clusters are explicitly specified on a model-by-model
+        # basis, and there in fact is no natural "default" cluster. So warning
+        # repeatedly that the default cluster doesn't exist isn't helpful, since
+        # each DDL statement will specify a different, valid cluster. If a DDL
+        # statement ever specifies an invalid cluster, dbt will still produce an
+        # error about the invalid cluster, even with this setting enabled.
+        "--current_object_missing_warnings=off",
         *(kwargs.get("options") or []),
     ]
     kwargs["options"] = " ".join(options)
@@ -58,7 +72,18 @@ psycopg2.connect = connect
 
 @dataclass
 class MaterializeCredentials(PostgresCredentials):
-    cluster: Optional[str] = "quickstart"
+    # NOTE(morsapaes) The cluster parameter defined in `profiles.yml` is not
+    # picked up in the connection string, but is picked up wherever we fall
+    # back to `target.cluster`. When no cluster is specified, either in
+    # `profiles.yml` or as a configuration, we should default to the default
+    # cluster configured for the connected dbt user (or, the active cluster for
+    # the connection). This is strictly better than hardcoding `quickstart` as
+    # the `target.cluster`, which might not exist and leads to all sorts of
+    # annoying errors. This will still fail if the defalt cluster for the
+    # connected user is invalid or set to `mz_catalog_server` (which cannot be
+    # modified).
+    cluster: Optional[str] = None
+    application_name: Optional[str] = f"dbt-materialize v{__version__}"
 
     @property
     def type(self):
@@ -77,6 +102,7 @@ class MaterializeCredentials(PostgresCredentials):
             "connect_timeout",
             "search_path",
             "retries",
+            "application_name",
         )
 
 

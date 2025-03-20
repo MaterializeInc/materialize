@@ -36,8 +36,8 @@ models:
     mysql_cdc:
       schema: mysql_cdc
       post-hook: "GRANT ALL PRIVILEGES ON TABLE {{ this }} TO \"infra+bot@materialize.com\", \"infra+qacanaryload@materialize.io\""
-    simple_table:
-      schema: simple_table
+    table:
+      schema: table
       post-hook: "GRANT ALL PRIVILEGES ON TABLE {{ this }} TO \"infra+bot@materialize.com\", \"infra+qacanaryload@materialize.io\""
 
 tests:

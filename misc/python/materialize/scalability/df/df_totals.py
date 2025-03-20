@@ -17,8 +17,8 @@ from materialize.scalability.df.df_wrapper_base import (
     DfWrapperBase,
     concat_df_wrapper_data,
 )
-from materialize.scalability.endpoint import Endpoint
-from materialize.scalability.scalability_change import ScalabilityChange
+from materialize.scalability.endpoint.endpoint import Endpoint
+from materialize.scalability.result.scalability_change import ScalabilityChange
 
 SCALABILITY_CHANGE_TYPE = TypeVar("SCALABILITY_CHANGE_TYPE", bound=ScalabilityChange)
 

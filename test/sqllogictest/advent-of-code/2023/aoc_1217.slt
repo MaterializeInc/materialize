@@ -1,0 +1,374 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# https://github.com/MaterializeInc/advent-of-code-2023/blob/main/week1/aoc_1216.md
+
+mode cockroach
+
+statement ok
+CREATE TABLE input (input TEXT);
+
+statement ok
+INSERT INTO input VALUES (
+'62838899848717171482491386857
+97364142198727715957423491912
+86369399573486615223592185179
+65896629415741215317915596532
+87429913559342885454881133182
+87599176619626884624793447611
+69826949796636945138977813282
+97787786569751297721492648197
+56111693893781611276884581493
+11326495731998819531787964758
+45631262918273787936318151868');
+
+query II
+WITH MUTUALLY RECURSIVE
+
+    lines(r INT, line TEXT) AS (
+        SELECT r, regexp_split_to_array(input, '\n')[r] as block
+        FROM input, generate_series(1, array_length(regexp_split_to_array(input, '\n'), 1)) r
+    ),
+    cells(r INT, c INT, cost INT) AS (
+        SELECT r, c, substring(line, c, 1)::INT
+        FROM lines, generate_series(1, length(line)) c
+    ),
+
+    -- For each cell, we can be headed n, e, w, s and have gone 1, 2, 3 steps already.
+    -- There is a mimimum cost path to reach this configuration, and .. we might need
+    -- to remember how we got there but let's do that in part 2.
+    min_cost(r INT, c INT, dr INT, dc INT, steps INT, cost INT) AS (
+        SELECT r, c, dr, dc, steps, MIN(cost)
+        FROM (
+            SELECT 1 as r, 1 as c, 1 as dr, 0 as dc, 0 as steps, 0 as cost
+            UNION ALL
+            SELECT 1, 1, 0, 1, 0, 0
+            -- We could have just stepped to r, c in a few ways, incurring its cost.
+            UNION ALL
+            SELECT cells.r, cells.c, dr, dc, steps + 1, min_cost.cost + cells.cost
+            FROM min_cost, cells
+            WHERE steps < 3
+              AND cells.r = min_cost.r + dr
+              AND cells.c = min_cost.c + dc
+            -- We could take a ??? turn
+            UNION ALL
+            SELECT cells.r, cells.c, dc, dr, 1, min_cost.cost + cells.cost
+            FROM min_cost, cells
+            WHERE cells.r = min_cost.r + dc
+              AND cells.c = min_cost.c + dr
+            -- We could take a ??? turn
+            UNION ALL
+            SELECT cells.r, cells.c, -dc, -dr, 1, min_cost.cost + cells.cost
+            FROM min_cost, cells
+            WHERE cells.r = min_cost.r - dc
+              AND cells.c = min_cost.c - dr
+        )
+        GROUP BY r, c, dr, dc, steps
+    ),
+
+    part1(part1 INT) AS (
+        SELECT MIN(cost)
+        FROM min_cost
+        WHERE r = (SELECT MAX(r) FROM cells)
+          AND c = (SELECT MAX(c) FROM cells)
+    ),
+
+    potato(x INT) AS (SELECT 1),
+
+    -- For each cell, we can be headed n, e, w, s and have gone 1, 2, 3 steps already.
+    -- There is a mimimum cost path to reach this configuration, and .. we might need
+    -- to remember how we got there but let's do that in part 2.
+    min_cost2(r INT, c INT, dr INT, dc INT, steps INT, cost INT) AS (
+        SELECT r, c, dr, dc, steps, MIN(cost)
+        FROM (
+            SELECT 1 as r, 1 as c, 1 as dr, 0 as dc, 0 as steps, 0 as cost
+            UNION ALL
+            SELECT 1, 1, 0, 1, 0, 0
+            -- We could have just stepped to r, c in a few ways, incurring its cost.
+            UNION ALL
+            SELECT cells.r, cells.c, dr, dc, steps + 1, min_cost2.cost + cells.cost
+            FROM min_cost2, cells
+            WHERE steps < 10
+              AND cells.r = min_cost2.r + dr
+              AND cells.c = min_cost2.c + dc
+            -- We could take a XYZ turn
+            UNION ALL
+            SELECT cells.r, cells.c, dc, dr, 1, min_cost2.cost + cells.cost
+            FROM min_cost2, cells
+            WHERE steps >= 4
+              AND cells.r = min_cost2.r + dc
+              AND cells.c = min_cost2.c + dr
+            -- We could take a ZYX turn
+            UNION ALL
+            SELECT cells.r, cells.c, -dc, -dr, 1, min_cost2.cost + cells.cost
+            FROM min_cost2, cells
+            WHERE steps >= 4
+              AND cells.r = min_cost2.r - dc
+              AND cells.c = min_cost2.c - dr
+        )
+        GROUP BY r, c, dr, dc, steps
+    ),
+    part2(part2 INT) AS (
+        SELECT MIN(cost)
+        FROM min_cost2
+        WHERE r = (SELECT MAX(r) FROM cells)
+          AND c = (SELECT MAX(c) FROM cells)
+          AND steps >= 4
+    )
+
+SELECT * FROM part1, part2;
+----
+156  190
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
+WITH MUTUALLY RECURSIVE
+
+    lines(r INT, line TEXT) AS (
+        SELECT r, regexp_split_to_array(input, '\n')[r] as block
+        FROM input, generate_series(1, array_length(regexp_split_to_array(input, '\n'), 1)) r
+    ),
+    cells(r INT, c INT, cost INT) AS (
+        SELECT r, c, substring(line, c, 1)::INT
+        FROM lines, generate_series(1, length(line)) c
+    ),
+
+    -- For each cell, we can be headed n, e, w, s and have gone 1, 2, 3 steps already.
+    -- There is a mimimum cost path to reach this configuration, and .. we might need
+    -- to remember how we got there but let's do that in part 2.
+    min_cost(r INT, c INT, dr INT, dc INT, steps INT, cost INT) AS (
+        SELECT r, c, dr, dc, steps, MIN(cost)
+        FROM (
+            SELECT 1 as r, 1 as c, 1 as dr, 0 as dc, 0 as steps, 0 as cost
+            UNION ALL
+            SELECT 1, 1, 0, 1, 0, 0
+            -- We could have just stepped to r, c in a few ways, incurring its cost.
+            UNION ALL
+            SELECT cells.r, cells.c, dr, dc, steps + 1, min_cost.cost + cells.cost
+            FROM min_cost, cells
+            WHERE steps < 3
+              AND cells.r = min_cost.r + dr
+              AND cells.c = min_cost.c + dc
+            -- We could take a ??? turn
+            UNION ALL
+            SELECT cells.r, cells.c, dc, dr, 1, min_cost.cost + cells.cost
+            FROM min_cost, cells
+            WHERE cells.r = min_cost.r + dc
+              AND cells.c = min_cost.c + dr
+            -- We could take a ??? turn
+            UNION ALL
+            SELECT cells.r, cells.c, -dc, -dr, 1, min_cost.cost + cells.cost
+            FROM min_cost, cells
+            WHERE cells.r = min_cost.r - dc
+              AND cells.c = min_cost.c - dr
+        )
+        GROUP BY r, c, dr, dc, steps
+    ),
+
+    part1(part1 INT) AS (
+        SELECT MIN(cost)
+        FROM min_cost
+        WHERE r = (SELECT MAX(r) FROM cells)
+          AND c = (SELECT MAX(c) FROM cells)
+    ),
+
+    potato(x INT) AS (SELECT 1),
+
+    -- For each cell, we can be headed n, e, w, s and have gone 1, 2, 3 steps already.
+    -- There is a mimimum cost path to reach this configuration, and .. we might need
+    -- to remember how we got there but let's do that in part 2.
+    min_cost2(r INT, c INT, dr INT, dc INT, steps INT, cost INT) AS (
+        SELECT r, c, dr, dc, steps, MIN(cost)
+        FROM (
+            SELECT 1 as r, 1 as c, 1 as dr, 0 as dc, 0 as steps, 0 as cost
+            UNION ALL
+            SELECT 1, 1, 0, 1, 0, 0
+            -- We could have just stepped to r, c in a few ways, incurring its cost.
+            UNION ALL
+            SELECT cells.r, cells.c, dr, dc, steps + 1, min_cost2.cost + cells.cost
+            FROM min_cost2, cells
+            WHERE steps < 10
+              AND cells.r = min_cost2.r + dr
+              AND cells.c = min_cost2.c + dc
+            -- We could take a XYZ turn
+            UNION ALL
+            SELECT cells.r, cells.c, dc, dr, 1, min_cost2.cost + cells.cost
+            FROM min_cost2, cells
+            WHERE steps >= 4
+              AND cells.r = min_cost2.r + dc
+              AND cells.c = min_cost2.c + dr
+            -- We could take a ZYX turn
+            UNION ALL
+            SELECT cells.r, cells.c, -dc, -dr, 1, min_cost2.cost + cells.cost
+            FROM min_cost2, cells
+            WHERE steps >= 4
+              AND cells.r = min_cost2.r - dc
+              AND cells.c = min_cost2.c - dr
+        )
+        GROUP BY r, c, dr, dc, steps
+    ),
+    part2(part2 INT) AS (
+        SELECT MIN(cost)
+        FROM min_cost2
+        WHERE r = (SELECT MAX(r) FROM cells)
+          AND c = (SELECT MAX(c) FROM cells)
+          AND steps >= 4
+    )
+
+SELECT * FROM part1, part2;
+----
+Explained Query:
+  With Mutually Recursive
+    cte l0 =
+      Project (#0, #2, #3) // { arity: 3 }
+        Map (text_to_integer(substr(#1, #2, 1))) // { arity: 4 }
+          FlatMap generate_series(1, char_length(#1), 1) // { arity: 3 }
+            Project (#1, #2) // { arity: 2 }
+              Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1))) // { arity: 3 }
+                FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#0{input}) array_length 1), 1) // { arity: 2 }
+                  ReadStorage materialize.public.input // { arity: 1 }
+    cte l1 =
+      ArrangeBy keys=[[#0, #1]] // { arity: 3 }
+        Get l0 // { arity: 3 }
+    cte l2 =
+      Project (#0..=#3, #5{min}) // { arity: 5 }
+        Get l3 // { arity: 6 }
+    cte l3 =
+      Reduce group_by=[#0..=#4] aggregates=[min(#5)] // { arity: 6 }
+        Union // { arity: 6 }
+          Project (#6, #7, #2, #3, #9, #10) // { arity: 6 }
+            Map ((#4 + 1), (#5 + #8)) // { arity: 11 }
+              Join on=(#6 = (#0 + #2) AND #7 = (#1 + #3)) type=differential // { arity: 9 }
+                implementation
+                  %0:l3[(#0 + #2), (#1 + #3)]KKif » %1:l1[#0, #1]KKif
+                ArrangeBy keys=[[(#0 + #2), (#1 + #3)]] // { arity: 6 }
+                  Filter (#4 < 3) // { arity: 6 }
+                    Get l3 // { arity: 6 }
+                Get l1 // { arity: 3 }
+          Project (#5, #6, #3, #2, #9, #8) // { arity: 6 }
+            Map ((#4 + #7), 1) // { arity: 10 }
+              Join on=(#5 = (#0 + #3) AND #6 = (#1 + #2)) type=differential // { arity: 8 }
+                implementation
+                  %0:l2[(#0 + #3), (#1 + #2)]KK » %1:l1[#0, #1]KK
+                ArrangeBy keys=[[(#0 + #3), (#1 + #2)]] // { arity: 5 }
+                  Get l2 // { arity: 5 }
+                Get l1 // { arity: 3 }
+          Project (#5, #6, #8, #9, #11, #10) // { arity: 6 }
+            Map (-(#3), -(#2), (#4 + #7), 1) // { arity: 12 }
+              Join on=(#5 = (#0 - #3) AND #6 = (#1 - #2)) type=differential // { arity: 8 }
+                implementation
+                  %0:l2[(#0 - #3), (#1 - #2)]KK » %1:l1[#0, #1]KK
+                ArrangeBy keys=[[(#0 - #3), (#1 - #2)]] // { arity: 5 }
+                  Get l2 // { arity: 5 }
+                Get l1 // { arity: 3 }
+          Constant // { arity: 6 }
+            - (1, 1, 0, 1, 0, 0)
+            - (1, 1, 1, 0, 0, 0)
+    cte l4 =
+      Reduce aggregates=[min(#0{min})] // { arity: 1 }
+        Project (#2{min}) // { arity: 1 }
+          Join on=(#0 = #3{max} AND #1 = #4{max}) type=differential // { arity: 5 }
+            implementation
+              %1[×]UA » %2[×]UA » %0:l3[#0, #1]KK
+            ArrangeBy keys=[[#0, #1]] // { arity: 3 }
+              Project (#0, #1, #5{min}) // { arity: 3 }
+                Get l3 // { arity: 6 }
+            ArrangeBy keys=[[]] // { arity: 1 }
+              Reduce aggregates=[max(#0)] // { arity: 1 }
+                Project (#0) // { arity: 1 }
+                  Get l0 // { arity: 3 }
+            ArrangeBy keys=[[]] // { arity: 1 }
+              Reduce aggregates=[max(#0)] // { arity: 1 }
+                Project (#1) // { arity: 1 }
+                  Get l0 // { arity: 3 }
+    cte l5 =
+      Project (#0..=#3, #5{min}) // { arity: 5 }
+        Filter (#4 >= 4) // { arity: 6 }
+          Get l6 // { arity: 6 }
+    cte l6 =
+      Reduce group_by=[#0..=#4] aggregates=[min(#5)] // { arity: 6 }
+        Union // { arity: 6 }
+          Project (#6, #7, #2, #3, #9, #10) // { arity: 6 }
+            Map ((#4 + 1), (#5 + #8)) // { arity: 11 }
+              Join on=(#6 = (#0 + #2) AND #7 = (#1 + #3)) type=differential // { arity: 9 }
+                implementation
+                  %0:l6[(#0 + #2), (#1 + #3)]KKif » %1:l1[#0, #1]KKif
+                ArrangeBy keys=[[(#0 + #2), (#1 + #3)]] // { arity: 6 }
+                  Filter (#4 < 10) // { arity: 6 }
+                    Get l6 // { arity: 6 }
+                Get l1 // { arity: 3 }
+          Project (#5, #6, #3, #2, #9, #8) // { arity: 6 }
+            Map ((#4 + #7), 1) // { arity: 10 }
+              Join on=(#5 = (#0 + #3) AND #6 = (#1 + #2)) type=differential // { arity: 8 }
+                implementation
+                  %0:l5[(#0 + #3), (#1 + #2)]KKif » %1:l1[#0, #1]KKif
+                ArrangeBy keys=[[(#0 + #3), (#1 + #2)]] // { arity: 5 }
+                  Get l5 // { arity: 5 }
+                Get l1 // { arity: 3 }
+          Project (#5, #6, #8, #9, #11, #10) // { arity: 6 }
+            Map (-(#3), -(#2), (#4 + #7), 1) // { arity: 12 }
+              Join on=(#5 = (#0 - #3) AND #6 = (#1 - #2)) type=differential // { arity: 8 }
+                implementation
+                  %0:l5[(#0 - #3), (#1 - #2)]KKif » %1:l1[#0, #1]KKif
+                ArrangeBy keys=[[(#0 - #3), (#1 - #2)]] // { arity: 5 }
+                  Get l5 // { arity: 5 }
+                Get l1 // { arity: 3 }
+          Constant // { arity: 6 }
+            - (1, 1, 0, 1, 0, 0)
+            - (1, 1, 1, 0, 0, 0)
+  Return // { arity: 2 }
+    With
+      cte l7 =
+        Reduce aggregates=[min(#0{min})] // { arity: 1 }
+          Project (#2{min}) // { arity: 1 }
+            Join on=(#0 = #3{max} AND #1 = #4{max}) type=differential // { arity: 5 }
+              implementation
+                %1[×]UA » %2[×]UA » %0:l6[#0, #1]KKif
+              ArrangeBy keys=[[#0, #1]] // { arity: 3 }
+                Project (#0, #1, #5{min}) // { arity: 3 }
+                  Filter (#4 >= 4) // { arity: 6 }
+                    Get l6 // { arity: 6 }
+              ArrangeBy keys=[[]] // { arity: 1 }
+                Reduce aggregates=[max(#0)] // { arity: 1 }
+                  Project (#0) // { arity: 1 }
+                    Get l0 // { arity: 3 }
+              ArrangeBy keys=[[]] // { arity: 1 }
+                Reduce aggregates=[max(#0)] // { arity: 1 }
+                  Project (#1) // { arity: 1 }
+                    Get l0 // { arity: 3 }
+    Return // { arity: 2 }
+      CrossJoin type=differential // { arity: 2 }
+        implementation
+          %0[×]U » %1[×]U
+        ArrangeBy keys=[[]] // { arity: 1 }
+          Union // { arity: 1 }
+            Get l4 // { arity: 1 }
+            Map (null) // { arity: 1 }
+              Union // { arity: 0 }
+                Negate // { arity: 0 }
+                  Project () // { arity: 0 }
+                    Get l4 // { arity: 1 }
+                Constant // { arity: 0 }
+                  - ()
+        ArrangeBy keys=[[]] // { arity: 1 }
+          Union // { arity: 1 }
+            Get l7 // { arity: 1 }
+            Map (null) // { arity: 1 }
+              Union // { arity: 0 }
+                Negate // { arity: 0 }
+                  Project () // { arity: 0 }
+                    Get l7 // { arity: 1 }
+                Constant // { arity: 0 }
+                  - ()
+
+Source materialize.public.input
+
+Target cluster: quickstart
+
+EOF

@@ -9,8 +9,8 @@
 
 MZFROM prod-base
 
-COPY environmentd /usr/local/bin/
+COPY environmentd entrypoint.sh /usr/local/bin/
 
 USER materialize
 
-ENTRYPOINT ["tini", "--", "environmentd", "--sql-listen-addr=0.0.0.0:6875", "--http-listen-addr=0.0.0.0:6876"]
+ENTRYPOINT ["tini", "--", "entrypoint.sh"]

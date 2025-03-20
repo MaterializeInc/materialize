@@ -69,7 +69,12 @@
   {% set fail_calc = config.get('fail_calc') %}
   {% set warn_if = config.get('warn_if') %}
   {% set error_if = config.get('error_if') %}
-  {% set cluster = config.get('cluster') %}
+  -- Tests compile to ad-hoc queries, which need a cluster to run against. If no
+  -- cluster is configured for data tests, use the target cluster from
+  -- `profiles.yml`. If none exists, fall back to the default cluster
+  -- configured for the connected user.
+  -- See: misc/dbt-materialize/dbt/adapters/materialize/connections.py
+  {%- set cluster = adapter.generate_final_cluster_name(config.get('cluster', target.cluster)) %}
 
   {% call statement('main', fetch_result=True) -%}
 

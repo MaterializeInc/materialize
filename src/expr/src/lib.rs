@@ -15,6 +15,7 @@ use std::collections::BTreeSet;
 use std::ops::Deref;
 
 use mz_repr::GlobalId;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 mod id;
@@ -24,6 +25,7 @@ mod relation;
 mod scalar;
 
 pub mod explain;
+pub mod row;
 pub mod virtual_syntax;
 pub mod visit;
 
@@ -34,6 +36,7 @@ pub use linear::util::{join_permutations, permutation_for_arrangement};
 pub use linear::{
     memoize_expr, MapFilterProject, ProtoMapFilterProject, ProtoMfpPlan, ProtoSafeMfpPlan,
 };
+pub use relation::func::order_aggregate_datums as order_aggregate_datums_exported_for_benchmarking;
 pub use relation::func::{
     AggregateFunc, AnalyzedRegex, CaptureGroupDesc, LagLeadType, NaiveOneByOneAggr, OneByOneAggr,
     TableFunc,
@@ -54,7 +57,7 @@ pub use scalar::{
 
 /// A [`MirRelationExpr`] that claims to have been optimized, e.g., by an
 /// `transform::Optimizer`.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct OptimizedMirRelationExpr(pub MirRelationExpr);
 
 impl OptimizedMirRelationExpr {

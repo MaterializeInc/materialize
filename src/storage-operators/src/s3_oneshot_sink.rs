@@ -9,30 +9,35 @@
 
 //! Uploads a consolidated collection to S3
 
+use std::any::Any;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
-use std::str::FromStr;
+use std::rc::Rc;
 
 use anyhow::anyhow;
 use aws_types::sdk_config::SdkConfig;
-use differential_dataflow::{Collection, Hashable};
-use http::Uri;
+use differential_dataflow::containers::TimelyStack;
+use differential_dataflow::Hashable;
+use futures::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::task::JoinHandleExt;
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_repr::{CatalogItemId, Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::connections::aws::AwsConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::DataflowError;
+use mz_storage_types::sinks::s3_oneshot_sink::S3KeyManager;
 use mz_storage_types::sinks::{S3SinkFormat, S3UploadInfo};
-use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
+use mz_timely_util::builder_async::{
+    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::Broadcast;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::PartialOrder;
-use tracing::{debug, info};
+use tracing::debug;
 
 mod parquet;
 mod pgcopy;
@@ -48,18 +53,25 @@ mod pgcopy;
 ///   - initialization: confirms the S3 path is empty and writes any sentinel files
 ///   - upload: uploads data to S3
 ///   - completion: removes the sentinel file and calls the `worker_callback`
+///
+/// Returns a token that should be held to keep the sink alive.
+///
+/// The `input_collection` must be a stream of chains, partitioned and exchanged by the row's hash
+/// modulo the number of batches.
 pub fn copy_to<G, F>(
-    input_collection: Collection<G, ((Row, u64), ()), Diff>,
-    err_stream: Stream<G, (((DataflowError, u64), ()), G::Timestamp, Diff)>,
+    input_collection: Stream<G, Vec<TimelyStack<((Row, ()), G::Timestamp, Diff)>>>,
+    err_stream: Stream<G, (DataflowError, G::Timestamp, Diff)>,
     up_to: Antichain<G::Timestamp>,
     connection_details: S3UploadInfo,
     connection_context: ConnectionContext,
     aws_connection: AwsConnection,
     sink_id: GlobalId,
-    connection_id: GlobalId,
+    connection_id: CatalogItemId,
     params: CopyToParameters,
     worker_callback: F,
-) where
+    output_batch_count: u64,
+) -> Rc<dyn Any>
+where
     G: Scope<Timestamp = Timestamp>,
     F: FnOnce(Result<u64, String>) -> () + 'static,
 {
@@ -67,18 +79,10 @@ pub fn copy_to<G, F>(
 
     let s3_key_manager = S3KeyManager::new(&sink_id, &connection_details.uri);
 
-    let start_stream = render_initialization_operator(
-        scope.clone(),
-        connection_context.clone(),
-        aws_connection.clone(),
-        connection_id,
-        sink_id,
-        s3_key_manager.clone(),
-        up_to.clone(),
-        err_stream,
-    );
+    let (start_stream, start_token) =
+        render_initialization_operator(scope.clone(), sink_id, up_to.clone(), err_stream);
 
-    let completion_stream = match connection_details.format {
+    let (completion_stream, upload_token) = match connection_details.format {
         S3SinkFormat::PgCopy(_) => render_upload_operator::<G, pgcopy::PgCopyUploader>(
             scope.clone(),
             connection_context.clone(),
@@ -90,6 +94,7 @@ pub fn copy_to<G, F>(
             up_to,
             start_stream,
             params,
+            output_batch_count,
         ),
         S3SinkFormat::Parquet => render_upload_operator::<G, parquet::ParquetUploader>(
             scope.clone(),
@@ -102,10 +107,11 @@ pub fn copy_to<G, F>(
             up_to,
             start_stream,
             params,
+            output_batch_count,
         ),
     };
 
-    render_completion_operator(
+    let completion_token = render_completion_operator(
         scope,
         connection_context,
         aws_connection,
@@ -115,38 +121,24 @@ pub fn copy_to<G, F>(
         completion_stream,
         worker_callback,
     );
+
+    Rc::new(vec![start_token, upload_token, completion_token])
 }
 
 /// Renders the 'initialization' operator, which does work on the leader worker only.
 ///
-/// The leader worker first receives all errors from the `err_stream` and if it
+/// The leader worker receives all errors from the `err_stream` and if it
 /// encounters any errors will early exit and broadcast the error on the
 /// returned `start_stream`, to avoid any unnecessary work across all workers.
 ///
-/// The leader worker then checks the S3 path for the sink to ensure it's empty
-/// (aside from files written by other instances of this sink), validates that we
-/// have appropriate permissions, and writes an INCOMPLETE
-/// sentinel file to indicate to the user that the upload is in-progress.
-///
-/// The INCOMPLETE sentinel is used to provide a single atomic operation that a user
-/// can wire up a notification on, to know when it is safe to start ingesting the
-/// data written by this sink to S3. Since the DeleteObject of the INCOMPLETE sentinel
-/// will only trigger one S3 notification, even if it's performed by multiple replicas
-/// it simplifies the user ergonomics by only having to listen for a single event
-/// (a PutObject sentinel would trigger once for each replica).
-///
-/// Returns the `start_stream` with a result object indicating the success or failure
-/// of the initialization operation or an error received in the `err_stream`.
+/// Returns the `start_stream` with an error received in the `err_stream`, if
+/// any, otherwise `Ok(())`.
 fn render_initialization_operator<G>(
     scope: G,
-    connection_context: ConnectionContext,
-    aws_connection: AwsConnection,
-    connection_id: GlobalId,
     sink_id: GlobalId,
-    s3_key_manager: S3KeyManager,
     up_to: Antichain<G::Timestamp>,
-    err_stream: Stream<G, (((DataflowError, u64), ()), G::Timestamp, Diff)>,
-) -> Stream<G, Result<(), String>>
+    err_stream: Stream<G, (DataflowError, G::Timestamp, Diff)>,
+) -> (Stream<G, Result<(), String>>, PressOnDropButton)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -158,7 +150,7 @@ where
     let mut builder =
         AsyncOperatorBuilder::new("CopyToS3-initialization".to_string(), scope.clone());
 
-    let (mut start_handle, start_stream) = builder.new_output();
+    let (start_handle, start_stream) = builder.new_output();
 
     // Push all errors to the leader worker, so it early exits before doing any initialization work
     // This should be at-most 1 incoming error per-worker due to the filtering of this stream
@@ -169,15 +161,15 @@ where
         &start_handle,
     );
 
-    builder.build(move |caps| async move {
+    let button = builder.build(move |caps| async move {
         let [start_cap] = caps.try_into().unwrap();
 
         while let Some(event) = error_handle.next().await {
             match event {
                 AsyncEvent::Data(cap, data) => {
-                    for (((error, _), _), ts, _) in data {
+                    for (error, ts, _) in data {
                         if !up_to.less_equal(&ts) {
-                            start_handle.give(&cap, Err(error.to_string())).await;
+                            start_handle.give(&cap, Err(error.to_string()));
                             return;
                         }
                     }
@@ -195,86 +187,12 @@ where
             return;
         }
 
-        // fallible async block to use the `?` operator for convenience
-        let leader_work = async move {
-            info!(%sink_id, %worker_id, "s3 leader worker initialization");
-            let sdk_config = aws_connection
-                .load_sdk_config(&connection_context, connection_id, InTask::Yes)
-                .await?;
-
-            let client = mz_aws_util::s3::new_client(&sdk_config);
-            let bucket = s3_key_manager.bucket.clone();
-            let path_prefix = s3_key_manager.path_prefix().to_string();
-            let incomplete_sentinel_key = s3_key_manager.incomplete_sentinel_key();
-
-            // Check that the S3 bucket path is empty before beginning the upload,
-            // verify we have DeleteObject permissions,
-            // and upload the INCOMPLETE sentinel file to the S3 path.
-            // Since we race against other replicas running the same sink we allow
-            // for objects to exist in the path if they were created by this sink
-            // (identified by the sink_id prefix).
-            // TODO: Add logic to determine if other replicas have already completed
-            // a full upload, to avoid writing the incomplete sentinel file again
-            // if the upload is already done.
-            mz_ore::task::spawn(|| "copytos3:initialization", async move {
-                if let Some(files) =
-                    mz_aws_util::s3::list_bucket_path(&client, &bucket, &path_prefix).await?
-                {
-                    let files = files
-                        .iter()
-                        .filter(|key| !s3_key_manager.is_sink_object(key))
-                        .collect::<Vec<_>>();
-                    if !files.is_empty() {
-                        Err(anyhow::anyhow!(
-                            "S3 bucket path is not empty, contains {} objects",
-                            files.len()
-                        ))?;
-                    }
-                };
-
-                // Confirm we have DeleteObject permissions before proceeding by trying to
-                // delete a known non-existent file since S3 will return an AccessDenied error
-                // whether or not the object exists, and no error if we have permissions and
-                // it doesn't.
-                client
-                    .delete_object()
-                    .bucket(&bucket)
-                    .key(s3_key_manager.data_key(0, 0, "delete_object_test"))
-                    .send()
-                    .await
-                    .map_err(|err| {
-                        if err
-                            .raw_response()
-                            .map_or(false, |r| r.status().as_u16() == 403)
-                        {
-                            anyhow!("AccessDenied error when using DeleteObject")
-                        } else {
-                            err.into()
-                        }
-                    })?;
-
-                debug!(%sink_id, %worker_id, "uploading INCOMPLETE sentinel file");
-                client
-                    .put_object()
-                    .bucket(bucket)
-                    .key(incomplete_sentinel_key)
-                    .send()
-                    .await?;
-
-                Ok::<(), anyhow::Error>(())
-            })
-            .wait_and_assert_finished()
-            .await?;
-            Ok::<(), anyhow::Error>(())
-        };
-
-        let res = leader_work.await.map_err(|e| e.to_string_with_causes());
-        start_handle.give(&start_cap, res).await;
+        start_handle.give(&start_cap, Ok(()));
     });
 
     // Broadcast the result to all workers so that they will all see any error that occurs
     // and exit before doing any unnecessary work
-    start_stream.broadcast()
+    (start_stream.broadcast(), button.press_on_drop())
 }
 
 /// Renders the 'completion' operator, which expects a `completion_stream`
@@ -292,12 +210,13 @@ fn render_completion_operator<G, F>(
     scope: G,
     connection_context: ConnectionContext,
     aws_connection: AwsConnection,
-    connection_id: GlobalId,
+    connection_id: CatalogItemId,
     sink_id: GlobalId,
     s3_key_manager: S3KeyManager,
     completion_stream: Stream<G, Result<u64, String>>,
     worker_callback: F,
-) where
+) -> PressOnDropButton
+where
     G: Scope<Timestamp = Timestamp>,
     F: FnOnce(Result<u64, String>) -> () + 'static,
 {
@@ -310,7 +229,7 @@ fn render_completion_operator<G, F>(
 
     let mut completion_input = builder.new_disconnected_input(&completion_stream, Pipeline);
 
-    builder.build(move |_| async move {
+    let button = builder.build(move |_| async move {
         // fallible async block to use the `?` operator for convenience
         let fallible_logic = async move {
             let mut row_count = None;
@@ -360,6 +279,8 @@ fn render_completion_operator<G, F>(
 
         worker_callback(fallible_logic.await.map_err(|e| e.to_string_with_causes()));
     });
+
+    button.press_on_drop()
 }
 
 /// Renders the `upload operator`, which waits on the `start_stream` to ensure
@@ -367,18 +288,22 @@ fn render_completion_operator<G, F>(
 /// Returns a `completion_stream` which contains 1 event per worker of
 /// the result of the upload operation, either an error or the number of rows
 /// uploaded by the worker.
+///
+/// The `input_collection` must be a stream of chains, partitioned and exchanged by the row's hash
+/// modulo the number of batches.
 fn render_upload_operator<G, T>(
     scope: G,
     connection_context: ConnectionContext,
     aws_connection: AwsConnection,
-    connection_id: GlobalId,
+    connection_id: CatalogItemId,
     connection_details: S3UploadInfo,
     sink_id: GlobalId,
-    input_collection: Collection<G, ((Row, u64), ()), Diff>,
+    input_collection: Stream<G, Vec<TimelyStack<((Row, ()), G::Timestamp, Diff)>>>,
     up_to: Antichain<G::Timestamp>,
     start_stream: Stream<G, Result<(), String>>,
     params: CopyToParameters,
-) -> Stream<G, Result<u64, String>>
+    output_batch_count: u64,
+) -> (Stream<G, Result<u64, String>>, PressOnDropButton)
 where
     G: Scope<Timestamp = Timestamp>,
     T: CopyToS3Uploader,
@@ -386,11 +311,11 @@ where
     let worker_id = scope.index();
     let mut builder = AsyncOperatorBuilder::new("CopyToS3-uploader".to_string(), scope.clone());
 
-    let mut input_handle = builder.new_disconnected_input(&input_collection.inner, Pipeline);
-    let (mut completion_handle, completion_stream) = builder.new_output();
+    let mut input_handle = builder.new_disconnected_input(&input_collection, Pipeline);
+    let (completion_handle, completion_stream) = builder.new_output();
     let mut start_handle = builder.new_input_for(&start_stream, Pipeline, &completion_handle);
 
-    builder.build(move |caps| async move {
+    let button = builder.build(move |caps| async move {
         let [completion_cap] = caps.try_into().unwrap();
 
         // Drain any events in the start stream. Once this stream advances to the empty frontier we
@@ -401,7 +326,7 @@ where
                 AsyncEvent::Data(cap, data) => {
                     for res in data {
                         if res.is_err() {
-                            completion_handle.give(&cap, res.map(|_| 0)).await;
+                            completion_handle.give(&cap, res.map(|_| 0));
                             return;
                         }
                     }
@@ -418,21 +343,42 @@ where
 
             // Map of an uploader per batch.
             let mut s3_uploaders: BTreeMap<u64, T> = BTreeMap::new();
+
+            // As a special case, the 0th worker always forces a file to be
+            // created for batch 0, even if it never sees any data for batch 0.
+            // This ensures that we always write at least one file to S3, even
+            // if the input is empty. See database-issue#8599.
+            if worker_id == 0 {
+                let mut uploader = T::new(
+                    sdk_config.clone(),
+                    connection_details.clone(),
+                    &sink_id,
+                    0,
+                    params.clone(),
+                )?;
+                uploader.force_new_file().await?;
+                s3_uploaders.insert(0, uploader);
+            }
+
             let mut row_count = 0;
-            let mut last_row = None;
             while let Some(event) = input_handle.next().await {
                 match event {
                     AsyncEvent::Data(_ts, data) => {
-                        for (((row, batch), ()), ts, diff) in data {
-                            if !up_to.less_equal(&ts) {
-                                if diff < 0 {
+                        for ((row, ()), ts, diff) in
+                            data.iter().flatten().flat_map(|chunk| chunk.iter())
+                        {
+                            // We're consuming a batch of data, and the upstream operator has to ensure
+                            // that the data is exchanged according to the batch.
+                            let batch = row.hashed() % output_batch_count;
+                            if !up_to.less_equal(ts) {
+                                if *diff < 0 {
                                     anyhow::bail!(
                                         "Invalid data in source errors, saw retractions ({}) for \
                                         row that does not exist",
-                                        diff * -1,
+                                        *diff * -1,
                                     )
                                 }
-                                row_count += u64::try_from(diff).unwrap();
+                                row_count += u64::try_from(*diff).unwrap();
                                 let uploader = match s3_uploaders.entry(batch) {
                                     Entry::Occupied(entry) => entry.into_mut(),
                                     Entry::Vacant(entry) => {
@@ -446,18 +392,10 @@ where
                                         )?)
                                     }
                                 };
-                                for _ in 0..diff {
-                                    uploader.append_row(&row).await?;
+                                for _ in 0..*diff {
+                                    uploader.append_row(row).await?;
                                 }
                             }
-                            // A very crude way to detect if there is ever a regression in the deterministic
-                            // ordering of rows in our input, since we are depending on an implementation
-                            // detail of timely communication (FIFO ordering over an exchange).
-                            let cur = (row, batch);
-                            if let Some(last) = last_row {
-                                assert!(&last < &cur, "broken fifo ordering!");
-                            }
-                            last_row = Some(cur);
                         }
                     }
                     AsyncEvent::Progress(frontier) => {
@@ -475,12 +413,10 @@ where
         }
         .await;
 
-        completion_handle
-            .give(&completion_cap, res.map_err(|e| e.to_string_with_causes()))
-            .await;
+        completion_handle.give(&completion_cap, res.map_err(|e| e.to_string_with_causes()));
     });
 
-    completion_stream
+    (completion_stream, button.press_on_drop())
 }
 
 /// dyncfg parameters for the copy_to operator, stored in this struct to avoid
@@ -498,60 +434,6 @@ pub struct CopyToParameters {
     pub s3_multipart_part_size_bytes: usize,
 }
 
-/// Helper to manage object keys created by this sink based on the S3 URI provided
-/// by the user and the GlobalId that identifies this copy-to-s3 sink.
-/// Since there may be multiple compute replicas running their own copy of this sink
-/// we need to ensure the S3 keys are consistent such that we can detect when objects
-/// were created by an instance of this sink or not.
-#[derive(Clone)]
-struct S3KeyManager {
-    pub bucket: String,
-    object_key_prefix: String,
-}
-
-impl S3KeyManager {
-    pub fn new(sink_id: &GlobalId, s3_uri: &str) -> Self {
-        // This url is already validated to be a valid s3 url in sequencer.
-        let uri = Uri::from_str(s3_uri).expect("valid s3 url");
-        let bucket = uri.host().expect("s3 bucket");
-        // TODO: Can an empty path be provided?
-        let path = uri.path().trim_start_matches('/').trim_end_matches('/');
-
-        Self {
-            bucket: bucket.to_string(),
-            object_key_prefix: format!("{}/mz-{}-", path, sink_id),
-        }
-    }
-
-    /// The S3 key to use for a specific data file, based on the batch
-    /// it belongs to and the index within that batch.
-    fn data_key(&self, batch: u64, file_index: usize, extension: &str) -> String {
-        format!(
-            "{}batch-{:04}-{:04}.{}",
-            self.object_key_prefix, batch, file_index, extension
-        )
-    }
-
-    /// The S3 key to use for the incomplete sentinel file
-    fn incomplete_sentinel_key(&self) -> String {
-        format!("{}INCOMPLETE", self.object_key_prefix)
-    }
-
-    /// Whether the given object key belongs to this sink instance
-    fn is_sink_object(&self, object_key: &str) -> bool {
-        object_key.starts_with(&self.object_key_prefix)
-    }
-
-    /// The key prefix based on the URI provided by the user. NOTE this doesn't
-    /// contain the additional prefix we include on all keys written by the sink
-    /// e.g. `mz-{sink_id}-batch-...`
-    /// This is useful when listing objects in the bucket with this prefix to
-    /// determine if its clear to upload.
-    fn path_prefix(&self) -> &str {
-        self.object_key_prefix.rsplit_once('/').expect("exists").0
-    }
-}
-
 /// This trait is used to abstract over the upload details for different file formats.
 /// Each format has its own buffering semantics and upload logic, since some can be
 /// written in a streaming fashion row-by-row, whereas others use a columnar-based
@@ -564,6 +446,9 @@ trait CopyToS3Uploader: Sized {
         batch: u64,
         params: CopyToParameters,
     ) -> Result<Self, anyhow::Error>;
+    /// Force the start of a new file, even if no rows have yet been appended or
+    /// if the current file has not yet reached the configured `max_file_size`.
+    async fn force_new_file(&mut self) -> Result<(), anyhow::Error>;
     /// Append a row to the internal buffer, and optionally flush the buffer to S3.
     async fn append_row(&mut self, row: &Row) -> Result<(), anyhow::Error>;
     /// Flush the full remaining internal buffer to S3, and close all open resources.

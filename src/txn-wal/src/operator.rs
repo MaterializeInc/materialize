@@ -19,6 +19,7 @@ use std::time::Duration;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
+use futures::StreamExt;
 use mz_dyncfg::{Config, ConfigSet, ConfigUpdates};
 use mz_ore::cast::CastFrom;
 use mz_ore::task::JoinHandleExt;
@@ -106,7 +107,7 @@ pub fn txns_progress<K, V, T, D, P, C, F, G>(
 where
     K: Debug + Codec + Send + Sync,
     V: Debug + Codec + Send + Sync,
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
     D: Debug + Data + Semigroup + Ord + Codec64 + Send + Sync,
     P: Debug + Data,
     C: TxnsCodec + 'static,
@@ -170,7 +171,7 @@ fn txns_progress_source_local<K, V, T, D, P, C, G>(
 where
     K: Debug + Codec + Send + Sync,
     V: Debug + Codec + Send + Sync,
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
     D: Debug + Data + Semigroup + Ord + Codec64 + Send + Sync,
     P: Debug + Data,
     C: TxnsCodec + 'static,
@@ -181,7 +182,7 @@ where
     let name = format!("txns_progress_source({})", name);
     let mut builder = AsyncOperatorBuilder::new(name.clone(), scope);
     let name = format!("{} [{}] {:.9}", name, unique_id, data_id.to_string());
-    let (mut remap_output, remap_stream) = builder.new_output();
+    let (remap_output, remap_stream) = builder.new_output();
 
     let shutdown_button = builder.build(move |capabilities| async move {
         if worker_idx != chosen_worker {
@@ -208,7 +209,7 @@ where
         }
 
         debug!("{} emitting {:?}", name, subscribe.remap);
-        remap_output.give(&cap, subscribe.remap.clone()).await;
+        remap_output.give(&cap, subscribe.remap.clone());
 
         loop {
             let _ = txns_cache.update_ge(&subscribe.remap.logical_upper).await;
@@ -237,7 +238,7 @@ where
                         logical_upper: new_upper,
                     };
                     debug!("{} emitting {:?}", name, subscribe.remap);
-                    remap_output.give(&cap, subscribe.remap.clone()).await;
+                    remap_output.give(&cap, subscribe.remap.clone());
                 }
                 // We know there are no writes in `[logical_upper,
                 // new_progress)`, so advance our output frontier.
@@ -286,7 +287,7 @@ fn txns_progress_source_global<K, V, T, D, P, C, G>(
 where
     K: Debug + Codec + Send + Sync,
     V: Debug + Codec + Send + Sync,
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
     D: Debug + Data + Semigroup + Ord + Codec64 + Send + Sync,
     P: Debug + Data,
     C: TxnsCodec + 'static,
@@ -297,7 +298,7 @@ where
     let name = format!("txns_progress_source({})", name);
     let mut builder = AsyncOperatorBuilder::new(name.clone(), scope);
     let name = format!("{} [{}] {:.9}", name, unique_id, data_id.to_string());
-    let (mut remap_output, remap_stream) = builder.new_output();
+    let (remap_output, remap_stream) = builder.new_output();
 
     let shutdown_button = builder.build(move |capabilities| async move {
         if worker_idx != chosen_worker {
@@ -337,7 +338,7 @@ where
             if remap.physical_upper != physical_upper {
                 physical_upper = remap.physical_upper.clone();
                 debug!("{} emitting {:?}", name, remap);
-                remap_output.give(&cap, remap).await;
+                remap_output.give(&cap, remap);
             } else {
                 debug!("{} not emitting {:?}", name, remap);
             }
@@ -374,7 +375,7 @@ where
         passthrough.scope().peers(),
         data_id.to_string(),
     );
-    let (mut passthrough_output, passthrough_stream) =
+    let (passthrough_output, passthrough_stream) =
         builder.new_output::<CapacityContainerBuilder<_>>();
     let mut remap_input = builder.new_disconnected_input(&remap, Pipeline);
     let mut passthrough_input = builder.new_disconnected_input(&passthrough, Pipeline);
@@ -433,7 +434,7 @@ where
                     // `mfp_and_decode` (after this operator) do the necessary
                     // filtering.
                     debug!("{} emitting data {:?}", name, data);
-                    passthrough_output.give_container(&cap, &mut data).await;
+                    passthrough_output.give_container(&cap, &mut data);
                 }
                 AsyncEvent::Progress(new_progress) => {
                     // If `until.less_equal(new_progress)`, it means that all
@@ -535,7 +536,7 @@ pub struct TxnsContext {
 impl TxnsContext {
     async fn get_or_init<T, C>(&self, client: &PersistClient, txns_id: ShardId) -> TxnsRead<T>
     where
-        T: Timestamp + Lattice + Codec64 + TotalOrder + StepForward,
+        T: Timestamp + Lattice + Codec64 + TotalOrder + StepForward + Sync,
         C: TxnsCodec + 'static,
     {
         let read = self
@@ -640,7 +641,7 @@ impl DataSubscribe {
     ) -> Self {
         let mut worker = Worker::new(
             WorkerConfig::default(),
-            timely::communication::allocator::Thread::new(),
+            timely::communication::allocator::Thread::default(),
         );
         let (data, txns, capture, tokens) = worker.dataflow::<u64, _, _>(|scope| {
             let (data_stream, shard_source_token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
@@ -664,7 +665,7 @@ impl DataSubscribe {
                 );
                 (data_stream.leave(), token)
             });
-            let (mut data, mut txns) = (ProbeHandle::new(), ProbeHandle::new());
+            let (data, txns) = (ProbeHandle::new(), ProbeHandle::new());
             let data_stream = data_stream.flat_map(|part| {
                 let part = part.parse();
                 part.part.map(|((k, v), t, d)| {
@@ -672,7 +673,7 @@ impl DataSubscribe {
                     (k, t, d)
                 })
             });
-            let data_stream = data_stream.probe_with(&mut data);
+            let data_stream = data_stream.probe_with(&data);
             // We purposely do not use the `ConfigSet` in `client` so that
             // different tests can set different values.
             let config_set = ConfigSet::default().add(&USE_GLOBAL_TXN_CACHE_SOURCE);
@@ -693,7 +694,7 @@ impl DataSubscribe {
                     Arc::new(StringSchema),
                     Arc::new(UnitSchema),
                 );
-            let data_stream = data_stream.probe_with(&mut txns);
+            let data_stream = data_stream.probe_with(&txns);
             let mut tokens = shard_source_token;
             tokens.append(&mut txns_progress_token);
             (data, txns, data_stream.capture(), tokens)
@@ -886,7 +887,7 @@ mod tests {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+        T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
         D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
         O: Opaque + Debug + Codec64,
         C: TxnsCodec,

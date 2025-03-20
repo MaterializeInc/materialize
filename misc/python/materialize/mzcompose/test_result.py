@@ -36,6 +36,8 @@ class TestFailureDetails:
 
     message: str
     details: str | None
+    additional_details_header: str | None = None
+    additional_details: str | None = None
     test_class_name_override: str | None = None
     """The test class usually describes the framework."""
     test_case_name_override: str | None = None

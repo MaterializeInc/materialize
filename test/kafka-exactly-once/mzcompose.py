@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Verify that data from Kafka is only ingested exactly once, there should be no
+duplicates, even after restarting Materialize.
+"""
+
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -33,6 +38,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
 
     c.up("zookeeper", "kafka", "schema-registry", "materialized")
+    c.setup_quickstart_cluster()
     c.run_testdrive_files(
         f"--seed={args.seed}",
         "--kafka-option=group.id=group1",

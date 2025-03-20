@@ -28,7 +28,7 @@ where
             Ok(())
         }
         Err(_) => Err(EvalError::InvalidByteSequence {
-            byte_sequence: format!("{:#02x}", c),
+            byte_sequence: format!("{:#02x}", c).into(),
             encoding_name: "UTF8".into(),
         }),
     }

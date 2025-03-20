@@ -32,6 +32,7 @@ use deadpool_postgres::{
 };
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::now::SYSTEM_TIME;
+use mz_ore::url::SensitiveUrl;
 use tracing::debug;
 
 use crate::error::PostgresError;
@@ -58,7 +59,7 @@ pub trait PostgresClientKnobs: std::fmt::Debug + Send + Sync {
 /// Configuration for creating a [PostgresClient].
 #[derive(Clone, Debug)]
 pub struct PostgresClientConfig {
-    url: String,
+    url: SensitiveUrl,
     knobs: Arc<dyn PostgresClientKnobs>,
     metrics: PostgresClientMetrics,
 }
@@ -66,7 +67,7 @@ pub struct PostgresClientConfig {
 impl PostgresClientConfig {
     /// Returns a new [PostgresClientConfig] for use in production.
     pub fn new(
-        url: String,
+        url: SensitiveUrl,
         knobs: Arc<dyn PostgresClientKnobs>,
         metrics: PostgresClientMetrics,
     ) -> Self {
@@ -93,7 +94,7 @@ impl std::fmt::Debug for PostgresClient {
 impl PostgresClient {
     /// Open a [PostgresClient] using the given `config`.
     pub fn open(config: PostgresClientConfig) -> Result<Self, PostgresError> {
-        let mut pg_config: Config = config.url.parse()?;
+        let mut pg_config: Config = config.url.to_string_unredacted().parse()?;
         pg_config.connect_timeout(config.knobs.connect_timeout());
         pg_config.tcp_user_timeout(config.knobs.tcp_user_timeout());
 

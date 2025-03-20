@@ -31,8 +31,7 @@ ALTER SYSTEM SET enable_statement_lifecycle_logging = true
 # Later, we need to ignore everything
 # that happened before the real test started. Sleep here,
 # so we can be sure that their `began_at` is different.
-> SELECT mz_unsafe.mz_sleep(1)
-<null>
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="1s"
 
 # Make it so we can query the tables later
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
@@ -110,7 +109,7 @@ serializable
 # (2) We don't have a way to log errors that happen during statement preparation,
 #     but only during statement execution.
 # (3) SQL-level statements always use a prepared statement with a useless name beginning with 's'
-# (4) `FETCH` has the somewhat confusing behavior of reporting the `rows_returned`
+# (4) `FETCH` has the somewhat confusing behavior of reporting the `result_size` and `rows_returned`
 #     of the *total* result set in the first `FETCH`, and null thereafter.
 #
 # All of these (except (3), which is just how the postgres library TD uses works) are working as designed.
@@ -121,30 +120,31 @@ serializable
 
 > WITH all_stmts AS (SELECT mseh.*, mpsh.*, mst.sql, mst.redacted_sql FROM mz_internal.mz_statement_execution_history mseh RIGHT JOIN mz_internal.mz_prepared_statement_history mpsh ON mseh.prepared_statement_id = mpsh.id RIGHT JOIN (SELECT DISTINCT sql_hash, sql, redacted_sql FROM mz_internal.mz_sql_text) mst ON mpsh.sql_hash = mst.sql_hash),
        test_begin AS (SELECT began_at FROM all_stmts WHERE sql = 'SELECT ''beginning real test!''' ORDER BY began_at DESC LIMIT 1)
-  SELECT c.name, all_stmts.cluster_name, all_stmts.application_name, all_stmts.sample_rate, all_stmts.params, all_stmts.finished_status, all_stmts.error_message, all_stmts.rows_returned, all_stmts.execution_strategy, all_stmts.name LIKE 's%', all_stmts.sql, all_stmts.transaction_isolation, all_stmts.transient_index_id ~ '^t[0-9]+$'
+  SELECT c.name, all_stmts.cluster_name, all_stmts.application_name, all_stmts.sample_rate, all_stmts.params, all_stmts.finished_status, all_stmts.error_message, all_stmts.result_size, all_stmts.rows_returned, all_stmts.execution_strategy, all_stmts.name LIKE 's%', all_stmts.sql, all_stmts.transaction_isolation, all_stmts.transient_index_id ~ '^t[0-9]+$',
+  all_stmts.database_name, all_stmts.search_path::text
   FROM all_stmts, test_begin LEFT JOIN mz_clusters c ON c.id = all_stmts.cluster_id WHERE all_stmts.began_at >= test_begin.began_at AND all_stmts.sql NOT LIKE '%sduiahsdfuoiahsdf%'
-<null> <null> my_app 1 {} success <null> <null> <null> true "SET transaction_isolation TO serializable" "strict serializable" <null>
-<null> c my_app 1 {} success <null> 1 standard true "SELECT count(*) FROM t" "strict serializable" true
-<null> c my_app 1 {} success <null> <null> <null> true "DROP CLUSTER c" "strict serializable" <null>
-quickstart quickstart my_app 1 {} error "Evaluation error: division by zero" <null> <null> true "SELECT f/0 FROM t" "strict serializable" true
-quickstart quickstart my_app 1 {} success <null> 1 constant true "EXECUTE p('hello world')" "strict serializable" <null>
-quickstart quickstart my_app 1 {} success <null> 1 fast-path true "SELECT * FROM t" "strict serializable" <null>
-quickstart quickstart my_app 1 {} success <null> 1 standard true "SELECT count(*) FROM t" "strict serializable" true
-quickstart quickstart my_app 1 {} success <null> 2 constant true "FETCH c" "strict serializable" <null>
-quickstart quickstart my_app 1 {} success <null> <null> <null> true BEGIN "strict serializable" <null>
-quickstart quickstart my_app 1 {} success <null> <null> <null> true COMMIT "strict serializable" <null>
-quickstart quickstart my_app 1 {} success <null> <null> <null> true "CREATE CLUSTER c REPLICAS (r1 (size '1'))" "strict serializable" <null>
-quickstart quickstart my_app 1 {} success <null> <null> <null> true "CREATE DEFAULT INDEX i ON t" "strict serializable" <null>
-quickstart quickstart my_app 1 {} success <null> <null> <null> true "CREATE TABLE t(f int)" "strict serializable" <null>
-quickstart quickstart my_app 1 {} success <null> <null> <null> true "DECLARE c CURSOR FOR VALUES (1), (2)" "strict serializable" <null>
-quickstart quickstart my_app 1 {} success <null> <null> <null> true "FETCH c" "strict serializable" <null>
-quickstart quickstart my_app 1 {} success <null> <null> <null> true "FETCH c" "strict serializable" <null>
-quickstart quickstart my_app 1 {} success <null> <null> <null> true "INSERT INTO t VALUES (1)" "strict serializable" <null>
-quickstart quickstart my_app 1 {} success <null> <null> <null> true "PREPARE p AS values ($1)" "strict serializable" <null>
-quickstart quickstart my_app 1 {} success <null> <null> <null> true "SET cluster TO c" "strict serializable" <null>
-mz_catalog_server mz_catalog_server my_app 1 {} success <null> 1 constant true "SELECT 'beginning real test!'" "strict serializable" <null>
-mz_catalog_server mz_catalog_server my_app 1 {} success <null> 1 constant true "SELECT 'serializable'" serializable <null>
-mz_catalog_server mz_catalog_server my_app 1 {} success <null> 1 standard true "SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" "strict serializable" true
+<null> <null> my_app 1 {} success <null> <null> <null> <null> true "SET transaction_isolation TO serializable" "strict serializable" <null> materialize {public}
+<null> c my_app 1 {} success <null> 18 1 standard true "SELECT count(*) FROM t" "strict serializable" true materialize {public}
+<null> c my_app 1 {} success <null> <null> <null> <null> true "DROP CLUSTER c" "strict serializable" <null> materialize {public}
+quickstart quickstart my_app 1 {} error "Evaluation error: division by zero" <null> <null> <null> true "SELECT f/0 FROM t" "strict serializable" true materialize {public}
+quickstart quickstart my_app 1 {} success <null> 13 1 constant true "EXECUTE p('hello world')" "strict serializable" <null> materialize {public}
+quickstart quickstart my_app 1 {} success <null> 18 1 fast-path true "SELECT * FROM t" "strict serializable" <null> materialize {public}
+quickstart quickstart my_app 1 {} success <null> 18 1 standard true "SELECT count(*) FROM t" "strict serializable" true materialize {public}
+quickstart quickstart my_app 1 {} success <null> 4 2 constant true "FETCH c" "strict serializable" <null> materialize {public}
+quickstart quickstart my_app 1 {} success <null> <null> <null> <null> true BEGIN "strict serializable" <null> materialize {public}
+quickstart quickstart my_app 1 {} success <null> <null> <null> <null> true COMMIT "strict serializable" <null> materialize {public}
+quickstart quickstart my_app 1 {} success <null> <null> <null> <null> true "CREATE CLUSTER c REPLICAS (r1 (size '1'))" "strict serializable" <null> materialize {public}
+quickstart quickstart my_app 1 {} success <null> <null> <null> <null> true "CREATE DEFAULT INDEX i ON t" "strict serializable" <null> materialize {public}
+quickstart quickstart my_app 1 {} success <null> <null> <null> <null> true "CREATE TABLE t(f int)" "strict serializable" <null> materialize {public}
+quickstart quickstart my_app 1 {} success <null> <null> <null> <null> true "DECLARE c CURSOR FOR VALUES (1), (2)" "strict serializable" <null> materialize {public}
+quickstart quickstart my_app 1 {} success <null> <null> <null> <null> true "FETCH c" "strict serializable" <null> materialize {public}
+quickstart quickstart my_app 1 {} success <null> <null> <null> <null> true "FETCH c" "strict serializable" <null> materialize {public}
+quickstart quickstart my_app 1 {} success <null> <null> <null> <null> true "INSERT INTO t VALUES (1)" "strict serializable" <null> materialize {public}
+quickstart quickstart my_app 1 {} success <null> <null> <null> <null> true "PREPARE p AS values ($1)" "strict serializable" <null> materialize {public}
+quickstart quickstart my_app 1 {} success <null> <null> <null> <null> true "SET cluster TO c" "strict serializable" <null> materialize {public}
+mz_catalog_server mz_catalog_server my_app 1 {} success <null> 22 1 constant true "SELECT 'beginning real test!'" "strict serializable" <null> materialize {public}
+mz_catalog_server mz_catalog_server my_app 1 {} success <null> 14 1 constant true "SELECT 'serializable'" serializable <null> materialize {public}
+mz_catalog_server mz_catalog_server my_app 1 {} success <null> 17 1 standard true "SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" "strict serializable" true materialize {public}
 
 > WITH all_stmts AS (SELECT mseh.id, mseh.began_at, mst.sql FROM mz_internal.mz_statement_execution_history mseh JOIN mz_internal.mz_prepared_statement_history mpsh ON mseh.prepared_statement_id = mpsh.id JOIN (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) mst ON mpsh.sql_hash = mst.sql_hash),
        test_begin AS (SELECT began_at FROM all_stmts WHERE sql = 'SELECT ''beginning real test!''' ORDER BY began_at DESC LIMIT 1)
@@ -276,6 +276,10 @@ ROLLBACK
 
 > INSERT INTO t_offset_limit SELECT generate_series(1, 5);
 
+# Make sure the table has its data already, otherwise Testdrive might execute it multiple times
+> SELECT COUNT(*) FROM t_offset_limit
+5
+
 > SELECT * FROM t_offset_limit ORDER BY a DESC OFFSET 4;
 1
 
@@ -287,14 +291,14 @@ ROLLBACK
 
 > SELECT * FROM t_offset_limit ORDER BY a DESC LIMIT 0;
 
-> SELECT rows_returned FROM mz_internal.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC OFFSET 4';
-1
+> SELECT result_size, rows_returned FROM mz_internal.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC OFFSET 4';
+90 1
 
-> SELECT rows_returned FROM mz_internal.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC LIMIT 2';
-2
+> SELECT result_size, rows_returned FROM mz_internal.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC LIMIT 2';
+54 2
 
-> SELECT rows_returned FROM mz_internal.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC OFFSET 100';
-0
+> SELECT result_size, rows_returned FROM mz_internal.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC OFFSET 100';
+90 0
 
-> SELECT rows_returned FROM mz_internal.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC LIMIT 0';
-0
+> SELECT result_size, rows_returned FROM mz_internal.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC LIMIT 0';
+0 0

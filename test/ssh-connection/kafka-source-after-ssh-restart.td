@@ -15,26 +15,26 @@
 $ kafka-ingest topic=thetopic format=bytes
 three
 
-> SELECT * FROM fixed_text
+> SELECT * FROM fixed_text_tbl
 text
 ----
 one
 two
 three
 
-> SELECT * FROM dynamic_text
+> SELECT * FROM dynamic_text_tbl
 text
 ----
 one
 two
 three
 
-> SELECT * FROM fixed_plus_csr
+> SELECT * FROM fixed_plus_csr_tbl
 f1    f2
 ----------
 fish  1000
 
-> SELECT * FROM dynamic_plus_csr
+> SELECT * FROM dynamic_plus_csr_tbl
 f1    f2
 ----------
 fish  1000

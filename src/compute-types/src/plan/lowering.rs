@@ -13,10 +13,10 @@ use std::collections::BTreeMap;
 
 use mz_expr::JoinImplementation::{DeltaQuery, Differential, IndexedFilter, Unimplemented};
 use mz_expr::{
-    permutation_for_arrangement, Id, JoinInputMapper, MapFilterProject, MirRelationExpr,
-    MirScalarExpr, OptimizedMirRelationExpr,
+    permutation_for_arrangement, AggregateExpr, Id, JoinInputMapper, MapFilterProject,
+    MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, TableFunc,
 };
-use mz_ore::{soft_assert_eq_or_log, soft_panic_or_log};
+use mz_ore::{assert_none, soft_assert_eq_or_log, soft_panic_or_log};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::GlobalId;
 use timely::progress::Timestamp;
@@ -26,7 +26,7 @@ use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
-use crate::plan::{AvailableCollections, GetPlan, LirId, Plan};
+use crate::plan::{AvailableCollections, GetPlan, LirId, Plan, PlanNode};
 
 pub(super) struct Context {
     /// Known bindings to (possibly arranged) collections.
@@ -43,7 +43,7 @@ impl Context {
     pub fn new(debug_name: String, features: &OptimizerFeatures) -> Self {
         Self {
             arrangements: Default::default(),
-            next_lir_id: 0,
+            next_lir_id: LirId(1),
             debug_info: LirDebugInfo {
                 debug_name,
                 id: GlobalId::Transient(0),
@@ -54,7 +54,12 @@ impl Context {
 
     fn allocate_lir_id(&mut self) -> LirId {
         let id = self.next_lir_id;
-        self.next_lir_id += 1;
+        self.next_lir_id = LirId(
+            self.next_lir_id
+                .0
+                .checked_add(1)
+                .expect("No LirId overflow"),
+        );
         id
     }
 
@@ -114,6 +119,7 @@ impl Context {
             initial_storage_as_of: desc.initial_storage_as_of,
             refresh_schedule: desc.refresh_schedule,
             debug_name: desc.debug_name,
+            time_dependence: desc.time_dependence,
         })
     }
 
@@ -179,16 +185,16 @@ impl Context {
             }
             // These operators may not have been extracted, and need to result in a `Plan`.
             MirRelationExpr::Constant { rows, typ: _ } => {
-                let plan = Plan::Constant {
+                let lir_id = self.allocate_lir_id();
+                let node = PlanNode::Constant {
                     rows: rows.clone().map(|rows| {
                         rows.into_iter()
                             .map(|(row, diff)| (row, T::minimum(), diff))
                             .collect()
                     }),
-                    lir_id: self.allocate_lir_id(),
                 };
                 // The plan, not arranged in any way.
-                (plan, AvailableCollections::new_raw())
+                (node.as_plan(lir_id), AvailableCollections::new_raw())
             }
             MirRelationExpr::Get { id, typ: _, .. } => {
                 // This stage can absorb arbitrary MFP operators.
@@ -229,7 +235,7 @@ impl Context {
                     //   `LiteralConstraints` has already run.
                     // (Also note that a similar literal constraint handling machinery is also
                     // present when handling the leftover MFP after this big match.)
-                    mfp.permute(permutation.clone(), thinning.len() + key.len());
+                    mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
                     in_keys.arranged = vec![(key.clone(), permutation.clone(), thinning.clone())];
                     GetPlan::Arrangement(key.clone(), Some(val.clone()), mfp)
                 } else if !mfp.is_identity() {
@@ -237,7 +243,7 @@ impl Context {
                     if let Some((key, permutation, thinning)) =
                         in_keys.arbitrary_arrangement().cloned()
                     {
-                        mfp.permute(permutation.clone(), thinning.len() + key.len());
+                        mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
                         in_keys.arranged = vec![(key.clone(), permutation, thinning)];
                         GetPlan::Arrangement(key, None, mfp)
                     } else {
@@ -254,16 +260,14 @@ impl Context {
                     AvailableCollections::new_raw()
                 };
 
+                let lir_id = self.allocate_lir_id();
+                let node = PlanNode::Get {
+                    id: id.clone(),
+                    keys: in_keys,
+                    plan,
+                };
                 // Return the plan, and any keys if an identity `mfp`.
-                (
-                    Plan::Get {
-                        id: id.clone(),
-                        keys: in_keys,
-                        plan,
-                        lir_id: self.allocate_lir_id(),
-                    },
-                    out_keys,
-                )
+                (node.as_plan(lir_id), out_keys)
             }
             MirRelationExpr::Let { id, value, body } => {
                 // It would be unfortunate to have a non-trivial `mfp` here, as we hope
@@ -274,19 +278,20 @@ impl Context {
                 // introduce any resulting arrangements bound to `id`.
                 let (value, v_keys) = self.lower_mir_expr(value)?;
                 let pre_existing = self.arrangements.insert(Id::Local(*id), v_keys);
-                assert!(pre_existing.is_none());
+                assert_none!(pre_existing);
                 // Plan the body using initial and `value` arrangements,
                 // and then remove reference to the value arrangements.
                 let (body, b_keys) = self.lower_mir_expr(body)?;
                 self.arrangements.remove(&Id::Local(*id));
                 // Return the plan, and any `body` arrangements.
+                let lir_id = self.allocate_lir_id();
                 (
-                    Plan::Let {
+                    PlanNode::Let {
                         id: id.clone(),
                         value: Box::new(value),
                         body: Box::new(body),
-                        lir_id: self.allocate_lir_id(),
-                    },
+                    }
+                    .as_plan(lir_id),
                     b_keys,
                 )
             }
@@ -311,7 +316,7 @@ impl Context {
                         let (input_key, permutation, thinning) =
                             v_keys.arbitrary_arrangement().unwrap();
                         let mut input_mfp = MapFilterProject::new(value.arity());
-                        input_mfp.permute(permutation.clone(), thinning.len() + input_key.len());
+                        input_mfp.permute_fn(|c| permutation[c], thinning.len() + input_key.len());
                         let input_key = Some(input_key.clone());
 
                         let forms = AvailableCollections::new_raw();
@@ -323,37 +328,48 @@ impl Context {
                         // then we insert the `ArrangeBy` on the `body` of the inner `LetRec`,
                         // instead of on top of the inner `LetRec`.
                         lir_value = match lir_value {
-                            Plan::LetRec {
-                                ids,
-                                values,
-                                limits,
-                                body,
+                            Plan {
+                                node:
+                                    PlanNode::LetRec {
+                                        ids,
+                                        values,
+                                        limits,
+                                        body,
+                                    },
                                 lir_id,
-                            } => Plan::LetRec {
-                                ids,
-                                values,
-                                limits,
-                                body: Box::new(Plan::ArrangeBy {
-                                    input: body,
+                            } => {
+                                let inner_lir_id = self.allocate_lir_id();
+                                PlanNode::LetRec {
+                                    ids,
+                                    values,
+                                    limits,
+                                    body: Box::new(
+                                        PlanNode::ArrangeBy {
+                                            input: body,
+                                            forms,
+                                            input_key,
+                                            input_mfp,
+                                        }
+                                        .as_plan(inner_lir_id),
+                                    ),
+                                }
+                                .as_plan(lir_id)
+                            }
+                            lir_value => {
+                                let lir_id = self.allocate_lir_id();
+                                PlanNode::ArrangeBy {
+                                    input: Box::new(lir_value),
                                     forms,
                                     input_key,
                                     input_mfp,
-                                    lir_id: self.allocate_lir_id(),
-                                }),
-                                lir_id,
-                            },
-                            lir_value => Plan::ArrangeBy {
-                                input: Box::new(lir_value),
-                                forms,
-                                input_key,
-                                input_mfp,
-                                lir_id: self.allocate_lir_id(),
-                            },
+                                }
+                                .as_plan(lir_id)
+                            }
                         };
                         v_keys.raw = true;
                     }
                     let pre_existing = self.arrangements.insert(Id::Local(*id), v_keys);
-                    assert!(pre_existing.is_none());
+                    assert_none!(pre_existing);
                     lir_values.push(lir_value);
                 }
                 // As we exit the iterative scope, we must leave all arrangements behind,
@@ -369,56 +385,169 @@ impl Context {
                     self.arrangements.remove(&Id::Local(*id));
                 }
                 // Return the plan, and any `body` arrangements.
+                let lir_id = self.allocate_lir_id();
                 (
-                    Plan::LetRec {
+                    PlanNode::LetRec {
                         ids: ids.clone(),
                         values: lir_values,
                         limits: limits.clone(),
                         body: Box::new(body),
-                        lir_id: self.allocate_lir_id(),
-                    },
+                    }
+                    .as_plan(lir_id),
                     b_keys,
                 )
             }
-            MirRelationExpr::FlatMap { input, func, exprs } => {
-                let (input, keys) = self.lower_mir_expr(input)?;
-                // This stage can absorb arbitrary MFP instances.
-                let mfp = mfp.take();
-                let mut exprs = exprs.clone();
-                let input_key = if let Some((k, permutation, _)) = keys.arbitrary_arrangement() {
-                    // We don't permute the MFP here, because it runs _after_ the table function,
-                    // whose output is in a fixed order.
-                    //
-                    // We _do_, however, need to permute the `expr`s that provide input to the
-                    // `func`.
-                    for expr in &mut exprs {
-                        expr.permute_map(permutation);
+            MirRelationExpr::FlatMap {
+                input: flat_map_input,
+                func,
+                exprs,
+            } => {
+                // A `FlatMap UnnestList` that comes after the `Reduce` of a window function can be
+                // fused into the lowered `Reduce`.
+                //
+                // In theory, we could have implemented this also as an MIR transform. However, this
+                // is more of a physical optimization, which are sometimes unpleasant to make a part
+                // of the MIR pipeline. The specific problem here with putting this into the MIR
+                // pipeline would be that we'd need to modify MIR's semantics: MIR's Reduce
+                // currently always emits exactly 1 row per group, but the fused Reduce-FlatMap can
+                // emit multiple rows per group. Such semantic changes of MIR are very scary, since
+                // various parts of the optimizer assume that Reduce emits only 1 row per group, and
+                // it would be very hard to hunt down all these parts. (For example, key inference
+                // infers the group key as a unique key.)
+                let fused_with_reduce = 'fusion: {
+                    if !matches!(func, TableFunc::UnnestList { .. }) {
+                        break 'fusion None;
                     }
-
-                    Some(k.clone())
-                } else {
-                    None
+                    // We might have a Project of a single col between the FlatMap and the
+                    // Reduce. (It projects away the grouping keys of the Reduce, and keeps the
+                    // result of the window function.)
+                    let (maybe_reduce, num_grouping_keys) = if let MirRelationExpr::Project {
+                        input: project_input,
+                        outputs: projection,
+                    } = &**flat_map_input
+                    {
+                        // We want this to be a single column, because we'll want to deal with only
+                        // one aggregation in the `Reduce`. (The aggregation of a window function
+                        // always stands alone currently: we plan them separately from other
+                        // aggregations, and Reduces are never fused. When window functions are
+                        // fused with each other, they end up in one aggregation. When there are
+                        // multiple window functions in the same SELECT, but can't be fused, they
+                        // end up in different Reduces.)
+                        if let &[single_col] = &**projection {
+                            (project_input, single_col)
+                        } else {
+                            break 'fusion None;
+                        }
+                    } else {
+                        (flat_map_input, 0)
+                    };
+                    if let MirRelationExpr::Reduce {
+                        input,
+                        group_key,
+                        aggregates,
+                        monotonic,
+                        expected_group_size,
+                    } = &**maybe_reduce
+                    {
+                        if group_key.len() != num_grouping_keys
+                            || aggregates.len() != 1
+                            || !aggregates[0].func.can_fuse_with_unnest_list()
+                        {
+                            break 'fusion None;
+                        }
+                        // At the beginning, `non_fused_mfp_above_flat_map` will be the original MFP
+                        // above the FlatMap. Later, we'll mutate this to be the residual MFP that
+                        // didn't get fused into the `Reduce`.
+                        let non_fused_mfp_above_flat_map = &mut mfp;
+                        let reduce_output_arity = num_grouping_keys + 1;
+                        // We are fusing away the list that the FlatMap would have been unnesting,
+                        // so the column that had that list disappears, so we have to permute the
+                        // MFP above the FlatMap with this column disappearance.
+                        let tweaked_mfp = {
+                            let mut mfp = non_fused_mfp_above_flat_map.clone();
+                            if mfp.demand().contains(&0) {
+                                // I don't think this can happen currently that this MFP would
+                                // refer to the list column, because both the list column and the
+                                // MFP were constructed by the HIR-to-MIR lowering, so it's not just
+                                // some random MFP that we are seeing here. But anyhow, it's better
+                                // to check this here for robustness against future code changes.
+                                break 'fusion None;
+                            }
+                            let permutation: BTreeMap<_, _> =
+                                (1..mfp.input_arity).map(|col| (col, col - 1)).collect();
+                            mfp.permute_fn(|c| permutation[&c], mfp.input_arity - 1);
+                            mfp
+                        };
+                        // We now put together the project that was before the FlatMap, and the
+                        // tweaked version of the MFP that was after the FlatMap.
+                        // (Part of this MFP might be fused into the Reduce.)
+                        let mut project_and_tweaked_mfp = {
+                            let mut mfp = MapFilterProject::new(reduce_output_arity);
+                            mfp = mfp.project(vec![num_grouping_keys]);
+                            mfp = MapFilterProject::compose(mfp, tweaked_mfp);
+                            mfp
+                        };
+                        let fused = self.lower_reduce(
+                            input,
+                            group_key,
+                            aggregates,
+                            monotonic,
+                            expected_group_size,
+                            &mut project_and_tweaked_mfp,
+                            true,
+                        )?;
+                        // Update the residual MFP.
+                        *non_fused_mfp_above_flat_map = project_and_tweaked_mfp;
+                        Some(fused)
+                    } else {
+                        break 'fusion None;
+                    }
                 };
-                // Return the plan, and no arrangements.
-                (
-                    Plan::FlatMap {
-                        input: Box::new(input),
-                        func: func.clone(),
-                        exprs: exprs.clone(),
-                        mfp_after: mfp,
-                        input_key,
-                        lir_id: self.allocate_lir_id(),
-                    },
-                    AvailableCollections::new_raw(),
-                )
+                if let Some(fused_with_reduce) = fused_with_reduce {
+                    fused_with_reduce
+                } else {
+                    // Couldn't fuse it with a `Reduce`, so lower as a normal `FlatMap`.
+                    let (input, keys) = self.lower_mir_expr(flat_map_input)?;
+                    // This stage can absorb arbitrary MFP instances.
+                    let mfp = mfp.take();
+                    let mut exprs = exprs.clone();
+                    let input_key = if let Some((k, permutation, _)) = keys.arbitrary_arrangement()
+                    {
+                        // We don't permute the MFP here, because it runs _after_ the table function,
+                        // whose output is in a fixed order.
+                        //
+                        // We _do_, however, need to permute the `expr`s that provide input to the
+                        // `func`.
+                        let permutation = permutation.iter().cloned().enumerate().collect();
+                        for expr in &mut exprs {
+                            expr.permute_map(&permutation);
+                        }
+
+                        Some(k.clone())
+                    } else {
+                        None
+                    };
+
+                    let lir_id = self.allocate_lir_id();
+                    // Return the plan, and no arrangements.
+                    (
+                        PlanNode::FlatMap {
+                            input: Box::new(input),
+                            func: func.clone(),
+                            exprs: exprs.clone(),
+                            mfp_after: mfp,
+                            input_key,
+                        }
+                        .as_plan(lir_id),
+                        AvailableCollections::new_raw(),
+                    )
+                }
             }
             MirRelationExpr::Join {
                 inputs,
                 equivalences,
                 implementation,
             } => {
-                let input_mapper = JoinInputMapper::new(inputs);
-
                 // Plan each of the join inputs independently.
                 // The `plans` get surfaced upwards, and the `input_keys` should
                 // be used as part of join planning / to validate the existing
@@ -433,10 +562,13 @@ impl Context {
                     input_keys.push(keys);
                 }
 
+                let input_mapper =
+                    JoinInputMapper::new_from_input_arities(input_arities.iter().copied());
+
                 // Extract temporal predicates as joins cannot currently absorb them.
                 let (plan, missing) = match implementation {
                     IndexedFilter(_coll_id, _idx_id, key, _val) => {
-                        // Start with the constant input. (This used to be important before #14059
+                        // Start with the constant input. (This used to be important before database-issues#4016
                         // was fixed.)
                         let start: usize = 1;
                         let order = vec![(0usize, key.clone(), None)];
@@ -445,7 +577,7 @@ impl Context {
                             (0..key.len())
                                 .map(MirScalarExpr::Column)
                                 .collect::<Vec<_>>(),
-                            (0..key.len()).map(|i| (i, i)).collect::<BTreeMap<_, _>>(),
+                            (0..key.len()).collect::<Vec<_>>(),
                             Vec::<usize>::new(),
                         );
                         let (ljp, missing) = LinearJoinPlan::create_from(
@@ -526,23 +658,25 @@ This is not expected to cause incorrect results, but could indicate a performanc
                             //    joins. This was fixed in
                             //    https://github.com/MaterializeInc/materialize/pull/16099)
                         }
+                        let lir_id = self.allocate_lir_id();
                         let raw_plan = std::mem::replace(
                             input_plan,
-                            Plan::Constant {
+                            PlanNode::Constant {
                                 rows: Ok(Vec::new()),
-                                lir_id: self.allocate_lir_id(),
-                            },
+                            }
+                            .as_plan(lir_id),
                         );
                         *input_plan = self.arrange_by(raw_plan, missing, input_keys, arity);
                     }
                 }
                 // Return the plan, and no arrangements.
+                let lir_id = self.allocate_lir_id();
                 (
-                    Plan::Join {
+                    PlanNode::Join {
                         inputs: plans,
                         plan,
-                        lir_id: self.allocate_lir_id(),
-                    },
+                    }
+                    .as_plan(lir_id),
                     AvailableCollections::new_raw(),
                 )
             }
@@ -553,58 +687,26 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 monotonic,
                 expected_group_size,
             } => {
-                let input_arity = input.arity();
-                let (input, keys) = self.lower_mir_expr(input)?;
-                let (input_key, permutation_and_new_arity) = if let Some((
-                    input_key,
-                    permutation,
-                    thinning,
-                )) = keys.arbitrary_arrangement()
+                if aggregates
+                    .iter()
+                    .any(|agg| agg.func.can_fuse_with_unnest_list())
                 {
-                    (
-                        Some(input_key.clone()),
-                        Some((permutation.clone(), thinning.len() + input_key.len())),
-                    )
-                } else {
-                    (None, None)
-                };
-                let key_val_plan = KeyValPlan::new(
-                    input_arity,
-                    group_key,
-                    aggregates,
-                    permutation_and_new_arity,
-                );
-                let reduce_plan =
-                    ReducePlan::create_from(aggregates.clone(), *monotonic, *expected_group_size);
-                // Return the plan, and the keys it produces.
-                let mfp_after;
-                let output_arity;
-                if self.enable_reduce_mfp_fusion {
-                    (mfp_after, mfp, output_arity) =
-                        reduce_plan.extract_mfp_after(mfp, group_key.len());
-                } else {
-                    (mfp_after, output_arity) = (
-                        MapFilterProject::new(mfp.input_arity),
-                        group_key.len() + aggregates.len(),
-                    );
-                    soft_assert_eq_or_log!(
-                        mfp.input_arity,
-                        output_arity,
-                        "Output arity of reduce must match input arity for MFP on top of it"
+                    // This case should have been handled at the `MirRelationExpr::FlatMap` case
+                    // above. But that has a pretty complicated pattern matching, so it's not
+                    // unthinkable that it fails.
+                    soft_panic_or_log!(
+                        "Window function performance issue: `reduce_unnest_list_fusion` failed"
                     );
                 }
-                let output_keys = reduce_plan.keys(group_key.len(), output_arity);
-                (
-                    Plan::Reduce {
-                        input: Box::new(input),
-                        key_val_plan,
-                        plan: reduce_plan,
-                        input_key,
-                        mfp_after,
-                        lir_id: self.allocate_lir_id(),
-                    },
-                    output_keys,
-                )
+                self.lower_reduce(
+                    input,
+                    group_key,
+                    aggregates,
+                    monotonic,
+                    expected_group_size,
+                    &mut mfp,
+                    false,
+                )?
             }
             MirRelationExpr::TopK {
                 input,
@@ -636,12 +738,13 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     input
                 };
                 // Return the plan, and no arrangements.
+                let lir_id = self.allocate_lir_id();
                 (
-                    Plan::TopK {
+                    PlanNode::TopK {
                         input: Box::new(input),
                         top_k_plan,
-                        lir_id: self.allocate_lir_id(),
-                    },
+                    }
+                    .as_plan(lir_id),
                     AvailableCollections::new_raw(),
                 )
             }
@@ -657,24 +760,22 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     input
                 };
                 // Return the plan, and no arrangements.
+                let lir_id = self.allocate_lir_id();
                 (
-                    Plan::Negate {
+                    PlanNode::Negate {
                         input: Box::new(input),
-                        lir_id: self.allocate_lir_id(),
-                    },
+                    }
+                    .as_plan(lir_id),
                     AvailableCollections::new_raw(),
                 )
             }
             MirRelationExpr::Threshold { input } => {
-                let arity = input.arity();
                 let (plan, keys) = self.lower_mir_expr(input)?;
-                // We don't have an MFP here -- install an operator to permute the
-                // input, if necessary.
-                let plan = if !keys.raw {
-                    self.arrange_by(plan, AvailableCollections::new_raw(), &keys, arity)
-                } else {
-                    plan
-                };
+                let arity = keys
+                    .types
+                    .as_ref()
+                    .map(|types| types.len())
+                    .unwrap_or_else(|| input.arity());
                 let (threshold_plan, required_arrangement) = ThresholdPlan::create_from(arity);
                 let mut types = keys.types.clone();
                 let plan = if !keys
@@ -682,7 +783,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     .iter()
                     .any(|(key, _, _)| key == &required_arrangement.0)
                 {
-                    types = Some(input.typ().column_types);
+                    types = Some(types.unwrap_or_else(|| input.typ().column_types));
                     self.arrange_by(
                         plan,
                         AvailableCollections::new_arranged(
@@ -698,12 +799,13 @@ This is not expected to cause incorrect results, but could indicate a performanc
 
                 let output_keys = threshold_plan.keys(types);
                 // Return the plan, and any produced keys.
+                let lir_id = self.allocate_lir_id();
                 (
-                    Plan::Threshold {
+                    PlanNode::Threshold {
                         input: Box::new(plan),
                         threshold_plan,
-                        lir_id: self.allocate_lir_id(),
-                    },
+                    }
+                    .as_plan(lir_id),
                     output_keys,
                 )
             }
@@ -729,18 +831,24 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     })
                     .collect();
                 // Return the plan and no arrangements.
-                let plan = Plan::Union {
-                    inputs: plans,
-                    consolidate_output: false,
-                    lir_id: self.allocate_lir_id(),
-                };
-                (plan, AvailableCollections::new_raw())
+                let lir_id = self.allocate_lir_id();
+                (
+                    PlanNode::Union {
+                        inputs: plans,
+                        consolidate_output: false,
+                    }
+                    .as_plan(lir_id),
+                    AvailableCollections::new_raw(),
+                )
             }
             MirRelationExpr::ArrangeBy { input, keys } => {
-                let arity = input.arity();
-                let types = Some(input.typ().column_types);
+                let input_mir = input;
                 let (input, mut input_keys) = self.lower_mir_expr(input)?;
-                input_keys.types = types;
+                // Fill the `types` in `input_keys` if not already present.
+                let input_types = input_keys
+                    .types
+                    .get_or_insert_with(|| input_mir.typ().column_types);
+                let arity = input_types.len();
 
                 // Determine keys that are not present in `input_keys`.
                 let new_keys = keys
@@ -759,7 +867,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         input_keys.arbitrary_arrangement()
                     {
                         let mut mfp = MapFilterProject::new(arity);
-                        mfp.permute(permutation.clone(), thinning.len() + input_key.len());
+                        mfp.permute_fn(|c| permutation[c], thinning.len() + input_key.len());
                         (Some(input_key.clone()), mfp)
                     } else {
                         (None, MapFilterProject::new(arity))
@@ -768,14 +876,15 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     input_keys.arranged.sort_by(|k1, k2| k1.0.cmp(&k2.0));
 
                     // Return the plan and extended keys.
+                    let lir_id = self.allocate_lir_id();
                     (
-                        Plan::ArrangeBy {
+                        PlanNode::ArrangeBy {
                             input: Box::new(input),
                             forms: input_keys.clone(),
                             input_key,
                             input_mfp,
-                            lir_id: self.allocate_lir_id(),
-                        },
+                        }
+                        .as_plan(lir_id),
                         input_keys,
                     )
                 }
@@ -791,7 +900,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 .iter()
                 .filter_map(|(key, permutation, thinning)| {
                     let mut mfp = mfp.clone();
-                    mfp.permute(permutation.clone(), thinning.len() + key.len());
+                    mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
                     mfp.literal_constraints(key)
                         .map(|val| (key.clone(), permutation, thinning, val))
                 })
@@ -804,20 +913,20 @@ This is not expected to cause incorrect results, but could indicate a performanc
             // (3) Otherwise, if there is _some_ key, use that,
             // (4) Otherwise just read the raw collection.
             let input_key_val = if let Some((key, permutation, thinning, val)) = key_val {
-                mfp.permute(permutation.clone(), thinning.len() + key.len());
+                mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
 
                 Some((key, Some(val)))
             } else if let Some((key, permutation, thinning)) =
                 keys.arranged.iter().find(|(key, permutation, thinning)| {
                     let mut mfp = mfp.clone();
-                    mfp.permute(permutation.clone(), thinning.len() + key.len());
+                    mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
                     mfp.is_identity()
                 })
             {
-                mfp.permute(permutation.clone(), thinning.len() + key.len());
+                mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
                 Some((key.clone(), None))
             } else if let Some((key, permutation, thinning)) = keys.arbitrary_arrangement() {
-                mfp.permute(permutation.clone(), thinning.len() + key.len());
+                mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
                 Some((key.clone(), None))
             } else {
                 None
@@ -835,7 +944,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     .iter_mut()
                     .find(|(key2, _, _)| key2 == &key)
                     .unwrap();
-                *old_permutation = (0..mfp.input_arity).map(|i| (i, i)).collect();
+                *old_permutation = (0..mfp.input_arity).collect();
                 let old_thinned_arity = old_thinning.len();
                 *old_thinning = (0..old_thinned_arity).collect();
                 // Get rid of all other forms, as this is now the only one known to be valid.
@@ -847,26 +956,97 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 // Creating a Plan::Mfp node is now logically unnecessary, but we
                 // should do so anyway when `val` is populated, so that
                 // the `key_val` optimization gets applied.
+                let lir_id = self.allocate_lir_id();
                 if val.is_some() {
-                    plan = Plan::Mfp {
+                    plan = PlanNode::Mfp {
                         input: Box::new(plan),
                         mfp,
                         input_key_val: Some((key, val)),
-                        lir_id: self.allocate_lir_id(),
                     }
+                    .as_plan(lir_id)
                 }
             } else {
-                plan = Plan::Mfp {
+                let lir_id = self.allocate_lir_id();
+                plan = PlanNode::Mfp {
                     input: Box::new(plan),
                     mfp,
                     input_key_val,
-                    lir_id: self.allocate_lir_id(),
-                };
+                }
+                .as_plan(lir_id);
                 keys = AvailableCollections::new_raw();
             }
         }
 
         Ok((plan, keys))
+    }
+
+    /// Lowers a `Reduce` with the given fields and an `mfp_on_top`, which is the MFP that is
+    /// originally on top of the `Reduce`. This MFP, or a part of it, might be fused into the
+    /// `Reduce`, in which case `mfp_on_top` is mutated to be the residual MFP, i.e., what was not
+    /// fused.
+    fn lower_reduce<T: Timestamp>(
+        &mut self,
+        input: &MirRelationExpr,
+        group_key: &Vec<MirScalarExpr>,
+        aggregates: &Vec<AggregateExpr>,
+        monotonic: &bool,
+        expected_group_size: &Option<u64>,
+        mfp_on_top: &mut MapFilterProject,
+        fused_unnest_list: bool,
+    ) -> Result<(Plan<T>, AvailableCollections), String> {
+        let input_arity = input.arity();
+        let (input, keys) = self.lower_mir_expr(input)?;
+        let (input_key, permutation_and_new_arity) =
+            if let Some((input_key, permutation, thinning)) = keys.arbitrary_arrangement() {
+                (
+                    Some(input_key.clone()),
+                    Some((permutation.clone(), thinning.len() + input_key.len())),
+                )
+            } else {
+                (None, None)
+            };
+        let key_val_plan = KeyValPlan::new(
+            input_arity,
+            group_key,
+            aggregates,
+            permutation_and_new_arity,
+        );
+        let reduce_plan = ReducePlan::create_from(
+            aggregates.clone(),
+            *monotonic,
+            *expected_group_size,
+            fused_unnest_list,
+        );
+        // Return the plan, and the keys it produces.
+        let mfp_after;
+        let output_arity;
+        if self.enable_reduce_mfp_fusion {
+            (mfp_after, *mfp_on_top, output_arity) =
+                reduce_plan.extract_mfp_after(mfp_on_top.clone(), group_key.len());
+        } else {
+            (mfp_after, output_arity) = (
+                MapFilterProject::new(mfp_on_top.input_arity),
+                group_key.len() + aggregates.len(),
+            );
+        }
+        soft_assert_eq_or_log!(
+            mfp_on_top.input_arity,
+            output_arity,
+            "Output arity of reduce must match input arity for MFP on top of it"
+        );
+        let output_keys = reduce_plan.keys(group_key.len(), output_arity);
+        let lir_id = self.allocate_lir_id();
+        Ok((
+            PlanNode::Reduce {
+                input: Box::new(input),
+                key_val_plan,
+                plan: reduce_plan,
+                input_key,
+                mfp_after,
+            }
+            .as_plan(lir_id),
+            output_keys,
+        ))
     }
 
     /// Replace the plan with another one
@@ -878,11 +1058,14 @@ This is not expected to cause incorrect results, but could indicate a performanc
         old_collections: &AvailableCollections,
         arity: usize,
     ) -> Plan<T> {
-        if let Plan::ArrangeBy {
-            input,
-            mut forms,
-            input_key,
-            input_mfp,
+        if let Plan {
+            node:
+                PlanNode::ArrangeBy {
+                    input,
+                    mut forms,
+                    input_key,
+                    input_mfp,
+                },
             lir_id,
         } = plan
         {
@@ -895,30 +1078,31 @@ This is not expected to cause incorrect results, but could indicate a performanc
             } else {
                 assert!(collections.types.is_none() || collections.types == forms.types);
             }
-            Plan::ArrangeBy {
+            PlanNode::ArrangeBy {
                 input,
                 forms,
                 input_key,
                 input_mfp,
-                lir_id,
             }
+            .as_plan(lir_id)
         } else {
             let (input_key, input_mfp) = if let Some((input_key, permutation, thinning)) =
                 old_collections.arbitrary_arrangement()
             {
                 let mut mfp = MapFilterProject::new(arity);
-                mfp.permute(permutation.clone(), thinning.len() + input_key.len());
+                mfp.permute_fn(|c| permutation[c], thinning.len() + input_key.len());
                 (Some(input_key.clone()), mfp)
             } else {
                 (None, MapFilterProject::new(arity))
             };
-            Plan::ArrangeBy {
+            let lir_id = self.allocate_lir_id();
+            PlanNode::ArrangeBy {
                 input: Box::new(plan),
                 forms: collections,
                 input_key,
                 input_mfp,
-                lir_id: self.allocate_lir_id(),
             }
+            .as_plan(lir_id)
         }
     }
 }

@@ -8,10 +8,11 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
-use std::fmt::{self, Debug, Write};
+use std::fmt::{self, Debug};
 use std::hash::Hash;
 use std::iter;
 use std::ops::Add;
+use std::sync::LazyLock;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use dec::OrderedDecimal;
@@ -19,8 +20,8 @@ use enum_kinds::EnumKind;
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
+use mz_ore::str::StrExt;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use once_cell::sync::Lazy;
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
 use proptest::strategy::Union;
@@ -45,7 +46,7 @@ pub use crate::relation_and_scalar::proto_scalar_type::ProtoRecordField;
 pub use crate::relation_and_scalar::ProtoScalarType;
 use crate::role_id::RoleId;
 use crate::row::DatumNested;
-use crate::{ColumnName, ColumnType, DatumList, DatumMap, GlobalId, Row, RowArena};
+use crate::{CatalogItemId, ColumnName, ColumnType, DatumList, DatumMap, Row, RowArena};
 
 /// A single value.
 ///
@@ -1350,15 +1351,7 @@ impl fmt::Display for Datum<'_> {
                 Ok(())
             }
             Datum::String(s) => {
-                f.write_str("\"")?;
-                for c in s.chars() {
-                    if c == '"' {
-                        f.write_str("\\\"")?;
-                    } else {
-                        f.write_char(c)?;
-                    }
-                }
-                f.write_str("\"")
+                write!(f, "{}", s.escaped())
             }
             Datum::Uuid(u) => write!(f, "{}", u),
             Datum::Array(array) => {
@@ -1501,14 +1494,16 @@ pub enum ScalarType {
     /// always be [`Datum::Null`].
     List {
         element_type: Box<ScalarType>,
-        custom_id: Option<GlobalId>,
+        custom_id: Option<CatalogItemId>,
     },
     /// An ordered and named sequence of datums.
     Record {
         /// The names and types of the fields of the record, in order from left
         /// to right.
-        fields: Vec<(ColumnName, ColumnType)>,
-        custom_id: Option<GlobalId>,
+        ///
+        /// Boxed slice to reduce the size of the enum variant.
+        fields: Box<[(ColumnName, ColumnType)]>,
+        custom_id: Option<CatalogItemId>,
     },
     /// A PostgreSQL object identifier.
     Oid,
@@ -1519,7 +1514,7 @@ pub enum ScalarType {
     /// be [`Datum::Null`].
     Map {
         value_type: Box<ScalarType>,
-        custom_id: Option<GlobalId>,
+        custom_id: Option<CatalogItemId>,
     },
     /// A PostgreSQL function name.
     RegProc,
@@ -2044,7 +2039,7 @@ impl<'a, E> DatumType<'a, E> for ArrayRustType<String> {
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(temp_storage.make_datum(|packer| {
             packer
-                .push_array(
+                .try_push_array(
                     &[ArrayDimension {
                         lower_bound: 1,
                         length: self.0.len(),
@@ -2652,6 +2647,21 @@ impl ScalarType {
         }
     }
 
+    /// Returns vector of [`ColumnType`] elements in a [`ScalarType::Record`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on anything other than a [`ScalarType::Record`].
+    pub fn unwrap_record_element_column_type(&self) -> Vec<&ColumnType> {
+        match self {
+            ScalarType::Record { fields, .. } => fields.iter().map(|(_, t)| t).collect_vec(),
+            _ => panic!(
+                "ScalarType::unwrap_record_element_column_type called on {:?}",
+                self
+            ),
+        }
+    }
+
     /// Returns number of dimensions/axes (also known as "rank") on a
     /// [`ScalarType::List`].
     ///
@@ -2705,7 +2715,7 @@ impl ScalarType {
                             },
                         )
                     })
-                    .collect_vec();
+                    .collect();
                 Record {
                     fields,
                     custom_id: None,
@@ -2962,8 +2972,9 @@ impl ScalarType {
         // But the 'static bound makes this either hard or impossible. We might need to remove that
         // and return, say, an owned Row. This would require changing lots of dependent test
         // functions, some of which also hard code a 'static bound.
-        static BOOL: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[Datum::True, Datum::False]));
-        static INT16: Lazy<Row> = Lazy::new(|| {
+        static BOOL: LazyLock<Row> =
+            LazyLock::new(|| Row::pack_slice(&[Datum::True, Datum::False]));
+        static INT16: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
                 Datum::Int16(0),
                 Datum::Int16(1),
@@ -2982,7 +2993,7 @@ impl ScalarType {
                 Datum::Int16(128),
             ])
         });
-        static INT32: Lazy<Row> = Lazy::new(|| {
+        static INT32: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
                 Datum::Int32(0),
                 Datum::Int32(1),
@@ -2997,7 +3008,7 @@ impl ScalarType {
                 Datum::Int32(32768),
             ])
         });
-        static INT64: Lazy<Row> = Lazy::new(|| {
+        static INT64: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
                 Datum::Int64(0),
                 Datum::Int64(1),
@@ -3012,7 +3023,7 @@ impl ScalarType {
                 Datum::Int64(2147483648),
             ])
         });
-        static UINT16: Lazy<Row> = Lazy::new(|| {
+        static UINT16: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
                 Datum::UInt16(0),
                 Datum::UInt16(1),
@@ -3024,7 +3035,7 @@ impl ScalarType {
                 Datum::UInt16(256),
             ])
         });
-        static UINT32: Lazy<Row> = Lazy::new(|| {
+        static UINT32: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
                 Datum::UInt32(0),
                 Datum::UInt32(1),
@@ -3036,7 +3047,7 @@ impl ScalarType {
                 Datum::UInt32(32768),
             ])
         });
-        static UINT64: Lazy<Row> = Lazy::new(|| {
+        static UINT64: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
                 Datum::UInt64(0),
                 Datum::UInt64(1),
@@ -3048,7 +3059,7 @@ impl ScalarType {
                 Datum::UInt64(2147483648),
             ])
         });
-        static FLOAT32: Lazy<Row> = Lazy::new(|| {
+        static FLOAT32: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
                 Datum::Float32(OrderedFloat(0.0)),
                 Datum::Float32(OrderedFloat(1.0)),
@@ -3062,7 +3073,7 @@ impl ScalarType {
                 Datum::Float32(OrderedFloat(f32::NEG_INFINITY)),
             ])
         });
-        static FLOAT64: Lazy<Row> = Lazy::new(|| {
+        static FLOAT64: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
                 Datum::Float64(OrderedFloat(0.0)),
                 Datum::Float64(OrderedFloat(1.0)),
@@ -3076,7 +3087,7 @@ impl ScalarType {
                 Datum::Float64(OrderedFloat(f64::NEG_INFINITY)),
             ])
         });
-        static NUMERIC: Lazy<Row> = Lazy::new(|| {
+        static NUMERIC: LazyLock<Row> = LazyLock::new(|| {
             cfg_if::cfg_if! {
                 // Numerics can't currently be instantiated under Miri
                 if #[cfg(miri)] {
@@ -3097,20 +3108,20 @@ impl ScalarType {
                 }
             }
         });
-        static DATE: Lazy<Row> = Lazy::new(|| {
+        static DATE: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
                 Datum::Date(Date::from_pg_epoch(0).unwrap()),
                 Datum::Date(Date::from_pg_epoch(Date::LOW_DAYS).unwrap()),
                 Datum::Date(Date::from_pg_epoch(Date::HIGH_DAYS).unwrap()),
             ])
         });
-        static TIME: Lazy<Row> = Lazy::new(|| {
+        static TIME: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
                 Datum::Time(NaiveTime::from_hms_micro_opt(0, 0, 0, 0).unwrap()),
                 Datum::Time(NaiveTime::from_hms_micro_opt(23, 59, 59, 999_999).unwrap()),
             ])
         });
-        static TIMESTAMP: Lazy<Row> = Lazy::new(|| {
+        static TIMESTAMP: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
                 Datum::Timestamp(
                     DateTime::from_timestamp(0, 0)
@@ -3153,7 +3164,7 @@ impl ScalarType {
                 ),
             ])
         });
-        static TIMESTAMPTZ: Lazy<Row> = Lazy::new(|| {
+        static TIMESTAMPTZ: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
                 Datum::TimestampTz(DateTime::from_timestamp(0, 0).unwrap().try_into().unwrap()),
                 Datum::TimestampTz(
@@ -3185,7 +3196,7 @@ impl ScalarType {
                 ),
             ])
         });
-        static INTERVAL: Lazy<Row> = Lazy::new(|| {
+        static INTERVAL: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
                 Datum::Interval(Interval::new(0, 0, 0)),
                 Datum::Interval(Interval::new(1, 1, 1)),
@@ -3206,9 +3217,9 @@ impl ScalarType {
                 Datum::Interval(Interval::new(0, 0, i64::MAX)),
             ])
         });
-        static PGLEGACYCHAR: Lazy<Row> =
-            Lazy::new(|| Row::pack_slice(&[Datum::UInt8(u8::MIN), Datum::UInt8(u8::MAX)]));
-        static PGLEGACYNAME: Lazy<Row> = Lazy::new(|| {
+        static PGLEGACYCHAR: LazyLock<Row> =
+            LazyLock::new(|| Row::pack_slice(&[Datum::UInt8(u8::MIN), Datum::UInt8(u8::MAX)]));
+        static PGLEGACYNAME: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
                 Datum::String(""),
                 Datum::String(" "),
@@ -3218,10 +3229,10 @@ impl ScalarType {
                 Datum::String(&"x".repeat(64)),
             ])
         });
-        static BYTES: Lazy<Row> = Lazy::new(|| {
+        static BYTES: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[Datum::Bytes(&[]), Datum::Bytes(&[0]), Datum::Bytes(&[255])])
         });
-        static STRING: Lazy<Row> = Lazy::new(|| {
+        static STRING: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
                 Datum::String(""),
                 Datum::String(" "),
@@ -3237,7 +3248,7 @@ impl ScalarType {
                 Datum::String("\"\""),
             ])
         });
-        static CHAR: Lazy<Row> = Lazy::new(|| {
+        static CHAR: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
                 Datum::String(" "),
                 Datum::String("'"),
@@ -3262,26 +3273,32 @@ impl ScalarType {
                 Datum::String(std::str::from_utf8(b"\x7F").unwrap()),
             ])
         });
-        static JSONB: Lazy<Row> = Lazy::new(|| {
+        static JSONB: LazyLock<Row> = LazyLock::new(|| {
             let mut datums = vec![Datum::True, Datum::False, Datum::JsonNull];
             datums.extend(STRING.iter());
-            datums.extend(NUMERIC.iter());
+            datums.extend(NUMERIC.iter().filter(|n| {
+                let Datum::Numeric(n) = n else {
+                    panic!("expected Numeric, found {n:?}");
+                };
+                // JSON doesn't support NaN or Infinite numbers.
+                !(n.0.is_nan() || n.0.is_infinite())
+            }));
             // TODO: Add List, Map.
             Row::pack_slice(&datums)
         });
-        static UUID: Lazy<Row> = Lazy::new(|| {
+        static UUID: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
                 Datum::Uuid(Uuid::from_u128(u128::MIN)),
                 Datum::Uuid(Uuid::from_u128(u128::MAX)),
             ])
         });
-        static ARRAY: Lazy<BTreeMap<&'static ScalarType, Row>> = Lazy::new(|| {
+        static ARRAY: LazyLock<BTreeMap<&'static ScalarType, Row>> = LazyLock::new(|| {
             let generate_row = |inner_type: &ScalarType| {
                 let datums: Vec<_> = inner_type.interesting_datums().collect();
 
                 let mut row = Row::default();
                 row.packer()
-                    .push_array::<_, Datum<'static>>(
+                    .try_push_array::<_, Datum<'static>>(
                         &[ArrayDimension {
                             lower_bound: 1,
                             length: 0,
@@ -3290,7 +3307,7 @@ impl ScalarType {
                     )
                     .expect("failed to push empty array");
                 row.packer()
-                    .push_array(
+                    .try_push_array(
                         &[ArrayDimension {
                             lower_bound: 1,
                             length: datums.len(),
@@ -3308,10 +3325,10 @@ impl ScalarType {
                 .map(|ty| (ty, generate_row(ty)))
                 .collect()
         });
-        static EMPTY_ARRAY: Lazy<Row> = Lazy::new(|| {
+        static EMPTY_ARRAY: LazyLock<Row> = LazyLock::new(|| {
             let mut row = Row::default();
             row.packer()
-                .push_array::<_, Datum<'static>>(
+                .try_push_array::<_, Datum<'static>>(
                     &[ArrayDimension {
                         lower_bound: 1,
                         length: 0,
@@ -3321,20 +3338,20 @@ impl ScalarType {
                 .expect("failed to push empty array");
             row
         });
-        static LIST: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
-        static RECORD: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
-        static OID: Lazy<Row> =
-            Lazy::new(|| Row::pack_slice(&[Datum::UInt32(u32::MIN), Datum::UInt32(u32::MAX)]));
-        static MAP: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
-        static INT2VECTOR: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
-        static MZTIMESTAMP: Lazy<Row> = Lazy::new(|| {
+        static LIST: LazyLock<Row> = LazyLock::new(|| Row::pack_slice(&[]));
+        static RECORD: LazyLock<Row> = LazyLock::new(|| Row::pack_slice(&[]));
+        static OID: LazyLock<Row> =
+            LazyLock::new(|| Row::pack_slice(&[Datum::UInt32(u32::MIN), Datum::UInt32(u32::MAX)]));
+        static MAP: LazyLock<Row> = LazyLock::new(|| Row::pack_slice(&[]));
+        static INT2VECTOR: LazyLock<Row> = LazyLock::new(|| Row::pack_slice(&[]));
+        static MZTIMESTAMP: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
                 Datum::MzTimestamp(crate::Timestamp::MIN),
                 Datum::MzTimestamp(crate::Timestamp::MAX),
             ])
         });
-        static RANGE: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
-        static MZACLITEM: Lazy<Row> = Lazy::new(|| {
+        static RANGE: LazyLock<Row> = LazyLock::new(|| Row::pack_slice(&[]));
+        static MZACLITEM: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
                 Datum::MzAclItem(MzAclItem {
                     grantee: RoleId::Public,
@@ -3369,7 +3386,7 @@ impl ScalarType {
             ])
         });
         // aclitem has no binary encoding so we can't test it here.
-        static ACLITEM: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
+        static ACLITEM: LazyLock<Row> = LazyLock::new(|| Row::pack_slice(&[]));
 
         let iter: Box<dyn Iterator<Item = Datum<'static>>> = match self {
             ScalarType::Bool => Box::new((*BOOL).iter()),
@@ -3541,7 +3558,7 @@ impl ScalarType {
 
             ScalarType::Array(elem) => Ok(elem.array_of_self_elem_type()?),
 
-            // https://github.com/MaterializeInc/materialize/issues/7613
+            // https://github.com/MaterializeInc/database-issues/issues/2360
             t @ (ScalarType::Char { .. }
             // not sensible to put in arrays
             | ScalarType::Map { .. }
@@ -3601,6 +3618,9 @@ impl Arbitrary for ScalarType {
             Just(ScalarType::RegClass).boxed(),
             Just(ScalarType::Int2Vector).boxed(),
         ])
+        // None of the leaf ScalarTypes types are really "simpler" than others
+        // so don't waste time trying to shrink.
+        .no_shrink()
         .boxed();
 
         // There are a limited set of types we support in ranges.
@@ -3635,14 +3655,14 @@ impl Arbitrary for ScalarType {
         leaf.prop_recursive(2, 3, 5, |inner| {
             Union::new(vec![
                 // List
-                (inner.clone(), any::<Option<GlobalId>>())
+                (inner.clone(), any::<Option<CatalogItemId>>())
                     .prop_map(|(x, id)| ScalarType::List {
                         element_type: Box::new(x),
                         custom_id: id,
                     })
                     .boxed(),
                 // Map
-                (inner.clone(), any::<Option<GlobalId>>())
+                (inner.clone(), any::<Option<CatalogItemId>>())
                     .prop_map(|(x, id)| ScalarType::Map {
                         value_type: Box::new(x),
                         custom_id: id,
@@ -3664,8 +3684,11 @@ impl Arbitrary for ScalarType {
                         prop::collection::vec((any::<ColumnName>(), column_type_strat), 0..10);
 
                     // Now we combine it with the default strategies to get Records.
-                    (fields_strat, any::<Option<GlobalId>>())
-                        .prop_map(|(fields, custom_id)| ScalarType::Record { fields, custom_id })
+                    (fields_strat, any::<Option<CatalogItemId>>())
+                        .prop_map(|(fields, custom_id)| ScalarType::Record {
+                            fields: fields.into(),
+                            custom_id,
+                        })
                         .boxed()
                 },
             ])
@@ -3674,21 +3697,21 @@ impl Arbitrary for ScalarType {
     }
 }
 
-static EMPTY_ARRAY_ROW: Lazy<Row> = Lazy::new(|| {
+static EMPTY_ARRAY_ROW: LazyLock<Row> = LazyLock::new(|| {
     let mut row = Row::default();
     row.packer()
-        .push_array(&[], iter::empty::<Datum>())
+        .try_push_array(&[], iter::empty::<Datum>())
         .expect("array known to be valid");
     row
 });
 
-static EMPTY_LIST_ROW: Lazy<Row> = Lazy::new(|| {
+static EMPTY_LIST_ROW: LazyLock<Row> = LazyLock::new(|| {
     let mut row = Row::default();
     row.packer().push_list(iter::empty::<Datum>());
     row
 });
 
-static EMPTY_MAP_ROW: Lazy<Row> = Lazy::new(|| {
+static EMPTY_MAP_ROW: LazyLock<Row> = LazyLock::new(|| {
     let mut row = Row::default();
     row.packer().push_dict(iter::empty::<(_, Datum)>());
     row
@@ -3970,6 +3993,12 @@ fn arb_array_dimension() -> BoxedStrategy<ArrayDimension> {
 pub struct PropArray(Row, Vec<PropDatum>);
 
 fn arb_array(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropArray> {
+    // Elements in Arrays can always be Null.
+    let element_strategy = Union::new_weighted(vec![
+        (20, element_strategy),
+        (1, Just(PropDatum::Null).boxed()),
+    ]);
+
     prop::collection::vec(
         arb_array_dimension(),
         1..usize::from(crate::adt::array::MAX_ARRAY_DIMENSIONS),
@@ -3985,7 +4014,7 @@ fn arb_array(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropAr
         let element_datums: Vec<Datum<'_>> = elements.iter().map(|pd| pd.into()).collect();
         let mut row = Row::default();
         row.packer()
-            .push_array(&dimensions, element_datums)
+            .try_push_array(&dimensions, element_datums)
             .unwrap();
         PropArray(row, elements)
     })
@@ -3996,6 +4025,12 @@ fn arb_array(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropAr
 pub struct PropList(Row, Vec<PropDatum>);
 
 fn arb_list(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropList> {
+    // Elements in Lists can always be Null.
+    let element_strategy = Union::new_weighted(vec![
+        (20, element_strategy),
+        (1, Just(PropDatum::Null).boxed()),
+    ]);
+
     prop::collection::vec(element_strategy, 1..50)
         .prop_map(|elements| {
             let element_datums: Vec<Datum<'_>> = elements.iter().map(|pd| pd.into()).collect();
@@ -4145,6 +4180,12 @@ fn arb_range(
 pub struct PropDict(Row, Vec<(String, PropDatum)>);
 
 fn arb_dict(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropDict> {
+    // Elements in Maps can always be Null.
+    let element_strategy = Union::new_weighted(vec![
+        (20, element_strategy),
+        (1, Just(PropDatum::Null).boxed()),
+    ]);
+
     prop::collection::vec((".*", element_strategy), 1..50)
         .prop_map(|mut entries| {
             entries.sort_by_key(|(k, _)| k.clone());
@@ -4166,7 +4207,7 @@ fn arb_record(
         .prop_map(move |x| {
             let mut row = Row::default();
             row.packer().push_list(x.iter().map(Datum::from));
-            let entries: Vec<_> = names.clone().into_iter().zip(x.into_iter()).collect();
+            let entries: Vec<_> = names.clone().into_iter().zip(x).collect();
             PropDict(row, entries)
         })
         .boxed()
@@ -4296,27 +4337,29 @@ impl<'a> From<&'a PropDatum> for Datum<'a> {
 #[mz_ore::test]
 fn verify_base_eq_record_nullability() {
     let s1 = ScalarType::Record {
-        fields: vec![(
+        fields: [(
             "c".into(),
             ColumnType {
                 scalar_type: ScalarType::Bool,
                 nullable: true,
             },
-        )],
+        )]
+        .into(),
         custom_id: None,
     };
     let s2 = ScalarType::Record {
-        fields: vec![(
+        fields: [(
             "c".into(),
             ColumnType {
                 scalar_type: ScalarType::Bool,
                 nullable: false,
             },
-        )],
+        )]
+        .into(),
         custom_id: None,
     };
     let s3 = ScalarType::Record {
-        fields: vec![],
+        fields: [].into(),
         custom_id: None,
     };
     assert!(s1.base_eq(&s2));
@@ -4325,6 +4368,7 @@ fn verify_base_eq_record_nullability() {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
 
     use super::*;
@@ -4334,7 +4378,7 @@ mod tests {
        #[cfg_attr(miri, ignore)] // too slow
         fn scalar_type_protobuf_roundtrip(expect in any::<ScalarType>() ) {
             let actual = protobuf_roundtrip::<_, ProtoScalarType>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }

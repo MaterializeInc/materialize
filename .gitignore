@@ -16,6 +16,7 @@
 .mtrlz.log
 *.rs.bk
 mzdata
+mzbuild
 __pycache__
 .mypy_cache
 venv
@@ -39,6 +40,7 @@ services.log
 test/scalability/results/**/*.csv
 test/scalability/results/**/*.png
 misc/wasm/target
+parallel-benchmark.db
 
 # This is un-orthodox, but adding it to the repo would "tie" it to each user's
 # local version of nixpkgs. This way, we can all use the flake and have a
@@ -50,7 +52,7 @@ flake.lock
 /misc/python/materialize/*.egg-info/
 /misc/python/materialize/dist/
 
-/bazel-bin
-/bazel-materialize
-/bazel-out
-/bazel-testlogs
+/bazel-*
+
+/src/testdrive/ci/protobuf-bin
+/src/testdrive/ci/protobuf-include

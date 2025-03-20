@@ -134,8 +134,8 @@ impl PartialBatchKey {
         PartialBatchKey(format!("{}/{}", version, part_id))
     }
 
-    pub fn split(&self) -> (WriterKey, PartId) {
-        split_batch_key(&self.0).expect("valid partial batch key")
+    pub fn split(&self) -> Option<(WriterKey, PartId)> {
+        split_batch_key(&self.0).ok()
     }
 
     pub fn complete(&self, shard_id: &ShardId) -> BlobKey {
@@ -341,7 +341,21 @@ mod tests {
             BlobKey::parse_ids(&format!("{}/{}/{}", shard_id, writer_id, part_id)),
             Ok((
                 shard_id,
-                PartialBlobKey::Batch(WriterKey::Id(writer_id), part_id)
+                PartialBlobKey::Batch(WriterKey::Id(writer_id), part_id.clone())
+            ))
+        );
+
+        let version = Version::new(1, 0, 0);
+        assert_eq!(
+            BlobKey::parse_ids(&format!(
+                "{}/{}/{}",
+                shard_id,
+                WriterKey::for_version(&version),
+                part_id
+            )),
+            Ok((
+                shard_id,
+                PartialBlobKey::Batch(WriterKey::for_version(&version), part_id)
             ))
         );
 

@@ -42,14 +42,16 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
   FROM KAFKA CONNECTION conn (TOPIC
   'testdrive-upsert-${testdrive.seed}'
   )
+
+> CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-upsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION c_conn
   ENVELOPE UPSERT
 
-> SELECT f2 from upsert
+> SELECT f2 from upsert_tbl
 1
 
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "fish"} {"f1": "s", "f2": 2}
 
-> SELECT f2 from upsert
+> SELECT f2 from upsert_tbl
 2

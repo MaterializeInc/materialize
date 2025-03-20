@@ -16,7 +16,7 @@ mod schema;
 pub use crate::avro::decode::{Decoder, DiffPair};
 pub use crate::avro::encode::{
     encode_datums_as_avro, encode_debezium_transaction_unchecked, get_debezium_transaction_schema,
-    AvroEncoder, AvroSchemaGenerator, AvroSchemaOptions, DocTarget,
+    AvroEncoder, AvroSchemaGenerator, DocTarget,
 };
 pub use crate::avro::schema::{parse_schema, schema_to_relationdesc, ConfluentAvroResolver};
 
@@ -62,9 +62,10 @@ mod tests {
         }"#;
 
         let desc = schema_to_relationdesc(parse_schema(schema)?)?;
-        let expected_desc = RelationDesc::empty()
+        let expected_desc = RelationDesc::builder()
             .with_column("f1", ScalarType::Int32.nullable(false))
-            .with_column("f2", ScalarType::String.nullable(false));
+            .with_column("f2", ScalarType::String.nullable(false))
+            .finish();
 
         assert_eq!(desc, expected_desc);
         Ok(())
@@ -162,11 +163,14 @@ mod tests {
             ),
         ];
         for (typ, datum, expected) in valid_pairings {
-            let desc = RelationDesc::empty().with_column("column1", typ.nullable(false));
+            let desc = RelationDesc::builder()
+                .with_column("column1", typ.nullable(false))
+                .finish();
             let schema_generator =
-                AvroSchemaGenerator::new(None, desc, Default::default()).unwrap();
+                AvroSchemaGenerator::new(desc, false, Default::default(), "row", false, None, true)
+                    .unwrap();
             let avro_value =
-                encode_datums_as_avro(std::iter::once(datum), schema_generator.value_columns());
+                encode_datums_as_avro(std::iter::once(datum), schema_generator.columns());
             assert_eq!(
                 Value::Record(vec![("column1".into(), expected)]),
                 avro_value

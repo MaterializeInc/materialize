@@ -6,6 +6,11 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+
+"""
+Basic Backup & Restore test with a table
+"""
+
 from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition
@@ -19,8 +24,13 @@ SERVICES = [
     Cockroach(setup_materialize=True),
     Minio(setup_materialize=True),
     Mc(),
-    Materialized(external_minio=True, external_cockroach=True, sanity_restart=False),
-    Testdrive(no_reset=True),
+    Materialized(
+        external_blob_store=True,
+        external_metadata_store=True,
+        sanity_restart=False,
+        metadata_store="cockroach",
+    ),
+    Testdrive(no_reset=True, metadata_store="cockroach"),
     Persistcli(),
 ]
 
@@ -46,7 +56,7 @@ def workflow_default(c: Composition) -> None:
         )
     )
 
-    c.backup_crdb()
+    c.backup_cockroach()
 
     # Make further updates to Materialize's state
     for i in range(0, 100):
@@ -64,7 +74,7 @@ def workflow_default(c: Composition) -> None:
         )
 
     # Restore CRDB from backup, run persistcli restore-blob and restart Mz
-    c.restore_mz()
+    c.restore_cockroach()
 
     # Confirm that the database is readable / has shard data
     c.exec(

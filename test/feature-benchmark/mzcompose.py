@@ -7,6 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Simple benchmark of mostly individual queries using testdrive. Can find
+wallclock/memorys regressions in single-connection query executions, not
+suitable for concurrency.
+"""
+
 import argparse
 import os
 import sys
@@ -15,11 +21,20 @@ import uuid
 from textwrap import dedent
 
 from materialize import buildkite
-from materialize.docker import is_image_tag_of_version
-from materialize.feature_benchmark.benchmark_versioning import (
-    FEATURE_BENCHMARK_FRAMEWORK_VERSION,
+from materialize.docker import is_image_tag_of_release_version
+from materialize.feature_benchmark.benchmark_result_evaluator import (
+    BenchmarkResultEvaluator,
+)
+from materialize.feature_benchmark.benchmark_result_selection import (
+    BestBenchmarkResultSelector,
+    get_discarded_reports_per_scenario,
+)
+from materialize.feature_benchmark.report import (
+    Report,
+    determine_scenario_classes_with_regressions,
 )
 from materialize.mz_version import MzVersion
+from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.test_result import (
     FailedTestExecutionError,
@@ -45,10 +60,9 @@ from materialize.version_list import (
 # so we need to explicitly add this directory to the Python module search path
 sys.path.append(os.path.dirname(__file__))
 from materialize.feature_benchmark.aggregation import Aggregation, MinAggregation
-from materialize.feature_benchmark.benchmark import Benchmark, Report
-from materialize.feature_benchmark.comparator import (
-    Comparator,
-    RelativeThresholdComparator,
+from materialize.feature_benchmark.benchmark import Benchmark
+from materialize.feature_benchmark.benchmark_result import (
+    BenchmarkScenarioResult,
 )
 from materialize.feature_benchmark.executor import Docker
 from materialize.feature_benchmark.filter import Filter, FilterFirst, NoFilter
@@ -70,6 +84,7 @@ from materialize.feature_benchmark.termination import (
     TerminationCondition,
 )
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.azure import Azurite
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
@@ -77,6 +92,7 @@ from materialize.mzcompose.services.kafka import Kafka as KafkaService
 from materialize.mzcompose.services.kgen import Kgen as KgenService
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
@@ -87,6 +103,9 @@ from materialize.util import all_subclasses
 #
 # Global feature benchmark thresholds and termination conditions
 #
+
+
+FEATURE_BENCHMARK_FRAMEWORK_VERSION = "1.5.0"
 
 
 def make_filter(args: argparse.Namespace) -> Filter:
@@ -109,14 +128,6 @@ def make_aggregation_class() -> type[Aggregation]:
     return MinAggregation
 
 
-def make_comparator(
-    name: str, type: MeasurementType, relative_threshold: float
-) -> Comparator:
-    return RelativeThresholdComparator(
-        name=name, type=type, threshold=relative_threshold
-    )
-
-
 default_timeout = "1800s"
 
 SERVICES = [
@@ -126,6 +137,7 @@ SERVICES = [
     Redpanda(),
     Cockroach(setup_materialize=True),
     Minio(setup_materialize=True),
+    Azurite(),
     KgenService(),
     Postgres(),
     MySql(),
@@ -134,26 +146,22 @@ SERVICES = [
     Materialized(),
     Clusterd(),
     Testdrive(),
+    Mz(app_password=""),
 ]
 
 
 def run_one_scenario(
     c: Composition, scenario_class: type[Scenario], args: argparse.Namespace
-) -> list[Comparator]:
-    name = scenario_class.__name__
-    print(f"--- Now benchmarking {name} ...")
+) -> BenchmarkScenarioResult:
+    scenario_name = scenario_class.__name__
+    print(f"--- Now benchmarking {scenario_name} ...")
 
-    measurement_types = [MeasurementType.WALLCLOCK, MeasurementType.MESSAGES]
+    measurement_types = [MeasurementType.WALLCLOCK]
     if args.measure_memory:
         measurement_types.append(MeasurementType.MEMORY_MZ)
         measurement_types.append(MeasurementType.MEMORY_CLUSTERD)
 
-    comparators = [
-        make_comparator(
-            name=name, type=t, relative_threshold=scenario_class.RELATIVE_THRESHOLD[t]
-        )
-        for t in measurement_types
-    ]
+    result = BenchmarkScenarioResult(scenario_class, measurement_types)
 
     common_seed = round(time.time())
 
@@ -177,7 +185,14 @@ def run_one_scenario(
 
         c.up("testdrive", persistent=True)
 
-        additional_system_parameter_defaults = {"max_clusters": "15"}
+        additional_system_parameter_defaults = (
+            ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
+            | {
+                "max_clusters": "15",
+                "enable_unorchestrated_cluster_replicas": "true",
+                "unsafe_enable_unorchestrated_cluster_replicas": "true",
+            }
+        )
 
         if params is not None:
             for param in params.split(";"):
@@ -185,7 +200,13 @@ def run_one_scenario(
                 additional_system_parameter_defaults[param_name] = param_value
 
         mz_image = f"materialize/materialized:{tag}" if tag else None
-        mz = create_mz_service(mz_image, size, additional_system_parameter_defaults)
+        # TODO: Better azurite support detection
+        mz = create_mz_service(
+            mz_image,
+            size,
+            additional_system_parameter_defaults,
+            args.azurite and instance == "this",
+        )
         clusterd_image = f"materialize/clusterd:{tag}" if tag else None
         clusterd = create_clusterd_service(
             clusterd_image, size, additional_system_parameter_defaults
@@ -196,7 +217,13 @@ def run_one_scenario(
                 f"Unable to find materialize image with tag {tag}, proceeding with latest instead!"
             )
             mz_image = "materialize/materialized:latest"
-            mz = create_mz_service(mz_image, size, additional_system_parameter_defaults)
+            # TODO: Better azurite support detection
+            mz = create_mz_service(
+                mz_image,
+                size,
+                additional_system_parameter_defaults,
+                args.azurite and instance == "this",
+            )
             clusterd_image = f"materialize/clusterd:{tag}" if tag else None
             clusterd = create_clusterd_service(
                 clusterd_image, size, additional_system_parameter_defaults
@@ -211,14 +238,14 @@ def run_one_scenario(
                 materialize_url=f"postgres://materialize@{entrypoint_host}:6875",
                 default_timeout=default_timeout,
                 materialize_params={"statement_timeout": f"'{default_timeout}'"},
+                metadata_store="cockroach",
+                external_blob_store=True,
+                blob_store_is_azure=args.azurite,
             )
         ):
             c.testdrive(
                 dedent(
                     """
-                    $[version>=9000] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-                    ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
-
                     $[version<9000] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                     ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
 
@@ -256,26 +283,41 @@ def run_one_scenario(
             else:
                 aggregations = benchmark.run()
                 scenario_version = benchmark.create_scenario_instance().version()
-                for aggregation, comparator in zip(aggregations, comparators):
-                    comparator.set_scenario_version(scenario_version)
-                    comparator.append(aggregation.aggregate())
+                result.set_scenario_version(scenario_version)
+                for aggregation, metric in zip(aggregations, result.metrics):
+                    assert (
+                        aggregation.measurement_type == metric.measurement_type
+                        or aggregation.measurement_type is None
+                    ), f"Aggregation contains {aggregation.measurement_type} but metric contains {metric.measurement_type} as measurement type"
+                    metric.append_point(
+                        aggregation.aggregate(),
+                        aggregation.unit(),
+                        aggregation.name(),
+                    )
 
         c.kill("cockroach", "materialized", "clusterd", "testdrive")
         c.rm("cockroach", "materialized", "clusterd", "testdrive")
         c.rm_volumes("mzdata")
 
         if early_abort:
-            comparators = []
+            result.empty()
             break
 
-    return comparators
+    return result
+
+
+resolved_tags: dict[tuple[str, frozenset[tuple[str, MzVersion]]], str] = {}
 
 
 def resolve_tag(tag: str, scenario_class: type[Scenario], scale: str | None) -> str:
     if tag == "common-ancestor":
-        return resolve_ancestor_image_tag(
-            get_ancestor_overrides_for_performance_regressions(scenario_class, scale)
+        overrides = get_ancestor_overrides_for_performance_regressions(
+            scenario_class, scale
         )
+        key = (tag, frozenset(overrides.items()))
+        if key not in resolved_tags:
+            resolved_tags[key] = resolve_ancestor_image_tag(overrides)
+        return resolved_tags[key]
 
     return tag
 
@@ -284,6 +326,7 @@ def create_mz_service(
     mz_image: str | None,
     default_size: int,
     additional_system_parameter_defaults: dict[str, str] | None,
+    azurite: bool,
 ) -> Materialized:
     return Materialized(
         image=mz_image,
@@ -292,8 +335,10 @@ def create_mz_service(
         environment_id=f"local-az1-{uuid.uuid4()}-0",
         soft_assertions=False,
         additional_system_parameter_defaults=additional_system_parameter_defaults,
-        external_cockroach=True,
-        external_minio=True,
+        external_metadata_store=True,
+        metadata_store="cockroach",
+        external_blob_store=True,
+        blob_store_is_azure=azurite,
         sanity_restart=False,
     )
 
@@ -392,7 +437,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--scenario",
         metavar="SCENARIO",
         type=str,
-        default=os.getenv("MZCOMPOSE_SCENARIO", default="Scenario"),
+        default="Scenario",
         help="Scenario or scenario family to benchmark. See scenarios.py for available scenarios.",
     )
 
@@ -413,11 +458,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
-        "--max-retries",
+        "--runs-per-scenario",
         metavar="N",
         type=int,
-        default=10,
-        help="Retry any potential performance regressions up to N times.",
+        default=5,
     )
 
     parser.add_argument(
@@ -429,7 +473,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--ignore-other-tag-missing",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Don't run anything if 'OTHER' tag is missing",
+    )
+
+    parser.add_argument(
         "--other-size", metavar="N", type=int, default=4, help="SIZE to use for 'OTHER'"
+    )
+    parser.add_argument(
+        "--azurite", action="store_true", help="Use Azurite as blob store instead of S3"
     )
 
     args = parser.parse_args()
@@ -474,42 +528,63 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     c.up(*dependencies)
 
-    scenarios_scheduled_to_run: list[type[Scenario]] = buildkite.shard_list(
+    scenario_classes_scheduled_to_run: list[type[Scenario]] = buildkite.shard_list(
         selected_scenarios, lambda scenario_cls: scenario_cls.__name__
     )
 
-    scenarios_with_regressions = []
-    latest_report_by_scenario_name: dict[str, Report] = dict()
-
-    scenarios_to_run = scenarios_scheduled_to_run.copy()
-    for cycle in range(0, args.max_retries):
-        print(
-            f"Cycle {cycle + 1} with scenarios: {', '.join([scenario.__name__ for scenario in scenarios_to_run])}"
+    if (
+        len(scenario_classes_scheduled_to_run) == 0
+        and buildkite.is_in_buildkite()
+        and not os.getenv("CI_EXTRA_ARGS")
+    ):
+        raise FailedTestExecutionError(
+            error_summary="No scenarios were selected", errors=[]
         )
 
-        report = Report()
+    reports = []
 
-        scenarios_with_regressions = []
-        for scenario in scenarios_to_run:
-            comparators = run_one_scenario(c, scenario, args)
+    for run_index in range(0, args.runs_per_scenario):
+        run_number = run_index + 1
+        print(
+            f"Run {run_number} with scenarios: {', '.join([scenario.__name__ for scenario in scenario_classes_scheduled_to_run])}"
+        )
 
-            if len(comparators) == 0:
+        report = Report(cycle_number=run_number)
+        reports.append(report)
+
+        for scenario_class in scenario_classes_scheduled_to_run:
+            try:
+                scenario_result = run_one_scenario(c, scenario_class, args)
+            except RuntimeError as e:
+                if (
+                    "No image found for commit hash" in str(e)
+                    and args.ignore_other_tag_missing
+                ):
+                    print(
+                        "Missing image for base, which can happen when main branch fails to build, ignoring"
+                    )
+                    return
+                raise e
+
+            if scenario_result.is_empty():
                 continue
 
-            report.extend(comparators)
+            report.add_scenario_result(scenario_result)
 
-            # Do not retry the scenario if no regressions
-            if any([c.is_regression() for c in comparators]):
-                scenarios_with_regressions.append(scenario)
+        print(f"+++ Benchmark Report for run {run_number}:")
+        print(report)
 
-            latest_report_by_scenario_name[scenario.__name__] = report
+    benchmark_result_selector = BestBenchmarkResultSelector()
+    selected_report_by_scenario_name = (
+        benchmark_result_selector.choose_report_per_scenario(reports)
+    )
+    discarded_reports_by_scenario_name = get_discarded_reports_per_scenario(
+        reports, selected_report_by_scenario_name
+    )
 
-            print(f"+++ Benchmark Report for cycle {cycle + 1}:")
-            print(report)
-
-        scenarios_to_run = scenarios_with_regressions
-        if len(scenarios_to_run) == 0:
-            break
+    scenarios_with_regressions = determine_scenario_classes_with_regressions(
+        selected_report_by_scenario_name
+    )
 
     if len(scenarios_with_regressions) > 0:
         justification_by_scenario_name = _check_regressions_justified(
@@ -554,9 +629,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     upload_results_to_test_analytics(
         c,
         args.this_tag,
-        scenarios_scheduled_to_run,
+        scenario_classes_scheduled_to_run,
+        scenarios_with_regressions,
         args.scale,
-        latest_report_by_scenario_name,
+        selected_report_by_scenario_name,
+        discarded_reports_by_scenario_name,
         successful_run,
     )
 
@@ -565,12 +642,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             error_summary="At least one regression occurred",
             errors=_regressions_to_failure_details(
                 scenarios_with_regressions,
-                latest_report_by_scenario_name,
+                selected_report_by_scenario_name,
                 justification_by_scenario_name,
                 baseline_tag=args.other_tag,
                 scale=args.scale,
             ),
         )
+
+
+def is_regression(
+    evaluator: BenchmarkResultEvaluator, scenario_result: BenchmarkScenarioResult
+) -> bool:
+    return any([evaluator.is_regression(metric) for metric in scenario_result.metrics])
 
 
 def _check_regressions_justified(
@@ -634,9 +717,9 @@ def _is_regression_justified(
 def _tag_references_release_version(image_tag: str | None) -> bool:
     if image_tag is None:
         return False
-    return is_image_tag_of_version(image_tag) and MzVersion.is_valid_version_string(
+    return is_image_tag_of_release_version(
         image_tag
-    )
+    ) and MzVersion.is_valid_version_string(image_tag)
 
 
 def _regressions_to_failure_details(
@@ -661,7 +744,9 @@ def _regressions_to_failure_details(
             TestFailureDetails(
                 test_case_name_override=f"Scenario '{scenario_name}'",
                 message=f"New regression against {regression_against_tag}",
-                details=report.as_string(use_colors=False),
+                details=report.as_string(
+                    use_colors=False, limit_to_scenario=scenario_name
+                ),
             )
         )
 
@@ -672,8 +757,10 @@ def upload_results_to_test_analytics(
     c: Composition,
     this_tag: str | None,
     scenario_classes: list[type[Scenario]],
+    scenarios_with_regressions: list[type[Scenario]],
     scale: str | None,
     latest_report_by_scenario_name: dict[str, Report],
+    discarded_reports_by_scenario_name: dict[str, list[Report]],
     was_successful: bool,
 ) -> None:
     if not buildkite.is_in_buildkite():
@@ -683,38 +770,64 @@ def upload_results_to_test_analytics(
         # only include measurements on HEAD
         return
 
-    try:
-        test_analytics = TestAnalyticsDb(create_test_analytics_config(c))
-        test_analytics.builds.insert_build_job(was_successful=was_successful)
+    test_analytics = TestAnalyticsDb(create_test_analytics_config(c))
+    test_analytics.builds.add_build_job(was_successful=was_successful)
 
-        result_entries = []
+    result_entries = []
+    discarded_entries = []
 
-        for scenario_cls in scenario_classes:
-            scenario_name = scenario_cls.__name__
-            report = latest_report_by_scenario_name[scenario_name]
-            report_measurements = report.measurements_of_this(scenario_name)
-            scenario_version = report.get_scenario_version(scenario_name)
+    for scenario_cls in scenario_classes:
+        scenario_name = scenario_cls.__name__
+        report = latest_report_by_scenario_name[scenario_name]
 
-            result_entries.append(
-                feature_benchmark_result_storage.FeatureBenchmarkResultEntry(
-                    scenario_name=scenario_name,
-                    scenario_version=str(scenario_version),
-                    scale=scale or "default",
-                    wallclock=report_measurements[MeasurementType.WALLCLOCK],
-                    messages=report_measurements[MeasurementType.MESSAGES],
-                    memory_mz=report_measurements[MeasurementType.MEMORY_MZ],
-                    memory_clusterd=report_measurements[
-                        MeasurementType.MEMORY_CLUSTERD
-                    ],
+        result_entries.append(
+            _create_feature_benchmark_result_entry(
+                scenario_cls,
+                report,
+                scale,
+                is_regression=scenario_cls in scenarios_with_regressions,
+            )
+        )
+
+        for discarded_report in discarded_reports_by_scenario_name.get(
+            scenario_name, []
+        ):
+            discarded_entries.append(
+                _create_feature_benchmark_result_entry(
+                    scenario_cls, discarded_report, scale, is_regression=True
                 )
             )
 
-        test_analytics.benchmark_results.insert_result(
-            framework_version=FEATURE_BENCHMARK_FRAMEWORK_VERSION,
-            results=result_entries,
-        )
+    test_analytics.benchmark_results.add_result(
+        framework_version=FEATURE_BENCHMARK_FRAMEWORK_VERSION,
+        results=result_entries,
+    )
+    test_analytics.benchmark_results.add_discarded_entries(discarded_entries)
 
+    try:
+        test_analytics.submit_updates()
         print("Uploaded results.")
     except Exception as e:
         # An error during an upload must never cause the build to fail
-        print(f"Uploading results failed! {e}")
+        test_analytics.on_upload_failed(e)
+
+
+def _create_feature_benchmark_result_entry(
+    scenario_cls: type[Scenario], report: Report, scale: str | None, is_regression: bool
+) -> feature_benchmark_result_storage.FeatureBenchmarkResultEntry:
+    scenario_name = scenario_cls.__name__
+    scenario_group = scenario_cls.__bases__[0].__name__
+    scenario_version = report.get_scenario_version(scenario_name)
+    measurements = report.measurements_of_this(scenario_name)
+
+    return feature_benchmark_result_storage.FeatureBenchmarkResultEntry(
+        scenario_name=scenario_name,
+        scenario_group=scenario_group,
+        scenario_version=str(scenario_version),
+        cycle=report.cycle_number,
+        scale=scale or "default",
+        is_regression=is_regression,
+        wallclock=measurements[MeasurementType.WALLCLOCK],
+        memory_mz=measurements[MeasurementType.MEMORY_MZ],
+        memory_clusterd=measurements[MeasurementType.MEMORY_CLUSTERD],
+    )

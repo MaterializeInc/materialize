@@ -24,9 +24,14 @@
 # For details on the code that is generated, see keywords.rs.
 
 Access
+Action
 Add
+Added
+Address
 Addresses
+After
 Aggregate
+Aggregation
 Aligned
 All
 Alter
@@ -35,6 +40,7 @@ And
 Any
 Arity
 Arn
+Arranged
 Arrangement
 Array
 As
@@ -61,6 +67,7 @@ Broker
 Brokers
 By
 Bytes
+Capture
 Cardinality
 Cascade
 Case
@@ -72,7 +79,9 @@ Char
 Character
 Characteristics
 Check
+Class
 Client
+Clock
 Close
 Cluster
 Clusters
@@ -93,15 +102,18 @@ Confluent
 Connection
 Connections
 Constraint
+Continual
 Copy
 Count
 Counter
 Create
 Createcluster
 Createdb
+Createnetworkpolicy
 Createrole
 Creation
 Cross
+Cse
 Csv
 Current
 Cursor
@@ -117,6 +129,7 @@ Debugging
 Dec
 Decimal
 Declare
+Decoding
 Decorrelated
 Default
 Defaults
@@ -126,6 +139,7 @@ Delimiter
 Delta
 Desc
 Details
+Direction
 Discard
 Disk
 Distinct
@@ -141,11 +155,14 @@ End
 Endpoint
 Enforced
 Envelope
+Equivalences
 Error
+Errors
 Escape
 Estimate
 Every
 Except
+Exclude
 Execute
 Exists
 Expected
@@ -161,6 +178,7 @@ Features
 Fetch
 Fields
 File
+Files
 Filter
 First
 Fixpoint
@@ -174,6 +192,7 @@ From
 Full
 Fullname
 Function
+Fusion
 Generator
 Grant
 Greatest
@@ -188,6 +207,7 @@ Host
 Hour
 Hours
 Humanized
+Hydration
 Id
 Identifiers
 Ids
@@ -208,6 +228,7 @@ Input
 Insert
 Insights
 Inspect
+Instance
 Int
 Integer
 Internal
@@ -266,6 +287,7 @@ Name
 Names
 Natural
 Negative
+Network
 New
 Next
 No
@@ -304,9 +326,12 @@ Partition
 Partitions
 Password
 Path
+Pattern
 Physical
 Plan
 Plans
+Policies
+Policy
 Port
 Position
 Postgres
@@ -315,13 +340,17 @@ Precision
 Prefix
 Prepare
 Primary
+Prioritize
 Privatelink
 Privileges
 Progress
+Projection
 Protobuf
 Protocol
+Public
 Publication
 Pushdown
+Qualify
 Query
 Quote
 Raise
@@ -329,18 +358,20 @@ Range
 Rate
 Raw
 Read
+Ready
 Real
 Reassign
 Recursion
 Recursive
 Redacted
+Reduce
 Reference
 References
 Refresh
 Regex
 Region
 Registry
-Rehydration
+Relation
 Rename
 Reoptimize
 Repeatable
@@ -364,6 +395,7 @@ Rotate
 Rounds
 Row
 Rows
+Rules
 Sasl
 Scale
 Schedule
@@ -378,6 +410,7 @@ Seed
 Select
 Sequences
 Serializable
+Server
 Service
 Session
 Set
@@ -391,6 +424,7 @@ Snapshot
 Some
 Source
 Sources
+Sql
 Ssh
 Ssl
 Start
@@ -414,6 +448,8 @@ System
 Table
 Tables
 Tail
+Task
+Tasks
 Temp
 Temporary
 Text
@@ -421,7 +457,6 @@ Then
 Tick
 Ties
 Time
-Timeline
 Timeout
 Timestamp
 TimestampTz
@@ -434,6 +469,7 @@ Trace
 Trailing
 Transaction
 Transactional
+Transform
 Trim
 True
 Tunnel
@@ -444,6 +480,8 @@ Uncommitted
 Union
 Unique
 Unknown
+Unnest
+Until
 Up
 Update
 Upsert
@@ -459,13 +497,16 @@ Values
 Varchar
 Variadic
 Varying
+Verbose
 Version
 View
 Views
+Wait
 Warning
 Webhook
 When
 Where
+While
 Window
 Wire
 With
@@ -473,8 +514,10 @@ Within
 Without
 Work
 Workers
+Workload
 Write
 Year
 Years
+Yugabyte
 Zone
 Zones

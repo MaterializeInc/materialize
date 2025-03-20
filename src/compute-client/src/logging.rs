@@ -26,7 +26,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_client.logging.rs"));
 //
 // Ideally we'd want to instead signal disabled logging by leaving `index_logs`
 // empty. Unfortunately, we have to always provide `index_logs`, because we must
-// install the logging dataflows even on replicas that have logging disabled. See #15799.
+// install the logging dataflows even on replicas that have logging disabled. See database-issues#4545.
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoggingConfig {
     /// The logging interval
@@ -100,16 +100,16 @@ impl ProtoMapEntry<LogVariant, GlobalId> for ProtoIndexLog {
     }
 }
 
-/// TODO(#25239): Add documentation.
+/// TODO(database-issues#7533): Add documentation.
 #[derive(
     Arbitrary, Hash, Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Copy, Serialize, Deserialize,
 )]
 pub enum LogVariant {
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     Timely(TimelyLog),
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     Differential(DifferentialLog),
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     Compute(ComputeLog),
 }
 
@@ -154,32 +154,32 @@ impl RustType<ProtoLogVariant> for LogVariant {
     }
 }
 
-/// TODO(#25239): Add documentation.
+/// TODO(database-issues#7533): Add documentation.
 #[derive(
     Arbitrary, Hash, Eq, Ord, PartialEq, PartialOrd, Debug, Clone, Copy, Serialize, Deserialize,
 )]
 pub enum TimelyLog {
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     Operates,
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     Channels,
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     Elapsed,
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     Histogram,
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     Addresses,
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     Parks,
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     MessagesSent,
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     MessagesReceived,
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     Reachability,
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     BatchesSent,
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     BatchesReceived,
 }
 
@@ -222,24 +222,24 @@ impl RustType<ProtoTimelyLog> for TimelyLog {
     }
 }
 
-/// TODO(#25239): Add documentation.
+/// TODO(database-issues#7533): Add documentation.
 #[derive(
     Arbitrary, Hash, Eq, Ord, PartialEq, PartialOrd, Debug, Clone, Copy, Serialize, Deserialize,
 )]
 pub enum DifferentialLog {
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     ArrangementBatches,
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     ArrangementRecords,
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     Sharing,
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     BatcherRecords,
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     BatcherSize,
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     BatcherCapacity,
-    /// TODO(#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     BatcherAllocations,
 }
 
@@ -276,31 +276,37 @@ impl RustType<ProtoDifferentialLog> for DifferentialLog {
     }
 }
 
-/// TODO(#25239): Add documentation.
+/// Variants of compute introspection sources.
 #[derive(
     Arbitrary, Hash, Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Copy, Serialize, Deserialize,
 )]
 pub enum ComputeLog {
-    /// TODO(#25239): Add documentation.
+    /// Installed dataflow exports.
     DataflowCurrent,
-    /// TODO(#25239): Add documentation.
+    /// Dataflow write frontiers.
     FrontierCurrent,
-    /// TODO(#25239): Add documentation.
+    /// Pending peeks.
     PeekCurrent,
-    /// TODO(#25239): Add documentation.
+    /// A histogram over peek durations.
     PeekDuration,
-    /// TODO(#25239): Add documentation.
+    /// Dataflow import frontiers.
     ImportFrontierCurrent,
-    /// TODO(#25239): Add documentation.
+    /// Arrangement heap sizes.
     ArrangementHeapSize,
-    /// TODO(#25239): Add documentation.
+    /// Arrangement heap capacities.
     ArrangementHeapCapacity,
-    /// TODO(#25239): Add documentation.
+    /// Arrangement heap allocations.
     ArrangementHeapAllocations,
-    /// TODO(#25239): Add documentation.
+    /// A histogram over dataflow shutdown durations.
     ShutdownDuration,
-    /// TODO(#25239): Add documentation.
+    /// Counts of errors in exported collections.
     ErrorCount,
+    /// Hydration times of exported collections.
+    HydrationTime,
+    /// Mappings from `GlobalId`/`LirId`` pairs to dataflow addresses.
+    LirMapping,
+    /// Mappings from dataflows to `GlobalId`s.
+    DataflowGlobal,
 }
 
 impl RustType<ProtoComputeLog> for ComputeLog {
@@ -318,6 +324,9 @@ impl RustType<ProtoComputeLog> for ComputeLog {
                 ComputeLog::ArrangementHeapAllocations => ArrangementHeapAllocations(()),
                 ComputeLog::ShutdownDuration => ShutdownDuration(()),
                 ComputeLog::ErrorCount => ErrorCount(()),
+                ComputeLog::HydrationTime => HydrationTime(()),
+                ComputeLog::LirMapping => LirMapping(()),
+                ComputeLog::DataflowGlobal => DataflowGlobal(()),
             }),
         }
     }
@@ -335,6 +344,9 @@ impl RustType<ProtoComputeLog> for ComputeLog {
             Some(ArrangementHeapAllocations(())) => Ok(ComputeLog::ArrangementHeapAllocations),
             Some(ShutdownDuration(())) => Ok(ComputeLog::ShutdownDuration),
             Some(ErrorCount(())) => Ok(ComputeLog::ErrorCount),
+            Some(HydrationTime(())) => Ok(ComputeLog::HydrationTime),
+            Some(LirMapping(())) => Ok(ComputeLog::LirMapping),
+            Some(DataflowGlobal(())) => Ok(ComputeLog::DataflowGlobal),
             None => Err(TryFromProtoError::missing_field("ProtoComputeLog::kind")),
         }
     }
@@ -356,34 +368,42 @@ impl LogVariant {
             .unwrap_or_else(|| (0..arity).collect())
     }
 
-    /// TODO(#25239): Add documentation.
+    /// Relation schemas for the logs.
+    ///
+    /// This types need to agree with the values that are produced
+    /// in `logging::compute::construct` and with the description in
+    /// `catalog/src/builtin.rs`.
     pub fn desc(&self) -> RelationDesc {
         match self {
-            LogVariant::Timely(TimelyLog::Operates) => RelationDesc::empty()
+            LogVariant::Timely(TimelyLog::Operates) => RelationDesc::builder()
                 .with_column("id", ScalarType::UInt64.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("name", ScalarType::String.nullable(false))
-                .with_key(vec![0, 1]),
+                .with_key(vec![0, 1])
+                .finish(),
 
-            LogVariant::Timely(TimelyLog::Channels) => RelationDesc::empty()
+            LogVariant::Timely(TimelyLog::Channels) => RelationDesc::builder()
                 .with_column("id", ScalarType::UInt64.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("from_index", ScalarType::UInt64.nullable(false))
                 .with_column("from_port", ScalarType::UInt64.nullable(false))
                 .with_column("to_index", ScalarType::UInt64.nullable(false))
                 .with_column("to_port", ScalarType::UInt64.nullable(false))
-                .with_key(vec![0, 1]),
+                .with_key(vec![0, 1])
+                .finish(),
 
-            LogVariant::Timely(TimelyLog::Elapsed) => RelationDesc::empty()
-                .with_column("id", ScalarType::UInt64.nullable(false))
-                .with_column("worker_id", ScalarType::UInt64.nullable(false)),
-
-            LogVariant::Timely(TimelyLog::Histogram) => RelationDesc::empty()
+            LogVariant::Timely(TimelyLog::Elapsed) => RelationDesc::builder()
                 .with_column("id", ScalarType::UInt64.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
-                .with_column("duration_ns", ScalarType::UInt64.nullable(false)),
+                .finish(),
 
-            LogVariant::Timely(TimelyLog::Addresses) => RelationDesc::empty()
+            LogVariant::Timely(TimelyLog::Histogram) => RelationDesc::builder()
+                .with_column("id", ScalarType::UInt64.nullable(false))
+                .with_column("worker_id", ScalarType::UInt64.nullable(false))
+                .with_column("duration_ns", ScalarType::UInt64.nullable(false))
+                .finish(),
+
+            LogVariant::Timely(TimelyLog::Addresses) => RelationDesc::builder()
                 .with_column("id", ScalarType::UInt64.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column(
@@ -394,46 +414,47 @@ impl LogVariant {
                     }
                     .nullable(false),
                 )
-                .with_key(vec![0, 1]),
+                .with_key(vec![0, 1])
+                .finish(),
 
-            LogVariant::Timely(TimelyLog::Parks) => RelationDesc::empty()
+            LogVariant::Timely(TimelyLog::Parks) => RelationDesc::builder()
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("slept_for_ns", ScalarType::UInt64.nullable(false))
-                .with_column("requested_ns", ScalarType::UInt64.nullable(false)),
+                .with_column("requested_ns", ScalarType::UInt64.nullable(false))
+                .finish(),
 
-            LogVariant::Timely(TimelyLog::BatchesReceived) => RelationDesc::empty()
+            LogVariant::Timely(TimelyLog::BatchesReceived) => RelationDesc::builder()
                 .with_column("channel_id", ScalarType::UInt64.nullable(false))
                 .with_column("from_worker_id", ScalarType::UInt64.nullable(false))
-                .with_column("to_worker_id", ScalarType::UInt64.nullable(false)),
+                .with_column("to_worker_id", ScalarType::UInt64.nullable(false))
+                .finish(),
 
-            LogVariant::Timely(TimelyLog::BatchesSent) => RelationDesc::empty()
+            LogVariant::Timely(TimelyLog::BatchesSent) => RelationDesc::builder()
                 .with_column("channel_id", ScalarType::UInt64.nullable(false))
                 .with_column("from_worker_id", ScalarType::UInt64.nullable(false))
-                .with_column("to_worker_id", ScalarType::UInt64.nullable(false)),
+                .with_column("to_worker_id", ScalarType::UInt64.nullable(false))
+                .finish(),
 
-            LogVariant::Timely(TimelyLog::MessagesReceived) => RelationDesc::empty()
+            LogVariant::Timely(TimelyLog::MessagesReceived) => RelationDesc::builder()
                 .with_column("channel_id", ScalarType::UInt64.nullable(false))
                 .with_column("from_worker_id", ScalarType::UInt64.nullable(false))
-                .with_column("to_worker_id", ScalarType::UInt64.nullable(false)),
+                .with_column("to_worker_id", ScalarType::UInt64.nullable(false))
+                .finish(),
 
-            LogVariant::Timely(TimelyLog::MessagesSent) => RelationDesc::empty()
+            LogVariant::Timely(TimelyLog::MessagesSent) => RelationDesc::builder()
                 .with_column("channel_id", ScalarType::UInt64.nullable(false))
                 .with_column("from_worker_id", ScalarType::UInt64.nullable(false))
-                .with_column("to_worker_id", ScalarType::UInt64.nullable(false)),
+                .with_column("to_worker_id", ScalarType::UInt64.nullable(false))
+                .finish(),
 
-            LogVariant::Timely(TimelyLog::Reachability) => RelationDesc::empty()
-                .with_column(
-                    "address",
-                    ScalarType::List {
-                        element_type: Box::new(ScalarType::UInt64),
-                        custom_id: None,
-                    }
-                    .nullable(false),
-                )
-                .with_column("port", ScalarType::UInt64.nullable(false))
+            LogVariant::Timely(TimelyLog::Reachability) => RelationDesc::builder()
+                .with_column("id", ScalarType::UInt64.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
+                .with_column("source", ScalarType::UInt64.nullable(false))
+                .with_column("port", ScalarType::UInt64.nullable(false))
                 .with_column("update_type", ScalarType::String.nullable(false))
-                .with_column("time", ScalarType::MzTimestamp.nullable(true)),
+                .with_column("time", ScalarType::MzTimestamp.nullable(true))
+                .finish(),
 
             LogVariant::Differential(DifferentialLog::ArrangementBatches)
             | LogVariant::Differential(DifferentialLog::ArrangementRecords)
@@ -444,57 +465,94 @@ impl LogVariant {
             | LogVariant::Differential(DifferentialLog::BatcherAllocations)
             | LogVariant::Compute(ComputeLog::ArrangementHeapSize)
             | LogVariant::Compute(ComputeLog::ArrangementHeapCapacity)
-            | LogVariant::Compute(ComputeLog::ArrangementHeapAllocations) => RelationDesc::empty()
-                .with_column("operator_id", ScalarType::UInt64.nullable(false))
-                .with_column("worker_id", ScalarType::UInt64.nullable(false)),
+            | LogVariant::Compute(ComputeLog::ArrangementHeapAllocations) => {
+                RelationDesc::builder()
+                    .with_column("operator_id", ScalarType::UInt64.nullable(false))
+                    .with_column("worker_id", ScalarType::UInt64.nullable(false))
+                    .finish()
+            }
 
-            LogVariant::Compute(ComputeLog::DataflowCurrent) => RelationDesc::empty()
+            LogVariant::Compute(ComputeLog::DataflowCurrent) => RelationDesc::builder()
                 .with_column("export_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("dataflow_id", ScalarType::UInt64.nullable(false))
-                .with_key(vec![0, 1]),
+                .with_key(vec![0, 1])
+                .finish(),
 
-            LogVariant::Compute(ComputeLog::FrontierCurrent) => RelationDesc::empty()
+            LogVariant::Compute(ComputeLog::FrontierCurrent) => RelationDesc::builder()
                 .with_column("export_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("time", ScalarType::MzTimestamp.nullable(false))
-                .with_key(vec![0, 1]),
+                .with_key(vec![0, 1])
+                .finish(),
 
-            LogVariant::Compute(ComputeLog::ImportFrontierCurrent) => RelationDesc::empty()
+            LogVariant::Compute(ComputeLog::ImportFrontierCurrent) => RelationDesc::builder()
                 .with_column("export_id", ScalarType::String.nullable(false))
                 .with_column("import_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("time", ScalarType::MzTimestamp.nullable(false))
-                .with_key(vec![0, 1, 2]),
+                .with_key(vec![0, 1, 2])
+                .finish(),
 
-            LogVariant::Compute(ComputeLog::PeekCurrent) => RelationDesc::empty()
+            LogVariant::Compute(ComputeLog::PeekCurrent) => RelationDesc::builder()
                 .with_column("id", ScalarType::Uuid.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("object_id", ScalarType::String.nullable(false))
                 .with_column("type", ScalarType::String.nullable(false))
                 .with_column("time", ScalarType::MzTimestamp.nullable(false))
-                .with_key(vec![0, 1]),
+                .with_key(vec![0, 1])
+                .finish(),
 
-            LogVariant::Compute(ComputeLog::PeekDuration) => RelationDesc::empty()
+            LogVariant::Compute(ComputeLog::PeekDuration) => RelationDesc::builder()
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("type", ScalarType::String.nullable(false))
-                .with_column("duration_ns", ScalarType::UInt64.nullable(false)),
+                .with_column("duration_ns", ScalarType::UInt64.nullable(false))
+                .finish(),
 
-            LogVariant::Compute(ComputeLog::ShutdownDuration) => RelationDesc::empty()
+            LogVariant::Compute(ComputeLog::ShutdownDuration) => RelationDesc::builder()
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
-                .with_column("duration_ns", ScalarType::UInt64.nullable(false)),
+                .with_column("duration_ns", ScalarType::UInt64.nullable(false))
+                .finish(),
 
-            LogVariant::Compute(ComputeLog::ErrorCount) => RelationDesc::empty()
+            LogVariant::Compute(ComputeLog::ErrorCount) => RelationDesc::builder()
                 .with_column("export_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("count", ScalarType::Int64.nullable(false))
-                .with_key(vec![0, 1]),
+                .with_key(vec![0, 1])
+                .finish(),
+
+            LogVariant::Compute(ComputeLog::HydrationTime) => RelationDesc::builder()
+                .with_column("export_id", ScalarType::String.nullable(false))
+                .with_column("worker_id", ScalarType::UInt64.nullable(false))
+                .with_column("time_ns", ScalarType::UInt64.nullable(true))
+                .with_key(vec![0, 1])
+                .finish(),
+
+            LogVariant::Compute(ComputeLog::LirMapping) => RelationDesc::builder()
+                .with_column("global_id", ScalarType::String.nullable(false))
+                .with_column("lir_id", ScalarType::UInt64.nullable(false))
+                .with_column("worker_id", ScalarType::UInt64.nullable(false))
+                .with_column("operator", ScalarType::String.nullable(false))
+                .with_column("parent_lir_id", ScalarType::UInt64.nullable(true))
+                .with_column("nesting", ScalarType::UInt16.nullable(false))
+                .with_column("operator_id_start", ScalarType::UInt64.nullable(false))
+                .with_column("operator_id_end", ScalarType::UInt64.nullable(false))
+                .with_key(vec![0, 1, 2])
+                .finish(),
+
+            LogVariant::Compute(ComputeLog::DataflowGlobal) => RelationDesc::builder()
+                .with_column("id", ScalarType::UInt64.nullable(false))
+                .with_column("worker_id", ScalarType::UInt64.nullable(false))
+                .with_column("global_id", ScalarType::String.nullable(false))
+                .with_key(vec![0, 1])
+                .finish(),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
@@ -504,7 +562,7 @@ mod tests {
         #[mz_ore::test]
         fn logging_config_protobuf_roundtrip(expect in any::<LoggingConfig>()) {
             let actual = protobuf_roundtrip::<_, ProtoLoggingConfig>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }

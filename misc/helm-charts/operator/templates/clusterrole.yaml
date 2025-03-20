@@ -1,0 +1,124 @@
+{{- if .Values.rbac.create -}}
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "materialize-operator.fullname" . }}
+rules:
+- apiGroups: [""]
+  resources:
+  - configmaps
+  - persistentvolumeclaims
+  - pods
+  - namespaces
+  - secrets
+  - serviceaccounts
+  - services
+  verbs:
+  - create
+  - update
+  - patch
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups: ["networking.k8s.io"]
+  resources:
+  - networkpolicies
+  verbs:
+  - create
+  - update
+  - patch
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources:
+  - roles
+  - rolebindings
+  - clusterrolebindings
+  verbs:
+  - create
+  - update
+  - patch
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources:
+  - clusterroles
+  verbs:
+  - bind
+  resourceNames:
+  - environmentd
+- apiGroups: ["apps"]
+  resources:
+  - deployments
+  - statefulsets
+  verbs:
+  - create
+  - update
+  - patch
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups: ["apiextensions.k8s.io"]
+  resources:
+  - customresourcedefinitions
+  verbs:
+  - create
+  - update
+  - patch
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups: ["materialize.cloud"]
+  resources:
+  - materializes
+  - materializes/status
+  - vpcendpoints
+  verbs:
+  - create
+  - update
+  - patch
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups: ["custom.metrics.k8s.io"]
+  resources:
+  - persistentvolumeclaims/kubelet_volume_stats_capacity_bytes
+  - persistentvolumeclaims/kubelet_volume_stats_used_bytes
+  verbs:
+  - get
+- apiGroups: ["metrics.k8s.io"]
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+- apiGroups: ["cert-manager.io"]
+  resources:
+  - certificates
+  verbs:
+  - create
+  - update
+  - patch
+  - delete
+  - get
+  - list
+  - watch
+
+{{- end }}

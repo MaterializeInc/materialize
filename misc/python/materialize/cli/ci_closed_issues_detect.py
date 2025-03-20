@@ -24,7 +24,12 @@ from materialize import buildkite, spawn
 ISSUE_RE = re.compile(
     r"""
     ( TimelyDataflow/timely-dataflow\#(?P<timelydataflow>[0-9]+)
-    | ( materialize\# | materialize/issues/ | \# ) (?P<materialize>[0-9]+)
+    | ( materialize\# | materialize/issues/ ) (?P<materialize>[0-9]+)
+    | ( cloud\# | cloud/issues/ ) (?P<cloud>[0-9]+)
+    | ( incidents-and-escalations\# | incidents-and-escalations/issues/ ) (?P<incidentsandescalations>[0-9]+)
+    | ( database-issues\# | database-issues/issues/ ) (?P<databaseissues>[0-9]+)
+    # only match from the beginning of the line or after a space character to avoid matching Buildkite URLs
+    | (^|\s) \# (?P<ambiguous>[0-9]+)
     )
     """,
     re.VERBOSE,
@@ -33,6 +38,10 @@ ISSUE_RE = re.compile(
 GROUP_REPO = {
     "timelydataflow": "TimelyDataflow/timely-dataflow",
     "materialize": "MaterializeInc/materialize",
+    "cloud": "MaterializeInc/cloud",
+    "incidentsandescalations": "MaterializeInc/incidents-and-escalations",
+    "databaseissues": "MaterializeInc/database-issues",
+    "ambiguous": None,
 }
 
 REFERENCE_RE = re.compile(
@@ -52,6 +61,8 @@ REFERENCE_RE = re.compile(
     | tracked\ with
     # Used in proto files
     | //\ buf\ breaking:\ ignore
+    # Used in documentation
+    | in\ the\ future
     )
     """,
     re.VERBOSE | re.IGNORECASE,
@@ -69,14 +80,14 @@ IGNORE_RE = re.compile(
     # test/sqllogictest/cockroach/*.slt
     | cockroach\#
     | Liquibase
-    # cloud repo
-    | cloud\#
     # ci/test/lint-buf/README.md
-    | Ignore\ because\ of\ #99999
+    | Ignore\ because\ of\ database-issues#99999
     # src/storage-client/src/controller.rs
     | issues/20211\>
     # src/sql/src/plan/statement.rs
     | issues/20019\>
+    # src/storage/src/storage_state.rs
+    | \#19907$
     )
     """,
     re.VERBOSE | re.IGNORECASE,
@@ -93,12 +104,12 @@ IGNORE_FILENAME_RE = re.compile(
     re.VERBOSE,
 )
 
-FILENAME_REFERENCE_RE = re.compile(r".*\.(td|slt|test)\.gh(?P<materialize>[0-9]+)")
+FILENAME_REFERENCE_RE = re.compile(r".*\.(td|slt|test)\.gh(?P<ambiguous>[0-9]+)")
 
 
 @dataclass
 class IssueRef:
-    repository: str
+    repository: str | None
     issue_id: int
     filename: str
     line_number: int
@@ -161,7 +172,11 @@ def detect_referenced_issues(filename: str) -> list[IssueRef]:
                 is_referenced_with_url = "issues/" in issue_match.group(0)
 
                 # Explain plans can look like issue references
-                if int(issue_id) < 100 and not is_referenced_with_url:
+                if (
+                    group == "ambiguous"
+                    and int(issue_id) < 100
+                    and not is_referenced_with_url
+                ):
                     continue
 
                 issue_refs.append(
@@ -177,26 +192,33 @@ def detect_referenced_issues(filename: str) -> list[IssueRef]:
     return issue_refs
 
 
-def is_issue_closed_on_github(repository: str, issue_id: int) -> bool:
+def is_issue_closed_on_github(repository: str | None, issue_id: int) -> bool:
+    assert repository
     headers = {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    if token := os.getenv("GITHUB_TOKEN"):
+
+    if token := os.getenv("GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN") or os.getenv(
+        "GITHUB_TOKEN"
+    ):
         headers["Authorization"] = f"Bearer {token}"
 
     url = f"https://api.github.com/repos/{repository}/issues/{issue_id}"
     response = requests.get(url, headers=headers)
 
+    if response.status_code == 404 and not os.getenv("CI"):
+        print(
+            f"Can't check issue #{issue_id} in {repository} repo, set GITHUB_TOKEN environment variable or run this check in CI"
+        )
+        return False
     if response.status_code != 200:
         raise ValueError(
             f"Bad return code from GitHub on {url}: {response.status_code}: {response.text}"
         )
 
     issue_json = response.json()
-    assert (
-        issue_json["number"] == issue_id
-    ), f"Returned issue number {issue_json['number']} is not the expected issue number {issue_id}"
+    # We can't check the issue number anymore because issues can have moved
     return issue_json["state"] == "closed"
 
 
@@ -210,6 +232,14 @@ def filter_changed_lines(issue_refs: list[IssueRef]) -> list[IssueRef]:
             (issue_ref.filename, issue_ref.line_number + i) in changed_lines
             for i in range(issue_ref.text.count("\n"))
         )
+    ]
+
+
+def filter_ambiguous_issues(
+    issue_refs: list[IssueRef],
+) -> tuple[list[IssueRef], list[IssueRef]]:
+    return [issue_ref for issue_ref in issue_refs if issue_ref.repository], [
+        issue_ref for issue_ref in issue_refs if not issue_ref.repository
     ]
 
 
@@ -271,15 +301,29 @@ def main() -> int:
         ):
             issue_refs.extend(detect_referenced_issues(filename))
 
+    issue_refs, ambiguous_refs = filter_ambiguous_issues(issue_refs)
+
     if args.changed_lines_only:
         issue_refs = filter_changed_lines(issue_refs)
+        ambiguous_refs = filter_changed_lines(ambiguous_refs)
 
     issue_refs = filter_closed_issues(issue_refs)
+
+    for issue_ref in ambiguous_refs:
+        print(f"--- Ambiguous issue reference: #{issue_ref.issue_id}")
+        if issue_ref.text is not None:
+            print(f"{issue_ref.filename}:{issue_ref.line_number}:")
+            print(issue_ref.text)
+        else:
+            print(f"{issue_ref.filename} (filename)")
+        print(
+            f"Use database-issues#{issue_ref.issue_id} or materialize#{issue_ref.issue_id} instead to have an unambiguous reference"
+        )
 
     for issue_ref in issue_refs:
         url = buildkite.inline_link(
             f"https://github.com/{issue_ref.repository}/issues/{issue_ref.issue_id}",
-            f"#{issue_ref.issue_id}",
+            f"{issue_ref.repository}#{issue_ref.issue_id}",
         )
         print(f"--- Issue is referenced in comment but already closed: {url}")
         if issue_ref.text is not None:
@@ -288,7 +332,7 @@ def main() -> int:
         else:
             print(f"{issue_ref.filename} (filename)")
 
-    return 1 if len(issue_refs) else 0
+    return 1 if issue_refs + ambiguous_refs else 0
 
 
 if __name__ == "__main__":

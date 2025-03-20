@@ -34,7 +34,7 @@ class CheckSchemas(Check):
             dedent(
                 """
                 > SHOW SCHEMAS LIKE 'to_be_%';
-                to_be_created
+                to_be_created ""
                 """
             )
         )

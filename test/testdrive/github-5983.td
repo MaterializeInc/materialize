@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 #
-# Regression test for https://github.com/MaterializeInc/materialize/issues/5983
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/1845
 #
 # panic with self-join
 #

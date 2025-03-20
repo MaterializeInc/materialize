@@ -22,11 +22,20 @@ impl<'a> Explain<'a> for Explainable<'a, FastPathPlan> {
 
     type Text = ExplainMultiPlan<'a, FastPathPlan>;
 
+    type VerboseText = ExplainMultiPlan<'a, FastPathPlan>;
+
     type Json = ExplainMultiPlan<'a, FastPathPlan>;
 
     type Dot = UnsupportedFormat;
 
     fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
+        self.as_explain_multi_plan(context)
+    }
+
+    fn explain_verbose_text(
+        &'a mut self,
+        context: &'a Self::Context,
+    ) -> Result<Self::VerboseText, ExplainError> {
         self.as_explain_multi_plan(context)
     }
 
@@ -37,7 +46,7 @@ impl<'a> Explain<'a> for Explainable<'a, FastPathPlan> {
 
 impl<'a> Explainable<'a, FastPathPlan> {
     fn as_explain_multi_plan(
-        &'a mut self,
+        &'a self,
         context: &'a ExplainContext<'a>,
     ) -> Result<ExplainMultiPlan<'a, FastPathPlan>, ExplainError> {
         let plans = vec![(

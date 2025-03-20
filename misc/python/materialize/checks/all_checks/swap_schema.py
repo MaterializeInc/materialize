@@ -10,14 +10,9 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.checks.executors import Executor
-from materialize.mz_version import MzVersion
 
 
 class SwapSchema(Check):
-    def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.75.0-dev")
-
     def initialize(self) -> Testdrive:
         return Testdrive(
             dedent(
@@ -58,10 +53,10 @@ class SwapSchema(Check):
             dedent(
                 """
                 > SHOW SCHEMAS LIKE 'swap_me%';
-                swap_me1
-                swap_me2
-                swap_me3
-                swap_me4
+                swap_me1 ""
+                swap_me2 ""
+                swap_me3 ""
+                swap_me4 ""
 
                 > SET SCHEMA = swap_me1;
 

@@ -12,7 +12,13 @@ from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition
 from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
-from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
+from materialize.zippy.framework import (
+    Action,
+    ActionFactory,
+    Capabilities,
+    Capability,
+    State,
+)
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.table_capabilities import TableExists
 
@@ -64,7 +70,7 @@ class CreateTable(Action):
         self.table = table
         super().__init__(capabilities)
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         index = (
             f"> CREATE DEFAULT INDEX ON {self.table.name}"
             if self.table.has_index
@@ -77,7 +83,8 @@ class CreateTable(Action):
                 {index}
                 > INSERT INTO {self.table.name} VALUES ({self.table.watermarks.max});
                 """
-            )
+            ),
+            mz_service=state.mz_service,
         )
 
     def provides(self) -> list[Capability]:
@@ -102,7 +109,7 @@ class ValidateTable(Action):
         self.select_limit = random.choices([True, False], weights=[0.2, 0.8], k=1)[0]
         super().__init__(capabilities)
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         # Validating via SELECT ... LIMIT is expensive as it requires creating a temporary table
         # Therefore, only use it in 20% of validations.
         if self.select_limit:
@@ -115,7 +122,8 @@ class ValidateTable(Action):
                     {self.table.watermarks.min} {self.table.watermarks.max} {(self.table.watermarks.max-self.table.watermarks.min)+1} {(self.table.watermarks.max-self.table.watermarks.min)+1}
                     > DROP TABLE {self.table.name}_select_limit
                     """
-                )
+                ),
+                mz_service=state.mz_service,
             )
         else:
             c.testdrive(
@@ -124,7 +132,8 @@ class ValidateTable(Action):
                     > SELECT MIN(f1), MAX(f1), COUNT(f1), COUNT(DISTINCT f1) FROM {self.table.name};
                     {self.table.watermarks.min} {self.table.watermarks.max} {(self.table.watermarks.max-self.table.watermarks.min)+1} {(self.table.watermarks.max-self.table.watermarks.min)+1}
                     """
-                )
+                ),
+                mz_service=state.mz_service,
             )
 
 
@@ -147,49 +156,58 @@ class DML(Action):
 class Insert(DML):
     """Inserts rows into a table."""
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         prev_max = self.table.watermarks.max
         self.table.watermarks.max = prev_max + self.delta
         c.testdrive(
-            f"> INSERT INTO {self.table.name} SELECT * FROM generate_series({prev_max + 1}, {self.table.watermarks.max});"
+            f"> INSERT INTO {self.table.name} SELECT * FROM generate_series({prev_max + 1}, {self.table.watermarks.max});",
+            mz_service=state.mz_service,
         )
 
 
 class ShiftForward(DML):
     """Update all rows from a table by incrementing their values by a constant."""
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         self.table.watermarks.shift(self.delta)
-        c.testdrive(f"> UPDATE {self.table.name} SET f1 = f1 + {self.delta};")
+        c.testdrive(
+            f"> UPDATE {self.table.name} SET f1 = f1 + {self.delta};",
+            mz_service=state.mz_service,
+        )
 
 
 class ShiftBackward(DML):
     """Update all rows from a table by decrementing their values by a constant."""
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         self.table.watermarks.shift(-self.delta)
-        c.testdrive(f"> UPDATE {self.table.name} SET f1 = f1 - {self.delta};")
+        c.testdrive(
+            f"> UPDATE {self.table.name} SET f1 = f1 - {self.delta};",
+            mz_service=state.mz_service,
+        )
 
 
 class DeleteFromHead(DML):
     """Delete the largest values from a table"""
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         self.table.watermarks.max = max(
             self.table.watermarks.max - self.delta, self.table.watermarks.min
         )
         c.testdrive(
-            f"> DELETE FROM {self.table.name} WHERE f1 > {self.table.watermarks.max};"
+            f"> DELETE FROM {self.table.name} WHERE f1 > {self.table.watermarks.max};",
+            mz_service=state.mz_service,
         )
 
 
 class DeleteFromTail(DML):
     """Delete the smallest values from a table"""
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         self.table.watermarks.min = min(
             self.table.watermarks.min + self.delta, self.table.watermarks.max
         )
         c.testdrive(
-            f"> DELETE FROM {self.table.name} WHERE f1 < {self.table.watermarks.min};"
+            f"> DELETE FROM {self.table.name} WHERE f1 < {self.table.watermarks.min};",
+            mz_service=state.mz_service,
         )

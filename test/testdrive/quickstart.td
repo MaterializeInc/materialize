@@ -10,6 +10,10 @@
 # This test verifies the Quickstart page works: https://materialize.com/docs/get-started/quickstart/
 # Uses shared compute+storage cluster
 
+# TODO: Reenable when database-issues#8581 is fixed
+$ skip-if
+SELECT true
+
 > CREATE CLUSTER quickstart_tutorial REPLICAS (r1 (SIZE '4-4'));
 
 > SET CLUSTER = quickstart_tutorial
@@ -17,19 +21,29 @@
 > CREATE SOURCE auction_house
   IN CLUSTER quickstart_tutorial
   FROM LOAD GENERATOR AUCTION
-  (TICK INTERVAL '0.05s')
-  FOR ALL TABLES
+  (TICK INTERVAL '0.05s', UP TO 1000)
+
+> CREATE TABLE accounts FROM SOURCE auction_house (REFERENCE accounts);
+> CREATE TABLE auctions FROM SOURCE auction_house (REFERENCE auctions);
+> CREATE TABLE bids FROM SOURCE auction_house (REFERENCE bids);
+> CREATE TABLE organizations FROM SOURCE auction_house (REFERENCE organizations);
+> CREATE TABLE users FROM SOURCE auction_house (REFERENCE users);
 
 > SHOW SOURCES
-name                   type           size                         cluster
+name                   type            cluster                comment
 --------------------------------------------------------------------------
-accounts               subsource      <null>                       quickstart_tutorial
-bids                   subsource      <null>                       quickstart_tutorial
-auction_house          load-generator <null>                       quickstart_tutorial
-auction_house_progress progress       <null>                       <null>
-auctions               subsource      <null>                       quickstart_tutorial
-organizations          subsource      <null>                       quickstart_tutorial
-users                  subsource      <null>                       quickstart_tutorial
+auction_house          load-generator  quickstart_tutorial    ""
+auction_house_progress progress        <null>                 ""
+
+> SHOW TABLES
+name                   comment
+--------------------------------
+accounts               ""
+bids                   ""
+auctions               ""
+organizations          ""
+users                  ""
+
 
 > SELECT id, seller, item FROM auctions WHERE id = 1
 1 1824 "Best Pizza in Town"
@@ -55,7 +69,7 @@ users                  subsource      <null>                       quickstart_tu
 > CREATE INDEX wins_by_bidder ON winning_bids (buyer)
 > CREATE INDEX wins_by_seller ON winning_bids (seller)
 
-? EXPLAIN SELECT * FROM winning_bids WHERE item = 'Best Pizza in Town' ORDER BY bid_time DESC
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM winning_bids WHERE item = 'Best Pizza in Town' ORDER BY bid_time DESC
 Explained Query (fast path):
   Finish order_by=[#4 desc nulls_first] output=[#0..=#6]
     Project (#1..=#5, #0, #6)

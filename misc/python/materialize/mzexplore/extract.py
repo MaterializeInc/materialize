@@ -19,7 +19,7 @@ import textwrap
 from contextlib import closing
 from pathlib import Path
 
-from pg8000.dbapi import DatabaseError
+from psycopg.errors import DatabaseError
 
 from materialize.mzexplore import sql
 from materialize.mzexplore.common import (

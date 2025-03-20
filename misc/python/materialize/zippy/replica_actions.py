@@ -11,7 +11,7 @@ import random
 from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition
-from materialize.zippy.framework import Action, Capabilities, Capability
+from materialize.zippy.framework import Action, Capabilities, Capability, State
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.replica_capabilities import ReplicaExists, ReplicaSizeType
 
@@ -23,17 +23,18 @@ class DropDefaultReplica(Action):
     def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning}
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         # Default cluster is not owned by materialize, thus can't be dropped by
         # it if enable_rbac_checks is on.
         c.testdrive(
             dedent(
                 """
-            $ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
             ALTER CLUSTER quickstart SET (MANAGED = false)
             DROP CLUSTER REPLICA quickstart.r1
             """
-            )
+            ),
+            mz_service=state.mz_service,
         )
 
 
@@ -69,7 +70,7 @@ class CreateReplica(Action):
             elif size_type is ReplicaSizeType.Both:
                 this_replica.size = f"{size}-{size}"
             else:
-                assert False
+                raise RuntimeError(f"Unsupported size type: {size_type}")
 
             if this_replica.size == "1-1":
                 this_replica.size = "1"
@@ -79,21 +80,22 @@ class CreateReplica(Action):
             self.new_replica = False
             self.replica = existing_replicas[0]
         else:
-            assert False
+            raise RuntimeError("More than one replica exists")
 
         super().__init__(capabilities)
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         if self.new_replica:
             # Default cluster is not owned by materialize, thus can't have a replica
             # added if enable_rbac_checks is on.
             c.testdrive(
                 dedent(
                     f"""
-                $ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+                $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
                 CREATE CLUSTER REPLICA quickstart.{self.replica.name} SIZE '{self.replica.size}'
                 """
-                )
+                ),
+                mz_service=state.mz_service,
             )
 
     def provides(self) -> list[Capability]:
@@ -120,15 +122,16 @@ class DropReplica(Action):
 
         super().__init__(capabilities)
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         if self.replica is not None:
             # Default cluster is not owned by materialize, thus can't have a replica
             # removed if enable_rbac_checks is on.
             c.testdrive(
                 dedent(
                     f"""
-                $ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+                $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
                 DROP CLUSTER REPLICA IF EXISTS quickstart.{self.replica.name}
                 """
-                )
+                ),
+                mz_service=state.mz_service,
             )

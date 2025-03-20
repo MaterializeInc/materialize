@@ -10,15 +10,10 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.checks.executors import Executor
-from materialize.mz_version import MzVersion
 
 
 class Comment(Check):
     """Test comments on types and tables, as well as the comment export as avro sink schema docs"""
-
-    def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.74.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(

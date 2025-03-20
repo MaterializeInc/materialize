@@ -1,0 +1,226 @@
+parameters:
+  - parameter: clusterd.nodeSelector
+    description: |
+      Node selector to use for clusterd pods spawned by the operator
+    default: "{}"
+  - parameter: environmentd.nodeSelector
+    description: |
+      Node selector to use for environmentd pods spawned by the operator
+    default: "{}"
+
+  - parameter: networkPolicies.egress
+    description: egress from Materialize pods to sources and sinks
+    default: |
+      {"cidrs":["0.0.0.0/0"],"enabled":false}
+
+  - parameter: networkPolicies.enabled
+    description: |
+      Whether to enable network policies for securing communication between pods
+    default: false
+
+  - parameter: networkPolicies.ingress
+    description: |
+      Ingress to the SQL and HTTP interfaces on environmentd or balancerd
+    default: |
+      {"cidrs":["0.0.0.0/0"],"enabled":false}
+
+  - parameter: networkPolicies.internal
+    description: |
+      Internal communication between Materialize pods
+    default: |
+      {"enabled":false}
+
+  - parameter: observability.enabled
+    description: ""
+    default: true
+
+  - parameter: observability.podMetrics.enabled
+    description: |
+      Whether to enable the pod metrics scraper which populates the Environment Overview Monitoring tab in the web console (requires metrics-server to be installed)
+    default: false
+
+  - parameter: observability.prometheus.scrapeAnnotations.enabled
+    description: |
+      Whether to annotate pods with common keys used for prometheus scraping.
+    default: true
+
+  - parameter: operator.args.enableInternalStatementLogging
+    description: ""
+    default: true
+
+  - parameter: operator.args.startupLogFilter
+    description: Log filtering settings for startup logs
+    default: INFO,mz_orchestratord=TRACE
+
+  - parameter: operator.cloudProvider.providers.aws.accountID
+    description: When using AWS, accountID is required
+    default: ""
+
+  - parameter: operator.cloudProvider.providers.aws.enabled
+    description: ""
+    default: false
+
+  - parameter: operator.cloudProvider.providers.aws.iam.roles.connection
+    description: ARN for CREATE CONNECTION feature
+    default: ""
+
+  - parameter: operator.cloudProvider.providers.aws.iam.roles.environment
+    description: ARN of the IAM role for environmentd
+    default: ""
+
+  - parameter: operator.cloudProvider.providers.gcp
+    description: GCP Configuration (placeholder for future use)
+    default: |
+      {"enabled":false}
+
+  - parameter: operator.cloudProvider.region
+    description: Common cloud provider settings
+    default: |
+      kind
+
+  - parameter: operator.cloudProvider.type
+    description: ""
+    default: local
+
+  - parameter: operator.clusters.defaultSizes.analytics
+    description: ""
+    default: 25cc
+
+  - parameter: operator.clusters.defaultSizes.catalogServer
+    description: ""
+    default: 50cc
+
+  - parameter: operator.clusters.defaultSizes.default
+    description: ""
+    default: 25cc
+
+  - parameter: operator.clusters.defaultSizes.probe
+    description: ""
+    default: mz_probe
+
+  - parameter: operator.clusters.defaultSizes.support
+    description: ""
+    default: 25cc
+
+  - parameter: operator.clusters.defaultSizes.system
+    description: ""
+    default: 25cc
+
+  - parameter: operator.features.authentication
+    description: |
+      Whether to enable environmentd rbac checks.
+
+      *Not yet supported in the helm chart*
+    default: false
+
+  - parameter: operator.features.consoleImageTagMapOverride
+    description: |
+      Override the mapping of environmentd versions to console versions
+    default: |
+      {}
+
+  - parameter: operator.features.createBalancers
+    description: |
+      Flag to indicate whether to create balancerd pods for the environments
+    default: true
+
+  - parameter: operator.features.createConsole
+    description: |
+      Flag to indicate whether to create console pods for the environments
+    default: true
+
+  - parameter: operator.image.pullPolicy
+    description: |
+      Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images
+    default: IfNotPresent
+
+  - parameter: operator.image.repository
+    description: |
+      The Docker repository for the operator image
+    default: materialize/orchestratord
+
+  - parameter: operator.image.tag
+    description: |
+      The tag/version of the operator image to be used
+    default: v0.127.0
+
+  - parameter: operator.nodeSelector
+    description: ""
+    default: |
+      {}
+
+  - parameter: operator.resources.limits
+    description: |
+      Resource limits for the operator's CPU and memory
+    default: |
+      {"memory":"512Mi"}
+
+  - parameter: operator.resources.requests
+    description: |
+      Resources requested by the operator for CPU and memory
+    default: |
+      {"cpu":"100m","memory":"512Mi"}
+
+  - parameter: rbac.create
+    description: |
+      Whether to create necessary RBAC roles and bindings
+    default: true
+
+  - parameter: serviceAccount.create
+    description: |
+      Whether to create a new service account for the operator
+    default: true
+
+  - parameter: serviceAccount.name
+    description: |
+      The name of the service account to be created
+    default: orchestratord
+
+  - parameter: storage.storageClass.allowVolumeExpansion
+    description: ""
+    default: false
+
+  - parameter: storage.storageClass.create
+    description: |
+      Set to false to use an existing StorageClass instead
+    default: false
+
+  - parameter: storage.storageClass.name
+    description: |
+      Name of the StorageClass to create/use: e.g.,"openebs-lvm-instance-store-ext4"
+    default: ""
+
+  - parameter: storage.storageClass.parameters
+    description: Parameters for the CSI driver
+    default: |
+      {"fsType":"ext4","storage":"lvm","volgroup":"instance-store-vg"}
+
+  - parameter: storage.storageClass.provisioner
+    description: |
+      CSI driver to use, eg "local.csi.openebs.io"
+    default: ""
+
+  - parameter: storage.storageClass.reclaimPolicy
+    description: ""
+    default: Delete
+
+  - parameter: storage.storageClass.volumeBindingMode
+    description: ""
+    default: WaitForFirstConsumer
+
+  - parameter: telemetry.enabled
+    description: ""
+    default: true
+
+  - parameter: telemetry.segmentApiKey
+    description: ""
+    default: hMWi3sZ17KFMjn2sPWo9UJGpOQqiba4A
+
+  - parameter: telemetry.segmentClientSide
+    description: ""
+    default: true
+
+  - parameter: tls.defaultCertificateSpecs
+    description: ""
+    default: |
+      {}

@@ -1,0 +1,8 @@
+Some general guidelines for usage patterns include:
+
+| Usage Pattern | General Guideline |
+|--------------------------------------------------------------------------------|--------------------|
+| View results are accessed from a single cluster only                                         | View with an [index](/sql/create-index) |
+| View results are accessed across [clusters](/concepts/clusters)                            | Materialized view  |
+| Final consumer of the view is a sink or a [`SUBSCRIBE`](/sql/subscribe) operation | Materialized view  |
+| View maintenance and query serving are scaled independently | Materialized view  |

@@ -36,6 +36,12 @@ class Application:
     def sanitizer_mode(self) -> str:
         return os.getenv("CI_SANITIZER", "none")
 
+    def bazel(self) -> bool:
+        return ui.env_is_truthy("CI_BAZEL_BUILD")
+
+    def bazel_remote_cache(self) -> str | None:
+        return os.getenv("CI_BAZEL_REMOTE_CACHE")
+
     def acquire_images(self) -> None:
         raise NotImplementedError
 

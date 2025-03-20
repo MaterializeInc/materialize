@@ -102,10 +102,12 @@ $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keys
 > CREATE SOURCE dbz_no_before
   IN CLUSTER dbz_no_before_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbz-no-before-${testdrive.seed}')
+
+> CREATE TABLE dbz_no_before_tbl FROM SOURCE dbz_no_before (REFERENCE "testdrive-dbz-no-before-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> SELECT * FROM dbz_no_before
+> SELECT * FROM dbz_no_before_tbl
 id creature
 -----------
 1  lizard
@@ -113,7 +115,7 @@ id creature
 $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keyschema} schema=${schema} timestamp=2
 {"id": 1} {"after": {"row": {"id": 1, "creature": "dino"}}, "op": "u", "source": {"file": "binlog4", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
-> SELECT * FROM dbz_no_before
+> SELECT * FROM dbz_no_before_tbl
 id creature
 -----------
 1  dino
@@ -122,7 +124,7 @@ $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keys
 {"id": 2} {"after": {"row": {"id": 2, "creature": "archeopteryx"}}, "op": "c", "source": {"file": "binlog5", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 {"id": 2} {"after": {"row": {"id": 2, "creature": "velociraptor"}}, "op": "u", "source": {"file": "binlog6", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
-> SELECT * FROM dbz_no_before ORDER BY creature
+> SELECT * FROM dbz_no_before_tbl ORDER BY creature
 id creature
 ------------
 1  dino
@@ -133,7 +135,7 @@ $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keys
 {"id": 3} {"after": {"row": {"id": 3, "creature": "triceratops"}}, "op": "u", "source": {"file": "binlog7", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 {"id": 3} {"after": {"row": {"id": 3, "creature": "triceratops"}}, "op": "u", "source": {"file": "binlog8", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
-> SELECT * FROM dbz_no_before WHERE id = 3
+> SELECT * FROM dbz_no_before_tbl WHERE id = 3
 id creature
 -----------
 3  triceratops
@@ -143,7 +145,7 @@ id creature
 $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keyschema} schema=${schema} timestamp=5
 {"id": 4} {"after": {"row": {"id": 4, "creature": "moros"}}, "op": "c", "source": {"file": "binlog9", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
-> SELECT creature FROM dbz_no_before WHERE id = 4
+> SELECT creature FROM dbz_no_before_tbl WHERE id = 4
 creature
 --------
 moros
@@ -151,19 +153,19 @@ moros
 $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keyschema} schema=${schema} timestamp=6
 {"id": 4} {"after": null, "op": "d", "source": {"file": "binlog10", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
-> SELECT creature FROM dbz_no_before WHERE id = 4
+> SELECT creature FROM dbz_no_before_tbl WHERE id = 4
 creature
 --------
 
 $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keyschema} schema=${schema} timestamp=7
 {"id": 4} {"after": {"row": {"id": 4, "creature": "chicken"}}, "op": "u", "source": {"file": "binlog11", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
-> SELECT creature FROM dbz_no_before WHERE id = 4
+> SELECT creature FROM dbz_no_before_tbl WHERE id = 4
 creature
 --------
 chicken
 
-> SELECT * FROM dbz_no_before WHERE id = 3
+> SELECT * FROM dbz_no_before_tbl WHERE id = 3
 id creature
 -----------
 3  triceratops

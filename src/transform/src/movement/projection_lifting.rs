@@ -41,12 +41,16 @@ impl CheckedRecursion for ProjectionLifting {
 }
 
 impl crate::Transform for ProjectionLifting {
+    fn name(&self) -> &'static str {
+        "ProjectionLifting"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "projection_lifting")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,

@@ -7,33 +7,39 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use once_cell::sync::Lazy;
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write;
 
 use mz_persist_types::Codec;
+use mz_repr::{RelationDesc, ScalarType};
 use mz_storage_types::sources::SourceData;
 
-use crate::durable::objects::state_update::StateUpdateKindRaw;
+use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::upgrade::AllVersionsStateUpdateKind;
 
-static PROTO_DIRECTORY: Lazy<String> =
-    Lazy::new(|| format!("{}/protos", env!("CARGO_MANIFEST_DIR")));
+const PROTO_DIRECTORY: &str = {
+    if mz_build_tools::is_bazel_build() {
+        "src/catalog-protos/protos"
+    } else {
+        "../catalog-protos/protos"
+    }
+};
 const PROTO_EXT: &str = "proto";
 
-static SNAPSHOT_DIRECTORY: Lazy<String> = Lazy::new(|| {
-    format!(
-        "{}/src/durable/upgrade/snapshots",
-        env!("CARGO_MANIFEST_DIR")
-    )
-});
+static SNAPSHOT_DIRECTORY: &str = {
+    if mz_build_tools::is_bazel_build() {
+        "src/catalog/src/durable/upgrade/snapshots"
+    } else {
+        "src/durable/upgrade/snapshots"
+    }
+};
 const SNAPSHOT_EXT: &str = "txt";
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_proto_serialization_stability() {
-    let protos: BTreeSet<_> = read_file_names(&PROTO_DIRECTORY, PROTO_EXT)
+    let protos: BTreeSet<_> = read_file_names(PROTO_DIRECTORY, PROTO_EXT)
         // Remove `objects.proto`.
         //
         // `objects.proto` is allowed to change and we don't have a good
@@ -43,7 +49,7 @@ fn test_proto_serialization_stability() {
         .filter(|name| name != "objects")
         .collect();
 
-    let snapshot_files: BTreeSet<_> = read_file_names(&SNAPSHOT_DIRECTORY, SNAPSHOT_EXT).collect();
+    let snapshot_files: BTreeSet<_> = read_file_names(SNAPSHOT_DIRECTORY, SNAPSHOT_EXT).collect();
 
     let unknown_snapshots: Vec<_> = snapshot_files.difference(&protos).collect();
     if !unknown_snapshots.is_empty() {
@@ -56,15 +62,18 @@ fn test_proto_serialization_stability() {
     }
 
     let base64_config = base64::Config::new(base64::CharacterSet::Standard, true);
+    let relation_desc = RelationDesc::builder()
+        .with_column("a", ScalarType::Jsonb.nullable(false))
+        .finish();
     for snapshot_file in snapshot_files {
-        let encoded_bytes = fs::read(format!("{}/{}.txt", *SNAPSHOT_DIRECTORY, snapshot_file))
+        let encoded_bytes = fs::read(format!("{}/{}.txt", SNAPSHOT_DIRECTORY, snapshot_file))
             .expect("unable to read encoded file");
         let encoded_str = std::str::from_utf8(encoded_bytes.as_slice()).expect("valid UTF-8");
         let decoded = encoded_str
             .lines()
             .map(|s| base64::decode_config(s, base64_config).expect("valid base64"))
-            .map(|b| SourceData::decode(&b).expect("valid proto"))
-            .map(StateUpdateKindRaw::from)
+            .map(|b| SourceData::decode(&b, &relation_desc).expect("valid proto"))
+            .map(StateUpdateKindJson::from)
             .map(|raw| {
                 AllVersionsStateUpdateKind::try_from_raw(&snapshot_file, raw)
                     .expect("valid version and raw")
@@ -101,11 +110,11 @@ fn test_proto_serialization_stability() {
 /// cargo test --package mz-catalog --lib durable::upgrade::tests::generate_missing_encodings -- --ignored
 /// ```
 fn generate_missing_encodings() {
-    let protos: BTreeSet<_> = read_file_names(&PROTO_DIRECTORY, PROTO_EXT)
+    let protos: BTreeSet<_> = read_file_names(PROTO_DIRECTORY, PROTO_EXT)
         .filter(|name| name != "objects")
         .collect();
 
-    let snapshots: BTreeSet<_> = read_file_names(&SNAPSHOT_DIRECTORY, SNAPSHOT_EXT).collect();
+    let snapshots: BTreeSet<_> = read_file_names(SNAPSHOT_DIRECTORY, SNAPSHOT_EXT).collect();
 
     let unknown_snapshots: Vec<_> = snapshots.difference(&protos).collect();
     if !unknown_snapshots.is_empty() {
@@ -118,18 +127,14 @@ fn generate_missing_encodings() {
         let mut file = fs::File::options()
             .create_new(true)
             .write(true)
-            .open(format!("{}/{}.txt", *SNAPSHOT_DIRECTORY, to_encode))
+            .open(format!("{}/{}.txt", SNAPSHOT_DIRECTORY, to_encode))
             .expect("file exists");
         let encoded_datas = AllVersionsStateUpdateKind::arbitrary_vec(to_encode)
             .expect("valid version")
             .into_iter()
             .map(|kind| kind.raw())
             .map(SourceData::from)
-            .map(|source_data| {
-                let mut buf = Vec::new();
-                source_data.encode(&mut buf);
-                buf
-            })
+            .map(|source_data| source_data.encode_to_vec())
             .map(|buf| {
                 let mut encoded = String::new();
                 base64::encode_config_buf(buf.as_slice(), base64_config, &mut encoded);

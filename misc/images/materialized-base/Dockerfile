@@ -10,23 +10,54 @@
 # This is a separate mzimage so that we don't have to re-install the apt things
 # every time we get a CI builder with a cold cache.
 
-FROM cockroachdb/cockroach:v23.1.11 AS crdb
+# Package a pinned version of the console into the image, for ease of getting
+# started with Materialize. It's okay if this console lags a bit behind what's
+# deployed to production, but the version needs to be bumped whenever features
+# that the console depends upon are removed (to a version of the console that
+# doesn't depend on those features).
+FROM materialize/console:25.2.0 AS console
 
 MZFROM ubuntu-base
 
+RUN groupadd --system --gid=999 materialize \
+    && useradd --system --gid=999 --uid=999 --create-home materialize
+
+ARG CI_SANITIZER=none
+
 RUN apt-get update \
-    && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install \
+    && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install --no-install-recommends \
         ca-certificates \
         curl \
-        llvm \
-        postgresql-client-14 \
+        gettext-base \
+        nginx \
+        postgresql \
+        postgresql-contrib \
         tini \
         ssh \
-    && groupadd --system --gid=999 materialize \
-    && useradd --system --gid=999 --uid=999 --create-home materialize \
-    && mkdir /mzdata \
-    && mkdir /cockroach-data \
-    && mkdir /scratch \
-    && chown materialize /mzdata /cockroach-data /scratch
+    && if [ "$CI_SANITIZER" != "none" ]; then \
+        TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install --no-install-recommends llvm; \
+       fi \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean \
+    && mkdir -p /mzdata /scratch /var/lib/postgresql/data /var/run/postgresql /var/lib/nginx /var/log/nginx \
+    && touch /run/nginx.pid \
+    && chown -R materialize /mzdata /scratch /var/lib/postgresql/data /var/run/postgresql /var/log/postgresql /var/lib/postgresql/16/main /var/lib/nginx /var/log/nginx /run/nginx.pid
 
-COPY --from=crdb /cockroach/cockroach /usr/local/bin/cockroach
+COPY postgresql.conf pg_hba.conf /etc/postgresql/16/main/
+
+COPY --from=console /usr/share/nginx/html /usr/share/nginx/html
+COPY console_nginx.template /etc/nginx/templates/default.conf.template
+
+# Configure the console to listen on port 6874 and proxy API requests through to
+# the Materialize instance that will be started and listening for requests on
+# port 6876.
+RUN MZ_ENDPOINT=http://localhost:6876 \
+    MZ_NGINX_LISTENER_CONFIG="listen 6874;" \
+    envsubst '${MZ_ENDPOINT} ${MZ_NGINX_LISTENER_CONFIG}' < /etc/nginx/templates/default.conf.template > /etc/nginx/sites-enabled/default \
+    && rm /etc/nginx/templates/default.conf.template
+
+USER materialize
+
+RUN pg_ctlcluster 16 main start \
+    && psql -U postgres -c "CREATE ROLE root WITH LOGIN PASSWORD 'root'" \
+    && psql -U postgres -c "CREATE DATABASE root OWNER root"

@@ -73,8 +73,9 @@ class UpsertManyValueColumns(Check):
                 {{"key1": "2"}} {{ {UpsertManyValueColumns.DATA_A} }}
                 {{"key1": "3"}} {{ {UpsertManyValueColumns.DATA_A} }}
 
-                > CREATE SOURCE upsert_many_value_columns
+                > CREATE SOURCE upsert_many_value_columns_source_src
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-many-value-columns-${{testdrive.seed}}')
+                > CREATE TABLE upsert_many_value_columns FROM SOURCE upsert_many_value_columns_source_src (REFERENCE "testdrive-upsert-many-value-columns-${{testdrive.seed}}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
@@ -131,8 +132,9 @@ class UpsertManyKeyColumns(Check):
                 {{ {UpsertManyKeyColumns.KEYS_B} }} {{ "f1" : "X" }}
                 {{ {UpsertManyKeyColumns.KEYS_C} }} {{ "f1" : "X" }}
 
-                > CREATE SOURCE upsert_many_key_columns
+                > CREATE SOURCE upsert_many_key_columns_source_src
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-many-key-columns-${{testdrive.seed}}')
+                > CREATE TABLE upsert_many_key_columns FROM SOURCE upsert_many_key_columns_source_src (REFERENCE "testdrive-upsert-many-key-columns-${{testdrive.seed}}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 

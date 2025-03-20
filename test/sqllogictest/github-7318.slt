@@ -1,0 +1,110 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/7318
+
+# This query involves a 1-input join. `JoinImplementation` or other join code shouldn't choke on this.
+
+statement ok
+CREATE TABLE t1 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL);
+
+statement ok
+CREATE INDEX t1i1 ON t1(f1);
+
+statement ok
+CREATE INDEX t1i2 ON t1(f2, f1);
+
+# one NULL row in t1
+
+statement ok
+INSERT INTO t1 VALUES (NULL, 0);
+
+# values 1 and 2 have 2 rows each in t1
+
+statement ok
+INSERT INTO t1 VALUES (1, 1), (1, 1), (2, 2), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8);
+
+# value 9 not present in either table
+
+statement ok
+CREATE TABLE t2 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL);
+
+statement ok
+CREATE INDEX t2i1 ON t2(f1);
+
+statement ok
+CREATE INDEX i2i2 ON t2(f2, f1);
+
+# two NULL rows in t2
+
+statement ok
+INSERT INTO t2 VALUES (NULL, 0);
+
+statement ok
+INSERT INTO t2 VALUES (NULL, 0);
+
+statement ok
+INSERT INTO t2 VALUES (1, 1);
+
+# value 2 has 2 rows in t2
+statement ok
+INSERT INTO t2 VALUES (2, 2);
+
+statement ok
+INSERT INTO t2 VALUES (2, 2);
+
+# value 3 has no rows in t2
+statement ok
+INSERT INTO t2 VALUES (4, 4), (5, 5), (6, 6), (7, 7), (8, 8);
+
+# value 9 not present in either table
+
+statement ok
+CREATE TABLE t3 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL);
+
+statement ok
+CREATE INDEX t3i1 ON t2(f1);
+
+statement ok
+CREATE INDEX i3i2 ON t2(f2, f1);
+
+
+statement ok
+CREATE MATERIALIZED VIEW pk1 AS SELECT DISTINCT ON (f1) f1 , f2 FROM t1 WHERE f1 IS NOT NULL AND f2 IS NOT NULL;
+
+statement ok
+CREATE MATERIALIZED VIEW pk2 AS SELECT DISTINCT ON (f1) f1 , f2 FROM t2 WHERE f1 IS NOT NULL AND f2 IS NOT NULL;
+
+statement ok
+CREATE MATERIALIZED VIEW pk3 AS SELECT DISTINCT ON (f1) f1 , f2 FROM t3 WHERE f1 IS NOT NULL AND f2 IS NOT NULL;
+
+
+query RR
+SELECT
+      left_object.f1 AS f1,
+      left_object.f1 AS f2
+    FROM
+      (
+        SELECT
+          DISTINCT f2 AS f1,
+          f2 AS f2
+        FROM
+          t1
+      ) AS left_object
+      LEFT JOIN pk1 AS before ON (left_object.f1 = before.f1)
+       JOIN LATERAL (
+        SELECT
+          f2 AS f1,
+          f1 AS f2
+        FROM
+          t2
+        LIMIT
+          left_object.f1
+      ) AS right_object ON (left_object.f2 = right_object.f1) ;
+----

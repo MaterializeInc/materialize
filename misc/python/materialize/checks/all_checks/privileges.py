@@ -10,8 +10,6 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.checks.executors import Executor
-from materialize.mz_version import MzVersion
 
 
 class Privileges(Check):
@@ -34,9 +32,7 @@ class Privileges(Check):
         if expensive:
             s += dedent(
                 f"""
-                $[version<9300] postgres-execute connection=postgres://materialize@${{testdrive.materialize-sql-addr}}
-                CREATE SOURCE privilege_source{i} FROM LOAD GENERATOR COUNTER (SCALE FACTOR 0.01)
-                $[version>=9300] postgres-execute connection=postgres://materialize@${{testdrive.materialize-sql-addr}}
+                $ postgres-execute connection=postgres://materialize@${{testdrive.materialize-sql-addr}}
                 CREATE SOURCE privilege_source{i} FROM LOAD GENERATOR COUNTER
                 $ postgres-execute connection=postgres://materialize@${{testdrive.materialize-sql-addr}}
                 CREATE SINK privilege_sink{i} FROM privilege_mv{i} INTO KAFKA CONNECTION privilege_kafka_conn{i} (TOPIC 'sink-sink-privilege{i}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION privilege_csr_conn{i} ENVELOPE DEBEZIUM
@@ -125,19 +121,12 @@ class Privileges(Check):
             + "\n"
         )
 
-    def _can_run(self, e: Executor) -> bool:
-        # Privilege changes weren't persisted in some cases earlier than 0.63.0.
-        return self.base_version >= MzVersion.parse_mz("v0.63.0-dev")
-
     def initialize(self) -> Testdrive:
         return Testdrive(
             dedent(
                 """
-                $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+                $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT CREATEROLE ON SYSTEM TO materialize
-
-                $[version<5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
-                ALTER ROLE materialize CREATEROLE
 
                 > CREATE ROLE role_1
                 > CREATE ROLE role_2
@@ -154,11 +143,8 @@ class Privileges(Check):
             for s in [
                 dedent(
                     """
-                    $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+                    $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                     GRANT CREATEROLE ON SYSTEM TO materialize
-
-                    $[version<5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
-                    ALTER ROLE materialize CREATEROLE
                     """
                 )
                 + self._revoke_privileges("role_2", 1, expensive=True)
@@ -167,11 +153,8 @@ class Privileges(Check):
                 + self._grant_privileges("role_2", 2),
                 dedent(
                     """
-                    $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+                    $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                     GRANT CREATEROLE ON SYSTEM TO materialize
-
-                    $[version<5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
-                    ALTER ROLE materialize CREATEROLE
                     """
                 )
                 + self._revoke_privileges("role_2", 2)

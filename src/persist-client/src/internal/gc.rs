@@ -23,12 +23,15 @@ use prometheus::Counter;
 use timely::progress::Timestamp;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot, Semaphore};
-use tracing::{debug, debug_span, error, warn, Instrument, Span};
+use tracing::{debug, debug_span, warn, Instrument, Span};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::PartDeletes;
+use crate::cfg::GC_BLOB_DELETE_CONCURRENCY_LIMIT;
+
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashSet;
+use mz_ore::soft_assert_or_log;
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 
@@ -36,7 +39,7 @@ use crate::internal::machine::{retry_external, Machine};
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::{GcStepTimings, RetryMetrics};
 use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey};
-use crate::internal::state::{BatchPart, HollowBlobRef};
+use crate::internal::state::HollowBlobRef;
 use crate::internal::state_versions::{InspectDiff, StateVersionsIter};
 use crate::ShardId;
 
@@ -113,7 +116,7 @@ impl<K, V, T, D> GarbageCollector<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64,
 {
     pub fn new(machine: Machine<K, V, T, D>, isolated_runtime: Arc<IsolatedRuntime>) -> Self {
@@ -157,10 +160,10 @@ where
                 machine.applier.metrics.gc.started.inc();
                 let (mut maintenance, _stats) = {
                     let name = format!("gc_and_truncate ({})", &consolidated_req.shard_id);
-                    let mut machine = machine.clone();
+                    let machine = machine.clone();
                     isolated_runtime
                         .spawn_named(|| name, async move {
-                            Self::gc_and_truncate(&mut machine, consolidated_req)
+                            Self::gc_and_truncate(&machine, consolidated_req)
                                 .instrument(gc_span)
                                 .await
                         })
@@ -217,7 +220,7 @@ where
     }
 
     pub(crate) async fn gc_and_truncate(
-        machine: &mut Machine<K, V, T, D>,
+        machine: &Machine<K, V, T, D>,
         req: GcReq,
     ) -> (RoutineMaintenance, GcResults) {
         let mut step_start = Instant::now();
@@ -358,25 +361,18 @@ where
             .rollups
             .contains_key(&initial_seqno);
 
-        debug_assert!(
+        // this should never be true in the steady-state, but may be true the
+        // first time GC runs after fixing any correctness bugs related to our
+        // state version invariants. we'll make it an error so we can track
+        // any violations in Sentry, but opt not to panic because the root
+        // cause of the violation cannot be from this GC run (in fact, this
+        // GC run, assuming it's correct, should have fixed the violation!)
+        soft_assert_or_log!(
             valid_pre_gc_state,
-            "rollups = {:?}, state seqno = {}",
+            "earliest state fetched during GC did not have corresponding rollup: rollups = {:?}, state seqno = {}",
             states.state().collections.rollups,
             initial_seqno
         );
-
-        if !valid_pre_gc_state {
-            // this should never be true in the steady-state, but may be true the
-            // first time GC runs after fixing any correctness bugs related to our
-            // state version invariants. we'll make it an error so we can track
-            // any violations in Sentry, but opt not to panic because the root
-            // cause of the violation cannot be from this GC run (in fact, this
-            // GC run, assuming it's correct, should have fixed the violation!)
-            error!("earliest state fetched during GC did not have corresponding rollup: rollups = {:?}, state seqno = {}",
-                states.state().collections.rollups,
-                initial_seqno
-            );
-        }
 
         report_step_timing(
             &machine
@@ -424,7 +420,7 @@ where
             // By our invariant, `states` should always begin on a rollup.
             assert!(
                 gc_rollups.contains_seqno(&states.state().seqno),
-                "rollups = {:?}, state seqno = {}",
+                "must start with a present rollup before searching for blobs: rollups = {:#?}, state seqno = {}",
                 gc_rollups,
                 states.state().seqno
             );
@@ -456,7 +452,7 @@ where
             // to maintain our invariant.
             assert!(
                 gc_rollups.contains_seqno(&states.state().seqno),
-                "rollups = {:?}, state seqno = {}",
+                "must start with a present rollup after searching for blobs: rollups = {:#?}, state seqno = {}",
                 gc_rollups,
                 states.state().seqno
             );
@@ -467,12 +463,7 @@ where
             states.state().blobs().for_each(|blob| match blob {
                 HollowBlobRef::Batch(batch) => {
                     for live_part in &batch.parts {
-                        match live_part {
-                            BatchPart::Hollow(x) => {
-                                assert_eq!(batch_parts_to_delete.get(&x.key), None)
-                            }
-                            BatchPart::Inline { .. } => {}
-                        }
+                        assert!(!batch_parts_to_delete.contains(live_part));
                     }
                 }
                 HollowBlobRef::Rollup(live_rollup) => {
@@ -515,7 +506,7 @@ where
         truncate_lt: SeqNo,
         metrics: &GcStepTimings,
         timer: &mut F,
-        batch_parts_to_delete: &mut PartDeletes,
+        batch_parts_to_delete: &mut PartDeletes<T>,
         rollups_to_delete: &mut BTreeSet<PartialRollupKey>,
     ) where
         F: FnMut(&Counter),
@@ -550,7 +541,7 @@ where
     /// Truncates Consensus to `truncate_lt`.
     async fn delete_and_truncate<F>(
         truncate_lt: SeqNo,
-        batch_parts: &mut PartDeletes,
+        batch_parts: &mut PartDeletes<T>,
         rollups: &mut BTreeSet<PartialRollupKey>,
         machine: &Machine<K, V, T, D>,
         timer: &mut F,
@@ -558,23 +549,20 @@ where
         F: FnMut(&Counter),
     {
         let shard_id = machine.shard_id();
-        let delete_semaphore = Semaphore::new(
-            machine
-                .applier
-                .cfg
-                .dynamic
-                .gc_blob_delete_concurrency_limit(),
-        );
+        let concurrency_limit = GC_BLOB_DELETE_CONCURRENCY_LIMIT.get(&machine.applier.cfg);
+        let delete_semaphore = Semaphore::new(concurrency_limit);
 
-        Self::delete_all(
-            machine.applier.state_versions.blob.borrow(),
-            batch_parts.iter().map(|k| k.complete(&shard_id)),
-            &machine.applier.metrics.retries.external.batch_delete,
-            debug_span!("batch::delete"),
-            &delete_semaphore,
-        )
-        .await;
-        *batch_parts = PartDeletes::default();
+        let batch_parts = std::mem::take(batch_parts);
+        batch_parts
+            .delete(
+                machine.applier.state_versions.blob.borrow(),
+                shard_id,
+                concurrency_limit,
+                &*machine.applier.metrics,
+                &machine.applier.metrics.retries.external.batch_delete,
+            )
+            .instrument(debug_span!("batch::delete"))
+            .await;
         timer(&machine.applier.metrics.gc.steps.delete_batch_part_seconds);
 
         Self::delete_all(

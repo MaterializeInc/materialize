@@ -17,6 +17,7 @@
     clippy::clone_on_ref_ptr
 )]
 
+pub mod azure;
 pub mod cfg;
 pub mod error;
 pub mod file;

@@ -160,17 +160,17 @@ BEGIN
 ----
 COMPLETE 0
 
-query T rowsort
+query TT rowsort
 SHOW TABLES
 ----
-t
+t (empty)
 
 simple
 COMMIT
 ----
 COMPLETE 0
 
-# Regression for #5725
+# Regression for database-issues#1768
 statement ok
 CREATE TABLE t5727 (i INT)
 
@@ -322,6 +322,7 @@ Only the following relations are available:
 "mz_catalog.mz_views"
 "mz_internal.mz_aggregates"
 "mz_internal.mz_comments"
+"mz_internal.mz_continual_tasks"
 "mz_internal.mz_object_dependencies"
 "mz_internal.mz_type_pg_metadata"
 
@@ -573,11 +574,21 @@ BEGIN
 statement ok
 INSERT INTO foo VALUES (42)
 
-statement error write transactions only support writes to a single table
-INSERT INTO bar VALUES (42)
+statement ok
+INSERT INTO bar VALUES (43)
 
 statement ok
-ROLLBACK
+COMMIT
+
+query I
+SELECT a FROM foo
+----
+42
+
+query I
+SELECT a FROM bar
+----
+43
 
 # Test that constant reads are allowed in write-only transactions
 
@@ -743,7 +754,7 @@ COMMIT
 simple conn=c1
 SHOW tables
 ----
-t
+t,
 COMPLETE 1
 
 statement ok
@@ -782,8 +793,8 @@ COMMIT
 simple
 SHOW SOURCES
 ----
-s,load-generator,2,quickstart
-s_progress,progress,NULL,NULL
+s,load-generator,quickstart,
+s_progress,progress,NULL,
 COMPLETE 2
 
 # Test a statement that doesn't work even in this mode because of ambiguous responses.
@@ -904,12 +915,12 @@ statement ok
 SHOW VIEWS
 
 query T multiline
-EXPLAIN SELECT *, generate_series(1, 100) FROM mz_views
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT *, generate_series(1, 100) FROM mz_views
 ----
 Explained Query:
   CrossJoin type=differential
     ArrangeBy keys=[[]]
-      ReadIndex on=mz_views mz_show_views_ind=[*** full scan ***]
+      ReadIndex on=mz_views mz_views_ind=[*** full scan ***]
     ArrangeBy keys=[[]]
       Constant
         total_rows (diffs absed): 100
@@ -936,7 +947,7 @@ Explained Query:
           - (20)
 
 Used Indexes:
-  - mz_catalog.mz_show_views_ind (*** full scan ***)
+  - mz_catalog.mz_views_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 
@@ -962,15 +973,48 @@ statement ok
 SELECT * FROM t, mz_views
 
 query T multiline
-EXPLAIN SHOW VIEWS
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SHOW VIEWS
 ----
 Explained Query:
-  Project (#3)
-    Filter (#2 = "u3")
-      ReadStorage mz_catalog.mz_views
+  With
+    cte l0 =
+      Project (#0..=#2, #4)
+        Join on=(#0 = #3) type=differential
+          ArrangeBy keys=[[#0]]
+            Project (#0, #2, #3)
+              ReadStorage mz_catalog.mz_views
+          ArrangeBy keys=[[#0]]
+            Project (#0, #3)
+              Filter (#2) IS NULL AND (#1 = "view")
+                ReadStorage mz_internal.mz_comments
+    cte l1 =
+      Project (#0, #3)
+        Filter (#2 = "u3")
+          ReadStorage mz_catalog.mz_views
+  Return
+    Project (#0, #2)
+      Map (coalesce(#1, ""))
+        Union
+          Map (null)
+            Union
+              Negate
+                Project (#1)
+                  Join on=(#0 = #2) type=differential
+                    ArrangeBy keys=[[#0]]
+                      Get l1
+                    ArrangeBy keys=[[#0]]
+                      Distinct project=[#0]
+                        Project (#0)
+                          Get l0
+              Project (#1)
+                Get l1
+          Project (#2, #3)
+            Filter (#1 = "u3")
+              Get l0
 
 Source mz_catalog.mz_views
-  filter=((#2 = "u3"))
+Source mz_internal.mz_comments
+  filter=((#1 = "view") AND (#2) IS NULL)
 
 Target cluster: quickstart
 
@@ -991,10 +1035,10 @@ statement ok
 CREATE SCHEMA green;
 
 query TT
-SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
+SELECT name, id FROM mz_schemas WHERE id LIKE 'u%' ORDER BY name;
 ----
-blue  u7
-green  u8
+blue  u9
+green  u10
 public  u3
 
 statement ok
@@ -1007,10 +1051,10 @@ statement ok
 COMMIT;
 
 query TT
-SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
+SELECT name, id FROM mz_schemas WHERE id LIKE 'u%' ORDER BY name;
 ----
-blue  u8
-green  u7
+blue  u10
+green  u9
 public  u3
 
 statement ok
@@ -1026,10 +1070,10 @@ statement ok
 ROLLBACK;
 
 query TT
-SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
+SELECT name, id FROM mz_schemas WHERE id LIKE 'u%' ORDER BY name;
 ----
-blue  u8
-green  u7
+blue  u10
+green  u9
 public  u3
 
 statement ok
@@ -1052,10 +1096,10 @@ statement ok
 ROLLBACK;
 
 query TT
-SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
+SELECT name, id FROM mz_schemas WHERE id LIKE 'u%' ORDER BY name;
 ----
-blue  u8
-green  u7
+blue  u10
+green  u9
 public  u3
 
 statement ok
@@ -1080,10 +1124,10 @@ statement ok
 COMMIT;
 
 query TT
-SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
+SELECT name, id FROM mz_schemas WHERE id LIKE 'u%' ORDER BY name;
 ----
-green  u7
-orange  u8
+green  u9
+orange  u10
 public  u3
 
 statement ok
@@ -1096,10 +1140,10 @@ statement ok
 COMMIT;
 
 query TT
-SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
+SELECT name, id FROM mz_schemas WHERE id LIKE 'u%' ORDER BY name;
 ----
-green  u7
-orange  u8
+green  u9
+orange  u10
 public  u3
 
 statement ok
@@ -1117,10 +1161,10 @@ COMMIT;
 # Transaction should be rolled back and nothing should change.
 
 query TT
-SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
+SELECT name, id FROM mz_schemas WHERE id LIKE 'u%' ORDER BY name;
 ----
-green  u7
-orange  u8
+green  u9
+orange  u10
 public  u3
 
 statement ok
@@ -1239,17 +1283,17 @@ query T
 SELECT name FROM mz_columns WHERE name = 'foobar';
 ----
 
-query TTT
+query TTTT
 SHOW COLUMNS IN mz_columns
 ----
-id  false  text
-name  false  text
-position  false  uint8
-nullable  false  boolean
-type  false  text
-default  true  text
-type_oid  false  oid
-type_mod  false  integer
+id  false  text  (empty)
+name  false  text  (empty)
+position  false  uint8  (empty)
+nullable  false  boolean  (empty)
+type  false  text  (empty)
+default  true  text  (empty)
+type_oid  false  oid  (empty)
+type_mod  false  integer  (empty)
 
 statement ok
 COMMIT;

@@ -11,6 +11,14 @@ mode cockroach
 
 # We have some tests also in cockroach/like.slt, but those go through const folding. The below tests avoid const folding.
 
+# Run all tests on a multi-process cluster, because there were some serialization issues in the past that happened
+# only on multi-process clusters.
+statement ok
+CREATE CLUSTER multiprocess REPLICAS (a (SIZE '2-2'));
+
+statement ok
+SET cluster = 'multiprocess';
+
 statement ok
 CREATE TABLE t(s string, like_pat string, regex_pat string);
 
@@ -18,7 +26,7 @@ statement ok
 INSERT INTO t VALUES ('abc', 'a%', 'a.*'), ('ABC', 'a%', 'a.*'), ('ccc', 'a%', 'a.*');
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT s FROM t WHERE s LIKE 'a%';
 ----
 Explained Query:
@@ -29,7 +37,7 @@ Explained Query:
 Source materialize.public.t
   filter=(like["a%"](#0))
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -39,7 +47,7 @@ SELECT s FROM t WHERE s LIKE 'a%';
 abc
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT s FROM t WHERE s ILIKE 'a%';
 ----
 Explained Query:
@@ -50,7 +58,7 @@ Explained Query:
 Source materialize.public.t
   filter=(ilike["a%"](#0))
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -61,7 +69,7 @@ ABC
 abc
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT s FROM t WHERE s NOT ILIKE 'a%';
 ----
 Explained Query:
@@ -72,7 +80,7 @@ Explained Query:
 Source materialize.public.t
   filter=(NOT(ilike["a%"](#0)))
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -83,7 +91,7 @@ ccc
 
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT s FROM t WHERE NOT (s ILIKE 'a%');
 ----
 Explained Query:
@@ -94,14 +102,14 @@ Explained Query:
 Source materialize.public.t
   filter=(NOT(ilike["a%"](#0)))
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
 # Binary versions (MirScalarExpr::reduce changes them into unary when the pattern is a constant, which we prevent here.)
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT s FROM t WHERE s LIKE like_pat;
 ----
 Explained Query:
@@ -112,7 +120,7 @@ Explained Query:
 Source materialize.public.t
   filter=((#0 like #1))
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -122,7 +130,7 @@ SELECT s FROM t WHERE s LIKE like_pat;
 abc
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT s FROM t WHERE s ILIKE like_pat;
 ----
 Explained Query:
@@ -133,7 +141,7 @@ Explained Query:
 Source materialize.public.t
   filter=((#0 ilike #1))
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -143,7 +151,7 @@ SELECT s FROM t WHERE s ILIKE like_pat;
 ABC
 abc
 
-# Regression test for https://github.com/MaterializeInc/materialize/issues/26177
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/7790
 
 statement ok
 CREATE TABLE t2 (text_val TEXT);
@@ -206,3 +214,6 @@ SELECT text_val LIKE '%1%2%' FROM t2;
 ----
 false
 true
+
+statement ok
+DROP CLUSTER multiprocess;

@@ -1,0 +1,102 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for database-issues#7892.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_variadic_left_join_lowering TO true;
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE ft(k INT, v INT NOT NULL);
+
+statement ok
+CREATE TABLE dt(k INT, v INT NOT NULL);
+
+statement ok
+INSERT INTO ft VALUES
+  -- one NULL row in ft
+  (NULL, 0),
+  (1, 1),
+  (2, 2),
+  (3, 3),
+  (4, 4),
+  -- mixed row for 5
+  (5, 5)
+  -- 7 is not present in either table
+  ;
+
+statement ok
+INSERT INTO dt VALUES
+  (NULL, 0),
+  -- 1 not present in dt
+  (2, 2),
+  (3, 3),
+  (4, 4),
+  (NULL, 5)
+  -- 6 not present in dt
+  -- 7 is not present in either table
+  ;
+
+# The predicate on d1: (ft.k = d1.k AND ft.v = d1.k) implies a local predicate
+# on fk: (ft.k = ft.v). However, we should not filter out fk rows where this
+# predicate does not hold.
+#
+# At the moment, we `variadic_left::attempt_left_join_magic` just bails in such
+# cases.
+query IIIIII rowsort
+SELECT
+  ft.k AS ft_k,
+  ft.v AS ft_v,
+  d1.k AS d1_k,
+  d1.v AS d1_v,
+  d2.k AS d2_k,
+  d2.v AS d2_v
+FROM
+  ft
+  LEFT JOIN dt AS d1 ON (ft.k = d1.k AND ft.v = d1.k)
+  LEFT JOIN dt AS d2 ON (ft.k = d2.v);
+----
+1
+1
+NULL
+NULL
+NULL
+NULL
+2
+2
+2
+2
+2
+2
+3
+3
+3
+3
+3
+3
+4
+4
+4
+4
+4
+4
+5
+5
+NULL
+NULL
+NULL
+5
+NULL
+0
+NULL
+NULL
+NULL
+NULL

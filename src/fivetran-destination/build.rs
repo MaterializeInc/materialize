@@ -20,10 +20,23 @@ fn main() {
 
     // Build protobufs.
     {
-        env::set_var("PROTOC", mz_build_tools::protoc());
-
         let mut config = prost_build::Config::new();
-        config.btree_map(["."]);
+        config
+            .protoc_executable(mz_build_tools::protoc())
+            .btree_map(["."]);
+
+        // Bazel places the `fivetran-sdk` submodule in a slightly different place.
+        let includes_directories = if mz_build_tools::is_bazel_build() {
+            &[
+                PathBuf::from("../../../fivetran_sdk"),
+                mz_build_tools::protoc_include(),
+            ]
+        } else {
+            &[
+                PathBuf::from("../../misc/fivetran-sdk"),
+                mz_build_tools::protoc_include(),
+            ]
+        };
 
         tonic_build::configure()
             // Enabling `emit_rerun_if_changed` will rerun the build script when
@@ -32,11 +45,7 @@ fn main() {
             // is to re-run if any file in the crate changes; that's still a bit too
             // broad, but it's better.
             .emit_rerun_if_changed(false)
-            .compile_with_config(
-                config,
-                &["destination_sdk.proto"],
-                &["../../misc/fivetran-sdk"],
-            )
+            .compile_protos_with_config(config, &["destination_sdk.proto"], includes_directories)
             .unwrap();
     }
 

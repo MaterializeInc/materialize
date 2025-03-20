@@ -28,11 +28,12 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::num::FpCategory;
+use std::str::FromStr;
+use std::sync::LazyLock;
 
 use chrono::offset::{Offset, TimeZone};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use dec::OrderedDecimal;
-use fast_float::FastFloat;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::ReinterpretCast;
 use mz_ore::error::ErrorExt;
@@ -40,9 +41,8 @@ use mz_ore::fmt::FormatBuffer;
 use mz_ore::lex::LexBuf;
 use mz_ore::str::StrExt;
 use mz_pgtz::timezone::{Timezone, TimezoneSpec};
-use mz_proto::{RustType, TryFromProtoError};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use num_traits::Float as NumFloat;
-use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use regex::bytes::Regex;
 use ryu::Float as RyuFloat;
@@ -249,7 +249,7 @@ pub fn parse_oid(s: &str) -> Result<u32, ParseError> {
 
 fn parse_float<Fl>(type_name: &'static str, s: &str) -> Result<Fl, ParseError>
 where
-    Fl: NumFloat + FastFloat,
+    Fl: NumFloat + FromStr,
 {
     // Matching PostgreSQL's float parsing behavior is tricky. PostgreSQL's
     // implementation delegates almost entirely to strtof(3)/strtod(3), which
@@ -260,25 +260,28 @@ where
     //
     // To @benesch's knowledge, there is no Rust implementation of float parsing
     // that reports whether underflow or overflow occurred. So we figure it out
-    // ourselves after the fact. If fast_float returns infinity and the input
+    // ourselves after the fact. If parsing the float returns infinity and the input
     // was not an explicitly-specified infinity, then we know overflow occurred.
-    // If fast_float returns zero and the input was not an explicitly-specified
+    // If parsing the float returns zero and the input was not an explicitly-specified
     // zero, then we know underflow occurred.
 
     // Matches `0`, `-0`, `+0`, `000000.00000`, `0.0e10`, 0., .0, et al.
-    static ZERO_RE: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r#"(?i-u)^[-+]?(0+(\.0*)?|\.0+)(e|$)"#).unwrap());
+    static ZERO_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"(?i-u)^[-+]?(0+(\.0*)?|\.0+)(e|$)"#).unwrap());
     // Matches `inf`, `-inf`, `+inf`, `infinity`, et al.
-    static INF_RE: Lazy<Regex> = Lazy::new(|| Regex::new("(?i-u)^[-+]?inf").unwrap());
+    static INF_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new("(?i-u)^[-+]?inf").unwrap());
 
-    let buf = s.trim().as_bytes();
-    let f: Fl =
-        fast_float::parse(buf).map_err(|_| ParseError::invalid_input_syntax(type_name, s))?;
+    let buf = s.trim();
+    let f: Fl = buf
+        .parse()
+        .map_err(|_| ParseError::invalid_input_syntax(type_name, s))?;
     match f.classify() {
-        FpCategory::Infinite if !INF_RE.is_match(buf) => {
+        FpCategory::Infinite if !INF_RE.is_match(buf.as_bytes()) => {
             Err(ParseError::out_of_range(type_name, s))
         }
-        FpCategory::Zero if !ZERO_RE.is_match(buf) => Err(ParseError::out_of_range(type_name, s)),
+        FpCategory::Zero if !ZERO_RE.is_match(buf.as_bytes()) => {
+            Err(ParseError::out_of_range(type_name, s))
+        }
         _ => Ok(f),
     }
 }
@@ -462,7 +465,7 @@ where
 {
     let (year_ad, year) = ts.year_ce();
     write!(buf, "{:04}-{}", year, ts.format("%m-%d %H:%M:%S"));
-    format_nanos_to_micros(buf, ts.timestamp_subsec_nanos());
+    format_nanos_to_micros(buf, ts.and_utc().timestamp_subsec_nanos());
     if !year_ad {
         write!(buf, " BC");
     }
@@ -702,7 +705,7 @@ where
     F: FormatBuffer,
 {
     write!(buf, "\\x{}", hex::encode(bytes));
-    Nestable::Yes
+    Nestable::MayNeedEscaping
 }
 
 pub fn parse_jsonb(s: &str) -> Result<Jsonb, ParseError> {
@@ -1534,7 +1537,7 @@ where
     let range = match &r.inner {
         None => {
             buf.write_str("empty");
-            return Ok(Nestable::Yes);
+            return Ok(Nestable::MayNeedEscaping);
         }
         Some(i) => i,
     };
@@ -1567,7 +1570,7 @@ where
         buf.write_char(')');
     }
 
-    Ok(Nestable::Yes)
+    Ok(Nestable::MayNeedEscaping)
 }
 
 /// A helper for `format_range` that formats a single record element.
@@ -1934,9 +1937,9 @@ where
 )]
 pub struct ParseError {
     pub kind: ParseErrorKind,
-    pub type_name: String,
-    pub input: String,
-    pub details: Option<String>,
+    pub type_name: Box<str>,
+    pub input: Box<str>,
+    pub details: Option<Box<str>>,
 }
 
 #[derive(
@@ -1964,7 +1967,7 @@ impl ParseError {
     // itself stores the type name as a `String`.
     fn new<S>(kind: ParseErrorKind, type_name: &'static str, input: S) -> ParseError
     where
-        S: Into<String>,
+        S: Into<Box<str>>,
     {
         ParseError {
             kind,
@@ -1976,14 +1979,14 @@ impl ParseError {
 
     fn out_of_range<S>(type_name: &'static str, input: S) -> ParseError
     where
-        S: Into<String>,
+        S: Into<Box<str>>,
     {
         ParseError::new(ParseErrorKind::OutOfRange, type_name, input)
     }
 
     fn invalid_input_syntax<S>(type_name: &'static str, input: S) -> ParseError
     where
-        S: Into<String>,
+        S: Into<Box<str>>,
     {
         ParseError::new(ParseErrorKind::InvalidInputSyntax, type_name, input)
     }
@@ -1992,7 +1995,7 @@ impl ParseError {
     where
         D: fmt::Display,
     {
-        self.details = Some(details.to_string());
+        self.details = Some(details.to_string().into());
         self
     }
 }
@@ -2035,9 +2038,9 @@ impl RustType<ProtoParseError> for ParseError {
         };
         ProtoParseError {
             kind: Some(kind),
-            type_name: self.type_name.clone(),
-            input: self.input.clone(),
-            details: self.details.clone(),
+            type_name: self.type_name.into_proto(),
+            input: self.input.into_proto(),
+            details: self.details.into_proto(),
         }
     }
 
@@ -2050,9 +2053,9 @@ impl RustType<ProtoParseError> for ParseError {
                     OutOfRange(()) => ParseErrorKind::OutOfRange,
                     InvalidInputSyntax(()) => ParseErrorKind::InvalidInputSyntax,
                 },
-                type_name: proto.type_name,
-                input: proto.input,
-                details: proto.details,
+                type_name: proto.type_name.into(),
+                input: proto.input.into(),
+                details: proto.details.into_rust()?,
             })
         } else {
             Err(TryFromProtoError::missing_field("ProtoParseError::kind"))
@@ -2120,6 +2123,7 @@ impl RustType<ProtoParseHexError> for ParseHexError {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
@@ -2130,7 +2134,7 @@ mod tests {
         #[cfg_attr(miri, ignore)] // too slow
         fn parse_error_protobuf_roundtrip(expect in any::<ParseError>()) {
             let actual = protobuf_roundtrip::<_, ProtoParseError>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }
@@ -2140,7 +2144,7 @@ mod tests {
         #[cfg_attr(miri, ignore)] // too slow
         fn parse_hex_error_protobuf_roundtrip(expect in any::<ParseHexError>()) {
             let actual = protobuf_roundtrip::<_, ProtoParseHexError>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }

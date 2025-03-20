@@ -7,14 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::env;
+use std::path::PathBuf;
 
 fn main() {
-    env::set_var("PROTOC", mz_build_tools::protoc());
-    env::set_var("PROTOC_INCLUDE", mz_build_tools::protoc_include());
-
     let mut config = prost_build::Config::new();
     config
+        .protoc_executable(mz_build_tools::protoc())
         .btree_map(["."])
         .type_attribute(".", "#[allow(missing_docs)]");
 
@@ -30,6 +28,7 @@ fn main() {
         .extern_path(".mz_expr.id", "::mz_expr")
         .extern_path(".mz_expr.linear", "::mz_expr")
         .extern_path(".mz_expr.relation", "::mz_expr")
+        .extern_path(".mz_expr.row.collection", "::mz_expr::row")
         .extern_path(".mz_expr.scalar", "::mz_expr")
         .extern_path(".mz_kafka_util.addr", "::mz_kafka_util")
         .extern_path(".mz_persist_client", "::mz_persist_client")
@@ -40,7 +39,6 @@ fn main() {
         .extern_path(".mz_repr.global_id", "::mz_repr::global_id")
         .extern_path(".mz_repr.relation_and_scalar", "::mz_repr")
         .extern_path(".mz_repr.row", "::mz_repr")
-        .extern_path(".mz_repr.row.collection", "::mz_repr")
         .extern_path(".mz_repr.url", "::mz_repr::url")
         .extern_path(".mz_compute_types", "::mz_compute_types")
         .extern_path(".mz_cluster_client", "::mz_cluster_client")
@@ -48,7 +46,7 @@ fn main() {
         .extern_path(".mz_storage_types", "::mz_storage_types")
         .extern_path(".mz_tracing", "::mz_tracing")
         .extern_path(".mz_service", "::mz_service")
-        .compile_with_config(
+        .compile_protos_with_config(
             config,
             &[
                 "compute-client/src/logging.proto",
@@ -56,7 +54,7 @@ fn main() {
                 "compute-client/src/protocol/response.proto",
                 "compute-client/src/service.proto",
             ],
-            &[".."],
+            &[PathBuf::from(".."), mz_build_tools::protoc_include()],
         )
         .unwrap_or_else(|e| panic!("{e}"));
 }

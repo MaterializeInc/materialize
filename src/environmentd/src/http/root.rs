@@ -18,7 +18,6 @@ use crate::BUILD_INFO;
 #[template(path = "home.html")]
 struct HomeTemplate<'a> {
     version: &'a str,
-    build_time: &'a str,
     build_sha: &'static str,
     profiling: bool,
 }
@@ -26,14 +25,14 @@ struct HomeTemplate<'a> {
 pub async fn handle_home(profiling: bool) -> impl IntoResponse {
     mz_http_util::template_response(HomeTemplate {
         version: BUILD_INFO.version,
-        build_time: BUILD_INFO.time,
         build_sha: BUILD_INFO.sha,
         profiling,
     })
 }
 
 mz_http_util::make_handle_static!(
-    include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/http/static"),
-    "src/http/static",
-    "src/http/static-dev"
+    dir_1: ::include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/http/static"),
+    dir_2: ::include_dir::include_dir!("$OUT_DIR/src/http/static"),
+    prod_base_path: "src/http/static",
+    dev_base_path: "src/http/static-dev",
 );

@@ -28,7 +28,7 @@ statement ok
 INSERT INTO t3 VALUES (2, 3), (5, 5);
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 INNER JOIN t2 ON t2.f2 = t1.f2 INNER JOIN t3 ON t1.f1 = t3.f1 WHERE t1.f1 <= t2.f1 AND t3.f1 > 0;
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 INNER JOIN t2 ON t2.f2 = t1.f2 INNER JOIN t3 ON t1.f1 = t3.f1 WHERE t1.f1 <= t2.f1 AND t3.f1 > 0;
 ----
 Explained Query:
   Project (#0..=#2, #1, #0, #5) // { arity: 6 }
@@ -65,7 +65,7 @@ SELECT * FROM t1 INNER JOIN t2 ON t2.f2 = t1.f2 INNER JOIN t3 ON t1.f1 = t3.f1 W
 2  3  2  3  2  3
 
 #
-# Additional queries that came out of the randomized testing of #6936
+# Additional queries that came out of the randomized testing of materialize#6936
 #
 
 #
@@ -109,7 +109,7 @@ statement ok
 CREATE INDEX fk_lineitem_partsuppkey ON lineitem (l_partkey ASC, l_suppkey ASC);
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM lineitem
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM lineitem
   JOIN orders ON ( l_orderkey = o_orderkey )
   JOIN customer ON ( c_acctbal >= o_totalprice )
   WHERE l_shipDATE <> o_orderdate
@@ -120,28 +120,27 @@ Explained Query:
     Filter (#5 != #11) AND (#14 >= #10) // { arity: 15 }
       Join on=(#0 = #8 AND date_to_timestamp(#11) = (#5 - 9 months)) type=delta // { arity: 15 }
         implementation
-          %0:lineitem » %1:orders[#0, date_to_timestamp(#3)]KK » %2:customer[×]
-          %1:orders » %0:lineitem[#0, (#5 - 9 months)]KK » %2:customer[×]
-          %2:customer » %0:lineitem[×] » %1:orders[#0, date_to_timestamp(#3)]KK
-        ArrangeBy keys=[[], [#0, (#5 - 9 months)]] // { arity: 8 }
-          ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 8 }
-        ArrangeBy keys=[[#0, date_to_timestamp(#3)]] // { arity: 4 }
-          Filter (#0) IS NOT NULL // { arity: 4 }
-            ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 4 }
+          %0:lineitem » %1:orders[#0]KA » %2:customer[×]
+          %1:orders » %0:lineitem[#0]KA » %2:customer[×]
+          %2:customer » %0:lineitem[×] » %1:orders[#0]KA
+        ArrangeBy keys=[[], [#0]] // { arity: 8 }
+          ReadIndex on=lineitem fk_lineitem_orderkey=[*** full scan ***, delta join lookup] // { arity: 8 }
+        ArrangeBy keys=[[#0]] // { arity: 4 }
+          ReadIndex on=orders pk_orders_orderkey=[delta join lookup] // { arity: 4 }
         ArrangeBy keys=[[]] // { arity: 3 }
           ReadIndex on=customer pk_customer_custkey=[*** full scan ***] // { arity: 3 }
 
 Used Indexes:
   - materialize.public.pk_customer_custkey (*** full scan ***)
-  - materialize.public.pk_orders_orderkey (*** full scan ***)
-  - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
+  - materialize.public.pk_orders_orderkey (delta join lookup)
+  - materialize.public.fk_lineitem_orderkey (*** full scan ***, delta join lookup)
 
 Target cluster: quickstart
 
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT  MIN( o_orderkey  )
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT  MIN( o_orderkey  )
   FROM lineitem  JOIN orders  ON ( l_extendedprice  = o_totalprice  )
   WHERE l_commitDATE  = '1997-01-25'
   AND o_orderkey  BETWEEN  38  AND  195
@@ -149,17 +148,10 @@ EXPLAIN WITH(arity, join implementations) SELECT  MIN( o_orderkey  )
   AND o_orderkey  = (  SELECT l_orderkey  FROM lineitem  WHERE l_orderkey  =  38  )
 ----
 Explained Query:
-  Return // { arity: 1 }
-    Union // { arity: 1 }
-      Get l1 // { arity: 1 }
-      Map (null) // { arity: 1 }
-        Union // { arity: 0 }
-          Negate // { arity: 0 }
-            Project () // { arity: 0 }
-              Get l1 // { arity: 1 }
-          Constant // { arity: 0 }
-            - ()
   With
+    cte l0 =
+      Project (#0) // { arity: 1 }
+        ReadIndex on=materialize.public.lineitem fk_lineitem_orderkey=[lookup value=(38)] // { arity: 9 }
     cte l1 =
       Reduce aggregates=[min(#0)] // { arity: 1 }
         Project (#1) // { arity: 1 }
@@ -178,16 +170,23 @@ Explained Query:
                   ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 4 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Union // { arity: 1 }
-                Project (#0) // { arity: 1 }
-                  Get l0 // { arity: 9 }
+                Get l0 // { arity: 1 }
                 Map (error("more than one record produced in subquery")) // { arity: 1 }
                   Project () // { arity: 0 }
                     Filter error("more than one record produced in subquery") AND (#0 > 1) // { arity: 1 }
                       Reduce aggregates=[count(*)] // { arity: 1 }
                         Project () // { arity: 0 }
-                          Get l0 // { arity: 9 }
-    cte l0 =
-      ReadIndex on=materialize.public.lineitem fk_lineitem_orderkey=[lookup value=(38)] // { arity: 9 }
+                          Get l0 // { arity: 1 }
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Get l1 // { arity: 1 }
+      Map (null) // { arity: 1 }
+        Union // { arity: 0 }
+          Negate // { arity: 0 }
+            Project () // { arity: 0 }
+              Get l1 // { arity: 1 }
+          Constant // { arity: 0 }
+            - ()
 
 Used Indexes:
   - materialize.public.pk_orders_orderkey (*** full scan ***)
@@ -198,7 +197,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT l_partkey AS col24843 , l_orderkey AS col24844 , l_partkey AS col24845
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT l_partkey AS col24843 , l_orderkey AS col24844 , l_partkey AS col24845
   FROM lineitem JOIN orders ON ( l_commitDATE = o_orderdate )
   JOIN customer ON ( o_custkey = c_custkey )
   WHERE l_extendedprice = o_totalprice
@@ -206,6 +205,11 @@ EXPLAIN WITH(arity, join implementations) SELECT l_partkey AS col24843 , l_order
   AND l_extendedprice = MOD (o_totalprice , 5 ) ;
 ----
 Explained Query:
+  With
+    cte l0 =
+      ArrangeBy keys=[[#0]] // { arity: 1 }
+        Constant // { arity: 1 }
+          - (134)
   Return // { arity: 3 }
     Project (#1, #0, #1) // { arity: 3 }
       Join on=(#2 = #4 AND #3 = #5) type=delta // { arity: 6 }
@@ -224,11 +228,6 @@ Explained Query:
         ArrangeBy keys=[[]] // { arity: 0 }
           Project () // { arity: 0 }
             ReadIndex on=materialize.public.customer pk_customer_custkey=[lookup values=<Get l0>] // { arity: 4 }
-  With
-    cte l0 =
-      ArrangeBy keys=[[#0]] // { arity: 1 }
-        Constant // { arity: 1 }
-          - (134)
 
 Used Indexes:
   - materialize.public.pk_customer_custkey (lookup)
@@ -240,7 +239,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT *
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT *
   FROM lineitem JOIN orders ON ( l_extendedprice = o_totalprice )
   JOIN customer ON ( o_custkey = c_custkey )
   WHERE o_custkey = 229
@@ -248,6 +247,11 @@ EXPLAIN WITH(arity, join implementations) SELECT *
   AND l_shipDATE = o_orderdate;
 ----
 Explained Query:
+  With
+    cte l0 =
+      ArrangeBy keys=[[#0]] // { arity: 1 }
+        Constant // { arity: 1 }
+          - (229)
   Return // { arity: 15 }
     Project (#0..=#9, #4, #5, #12..=#14) // { arity: 15 }
       Join on=(#4 = #10 AND #5 = #11) type=delta // { arity: 15 }
@@ -264,11 +268,6 @@ Explained Query:
         ArrangeBy keys=[[]] // { arity: 3 }
           Project (#0..=#2) // { arity: 3 }
             ReadIndex on=materialize.public.customer pk_customer_custkey=[lookup values=<Get l0>] // { arity: 4 }
-  With
-    cte l0 =
-      ArrangeBy keys=[[#0]] // { arity: 1 }
-        Constant // { arity: 1 }
-          - (229)
 
 Used Indexes:
   - materialize.public.pk_customer_custkey (lookup)
@@ -284,7 +283,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 AS a1, t1 AS a2
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 AS a1, t1 AS a2
 WHERE a2.f1 + a1.f2 = (SELECT 1)
 AND a2.f1 IS NULL;
 ----

@@ -9,7 +9,6 @@
 
 
 from materialize.checks.actions import Action, Initialize, Manipulate, Sleep, Validate
-from materialize.checks.all_checks.statement_logging import StatementLogging
 from materialize.checks.checks import Check
 from materialize.checks.executors import Executor
 from materialize.checks.mzcompose_actions import (
@@ -23,7 +22,8 @@ from materialize.checks.mzcompose_actions import (
 )
 from materialize.checks.scenarios import Scenario
 from materialize.mz_version import MzVersion
-from materialize.version_list import get_published_minor_mz_versions
+from materialize.mzcompose.services.materialized import LEADER_STATUS_HEALTHCHECK
+from materialize.version_list import LTS_VERSIONS, get_published_minor_mz_versions
 
 # late initialization
 _minor_versions: list[MzVersion] | None = None
@@ -34,9 +34,14 @@ _previous_version: MzVersion | None = None
 def get_minor_versions() -> list[MzVersion]:
     global _minor_versions
     if _minor_versions is None:
-        _minor_versions = get_published_minor_mz_versions(
-            limit=4, exclude_current_minor_version=True
-        )
+        current_version = MzVersion.parse_cargo()
+        _minor_versions = [
+            v
+            for v in get_published_minor_mz_versions(
+                limit=4, exclude_current_minor_version=True
+            )
+            if v < current_version
+        ]
     return _minor_versions
 
 
@@ -54,6 +59,64 @@ def get_previous_version() -> MzVersion:
     return _previous_version
 
 
+def start_mz_read_only(
+    scenario: Scenario,
+    deploy_generation: int,
+    mz_service: str = "materialized",
+    tag: MzVersion | None = None,
+    system_parameter_defaults: dict[str, str] | None = None,
+    system_parameter_version: MzVersion | None = None,
+    force_migrations: str | None = None,
+    publish: bool | None = None,
+) -> StartMz:
+    return StartMz(
+        scenario,
+        tag=tag,
+        mz_service=mz_service,
+        deploy_generation=deploy_generation,
+        healthcheck=LEADER_STATUS_HEALTHCHECK,
+        restart="on-failure",
+        system_parameter_defaults=system_parameter_defaults,
+        system_parameter_version=system_parameter_version,
+        force_migrations=force_migrations,
+        publish=publish,
+    )
+
+
+class UpgradeEntireMzFromLatestLTS(Scenario):
+    """Upgrade the entire Mz instance from the last LTS version without any intermediate steps. This makes sure our LTS releases for self-managed Materialize stay upgradable."""
+
+    def base_version(self) -> MzVersion:
+        return LTS_VERSIONS[-1]
+
+    def actions(self) -> list[Action]:
+        print(f"Upgrading from tag {self.base_version()}")
+        return [
+            StartMz(
+                self,
+                tag=self.base_version(),
+            ),
+            Initialize(self),
+            Manipulate(self, phase=1),
+            KillMz(
+                capture_logs=True
+            ),  #  We always use True here otherwise docker-compose will lose the pre-upgrade logs
+            StartMz(
+                self,
+                tag=None,
+            ),
+            Manipulate(self, phase=2),
+            Validate(self),
+            # A second restart while already on the new version
+            KillMz(capture_logs=True),
+            StartMz(
+                self,
+                tag=None,
+            ),
+            Validate(self),
+        ]
+
+
 class UpgradeEntireMz(Scenario):
     """Upgrade the entire Mz instance from the last released version."""
 
@@ -63,18 +126,27 @@ class UpgradeEntireMz(Scenario):
     def actions(self) -> list[Action]:
         print(f"Upgrading from tag {self.base_version()}")
         return [
-            StartMz(self, tag=self.base_version()),
+            StartMz(
+                self,
+                tag=self.base_version(),
+            ),
             Initialize(self),
             Manipulate(self, phase=1),
             KillMz(
                 capture_logs=True
             ),  #  We always use True here otherwise docker-compose will lose the pre-upgrade logs
-            StartMz(self, tag=None),
+            StartMz(
+                self,
+                tag=None,
+            ),
             Manipulate(self, phase=2),
             Validate(self),
             # A second restart while already on the new version
             KillMz(capture_logs=True),
-            StartMz(self, tag=None),
+            StartMz(
+                self,
+                tag=None,
+            ),
             Validate(self),
         ]
 
@@ -90,20 +162,32 @@ class UpgradeEntireMzTwoVersions(Scenario):
         print(f"Upgrade path: {self.base_version()} -> {get_last_version()} -> current")
         return [
             # Start with previous_version
-            StartMz(self, tag=self.base_version()),
+            StartMz(
+                self,
+                tag=self.base_version(),
+            ),
             Initialize(self),
             # Upgrade to last_version
             KillMz(capture_logs=True),
-            StartMz(self, tag=get_last_version()),
+            StartMz(
+                self,
+                tag=get_last_version(),
+            ),
             Manipulate(self, phase=1),
             # Upgrade to current source
             KillMz(capture_logs=True),
-            StartMz(self, tag=None),
+            StartMz(
+                self,
+                tag=None,
+            ),
             Manipulate(self, phase=2),
             Validate(self),
             # A second restart while already on the current source
             KillMz(),
-            StartMz(self, tag=None),
+            StartMz(
+                self,
+                tag=None,
+            ),
             Validate(self),
         ]
 
@@ -112,10 +196,14 @@ class UpgradeEntireMzFourVersions(Scenario):
     """Test upgrade X-4 -> X-3 -> X-2 -> X-1 -> X"""
 
     def __init__(
-        self, checks: list[type[Check]], executor: Executor, seed: str | None = None
+        self,
+        checks: list[type[Check]],
+        executor: Executor,
+        azurite: bool,
+        seed: str | None = None,
     ):
         self.minor_versions = get_minor_versions()
-        super().__init__(checks, executor, seed)
+        super().__init__(checks, executor, azurite, seed)
 
     def base_version(self) -> MzVersion:
         return self.minor_versions[3]
@@ -125,21 +213,39 @@ class UpgradeEntireMzFourVersions(Scenario):
             f"Upgrade path: {self.minor_versions[3]} -> {self.minor_versions[2]} -> {get_previous_version()} -> {get_last_version()} -> current"
         )
         return [
-            StartMz(self, tag=self.minor_versions[3]),
+            StartMz(
+                self,
+                tag=self.minor_versions[3],
+            ),
             Initialize(self),
             KillMz(capture_logs=True),
-            StartMz(self, tag=self.minor_versions[2]),
+            StartMz(
+                self,
+                tag=self.minor_versions[2],
+            ),
             Manipulate(self, phase=1),
             KillMz(capture_logs=True),
-            StartMz(self, tag=get_previous_version()),
+            StartMz(
+                self,
+                tag=get_previous_version(),
+            ),
             Manipulate(self, phase=2),
             KillMz(capture_logs=True),
-            StartMz(self, tag=get_last_version()),
+            StartMz(
+                self,
+                tag=get_last_version(),
+            ),
             KillMz(capture_logs=True),
-            StartMz(self, tag=None),
+            StartMz(
+                self,
+                tag=None,
+            ),
             Validate(self),
             KillMz(),
-            StartMz(self, tag=None),
+            StartMz(
+                self,
+                tag=None,
+            ),
             Validate(self),
         ]
 
@@ -161,13 +267,20 @@ class UpgradeClusterdComputeLast(Scenario):
 
     def actions(self) -> list[Action]:
         return [
-            StartMz(self, tag=self.base_version()),
+            StartMz(
+                self,
+                tag=self.base_version(),
+            ),
             StartClusterdCompute(tag=self.base_version()),
             UseClusterdCompute(self),
             Initialize(self),
             Manipulate(self, phase=1),
             KillMz(capture_logs=True),
-            StartMz(self, tag=None),
+            StartMz(
+                self,
+                tag=None,
+                system_parameter_version=self.base_version(),
+            ),
             # No useful work can be done while clusterd is old-version
             # and environmentd is new-version. So we proceed
             # to upgrade clusterd as well.
@@ -180,7 +293,10 @@ class UpgradeClusterdComputeLast(Scenario):
             Validate(self),
             # A second restart while already on the new version
             KillMz(),
-            StartMz(self, tag=None),
+            StartMz(
+                self,
+                tag=None,
+            ),
             Validate(self),
         ]
 
@@ -193,7 +309,10 @@ class UpgradeClusterdComputeFirst(Scenario):
 
     def actions(self) -> list[Action]:
         return [
-            StartMz(self, tag=self.base_version()),
+            StartMz(
+                self,
+                tag=self.base_version(),
+            ),
             StartClusterdCompute(tag=self.base_version()),
             UseClusterdCompute(self),
             Initialize(self),
@@ -207,11 +326,17 @@ class UpgradeClusterdComputeFirst(Scenario):
             # though we are not issuing queries during that time.
             Sleep(10),
             KillMz(),
-            StartMz(self, tag=None),
+            StartMz(
+                self,
+                tag=None,
+            ),
             Manipulate(self, phase=2),
             Validate(self),
             KillMz(),
-            StartMz(self, tag=None),
+            StartMz(
+                self,
+                tag=None,
+            ),
             Validate(self),
         ]
 
@@ -226,35 +351,21 @@ class PreflightCheckContinue(Scenario):
         if not super()._include_check_class(check_class):
             return False
 
-        if (
-            check_class == StatementLogging
-            and self.base_version() == MzVersion.parse_mz("v0.89.2")
-        ):
-            # mz_version column was added to mz_statement_execution_history, history will be lost when a new column is added to the objects
-            return False
-
         return True
 
     def actions(self) -> list[Action]:
         print(f"Upgrading from tag {self.base_version()}")
         return [
-            StartMz(self, tag=self.base_version()),
+            StartMz(
+                self,
+                tag=self.base_version(),
+            ),
             Initialize(self),
             Manipulate(self, phase=1),
             KillMz(
                 capture_logs=True
             ),  #  We always use True here otherwise docker-compose will lose the pre-upgrade logs
-            StartMz(
-                self,
-                tag=None,
-                environment_extra=["MZ_DEPLOY_GENERATION=1"],
-                healthcheck=[
-                    "CMD",
-                    "curl",
-                    "-f",
-                    "localhost:6878/api/leader/status",
-                ],
-            ),
+            start_mz_read_only(self, tag=None, deploy_generation=1),
             WaitReadyMz(),
             PromoteMz(),
             Manipulate(self, phase=2),
@@ -264,7 +375,7 @@ class PreflightCheckContinue(Scenario):
             StartMz(
                 self,
                 tag=None,
-                environment_extra=["MZ_DEPLOY_GENERATION=1"],
+                deploy_generation=1,
             ),
             Validate(self),
         ]
@@ -279,7 +390,55 @@ class PreflightCheckRollback(Scenario):
     def actions(self) -> list[Action]:
         print(f"Upgrading from tag {self.base_version()}")
         return [
-            StartMz(self, tag=self.base_version()),
+            StartMz(
+                self,
+                tag=self.base_version(),
+            ),
+            Initialize(self),
+            Manipulate(self, phase=1),
+            KillMz(
+                capture_logs=True
+            ),  #  We always use True here otherwise docker-compose will lose the pre-upgrade logs
+            start_mz_read_only(
+                self,
+                tag=None,
+                deploy_generation=1,
+                system_parameter_version=self.base_version(),
+            ),
+            WaitReadyMz(),
+            KillMz(capture_logs=True),
+            StartMz(
+                self,
+                tag=self.base_version(),
+            ),
+            Manipulate(self, phase=2),
+            Validate(self),
+            # A second restart while still on old version
+            KillMz(capture_logs=True),
+            StartMz(
+                self,
+                tag=self.base_version(),
+            ),
+            Validate(self),
+        ]
+
+
+class ActivateSourceVersioningMigration(Scenario):
+    """
+    Starts MZ, initializes and manipulates, then forces the migration
+    of sources to the new table model (introducing Source Versioning).
+    """
+
+    def base_version(self) -> MzVersion:
+        return get_last_version()
+
+    def actions(self) -> list[Action]:
+        print(f"Upgrading from tag {self.base_version()}")
+        return [
+            StartMz(
+                self,
+                tag=self.base_version(),
+            ),
             Initialize(self),
             Manipulate(self, phase=1),
             KillMz(
@@ -288,24 +447,23 @@ class PreflightCheckRollback(Scenario):
             StartMz(
                 self,
                 tag=None,
-                environment_extra=["MZ_DEPLOY_GENERATION=1"],
-                healthcheck=[
-                    "CMD",
-                    "curl",
-                    "-f",
-                    "localhost:6878/api/leader/status",
-                ],
+                # Activate the `force_source_table_syntax` flag
+                # which should trigger the migration of sources
+                # using the old syntax to the new table model.
+                additional_system_parameter_defaults={
+                    "force_source_table_syntax": "true",
+                },
             ),
-            WaitReadyMz(),
-            KillMz(capture_logs=True),
-            StartMz(self, tag=self.base_version()),
             Manipulate(self, phase=2),
             Validate(self),
-            # A second restart while still on old version
+            # A second restart while already on the new version
             KillMz(capture_logs=True),
             StartMz(
                 self,
-                tag=self.base_version(),
+                tag=None,
+                additional_system_parameter_defaults={
+                    "force_source_table_syntax": "true",
+                },
             ),
             Validate(self),
         ]

@@ -13,6 +13,7 @@ use differential_dataflow::trace::Description;
 use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::cast::CastFrom;
 use mz_persist::indexed::columnar::ColumnarRecordsBuilder;
+use mz_persist::indexed::encoding::BlobTraceUpdates;
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
@@ -149,7 +150,7 @@ impl ProjectionPushdown {
 
         let mut faked_data = ColumnarRecordsBuilder::default();
         assert!(faked_data.push(((key_bytes, val_bytes), T::encode(as_of), diffs_sum)));
-        let updates = faked_data.finish(&metrics.columnar).into_proto();
+        let updates = BlobTraceUpdates::Row(faked_data.finish(&metrics.columnar)).into_proto();
         let faked_data = LazyInlineBatchPart::from(&ProtoInlineBatchPart {
             desc: Some(desc.into_proto()),
             index: 0,
@@ -158,6 +159,8 @@ impl ProjectionPushdown {
         Some(BatchPart::Inline {
             updates: faked_data,
             ts_rewrite: None,
+            schema_id: None,
+            deprecated_schema_id: None,
         })
     }
 }
@@ -176,8 +179,9 @@ pub fn error_free(part_stats: Option<PartStats>, err_col_name: &str) -> Option<b
     // The number of OKs is the number of rows whose error is None.
     let num_oks = part_stats
         .key
-        .col::<Option<Vec<u8>>>(err_col_name)
+        .col(err_col_name)?
+        .try_as_optional_bytes()
         .expect("err column should be a Option<Vec<u8>>")
-        .map(|x| x.none)?;
+        .none;
     Some(num_results == num_oks)
 }

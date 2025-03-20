@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Test that setting feature flags works
+"""
+
 import argparse
 from textwrap import dedent, indent
 
@@ -197,12 +201,12 @@ class FeatureTestScenario:
     @classmethod
     def feature_name(cls) -> str:
         """The name of the feature flag under test."""
-        assert False, "feature_name() must be overriden"
+        raise NotImplementedError
 
     @classmethod
     def feature_error(cls) -> str:
         """The error expected when the feature is disabled."""
-        assert False, "feature_error() must be overriden"
+        raise NotImplementedError
 
     @classmethod
     def initialize(cls) -> str:
@@ -212,17 +216,17 @@ class FeatureTestScenario:
     @classmethod
     def create_item(cls, ordinal: int) -> str:
         """A SQL statement that creates an item that depends on the feature."""
-        assert False, "create_item() must be overriden"
+        raise NotImplementedError
 
     @classmethod
     def drop_item(cls, ordinal: int) -> str:
         """A SQL statement that drops an item that depends on the feature."""
-        assert False, "drop_item() must be overriden"
+        raise NotImplementedError
 
     @classmethod
     def query_item(cls, ordinal: int) -> str:
         """A SQL query referencing an item that depends on the feature."""
-        assert False, "query_item() must be overriden"
+        raise NotImplementedError
 
 
 def run_test(c: Composition, args: argparse.Namespace) -> None:

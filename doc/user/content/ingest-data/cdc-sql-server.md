@@ -15,8 +15,12 @@ menu:
 
 Change Data Capture (CDC) allows you to track and propagate changes in a SQL
 Server database to downstream consumers. In this guide, we’ll cover how to use
-Materialize to create and efficiently maintain real-time materialized views on
-top of CDC data.
+Materialize to create and efficiently maintain real-time views with
+incrementally updated results on top of CDC data.
+
+{{< tip >}}
+{{< guided-tour-blurb-for-ingest-data >}}
+{{< /tip >}}
 
 ## Kafka + Debezium
 
@@ -154,7 +158,7 @@ information about upstream database operations, like the `before` and `after`
 values for each record. To create a source that interprets the
 [Debezium envelope](/sql/create-source/kafka/#using-debezium) in Materialize:
 
-```sql
+```mzsql
 CREATE SOURCE kafka_repl
     FROM KAFKA CONNECTION kafka_connection (TOPIC 'server1.testDB.tableName')
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
@@ -164,26 +168,13 @@ CREATE SOURCE kafka_repl
 By default, the source will be created in the active cluster; to use a different
 cluster, use the `IN CLUSTER` clause.
 
-#### Transaction support
+### Create a view
 
-Debezium provides [transaction metadata](https://debezium.io/documentation/reference/connectors/sqlserver.html#sqlserver-transaction-metadata)
-that can be used to preserve transactional boundaries downstream. Work is in
-progress to utilize this topic to support transaction-aware processing in
-[Materialize #7537](https://github.com/MaterializeInc/materialize/issues/7537)!
+{{% ingest-data/ingest-data-kafka-debezium-view %}}
 
-### Create a materialized view
+### Create an index on the view
 
-Any materialized view defined on top of this source will be incrementally
-updated as new change events stream in through Kafka, resulting from `INSERT`,
-`UPDATE`, and `DELETE` operations in the original SQL Server database.
-
-```sql
-CREATE MATERIALIZED VIEW cnt_table AS
-    SELECT field1,
-           COUNT(*) AS cnt
-    FROM kafka_repl
-    GROUP BY field1;
-```
+{{% ingest-data/ingest-data-kafka-debezium-index %}}
 
 ## Known limitations
 
@@ -204,5 +195,5 @@ initial snapshot for all tables has been completed.
 
 ##### Supported types
 
-`DATETIMEOFFSET` columns are replicated as `text` {{% gh 8017 %}}, and
-`DATETIME2` columns are replicated as `bigint` {{% gh 8041 %}} in Materialize.
+`DATETIMEOFFSET` columns are replicated as `text`, and
+`DATETIME2` columns are replicated as `bigint` in Materialize.

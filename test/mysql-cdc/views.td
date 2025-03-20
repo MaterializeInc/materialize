@@ -10,8 +10,6 @@
 $ set-sql-timeout duration=1s
 $ set-max-tries max-tries=20
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_mysql_source = true
 
 #
 # Test that views are not replicated
@@ -37,9 +35,10 @@ INSERT INTO t1 VALUES (true), (false);
 
 CREATE VIEW v1 (f1) AS SELECT f1 FROM t1;
 
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR SCHEMAS (public);
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 
-! SELECT * FROM v1;
-contains:unknown catalog item 'v1'
+! CREATE TABLE v1 FROM SOURCE mz_source (REFERENCE public.v1);
+contains:reference to public.v1 not found in source
+
+! CREATE VIEW v1 FROM SOURCE mz_source (REFERENCE public.v1);
+contains:Expected AS, found FROM

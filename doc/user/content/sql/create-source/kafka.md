@@ -2,6 +2,12 @@
 title: "CREATE SOURCE: Kafka"
 description: "Connecting Materialize to a Kafka or Redpanda broker"
 pagerank: 40
+menu:
+  main:
+    parent: 'create-source'
+    identifier: cs_kafka
+    name: Kafka
+    weight: 20
 aliases:
     - /sql/create-source/avro-kafka
     - /sql/create-source/json-kafka
@@ -11,11 +17,15 @@ aliases:
 ---
 
 {{% create-source/intro %}}
-To connect to a Kafka broker (and optionally a schema registry), you first need to [create a connection](#creating-a-connection) that specifies access and authentication parameters. Once created, a connection is **reusable** across multiple `CREATE SOURCE` and `CREATE SINK` statements.
+To connect to a Kafka broker (and optionally a schema registry), you first need
+to [create a connection](#creating-a-connection) that specifies access and
+authentication parameters. Once created, a connection is **reusable** across
+multiple `CREATE SOURCE` and `CREATE SINK` statements.
 {{% /create-source/intro %}}
 
 {{< note >}}
-The same syntax, supported formats and features can be used to connect to a [Redpanda](/integrations/redpanda/) broker.
+The same syntax, supported formats and features can be used to connect to a
+[Redpanda](/integrations/redpanda/) broker.
 {{</ note >}}
 
 ## Syntax
@@ -50,7 +60,7 @@ Field                                         | Value     | Description
 ----------------------------------------------|-----------|-------------------------------------
 **TOPIC**                                     | `text`    | The Kafka topic you want to subscribe to.
 **GROUP ID PREFIX**                           | `text`    | The prefix of the consumer group ID to use. See [Monitoring consumer lag](#monitoring-consumer-lag).<br>Default: `materialize-{REGION-ID}-{CONNECTION-ID}-{SOURCE_ID}`
-**RETAIN HISTORY FOR** <br>_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data for performing [time travel queries](/transform-data/patterns/time-travel-queries). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+**RETAIN HISTORY FOR** <br>_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
 
 ## Supported formats
 
@@ -64,15 +74,19 @@ Field                                         | Value     | Description
 
 ### Key-value encoding
 
-By default, the message key is decoded using the same format as the message value. However, you can set the key and value encodings explicitly using the `KEY FORMAT ... VALUE FORMAT` [syntax](#syntax).
+By default, the message key is decoded using the same format as the message
+value. However, you can set the key and value encodings explicitly using the
+`KEY FORMAT ... VALUE FORMAT` [syntax](#syntax).
 
 ## Features
 
 ### Handling upserts
 
-To create a source that uses the standard key-value convention to support inserts, updates, and deletes within Materialize, you can use `ENVELOPE UPSERT`:
+To create a source that uses the standard key-value convention to support
+inserts, updates, and deletes within Materialize, you can use `ENVELOPE
+UPSERT`:
 
-```sql
+```mzsql
 CREATE SOURCE kafka_upsert
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'events')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
@@ -82,6 +96,7 @@ CREATE SOURCE kafka_upsert
 Note that:
 
 - Using this envelope is required to consume [log compacted topics](https://docs.confluent.io/platform/current/kafka/design.html#log-compaction).
+
 - This envelope can lead to high memory and disk utilization in the cluster
   maintaining the source. We recommend using a standard-sized cluster, rather
   than a legacy-sized cluster, to automatically spill the workload to disk. See
@@ -104,27 +119,75 @@ echo ":" | kcat -b $BROKER -t $TOPIC -Z -K: \
   -X sasl.password=$KAFKA_PASSWORD
 ```
 
+#### Value decoding errors
+
+{{< private-preview />}}
+
+By default, if an error happens while decoding the value of a message for a
+specific key, Materialize sets the source into an error state. You can
+configure the source to continue ingesting data in the presence of value
+decoding errors using the `VALUE DECODING ERRORS = INLINE` option:
+
+```mzsql
+CREATE SOURCE kafka_upsert
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'events')
+  KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  ENVELOPE UPSERT (VALUE DECODING ERRORS = INLINE);
+```
+
+When this option is specified the source will include an additional column named
+`error` with type `record(description: text)`.
+
+This column and all value columns will be nullable, such that if the most recent value
+for the given Kafka message key cannot be decoded, this `error` column will contain
+the error message. If the most recent value for a key has been successfully decoded,
+this column will be `NULL`.
+
+To use an alternative name for the error column, use `INLINE AS ..` to specify the
+column name to use:
+
+```mzsql
+ENVELOPE UPSERT (VALUE DECODING ERRORS = (INLINE AS my_error_col))
+```
+
+It might be convenient to implement a parsing view on top of your Kafka upsert source that
+excludes keys with decoding errors:
+
+```mzsql
+CREATE VIEW kafka_upsert_parsed
+SELECT *
+FROM kafka_upsert
+WHERE error IS NULL;
+```
+
 ### Using Debezium
 
 {{< debezium-json >}}
 
-Materialize provides a dedicated envelope (`ENVELOPE DEBEZIUM`) to decode Kafka messages produced by [Debezium](https://debezium.io/). To create a source that interprets Debezium messages:
+Materialize provides a dedicated envelope (`ENVELOPE DEBEZIUM`) to decode Kafka
+messages produced by [Debezium](https://debezium.io/). To create a source that
+interprets Debezium messages:
 
-```sql
+```mzsql
 CREATE SOURCE kafka_repl
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'pg_repl.public.table1')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   ENVELOPE DEBEZIUM;
 ```
 
-Any materialized view defined on top of this source will be incrementally updated as new change events stream in through Kafka, as a result of `INSERT`, `UPDATE` and `DELETE` operations in the original database.
+Any materialized view defined on top of this source will be incrementally
+updated as new change events stream in through Kafka, as a result of `INSERT`,
+`UPDATE` and `DELETE` operations in the original database.
 
-For more details and a step-by-step guide on using Kafka+Debezium for Change Data Capture (CDC), check [Using Debezium](/integrations/debezium/).
+For more details and a step-by-step guide on using Kafka+Debezium for Change
+Data Capture (CDC), check [Using Debezium](/integrations/debezium/).
 
 Note that:
 
 - This envelope can lead to high memory utilization in the cluster maintaining
-  the source. To reduce memory utilization, consider [enabling spill to disk](#spilling-to-disk).
+  the source. Materialize can automatically offload processing to
+  disk as needed. See [spilling to disk](#spilling-to-disk) for details.
 
 ### Spilling to disk
 
@@ -138,13 +201,15 @@ Spilling to disk is not available with [legacy cluster sizes](/sql/create-cluste
 
 ### Exposing source metadata
 
-In addition to the message value, Materialize can expose the message key, headers and other source metadata fields to SQL.
+In addition to the message value, Materialize can expose the message key,
+headers and other source metadata fields to SQL.
 
 #### Key
 
-The message key is exposed via the `INCLUDE KEY` option. Composite keys are also supported {{% gh 7645 %}}.
+The message key is exposed via the `INCLUDE KEY` option. Composite keys are also
+supported.
 
-```sql
+```mzsql
 CREATE SOURCE kafka_metadata
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   KEY FORMAT TEXT
@@ -169,11 +234,15 @@ Note that:
 
 **All headers**
 
-All of a message's headers can be exposed using `INCLUDE HEADERS`, followed by an `AS <header_col>`.
+All of a message's headers can be exposed using `INCLUDE HEADERS`, followed by
+an `AS <header_col>`.
 
-This introduces column with the name specified or `headers` if none was specified. The column has the type `record(key: text, value: bytea?) list`, i.e. a list of records containing key-value pairs, where the keys are `text` and the values are nullable `bytea`s.
+This introduces column with the name specified or `headers` if none was
+specified. The column has the type `record(key: text, value: bytea?) list`,
+i.e. a list of records containing key-value pairs, where the keys are `text`
+and the values are nullable `bytea`s.
 
-```sql
+```mzsql
 CREATE SOURCE kafka_metadata
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
@@ -181,9 +250,10 @@ CREATE SOURCE kafka_metadata
   ENVELOPE NONE;
 ```
 
-To simplify turning the headers column into a `map` (so individual headers can be searched), you can use the `map_build` function, e.g.
+To simplify turning the headers column into a `map` (so individual headers can
+be searched), you can use the [`map_build`](/sql/functions/#map_build) function:
 
-```sql
+```mzsql
 SELECT
     id,
     seller,
@@ -192,7 +262,10 @@ SELECT
     map_build(headers)->'encryption_key' AS encryption_key,
 FROM kafka_metadata;
 ```
-```
+
+<p></p>
+
+```nofmt
  id | seller |        item        | client_id |    encryption_key
 ----+--------+--------------------+-----------+----------------------
   2 |   1592 | Custom Art         |        23 | \x796f75207769736821
@@ -201,11 +274,13 @@ FROM kafka_metadata;
 
 **Individual headers**
 
-Individual message headers can be exposed via the `INCLUDE HEADER key AS name` option.
+Individual message headers can be exposed via the `INCLUDE HEADER key AS name`
+option.
 
-The `bytea` value of the header is automatically parsed into an UTF-8 string. To expose the raw `bytea` instead, the `BYTES` option can be used.
+The `bytea` value of the header is automatically parsed into an UTF-8 string. To
+expose the raw `bytea` instead, the `BYTES` option can be used.
 
-```sql
+```mzsql
 CREATE SOURCE kafka_metadata
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
@@ -215,7 +290,7 @@ CREATE SOURCE kafka_metadata
 
 Headers can be queried as any other column in the source:
 
-```sql
+```mzsql
 SELECT
     id,
     seller,
@@ -223,7 +298,11 @@ SELECT
     client_id::numeric,
     encryption_key
 FROM kafka_metadata;
+```
 
+<p></p>
+
+```nofmt
  id | seller |        item        | client_id |    encryption_key
 ----+--------+--------------------+-----------+----------------------
   2 |   1592 | Custom Art         |        23 | \x796f75207769736821
@@ -231,13 +310,19 @@ FROM kafka_metadata;
 ```
 
 Note that:
-- Messages that do not contain all header keys as specified in the source DDL will cause an error that prevents further querying the source.
-- Header values containing badly formed UTF-8 strings will cause an error in the source that prevents querying it, unless the `BYTES` option is specified.
+
+- Messages that do not contain all header keys as specified in the source DDL
+  will cause an error that prevents further querying the source.
+
+- Header values containing badly formed UTF-8 strings will cause an error in the
+  source that prevents querying it, unless the `BYTES` option is specified.
+
 #### Partition, offset, timestamp
 
-These metadata fields are exposed via the `INCLUDE PARTITION`, `INCLUDE OFFSET` and `INCLUDE TIMESTAMP` options.
+These metadata fields are exposed via the `INCLUDE PARTITION`, `INCLUDE OFFSET`
+and `INCLUDE TIMESTAMP` options.
 
-```sql
+```mzsql
 CREATE SOURCE kafka_metadata
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
@@ -245,9 +330,13 @@ CREATE SOURCE kafka_metadata
   ENVELOPE NONE;
 ```
 
-```sql
+```mzsql
 SELECT "offset" FROM kafka_metadata WHERE ts > '2021-01-01';
+```
 
+<p></p>
+
+```nofmt
 offset
 ------
 15
@@ -257,9 +346,10 @@ offset
 
 ### Setting start offsets
 
-To start consuming a Kafka stream from a specific offset, you can use the `START OFFSET` option.
+To start consuming a Kafka stream from a specific offset, you can use the `START
+OFFSET` option.
 
-```sql
+```mzsql
 CREATE SOURCE kafka_offset
   FROM KAFKA CONNECTION kafka_connection (
     TOPIC 'data',
@@ -272,16 +362,27 @@ CREATE SOURCE kafka_offset
 
 Note that:
 
-- If fewer offsets than partitions are provided, the remaining partitions will start at offset 0. This is true if you provide `START OFFSET (1)` or `START OFFSET (1, ...)`.
+- If fewer offsets than partitions are provided, the remaining partitions will
+  start at offset 0. This is true if you provide `START OFFSET (1)` or `START
+  OFFSET (1, ...)`.
+
 - Providing more offsets than partitions is not supported.
 
 #### Time-based offsets
 
-It's also possible to set a start offset based on Kafka timestamps, using the `START TIMESTAMP` option. This approach sets the start offset for each available partition based on the Kafka timestamp and the source behaves as if `START OFFSET` was provided directly.
+It's also possible to set a start offset based on Kafka timestamps, using the
+`START TIMESTAMP` option. This approach sets the start offset for each
+available partition based on the Kafka timestamp and the source behaves as if
+`START OFFSET` was provided directly.
 
-It's important to note that `START TIMESTAMP` is a property of the source: it will be calculated _once_ at the time the `CREATE SOURCE` statement is issued. This means that the computed start offsets will be the **same** for all views depending on the source and **stable** across restarts.
+It's important to note that `START TIMESTAMP` is a property of the source: it
+will be calculated _once_ at the time the `CREATE SOURCE` statement is issued.
+This means that the computed start offsets will be the **same** for all views
+depending on the source and **stable** across restarts.
 
-If you need to limit the amount of data maintained as state after source creation, consider using [temporal filters](/sql/patterns/temporal-filters/) instead.
+If you need to limit the amount of data maintained as state after source
+creation, consider using [temporal filters](/sql/patterns/temporal-filters/)
+instead.
 
 #### `CONNECTION` options
 
@@ -295,7 +396,10 @@ Field               | Value | Description
 It is possible to define how an Avro reader schema will be chosen for Avro sources by
 using the `KEY STRATEGY` and `VALUE STRATEGY` keywords, as shown in the syntax diagram.
 
-A strategy of `LATEST` (the default) will choose the latest writer schema from the schema registry to use as a reader schema. `ID` or `INLINE` will allow specifying a schema from the registry by ID or inline in the `CREATE SOURCE` statement, respectively.
+A strategy of `LATEST` (the default) will choose the latest writer schema from
+the schema registry to use as a reader schema. `ID` or `INLINE` will allow
+specifying a schema from the registry by ID or inline in the `CREATE SOURCE`
+statement, respectively.
 
 ### Monitoring source progress
 
@@ -313,7 +417,7 @@ Field          | Type                                     | Meaning
 
 And can be queried using:
 
-```sql
+```mzsql
 SELECT
   partition, "offset"
 FROM
@@ -366,7 +470,7 @@ The consumer group ID prefix for each Kafka source in the system is available in
 the `group_id_prefix` column of the [`mz_kafka_sources`] table. To look up the
 `group_id_prefix` for a source by name, use:
 
-```sql
+```mzsql
 SELECT group_id_prefix
 FROM mz_internal.mz_kafka_sources ks
 JOIN mz_sources s ON s.id = ks.id
@@ -387,20 +491,23 @@ Read           | Group            | All group IDs starting with the specified [`
 
 ### Creating a connection
 
-A connection describes how to connect and authenticate to an external system you want Materialize to read data from.
+A connection describes how to connect and authenticate to an external system you
+want Materialize to read data from.
 
-Once created, a connection is **reusable** across multiple `CREATE SOURCE` statements. For more details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection) documentation page.
+Once created, a connection is **reusable** across multiple `CREATE SOURCE`
+statements. For more details on creating connections, check the
+[`CREATE CONNECTION`](/sql/create-connection) documentation page.
 
 #### Broker
 
 {{< tabs tabID="1" >}}
 {{< tab "SSL">}}
-```sql
+```mzsql
 CREATE SECRET kafka_ssl_key AS '<BROKER_SSL_KEY>';
 CREATE SECRET kafka_ssl_crt AS '<BROKER_SSL_CRT>';
 
 CREATE CONNECTION kafka_connection TO KAFKA (
-    BROKER 'rp-f00000bar.data.vectorized.cloud:30365',
+    BROKER 'unique-jellyfish-0000.us-east-1.aws.confluent.cloud:9093',
     SSL KEY = SECRET kafka_ssl_key,
     SSL CERTIFICATE = SECRET kafka_ssl_crt
 );
@@ -408,11 +515,11 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 {{< /tab >}}
 {{< tab "SASL">}}
 
-```sql
+```mzsql
 CREATE SECRET kafka_password AS '<BROKER_PASSWORD>';
 
 CREATE CONNECTION kafka_connection TO KAFKA (
-    BROKER 'unique-jellyfish-0000-kafka.upstash.io:9092',
+    BROKER 'unique-jellyfish-0000.us-east-1.aws.confluent.cloud:9092',
     SASL MECHANISMS = 'SCRAM-SHA-256',
     SASL USERNAME = 'foo',
     SASL PASSWORD = SECRET kafka_password
@@ -421,19 +528,20 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 {{< /tab >}}
 {{< /tabs >}}
 
-If your Kafka broker is not exposed to the public internet, you can [tunnel the connection](/sql/create-connection/#network-security-connections) through an AWS PrivateLink service or an SSH bastion host:
+If your Kafka broker is not exposed to the public internet, you can [tunnel the connection](/sql/create-connection/#network-security-connections)
+through an AWS PrivateLink service or an SSH bastion host:
 
 {{< tabs tabID="1" >}}
 {{< tab "AWS PrivateLink">}}
 
-```sql
+```mzsql
 CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
     SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
     AVAILABILITY ZONES ('use1-az1', 'use1-az4')
 );
 ```
 
-```sql
+```mzsql
 CREATE CONNECTION kafka_connection TO KAFKA (
     BROKERS (
         'broker1:9092' USING AWS PRIVATELINK privatelink_svc,
@@ -442,11 +550,14 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 );
 ```
 
-For step-by-step instructions on creating AWS PrivateLink connections and configuring an AWS PrivateLink service to accept connections from Materialize, check [this guide](/ops/network-security/privatelink/).
+For step-by-step instructions on creating AWS PrivateLink connections and
+configuring an AWS PrivateLink service to accept connections from Materialize,
+check [this guide](/ops/network-security/privatelink/).
+
 {{< /tab >}}
 {{< tab "SSH tunnel">}}
 
-```sql
+```mzsql
 CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     HOST '<SSH_BASTION_HOST>',
     USER '<SSH_BASTION_USER>',
@@ -454,7 +565,7 @@ CREATE CONNECTION ssh_connection TO SSH TUNNEL (
 );
 ```
 
-```sql
+```mzsql
 CREATE CONNECTION kafka_connection TO KAFKA (
 BROKERS (
     'broker1:9092' USING SSH TUNNEL ssh_connection,
@@ -463,7 +574,8 @@ BROKERS (
 );
 ```
 
-For step-by-step instructions on creating SSH tunnel connections and configuring an SSH bastion server to accept connections from Materialize, check [this guide](/ops/network-security/ssh-tunnel/).
+For step-by-step instructions on creating SSH tunnel connections and configuring
+an SSH bastion server to accept connections from Materialize, check [this guide](/ops/network-security/ssh-tunnel/).
 {{< /tab >}}
 {{< /tabs >}}
 
@@ -471,13 +583,13 @@ For step-by-step instructions on creating SSH tunnel connections and configuring
 
 {{< tabs tabID="1" >}}
 {{< tab "SSL">}}
-```sql
+```mzsql
 CREATE SECRET csr_ssl_crt AS '<CSR_SSL_CRT>';
 CREATE SECRET csr_ssl_key AS '<CSR_SSL_KEY>';
 CREATE SECRET csr_password AS '<CSR_PASSWORD>';
 
 CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
-    URL 'https://rp-f00000bar.data.vectorized.cloud:30993',
+    URL 'https://unique-jellyfish-0000.us-east-1.aws.confluent.cloud:9093',
     SSL KEY = SECRET csr_ssl_key,
     SSL CERTIFICATE = SECRET csr_ssl_crt,
     USERNAME = 'foo',
@@ -486,7 +598,7 @@ CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
 ```
 {{< /tab >}}
 {{< tab "Basic HTTP Authentication">}}
-```sql
+```mzsql
 CREATE SECRET IF NOT EXISTS csr_username AS '<CSR_USERNAME>';
 CREATE SECRET IF NOT EXISTS csr_password AS '<CSR_PASSWORD>';
 
@@ -499,29 +611,33 @@ CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
 {{< /tab >}}
 {{< /tabs >}}
 
-If your Confluent Schema Registry server is not exposed to the public internet, you can [tunnel the connection](/sql/create-connection/#network-security-connections) through an AWS PrivateLink service or an SSH bastion host:
+If your Confluent Schema Registry server is not exposed to the public internet,
+you can [tunnel the connection](/sql/create-connection/#network-security-connections)
+through an AWS PrivateLink service or an SSH bastion host:
 
 {{< tabs tabID="1" >}}
 {{< tab "AWS PrivateLink">}}
 
-```sql
+```mzsql
 CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
     SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
     AVAILABILITY ZONES ('use1-az1', 'use1-az4')
 );
 ```
 
-```sql
+```mzsql
 CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
     URL 'http://my-confluent-schema-registry:8081',
     AWS PRIVATELINK privatelink_svc
 );
 ```
 
-For step-by-step instructions on creating AWS PrivateLink connections and configuring an AWS PrivateLink service to accept connections from Materialize, check [this guide](/ops/network-security/privatelink/).
+For step-by-step instructions on creating AWS PrivateLink connections and
+configuring an AWS PrivateLink service to accept connections from Materialize,
+check [this guide](/ops/network-security/privatelink/).
 {{< /tab >}}
 {{< tab "SSH tunnel">}}
-```sql
+```mzsql
 CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     HOST '<SSH_BASTION_HOST>',
     USER '<SSH_BASTION_USER>',
@@ -529,14 +645,15 @@ CREATE CONNECTION ssh_connection TO SSH TUNNEL (
 );
 ```
 
-```sql
+```mzsql
 CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
     URL 'http://my-confluent-schema-registry:8081',
     SSH TUNNEL ssh_connection
 );
 ```
 
-For step-by-step instructions on creating SSH tunnel connections and configuring an SSH bastion server to accept connections from Materialize, check [this guide](/ops/network-security/ssh-tunnel/).
+For step-by-step instructions on creating SSH tunnel connections and configuring
+an SSH bastion server to accept connections from Materialize, check [this guide](/ops/network-security/ssh-tunnel/).
 {{< /tab >}}
 {{< /tabs >}}
 
@@ -547,7 +664,7 @@ For step-by-step instructions on creating SSH tunnel connections and configuring
 
 **Using Confluent Schema Registry**
 
-```sql
+```mzsql
 CREATE SOURCE avro_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
@@ -556,13 +673,13 @@ CREATE SOURCE avro_source
 {{< /tab >}}
 {{< tab "JSON">}}
 
-```sql
+```mzsql
 CREATE SOURCE json_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT JSON;
 ```
 
-```sql
+```mzsql
 CREATE VIEW typed_kafka_source AS
   SELECT
     (data->>'field1')::boolean AS field_1,
@@ -581,7 +698,7 @@ manually, you can use [this **JSON parsing widget**](/sql/types/jsonb/#parsing)!
 
 **Using Confluent Schema Registry**
 
-```sql
+```mzsql
 CREATE SOURCE proto_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
@@ -589,7 +706,9 @@ CREATE SOURCE proto_source
 
 **Using an inline schema**
 
-If you're not using a schema registry, you can use the `MESSAGE...SCHEMA` clause to specify a Protobuf schema descriptor inline. Protobuf does not serialize a schema with the message, so before creating a source you must:
+If you're not using a schema registry, you can use the `MESSAGE...SCHEMA` clause
+to specify a Protobuf schema descriptor inline. Protobuf does not serialize a
+schema with the message, so before creating a source you must:
 
 * Compile the Protobuf schema into a descriptor file using [`protoc`](https://grpc.io/docs/protoc-installation/):
 
@@ -616,7 +735,7 @@ If you're not using a schema registry, you can use the `MESSAGE...SCHEMA` clause
 * Create the source using the encoded descriptor bytes from the previous step
   (including the `\x` at the beginning):
 
-  ```sql
+  ```mzsql
   CREATE SOURCE proto_source
     FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
     FORMAT PROTOBUF MESSAGE 'Batch' USING SCHEMA '\x0a300a0d62696...';
@@ -628,7 +747,7 @@ If you're not using a schema registry, you can use the `MESSAGE...SCHEMA` clause
 {{< /tab >}}
 {{< tab "Text/bytes">}}
 
-```sql
+```mzsql
 CREATE SOURCE text_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT TEXT
@@ -638,7 +757,7 @@ CREATE SOURCE text_source
 {{< /tab >}}
 {{< tab "CSV">}}
 
-```sql
+```mzsql
 CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT CSV WITH 3 COLUMNS;
@@ -665,4 +784,4 @@ CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
 [Append-only envelope]: /sql/create-source/#append-only-envelope
 [Upsert envelope]: /sql/create-source/#upsert-envelope
 [Debezium envelope]: /sql/create-source/#debezium-envelope
-[`mz_kafka_sources`]: /sql/system-catalog/mz_internal/#mz_kafka_sources
+[`mz_kafka_sources`]: /sql/system-catalog/mz_catalog/#mz_kafka_sources

@@ -11,11 +11,14 @@
 //! all oracle operations are self-sufficiently linearized, without requiring
 //! any external precautions/machinery.
 
+use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
+use deadpool_postgres::tokio_postgres::error::SqlState;
+use deadpool_postgres::tokio_postgres::Config;
 use deadpool_postgres::{Object, PoolError};
 use dec::Decimal;
 use mz_adapter_types::timestamp_oracle::{
@@ -26,9 +29,11 @@ use mz_adapter_types::timestamp_oracle::{
 use mz_ore::error::ErrorExt;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::url::SensitiveUrl;
 use mz_pgrepr::Numeric;
 use mz_postgres_client::{PostgresClient, PostgresClientConfig, PostgresClientKnobs};
 use mz_repr::Timestamp;
+use postgres_protocol::escape::escape_identifier;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
@@ -40,21 +45,32 @@ use crate::{GenericNowFn, TimestampOracle};
 // The timestamp columns are a `DECIMAL` that is big enough to hold
 // `18446744073709551615`, the maximum value of `u64` which is our underlying
 // timestamp type.
-//
-// These `sql_stats_automatic_collection_enabled` are for the cost-based
-// optimizer but all the queries against this table are single-table and very
-// carefully tuned to hit the primary index, so the cost-based optimizer doesn't
-// really get us anything. OTOH, the background jobs that crdb creates to
-// collect these stats fill up the jobs table (slowing down all sorts of
-// things).
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS timestamp_oracle (
     timeline text NOT NULL,
     read_ts DECIMAL(20,0) NOT NULL,
     write_ts DECIMAL(20,0) NOT NULL,
     PRIMARY KEY(timeline)
-) WITH (sql_stats_automatic_collection_enabled = false);
+)
 ";
+
+// These `sql_stats_automatic_collection_enabled` are for the cost-based
+// optimizer but all the queries against this table are single-table and very
+// carefully tuned to hit the primary index, so the cost-based optimizer doesn't
+// really get us anything. OTOH, the background jobs that crdb creates to
+// collect these stats fill up the jobs table (slowing down all sorts of
+// things).
+const CRDB_SCHEMA_OPTIONS: &str = "WITH (sql_stats_automatic_collection_enabled = false)";
+// The `timestamp_oracle` table creates and deletes rows at a high
+// frequency, generating many tombstoned rows. If Cockroach's GC
+// interval is set high (the default is 25h) and these tombstones
+// accumulate, scanning over the table will take increasingly and
+// prohibitively long.
+//
+// See: https://github.com/MaterializeInc/database-issues/issues/4001
+// See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
+const CRDB_CONFIGURE_ZONE: &str =
+    "ALTER TABLE timestamp_oracle CONFIGURE ZONE USING gc.ttlseconds = 600;";
 
 /// A [`TimestampOracle`] backed by "Postgres".
 #[derive(Debug)]
@@ -66,13 +82,16 @@ where
     next: N,
     postgres_client: Arc<PostgresClient>,
     metrics: Arc<Metrics>,
+    /// A read-only timestamp oracle is NOT allowed to do operations that change
+    /// the backing Postgres/CRDB state.
+    read_only: bool,
 }
 
 /// Configuration to connect to a Postgres-backed implementation of
 /// [`TimestampOracle`].
 #[derive(Clone, Debug)]
 pub struct PostgresTimestampOracleConfig {
-    url: String,
+    url: SensitiveUrl,
     pub metrics: Arc<Metrics>,
 
     /// Configurations that can be dynamically updated.
@@ -90,13 +109,13 @@ impl PostgresTimestampOracleConfig {
     pub(crate) const EXTERNAL_TESTS_POSTGRES_URL: &'static str = "COCKROACH_URL";
 
     /// Returns a new instance of [`PostgresTimestampOracleConfig`] with default tuning.
-    pub fn new(url: &str, metrics_registry: &MetricsRegistry) -> Self {
+    pub fn new(url: &SensitiveUrl, metrics_registry: &MetricsRegistry) -> Self {
         let metrics = Arc::new(Metrics::new(metrics_registry));
 
         let dynamic = DynamicConfig::default();
 
         PostgresTimestampOracleConfig {
-            url: url.to_string(),
+            url: url.clone(),
             metrics,
             dynamic: Arc::new(dynamic),
         }
@@ -112,7 +131,7 @@ impl PostgresTimestampOracleConfig {
     /// [1]: https://docs.rs/tokio-postgres/latest/tokio_postgres/config/struct.Config.html#url
     pub fn new_for_test() -> Option<Self> {
         let url = match std::env::var(Self::EXTERNAL_TESTS_POSTGRES_URL) {
-            Ok(url) => url,
+            Ok(url) => SensitiveUrl::from_str(&url).expect("invalid Postgres URL"),
             Err(_) => {
                 if mz_ore::env::is_var_truthy("CI") {
                     panic!("CI is supposed to run this test but something has gone wrong!");
@@ -124,7 +143,7 @@ impl PostgresTimestampOracleConfig {
         let dynamic = DynamicConfig::default();
 
         let config = PostgresTimestampOracleConfig {
-            url: url.to_string(),
+            url,
             metrics: Arc::new(Metrics::new(&MetricsRegistry::new())),
             dynamic: Arc::new(dynamic),
         };
@@ -417,37 +436,55 @@ where
         timeline: String,
         initially: Timestamp,
         next: N,
+        read_only: bool,
     ) -> Self {
         info!(config = ?config, "opening PostgresTimestampOracle");
 
         let fallible = || async {
             let metrics = Arc::clone(&config.metrics);
 
+            // don't need to unredact here because we're just pulling out the username
+            let pg_config: Config = config.url.to_string().parse()?;
+            let role = pg_config.get_user().unwrap();
+            let create_schema = format!(
+                "CREATE SCHEMA IF NOT EXISTS tsoracle AUTHORIZATION {}",
+                escape_identifier(role),
+            );
+
             let postgres_client = PostgresClient::open(config.clone().into())?;
 
             let client = postgres_client.get_connection().await?;
 
-            // The `timestamp_oracle` table creates and deletes rows at a high
-            // frequency, generating many tombstoned rows. If Cockroach's GC
-            // interval is set high (the default is 25h) and these tombstones
-            // accumulate, scanning over the table will take increasingly and
-            // prohibitively long.
-            //
-            // See: https://github.com/MaterializeInc/materialize/issues/13975
-            // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
-            client
+            let crdb_mode = match client
                 .batch_execute(&format!(
-                    "{} {}",
-                    SCHEMA,
-                    "ALTER TABLE timestamp_oracle CONFIGURE ZONE USING gc.ttlseconds = 600;",
+                    "{}; {}{}; {}",
+                    create_schema, SCHEMA, CRDB_SCHEMA_OPTIONS, CRDB_CONFIGURE_ZONE,
                 ))
-                .await?;
+                .await
+            {
+                Ok(()) => true,
+                Err(e)
+                    if e.code() == Some(&SqlState::INVALID_PARAMETER_VALUE)
+                        || e.code() == Some(&SqlState::SYNTAX_ERROR) =>
+                {
+                    info!("unable to initiate timestamp_oracle with CRDB params, this is expected and OK when running against Postgres: {:?}", e);
+                    false
+                }
+                Err(e) => return Err(e.into()),
+            };
+
+            if !crdb_mode {
+                client
+                    .batch_execute(&format!("{}; {};", create_schema, SCHEMA))
+                    .await?;
+            }
 
             let oracle = PostgresTimestampOracle {
                 timeline: timeline.clone(),
                 next: next.clone(),
                 postgres_client: Arc::new(postgres_client),
                 metrics,
+                read_only,
             };
 
             // Create a row for our timeline, if it doesn't exist. The
@@ -473,7 +510,9 @@ where
             // Forward timestamps to what we're given from outside. Remember,
             // the above query will only create the row at the initial timestamp
             // if it didn't exist before.
-            TimestampOracle::apply_write(&oracle, initially).await;
+            if !read_only {
+                TimestampOracle::apply_write(&oracle, initially).await;
+            }
 
             Result::<_, anyhow::Error>::Ok(oracle)
         };
@@ -556,6 +595,10 @@ where
 
     #[mz_ore::instrument(name = "oracle::write_ts")]
     async fn fallible_write_ts(&self) -> Result<WriteTimestamp<Timestamp>, anyhow::Error> {
+        if self.read_only {
+            panic!("attempting write_ts in read-only mode");
+        }
+
         let proposed_next_ts = self.next.now();
         let proposed_next_ts = Self::ts_to_decimal(proposed_next_ts);
 
@@ -631,6 +674,10 @@ where
 
     #[mz_ore::instrument(name = "oracle::apply_write")]
     async fn fallible_apply_write(&self, write_ts: Timestamp) -> Result<(), anyhow::Error> {
+        if self.read_only {
+            panic!("attempting apply_write in read-only mode");
+        }
+
         let q = r#"
             UPDATE timestamp_oracle SET write_ts = GREATEST(write_ts, $2), read_ts = GREATEST(read_ts, $2)
                 WHERE timeline = $1;
@@ -817,8 +864,13 @@ mod tests {
         };
 
         crate::tests::timestamp_oracle_impl_test(|timeline, now_fn, initial_ts| {
-            let oracle =
-                PostgresTimestampOracle::open(config.clone(), timeline, initial_ts, now_fn);
+            let oracle = PostgresTimestampOracle::open(
+                config.clone(),
+                timeline,
+                initial_ts,
+                now_fn,
+                false, /* read-only */
+            );
 
             async {
                 let arced_oracle: Arc<dyn TimestampOracle<Timestamp> + Send + Sync> =

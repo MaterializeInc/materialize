@@ -7,18 +7,28 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Postgres source tests with interruptions, test that Materialize can recover.
+"""
+import re
 import time
+
+import pg8000
+from pg8000 import Connection
+from pg8000.dbapi import ProgrammingError
 
 from materialize import buildkite
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.alpine import Alpine
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
 SERVICES = [
     Alpine(),
+    Mz(app_password=""),
     Materialized(),
     Postgres(),
     Toxiproxy(),
@@ -27,16 +37,18 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    for name in c.workflows:
+    def process(name: str) -> None:
+        if name == "default":
+            return
+
         # clear to avoid issues
         c.kill("postgres")
         c.rm("postgres")
 
-        if name == "default":
-            continue
-
         with c.test_case(name):
             c.workflow(name)
+
+    c.test_parts(list(c.workflows.keys()), process)
 
 
 def workflow_disruptions(c: Composition) -> None:
@@ -56,6 +68,9 @@ def workflow_disruptions(c: Composition) -> None:
         restart_mz_during_replication,
         fix_pg_schema_while_mz_restarts,
         verify_no_snapshot_reingestion,
+        restart_mz_after_initial_snapshot,
+        restart_mz_while_cdc_changes,
+        drop_replication_slot_when_mz_is_on,
     ]
 
     scenarios = buildkite.shard_list(scenarios, lambda s: s.__name__)
@@ -82,14 +97,20 @@ def workflow_disruptions(c: Composition) -> None:
 
 
 def workflow_backup_restore(c: Composition) -> None:
+    scenarios = [
+        backup_restore_pg,
+    ]
+    scenarios = buildkite.shard_list(scenarios, lambda s: s.__name__)
+    print(
+        f"Scenarios in shard with index {buildkite.get_parallelism_index()}: {[s.__name__ for s in scenarios]}"
+    )
+
     with c.override(
         Materialized(sanity_restart=False),
         Alpine(volumes=["pgdata:/var/lib/postgresql/data", "tmp:/scratch"]),
         Postgres(volumes=["pgdata:/var/lib/postgresql/data", "tmp:/scratch"]),
     ):
-        for scenario in [
-            backup_restore_pg,
-        ]:
+        for scenario in scenarios:
             print(f"--- Running scenario {scenario.__name__}")
             initialize(c)
             scenario(c)
@@ -150,6 +171,46 @@ def restart_mz_during_snapshot(c: Composition) -> None:
     restart_mz(c)
 
     c.run_testdrive_files("delete-rows-t1.td", "delete-rows-t2.td", "alter-table.td")
+
+
+def restart_mz_after_initial_snapshot(c: Composition) -> None:
+    c.run_testdrive_files(
+        "wait-for-snapshot.td",
+        "delete-rows-t1.td",
+    )
+
+    restart_mz(c)
+
+    c.run_testdrive_files(
+        "delete-rows-t2.td",
+        "alter-table.td",
+        "alter-mz.td",
+        "verify-data.td",
+        "alter-table-fix.td",
+    )
+
+
+def restart_mz_while_cdc_changes(c: Composition) -> None:
+    c.run_testdrive_files(
+        "wait-for-snapshot.td",
+        "delete-rows-t1.td",
+    )
+
+    c.kill("materialized")
+
+    # run delete-rows-t2.td in pg
+    pg_conn = _create_pg_connection(c)
+    cursor = pg_conn.cursor()
+    cursor.execute("DELETE FROM t2 WHERE f1 % 2 = 1;")
+
+    c.up("materialized")
+
+    c.run_testdrive_files(
+        "alter-table.td",
+        "alter-mz.td",
+        "verify-data.td",
+        "alter-table-fix.td",
+    )
 
 
 def disconnect_pg_during_replication(c: Composition) -> None:
@@ -238,6 +299,59 @@ def pg_out_of_disk_space(c: Composition) -> None:
     c.exec("postgres", "bash", "-c", f"rm {fill_file}")
 
     c.run_testdrive_files("delete-rows-t2.td", "alter-table.td", "alter-mz.td")
+
+
+def drop_replication_slot_when_mz_is_on(c: Composition) -> None:
+    c.run_testdrive_files(
+        "wait-for-snapshot.td",
+        "delete-rows-t1.td",
+    )
+
+    pg_conn = _create_pg_connection(c)
+    slot_names = _get_all_pg_replication_slots(pg_conn)
+
+    try:
+        _drop_pg_replication_slots(pg_conn, slot_names)
+        assert False, "active replication slot is not expected to allow drop action"
+    except ProgrammingError as e:
+        assert re.search(
+            'replication slot "materialize_[a-f0-9]+" is active', (str(e))
+        ), f"Got: {str(e)}"
+
+    c.run_testdrive_files(
+        "delete-rows-t2.td",
+        "alter-table.td",
+        "alter-mz.td",
+    )
+
+
+def _create_pg_connection(c: Composition) -> Connection:
+    connection = pg8000.connect(
+        host="localhost",
+        user="postgres",
+        password="postgres",
+        port=c.default_port("postgres"),
+    )
+    connection.autocommit = True
+    return connection
+
+
+def _get_all_pg_replication_slots(pg_conn: Connection) -> list[str]:
+    cursor = pg_conn.cursor()
+    cursor.execute("SELECT slot_name FROM pg_replication_slots;")
+
+    slot_names = []
+    for row in cursor.fetchall():
+        slot_names.append(row[0])
+
+    return slot_names
+
+
+def _drop_pg_replication_slots(pg_conn: Connection, slot_names: list[str]) -> None:
+    cursor = pg_conn.cursor()
+    for slot_name in slot_names:
+        print(f"Dropping replication slot {slot_name}")
+        cursor.execute(f"SELECT pg_drop_replication_slot('{slot_name}');")
 
 
 def backup_restore_pg(c: Composition) -> None:

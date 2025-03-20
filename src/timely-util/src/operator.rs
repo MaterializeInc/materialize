@@ -1,11 +1,17 @@
 // Copyright Materialize, Inc. and contributors. All rights reserved.
 //
-// Use of this software is governed by the Business Source License
-// included in the LICENSE file.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License in the LICENSE file at the
+// root of this repository, or online at
 //
-// As of the Change Date specified in that file, in accordance with
-// the Business Source License, use of this software will be governed
-// by the Apache License, Version 2.0.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Common operator transformations on timely streams and differential collections.
 
@@ -15,31 +21,33 @@ use std::marker::PhantomData;
 use std::rc::Weak;
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
+use differential_dataflow::containers::{Columnation, TimelyStack};
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::{Batcher, Builder};
+use differential_dataflow::logging::DifferentialEventBuilder;
+use differential_dataflow::trace::{Batcher, Builder, Description};
 use differential_dataflow::{AsCollection, Collection, Hashable};
-use timely::container::columnation::{Columnation, TimelyStack};
-use timely::container::{CapacityContainerBuilder, ContainerBuilder, PushInto};
+use timely::container::{ContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
+use timely::dataflow::channels::ContainerBytes;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::generic::operator::{self, Operator};
-use timely::dataflow::operators::generic::{InputHandle, OperatorInfo, OutputHandleCore};
+use timely::dataflow::operators::generic::{InputHandleCore, OperatorInfo, OutputHandleCore};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream, StreamCore};
 use timely::progress::{Antichain, Timestamp};
-use timely::{Container, Data, ExchangeData, PartialOrder};
+use timely::{Container, Data, PartialOrder};
 
 use crate::builder_async::{
     AsyncInputHandle, AsyncOutputHandle, ConnectedToOne, Disconnected,
     OperatorBuilder as OperatorBuilderAsync,
 };
 
-/// Extension methods for timely [`Stream`]s.
-pub trait StreamExt<G, D1>
+/// Extension methods for timely [`StreamCore`]s.
+pub trait StreamExt<G, C1>
 where
-    D1: Data,
+    C1: Container,
     G: Scope,
 {
     /// Like `timely::dataflow::operators::generic::operator::Operator::unary`,
@@ -66,69 +74,66 @@ where
             OperatorInfo,
         ) -> Box<
             dyn FnMut(
-                    &mut InputHandle<G::Timestamp, D1, P::Puller>,
+                    &mut InputHandleCore<G::Timestamp, C1, P::Puller>,
                     &mut OutputHandleCore<G::Timestamp, DCB, Tee<G::Timestamp, DCB::Container>>,
                     &mut OutputHandleCore<G::Timestamp, ECB, Tee<G::Timestamp, ECB::Container>>,
                 ) + 'static,
         >,
-        P: ParallelizationContract<G::Timestamp, Vec<D1>>;
+        P: ParallelizationContract<G::Timestamp, C1>;
 
     /// Creates a new dataflow operator that partitions its input stream by a parallelization
     /// strategy pact, and repeatedly schedules logic, the future returned by the function passed
     /// as constructor. logic can read from the input stream, and write to the output stream.
-    fn unary_async<D2, P, B, BFut>(&self, pact: P, name: String, constructor: B) -> Stream<G, D2>
+    fn unary_async<CB, P, B, BFut>(
+        &self,
+        pact: P,
+        name: String,
+        constructor: B,
+    ) -> StreamCore<G, CB::Container>
     where
-        D2: Data,
+        CB: ContainerBuilder,
         B: FnOnce(
             Capability<G::Timestamp>,
             OperatorInfo,
-            AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
-            AsyncOutputHandle<
-                G::Timestamp,
-                CapacityContainerBuilder<Vec<D2>>,
-                Tee<G::Timestamp, Vec<D2>>,
-            >,
+            AsyncInputHandle<G::Timestamp, C1, ConnectedToOne>,
+            AsyncOutputHandle<G::Timestamp, CB, Tee<G::Timestamp, CB::Container>>,
         ) -> BFut,
         BFut: Future + 'static,
-        P: ParallelizationContract<G::Timestamp, Vec<D1>>;
+        P: ParallelizationContract<G::Timestamp, C1>;
 
     /// Creates a new dataflow operator that partitions its input streams by a parallelization
     /// strategy pact, and repeatedly schedules logic, the future returned by the function passed
     /// as constructor. logic can read from the input streams, and write to the output stream.
-    fn binary_async<D2, D3, P1, P2, B, BFut>(
+    fn binary_async<C2, CB, P1, P2, B, BFut>(
         &self,
-        other: &Stream<G, D2>,
+        other: &StreamCore<G, C2>,
         pact1: P1,
         pact2: P2,
         name: String,
         constructor: B,
-    ) -> Stream<G, D3>
+    ) -> StreamCore<G, CB::Container>
     where
-        D2: Data,
-        D3: Data,
+        C2: Container + 'static,
+        CB: ContainerBuilder,
         B: FnOnce(
             Capability<G::Timestamp>,
             OperatorInfo,
-            AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
-            AsyncInputHandle<G::Timestamp, Vec<D2>, ConnectedToOne>,
-            AsyncOutputHandle<
-                G::Timestamp,
-                CapacityContainerBuilder<Vec<D3>>,
-                Tee<G::Timestamp, Vec<D3>>,
-            >,
+            AsyncInputHandle<G::Timestamp, C1, ConnectedToOne>,
+            AsyncInputHandle<G::Timestamp, C2, ConnectedToOne>,
+            AsyncOutputHandle<G::Timestamp, CB, Tee<G::Timestamp, CB::Container>>,
         ) -> BFut,
         BFut: Future + 'static,
-        P1: ParallelizationContract<G::Timestamp, Vec<D1>>,
-        P2: ParallelizationContract<G::Timestamp, Vec<D2>>;
+        P1: ParallelizationContract<G::Timestamp, C1>,
+        P2: ParallelizationContract<G::Timestamp, C2>;
 
     /// Creates a new dataflow operator that partitions its input stream by a parallelization
     /// strategy pact, and repeatedly schedules logic which can read from the input stream and
     /// inspect the frontier at the input.
     fn sink_async<P, B, BFut>(&self, pact: P, name: String, constructor: B)
     where
-        B: FnOnce(OperatorInfo, AsyncInputHandle<G::Timestamp, Vec<D1>, Disconnected>) -> BFut,
+        B: FnOnce(OperatorInfo, AsyncInputHandle<G::Timestamp, C1, Disconnected>) -> BFut,
         BFut: Future + 'static,
-        P: ParallelizationContract<G::Timestamp, Vec<D1>>;
+        P: ParallelizationContract<G::Timestamp, C1>;
 
     /// Like [`timely::dataflow::operators::map::Map::map`], but `logic`
     /// is allowed to fail. The first returned stream will contain the
@@ -142,7 +147,7 @@ where
     where
         DCB: ContainerBuilder + PushInto<D2>,
         ECB: ContainerBuilder + PushInto<E>,
-        L: FnMut(D1) -> Result<D2, E> + 'static,
+        L: for<'a> FnMut(C1::Item<'a>) -> Result<D2, E> + 'static,
     {
         self.flat_map_fallible::<DCB, ECB, _, _, _, _>(name, move |record| Some(logic(record)))
     }
@@ -160,21 +165,32 @@ where
         DCB: ContainerBuilder + PushInto<D2>,
         ECB: ContainerBuilder + PushInto<E>,
         I: IntoIterator<Item = Result<D2, E>>,
-        L: FnMut(D1) -> I + 'static;
+        L: for<'a> FnMut(C1::Item<'a>) -> I + 'static;
+
+    /// Block progress of the frontier at `expiration` time, unless the token is dropped.
+    fn expire_stream_at(
+        &self,
+        name: &str,
+        expiration: G::Timestamp,
+        token: Weak<()>,
+    ) -> StreamCore<G, C1>;
 
     /// Take a Timely stream and convert it to a Differential stream, where each diff is "1"
     /// and each time is the current Timely timestamp.
-    fn pass_through<R: Data>(&self, name: &str, unit: R) -> Stream<G, (D1, G::Timestamp, R)>;
+    fn pass_through<CB, R>(&self, name: &str, unit: R) -> StreamCore<G, CB::Container>
+    where
+        CB: ContainerBuilder + for<'a> PushInto<(C1::Item<'a>, G::Timestamp, R)>,
+        R: Data;
 
     /// Wraps the stream with an operator that passes through all received inputs as long as the
     /// provided token can be upgraded. Once the token cannot be upgraded anymore, all data flowing
     /// into the operator is dropped.
-    fn with_token(&self, token: Weak<()>) -> Stream<G, D1>;
+    fn with_token(&self, token: Weak<()>) -> StreamCore<G, C1>;
 
     /// Distributes the data of the stream to all workers in a round-robin fashion.
-    fn distribute(&self) -> Stream<G, D1>
+    fn distribute(&self) -> StreamCore<G, C1>
     where
-        D1: ExchangeData;
+        C1: ContainerBytes + Send;
 }
 
 /// Extension methods for differential [`Collection`]s.
@@ -230,6 +246,14 @@ where
         I: IntoIterator<Item = Result<D2, E>>,
         L: FnMut(D1) -> I + 'static;
 
+    /// Block progress of the frontier at `expiration` time, unless the token is dropped.
+    fn expire_collection_at(
+        &self,
+        name: &str,
+        expiration: G::Timestamp,
+        token: Weak<()>,
+    ) -> Collection<G, D1, R>;
+
     /// Replaces each record with another, with a new difference type.
     ///
     /// This method is most commonly used to take records containing aggregatable data (e.g. numbers to be summed)
@@ -283,9 +307,9 @@ where
             > + 'static;
 }
 
-impl<G, D1> StreamExt<G, D1> for Stream<G, D1>
+impl<G, C1> StreamExt<G, C1> for StreamCore<G, C1>
 where
-    D1: Data,
+    C1: Container + Data,
     G: Scope,
 {
     fn unary_fallible<DCB, ECB, B, P>(
@@ -302,12 +326,12 @@ where
             OperatorInfo,
         ) -> Box<
             dyn FnMut(
-                    &mut InputHandle<G::Timestamp, D1, P::Puller>,
+                    &mut InputHandleCore<G::Timestamp, C1, P::Puller>,
                     &mut OutputHandleCore<G::Timestamp, DCB, Tee<G::Timestamp, DCB::Container>>,
                     &mut OutputHandleCore<G::Timestamp, ECB, Tee<G::Timestamp, ECB::Container>>,
                 ) + 'static,
         >,
-        P: ParallelizationContract<G::Timestamp, Vec<D1>>,
+        P: ParallelizationContract<G::Timestamp, C1>,
     {
         let mut builder = OperatorBuilderRc::new(name.into(), self.scope());
         builder.set_notify(false);
@@ -332,21 +356,22 @@ where
         (ok_stream, err_stream)
     }
 
-    fn unary_async<D2, P, B, BFut>(&self, pact: P, name: String, constructor: B) -> Stream<G, D2>
+    fn unary_async<CB, P, B, BFut>(
+        &self,
+        pact: P,
+        name: String,
+        constructor: B,
+    ) -> StreamCore<G, CB::Container>
     where
-        D2: Data,
+        CB: ContainerBuilder,
         B: FnOnce(
             Capability<G::Timestamp>,
             OperatorInfo,
-            AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
-            AsyncOutputHandle<
-                G::Timestamp,
-                CapacityContainerBuilder<Vec<D2>>,
-                Tee<G::Timestamp, Vec<D2>>,
-            >,
+            AsyncInputHandle<G::Timestamp, C1, ConnectedToOne>,
+            AsyncOutputHandle<G::Timestamp, CB, Tee<G::Timestamp, CB::Container>>,
         ) -> BFut,
         BFut: Future + 'static,
-        P: ParallelizationContract<G::Timestamp, Vec<D1>>,
+        P: ParallelizationContract<G::Timestamp, C1>,
     {
         let mut builder = OperatorBuilderAsync::new(name, self.scope());
         let operator_info = builder.operator_info();
@@ -363,31 +388,27 @@ where
         stream
     }
 
-    fn binary_async<D2, D3, P1, P2, B, BFut>(
+    fn binary_async<C2, CB, P1, P2, B, BFut>(
         &self,
-        other: &Stream<G, D2>,
+        other: &StreamCore<G, C2>,
         pact1: P1,
         pact2: P2,
         name: String,
         constructor: B,
-    ) -> Stream<G, D3>
+    ) -> StreamCore<G, CB::Container>
     where
-        D2: Data,
-        D3: Data,
+        C2: Container + 'static,
+        CB: ContainerBuilder,
         B: FnOnce(
             Capability<G::Timestamp>,
             OperatorInfo,
-            AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
-            AsyncInputHandle<G::Timestamp, Vec<D2>, ConnectedToOne>,
-            AsyncOutputHandle<
-                G::Timestamp,
-                CapacityContainerBuilder<Vec<D3>>,
-                Tee<G::Timestamp, Vec<D3>>,
-            >,
+            AsyncInputHandle<G::Timestamp, C1, ConnectedToOne>,
+            AsyncInputHandle<G::Timestamp, C2, ConnectedToOne>,
+            AsyncOutputHandle<G::Timestamp, CB, Tee<G::Timestamp, CB::Container>>,
         ) -> BFut,
         BFut: Future + 'static,
-        P1: ParallelizationContract<G::Timestamp, Vec<D1>>,
-        P2: ParallelizationContract<G::Timestamp, Vec<D2>>,
+        P1: ParallelizationContract<G::Timestamp, C1>,
+        P2: ParallelizationContract<G::Timestamp, C2>,
     {
         let mut builder = OperatorBuilderAsync::new(name, self.scope());
         let operator_info = builder.operator_info();
@@ -410,9 +431,9 @@ where
     /// inspect the frontier at the input.
     fn sink_async<P, B, BFut>(&self, pact: P, name: String, constructor: B)
     where
-        B: FnOnce(OperatorInfo, AsyncInputHandle<G::Timestamp, Vec<D1>, Disconnected>) -> BFut,
+        B: FnOnce(OperatorInfo, AsyncInputHandle<G::Timestamp, C1, Disconnected>) -> BFut,
         BFut: Future + 'static,
-        P: ParallelizationContract<G::Timestamp, Vec<D1>>,
+        P: ParallelizationContract<G::Timestamp, C1>,
     {
         let mut builder = OperatorBuilderAsync::new(name, self.scope());
         let operator_info = builder.operator_info();
@@ -437,16 +458,14 @@ where
         DCB: ContainerBuilder + PushInto<D2>,
         ECB: ContainerBuilder + PushInto<E>,
         I: IntoIterator<Item = Result<D2, E>>,
-        L: FnMut(D1) -> I + 'static,
+        L: for<'a> FnMut(C1::Item<'a>) -> I + 'static,
     {
-        let mut storage = Vec::new();
         self.unary_fallible::<DCB, ECB, _, _>(Pipeline, name, move |_, _| {
             Box::new(move |input, ok_output, err_output| {
                 input.for_each(|time, data| {
                     let mut ok_session = ok_output.session_with_builder(&time);
                     let mut err_session = err_output.session_with_builder(&time);
-                    data.swap(&mut storage);
-                    for r in storage.drain(..).flat_map(|d1| logic(d1)) {
+                    for r in data.drain().flat_map(|d1| logic(d1)) {
                         match r {
                             Ok(d2) => ok_session.push_into(d2),
                             Err(e) => err_session.push_into(e),
@@ -457,15 +476,61 @@ where
         })
     }
 
-    fn pass_through<R: Data>(&self, name: &str, unit: R) -> Stream<G, (D1, G::Timestamp, R)> {
-        self.unary(Pipeline, name, move |_, _| {
+    fn expire_stream_at(
+        &self,
+        name: &str,
+        expiration: G::Timestamp,
+        token: Weak<()>,
+    ) -> StreamCore<G, C1> {
+        let name = format!("expire_stream_at({name})");
+        self.unary_frontier(Pipeline, &name.clone(), move |cap, _| {
+            // Retain a capability for the expiration time, which we'll only drop if the token
+            // is dropped. Else, block progress at the expiration time to prevent downstream
+            // operators from making any statement about expiration time or any following time.
+            let mut cap = Some(cap.delayed(&expiration));
+            let mut warned = false;
+            move |input, output| {
+                if token.upgrade().is_none() {
+                    // In shutdown, allow to propagate.
+                    drop(cap.take());
+                } else {
+                    let frontier = input.frontier().frontier();
+                    if !frontier.less_than(&expiration) && !warned {
+                        // Here, we print a warning, not an error. The state is only a liveness
+                        // concern, but not relevant for correctness. Additionally, a race between
+                        // shutting down the dataflow and dropping the token can cause the dataflow
+                        // to shut down before we drop the token.  This can happen when dropping
+                        // the last remaining capability on a different worker.  We do not want to
+                        // log an error every time this happens.
+
+                        tracing::warn!(
+                            name = name,
+                            frontier = ?frontier,
+                            expiration = ?expiration,
+                            "frontier not less than expiration"
+                        );
+                        warned = true;
+                    }
+                }
+                input.for_each(|time, data| {
+                    let mut session = output.session(&time);
+                    session.give_container(data);
+                });
+            }
+        })
+    }
+
+    fn pass_through<CB, R>(&self, name: &str, unit: R) -> StreamCore<G, CB::Container>
+    where
+        CB: ContainerBuilder + for<'a> PushInto<(C1::Item<'a>, G::Timestamp, R)>,
+        R: Data,
+    {
+        self.unary::<CB, _, _, _>(Pipeline, name, move |_, _| {
             move |input, output| {
                 input.for_each(|cap, data| {
-                    let mut v = Vec::new();
-                    data.swap(&mut v);
-                    let mut session = output.session(&cap);
+                    let mut session = output.session_with_builder(&cap);
                     session.give_iterator(
-                        v.into_iter()
+                        data.drain()
                             .map(|payload| (payload, cap.time().clone(), unit.clone())),
                     );
                 });
@@ -473,30 +538,26 @@ where
         })
     }
 
-    fn with_token(&self, token: Weak<()>) -> Stream<G, D1> {
+    fn with_token(&self, token: Weak<()>) -> StreamCore<G, C1> {
         self.unary(Pipeline, "WithToken", move |_cap, _info| {
-            let mut vector = Default::default();
             move |input, output| {
                 input.for_each(|cap, data| {
                     if token.upgrade().is_some() {
-                        data.swap(&mut vector);
-                        output.session(&cap).give_container(&mut vector);
+                        output.session(&cap).give_container(data);
                     }
                 });
             }
         })
     }
 
-    fn distribute(&self) -> Stream<G, D1>
+    fn distribute(&self) -> StreamCore<G, C1>
     where
-        D1: ExchangeData,
+        C1: ContainerBytes + Send,
     {
-        let mut vector = Vec::new();
         self.unary(crate::pact::Distribute, "Distribute", move |_, _| {
             move |input, output| {
                 input.for_each(|time, data| {
-                    data.swap(&mut vector);
-                    output.session(&time).give_container(&mut vector);
+                    output.session(&time).give_container(data);
                 });
             }
         })
@@ -540,6 +601,17 @@ where
         (ok_stream.as_collection(), err_stream.as_collection())
     }
 
+    fn expire_collection_at(
+        &self,
+        name: &str,
+        expiration: G::Timestamp,
+        token: Weak<()>,
+    ) -> Collection<G, D1, R> {
+        self.inner
+            .expire_stream_at(name, expiration, token)
+            .as_collection()
+    }
+
     fn explode_one<D2, R2, L>(&self, mut logic: L) -> Collection<G, D2, <R2 as Multiply<R>>::Output>
     where
         D2: differential_dataflow::Data,
@@ -553,13 +625,11 @@ where
                 Pipeline,
                 "ExplodeOne",
                 move |_, _| {
-                    let mut buffer = Vec::new();
                     move |input, output| {
                         input.for_each(|time, data| {
-                            data.swap(&mut buffer);
                             output
                                 .session_with_builder(&time)
-                                .give_iterator(buffer.drain(..).map(|(x, t, d)| {
+                                .give_iterator(data.drain(..).map(|(x, t, d)| {
                                     let (x, d2) = logic(x);
                                     (x, t, d2.multiply(&d))
                                 }));
@@ -576,7 +646,6 @@ where
         IE: Fn(D1, R) -> (E, R) + 'static,
         R: num_traits::sign::Signed,
     {
-        let mut buffer = Vec::new();
         let (oks, errs) = self
             .inner
             .unary_fallible(Pipeline, "EnsureMonotonic", move |_, _| {
@@ -584,8 +653,7 @@ where
                     input.for_each(|time, data| {
                         let mut ok_session = ok_output.session(&time);
                         let mut err_session = err_output.session(&time);
-                        data.swap(&mut buffer);
-                        for (x, t, d) in buffer.drain(..) {
+                        for (x, t, d) in data.drain(..) {
                             if d.is_positive() {
                                 ok_session.give((x, t, d))
                             } else {
@@ -644,9 +712,20 @@ where
                 data.hash(&mut h);
                 h.finish()
             });
-            // Access to `arrange_core` is OK because we specify the trace and don't hold on to it.
-            consolidate_pact::<Ba, _, _, _, _, _>(&self.map(|k| (k, ())), exchange, name)
-                .map(|(k, ())| k)
+            consolidate_pact::<Ba, _, _>(&self.map(|k| (k, ())).inner, exchange, name)
+                .unary(Pipeline, "unpack consolidated", |_, _| {
+                    |input, output| {
+                        input.for_each(|time, data| {
+                            let mut session = output.session(&time);
+                            for ((k, ()), t, d) in
+                                data.iter().flatten().flat_map(|chunk| chunk.iter())
+                            {
+                                session.give((k.clone(), t.clone(), d.clone()))
+                            }
+                        })
+                    }
+                })
+                .as_collection()
         } else {
             self
         }
@@ -664,10 +743,21 @@ where
             > + 'static,
     {
         let exchange =
-            Exchange::new(move |update: &((D1, ()), G::Timestamp, R)| (update.0).0.hashed().into());
+            Exchange::new(move |update: &((D1, ()), G::Timestamp, R)| (update.0).0.hashed());
 
-        consolidate_pact::<Ba, _, _, _, _, _>(&self.map(|k| (k, ())), exchange, name)
-            .map(|(k, ())| k)
+        consolidate_pact::<Ba, _, _>(&self.map(|k| (k, ())).inner, exchange, name)
+            .unary(Pipeline, &format!("Unpack {name}"), |_, _| {
+                |input, output| {
+                    input.for_each(|time, data| {
+                        let mut session = output.session(&time);
+                        for ((k, ()), t, d) in data.iter().flatten().flat_map(|chunk| chunk.iter())
+                        {
+                            session.give((k.clone(), t.clone(), d.clone()))
+                        }
+                    })
+                }
+            })
+            .as_collection()
     }
 }
 
@@ -706,132 +796,118 @@ where
 
 /// Aggregates the weights of equal records into at most one record.
 ///
-/// The data are accumulated in place, each held back until their timestamp has completed.
+/// Produces a stream of chains of records, partitioned according to `pact`. The
+/// data is sorted according to `Ba`. For each timestamp, it produces at most one chain.
 ///
-/// This serves as a low-level building-block for more user-friendly functions.
-pub fn consolidate_pact<B, P, G, K, V, R>(
-    collection: &Collection<G, (K, V), R>,
+/// The data are accumulated in place, each held back until their timestamp has completed.
+pub fn consolidate_pact<Ba, P, G>(
+    stream: &StreamCore<G, Ba::Input>,
     pact: P,
     name: &str,
-) -> Collection<G, (K, V), R>
+) -> Stream<G, Vec<Ba::Output>>
 where
     G: Scope,
-    K: Data,
-    V: Data,
-    R: Data + Semigroup,
-    B: Batcher<Input = Vec<((K, V), G::Timestamp, R)>, Time = G::Timestamp> + 'static,
-    B::Output: Container,
-    for<'a> Vec<((K, V), G::Timestamp, R)>: PushInto<<B::Output as Container>::Item<'a>>,
-    P: ParallelizationContract<G::Timestamp, Vec<((K, V), G::Timestamp, R)>>,
+    Ba: Batcher<Time = G::Timestamp> + 'static,
+    Ba::Input: Container + Clone + 'static,
+    Ba::Output: Container + Clone,
+    P: ParallelizationContract<G::Timestamp, Ba::Input>,
 {
-    collection
-        .inner
-        .unary_frontier(pact, name, |_cap, info| {
-            // Acquire a logger for arrange events.
-            let logger = {
-                let scope = collection.scope();
-                let register = scope.log_register();
-                register.get::<differential_dataflow::logging::DifferentialEvent>(
-                    "differential/arrange",
-                )
-            };
+    stream.unary_frontier(pact, name, |_cap, info| {
+        // Acquire a logger for arrange events.
+        let logger = {
+            let scope = stream.scope();
+            let register = scope.log_register();
+            register
+                .get::<DifferentialEventBuilder>("differential/arrange")
+                .map(Into::into)
+        };
 
-            let mut batcher = B::new(logger, info.global_id);
-            // Capabilities for the lower envelope of updates in `batcher`.
-            let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
-            let mut prev_frontier = Antichain::from_elem(G::Timestamp::minimum());
+        let mut batcher = Ba::new(logger, info.global_id);
+        // Capabilities for the lower envelope of updates in `batcher`.
+        let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
+        let mut prev_frontier = Antichain::from_elem(G::Timestamp::minimum());
 
-            move |input, output| {
-                input.for_each(|cap, data| {
-                    capabilities.insert(cap.retain());
-                    batcher.push_container(data);
-                });
+        move |input, output| {
+            input.for_each(|cap, data| {
+                capabilities.insert(cap.retain());
+                batcher.push_container(data);
+            });
 
-                if prev_frontier.borrow() != input.frontier().frontier() {
-                    if capabilities
-                        .elements()
-                        .iter()
-                        .any(|c| !input.frontier().less_equal(c.time()))
-                    {
-                        let mut upper = Antichain::new(); // re-used allocation for sealing batches.
+            if prev_frontier.borrow() != input.frontier().frontier() {
+                if capabilities
+                    .elements()
+                    .iter()
+                    .any(|c| !input.frontier().less_equal(c.time()))
+                {
+                    let mut upper = Antichain::new(); // re-used allocation for sealing batches.
 
-                        // For each capability not in advance of the input frontier ...
-                        for (index, capability) in capabilities.elements().iter().enumerate() {
-                            if !input.frontier().less_equal(capability.time()) {
-                                // Assemble the upper bound on times we can commit with this capabilities.
-                                // We must respect the input frontier, and *subsequent* capabilities, as
-                                // we are pretending to retire the capability changes one by one.
-                                upper.clear();
-                                for time in input.frontier().frontier().iter() {
-                                    upper.insert(time.clone());
-                                }
-                                for other_capability in &capabilities.elements()[(index + 1)..] {
-                                    upper.insert(other_capability.time().clone());
-                                }
-
-                                // send the batch to downstream consumers, empty or not.
-                                let mut session = output.session(&capabilities.elements()[index]);
-                                // Extract updates not in advance of `upper`.
-                                let output = batcher
-                                    .seal::<ConsolidateBuilder<_, _, _, _, _>>(upper.clone());
-                                for mut batch in output {
-                                    session.give_container(&mut batch);
-                                }
+                    // For each capability not in advance of the input frontier ...
+                    for (index, capability) in capabilities.elements().iter().enumerate() {
+                        if !input.frontier().less_equal(capability.time()) {
+                            // Assemble the upper bound on times we can commit with this capabilities.
+                            // We must respect the input frontier, and *subsequent* capabilities, as
+                            // we are pretending to retire the capability changes one by one.
+                            upper.clear();
+                            for time in input.frontier().frontier().iter() {
+                                upper.insert(time.clone());
                             }
-                        }
-
-                        // Having extracted and sent batches between each capability and the input frontier,
-                        // we should downgrade all capabilities to match the batcher's lower update frontier.
-                        // This may involve discarding capabilities, which is fine as any new updates arrive
-                        // in messages with new capabilities.
-
-                        let mut new_capabilities = Antichain::new();
-                        for time in batcher.frontier().iter() {
-                            if let Some(capability) = capabilities
-                                .elements()
-                                .iter()
-                                .find(|c| c.time().less_equal(time))
-                            {
-                                new_capabilities.insert(capability.delayed(time));
-                            } else {
-                                panic!("failed to find capability");
+                            for other_capability in &capabilities.elements()[(index + 1)..] {
+                                upper.insert(other_capability.time().clone());
                             }
-                        }
 
-                        capabilities = new_capabilities;
+                            // send the batch to downstream consumers, empty or not.
+                            let mut session = output.session(&capabilities.elements()[index]);
+                            // Extract updates not in advance of `upper`.
+                            let output =
+                                batcher.seal::<ConsolidateBuilder<_, Ba::Output>>(upper.clone());
+                            session.give(output);
+                        }
                     }
 
-                    prev_frontier.clear();
-                    prev_frontier.extend(input.frontier().frontier().iter().cloned());
+                    // Having extracted and sent batches between each capability and the input frontier,
+                    // we should downgrade all capabilities to match the batcher's lower update frontier.
+                    // This may involve discarding capabilities, which is fine as any new updates arrive
+                    // in messages with new capabilities.
+
+                    let mut new_capabilities = Antichain::new();
+                    for time in batcher.frontier().iter() {
+                        if let Some(capability) = capabilities
+                            .elements()
+                            .iter()
+                            .find(|c| c.time().less_equal(time))
+                        {
+                            new_capabilities.insert(capability.delayed(time));
+                        } else {
+                            panic!("failed to find capability");
+                        }
+                    }
+
+                    capabilities = new_capabilities;
                 }
+
+                prev_frontier.clear();
+                prev_frontier.extend(input.frontier().frontier().iter().cloned());
             }
-        })
-        .as_collection()
+        }
+    })
 }
 
 /// A builder that wraps a session for direct output to a stream.
-struct ConsolidateBuilder<K: Data, V: Data, T: Timestamp, R: Data, O> {
-    // Session<'a, T, Vec<((K, V), T, R)>, Counter<T, ((K, V), T, R), Tee<T, ((K, V), T, R)>>>,
-    buffer: Vec<Vec<((K, V), T, R)>>,
-    _marker: PhantomData<O>,
+struct ConsolidateBuilder<T, I> {
+    _marker: PhantomData<(T, I)>,
 }
 
-impl<K, V, T, R, O> Builder for ConsolidateBuilder<K, V, T, R, O>
+impl<T, I> Builder for ConsolidateBuilder<T, I>
 where
-    K: Data,
-    V: Data,
     T: Timestamp,
-    R: Data,
-    O: Container,
-    for<'a> Vec<((K, V), T, R)>: PushInto<O::Item<'a>>,
+    I: Container,
 {
-    type Input = O;
+    type Input = I;
     type Time = T;
-    type Output = Vec<Vec<((K, V), T, R)>>;
+    type Output = Vec<I>;
 
     fn new() -> Self {
         Self {
-            buffer: Vec::default(),
             _marker: PhantomData,
         }
     }
@@ -840,32 +916,15 @@ where
         Self::new()
     }
 
-    fn push(&mut self, chunk: &mut Self::Input) {
-        // TODO(mh): This is less efficient than it could be because it extracts each item
-        // individually and then pushes it. However, it is not a regression over the previous
-        // implementation. In the future, we want to either clone many elements in one go,
-        // or ensure that `Vec<Input>` == `Output`, which would avoid looking at the container
-        // contents at all.
-        'element: for element in chunk.drain() {
-            if let Some(last) = self.buffer.last_mut() {
-                if last.len() < last.capacity() {
-                    last.push_into(element);
-                    continue 'element;
-                }
-            }
-            let mut new =
-                Vec::with_capacity(timely::container::buffer::default_capacity::<Self::Input>());
-            new.push_into(element);
-            self.buffer.push(new);
-        }
+    fn push(&mut self, _chunk: &mut Self::Input) {
+        unimplemented!("ConsolidateBuilder::push")
     }
 
-    fn done(
-        self,
-        _lower: Antichain<Self::Time>,
-        _upper: Antichain<Self::Time>,
-        _since: Antichain<Self::Time>,
-    ) -> Self::Output {
-        self.buffer
+    fn done(self, _: Description<Self::Time>) -> Self::Output {
+        unimplemented!("ConsolidateBuilder::done")
+    }
+
+    fn seal(chain: &mut Vec<Self::Input>, _description: Description<Self::Time>) -> Self::Output {
+        std::mem::take(chain)
     }
 }

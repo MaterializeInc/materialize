@@ -18,11 +18,16 @@ import os
 import pathlib
 import random
 import subprocess
+from collections.abc import Iterator
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from threading import Thread
-from typing import TypeVar
+from typing import Protocol, TypeVar
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
+import psycopg
+import xxhash
 import zstandard
 
 MZ_ROOT = Path(os.environ["MZ_ROOT"])
@@ -106,7 +111,7 @@ def ensure_dir_exists(path_to_dir: str) -> None:
     )
 
 
-def compute_sha256_of_file(path: str | Path) -> str:
+def sha256_of_file(path: str | Path) -> str:
     sha256 = hashlib.sha256()
     with open(path, "rb") as f:
         for block in iter(lambda: f.read(filecmp.BUFSIZE), b""):
@@ -114,5 +119,82 @@ def compute_sha256_of_file(path: str | Path) -> str:
     return sha256.hexdigest()
 
 
-def compute_sha256_of_utf8_string(string: str) -> str:
-    return hashlib.sha256(bytes(string, encoding="utf-8")).hexdigest()
+def sha256_of_utf8_string(value: str) -> str:
+    return hashlib.sha256(bytes(value, encoding="utf-8")).hexdigest()
+
+
+def stable_int_hash(*values: str) -> int:
+    if len(values) == 1:
+        return xxhash.xxh64(values[0], seed=0).intdigest()
+
+    return stable_int_hash(",".join([str(stable_int_hash(entry)) for entry in values]))
+
+
+class HasName(Protocol):
+    name: str
+
+
+U = TypeVar("U", bound=HasName)
+
+
+def selected_by_name(selected: list[str], objs: list[U]) -> Iterator[U]:
+    for name in selected:
+        for obj in objs:
+            if obj.name == name:
+                yield obj
+                break
+        else:
+            raise ValueError(
+                f"Unknown object with name {name} in {[obj.name for obj in objs]}"
+            )
+
+
+@dataclass
+class PgConnInfo:
+    user: str
+    host: str
+    port: int
+    database: str
+    password: str | None = None
+    ssl: bool = False
+    cluster: str | None = None
+    autocommit: bool = False
+
+    def connect(self) -> psycopg.Connection:
+        conn = psycopg.connect(
+            host=self.host,
+            port=self.port,
+            user=self.user,
+            password=self.password,
+            dbname=self.database,
+            sslmode="require" if self.ssl else None,
+        )
+        if self.autocommit:
+            conn.autocommit = True
+        if self.cluster:
+            with conn.cursor() as cur:
+                cur.execute(f"SET cluster = {self.cluster}".encode())
+        return conn
+
+    def to_conn_string(self) -> str:
+        return (
+            f"postgres://{quote(self.user)}:{quote(self.password)}@{self.host}:{self.port}/{quote(self.database)}"
+            if self.password
+            else f"postgres://{quote(self.user)}@{self.host}:{self.port}/{quote(self.database)}"
+        )
+
+
+def parse_pg_conn_string(conn_string: str) -> PgConnInfo:
+    """Not supported natively by pg8000, so we have to parse ourselves"""
+    url = urlparse(conn_string)
+    query_params = parse_qs(url.query)
+    assert url.username
+    assert url.hostname
+    return PgConnInfo(
+        user=unquote(url.username),
+        password=unquote(url.password) if url.password else url.password,
+        host=url.hostname,
+        port=url.port or 5432,
+        database=url.path.lstrip("/"),
+        ssl=query_params.get("sslmode", ["disable"])[-1] != "disable",
+    )

@@ -22,12 +22,12 @@
 #![warn(missing_docs, missing_debug_implementations)]
 #![cfg_attr(nightly_doc_features, feature(doc_cfg))]
 
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "test")))]
-#[cfg(feature = "test")]
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "assert")))]
+#[cfg(feature = "assert")]
 pub mod assert;
 pub mod bits;
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "bytes_")))]
-#[cfg(feature = "bytes_")]
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "bytes")))]
+#[cfg(feature = "bytes")]
 pub mod bytes;
 pub mod cast;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]
@@ -36,7 +36,6 @@ pub mod channel;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "cli")))]
 #[cfg(feature = "cli")]
 pub mod cli;
-pub mod codegen;
 pub mod collections;
 pub mod env;
 pub mod error;
@@ -53,9 +52,9 @@ pub mod iter;
 pub mod lex;
 #[cfg_attr(
     nightly_doc_features,
-    doc(cfg(all(feature = "bytes_", feature = "region")))
+    doc(cfg(all(feature = "bytes", feature = "region")))
 )]
-#[cfg(all(feature = "bytes_", feature = "region", feature = "tracing_"))]
+#[cfg(all(feature = "bytes", feature = "region", feature = "tracing"))]
 pub mod lgbytes;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "metrics")))]
 #[cfg(feature = "metrics")]
@@ -66,6 +65,7 @@ pub mod netio;
 pub mod now;
 pub mod num;
 pub mod option;
+#[cfg(not(target_family = "wasm"))]
 pub mod panic;
 pub mod path;
 pub mod permutations;
@@ -92,15 +92,20 @@ pub mod task;
 pub mod test;
 pub mod thread;
 pub mod time;
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing_")))]
-#[cfg(feature = "tracing_")]
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing")))]
+#[cfg(feature = "tracing")]
 pub mod tracing;
+pub mod url;
 pub mod vec;
 
 pub use mz_ore_proc::{instrument, static_list, test};
 
 #[doc(hidden)]
 pub mod __private {
-    #[cfg(feature = "tracing_")]
+    #[cfg(feature = "tracing")]
     pub use tracing;
 }
+
+// Epoch: 1
+//
+// Bump this whenever we need to change the hash of a build without changing any code.

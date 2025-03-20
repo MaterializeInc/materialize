@@ -26,7 +26,7 @@ use crate::stats::{
 // Each element could be any of a JsonNull, a bool, a string, a numeric, a list,
 // or a map/object. The column might be a single type but could also be a
 // mixture of any subset of these types.
-#[cfg_attr(any(test), derive(Clone))]
+#[derive(Clone)]
 pub enum JsonStats {
     /// A sentinel that indicates there were no elements.
     None,
@@ -55,8 +55,7 @@ pub enum JsonStats {
     Maps(BTreeMap<String, JsonMapElementStats>),
 }
 
-#[derive(Default)]
-#[cfg_attr(any(test), derive(Clone))]
+#[derive(Default, Clone)]
 pub struct JsonMapElementStats {
     pub len: usize,
     pub stats: JsonStats,

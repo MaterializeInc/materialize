@@ -95,7 +95,35 @@ fn pack_val_as_datum(
             ScalarType::Int16 => packer.push(Datum::from(from_value_opt::<i16>(value)?)),
             ScalarType::UInt32 => packer.push(Datum::from(from_value_opt::<u32>(value)?)),
             ScalarType::Int32 => packer.push(Datum::from(from_value_opt::<i32>(value)?)),
-            ScalarType::UInt64 => packer.push(Datum::from(from_value_opt::<u64>(value)?)),
+            ScalarType::UInt64 => {
+                if let Some(MySqlColumnMeta::Bit(precision)) = &col_desc.meta {
+                    let mut value = from_value_opt::<Vec<u8>>(value)?;
+
+                    // Ensure we have the correct number of bytes.
+                    let precision_bytes = (precision + 7) / 8;
+                    if value.len() != usize::cast_from(precision_bytes) {
+                        return Err(anyhow::anyhow!("'bit' column out of range!"));
+                    }
+                    // Be defensive and prune any bits that come over the wire and are
+                    // greater than our precision.
+                    let bit_index = precision % 8;
+                    if bit_index != 0 {
+                        let mask = !(u8::MAX << bit_index);
+                        if value.len() > 0 {
+                            value[0] &= mask;
+                        }
+                    }
+
+                    // Based on experimentation the value coming across the wire is
+                    // encoded in big-endian.
+                    let mut buf = [0u8; 8];
+                    buf[(8 - value.len())..].copy_from_slice(value.as_slice());
+                    let value = u64::from_be_bytes(buf);
+                    packer.push(Datum::from(value))
+                } else {
+                    packer.push(Datum::from(from_value_opt::<u64>(value)?))
+                }
+            }
             ScalarType::Int64 => packer.push(Datum::from(from_value_opt::<i64>(value)?)),
             ScalarType::Float32 => packer.push(Datum::from(from_value_opt::<f32>(value)?)),
             ScalarType::Float64 => packer.push(Datum::from(from_value_opt::<f64>(value)?)),
@@ -198,6 +226,7 @@ fn pack_val_as_datum(
                             ))?;
                         }
                     }
+                    Some(MySqlColumnMeta::Bit(_)) => unreachable!("parsed as a u64"),
                     None => {
                         packer.push(Datum::String(&from_value_opt::<String>(value)?));
                     }

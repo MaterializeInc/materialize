@@ -11,6 +11,7 @@ use std::convert::TryFrom;
 use std::num::TryFromIntError;
 use std::time::Duration;
 
+use columnar::Columnar;
 use dec::TryFromDecimalError;
 use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
@@ -34,7 +35,9 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.timestamp.rs"));
     Hash,
     Default,
     Arbitrary,
+    Columnar,
 )]
+#[columnar(derive(PartialEq, Eq, PartialOrd, Ord))]
 pub struct Timestamp {
     /// note no `pub`.
     internal: u64,
@@ -70,6 +73,7 @@ pub trait TimestampManipulation:
     + differential_dataflow::lattice::Lattice
     + std::fmt::Debug
     + mz_persist_types::StepForward
+    + Sync
 {
     /// Advance a timestamp by the least amount possible such that
     /// `ts.less_than(ts.step_forward())` is true. Panic if unable to do so.
@@ -267,6 +271,12 @@ impl From<Timestamp> for Numeric {
     }
 }
 
+impl From<Timestamp> for Duration {
+    fn from(ts: Timestamp) -> Self {
+        Duration::from_millis(ts.internal)
+    }
+}
+
 impl std::ops::Rem<Timestamp> for Timestamp {
     type Output = Timestamp;
 
@@ -460,14 +470,10 @@ impl columnation::Columnation for Timestamp {
     type InnerRegion = columnation::CopyRegion<Timestamp>;
 }
 
-mod flatcontainer {
-    use flatcontainer::{Containerized, IntoOwned, MirrorRegion};
+mod differential {
+    use differential_dataflow::IntoOwned;
 
     use crate::Timestamp;
-
-    impl Containerized for Timestamp {
-        type Region = MirrorRegion<Timestamp>;
-    }
 
     impl<'a> IntoOwned<'a> for Timestamp {
         type Owned = Self;

@@ -524,7 +524,7 @@ SELECT '{a=>1, b=>2}'::map[text=>int] <@ '{a=>1, b=>2, c=>3}'::map[text=>int]
 ----
 true
 
-query error CAST does not support casting from map\[text=>map\[text=>character\]\] to map\[text=>map\[text=>character\]\]
+query error db error: ERROR: CAST does not support casting from map\[text=>map\[text=>char\]\] to map\[text=>map\[text=>char\(1\)\]\]
 SELECT '{hello=>{world=>a}}'::map[text=>map[text=>char]] <@ '{hello=>c}'::map[text=>char]
 ----
 false
@@ -596,11 +596,10 @@ SELECT '{a=>1,b=>2}'::int4_map::text;
 ----
 {a=>1,b=>2}
 
-# TODO: #27761
-# query T
-# SELECT pg_typeof(NULL::int4_map);
-# ----
-# int4_map
+query T
+SELECT pg_typeof(NULL::int4_map);
+----
+int4_map
 
 # 🔬🔬 Check each valid value type
 

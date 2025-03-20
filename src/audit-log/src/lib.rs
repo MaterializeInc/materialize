@@ -82,6 +82,7 @@ pub enum EventType {
     Alter,
     Grant,
     Revoke,
+    Comment,
 }
 
 impl EventType {
@@ -92,6 +93,7 @@ impl EventType {
             EventType::Alter => "Altered",
             EventType::Grant => "Granted",
             EventType::Revoke => "Revoked",
+            EventType::Comment => "Comment",
         }
     }
 }
@@ -106,10 +108,12 @@ pub enum ObjectType {
     Cluster,
     ClusterReplica,
     Connection,
+    ContinualTask,
     Database,
     Func,
     Index,
     MaterializedView,
+    NetworkPolicy,
     Role,
     Secret,
     Schema,
@@ -127,10 +131,12 @@ impl ObjectType {
             ObjectType::Cluster => "Cluster",
             ObjectType::ClusterReplica => "Cluster Replica",
             ObjectType::Connection => "Connection",
+            ObjectType::ContinualTask => "Continual Task",
             ObjectType::Database => "Database",
             ObjectType::Func => "Function",
             ObjectType::Index => "Index",
             ObjectType::MaterializedView => "Materialized View",
+            ObjectType::NetworkPolicy => "Network Policy",
             ObjectType::Role => "Role",
             ObjectType::Schema => "Schema",
             ObjectType::Secret => "Secret",
@@ -151,12 +157,17 @@ pub enum EventDetails {
     #[serde(rename = "CreateComputeReplicaV1")] // historical name
     CreateClusterReplicaV1(CreateClusterReplicaV1),
     CreateClusterReplicaV2(CreateClusterReplicaV2),
+    CreateClusterReplicaV3(CreateClusterReplicaV3),
     #[serde(rename = "DropComputeReplicaV1")] // historical name
     DropClusterReplicaV1(DropClusterReplicaV1),
     DropClusterReplicaV2(DropClusterReplicaV2),
+    DropClusterReplicaV3(DropClusterReplicaV3),
     CreateSourceSinkV1(CreateSourceSinkV1),
     CreateSourceSinkV2(CreateSourceSinkV2),
     CreateSourceSinkV3(CreateSourceSinkV3),
+    CreateSourceSinkV4(CreateSourceSinkV4),
+    CreateIndexV1(CreateIndexV1),
+    CreateMaterializedViewV1(CreateMaterializedViewV1),
     AlterSetClusterV1(AlterSetClusterV1),
     AlterSourceSinkV1(AlterSourceSinkV1),
     GrantRoleV1(GrantRoleV1),
@@ -178,6 +189,21 @@ pub enum EventDetails {
     AlterRetainHistoryV1(AlterRetainHistoryV1),
     ToNewIdV1(ToNewIdV1),
     FromPreviousIdV1(FromPreviousIdV1),
+    SetV1(SetV1),
+    ResetAllV1,
+    RotateKeysV1(RotateKeysV1),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct SetV1 {
+    pub name: String,
+    pub value: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct RotateKeysV1 {
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
@@ -244,6 +270,17 @@ pub struct DropClusterReplicaV2 {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct DropClusterReplicaV3 {
+    pub cluster_id: String,
+    pub cluster_name: String,
+    pub replica_id: Option<String>,
+    pub replica_name: String,
+    pub reason: CreateOrDropClusterReplicaReasonV1,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scheduling_policies: Option<SchedulingDecisionsWithReasonsV2>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct CreateClusterReplicaV1 {
     pub cluster_id: String,
     pub cluster_name: String,
@@ -273,6 +310,21 @@ pub struct CreateClusterReplicaV2 {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct CreateClusterReplicaV3 {
+    pub cluster_id: String,
+    pub cluster_name: String,
+    pub replica_id: Option<String>,
+    pub replica_name: String,
+    pub logical_size: String,
+    pub disk: bool,
+    pub billed_as: Option<String>,
+    pub internal: bool,
+    pub reason: CreateOrDropClusterReplicaReasonV1,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scheduling_policies: Option<SchedulingDecisionsWithReasonsV2>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 #[serde(rename_all = "kebab-case")]
 pub enum CreateOrDropClusterReplicaReasonV1 {
     Manual,
@@ -289,14 +341,36 @@ pub struct SchedulingDecisionsWithReasonsV1 {
     pub on_refresh: RefreshDecisionWithReasonV1,
 }
 
+/// The reason for the automated cluster scheduling to turn a cluster On or Off. Each existing
+/// policy's On/Off opinion should be recorded, along with their reasons. (Among the reasons there
+/// can be settings of the policy as well as other information about the state of the system.)
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct SchedulingDecisionsWithReasonsV2 {
+    /// The reason for the refresh policy for wanting to turn a cluster On or Off.
+    pub on_refresh: RefreshDecisionWithReasonV2,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct RefreshDecisionWithReasonV1 {
     pub decision: SchedulingDecisionV1,
     /// Objects that currently need a refresh on the cluster (taking into account the rehydration
     /// time estimate).
     pub objects_needing_refresh: Vec<String>,
-    /// The REHYDRATION TIME ESTIMATE setting of the cluster.
-    pub rehydration_time_estimate: String,
+    /// The HYDRATION TIME ESTIMATE setting of the cluster.
+    pub hydration_time_estimate: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct RefreshDecisionWithReasonV2 {
+    pub decision: SchedulingDecisionV1,
+    /// Objects that currently need a refresh on the cluster (taking into account the rehydration
+    /// time estimate), and therefore should keep the cluster On.
+    pub objects_needing_refresh: Vec<String>,
+    /// Objects for which we estimate that they currently need Persist compaction, and therefore
+    /// should keep the cluster On.
+    pub objects_needing_compaction: Vec<String>,
+    /// The HYDRATION TIME ESTIMATE setting of the cluster.
+    pub hydration_time_estimate: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
@@ -340,6 +414,32 @@ pub struct CreateSourceSinkV3 {
     pub name: FullNameV1,
     #[serde(rename = "type")]
     pub external_type: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct CreateSourceSinkV4 {
+    pub id: String,
+    pub cluster_id: Option<String>,
+    #[serde(flatten)]
+    pub name: FullNameV1,
+    #[serde(rename = "type")]
+    pub external_type: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct CreateIndexV1 {
+    pub id: String,
+    pub cluster_id: String,
+    #[serde(flatten)]
+    pub name: FullNameV1,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct CreateMaterializedViewV1 {
+    pub id: String,
+    pub cluster_id: String,
+    #[serde(flatten)]
+    pub name: FullNameV1,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
@@ -470,10 +570,16 @@ impl EventDetails {
             EventDetails::CreateClusterReplicaV2(v) => {
                 serde_json::to_value(v).expect("must serialize")
             }
+            EventDetails::CreateClusterReplicaV3(v) => {
+                serde_json::to_value(v).expect("must serialize")
+            }
             EventDetails::DropClusterReplicaV1(v) => {
                 serde_json::to_value(v).expect("must serialize")
             }
             EventDetails::DropClusterReplicaV2(v) => {
+                serde_json::to_value(v).expect("must serialize")
+            }
+            EventDetails::DropClusterReplicaV3(v) => {
                 serde_json::to_value(v).expect("must serialize")
             }
             EventDetails::IdFullNameV1(v) => serde_json::to_value(v).expect("must serialize"),
@@ -489,6 +595,11 @@ impl EventDetails {
             EventDetails::CreateSourceSinkV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::CreateSourceSinkV2(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::CreateSourceSinkV3(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::CreateSourceSinkV4(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::CreateIndexV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::CreateMaterializedViewV1(v) => {
+                serde_json::to_value(v).expect("must serialize")
+            }
             EventDetails::AlterSourceSinkV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::AlterSetClusterV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::GrantRoleV1(v) => serde_json::to_value(v).expect("must serialize"),
@@ -506,6 +617,9 @@ impl EventDetails {
             }
             EventDetails::ToNewIdV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::FromPreviousIdV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::SetV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::ResetAllV1 => serde_json::Value::Null,
+            EventDetails::RotateKeysV1(v) => serde_json::to_value(v).expect("must serialize"),
         }
     }
 }

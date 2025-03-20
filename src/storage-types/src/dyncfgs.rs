@@ -10,9 +10,8 @@
 //! Dyncfgs used by the storage layer. Despite their name, these can be used
 //! "statically" during rendering, or dynamically within timely operators.
 
-use std::time::Duration;
-
 use mz_dyncfg::{Config, ConfigSet};
+use std::time::Duration;
 
 /// When dataflows observe an invariant violation it is either due to a bug or due to the cluster
 /// being shut down. This configuration defines the amount of time to wait before panicking the
@@ -37,6 +36,15 @@ pub const DELAY_SOURCES_PAST_REHYDRATION: Config<bool> = Config::new(
         (namely, upsert) till after rehydration is finished",
 );
 
+/// Whether storage dataflows should suspend execution while downstream operators are still
+/// processing data.
+pub const SUSPENDABLE_SOURCES: Config<bool> = Config::new(
+    "storage_dataflow_suspendable_sources",
+    true,
+    "Whether storage dataflows should suspend execution while downstream operators are still \
+        processing data.",
+);
+
 // Controller
 
 /// When enabled, force-downgrade the controller's since handle on the shard
@@ -47,6 +55,20 @@ pub const STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION: Config<bool> = Config::ne
     true,
     "When enabled, force-downgrade the controller's since handle on the shard\
     during shard finalization",
+);
+
+/// The interval of time to keep when truncating the replica metrics history.
+pub const REPLICA_METRICS_HISTORY_RETENTION_INTERVAL: Config<Duration> = Config::new(
+    "replica_metrics_history_retention_interval",
+    Duration::from_secs(60 * 60 * 24 * 30), // 30 days
+    "The interval of time to keep when truncating the replica metrics history.",
+);
+
+/// The interval of time to keep when truncating the wallclock lag history.
+pub const WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL: Config<Duration> = Config::new(
+    "wallclock_lag_history_retention_interval",
+    Duration::from_secs(60 * 60 * 24 * 30), // 30 days
+    "The interval of time to keep when truncating the wallclock lag history.",
 );
 
 // Kafka
@@ -76,13 +98,28 @@ pub const KAFKA_POLL_MAX_WAIT: Config<Duration> = Config::new(
     available.",
 );
 
-/// The timeout when seeking through a consumer when fast-forwarding it. We expect this
-/// to happen quickly.
-pub const KAFKA_FAST_FORWARD_SEEK_TIMEOUT: Config<Duration> = Config::new(
-    "kafka_fast_forward_seek_timeout",
-    Duration::from_secs(1),
-    "The timeout when seeking through a consumer when fast-forwarding it. We expect this \
-    to happen quickly.",
+/// Interval to fetch topic partition metadata.
+pub static KAFKA_METADATA_FETCH_INTERVAL: Config<Duration> = Config::new(
+    "kafka_default_metadata_fetch_interval",
+    Duration::from_secs(60),
+    "Interval to fetch topic partition metadata.",
+);
+
+pub const KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM: Config<&'static str> =
+    Config::new(
+        "kafka_default_aws_privatelink_endpoint_identification_algorithm",
+        // Default to no hostname verification, which is the default in versions of `librdkafka <1.9.2`.
+        "none",
+        "The value we set for the 'ssl.endpoint.identification.algorithm' option in the Kafka \
+    Connection config. default: 'none'",
+    );
+
+pub const KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS: Config<usize> = Config::new(
+    "kafka_buffered_event_resize_threshold_elements",
+    1000,
+    "In the Kafka sink operator we might need to buffer messages before emitting them. As a \
+        performance optimization we reuse the buffer allocations, but shrink it to retain at \
+        most this number of elements.",
 );
 
 // MySQL
@@ -115,6 +152,13 @@ pub const PG_OFFSET_KNOWN_INTERVAL: Config<Duration> = Config::new(
     "pg_offset_known_interval",
     Duration::from_secs(10),
     "Interval to fetch `offset_known`, from `pg_current_wal_lsn`",
+);
+
+/// Interval to re-validate the schemas of ingested tables.
+pub const PG_SCHEMA_VALIDATION_INTERVAL: Config<Duration> = Config::new(
+    "pg_schema_validation_interval",
+    Duration::from_secs(15),
+    "Interval to re-validate the schemas of ingested tables.",
 );
 
 // Networking
@@ -153,7 +197,7 @@ pub const STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING: Config<bool> = Config::new(
 /// Whether to enable the merge operator in upsert for the RocksDB backend.
 pub const STORAGE_ROCKSDB_USE_MERGE_OPERATOR: Config<bool> = Config::new(
     "storage_rocksdb_use_merge_operator",
-    false,
+    true,
     "Use the native rocksdb merge operator where possible.",
 );
 
@@ -176,22 +220,77 @@ pub const STORAGE_ROCKSDB_CLEANUP_TRIES: Config<usize> = Config::new(
     "How many times to try to cleanup old RocksDB DB's on disk before giving up.",
 );
 
+/// Delay interval when reconnecting to a source / sink after halt.
+pub const STORAGE_SUSPEND_AND_RESTART_DELAY: Config<Duration> = Config::new(
+    "storage_suspend_and_restart_delay",
+    Duration::from_secs(5),
+    "Delay interval when reconnecting to a source / sink after halt.",
+);
+
+/// If true, skip fetching the snapshot in the sink once the frontier has advanced.
+pub const STORAGE_SINK_SNAPSHOT_FRONTIER: Config<bool> = Config::new(
+    "storage_sink_snapshot_frontier",
+    true,
+    "If true, skip fetching the snapshot in the sink once the frontier has advanced.",
+);
+
+/// Whether to mint reclock bindings based on the latest probed frontier or the currently ingested
+/// frontier.
+pub const STORAGE_RECLOCK_TO_LATEST: Config<bool> = Config::new(
+    "storage_reclock_to_latest",
+    false,
+    "Whether to mint reclock bindings based on the latest probed offset or the latest ingested offset."
+);
+
+/// Whether to use the new continual feedback upsert operator.
+pub const STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT: Config<bool> = Config::new(
+    "storage_use_continual_feedback_upsert",
+    true,
+    "Whether to use the new continual feedback upsert operator.",
+);
+
+/// The interval at which the storage server performs maintenance tasks.
+pub const STORAGE_SERVER_MAINTENANCE_INTERVAL: Config<Duration> = Config::new(
+    "storage_server_maintenance_interval",
+    Duration::from_millis(10),
+    "The interval at which the storage server performs maintenance tasks. Zero enables maintenance on every iteration.",
+);
+
+/// If set, iteratively search the progress topic for a progress record with increasing lookback.
+pub const SINK_PROGRESS_SEARCH: Config<bool> = Config::new(
+    "storage_sink_progress_search",
+    true,
+    "If set, iteratively search the progress topic for a progress record with increasing lookback.",
+);
+
 /// Adds the full set of all storage `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&CLUSTER_SHUTDOWN_GRACE_PERIOD)
         .add(&DELAY_SOURCES_PAST_REHYDRATION)
+        .add(&SUSPENDABLE_SOURCES)
         .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
+        .add(&REPLICA_METRICS_HISTORY_RETENTION_INTERVAL)
+        .add(&WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL)
         .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)
         .add(&KAFKA_POLL_MAX_WAIT)
-        .add(&KAFKA_FAST_FORWARD_SEEK_TIMEOUT)
+        .add(&KAFKA_METADATA_FETCH_INTERVAL)
+        .add(&KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM)
+        .add(&KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS)
         .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
         .add(&MYSQL_OFFSET_KNOWN_INTERVAL)
         .add(&PG_FETCH_SLOT_RESUME_LSN_INTERVAL)
         .add(&PG_OFFSET_KNOWN_INTERVAL)
+        .add(&PG_SCHEMA_VALIDATION_INTERVAL)
         .add(&ENFORCE_EXTERNAL_ADDRESSES)
         .add(&STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING)
         .add(&STORAGE_ROCKSDB_USE_MERGE_OPERATOR)
         .add(&STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING)
         .add(&STORAGE_ROCKSDB_CLEANUP_TRIES)
+        .add(&STORAGE_SUSPEND_AND_RESTART_DELAY)
+        .add(&STORAGE_SINK_SNAPSHOT_FRONTIER)
+        .add(&STORAGE_RECLOCK_TO_LATEST)
+        .add(&STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT)
+        .add(&STORAGE_SERVER_MAINTENANCE_INTERVAL)
+        .add(&SINK_PROGRESS_SEARCH)
 }

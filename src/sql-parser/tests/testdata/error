@@ -49,7 +49,7 @@ SELECT ALL DISTINCT name FROM customer
 parse-statement
 INSERT public.customer (id, name, active) VALUES (1, 2, 3)
 ----
-error: Expected INTO, found identifier "public"
+error: Expected INTO, found PUBLIC
 INSERT public.customer (id, name, active) VALUES (1, 2, 3)
        ^
 
@@ -107,7 +107,7 @@ SELECT 1 WHERE 1 + ANY (SELECT 2)
 ----
 SELECT 1 WHERE 1 + ANY (SELECT 2)
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: Some(AnySubquery { left: Value(Number("1")), op: Op { namespace: None, op: "+" }, right: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: Some(AnySubquery { left: Value(Number("1")), op: Op { namespace: None, op: "+" }, right: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None } }), group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT EXISTS (NULL)
@@ -228,3 +228,10 @@ ARRAY[]::int[1 + 1]
 error: Expected right square bracket, found operator "+"
 ARRAY[]::int[1 + 1]
                ^
+
+parse-statement
+CREATE MATERIAL VIEW in_a_material_world AS SELECT 1
+----
+error: Expected DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, [TEMPORARY] TABLE, SECRET, [OR REPLACE] [TEMPORARY] VIEW, or [OR REPLACE] MATERIALIZED VIEW after CREATE, found identifier "material"
+CREATE MATERIAL VIEW in_a_material_world AS SELECT 1
+       ^

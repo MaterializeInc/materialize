@@ -1,0 +1,116 @@
+columns:
+  - column: name
+  - column: global_id
+  - column: lir_id
+  - column: parent_lir_id
+  - column: operator
+  - column: levels
+  - column: to_cut
+  - column: hint
+  - column: savings
+
+
+rows:
+  - name: "`winning_bids`"
+    global_id: "`u148`"
+    lir_id: "`6`"
+    parent_lir_id: "`null`"
+    operator: |
+      ```mzsql
+      TopK::Basic 5
+      ```
+    levels: "`8`"
+    to_cut: "`6`"
+    savings: "`27 MB`"
+    hint: "`255.0`"
+
+  - name: "`winning_bids`"
+    global_id: "`u148`"
+    lir_id: "`5`"
+    parent_lir_id: "`6`"
+    operator: |
+      ```mzsql
+        Join::Differential 2 » 4
+      ```
+    levels: "`null`"
+    to_cut: "`null`"
+    savings: "`null`"
+    hint: "`null`"
+
+  - name: "`winning_bids`"
+    global_id: "`u148`"
+    lir_id: "`4`"
+    parent_lir_id: "`5`"
+    operator: |
+      ```mzsql
+          Arrange 3
+      ```
+    levels: "`null`"
+    to_cut: "`null`"
+    savings: "`null`"
+    hint: "`null`"
+
+  - name: "`winning_bids`"
+    global_id: "`u148`"
+    lir_id: "`3`"
+    parent_lir_id: "`4`"
+    operator: |
+      ```mzsql
+            Get::PassArrangements u145
+      ```
+    levels: "`null`"
+    to_cut: "`null`"
+    savings: "`null`"
+    hint: "`null`"
+
+  - name: "`winning_bids`"
+    global_id: "`u148`"
+    lir_id: "`2`"
+    parent_lir_id: "`5`"
+    operator: |
+      ```mzsql
+          Arrange 1
+      ```
+    levels: "`null`"
+    to_cut: "`null`"
+    savings: "`null`"
+    hint: "`null`"
+
+  - name: "`winning_bids`"
+    global_id: "`u148`"
+    lir_id: "`1`"
+    parent_lir_id: "`2`"
+    operator: |
+      ```mzsql
+            Get::Collection u144
+      ```
+    levels: "`null`"
+    to_cut: "`null`"
+    savings: "`null`"
+    hint: "`null`"
+
+  - name: "`wins_by_item`"
+    global_id: "`u149`"
+    lir_id: "`8`"
+    parent_lir_id: "`null`"
+    operator: |
+      ```mzsql
+      Arrange 7
+      ```
+    levels: "`null`"
+    to_cut: "`null`"
+    savings: "`null`"
+    hint: "`null`"
+
+  - name: "`wins_by_item`"
+    global_id: "`u149`"
+    lir_id: "`7`"
+    parent_lir_id: "`8`"
+    operator: |
+      ```mzsql
+        Get::PassArrangements u148
+      ```
+    levels: "`null`"
+    to_cut: "`null`"
+    savings: "`null`"
+    hint: "`null`"

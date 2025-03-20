@@ -39,7 +39,7 @@ configuration parameters.
 
 ### Set active cluster
 
-```sql
+```mzsql
 SHOW cluster;
 
  cluster
@@ -57,17 +57,17 @@ SHOW cluster;
 
 ### Set transaction isolation level
 
-```sql
+```mzsql
 SET transaction_isolation = 'serializable';
 ```
 
 ### Set search path
 
-```sql
+```mzsql
 SET search_path = public, qck;
 ```
 
-```sql
+```mzsql
 SET schema = qck;
 ```
 

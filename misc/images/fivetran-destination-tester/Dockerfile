@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 # Note: This mzimage is a simple wrapper around the Fivetran Destination Tester to act as a mirror
-#       and decouple ourselves from Fivetran's Dockerhub, incase Fivetran removes the image that we
-#       depend on.
+# and decouple ourselves from Fivetran's Dockerhub, in case Fivetran removes the image that we
+# depend on.
 
-FROM fivetrandocker/sdk-destination-tester:024.0314.001
+FROM us-docker.pkg.dev/build-286712/public-docker-us/sdktesters-v2/sdk-tester:2.25.0228.002

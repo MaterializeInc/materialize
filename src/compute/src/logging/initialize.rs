@@ -10,21 +10,28 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use differential_dataflow::logging::DifferentialEvent;
+use differential_dataflow::dynamic::pointstamp::PointStamp;
+use differential_dataflow::logging::{DifferentialEvent, DifferentialEventBuilder};
 use differential_dataflow::Collection;
 use mz_compute_client::logging::{LogVariant, LoggingConfig};
 use mz_repr::{Diff, Timestamp};
+use mz_storage_operators::persist_source::Subtime;
 use mz_storage_types::errors::DataflowError;
+use mz_timely_util::containers::{Column, ColumnBuilder};
 use mz_timely_util::operator::CollectionExt;
 use timely::communication::Allocate;
-use timely::logging::{Logger, TimelyEvent};
-use timely::progress::reachability::logging::TrackerEvent;
+use timely::container::{ContainerBuilder, PushInto};
+use timely::dataflow::Scope;
+use timely::logging::{TimelyEvent, TimelyEventBuilder};
+use timely::logging_core::{Logger, Registry};
+use timely::order::Product;
+use timely::progress::reachability::logging::{TrackerEvent, TrackerEventBuilder};
 
 use crate::arrangement::manager::TraceBundle;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
-use crate::logging::compute::ComputeEvent;
-use crate::logging::reachability::ReachabilityEvent;
+use crate::logging::compute::{ComputeEvent, ComputeEventBuilder};
 use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
+use crate::typedefs::{ErrBatcher, ErrBuilder};
 
 /// Initialize logging dataflows.
 ///
@@ -33,13 +40,8 @@ use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
 pub fn initialize<A: Allocate + 'static>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
-) -> (
-    super::compute::Logger,
-    BTreeMap<LogVariant, (TraceBundle, usize)>,
-) {
-    let interval_ms = std::cmp::max(1, config.interval.as_millis())
-        .try_into()
-        .expect("must fit");
+) -> LoggingTraces {
+    let interval_ms = std::cmp::max(1, config.interval.as_millis());
 
     // Track time relative to the Unix epoch, rather than when the server
     // started, so that the logging sources can be joined with tables and
@@ -64,158 +66,248 @@ pub fn initialize<A: Allocate + 'static>(
 
     // Depending on whether we should log the creation of the logging dataflows, we register the
     // loggers with timely either before or after creating them.
+    let dataflow_index = context.worker.next_dataflow_index();
     let traces = if config.log_logging {
         context.register_loggers();
-        context.construct_dataflows()
+        context.construct_dataflow()
     } else {
-        let traces = context.construct_dataflows();
+        let traces = context.construct_dataflow();
         context.register_loggers();
         traces
     };
 
-    let logger = worker.log_register().get("materialize/compute").unwrap();
-    (logger, traces)
+    let compute_logger = worker.log_register().get("materialize/compute").unwrap();
+    LoggingTraces {
+        traces,
+        dataflow_index,
+        compute_logger,
+    }
 }
+
+pub(super) type ReachabilityEvent = (usize, Vec<(usize, usize, bool, Timestamp, Diff)>);
 
 struct LoggingContext<'a, A: Allocate> {
     worker: &'a mut timely::worker::Worker<A>,
     config: &'a LoggingConfig,
-    interval_ms: u64,
+    interval_ms: u128,
     now: Instant,
     start_offset: Duration,
-    t_event_queue: EventQueue<TimelyEvent>,
-    r_event_queue: EventQueue<ReachabilityEvent>,
-    d_event_queue: EventQueue<DifferentialEvent>,
-    c_event_queue: EventQueue<ComputeEvent>,
+    t_event_queue: EventQueue<Vec<(Duration, TimelyEvent)>>,
+    r_event_queue: EventQueue<Column<(Duration, ReachabilityEvent)>, 3>,
+    d_event_queue: EventQueue<Vec<(Duration, DifferentialEvent)>>,
+    c_event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
 }
 
-impl<A: Allocate + 'static> LoggingContext<'_, A> {
-    fn construct_dataflows(&mut self) -> BTreeMap<LogVariant, (TraceBundle, usize)> {
-        let mut collections = BTreeMap::new();
-        collections.extend(super::timely::construct(
-            self.worker,
-            self.config,
-            self.t_event_queue.clone(),
-            Rc::clone(&self.shared_state),
-        ));
-        collections.extend(super::reachability::construct(
-            self.worker,
-            self.config,
-            self.r_event_queue.clone(),
-        ));
-        collections.extend(super::differential::construct(
-            self.worker,
-            self.config,
-            self.d_event_queue.clone(),
-            Rc::clone(&self.shared_state),
-        ));
-        collections.extend(super::compute::construct(
-            self.worker,
-            self.config,
-            self.c_event_queue.clone(),
-            Rc::clone(&self.shared_state),
-        ));
+pub(crate) struct LoggingTraces {
+    /// Exported traces, by log variant.
+    pub traces: BTreeMap<LogVariant, TraceBundle>,
+    /// The index of the dataflow that exports the traces.
+    pub dataflow_index: usize,
+    /// The compute logger.
+    pub compute_logger: super::compute::Logger,
+}
 
-        let errs = self
-            .worker
-            .dataflow_named("Dataflow: logging errors", |scope| {
+impl<A: Allocate + 'static> LoggingContext<'_, A> {
+    fn construct_dataflow(&mut self) -> BTreeMap<LogVariant, TraceBundle> {
+        self.worker.dataflow_named("Dataflow: logging", |scope| {
+            let mut collections = BTreeMap::new();
+
+            let super::timely::Return {
+                collections: timely_collections,
+            } = super::timely::construct(
+                scope.clone(),
+                self.config,
+                self.t_event_queue.clone(),
+                Rc::clone(&self.shared_state),
+            );
+            collections.extend(timely_collections);
+
+            let super::reachability::Return {
+                collections: reachability_collections,
+            } = super::reachability::construct(
+                scope.clone(),
+                self.config,
+                self.r_event_queue.clone(),
+            );
+            collections.extend(reachability_collections);
+
+            let super::differential::Return {
+                collections: differential_collections,
+            } = super::differential::construct(
+                scope.clone(),
+                self.config,
+                self.d_event_queue.clone(),
+                Rc::clone(&self.shared_state),
+            );
+            collections.extend(differential_collections);
+
+            let super::compute::Return {
+                collections: compute_collections,
+            } = super::compute::construct(
+                scope.clone(),
+                scope.parent.clone(),
+                self.config,
+                self.c_event_queue.clone(),
+                Rc::clone(&self.shared_state),
+            );
+            collections.extend(compute_collections);
+
+            let errs = scope.scoped("logging errors", |scope| {
                 let collection: KeyCollection<_, DataflowError, Diff> =
                     Collection::empty(scope).into();
-                collection.mz_arrange("Arrange logging err").trace
+                collection
+                    .mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, _>("Arrange logging err")
+                    .trace
             });
 
-        // TODO(vmarcos): If we introduce introspection sources that would match
-        // type specialization for keys, we'd need to ensure that type specialized
-        // variants reach the map below (issue #22398).
-        collections
-            .into_iter()
-            .map(|(log, collection)| {
-                let bundle =
-                    TraceBundle::new(collection.trace, errs.clone()).with_drop(collection.token);
-                (log, (bundle, collection.dataflow_index))
-            })
-            .collect()
+            let traces = collections
+                .into_iter()
+                .map(|(log, collection)| {
+                    let bundle = TraceBundle::new(collection.trace, errs.clone())
+                        .with_drop(collection.token);
+                    (log, bundle)
+                })
+                .collect();
+            traces
+        })
     }
 
+    /// Construct a new reachability logger for timestamp type `T`.
+    ///
+    /// Inserts a logger with the name `timely/reachability/{type_name::<T>()}`, following
+    /// Timely naming convention.
+    fn register_reachability_logger<T: ExtractTimestamp>(
+        &self,
+        registry: &mut Registry,
+        index: usize,
+    ) {
+        let logger = self.reachability_logger::<T>(index);
+        let type_name = std::any::type_name::<T>();
+        registry.insert_logger(&format!("timely/reachability/{type_name}"), logger);
+    }
+
+    /// Register all loggers with the timely worker.
+    ///
+    /// Registers the timely, differential, compute, and reachability loggers.
     fn register_loggers(&self) {
-        let t_logger = self.simple_logger(self.t_event_queue.clone());
-        let r_logger = self.reachability_logger();
-        let d_logger = self.simple_logger(self.d_event_queue.clone());
-        let c_logger = self.simple_logger(self.c_event_queue.clone());
+        let t_logger = self.simple_logger::<TimelyEventBuilder>(self.t_event_queue.clone());
+        let d_logger = self.simple_logger::<DifferentialEventBuilder>(self.d_event_queue.clone());
+        let c_logger = self.simple_logger::<ComputeEventBuilder>(self.c_event_queue.clone());
 
         let mut register = self.worker.log_register();
         register.insert_logger("timely", t_logger);
-        register.insert_logger("timely/reachability", r_logger);
+        // Note that each reachability logger has a unique index, this is crucial to avoid dropping
+        // data because the event link structure is not multi-producer safe.
+        self.register_reachability_logger::<Timestamp>(&mut register, 0);
+        self.register_reachability_logger::<Product<Timestamp, PointStamp<u64>>>(&mut register, 1);
+        self.register_reachability_logger::<(Timestamp, Subtime)>(&mut register, 2);
         register.insert_logger("differential/arrange", d_logger);
         register.insert_logger("materialize/compute", c_logger.clone());
 
         self.shared_state.borrow_mut().compute_logger = Some(c_logger);
     }
 
-    fn simple_logger<E: 'static>(&self, event_queue: EventQueue<E>) -> Logger<E> {
-        let mut logger = BatchLogger::new(event_queue.link, self.interval_ms);
+    fn simple_logger<CB: ContainerBuilder>(
+        &self,
+        event_queue: EventQueue<CB::Container>,
+    ) -> Logger<CB> {
+        let [link] = event_queue.links;
+        let mut logger = BatchLogger::new(link, self.interval_ms);
+        let activator = event_queue.activator.clone();
         Logger::new(
             self.now,
             self.start_offset,
-            self.worker.index(),
-            move |time, data| {
-                logger.publish_batch(time, data);
-                event_queue.activator.activate();
+            move |time, data: &mut Option<CB::Container>| {
+                if let Some(data) = data.take() {
+                    logger.publish_batch(data);
+                } else if logger.report_progress(*time) {
+                    activator.activate();
+                }
             },
         )
     }
 
-    fn reachability_logger(&self) -> Logger<TrackerEvent> {
-        let event_queue = self.r_event_queue.clone();
-        let mut logger = BatchLogger::new(event_queue.link, self.interval_ms);
-        Logger::new(
-            self.now,
-            self.start_offset,
-            self.worker.index(),
-            move |time, data| {
-                let mut converted_updates = Vec::new();
-                for event in data.drain(..) {
-                    match event.2 {
-                        TrackerEvent::SourceUpdate(update) => {
-                            let massaged: Vec<_> = update
-                                .updates
-                                .iter()
-                                .map(|(node, port, time, diff)| {
-                                    let ts = time.as_any().downcast_ref::<Timestamp>().copied();
-                                    let is_source = true;
-                                    (*node, *port, is_source, ts, *diff)
-                                })
-                                .collect();
+    /// Construct a reachability logger for timestamp type `T`. The index must
+    /// refer to a unique link in the reachability event queue.
+    fn reachability_logger<T>(&self, index: usize) -> Logger<TrackerEventBuilder<T>>
+    where
+        T: ExtractTimestamp,
+    {
+        let link = Rc::clone(&self.r_event_queue.links[index]);
+        let mut logger = BatchLogger::new(link, self.interval_ms);
+        let mut massaged = Vec::new();
+        let mut builder = ColumnBuilder::default();
+        let activator = self.r_event_queue.activator.clone();
 
-                            converted_updates.push((
-                                event.0,
-                                event.1,
-                                (update.tracker_id, massaged),
+        let action = move |batch_time: &Duration, data: &mut Option<Vec<_>>| {
+            if let Some(data) = data {
+                // Handle data
+                for (time, event) in data.drain(..) {
+                    match event {
+                        TrackerEvent::SourceUpdate(update) => {
+                            massaged.extend(update.updates.iter().map(
+                                |(node, port, time, diff)| {
+                                    let is_source = true;
+                                    (*node, *port, is_source, T::extract(time), *diff)
+                                },
                             ));
+
+                            builder.push_into((time, (update.tracker_id, &massaged)));
+                            massaged.clear();
                         }
                         TrackerEvent::TargetUpdate(update) => {
-                            let massaged: Vec<_> = update
-                                .updates
-                                .iter()
-                                .map(|(node, port, time, diff)| {
-                                    let ts = time.as_any().downcast_ref::<Timestamp>().copied();
+                            massaged.extend(update.updates.iter().map(
+                                |(node, port, time, diff)| {
                                     let is_source = false;
-                                    (*node, *port, is_source, ts, *diff)
-                                })
-                                .collect();
-
-                            converted_updates.push((
-                                event.0,
-                                event.1,
-                                (update.tracker_id, massaged),
+                                    (*node, *port, is_source, time.extract(), *diff)
+                                },
                             ));
+
+                            builder.push_into((time, (update.tracker_id, &massaged)));
+                            massaged.clear();
                         }
                     }
+                    while let Some(container) = builder.extract() {
+                        logger.publish_batch(std::mem::take(container));
+                    }
                 }
-                logger.publish_batch(time, &mut converted_updates);
-                event_queue.activator.activate();
-            },
-        )
+            } else {
+                // Handle a flush
+                while let Some(container) = builder.finish() {
+                    logger.publish_batch(std::mem::take(container));
+                }
+
+                if logger.report_progress(*batch_time) {
+                    activator.activate();
+                }
+            }
+        };
+
+        Logger::new(self.now, self.start_offset, action)
+    }
+}
+
+/// Helper trait to extract a timestamp from various types of timestamp used in rendering.
+trait ExtractTimestamp: Clone + 'static {
+    /// Extracts the timestamp from the type.
+    fn extract(&self) -> Timestamp;
+}
+
+impl ExtractTimestamp for Timestamp {
+    fn extract(&self) -> Timestamp {
+        *self
+    }
+}
+
+impl ExtractTimestamp for Product<Timestamp, PointStamp<u64>> {
+    fn extract(&self) -> Timestamp {
+        self.outer
+    }
+}
+
+impl ExtractTimestamp for (Timestamp, Subtime) {
+    fn extract(&self) -> Timestamp {
+        self.0
     }
 }

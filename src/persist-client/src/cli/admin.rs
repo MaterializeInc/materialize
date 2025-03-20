@@ -13,26 +13,27 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures_util::{stream, StreamExt, TryStreamExt};
-use mz_dyncfg::ConfigSet;
+use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_ore::url::SensitiveUrl;
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::codec_impls::TodoSchema;
 use mz_persist_types::{Codec, Codec64};
 use prometheus::proto::{MetricFamily, MetricType};
 use semver::Version;
 use timely::progress::{Antichain, Timestamp};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
-use crate::cfg::all_dyncfgs;
+use crate::cfg::{all_dyncfgs, COMPACTION_MEMORY_BOUND_BYTES};
 use crate::cli::args::{make_blob, make_consensus, StateArgs, StoreArgs};
 use crate::cli::inspect::FAKE_OPAQUE_CODEC;
 use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
@@ -130,10 +131,11 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
             let configs = all_dyncfgs(ConfigSet::default());
             // TODO: Fetch the latest values of these configs from Launch Darkly.
             let cfg = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone(), configs);
-            if args.compaction_memory_bound_bytes > 0 {
-                cfg.dynamic
-                    .set_compaction_memory_bound_bytes(args.compaction_memory_bound_bytes);
-            }
+            cfg.set_config(
+                &COMPACTION_MEMORY_BOUND_BYTES,
+                args.compaction_memory_bound_bytes,
+            );
+
             let metrics_registry = MetricsRegistry::new();
             let expected_version = command
                 .expected_version
@@ -209,7 +211,7 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
 
             // Open a machine so we can read the state of the Opaque, and set
             // our fake codecs.
-            let mut machine = make_machine(
+            let machine = make_machine(
                 &cfg,
                 Arc::clone(&consensus),
                 Arc::clone(&blob),
@@ -221,7 +223,7 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
             .await?;
 
             if force_downgrade_upper {
-                let isolated_runtime = Arc::new(IsolatedRuntime::default());
+                let isolated_runtime = Arc::new(IsolatedRuntime::new(&metrics_registry, None));
                 let pubsub_sender: Arc<dyn PubSubSender> = Arc::new(NoopPubSubSender);
                 let shared_states = Arc::new(StateCache::new(
                     &cfg,
@@ -334,7 +336,7 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
                 cfg.clone(),
                 Arc::clone(&consensus),
                 Arc::clone(&blob),
-                metrics,
+                Arc::clone(&metrics),
             );
 
             let not_restored: Vec<_> = consensus
@@ -350,6 +352,7 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
                             blob.as_ref(),
                             &cfg.build_version,
                             shard_id,
+                            &*metrics,
                         )
                         .await?;
                         info!(
@@ -413,8 +416,8 @@ pub async fn force_compaction<K, V, T, D>(
     cfg: PersistConfig,
     metrics_registry: &MetricsRegistry,
     shard_id: ShardId,
-    consensus_uri: &str,
-    blob_uri: &str,
+    consensus_uri: &SensitiveUrl,
+    blob_uri: &SensitiveUrl,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
     commit: bool,
@@ -423,14 +426,14 @@ pub async fn force_compaction<K, V, T, D>(
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Ord + Codec64 + Send + Sync,
 {
     let metrics = Arc::new(Metrics::new(&cfg, metrics_registry));
     let consensus = make_consensus(&cfg, consensus_uri, commit, Arc::clone(&metrics)).await?;
     let blob = make_blob(&cfg, blob_uri, commit, Arc::clone(&metrics)).await?;
 
-    let mut machine = make_typed_machine::<K, V, T, D>(
+    let machine = make_typed_machine::<K, V, T, D>(
         &cfg,
         consensus,
         Arc::clone(&blob),
@@ -481,12 +484,13 @@ where
                 continue;
             }
             let schemas = Schemas {
+                id: None,
                 key: Arc::clone(&key_schema),
                 val: Arc::clone(&val_schema),
             };
 
             let res = Compactor::<K, V, T, D>::compact(
-                CompactConfig::new(&cfg, &writer_id),
+                CompactConfig::new(&cfg, shard_id),
                 Arc::clone(&blob),
                 Arc::clone(&metrics),
                 Arc::clone(&machine.applier.shard_metrics),
@@ -495,6 +499,7 @@ where
                 schemas,
             )
             .await?;
+            metrics.compaction.admin_count.inc();
             info!(
                 "attempt {} req {}: compacted into {} parts {} bytes in {:?}",
                 attempt,
@@ -560,7 +565,7 @@ async fn make_typed_machine<K, V, T, D>(
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64,
 {
     let state_versions = Arc::new(StateVersions::new(
@@ -634,15 +639,15 @@ async fn force_gc(
     cfg: PersistConfig,
     metrics_registry: &MetricsRegistry,
     shard_id: ShardId,
-    consensus_uri: &str,
-    blob_uri: &str,
+    consensus_uri: &SensitiveUrl,
+    blob_uri: &SensitiveUrl,
     commit: bool,
     expected_version: Option<Version>,
 ) -> anyhow::Result<Box<dyn Any>> {
     let metrics = Arc::new(Metrics::new(&cfg, metrics_registry));
     let consensus = make_consensus(&cfg, consensus_uri, commit, Arc::clone(&metrics)).await?;
     let blob = make_blob(&cfg, blob_uri, commit, Arc::clone(&metrics)).await?;
-    let mut machine = make_machine(
+    let machine = make_machine(
         &cfg,
         consensus,
         blob,
@@ -656,10 +661,172 @@ async fn force_gc(
         shard_id,
         new_seqno_since: machine.applier.seqno_since(),
     };
-    let (maintenance, _stats) = GarbageCollector::gc_and_truncate(&mut machine, gc_req).await;
+    let (maintenance, _stats) = GarbageCollector::gc_and_truncate(&machine, gc_req).await;
     if !maintenance.is_empty() {
         info!("ignoring non-empty requested maintenance: {maintenance:?}")
     }
 
     Ok(Box::new(machine))
+}
+
+/// Exposed for `mz-catalog`.
+pub const CATALOG_FORCE_COMPACTION_FUEL: Config<usize> = Config::new(
+    "persist_catalog_force_compaction_fuel",
+    1024,
+    "fuel to use in catalog dangerous_force_compaction task",
+);
+
+/// Exposed for `mz-catalog`.
+pub const CATALOG_FORCE_COMPACTION_WAIT: Config<Duration> = Config::new(
+    "persist_catalog_force_compaction_wait",
+    Duration::from_secs(60),
+    "wait to use in catalog dangerous_force_compaction task",
+);
+
+/// Exposed for `mz-catalog`.
+pub const EXPRESSION_CACHE_FORCE_COMPACTION_FUEL: Config<usize> = Config::new(
+    "persist_expression_cache_force_compaction_fuel",
+    131_072,
+    "fuel to use in expression cache dangerous_force_compaction",
+);
+
+/// Exposed for `mz-catalog`.
+pub const EXPRESSION_CACHE_FORCE_COMPACTION_WAIT: Config<Duration> = Config::new(
+    "persist_expression_cache_force_compaction_wait",
+    Duration::from_secs(0),
+    "wait to use in expression cache dangerous_force_compaction",
+);
+
+/// Attempts to compact all batches in a shard into a minimal number.
+///
+/// This destroys most hope of filter pushdown doing anything useful. If you
+/// think you want this, you almost certainly want something else, please come
+/// talk to the persist team before using.
+///
+/// This is accomplished by adding artificial fuel (representing some count of
+/// updates) to the shard's internal Spine of batches structure on some schedule
+/// and doing any compaction work that results. Both the amount of fuel and
+/// cadence are dynamically tunable. However, it is not clear exactly how much
+/// fuel is safe to add in each call: 10 definitely seems fine, usize::MAX may
+/// not be. This also adds to the danger in "dangerous".
+///
+/// This is intentionally not even hooked up to `persistcli admin` for the above
+/// reasons.
+///
+/// Exits once the shard is sufficiently compacted, but can be called in a loop
+/// to keep it compacted.
+pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
+    write: &WriteHandle<K, V, T, D>,
+    fuel: impl Fn() -> usize,
+    wait: impl Fn() -> Duration,
+) where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64 + Sync,
+    D: Semigroup + Ord + Codec64 + Send + Sync,
+{
+    let machine = write.machine.clone();
+
+    let mut last_exert: Instant;
+
+    loop {
+        last_exert = Instant::now();
+        let fuel = fuel();
+        let (reqs, mut maintenance) = machine.spine_exert(fuel).await;
+        for req in reqs {
+            info!(
+                "force_compaction {} {} compacting {} batches in {} parts totaling {} bytes: lower={:?} upper={:?} since={:?}",
+                machine.applier.shard_metrics.name,
+                machine.applier.shard_metrics.shard_id,
+                req.inputs.len(),
+                req.inputs.iter().flat_map(|x| &x.parts).count(),
+                req.inputs.iter().flat_map(|x| &x.parts).map(|x| x.encoded_size_bytes()).sum::<usize>(),
+                req.desc.lower().elements(),
+                req.desc.upper().elements(),
+                req.desc.since().elements(),
+            );
+            machine.applier.metrics.compaction.requested.inc();
+            let start = Instant::now();
+            let res = Compactor::<K, V, T, D>::compact_and_apply(
+                &machine,
+                req,
+                write.write_schemas.clone(),
+            )
+            .await;
+            let (res, apply_maintenance) = match res {
+                Ok(x) => x,
+                Err(err) => {
+                    warn!(
+                        "force_compaction {} {} errored in compaction: {:?}",
+                        machine.applier.shard_metrics.name,
+                        machine.applier.shard_metrics.shard_id,
+                        err
+                    );
+                    continue;
+                }
+            };
+            machine.applier.metrics.compaction.admin_count.inc();
+            info!(
+                "force_compaction {} {} compacted in {:?}: {:?}",
+                machine.applier.shard_metrics.name,
+                machine.applier.shard_metrics.shard_id,
+                start.elapsed(),
+                res
+            );
+            maintenance.merge(apply_maintenance);
+        }
+        maintenance.perform(&machine, &write.gc).await;
+
+        // Now sleep before the next one. Make sure to delay from when we
+        // started the last exert in case the compaction takes non-trivial time.
+        let next_exert = last_exert + wait();
+        tokio::time::sleep_until(next_exert.into()).await;
+
+        // NB: This check is intentionally at the end so that it's safe to call
+        // this method in a loop.
+        let num_batches = machine.applier.all_batches().len();
+        if num_batches < 2 {
+            info!(
+                "force_compaction {} {} exiting with {} batches",
+                machine.applier.shard_metrics.name,
+                machine.applier.shard_metrics.shard_id,
+                num_batches
+            );
+            return;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use mz_dyncfg::ConfigUpdates;
+    use mz_persist_types::ShardId;
+
+    use crate::tests::new_test_client;
+
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn dangerous_force_compaction_and_break_pushdown(dyncfgs: ConfigUpdates) {
+        let client = new_test_client(&dyncfgs).await;
+        for num_batches in 0..=17 {
+            let (mut write, _read) = client
+                .expect_open::<String, (), u64, i64>(ShardId::new())
+                .await;
+            let machine = write.machine.clone();
+
+            for idx in 0..num_batches {
+                let () = write
+                    .expect_compare_and_append(&[((idx.to_string(), ()), idx, 1)], idx, idx + 1)
+                    .await;
+            }
+
+            // Run the tool and verify that we get down to at most two.
+            super::dangerous_force_compaction_and_break_pushdown(&write, || 1, || Duration::ZERO)
+                .await;
+            let batches_after = machine.applier.all_batches().len();
+            assert!(batches_after < 2, "{} vs {}", num_batches, batches_after);
+        }
+    }
 }

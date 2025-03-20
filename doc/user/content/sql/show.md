@@ -8,16 +8,14 @@ menu:
 
 ---
 
-`SHOW` displays the value of a configuration parameter.
+`SHOW` displays the value of either a specified configuration parameter or all
+configuration parameters.
 
 ## Syntax
 
-{{< diagram "show-stmt.svg" >}}
-
-Field                  | Use
------------------------|-----
-_name_                 | The name of the configuration parameter to display.
-**ALL**                | Display the values of all configuration parameters.
+```sql
+SHOW [ <name> | ALL ]
+```
 
 ### Aliased configuration parameters
 
@@ -33,7 +31,7 @@ configuration parameters.
 
 ### Show active cluster
 
-```sql
+```mzsql
 SHOW cluster;
 ```
 ```
@@ -44,7 +42,7 @@ SHOW cluster;
 
 ### Show transaction isolation level
 
-```sql
+```mzsql
 SHOW transaction_isolation;
 ```
 ```

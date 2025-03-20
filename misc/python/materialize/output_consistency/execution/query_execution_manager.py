@@ -16,7 +16,6 @@ from materialize.output_consistency.execution.evaluation_strategy import (
 )
 from materialize.output_consistency.execution.sql_executor import SqlExecutionError
 from materialize.output_consistency.execution.sql_executors import SqlExecutors
-from materialize.output_consistency.execution.test_summary import ConsistencyTestSummary
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )
@@ -28,9 +27,10 @@ from materialize.output_consistency.query.query_result import (
     QueryResult,
 )
 from materialize.output_consistency.query.query_template import QueryTemplate
-from materialize.output_consistency.selection.selection import (
+from materialize.output_consistency.selection.column_selection import (
     ALL_QUERY_COLUMNS_BY_INDEX_SELECTION,
 )
+from materialize.output_consistency.status.test_summary import ConsistencyTestSummary
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 from materialize.output_consistency.validation.validation_outcome import (
     ValidationOutcome,
@@ -67,7 +67,9 @@ class QueryExecutionManager:
                 f"Setup for evaluation strategy '{strategy.name}'"
             )
             executor = self.executors.get_executor(strategy)
-            ddl_statements = strategy.generate_sources(input_data.types_input)
+            ddl_statements = strategy.generate_sources(
+                input_data.types_input, self.config.vertical_join_tables
+            )
 
             for sql_statement in ddl_statements:
                 self.output_printer.print_sql(sql_statement)
@@ -98,24 +100,11 @@ class QueryExecutionManager:
         all_comparisons_passed = True
 
         for test_outcome in test_outcomes:
-            summary_to_update.count_executed_query_templates += 1
-            verdict = test_outcome.verdict()
-
-            if verdict in {
-                ValidationVerdict.SUCCESS,
-                ValidationVerdict.SUCCESS_WITH_WARNINGS,
-            }:
-                summary_to_update.count_successful_query_templates += 1
-            elif verdict == ValidationVerdict.IGNORED_FAILURE:
-                summary_to_update.count_ignored_error_query_templates += 1
-            elif verdict == ValidationVerdict.FAILURE:
-                summary_to_update.add_failures(test_outcome.to_failure_details())
+            if test_outcome.verdict() == ValidationVerdict.FAILURE:
                 all_comparisons_passed = False
-            else:
-                raise RuntimeError(f"Unexpected verdict: {verdict}")
-
-            if test_outcome.has_warnings():
-                summary_to_update.count_with_warning_query_templates += 1
+            summary_to_update.accept_execution_result(
+                query, test_outcome, self.output_printer.reproduction_code_printer
+            )
 
         return all_comparisons_passed
 
@@ -126,7 +115,9 @@ class QueryExecutionManager:
         if commit_previous_tx:
             self.commit_tx(strategy)
 
+        self.executors.get_executor(strategy).before_new_tx()
         self.executors.get_executor(strategy).begin_tx("SERIALIZABLE")
+        self.executors.get_executor(strategy).after_new_tx()
 
     def commit_tx(
         self,
@@ -152,7 +143,9 @@ class QueryExecutionManager:
     ) -> list[ValidationOutcome]:
         query_no = query_index + 1
         query_id = f"{query_id_prefix}{query_no}"
-        query_execution = QueryExecution(query_template, query_id)
+        query_execution = QueryExecution(
+            query_template, query_id, self.config.query_output_mode
+        )
 
         if self.config.verbose_output:
             # print the header with the query before the execution to have information if it gets stuck
@@ -163,13 +156,20 @@ class QueryExecutionManager:
                 strategy,
                 QueryOutputFormat.SINGLE_LINE,
                 ALL_QUERY_COLUMNS_BY_INDEX_SELECTION,
+                self.config.query_output_mode,
             )
 
             start_time = datetime.now()
 
             try:
+                self.executors.get_executor(strategy).before_query_execution()
+
+                start_time = datetime.now()
                 data = self.executors.get_executor(strategy).query(sql_query_string)
                 duration = self._get_duration_in_ms(start_time)
+
+                self.executors.get_executor(strategy).after_query_execution()
+
                 result = QueryResult(
                     strategy, sql_query_string, query_template.column_count(), data
                 )
@@ -226,28 +226,20 @@ class QueryExecutionManager:
         # However, it is also possible that the where condition was invalid.
         # This is ignored as of now.
         arg_split_index = int(args_count / 2)
-        query1_args = original_query_template.select_expressions[arg_split_index:]
-        query2_args = original_query_template.select_expressions[:arg_split_index]
+        query1_select_expressions = original_query_template.select_expressions[
+            arg_split_index:
+        ]
+        query2_select_expressions = original_query_template.select_expressions[
+            :arg_split_index
+        ]
 
-        new_query_template1 = QueryTemplate(
+        new_query_template1 = original_query_template.clone(
             False,
-            query1_args,
-            original_query_template.where_expression,
-            original_query_template.storage_layout,
-            original_query_template.contains_aggregations,
-            original_query_template.row_selection,
-            original_query_template.offset,
-            original_query_template.limit,
+            query1_select_expressions,
         )
-        new_query_template2 = QueryTemplate(
+        new_query_template2 = original_query_template.clone(
             False,
-            query2_args,
-            original_query_template.where_expression,
-            original_query_template.storage_layout,
-            original_query_template.contains_aggregations,
-            original_query_template.row_selection,
-            original_query_template.offset,
-            original_query_template.limit,
+            query2_select_expressions,
         )
         query_id_prefix = f"{query_id}."
 

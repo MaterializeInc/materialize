@@ -1,0 +1,21 @@
+[package]
+name = "mz-cloud-provider"
+description = "Representation of a cloud provider"
+version = "0.1.0"
+authors = ["Materialize, Inc."]
+license = "proprietary"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[features]
+default = ["workspace-hack"]
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]
+
+[lints]
+workspace = true

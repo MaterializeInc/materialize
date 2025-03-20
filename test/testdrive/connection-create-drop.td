@@ -43,15 +43,18 @@ contains: option SSL KEY not supported with this configuration
 ! CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT, SASL USERNAME 'materialize')
 contains: option SASL USERNAME not supported with this configuration
 
+! CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT, PROGRESS TOPIC REPLICATION FACTOR -4)
+contains:PROGRESS TOPIC REPLICATION FACTOR must be greater than 0
+
 > CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
-> SELECT name, type from mz_connections
+> SELECT name, type from mz_connections WHERE id LIKE 'u%'
 name       type
 ------------------------------
 testconn   kafka
 
 > SHOW CONNECTIONS
-testconn    kafka
+testconn    kafka    ""
 
 > SHOW CREATE CONNECTION testconn
 name   create_sql
@@ -71,6 +74,7 @@ materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"te
 > CREATE CONNECTION progress_override TO KAFKA (
     BROKER '${testdrive.kafka-addr}',
     PROGRESS TOPIC 'override_topic',
+    PROGRESS TOPIC REPLICATION FACTOR 1,
     SECURITY PROTOCOL PLAINTEXT
   )
 
@@ -87,12 +91,15 @@ materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"te
 > CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
 > CREATE CLUSTER connection_source_cluster SIZE '${arg.default-storage-size}';
-> CREATE SOURCE connection_source (first, second)
+> CREATE SOURCE connection_source
   IN CLUSTER connection_source_cluster
   FROM KAFKA CONNECTION testconn (TOPIC 'testdrive-connection_test-${testdrive.seed}')
+
+> CREATE TABLE connection_source_tbl (first, second)
+  FROM SOURCE connection_source (REFERENCE "testdrive-connection_test-${testdrive.seed}")
   FORMAT CSV WITH 2 COLUMNS
 
-> SELECT * FROM connection_source
+> SELECT * FROM connection_source_tbl
 first second
 ------------
 1     2
@@ -106,6 +113,9 @@ contains:depended upon by source "connection_source"
 > DROP CONNECTION testconn CASCADE;
 
 # Validate the cascading drop actually happened
+! SELECT * FROM connection_source_tbl
+contains:unknown catalog item 'connection_source_tbl'
+
 ! SELECT * FROM connection_source
 contains:unknown catalog item 'connection_source'
 
@@ -178,20 +188,19 @@ contains:CONFLUENT SCHEMA REGISTRY connections do not support SESSION TOKEN valu
 ! CREATE SOURCE csr_source
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION csr_conn (TOPIC 'testdrive-csr_test-${testdrive.seed}')
-    FORMAT AVRO
-    USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-    ENVELOPE DEBEZIUM
 contains:is not a KAFKA CONNECTION
 
 > CREATE CLUSTER csr_source_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE csr_source
     IN CLUSTER csr_source_cluster
     FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-csr_test-${testdrive.seed}')
+
+> CREATE TABLE csr_source_tbl FROM SOURCE csr_source (REFERENCE "testdrive-csr_test-${testdrive.seed}")
     FORMAT AVRO
     USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
     ENVELOPE DEBEZIUM
 
-> SELECT * from csr_source
+> SELECT * from csr_source_tbl
 id creature
 -----------
 1  lizard
@@ -202,29 +211,32 @@ id creature
 > CREATE SOURCE two_connection_source
   IN CLUSTER two_connection_source_cluster
   FROM KAFKA CONNECTION broker_connection (TOPIC 'testdrive-csr_test-${testdrive.seed}')
+
+> CREATE TABLE two_connection_source_tbl FROM SOURCE two_connection_source (REFERENCE "testdrive-csr_test-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> SELECT * from two_connection_source
+> SELECT * from two_connection_source_tbl
 id creature
 -----------
 1  lizard
 
 ! DROP CONNECTION csr_conn
-contains:depended upon by source "csr_source"
+contains:depended upon by table "csr_source_tbl"
 
 > DROP CONNECTION csr_conn CASCADE
 
 ! CREATE SOURCE should_fail
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION does_not_exist (TOPIC 'testdrive-error_topic-${testdrive.seed}')
-  FORMAT TEXT
 contains: unknown catalog item 'does_not_exist'
 
-! CREATE SOURCE should_fail
+> CREATE SOURCE source
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-csr_test-${testdrive.seed}')
+
+! CREATE TABLE should_fail_tbl FROM SOURCE source (REFERENCE "testdrive-csr_test-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION does_not_exist
   ENVELOPE DEBEZIUM
 contains: unknown catalog item 'does_not_exist'
@@ -305,9 +317,11 @@ $ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb messag
 > CREATE SOURCE import_connection_csr
   IN CLUSTER import_connection_csr_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-import-csr-${testdrive.seed}')
+
+> CREATE TABLE import_connection_csr_tbl FROM SOURCE import_connection_csr (REFERENCE "testdrive-import-csr-${testdrive.seed}")
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION proto_csr
 
-> SELECT importee1::text, importee2::text FROM import_connection_csr
+> SELECT importee1::text, importee2::text FROM import_connection_csr_tbl
 importee1  importee2
 --------------------------------
 (f)        "(\"(1234,5678)\")"

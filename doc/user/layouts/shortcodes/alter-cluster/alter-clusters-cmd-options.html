@@ -1,0 +1,18 @@
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TIMEOUT</code></td>
+<td>The maximum duration to wait for the new replicas to be ready.</td>
+</tr>
+<tr>
+<td><code>ON TIMEOUT</code></td>
+<td>The action to take on timeout. <br><ul><li><code>COMMIT</code> cuts over to the new replica regardless of its hydration status, which may lead to downtime.</li><li><code>ROLLBACK</code> removes the pending replica and returns a timeout error.</li></ul>Default: <code>COMMIT</code>.</td>
+</tr>
+</tbody>
+</table>

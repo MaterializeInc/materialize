@@ -11,30 +11,28 @@ license = "Apache-2.0"
 workspace = true
 
 [dependencies]
-anyhow = "1.0.66"
+anyhow = "1.0.95"
 backtrace = "0.3.66"
-flate2 = "1.0.24"
-libc = "0.2.138"
-once_cell = "1.16.0"
+flate2 = "1.1.0"
+jemalloc_pprof = { version = "0.6", optional = true }
+pprof_util = "0.6"
 mz-ore = { path = "../ore", default-features = false }
-mz-proc = { path = "../proc", default-features = false }
-pprof = "0.11.1"
-prost = { version = "0.11.3", features = ["no-recursion-limit"] }
-tempfile = "3.8.1"
-tikv-jemalloc-ctl = { version = "0.5.0", features = ["use_std"], optional = true }
+pprof = "0.14.0"
+prost = { version = "0.13.5", features = ["no-recursion-limit"] }
+tikv-jemalloc-ctl = { version = "0.6", features = ["use_std", "stats"], optional = true }
 tracing = "0.1.37"
-tokio = { version = "1.32.0", features = ["time"] }
+tokio = { version = "1.44.1", features = ["time"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [build-dependencies]
-anyhow = "1.0.66"
+anyhow = "1.0.95"
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.11.2"
+prost-build = "0.13.4"
 
 [features]
 default = ["mz-build-tools/default", "workspace-hack"]
 # Whether to enable profiling features that depend on jemalloc.
-jemalloc = ["tikv-jemalloc-ctl"]
+jemalloc = ["tikv-jemalloc-ctl", "jemalloc_pprof"]
 
 [package.metadata.cargo-udeps.ignore]
 # "bytesize" not used on linux

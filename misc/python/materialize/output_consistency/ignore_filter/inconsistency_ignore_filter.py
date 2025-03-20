@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+from materialize.output_consistency.execution.query_output_mode import QueryOutputMode
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
@@ -27,7 +28,7 @@ from materialize.output_consistency.operation.operation import (
     DbOperationOrFunction,
 )
 from materialize.output_consistency.query.query_template import QueryTemplate
-from materialize.output_consistency.selection.selection import DataRowSelection
+from materialize.output_consistency.selection.row_selection import DataRowSelection
 from materialize.output_consistency.validation.validation_message import (
     ValidationError,
     ValidationErrorType,
@@ -163,13 +164,41 @@ class PostExecutionInconsistencyIgnoreFilterBase:
             )
 
         if error.error_type == ValidationErrorType.CONTENT_TYPE_MISMATCH:
+            col_index = error.col_index
+            assert col_index is not None
+
+            involved_characteristics = self._load_all_involved_characteristics(
+                query_template, col_index
+            )
             return self._shall_ignore_content_type_mismatch(
-                error, query_template, contains_aggregation
+                error,
+                query_template,
+                contains_aggregation,
+                col_index,
+                involved_characteristics,
             )
 
         if error.error_type == ValidationErrorType.CONTENT_MISMATCH:
+            col_index = error.col_index
+            assert col_index is not None
+
+            involved_characteristics = self._load_all_involved_characteristics(
+                query_template, col_index
+            )
             return self._shall_ignore_content_mismatch(
-                error, query_template, contains_aggregation
+                error,
+                query_template,
+                contains_aggregation,
+                col_index,
+                involved_characteristics,
+            )
+
+        if error.error_type == ValidationErrorType.EXPLAIN_PLAN_MISMATCH:
+            return self._shall_ignore_explain_plan_mismatch(
+                error,
+                query_template,
+                contains_aggregation,
+                error.query_execution.query_output_mode,
             )
 
         if error.error_type == ValidationErrorType.ROW_COUNT_MISMATCH:
@@ -178,6 +207,27 @@ class PostExecutionInconsistencyIgnoreFilterBase:
             )
 
         raise RuntimeError(f"Unexpected validation error type: {error.error_type}")
+
+    def _load_all_involved_characteristics(
+        self, query_template: QueryTemplate, col_index: int
+    ) -> set[ExpressionCharacteristics]:
+        all_involved_characteristics = query_template.select_expressions[
+            col_index
+        ].recursively_collect_involved_characteristics(query_template.row_selection)
+
+        further_expressions = query_template.get_all_expressions(
+            include_select_expressions=False, include_join_constraints=True
+        )
+
+        for expression in further_expressions:
+            all_involved_characteristics = (
+                all_involved_characteristics
+                | expression.recursively_collect_involved_characteristics(
+                    query_template.row_selection
+                )
+            )
+
+        return all_involved_characteristics
 
     def _shall_ignore_success_mismatch(
         self,
@@ -200,9 +250,15 @@ class PostExecutionInconsistencyIgnoreFilterBase:
         error: ValidationError,
         query_template: QueryTemplate,
         contains_aggregation: bool,
+        col_index: int,
+        all_involved_characteristics: set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
         return self._shall_ignore_content_mismatch(
-            error, query_template, contains_aggregation
+            error,
+            query_template,
+            contains_aggregation,
+            col_index,
+            all_involved_characteristics,
         )
 
     def _shall_ignore_content_mismatch(
@@ -210,9 +266,20 @@ class PostExecutionInconsistencyIgnoreFilterBase:
         error: ValidationError,
         query_template: QueryTemplate,
         contains_aggregation: bool,
+        col_index: int,
+        all_involved_characteristics: set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
         # Content mismatch ignore entries should only operate on the expression of the column with the mismatch (and on
         # expressions in other parts of the query like, for example, the WHERE part)!
+        return NoIgnore()
+
+    def _shall_ignore_explain_plan_mismatch(
+        self,
+        error: ValidationError,
+        query_template: QueryTemplate,
+        contains_aggregation: bool,
+        query_output_mode: QueryOutputMode,
+    ) -> IgnoreVerdict:
         return NoIgnore()
 
     def _shall_ignore_row_count_mismatch(

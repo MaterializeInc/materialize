@@ -160,6 +160,7 @@ pub fn any_timezone() -> impl Strategy<Value = Tz> {
 #[cfg(test)]
 mod tests {
     use crate::protobuf_roundtrip;
+    use mz_ore::assert_ok;
     use proptest::prelude::*;
 
     use super::*;
@@ -171,7 +172,7 @@ mod tests {
         #[cfg_attr(miri, ignore)] // too slow
         fn naive_date_protobuf_roundtrip(expect in any_naive_date() ) {
             let actual = protobuf_roundtrip::<_, ProtoNaiveDate>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
 
@@ -179,7 +180,7 @@ mod tests {
         #[cfg_attr(miri, ignore)] // too slow
         fn naive_date_time_protobuf_roundtrip(expect in any_naive_datetime() ) {
             let actual = protobuf_roundtrip::<_, ProtoNaiveDateTime>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
 
@@ -187,7 +188,7 @@ mod tests {
         #[cfg_attr(miri, ignore)] // too slow
         fn date_time_protobuf_roundtrip(expect in any_datetime() ) {
             let actual = protobuf_roundtrip::<_, ProtoNaiveDateTime>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
 
@@ -195,7 +196,7 @@ mod tests {
         #[cfg_attr(miri, ignore)] // too slow
         fn fixed_offset_protobuf_roundtrip(expect in any_fixed_offset() ) {
             let actual = protobuf_roundtrip::<_, ProtoFixedOffset>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }

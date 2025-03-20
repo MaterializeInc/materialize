@@ -24,6 +24,7 @@ from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_deployment import K8sDeployment
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 from materialize.cloudtest.k8s.api.k8s_service import K8sService
+from materialize.mzcompose.services.redpanda import REDPANDA_VERSION
 
 
 class RedpandaDeployment(K8sDeployment):
@@ -31,7 +32,7 @@ class RedpandaDeployment(K8sDeployment):
         super().__init__(namespace)
         container = V1Container(
             name="redpanda",
-            image="vectorized/redpanda:v23.3.5",
+            image=f"redpandadata/redpanda:{REDPANDA_VERSION}",
             command=[
                 "/usr/bin/rpk",
                 "redpanda",
@@ -52,6 +53,9 @@ class RedpandaDeployment(K8sDeployment):
                 "redpanda.enable_idempotence=true",
                 "--set",
                 "redpanda.auto_create_topics_enabled=true",
+                # Only require 4KB per topic partition rather than 4MiB.
+                "--set",
+                "redpanda.topic_memory_per_partition=4096",
                 "--advertise-kafka-addr",
                 f"redpanda.{namespace}:9092",
             ],

@@ -7,19 +7,26 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# Deploys are fast, do them quickly
+priority: 30
+
+env:
+  CI_BAZEL_BUILD: 1
+  CI_BAZEL_REMOTE_CACHE: $BAZEL_REMOTE_CACHE
+
 steps:
   - command: bin/ci-builder run nightly ci/deploy/devsite.sh
     branches: main
-    timeout_in_minutes: 30
+    timeout_in_minutes: 60
     agents:
-      queue: builder-linux-x86_64
+      queue: linux-x86_64
     concurrency: 1
     concurrency_group: deploy/devsite
 
   - command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.docker
     timeout_in_minutes: 30
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-small
     concurrency: 1
     concurrency_group: deploy/linux
 
@@ -28,14 +35,14 @@ steps:
     concurrency: 1
     concurrency_group: deploy/pypi
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-small
 
   - command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.npm
     timeout_in_minutes: 30
     concurrency: 1
     concurrency_group: deploy/npm
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-small
 
   - label: ":bulb: Full SQL Logic Tests"
     trigger: slt

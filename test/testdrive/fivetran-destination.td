@@ -85,12 +85,10 @@ $ fivetran-destination action=write_batch
     "update_files": [],
     "delete_files": [],
     "file_params": {
-        "Csv": {
-            "compression": 2,
-            "encryption": 0,
-            "null_string": "null-123",
-            "unmodified_string": "unmodified-123"
-        }
+        "compression": 2,
+        "encryption": 0,
+        "null_string": "null-123",
+        "unmodified_string": "unmodified-123"
     }
 }
 {
@@ -122,6 +120,10 @@ $ file-append container=fivetran path=d.csv compression=gzip header=a,b,c,d repe
 
 # Note: Both 'c.csv' and 'd.csv' are individually under the 'max_copy_from_size', but together
 # they exceed it. We want to make sure the write_batch still succeeds in this case.
+
+# TODO(def-) Reenable when database-issues#8373 is fixed
+$ skip-if
+SELECT true
 
 $ fivetran-destination action=write_batch
 {

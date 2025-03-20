@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mz_version import MzVersion
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.enum.enum_constant import EnumConstant
 from materialize.output_consistency.expression.expression import Expression
@@ -19,7 +18,7 @@ from materialize.output_consistency.input_data.params.boolean_operation_param im
 )
 from materialize.output_consistency.input_data.params.enum_constant_operation_params import (
     LIKE_PARAM,
-    REGEX_FLAG_PARAM,
+    REGEX_FLAG_OPTIONAL_PARAM,
     REGEX_PARAM,
     REPETITIONS_PARAM,
     STRING_TRIM_SPEC_PARAM,
@@ -52,6 +51,7 @@ from materialize.output_consistency.operation.operation import (
 STRING_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
 TAG_REGEX = "regex"
+TAG_STRING_LIKE_OP = "strlike"
 
 STRING_OPERATION_TYPES.append(
     DbOperation(
@@ -105,6 +105,7 @@ STRING_LIKE_OPERATION = DbOperation(
     "$ LIKE $",
     [StringOperationParam(), LIKE_PARAM],
     BooleanReturnTypeSpec(),
+    tags={TAG_STRING_LIKE_OP},
     comment="case-sensitive SQL LIKE matching (equal to: $ ~~ $)",
 )
 STRING_OPERATION_TYPES.append(STRING_LIKE_OPERATION)
@@ -114,6 +115,7 @@ STRING_OPERATION_TYPES.append(
         "$ ILIKE $",
         [StringOperationParam(), LIKE_PARAM],
         BooleanReturnTypeSpec(),
+        tags={TAG_STRING_LIKE_OP},
         comment="case-insensitive SQL LIKE matching (equal to: $ ~~* $)",
     )
 )
@@ -122,6 +124,7 @@ STRING_NOT_LIKE_OPERATION = DbOperation(
     "$ NOT LIKE $",
     [StringOperationParam(), LIKE_PARAM],
     BooleanReturnTypeSpec(),
+    tags={TAG_STRING_LIKE_OP},
     comment="negative case-sensitive SQL LIKE matching (equal to: $ !~~ $)",
 )
 STRING_OPERATION_TYPES.append(STRING_NOT_LIKE_OPERATION)
@@ -131,6 +134,7 @@ STRING_OPERATION_TYPES.append(
         "$ NOT ILIKE $",
         [StringOperationParam(), LIKE_PARAM],
         BooleanReturnTypeSpec(),
+        tags={TAG_STRING_LIKE_OP},
         comment="negative case-insensitive SQL LIKE matching (equal to: $ !~~* $)",
     )
 )
@@ -196,7 +200,6 @@ STRING_OPERATION_TYPES.append(
         "initcap",
         [StringOperationParam()],
         StringReturnTypeSpec(),
-        since_mz_version=MzVersion.parse_mz("v0.97.0"),
     )
 )
 
@@ -289,7 +292,7 @@ STRING_OPERATION_TYPES.append(
 STRING_OPERATION_TYPES.append(
     DbFunction(
         "regexp_match",
-        [StringOperationParam(), REGEX_PARAM, REGEX_FLAG_PARAM],
+        [StringOperationParam(), REGEX_PARAM, REGEX_FLAG_OPTIONAL_PARAM],
         ArrayReturnTypeSpec(array_value_type_category=DataTypeCategory.STRING),
         tags={TAG_REGEX},
     )
@@ -297,7 +300,12 @@ STRING_OPERATION_TYPES.append(
 
 REGEXP_REPLACE = DbFunction(
     "regexp_replace",
-    [StringOperationParam(), REGEX_PARAM, StringOperationParam(), REGEX_FLAG_PARAM],
+    [
+        StringOperationParam(),
+        REGEX_PARAM,
+        StringOperationParam(),
+        REGEX_FLAG_OPTIONAL_PARAM,
+    ],
     StringReturnTypeSpec(),
     tags={TAG_REGEX},
 )
@@ -306,7 +314,7 @@ STRING_OPERATION_TYPES.append(REGEXP_REPLACE)
 STRING_OPERATION_TYPES.append(
     DbFunction(
         "regexp_split_to_array",
-        [StringOperationParam(), REGEX_PARAM, REGEX_FLAG_PARAM],
+        [StringOperationParam(), REGEX_PARAM, REGEX_FLAG_OPTIONAL_PARAM],
         ArrayReturnTypeSpec(array_value_type_category=DataTypeCategory.ARRAY),
         tags={TAG_REGEX},
     )
@@ -406,6 +414,5 @@ STRING_OPERATION_TYPES.append(
         [StringOperationParam(), StringOperationParam()],
         BooleanReturnTypeSpec(),
         is_pg_compatible=False,
-        since_mz_version=MzVersion.parse_mz("v0.77.0"),
     )
 )

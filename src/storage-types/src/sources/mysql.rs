@@ -12,13 +12,14 @@
 use std::fmt;
 use std::io;
 use std::num::NonZeroU64;
+use std::sync::LazyLock;
 
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};
-use mz_sql_parser::ast::UnresolvedItemName;
+use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
+use mz_repr::CatalogItemId;
+use mz_repr::GlobalId;
+use mz_repr::{Datum, RelationDesc, Row, ScalarType};
 use mz_timely_util::order::Partitioned;
 use mz_timely_util::order::Step;
-use once_cell::sync::Lazy;
 use proptest::prelude::any;
 use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
@@ -36,74 +37,18 @@ use crate::controller::AlterError;
 use crate::sources::{SourceConnection, SourceTimestamp};
 use crate::AlterCompatible;
 
+use super::SourceExportDetails;
+
 include!(concat!(
     env!("OUT_DIR"),
     "/mz_storage_types.sources.mysql.rs"
 ));
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
-pub struct MySqlColumnRef {
-    pub schema_name: String,
-    pub table_name: String,
-    pub column_name: String,
-}
-
-impl RustType<ProtoMySqlColumnRef> for MySqlColumnRef {
-    fn into_proto(&self) -> ProtoMySqlColumnRef {
-        ProtoMySqlColumnRef {
-            schema_name: self.schema_name.clone(),
-            table_name: self.table_name.clone(),
-            column_name: self.column_name.clone(),
-        }
-    }
-
-    fn from_proto(proto: ProtoMySqlColumnRef) -> Result<Self, TryFromProtoError> {
-        Ok(MySqlColumnRef {
-            schema_name: proto.schema_name,
-            table_name: proto.table_name,
-            column_name: proto.column_name,
-        })
-    }
-}
-
-pub struct IntoMySqlColumnRefError(String);
-
-impl fmt::Display for IntoMySqlColumnRefError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl TryFrom<UnresolvedItemName> for MySqlColumnRef {
-    type Error = IntoMySqlColumnRefError;
-
-    /// Convert an UnresolvedItemName into a MySqlColumnRef
-    fn try_from(item: UnresolvedItemName) -> Result<Self, Self::Error> {
-        let mut iter = item.0.into_iter();
-        match (iter.next(), iter.next(), iter.next()) {
-            (Some(schema_name), Some(table_name), Some(column_name)) => Ok(MySqlColumnRef {
-                // We need to be careful not to accidentally introduce postgres/mz-style
-                // quoting in the schema_name, table_name, or column_name fields, which
-                // happens if naively using the to_string()/fmt method on the Ident values.
-                schema_name: schema_name.into_string(),
-                table_name: table_name.into_string(),
-                column_name: column_name.into_string(),
-            }),
-            ref other => Err(IntoMySqlColumnRefError(format!(
-                "expected fully-qualified column name, got: {:?}",
-                other
-            ))),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct MySqlSourceConnection<C: ConnectionAccess = InlinedConnection> {
-    pub connection_id: GlobalId,
+    pub connection_id: CatalogItemId,
     pub connection: C::MySql,
     pub details: MySqlSourceDetails,
-    pub text_columns: Vec<MySqlColumnRef>,
-    pub ignore_columns: Vec<MySqlColumnRef>,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<MySqlSourceConnection, R>
@@ -114,25 +59,22 @@ impl<R: ConnectionResolver> IntoInlineConnection<MySqlSourceConnection, R>
             connection_id,
             connection,
             details,
-            text_columns,
-            ignore_columns,
         } = self;
 
         MySqlSourceConnection {
             connection_id,
             connection: r.resolve_connection(connection).unwrap_mysql(),
             details,
-            text_columns,
-            ignore_columns,
         }
     }
 }
 
-pub static MYSQL_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
-    RelationDesc::empty()
+pub static MYSQL_PROGRESS_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
+    RelationDesc::builder()
         .with_column("source_id_lower", ScalarType::Uuid.nullable(false))
         .with_column("source_id_upper", ScalarType::Uuid.nullable(false))
         .with_column("transaction_id", ScalarType::UInt64.nullable(true))
+        .finish()
 });
 
 impl MySqlSourceConnection {
@@ -170,15 +112,15 @@ impl<C: ConnectionAccess> SourceConnection for MySqlSourceConnection<C> {
         "mysql"
     }
 
-    fn upstream_name(&self) -> Option<&str> {
+    fn external_reference(&self) -> Option<&str> {
         None
     }
 
-    fn key_desc(&self) -> RelationDesc {
+    fn default_key_desc(&self) -> RelationDesc {
         RelationDesc::empty()
     }
 
-    fn value_desc(&self) -> RelationDesc {
+    fn default_value_desc(&self) -> RelationDesc {
         // The MySQL source only outputs data to its subsources. The catalog object
         // representing the source itself is just an empty relation with no columns
         RelationDesc::empty()
@@ -188,17 +130,16 @@ impl<C: ConnectionAccess> SourceConnection for MySqlSourceConnection<C> {
         MYSQL_PROGRESS_DESC.clone()
     }
 
-    fn connection_id(&self) -> Option<GlobalId> {
+    fn connection_id(&self) -> Option<CatalogItemId> {
         Some(self.connection_id)
     }
 
-    fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
-        vec![]
+    fn primary_export_details(&self) -> SourceExportDetails {
+        SourceExportDetails::None
     }
 
-    fn get_subsource_resolver(&self) -> super::SubsourceResolver {
-        super::SubsourceResolver::new("mysql", &self.details.tables)
-            .expect("already validated that SubsourceResolver elements are valid")
+    fn supports_read_only(&self) -> bool {
+        false
     }
 }
 
@@ -212,8 +153,6 @@ impl<C: ConnectionAccess> AlterCompatible for MySqlSourceConnection<C> {
             connection_id,
             connection,
             details,
-            text_columns: _,
-            ignore_columns: _,
         } = self;
 
         let compatibility_checks = [
@@ -250,8 +189,6 @@ impl RustType<ProtoMySqlSourceConnection> for MySqlSourceConnection {
             connection: Some(self.connection.into_proto()),
             connection_id: Some(self.connection_id.into_proto()),
             details: Some(self.details.into_proto()),
-            text_columns: self.text_columns.into_proto(),
-            ignore_columns: self.ignore_columns.into_proto(),
         }
     }
 
@@ -266,36 +203,33 @@ impl RustType<ProtoMySqlSourceConnection> for MySqlSourceConnection {
             details: proto
                 .details
                 .into_rust_if_some("ProtoMySqlSourceConnection::details")?,
-            text_columns: proto.text_columns.into_rust()?,
-            ignore_columns: proto.ignore_columns.into_rust()?,
         })
     }
 }
 
+/// This struct allows storing any mysql-specific details for a source, serialized as
+/// an option in the `CREATE SOURCE` statement. It was previously used but is not currently
+/// necessary, though we keep it around to maintain conformity with other sources.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
-pub struct MySqlSourceDetails {
-    #[proptest(
-        strategy = "proptest::collection::vec(any::<mz_mysql_util::MySqlTableDesc>(), 0..4)"
-    )]
-    pub tables: Vec<mz_mysql_util::MySqlTableDesc>,
-    /// The initial 'gtid_executed' set for each subsource. The index of each string in this
-    /// vector corresponds to the index of the corresponding table in the `tables` field.
-    /// If this vector has only one element, it is the initial gtid set for all tables.
-    ///
-    /// This is used as the effective snapshot point for each subsource to ensure correctness
-    /// if the source is interrupted but commits one or more tables before the initial snapshot
-    /// of all tables is complete.
-    #[proptest(strategy = "proptest::collection::vec(any_gtidset(), 1..4)")]
-    pub initial_gtid_set: Vec<String>,
+pub struct MySqlSourceDetails {}
+
+impl RustType<ProtoMySqlSourceDetails> for MySqlSourceDetails {
+    fn into_proto(&self) -> ProtoMySqlSourceDetails {
+        ProtoMySqlSourceDetails {}
+    }
+
+    fn from_proto(_proto: ProtoMySqlSourceDetails) -> Result<Self, TryFromProtoError> {
+        Ok(MySqlSourceDetails {})
+    }
 }
 
-impl MySqlSourceDetails {
-    /// The initial 'gtid_executed' set for the given table index.
-    pub fn table_initial_gtid_set(&self, table_index: usize) -> &str {
-        match &*self.initial_gtid_set {
-            [gtid] => gtid,
-            gtids => &gtids[table_index],
-        }
+impl AlterCompatible for MySqlSourceDetails {
+    fn alter_compatible(
+        &self,
+        _id: GlobalId,
+        _other: &Self,
+    ) -> Result<(), crate::controller::AlterError> {
+        Ok(())
     }
 }
 
@@ -303,53 +237,56 @@ fn any_gtidset() -> impl Strategy<Value = String> {
     any::<(u128, u64)>().prop_map(|(uuid, tx_id)| format!("{}:{}", Uuid::from_u128(uuid), tx_id))
 }
 
-impl RustType<ProtoMySqlSourceDetails> for MySqlSourceDetails {
-    fn into_proto(&self) -> ProtoMySqlSourceDetails {
-        ProtoMySqlSourceDetails {
-            tables: self.tables.iter().map(|t| t.into_proto()).collect(),
+/// Specifies the details of a MySQL source export.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+pub struct MySqlSourceExportDetails {
+    pub table: mz_mysql_util::MySqlTableDesc,
+    /// The initial 'gtid_executed' set for this export.
+    /// This is used as the effective snapshot point for this export to ensure correctness
+    /// if the source is interrupted but commits one or more tables before the initial snapshot
+    /// of all tables is complete.
+    #[proptest(strategy = "any_gtidset()")]
+    pub initial_gtid_set: String,
+    pub text_columns: Vec<String>,
+    pub exclude_columns: Vec<String>,
+}
+
+impl RustType<ProtoMySqlSourceExportDetails> for MySqlSourceExportDetails {
+    fn into_proto(&self) -> ProtoMySqlSourceExportDetails {
+        ProtoMySqlSourceExportDetails {
+            table: Some(self.table.into_proto()),
             initial_gtid_set: self.initial_gtid_set.clone(),
-            legacy_initial_gtid_set: "".to_string(),
+            text_columns: self.text_columns.clone(),
+            exclude_columns: self.exclude_columns.clone(),
         }
     }
 
-    fn from_proto(proto: ProtoMySqlSourceDetails) -> Result<Self, TryFromProtoError> {
-        // Handle the migration of the legacy_initial_gtid_set field to the initial_gtid_set field
-        let gtid_set = match (proto.initial_gtid_set, proto.legacy_initial_gtid_set) {
-            (gtid_set, legacy_gtid_set) if legacy_gtid_set.is_empty() => gtid_set,
-            (gtid_set, legacy_gtid_set) if gtid_set.is_empty() => vec![legacy_gtid_set],
-            (gtid_set, legacy_gtid_set) => {
-                return Err(TryFromProtoError::InvalidFieldError(format!(
-                    "initial_gtid_set and legacy_initial_gtid_set both contain values:\n{}\n{}",
-                    gtid_set.join(", "),
-                    legacy_gtid_set
-                )));
-            }
-        };
-
-        Ok(MySqlSourceDetails {
-            tables: proto
-                .tables
-                .into_iter()
-                .map(mz_mysql_util::MySqlTableDesc::from_proto)
-                .collect::<Result<_, _>>()?,
-            initial_gtid_set: gtid_set,
+    fn from_proto(proto: ProtoMySqlSourceExportDetails) -> Result<Self, TryFromProtoError> {
+        Ok(MySqlSourceExportDetails {
+            table: proto
+                .table
+                .into_rust_if_some("ProtoMySqlSourceExportDetails::table")?,
+            initial_gtid_set: proto.initial_gtid_set,
+            text_columns: proto.text_columns,
+            exclude_columns: proto.exclude_columns,
         })
     }
 }
 
-impl AlterCompatible for MySqlSourceDetails {
+impl AlterCompatible for MySqlSourceExportDetails {
     fn alter_compatible(
         &self,
-        _id: mz_repr::GlobalId,
+        _id: GlobalId,
         _other: &Self,
     ) -> Result<(), crate::controller::AlterError> {
-        // TODO(roshan): We should verify here that the initial_gtid_set value for a given
-        // subsource remains the same. However, since a DROP SOURCE operation can drop a specific
-        // subsource without updating these `details`, and then an `ALTER SOURCE .. ADD SUBSOURCE`
-        // can re-add the same subsource with a new initial_gtid_set, there is no way for us to
-        // know that was a valid operation. We could consider updating `details` on DROP SOURCE
-        // but a better long-term fix is to store the initial_gtid_set in the catalog on each subsource
-        // itself, rather than in the source details.
+        // compatibility checks are performed against the upstream table in the source
+        // render operators instead
+        let Self {
+            table: _,
+            initial_gtid_set: _,
+            text_columns: _,
+            exclude_columns: _,
+        } = self;
         Ok(())
     }
 }
@@ -596,6 +533,8 @@ pub fn gtid_set_frontier(gtid_set_str: &str) -> Result<Antichain<GtidPartition>,
 #[cfg(test)]
 mod tests {
 
+    use mz_ore::assert_err;
+
     use super::*;
     use std::num::NonZeroU64;
 
@@ -649,7 +588,7 @@ mod tests {
         let gtid_set_str =
             "3E11FA47-71CA-11E1-9E33-C80AA9429562:1-19, 2174B383-5441-11E8-B90A-C80AA9429562:1-3";
         let result = gtid_set_frontier(gtid_set_str);
-        assert!(result.is_err());
+        assert_err!(result);
     }
 
     #[mz_ore::test]
@@ -657,7 +596,7 @@ mod tests {
         let gtid_set_str =
             "2174B383-5441-11E8-B90A-C80AA9429562:1-3:5-8, 3E11FA47-71CA-11E1-9E33-C80AA9429562:1-19";
         let result = gtid_set_frontier(gtid_set_str);
-        assert!(result.is_err());
+        assert_err!(result);
     }
 
     #[mz_ore::test]
@@ -665,7 +604,7 @@ mod tests {
         let gtid_set_str =
             "14c1b43a-eb64-11eb-8a9a-0242ac130002:1-5,24DA167-0C0C-11E8-8442-00059A3C7B00:1";
         let result = gtid_set_frontier(gtid_set_str);
-        assert!(result.is_err());
+        assert_err!(result);
     }
 
     #[mz_ore::test]
@@ -673,7 +612,7 @@ mod tests {
         let gtid_set_str =
             "14c1b43a-eb64-11eb-8a9a-0242ac130002:1-5,14c1b43a-eb64-11eb-8a9a-0242ac130003:1-3:4";
         let result = gtid_set_frontier(gtid_set_str);
-        assert!(result.is_err());
+        assert_err!(result);
     }
 
     #[mz_ore::test]

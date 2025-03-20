@@ -12,13 +12,14 @@
 use std::iter;
 use std::time::Duration;
 
+use anyhow::{anyhow, bail};
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic};
 use rdkafka::client::ClientContext;
 use rdkafka::error::{KafkaError, RDKafkaErrorCode};
 
-/// Creates a Kafka topic and waits for it to be reported in the broker
+/// Creates a Kafka topic if it does not exist, and waits for it to be reported in the broker
 /// metadata.
 ///
 /// This function is a wrapper around [`AdminClient::create_topics`] that
@@ -35,49 +36,27 @@ use rdkafka::error::{KafkaError, RDKafkaErrorCode};
 /// succeed.
 ///
 /// Returns a boolean indicating whether the topic already existed.
-pub async fn create_new_topic<'a, C>(
-    client: &'a AdminClient<C>,
-    admin_opts: &AdminOptions,
-    new_topic: &'a NewTopic<'a>,
-) -> Result<bool, CreateTopicError>
-where
-    C: ClientContext,
-{
-    create_topic_helper(client, admin_opts, new_topic, false).await
-}
-
-/// Like `create_new_topic` but allow topic to already exist
 pub async fn ensure_topic<'a, C>(
     client: &'a AdminClient<C>,
     admin_opts: &AdminOptions,
     new_topic: &'a NewTopic<'a>,
-) -> Result<bool, CreateTopicError>
-where
-    C: ClientContext,
-{
-    create_topic_helper(client, admin_opts, new_topic, true).await
-}
-
-async fn create_topic_helper<'a, C>(
-    client: &'a AdminClient<C>,
-    admin_opts: &AdminOptions,
-    new_topic: &'a NewTopic<'a>,
-    allow_existing: bool,
-) -> Result<bool, CreateTopicError>
+) -> anyhow::Result<bool>
 where
     C: ClientContext,
 {
     let res = client
         .create_topics(iter::once(new_topic), admin_opts)
         .await?;
-    if res.len() != 1 {
-        return Err(CreateTopicError::TopicCountMismatch(res.len()));
-    }
-    let already_exists = match res.into_element() {
-        Ok(_) => Ok(false),
-        Err((_, RDKafkaErrorCode::TopicAlreadyExists)) if allow_existing => Ok(true),
-        Err((_, e)) => Err(CreateTopicError::Kafka(KafkaError::AdminOp(e))),
-    }?;
+
+    let already_exists = match res.as_slice() {
+        &[Ok(_)] => false,
+        &[Err((_, RDKafkaErrorCode::TopicAlreadyExists))] => true,
+        &[Err((_, e))] => bail!(KafkaError::AdminOp(e)),
+        other => bail!(
+            "kafka topic creation returned {} results, but exactly one result was expected",
+            other.len()
+        ),
+    };
 
     // We don't need to read in metadata / do any validation if the topic already exists.
     if already_exists {
@@ -103,49 +82,22 @@ where
                 .topics()
                 .iter()
                 .find(|t| t.name() == new_topic.name)
-                .ok_or(CreateTopicError::MissingMetadata)?;
+                .ok_or(anyhow!("unable to fetch topic metadata after creation"))?;
             // If the desired number of partitions is not "use the broker
             // default", wait for the topic to have the correct number of
             // partitions.
             if new_topic.num_partitions != -1 {
-                let num_partitions = i32::try_from(topic.partitions().len())
-                    .map_err(|_| CreateTopicError::TooManyPartitions)?;
-                if num_partitions != new_topic.num_partitions {
-                    return Err(CreateTopicError::PartitionCountMismatch {
-                        expected: new_topic.num_partitions,
-                        actual: num_partitions,
-                    });
+                let actual = i32::try_from(topic.partitions().len())?;
+                if actual != new_topic.num_partitions {
+                    bail!(
+                        "topic reports {actual} partitions, but expected {} partitions",
+                        new_topic.num_partitions
+                    );
                 }
             }
             Ok(false)
         })
         .await
-}
-
-/// An error while creating a Kafka topic.
-#[derive(Debug, thiserror::Error)]
-pub enum CreateTopicError {
-    /// An error from the underlying Kafka library.
-    #[error(transparent)]
-    Kafka(#[from] KafkaError),
-    /// Topic creation returned the wrong number of results.
-    #[error("kafka topic creation returned {0} results, but exactly one result was expected")]
-    TopicCountMismatch(usize),
-    /// The topic metadata could not be fetched after the topic was created.
-    #[error("unable to fetch topic metadata after creation")]
-    MissingMetadata,
-    /// The topic reported more than the maximum allowable number of partitions.
-    #[error("the topic reported more than {} partitions", i32::MAX)]
-    TooManyPartitions,
-    /// The topic metadata reported a number of partitions that did not match
-    /// the number of partitions in the topic creation request.
-    #[error("topic reports {actual} partitions, but expected {expected} partitions")]
-    PartitionCountMismatch {
-        /// The requested number of partitions.
-        expected: i32,
-        /// The reported number of partitions.
-        actual: i32,
-    },
 }
 
 /// Deletes a Kafka topic and waits for it to be reported absent in the broker metadata.

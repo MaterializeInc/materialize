@@ -58,7 +58,7 @@ impl ByteSize {
 
     fn format_string(&self) -> String {
         match self.0 {
-            zero if zero == 0 => format!("0"),
+            zero if zero == 0 => "0".to_string(),
             tb if tb % BytesUnit::Tb.value() == 0 => {
                 format!("{}{}", tb / BytesUnit::Tb.value(), BytesUnit::Tb)
             }
@@ -133,7 +133,7 @@ impl FromStr for ByteSize {
 
         let bytes = size
             .checked_mul(unit.value())
-            .ok_or_else(|| format!("bytes value exceeds u64 range"))?;
+            .ok_or_else(|| "bytes value exceeds u64 range".to_string())?;
         Ok(Self(bytes))
     }
 }
@@ -179,7 +179,7 @@ impl FromStr for BytesUnit {
     type Err = String;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s.as_ref() {
+        match s {
             "B" => Ok(Self::B),
             "kB" => Ok(Self::Kb),
             "MB" => Ok(Self::Mb),
@@ -196,6 +196,7 @@ impl FromStr for BytesUnit {
 #[cfg(test)]
 mod tests {
     use crate::bytes::ByteSize;
+    use mz_ore::assert_err;
     use proptest::prelude::*;
     use proptest::proptest;
 
@@ -241,13 +242,13 @@ mod tests {
         assert_eq!(parse("521  TB"), ByteSize::tb(521));
 
         // parsing errors
-        assert!("".parse::<ByteSize>().is_err());
-        assert!("a124GB".parse::<ByteSize>().is_err());
-        assert!("1K".parse::<ByteSize>().is_err());
-        assert!("B".parse::<ByteSize>().is_err());
+        assert_err!("".parse::<ByteSize>());
+        assert_err!("a124GB".parse::<ByteSize>());
+        assert_err!("1K".parse::<ByteSize>());
+        assert_err!("B".parse::<ByteSize>());
         // postgres is strict about matching capitalization
-        assert!("1gb".parse::<ByteSize>().is_err());
-        assert!("1KB".parse::<ByteSize>().is_err());
+        assert_err!("1gb".parse::<ByteSize>());
+        assert_err!("1KB".parse::<ByteSize>());
     }
 
     #[mz_ore::test]

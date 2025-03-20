@@ -1,0 +1,12 @@
+Indexes in Materialize do not order their keys using the data type's natural
+ordering and instead orders by its internal representation of the key (the tuple
+of key length and value).
+
+As such, indexes in Materialize currently do not provide optimizations for:
+
+- Range queries; that is queries using <code>&gt;</code>, <code>&gt;=</code>,
+  <code>&lt;</code>, <code>&lt;=</code>, `BETWEEN` clauses (e.g., `WHERE
+  quantity > 10`,  <code>price >= 10 AND price <= 50</code>, and `WHERE quantity
+  BETWEEN 10 AND 20`).
+
+- `GROUP BY`, `ORDER BY` and `LIMIT` clauses.

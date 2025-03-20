@@ -1,6 +1,6 @@
 ---
 title: "CREATE VIEW"
-description: "`CREATE VIEW` defines a non-materialized view, which provides an alias for the embedded `SELECT` statement."
+description: "`CREATE VIEW` defines view, which provides an alias for the embedded `SELECT` statement."
 menu:
   # This should also have a "non-content entry" under Reference, which is
   # configured in doc/user/config.toml
@@ -8,13 +8,18 @@ menu:
     parent: 'commands'
 ---
 
-`CREATE VIEW` defines a non-materialized view, which simply provides an alias
+`CREATE VIEW` defines a view, which simply provides an alias
 for the embedded `SELECT` statement.
 
 The results of a view can be incrementally maintained **in memory** within a
-[cluster](/get-started/key-concepts/#clusters) by creating an [index](../create-index).
+[cluster](/concepts/clusters/) by creating an [index](../create-index).
 This allows you to serve queries without the overhead of
 materializing the view.
+
+### Usage patterns
+
+{{% views-indexes/table-usage-pattern-intro %}}
+{{% views-indexes/table-usage-pattern %}}
 
 ## Syntax
 
@@ -47,7 +52,7 @@ views may not depend on temporary objects.
 
 ### Creating a view
 
-```sql
+```mzsql
 CREATE VIEW purchase_sum_by_region
 AS
     SELECT sum(purchase.amount) AS region_sum,
@@ -68,6 +73,10 @@ The privileges required to execute this statement are:
 - `CREATE` privileges on the containing schema.
 - `USAGE` privileges on all types used in the view definition.
 - `USAGE` privileges on the schemas that all types in the statement are contained in.
+
+## Additional information
+
+- Views can be monotonic; that is, views can be recognized as append-only.
 
 ## Related pages
 

@@ -35,7 +35,7 @@ class ArrayDataType(CollectionDataType):
         super().__init__(
             internal_identifier,
             type_name,
-            DataTypeCategory.LIST,
+            DataTypeCategory.ARRAY,
             entry_value_1=array_entry_value_1,
             entry_value_2=array_entry_value_2,
             value_type_category=value_type_category,

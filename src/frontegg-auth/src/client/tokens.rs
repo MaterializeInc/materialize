@@ -7,8 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::time::Instant;
+
 use mz_ore::instrument;
-use mz_ore::metrics::MetricsFutureExt;
 use uuid::Uuid;
 
 use crate::metrics::Metrics;
@@ -29,14 +30,18 @@ impl Client {
         let name = "exchange_secret_for_token";
         let histogram = metrics.request_duration_seconds.with_label_values(&[name]);
 
+        let start = Instant::now();
         let response = self
             .client
             .post(admin_api_token_url)
             .json(&request)
             .send()
-            .wall_time()
-            .observe(histogram)
             .await?;
+        let duration = start.elapsed();
+
+        // Authentication is on the blocking path for connection startup so we
+        // want to make sure it stays fast.
+        histogram.observe(duration.as_secs_f64());
 
         let status = response.status().to_string();
         metrics
@@ -51,7 +56,15 @@ impl Client {
             .map(|v| v.to_string());
 
         match response.error_for_status_ref() {
-            Ok(_) => Ok(response.json().await?),
+            Ok(_) => {
+                tracing::debug!(
+                    ?request.client_id,
+                    frontegg_trace_id,
+                    ?duration,
+                    "request success",
+                );
+                Ok(response.json().await?)
+            }
             Err(e) => {
                 let body = response
                     .text()
@@ -82,12 +95,14 @@ pub struct ApiTokenResponse {
 
 #[cfg(test)]
 mod tests {
+    use axum::http::StatusCode;
     use axum::{routing::post, Router};
     use mz_ore::metrics::MetricsRegistry;
-    use reqwest::StatusCode;
+    use mz_ore::{assert_err, assert_ok};
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use tokio::net::TcpListener;
     use uuid::Uuid;
 
     use super::ApiTokenResponse;
@@ -127,14 +142,10 @@ mod tests {
 
         // Use port 0 to get a dynamically assigned port.
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
-        let tcp = std::net::TcpListener::bind(addr).expect("able to bind");
+        let tcp = TcpListener::bind(addr).await.expect("able to bind");
         let addr = tcp.local_addr().expect("valid addr");
         mz_ore::task::spawn(|| "test-server", async move {
-            axum::Server::from_tcp(tcp)
-                .expect("able to start")
-                .serve(app.into_make_service())
-                .await
-                .unwrap();
+            axum::serve(tcp, app.into_make_service()).await.unwrap();
         });
 
         let client = Client::default();
@@ -165,13 +176,13 @@ mod tests {
         }
 
         // Should get retried which results in eventual success.
-        assert!(test_case(&client, &addr, &count, 500, true).await.is_ok());
-        assert!(test_case(&client, &addr, &count, 502, true).await.is_ok());
-        assert!(test_case(&client, &addr, &count, 429, true).await.is_ok());
-        assert!(test_case(&client, &addr, &count, 408, true).await.is_ok());
+        assert_ok!(test_case(&client, &addr, &count, 500, true).await);
+        assert_ok!(test_case(&client, &addr, &count, 502, true).await);
+        assert_ok!(test_case(&client, &addr, &count, 429, true).await);
+        assert_ok!(test_case(&client, &addr, &count, 408, true).await);
 
         // Should not get retried, and thus return an error.
-        assert!(test_case(&client, &addr, &count, 404, false).await.is_err());
-        assert!(test_case(&client, &addr, &count, 400, false).await.is_err());
+        assert_err!(test_case(&client, &addr, &count, 404, false).await);
+        assert_err!(test_case(&client, &addr, &count, 400, false).await);
     }
 }

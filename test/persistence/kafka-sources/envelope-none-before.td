@@ -33,11 +33,13 @@ $ kafka-ingest format=avro topic=envelope-none key-format=avro key-schema=${sche
 
 > CREATE SOURCE envelope_none
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-envelope-none-${testdrive.seed}')
+
+> CREATE TABLE envelope_none_tbl FROM SOURCE envelope_none (REFERENCE "testdrive-envelope-none-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE NONE
 
-> SELECT COUNT(*) FROM envelope_none
+> SELECT COUNT(*) FROM envelope_none_tbl
 10000
 
 $ kafka-add-partitions topic=envelope-none total-partitions=4

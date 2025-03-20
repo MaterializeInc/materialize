@@ -13,14 +13,8 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use mz_dyncfg::{Config, ConfigSet};
-use mz_ore::soft_panic_or_log;
-use mz_persist::indexed::encoding::BlobTraceUpdates;
-use mz_persist_types::part::{Part, PartBuilder};
-use mz_persist_types::stats::PartStats;
-use mz_persist_types::Codec;
 
 use crate::batch::UntrimmableColumns;
-use crate::internal::encoding::Schemas;
 use crate::metrics::Metrics;
 use crate::read::LazyPartStats;
 
@@ -29,7 +23,7 @@ use crate::ShardId;
 /// Percent of filtered data to opt in to correctness auditing.
 pub(crate) const STATS_AUDIT_PERCENT: Config<usize> = Config::new(
     "persist_stats_audit_percent",
-    0,
+    1,
     "Percent of filtered data to opt in to correctness auditing (Materialize).",
 );
 
@@ -120,45 +114,6 @@ pub(crate) fn untrimmable_columns(cfg: &ConfigSet) -> UntrimmableColumns {
         prefixes: split(STATS_UNTRIMMABLE_COLUMNS_PREFIX.get(cfg)),
         suffixes: split(STATS_UNTRIMMABLE_COLUMNS_SUFFIX.get(cfg)),
     }
-}
-
-/// Encodes a [`ColumnarRecords`] into a [`Part`] and calculates [`PartStats`].
-///
-/// Note: The [`Part`] will contain the same data as [`ColumnarRecords`], but
-/// the [`Part`] will have the data fully structured as opposed to an opaque
-/// binary blob.
-pub(crate) fn encode_updates<K, V>(
-    schemas: &Schemas<K, V>,
-    updates: &BlobTraceUpdates,
-) -> Result<(Part, PartStats), String>
-where
-    K: Codec,
-    V: Codec,
-{
-    let updates = match updates {
-        BlobTraceUpdates::Row(updates) => itertools::Either::Left(updates.into_iter()),
-        BlobTraceUpdates::Both(codec, _structured) => {
-            // This is super unexpected, but not worthy of a panic.
-            soft_panic_or_log!("re-encoding structured data?");
-            itertools::Either::Right(std::iter::once(codec))
-        }
-    };
-
-    let mut builder = PartBuilder::new(schemas.key.as_ref(), schemas.val.as_ref())?;
-    for update in updates {
-        for ((k, v), t, d) in update.iter() {
-            let k = K::decode(k)?;
-            let v = V::decode(v)?;
-            let t = i64::from_le_bytes(t);
-            let d = i64::from_le_bytes(d);
-
-            builder.push(&k, &v, t, d);
-        }
-    }
-    let part = builder.finish();
-    let stats = PartStats::new(&part)?;
-
-    Ok((part, stats))
 }
 
 /// Statistics about the contents of a shard as_of some time.

@@ -9,7 +9,7 @@
 
 use mz_ore::now::NowFn;
 use mz_repr::{Datum, Row};
-use mz_storage_types::sources::load_generator::{Event, Generator};
+use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorOutput};
 use mz_storage_types::sources::MzOffset;
 
 pub struct Counter {
@@ -27,7 +27,8 @@ impl Generator for Counter {
         _now: NowFn,
         _seed: Option<u64>,
         resume_offset: MzOffset,
-    ) -> Box<(dyn Iterator<Item = (usize, Event<Option<MzOffset>, (Row, i64)>)>)> {
+    ) -> Box<(dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, i64)>)>)>
+    {
         let max_cardinality = self.max_cardinality;
 
         Box::new(
@@ -45,7 +46,10 @@ impl Generator for Counter {
                         Some(max) if offset >= max => {
                             let retracted_value = i64::try_from(offset - max + 1).unwrap();
                             let row = Row::pack_slice(&[Datum::Int64(retracted_value)]);
-                            Some((0, Event::Message(MzOffset::from(offset), (row, -1))))
+                            Some((
+                                LoadGeneratorOutput::Default,
+                                Event::Message(MzOffset::from(offset), (row, -1)),
+                            ))
                         }
                         _ => None,
                     };
@@ -53,8 +57,14 @@ impl Generator for Counter {
                     let inserted_value = i64::try_from(offset + 1).unwrap();
                     let row = Row::pack_slice(&[Datum::Int64(inserted_value)]);
                     let insertion = [
-                        (0, Event::Message(MzOffset::from(offset), (row, 1))),
-                        (0, Event::Progress(Some(MzOffset::from(offset + 1)))),
+                        (
+                            LoadGeneratorOutput::Default,
+                            Event::Message(MzOffset::from(offset), (row, 1)),
+                        ),
+                        (
+                            LoadGeneratorOutput::Default,
+                            Event::Progress(Some(MzOffset::from(offset + 1))),
+                        ),
                     ];
                     retraction.into_iter().chain(insertion)
                 })

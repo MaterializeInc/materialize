@@ -24,7 +24,7 @@ $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=2
 $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=23
 {"f1": "04-03" }
 
-> SELECT f1 FROM kafka_multi_broker
+> SELECT f1 FROM kafka_multi_broker_tbl
 01-01
 01-02
 01-03

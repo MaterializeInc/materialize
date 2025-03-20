@@ -81,9 +81,11 @@ contains:server error 401: Unauthorized
 > CREATE SOURCE avro_data FROM KAFKA CONNECTION kafka (
     TOPIC 'testdrive-avro-data-${testdrive.seed}'
   )
+
+> CREATE TABLE avro_data_tbl FROM SOURCE avro_data (REFERENCE "testdrive-avro-data-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION schema_registry
 
-> SELECT * FROM avro_data
+> SELECT * FROM avro_data_tbl
 a
 ----
 1
@@ -103,9 +105,11 @@ a
 > CREATE SOURCE avro_data_ssh FROM KAFKA CONNECTION kafka (
     TOPIC 'testdrive-avro-data-${testdrive.seed}'
   )
+
+> CREATE TABLE avro_data_ssh_tbl FROM SOURCE avro_data_ssh (REFERENCE "testdrive-avro-data-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION schema_registry
 
-> SELECT * FROM avro_data_ssh
+> SELECT * FROM avro_data_ssh_tbl
 a
 ----
 1

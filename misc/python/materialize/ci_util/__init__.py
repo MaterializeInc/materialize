@@ -14,8 +14,9 @@ from pathlib import Path
 from typing import Any
 
 import requests
+from semver.version import VersionInfo
 
-from materialize import buildkite, ui
+from materialize import MZ_ROOT, buildkite, cargo, ui
 
 
 def junit_report_filename(suite: str) -> Path:
@@ -47,9 +48,10 @@ def upload_junit_report(suite: str, junit_report: Path) -> None:
     """
     if not buildkite.is_in_buildkite():
         return
-    ui.header(f"Uploading report for suite {suite!r} to Buildkite Test Analytics")
     suite = suite.upper().replace("-", "_")
-    token = os.environ[f"BUILDKITE_TEST_ANALYTICS_API_KEY_{suite}"]
+    token = os.getenv(f"BUILDKITE_TEST_ANALYTICS_API_KEY_{suite}")
+    if not token:
+        return
     try:
         res = requests.post(
             "https://analytics-api.buildkite.com/v1/uploads",
@@ -81,7 +83,7 @@ def get_artifacts() -> Any:
     if not buildkite.is_in_buildkite():
         return []
 
-    ui.header("Getting artifact informations from Buildkite")
+    ui.section("Getting artifact informations from Buildkite")
     build = os.environ["BUILDKITE_BUILD_NUMBER"]
     build_id = os.environ["BUILDKITE_BUILD_ID"]
     job = os.environ["BUILDKITE_JOB_ID"]
@@ -107,3 +109,11 @@ def get_artifacts() -> Any:
         return []
 
     return res.json()
+
+
+def get_mz_version(workspace: cargo.Workspace | None = None) -> VersionInfo:
+    """Get the current Materialize version from Cargo.toml."""
+
+    if not workspace:
+        workspace = cargo.Workspace(MZ_ROOT)
+    return VersionInfo.parse(workspace.crates["mz-environmentd"].version_string)

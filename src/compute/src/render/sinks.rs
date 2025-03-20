@@ -11,18 +11,20 @@
 
 use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
+use columnar::Columnar;
 use differential_dataflow::Collection;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use mz_expr::{permutation_for_arrangement, EvalError, MapFilterProject};
 use mz_ore::soft_assert_or_log;
 use mz_ore::str::StrExt;
 use mz_ore::vec::PartialOrdVecExt;
-use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
+use mz_timely_util::probe::Handle;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
@@ -37,16 +39,20 @@ impl<'g, G, T> Context<Child<'g, G, T>>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     T: RenderTimestamp,
+    <T as Columnar>::Container: Clone + Send,
+    for<'a> <T as Columnar>::Ref<'a>: Ord + Copy,
 {
     /// Export the sink described by `sink` from the rendering context.
     pub(crate) fn export_sink(
-        &mut self,
+        &self,
         compute_state: &mut crate::compute_state::ComputeState,
         tokens: &BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         dependency_ids: BTreeSet<GlobalId>,
         sink_id: GlobalId,
         sink: &ComputeSinkDesc<CollectionMetadata>,
         start_signal: StartSignal,
+        ct_times: Option<Collection<G, (), Diff>>,
+        output_probe: &Handle<Timestamp>,
     ) {
         soft_assert_or_log!(
             sink.non_null_assertions.is_strictly_sorted(),
@@ -79,8 +85,13 @@ where
             let unthinned_arity = sink.from_desc.arity();
             let (permutation, thinning) = permutation_for_arrangement(key, unthinned_arity);
             let mut mfp = MapFilterProject::new(unthinned_arity);
-            mfp.permute(permutation, thinning.len() + key.len());
-            bundle.as_collection_core(mfp, Some((key.clone(), None)), self.until.clone())
+            mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
+            bundle.as_collection_core(
+                mfp,
+                Some((key.clone(), None)),
+                self.until.clone(),
+                &self.config_set,
+            )
         };
 
         // Attach logging of dataflow errors.
@@ -90,6 +101,24 @@ where
 
         let mut ok_collection = ok_collection.leave();
         let mut err_collection = err_collection.leave();
+
+        // Ensure that the frontier does not advance past the expiration time, if set. Otherwise,
+        // we might write down incorrect data.
+        if let Some(&expiration) = self.dataflow_expiration.as_option() {
+            let token = Rc::new(());
+            let shutdown_token = Rc::downgrade(&token);
+            ok_collection = ok_collection.expire_collection_at(
+                &format!("{}_export_sink_oks", self.debug_name),
+                expiration,
+                Weak::clone(&shutdown_token),
+            );
+            err_collection = err_collection.expire_collection_at(
+                &format!("{}_export_sink_errs", self.debug_name),
+                expiration,
+                shutdown_token,
+            );
+            needed_tokens.push(token);
+        }
 
         let non_null_assertions = sink.non_null_assertions.clone();
         let from_desc = sink.from_desc.clone();
@@ -106,10 +135,10 @@ where
                         idx += skip + 1;
                         if datum.is_null() {
                             return Err(DataflowError::EvalError(Box::new(
-                                EvalError::MustNotBeNull(format!(
-                                    "column {}",
-                                    from_desc.get_name(i).as_str().quoted()
-                                )),
+                                EvalError::MustNotBeNull(
+                                    format!("column {}", from_desc.get_name(i).as_str().quoted())
+                                        .into(),
+                                ),
                             )));
                         }
                     }
@@ -121,7 +150,12 @@ where
 
         let region_name = match sink.connection {
             ComputeSinkConnection::Subscribe(_) => format!("SubscribeSink({:?})", sink_id),
-            ComputeSinkConnection::Persist(_) => format!("PersistSink({:?})", sink_id),
+            ComputeSinkConnection::MaterializedView(_) => {
+                format!("MaterializedViewSink({:?})", sink_id)
+            }
+            ComputeSinkConnection::ContinualTask(_) => {
+                format!("ContinualTaskSink({:?})", sink_id)
+            }
             ComputeSinkConnection::CopyToS3Oneshot(_) => {
                 format!("CopyToS3OneshotSink({:?})", sink_id)
             }
@@ -140,6 +174,8 @@ where
                     start_signal,
                     ok_collection.enter_region(inner),
                     err_collection.enter_region(inner),
+                    ct_times.map(|x| x.enter_region(inner)),
+                    output_probe,
                 );
 
                 if let Some(sink_token) = sink_token {
@@ -166,6 +202,10 @@ where
         start_signal: StartSignal,
         sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
+        // TODO(ct2): Figure out a better way to smuggle this in, potentially by
+        // removing the `SinkRender` trait entirely.
+        ct_times: Option<Collection<G, (), Diff>>,
+        output_probe: &Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>>;
 }
 
@@ -177,7 +217,8 @@ where
 {
     match connection {
         ComputeSinkConnection::Subscribe(connection) => Box::new(connection.clone()),
-        ComputeSinkConnection::Persist(connection) => Box::new(connection.clone()),
+        ComputeSinkConnection::MaterializedView(connection) => Box::new(connection.clone()),
+        ComputeSinkConnection::ContinualTask(connection) => Box::new(connection.clone()),
         ComputeSinkConnection::CopyToS3Oneshot(connection) => Box::new(connection.clone()),
     }
 }

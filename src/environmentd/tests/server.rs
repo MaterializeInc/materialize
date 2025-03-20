@@ -23,19 +23,16 @@ use std::{iter, thread};
 use anyhow::bail;
 use chrono::{DateTime, Utc};
 use futures::FutureExt;
-use http::{Request, StatusCode};
+use http::Request;
 use itertools::Itertools;
 use jsonwebtoken::{DecodingKey, EncodingKey};
-use mz_environmentd::http::{
-    BecomeLeaderResponse, BecomeLeaderResult, LeaderStatus, LeaderStatusResponse,
-};
 use mz_environmentd::test_util::{self, make_pg_tls, Ca, PostgresErrorExt, KAFKA_ADDRS};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
     Authenticator as FronteggAuthentication, AuthenticatorConfig as FronteggConfig,
     DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
 };
-use mz_frontegg_mock::{ApiToken, FronteggMockServer, UserConfig};
+use mz_frontegg_mock::{models::ApiToken, models::UserConfig, FronteggMockServer};
 use mz_ore::cast::CastFrom;
 use mz_ore::cast::CastLossy;
 use mz_ore::cast::TryCastFrom;
@@ -43,10 +40,10 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
-use mz_ore::task;
 use mz_ore::{assert_contains, task::RuntimeExt};
+use mz_ore::{assert_err, assert_none, assert_ok, task};
 use mz_pgrepr::UInt8;
-use mz_sql::session::user::{HTTP_DEFAULT_USER, SYSTEM_USER};
+use mz_sql::session::user::{ANALYTICS_USER, HTTP_DEFAULT_USER, SYSTEM_USER};
 use mz_sql_parser::ast::display::AstDisplay;
 use openssl::ssl::{SslConnectorBuilder, SslVerifyMode};
 use openssl::x509::X509;
@@ -57,7 +54,8 @@ use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::ClientConfig;
 use rdkafka_sys::RDKafkaErrorCode;
 use reqwest::blocking::Client;
-use reqwest::{header::CONTENT_TYPE, Url};
+use reqwest::header::CONTENT_TYPE;
+use reqwest::{StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use tokio::sync::oneshot;
@@ -175,17 +173,15 @@ fn setup_statement_logging_core(
             max_sample_rate.to_string(),
         )
         .with_system_parameter_default(
+            "statement_logging_default_sample_rate".to_string(),
+            sample_rate.to_string(),
+        )
+        .with_system_parameter_default(
             "statement_logging_use_reproducible_rng".to_string(),
             "true".to_string(),
         )
         .start_blocking();
-    let mut client = server.connect(postgres::NoTls).unwrap();
-    client
-        .execute(
-            &format!("SET statement_logging_sample_rate={sample_rate}"),
-            &[],
-        )
-        .unwrap();
+    let client = server.connect(postgres::NoTls).unwrap();
     (server, client)
 }
 
@@ -202,9 +198,25 @@ fn setup_statement_logging(
 
 // Test that we log various kinds of statement whose execution terminates in the coordinator.
 #[mz_ore::test]
-#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/21598
+#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/6487
 fn test_statement_logging_immediate() {
     let (server, mut client) = setup_statement_logging(1.0, 1.0);
+
+    let mut mz_client = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+    mz_client
+        .batch_execute("ALTER SYSTEM SET enable_statement_lifecycle_logging = false")
+        .unwrap();
+    mz_client
+        .batch_execute("ALTER SYSTEM SET statement_logging_max_sample_rate = 1")
+        .unwrap();
+    mz_client
+        .batch_execute("ALTER SYSTEM SET statement_logging_default_sample_rate = 1")
+        .unwrap();
+
     let successful_immediates: &[&str] = &[
         "CREATE VIEW v AS SELECT 1;",
         "CREATE DEFAULT INDEX i ON v;",
@@ -345,6 +357,7 @@ fn test_statement_logging_basic() {
         error_message: Option<String>,
         prepared_at: DateTime<Utc>,
         execution_strategy: Option<String>,
+        result_size: Option<i64>,
         rows_returned: Option<i64>,
         execution_timestamp: Option<u64>,
     }
@@ -364,6 +377,7 @@ fn test_statement_logging_basic() {
     mseh.error_message,
     mpsh.prepared_at,
     mseh.execution_strategy,
+    mseh.result_size,
     mseh.rows_returned,
     mseh.execution_timestamp
 FROM
@@ -400,8 +414,9 @@ ORDER BY mseh.began_at",
                 error_message: r.get(4),
                 prepared_at: r.get(5),
                 execution_strategy: r.get(6),
-                rows_returned: r.get(7),
-                execution_timestamp: r.get::<_, Option<UInt8>>(8).map(|UInt8(val)| val),
+                result_size: r.get(7),
+                rows_returned: r.get(8),
+                execution_timestamp: r.get::<_, Option<UInt8>>(9).map(|UInt8(val)| val),
             })
             .collect::<Vec<_>>(),
         Err(rows) => {
@@ -441,18 +456,21 @@ ORDER BY mseh.began_at",
             }
         }
     }
+    assert!(sl_results[0].result_size.unwrap_or(0) > 0);
     assert_eq!(sl_results[0].rows_returned, Some(1));
     assert_eq!(sl_results[0].finished_status, "success");
     assert_eq!(
         sl_results[0].execution_strategy.as_ref().unwrap(),
         "constant"
     );
+    assert!(sl_results[1].result_size.unwrap_or(0) > 0);
     assert_eq!(sl_results[1].rows_returned, Some(10001));
     assert_eq!(sl_results[1].finished_status, "success");
     assert_eq!(
         sl_results[1].execution_strategy.as_ref().unwrap(),
         "standard"
     );
+    assert!(sl_results[2].result_size.unwrap_or(0) > 0);
     assert_eq!(sl_results[2].rows_returned, Some(10001));
     assert_eq!(sl_results[2].finished_status, "success");
     assert_eq!(
@@ -465,7 +483,8 @@ ORDER BY mseh.began_at",
         .as_ref()
         .unwrap()
         .contains("division by zero"));
-    assert!(sl_results[3].rows_returned.is_none());
+    assert_none!(sl_results[3].result_size);
+    assert_none!(sl_results[3].rows_returned);
 }
 
 #[mz_ore::test]
@@ -603,7 +622,7 @@ ORDER BY mseh.began_at",
         assert_eq!(r.sample_rate, 1.0);
         assert!(r.prepared_at <= r.began_at);
         assert!(r.began_at <= r.finished_at);
-        assert!(r.execution_strategy.is_none());
+        assert_none!(r.execution_strategy);
     }
     assert_eq!(sl_subscribes[0].finished_status, "success");
     assert_eq!(sl_subscribes[1].finished_status, "canceled");
@@ -642,9 +661,9 @@ ORDER BY mseh.began_at ASC;",
         .into_iter()
         .map(|r| r.get(0))
         .collect();
-    // 22 randomly sampled out of 50 with 50% sampling. Seems legit!
+    // 23 randomly sampled out of 50 with 50% sampling. Seems legit!
     let expected_sqls = [
-        1, 3, 4, 5, 8, 14, 16, 17, 18, 19, 20, 22, 23, 24, 30, 31, 32, 35, 36, 41, 45, 49,
+        2, 4, 5, 6, 9, 15, 17, 18, 19, 20, 21, 23, 24, 25, 31, 32, 33, 36, 37, 42, 46,
     ]
     .into_iter()
     .map(|i| format!("SELECT {i}"))
@@ -653,6 +672,7 @@ ORDER BY mseh.began_at ASC;",
 }
 
 #[mz_ore::test]
+#[ignore] // TODO: Reenable when database-issues#8967 is fixed
 fn test_statement_logging_sampling() {
     let (server, client) = setup_statement_logging(1.0, 0.5);
     test_statement_logging_sampling_inner(server, client);
@@ -661,6 +681,7 @@ fn test_statement_logging_sampling() {
 /// Test that we are not allowed to set `statement_logging_sample_rate`
 /// arbitrarily high, but that it is constrained by `statement_logging_max_sample_rate`.
 #[mz_ore::test]
+#[ignore] // TODO: Reenable when database-issues#8967 is fixed
 fn test_statement_logging_sampling_constrained() {
     let (server, client) = setup_statement_logging(0.5, 1.0);
     test_statement_logging_sampling_inner(server, client);
@@ -738,6 +759,50 @@ async fn test_statement_logging_unsampled_metrics() {
         .get_value();
     let metric_value = usize::cast_from(u64::try_cast_from(metric_value).unwrap());
     assert_eq!(expected_total, metric_value);
+}
+
+#[mz_ore::test]
+fn test_enable_internal_statement_logging() {
+    let (server, mut client) = setup_statement_logging_core(
+        1.0,
+        1.0,
+        test_util::TestHarness::default().with_system_parameter_default(
+            "enable_internal_statement_logging".to_string(),
+            "true".to_string(),
+        ),
+    );
+
+    client.execute("SELECT 1", &[]).unwrap();
+
+    let mut client = server.connect_internal(postgres::NoTls).unwrap();
+    let num_mz_system_statements = Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry(|_| {
+            let sl_results = client
+                .query(
+                    "SELECT
+    count(*)
+FROM mz_internal.mz_prepared_statement_history mpsh
+JOIN mz_internal.mz_session_history USING (session_id)
+WHERE authenticated_user='mz_system'",
+                    &[],
+                )
+                .unwrap();
+
+            let count: i64 = sl_results[0].get(0);
+
+            if count > 0 {
+                Ok(count)
+            } else {
+                Err(())
+            }
+        })
+        .expect("at least some statements from mz_system should have been logged");
+
+    assert!(
+        num_mz_system_statements > 0,
+        "statements executed by mz_system should have been logged"
+    );
 }
 
 // Test the POST and WS server endpoints.
@@ -924,6 +989,13 @@ fn test_cancel_long_running_query() {
 }
 
 fn test_cancellation_cancels_dataflows(query: &str) {
+    // Query that returns how many dataflows are currently installed.
+    // Accounts for the presence of introspection subscribe dataflows by ignoring those.
+    const DATAFLOW_QUERY: &str = " \
+        SELECT count(*) \
+        FROM mz_introspection.mz_dataflows \
+        WHERE name NOT LIKE '%introspection-subscribe%'";
+
     let server = test_util::TestHarness::default()
         .unsafe_mode()
         .start_blocking();
@@ -936,10 +1008,7 @@ fn test_cancellation_cancels_dataflows(query: &str) {
     // No dataflows expected at startup.
     assert_eq!(
         client1
-            .query_one(
-                "SELECT count(*) FROM mz_internal.mz_dataflow_operators",
-                &[]
-            )
+            .query_one(DATAFLOW_QUERY, &[])
             .unwrap()
             .get::<_, i64>(0),
         0
@@ -950,10 +1019,7 @@ fn test_cancellation_cancels_dataflows(query: &str) {
         Retry::default()
             .retry(|_state| {
                 let count: i64 = client2
-                    .query_one(
-                        "SELECT count(*) FROM mz_internal.mz_dataflow_operators",
-                        &[],
-                    )
+                    .query_one(DATAFLOW_QUERY, &[])
                     .map_err(|_| ())
                     .unwrap()
                     .get(0);
@@ -976,10 +1042,7 @@ fn test_cancellation_cancels_dataflows(query: &str) {
     Retry::default()
         .retry(|_state| {
             let count: i64 = client1
-                .query_one(
-                    "SELECT count(*) FROM mz_internal.mz_dataflow_operators",
-                    &[],
-                )
+                .query_one(DATAFLOW_QUERY, &[])
                 .map_err(|_| ())
                 .unwrap()
                 .get(0);
@@ -1009,6 +1072,13 @@ fn test_cancel_insert_select() {
 }
 
 fn test_closing_connection_cancels_dataflows(query: String) {
+    // Query that returns how many dataflows are currently installed.
+    // Accounts for the presence of introspection subscribe dataflows by ignoring those.
+    const DATAFLOW_QUERY: &str = " \
+        SELECT count(*) \
+        FROM mz_introspection.mz_dataflows \
+        WHERE name NOT LIKE '%introspection-subscribe%'";
+
     let server = test_util::TestHarness::default()
         .unsafe_mode()
         .start_blocking();
@@ -1048,10 +1118,7 @@ fn test_closing_connection_cancels_dataflows(query: String) {
                 panic!("waited too long for psql to send the query");
             }
             let count: i64 = client
-                .query_one(
-                    "SELECT count(*) FROM mz_internal.mz_dataflow_operators",
-                    &[],
-                )
+                .query_one(DATAFLOW_QUERY, &[])
                 .map_err(|_| ())
                 .unwrap()
                 .get(0);
@@ -1077,10 +1144,7 @@ fn test_closing_connection_cancels_dataflows(query: String) {
                 panic!("waited too long for dataflow cancellation");
             }
             let count: i64 = client
-                .query_one(
-                    "SELECT count(*) FROM mz_internal.mz_dataflow_operators",
-                    &[],
-                )
+                .query_one(DATAFLOW_QUERY, &[])
                 .map_err(|_| ())
                 .unwrap()
                 .get(0);
@@ -1298,7 +1362,7 @@ fn test_storage_usage_updates_between_restarts() {
 }
 
 #[mz_ore::test]
-#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18896
+#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5584
 fn test_storage_usage_doesnt_update_between_restarts() {
     let data_dir = tempfile::tempdir().unwrap();
     let storage_usage_collection_interval = Duration::from_secs(10);
@@ -1325,7 +1389,7 @@ fn test_storage_usage_doesnt_update_between_restarts() {
 
     // Another storage usage collection should not be scheduled immediately.
     {
-        // Give plenty of time so we don't accidentally do another collection if this test is slow.
+        // Give plenty of time, so we don't accidentally do another collection if this test is slow.
         let server = harness
             .with_storage_usage_collection_interval(Duration::from_secs(60 * 1000))
             .start_blocking();
@@ -1350,7 +1414,11 @@ fn test_storage_usage_doesnt_update_between_restarts() {
                 let expected_collection_interval: f64 =
                     f64::cast_lossy(storage_usage_collection_interval.as_secs());
 
-                assert!(actual_collection_interval >= expected_collection_interval);
+                assert!(
+                    // Add 1 second grace period to avoid flaky tests.
+                    actual_collection_interval >= expected_collection_interval - 1.0,
+                    "actual_collection_interval={actual_collection_interval}, expected_collection_interval={expected_collection_interval}"
+                );
             }
             _ => unreachable!("query is limited to 2"),
         }
@@ -1423,8 +1491,8 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
         NowFn::from(move || *timestamp.lock().expect("lock poisoned"))
     };
     let data_dir = tempfile::tempdir().unwrap();
-    let collection_interval = Duration::from_secs(1);
-    let retention_period = Duration::from_millis(1100);
+    let collection_interval = Duration::from_millis(100);
+    let retention_period = Duration::from_millis(200);
     let harness = test_util::TestHarness::default()
         .with_now(now_fn)
         .with_storage_usage_collection_interval(collection_interval)
@@ -1434,6 +1502,7 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
     let initial_timestamp = {
         let server = harness.clone().start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
+
         // Create a table with no data, which should have some overhead and therefore some storage usage
         client
             .batch_execute("CREATE TABLE usage_test (a int)")
@@ -1449,12 +1518,12 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
                         "SELECT (EXTRACT(EPOCH FROM MAX(collection_timestamp)) * 1000)::integer FROM mz_internal.mz_storage_usage_by_shard;",
                         &[],
                     )
-                    .map_err(|e| e.to_string()).unwrap()
+                    .map_err(|e| e.to_string())?
                     .try_get::<_, i32>(0)
                     .map_err(|e| e.to_string())
             }).expect("Could not fetch initial timestamp");
 
-        let initial_server_usage_records = client
+        let initial_storage_usage_records = client
             .query_one(
                 "SELECT COUNT(*)::integer AS number
                      FROM mz_internal.mz_storage_usage_by_shard",
@@ -1464,9 +1533,9 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
             .try_get::<_, i32>(0)
             .expect("Could not get initial count of records");
 
-        info!(%initial_timestamp, %initial_server_usage_records);
+        info!(%initial_timestamp, %initial_storage_usage_records);
         assert!(
-            initial_server_usage_records >= 1,
+            initial_storage_usage_records >= 1,
             "No initial server usage records!"
         );
 
@@ -1477,22 +1546,23 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
     *now.lock().expect("lock poisoned") = u64::try_from(initial_timestamp)
         .expect("negative timestamps are impossible")
         + u64::try_from(retention_period.as_millis()).expect("known to fit")
-        + 1;
+        // Add a second to account for any rounding errors.
+        + 1000;
 
     {
         let server = harness.start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
 
         *now.lock().expect("lock poisoned") +=
-            u64::try_from(collection_interval.as_millis()).expect("known to fit") + 1;
+            u64::try_from(collection_interval.as_millis()).expect("known to fit") + 1000;
 
-        let subsequent_initial_timestamp = Retry::default().max_duration(Duration::from_secs(5)).retry(|_| {
+        let subsequent_initial_timestamp = Retry::default().max_duration(Duration::from_secs(30)).retry(|_| {
                 client
                     .query_one(
-                        "SELECT (EXTRACT(EPOCH FROM MIN(collection_timestamp)) * 1000)::integer FROM mz_internal.mz_storage_usage_by_shard;",
+                        &format!("SELECT ts FROM (SELECT (EXTRACT(EPOCH FROM MIN(collection_timestamp)) * 1000)::integer as ts FROM mz_internal.mz_storage_usage_by_shard) WHERE ts > {initial_timestamp};"),
                         &[],
                     )
-                    .map_err(|e| e.to_string()).unwrap()
+                    .map_err(|e| e.to_string())?
                     .try_get::<_, i32>(0)
                     .map_err(|e| e.to_string())
             }).expect("Could not fetch initial timestamp");
@@ -1501,6 +1571,91 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
         assert!(
             subsequent_initial_timestamp > initial_timestamp,
             "Records were not reaped!"
+        );
+    };
+}
+
+#[mz_ore::test]
+fn test_storage_usage_records_are_not_cleared_on_restart() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let collection_interval = Duration::from_secs(1);
+    // Intentionally set retention period extremely high so that records aren't reaped.
+    let retention_period = Duration::from_secs(u64::MAX);
+    let harness = test_util::TestHarness::default()
+        .with_storage_usage_collection_interval(collection_interval)
+        .with_storage_usage_retention_period(retention_period)
+        .data_directory(data_dir.path());
+
+    let (initial_timestamp, initial_storage_usage_records) = {
+        let server = harness.clone().start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        // Create a table with no data, which should have some overhead and therefore some storage usage.
+        client
+            .batch_execute("CREATE TABLE usage_test (a int)")
+            .unwrap();
+
+        // Wait for initial storage usage collection, to be sure records are present.
+        let initial_timestamp = Retry::default().max_duration(Duration::from_secs(5)).retry(|_| {
+            client
+                .query_one(
+                    "SELECT (EXTRACT(EPOCH FROM MIN(collection_timestamp)) * 1000)::int8 FROM mz_internal.mz_storage_usage_by_shard;",
+                    &[],
+                )
+                .map_err(|e| e.to_string()).unwrap()
+                .try_get::<_, i64>(0)
+                .map_err(|e| e.to_string())
+        }).expect("Could not fetch initial timestamp");
+
+        let initial_storage_usage_records = client
+            .query_one(
+                "SELECT COUNT(*)::integer AS number
+                     FROM mz_internal.mz_storage_usage_by_shard",
+                &[],
+            )
+            .unwrap()
+            .try_get::<_, i32>(0)
+            .expect("Could not get initial count of records");
+
+        info!(%initial_timestamp, %initial_storage_usage_records);
+        assert!(
+            initial_storage_usage_records >= 1,
+            "No initial server usage records!"
+        );
+
+        (initial_timestamp, initial_storage_usage_records)
+    };
+
+    {
+        let server = harness.start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+
+        let subsequent_initial_timestamp =client
+            .query_one(
+                "SELECT (EXTRACT(EPOCH FROM MIN(collection_timestamp)) * 1000)::int8 FROM mz_internal.mz_storage_usage_by_shard;",
+                &[],
+            )
+            .map_err(|e| e.to_string()).unwrap()
+            .try_get::<_, i64>(0)
+            .expect("Could not fetch subsequent initial timestamp");
+
+        let subsequent_storage_usage_records = client
+            .query_one(
+                "SELECT COUNT(*)::integer AS number
+                     FROM mz_internal.mz_storage_usage_by_shard",
+                &[],
+            )
+            .unwrap()
+            .try_get::<_, i32>(0)
+            .expect("Could not get initial count of records");
+
+        info!(%subsequent_initial_timestamp, %subsequent_storage_usage_records);
+        assert_eq!(
+            subsequent_initial_timestamp, initial_timestamp,
+            "storage usage records were cleared"
+        );
+        assert!(
+            subsequent_storage_usage_records >= initial_storage_usage_records,
+            "storage usage was cleared!"
         );
     };
 }
@@ -1538,6 +1693,7 @@ fn test_default_cluster_sizes() {
 }
 
 #[mz_ore::test]
+#[ignore] // TODO: Reenable when database-issues#6931 is fixed
 fn test_max_request_size() {
     let statement = "SELECT $1::text";
     let statement_size = statement.bytes().count();
@@ -1551,7 +1707,7 @@ fn test_max_request_size() {
 
         let err = client.query(statement, &[&param]).unwrap_db_error();
         assert_contains!(err.message(), "request larger than");
-        assert!(client.is_valid(Duration::from_secs(2)).is_err());
+        assert_err!(client.is_valid(Duration::from_secs(2)));
     }
 
     // http
@@ -1627,15 +1783,29 @@ fn test_max_statement_batch_size() {
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         let res = Client::new().post(http_url).json(&json).send().unwrap();
+        let body: serde_json::Value = res.json().unwrap();
+        let is_error = body
+            .get("results")
+            .unwrap()
+            .get(0)
+            .unwrap()
+            .get("error")
+            .is_some();
+        assert!(is_error, "statement should result in an error: {body}");
         assert!(
-            res.status().is_client_error(),
-            "statement should result in an error: {res:?}"
-        );
-        let text = res.text().unwrap();
-        assert!(
-            text.contains("statement batch size cannot exceed"),
+            body.get("results")
+                .unwrap()
+                .get(0)
+                .unwrap()
+                .get("error")
+                .unwrap()
+                .get("message")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .contains("statement batch size cannot exceed"),
             "error should indicate that the statement was too large: {}",
-            text
+            body
         );
     }
 
@@ -1647,6 +1817,9 @@ fn test_max_statement_batch_size() {
         let json = format!("{{\"query\":\"{statements}\"}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
         ws.send(Message::Text(json.to_string())).unwrap();
+
+        // Discard the CommandStarting message
+        let _ = ws.read().unwrap();
 
         let msg = ws.read().unwrap();
         let msg = msg.into_text().expect("response should be text");
@@ -1902,10 +2075,10 @@ fn test_max_connections_on_all_interfaces() {
         .connect(postgres::NoTls)
         .unwrap();
     mz_client
-        .batch_execute("ALTER SYSTEM SET max_connections = 1")
+        .batch_execute("ALTER SYSTEM SET superuser_reserved_connections = 1")
         .unwrap();
     mz_client
-        .batch_execute("ALTER SYSTEM SET superuser_reserved_connections = 0")
+        .batch_execute("ALTER SYSTEM SET max_connections = 2")
         .unwrap();
 
     let client = server.connect(postgres::NoTls).unwrap();
@@ -1929,14 +2102,14 @@ fn test_max_connections_on_all_interfaces() {
         let status = res.status();
         let text = res.text().expect("no body?");
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-        assert!(text.contains("creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)"));
+        assert_contains!(text, "creating connection would violate max_connections limit (desired: 2, limit: 2, current: 1)");
     }
 
     {
         // while postgres client is connected, websockets can't auth
         let (mut ws, _resp) = tungstenite::connect(ws_url.clone()).unwrap();
         let err = test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap_err();
-        assert!(err.to_string().contains("creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)"), "{err}");
+        assert_contains!(err.to_string(), "creating connection would violate max_connections limit (desired: 2, limit: 2, current: 1)");
     }
 
     tracing::info!("closing postgres client");
@@ -1948,7 +2121,7 @@ fn test_max_connections_on_all_interfaces() {
             let res = Client::new().post(http_url.clone()).json(&json).send().unwrap();
             let status = res.status();
             if status == StatusCode::INTERNAL_SERVER_ERROR {
-                assert!(res.text().expect("expect body").contains("creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)"));
+                assert_contains!(res.text().expect("expect body"), "creating connection would violate max_connections limit (desired: 2, limit: 2, current: 1)");
                 return Err(());
             }
             assert_eq!(status, StatusCode::OK);
@@ -1992,7 +2165,35 @@ fn test_max_connections_on_all_interfaces() {
     let status = res.status();
     let text = res.text().expect("no body?");
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-    assert!(text.contains("creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)"));
+    assert_contains!(text, "creating connection would violate max_connections limit (desired: 2, limit: 2, current: 1)");
+
+    // Make sure lowering our max connections below the current limit does not
+    // cause a panic.
+    mz_client
+        .batch_execute("ALTER SYSTEM SET max_connections = 10")
+        .unwrap();
+
+    // Open a few connections.
+    let mut clients = Vec::new();
+    for _ in 0..5 {
+        let client = server
+            .pg_config()
+            .connect(postgres::NoTls)
+            .expect("success opening client");
+        clients.push(client);
+    }
+
+    // Lower the connection below the number of open clients.
+    mz_client
+        .batch_execute("ALTER SYSTEM SET max_connections = 2")
+        .unwrap();
+
+    // Opening a new connection should fail.
+    let result = server.pg_config().connect(postgres::NoTls);
+    let Err(failure) = result else {
+        panic!("unexpected success connecting to server");
+    };
+    assert_contains!(failure.to_string(), "creating connection would violate max_connections limit (desired: 7, limit: 2, current: 6)");
 }
 
 // Test max_connections and superuser_reserved_connections.
@@ -2030,6 +2231,7 @@ async fn test_max_connections_limits() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
@@ -2386,10 +2588,7 @@ fn test_internal_ws_auth() {
     ]);
     // We should receive error if sending the standard bearer auth, since that is unexpected
     // for the Internal HTTP API
-    assert_eq!(
-        test_util::auth_with_ws(&mut ws, options.clone()).is_err(),
-        true
-    );
+    assert_err!(test_util::auth_with_ws(&mut ws, options.clone()));
 
     // Recreate the websocket
     let (mut ws, _resp) = tungstenite::connect(make_req()).unwrap();
@@ -2434,165 +2633,9 @@ fn test_internal_ws_auth() {
     }
 }
 
-#[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
-async fn test_leader_promotion() {
-    let tmpdir = TempDir::new().unwrap();
-    let harness = test_util::TestHarness::default()
-        .unsafe_mode()
-        .data_directory(tmpdir.path());
-    {
-        // start with a catalog with no deploy generation to match current production.
-        let server = harness.clone().start().await;
-        let client = server.connect().await.unwrap();
-        client.simple_query("SELECT 1").await.unwrap();
-    }
-    // propose a deploy generation for the first time.
-    let harness = harness.with_deploy_generation(2);
-    {
-        let listeners_2 = test_util::Listeners::new().await.unwrap();
-        let internal_http_addr_2 = listeners_2.inner.internal_http_local_addr();
-        let config_2 = harness.clone();
-        let server_2 = mz_ore::task::spawn(|| "gen-2", async move {
-            listeners_2.serve(config_2).await.unwrap()
-        })
-        .abort_on_drop();
-
-        // make sure asking about the leader and promoting don't panic.
-        let status_http_url = Url::parse(&format!(
-            "http://{}/api/leader/status",
-            internal_http_addr_2
-        ))
-        .unwrap();
-        Retry::default()
-            .max_tries(10)
-            .retry_async(|_state| async {
-                let res = reqwest::Client::new()
-                    .get(status_http_url.clone())
-                    .send()
-                    .await
-                    .unwrap();
-                assert_eq!(res.status(), StatusCode::OK);
-                let response: LeaderStatusResponse = res.json().await.unwrap();
-                assert_ne!(response.status, LeaderStatus::IsLeader);
-                if response.status == LeaderStatus::ReadyToPromote {
-                    Ok(())
-                } else {
-                    Err(())
-                }
-            })
-            .await
-            .unwrap();
-        let res = reqwest::Client::new()
-            .post(
-                Url::parse(&format!(
-                    "http://{}/api/leader/promote",
-                    internal_http_addr_2
-                ))
-                .unwrap(),
-            )
-            .send()
-            .await
-            .unwrap();
-        tracing::info!("response: {res:?}");
-        assert_eq!(
-            res.status(),
-            StatusCode::OK,
-            "{:?}",
-            res.json::<serde_json::Value>().await
-        );
-        let server_2 = server_2.await.unwrap();
-        let client = server_2.connect().await.unwrap();
-        client.simple_query("SELECT 1").await.unwrap();
-    }
-    // start with different deploy generation.
-    let harness = harness.with_deploy_generation(3);
-    {
-        let listeners_3 = test_util::Listeners::new().await.unwrap();
-        let internal_http_addr_3 = listeners_3.inner.internal_http_local_addr();
-        let config_3 = harness.clone();
-        let server_3 = mz_ore::task::spawn(|| "gen-3", async move {
-            listeners_3.serve(config_3).await.unwrap()
-        })
-        .abort_on_drop();
-        // make sure asking about the leader and promoting don't panic.
-        let status_http_url = Url::parse(&format!(
-            "http://{}/api/leader/status",
-            internal_http_addr_3
-        ))
-        .unwrap();
-        Retry::default()
-            .max_tries(10)
-            .retry_async(|_state| async {
-                let res = reqwest::Client::new()
-                    .get(status_http_url.clone())
-                    .send()
-                    .await
-                    .unwrap();
-                assert_eq!(res.status(), StatusCode::OK);
-                let response: LeaderStatusResponse = res.json().await.unwrap();
-                assert_ne!(response.status, LeaderStatus::IsLeader);
-                if response.status == LeaderStatus::ReadyToPromote {
-                    Ok(())
-                } else {
-                    Err(())
-                }
-            })
-            .await
-            .unwrap();
-        let promote_http_url = Url::parse(&format!(
-            "http://{}/api/leader/promote",
-            internal_http_addr_3
-        ))
-        .unwrap();
-        let res = reqwest::Client::new()
-            .post(promote_http_url.clone())
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
-        let response: BecomeLeaderResponse = res.json().await.unwrap();
-        assert_eq!(
-            response,
-            BecomeLeaderResponse {
-                result: BecomeLeaderResult::Success
-            }
-        );
-
-        let server_3 = server_3.await.unwrap();
-
-        let client = server_3.connect().await.unwrap();
-        client.simple_query("SELECT 1").await.unwrap();
-
-        // check that we're the leader and promotion doesn't do anything
-        let res = reqwest::Client::new()
-            .get(status_http_url)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
-        let response: LeaderStatusResponse = res.json().await.unwrap();
-        assert_eq!(response.status, LeaderStatus::IsLeader);
-
-        let res = reqwest::Client::new()
-            .post(promote_http_url)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
-        let response: BecomeLeaderResponse = res.json().await.unwrap();
-        assert_eq!(
-            response,
-            BecomeLeaderResponse {
-                result: BecomeLeaderResult::Success
-            }
-        );
-    }
-}
-
-#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // too slow
-async fn test_leader_promotion_always_using_deploy_generation() {
+fn test_leader_promotion_always_using_deploy_generation() {
     let tmpdir = TempDir::new().unwrap();
     let harness = test_util::TestHarness::default()
         .unsafe_mode()
@@ -2600,43 +2643,38 @@ async fn test_leader_promotion_always_using_deploy_generation() {
         .with_deploy_generation(2);
     {
         // propose a deploy generation for the first time
-        let server = harness.clone().start().await;
-        let client = server.connect().await.unwrap();
-        client.simple_query("SELECT 1").await.unwrap();
+        let server = harness.clone().start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client.simple_query("SELECT 1").unwrap();
     }
     {
         // keep it the same, no need to promote the leader
-        let server = harness.start().await;
-        let client = server.connect().await.unwrap();
-        client.simple_query("SELECT 1").await.unwrap();
+        let server = harness.start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client.simple_query("SELECT 1").unwrap();
 
-        let http_client = reqwest::Client::new();
+        let http_client = reqwest::blocking::Client::new();
 
         // check that we're the leader and promotion doesn't do anything
         let status_http_url = Url::parse(&format!(
             "http://{}/api/leader/status",
-            server.inner.internal_http_local_addr()
+            server.inner().internal_http_local_addr()
         ))
         .unwrap();
-        let res = http_client.get(status_http_url).send().await.unwrap();
+        let res = http_client.get(status_http_url).send().unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let response: LeaderStatusResponse = res.json().await.unwrap();
-        assert_eq!(response.status, LeaderStatus::IsLeader);
+        let response = res.text().unwrap();
+        assert_eq!(response, r#"{"status":"IsLeader"}"#);
 
         let promote_http_url = Url::parse(&format!(
             "http://{}/api/leader/promote",
-            server.inner.internal_http_local_addr()
+            server.inner().internal_http_local_addr()
         ))
         .unwrap();
-        let res = http_client.post(promote_http_url).send().await.unwrap();
+        let res = http_client.post(promote_http_url).send().unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let response: BecomeLeaderResponse = res.json().await.unwrap();
-        assert_eq!(
-            response,
-            BecomeLeaderResponse {
-                result: BecomeLeaderResult::Success
-            }
-        );
+        let response = res.text().unwrap();
+        assert_eq!(response, r#"{"result":"Success"}"#);
     }
 }
 
@@ -2684,10 +2722,10 @@ async fn test_leader_promotion_mixed_code_version() {
                 .unwrap();
             tracing::info!("{} response: {res:?}", next_version);
             assert_eq!(res.status(), StatusCode::OK);
-            let response: LeaderStatusResponse = res.json().await.unwrap();
+            let response = res.text().await.unwrap();
             tracing::info!("{} response body: {response:?}", next_version);
-            assert_ne!(response.status, LeaderStatus::IsLeader);
-            if response.status == LeaderStatus::ReadyToPromote {
+            assert_ne!(response, r#"{"status":"IsLeader"}"#);
+            if response == r#"{"status":"ReadyToPromote"}"# {
                 Ok(())
             } else {
                 Err(())
@@ -2715,7 +2753,7 @@ fn test_cancel_ws() {
             .retry(|_| {
                 let conn_id: String = client
                     .query_one(
-                        "SELECT session_id::text FROM mz_internal.mz_subscriptions",
+                        "SELECT s.connection_id::text FROM mz_internal.mz_subscriptions b JOIN mz_internal.mz_sessions s ON s.id = b.session_id",
                         &[],
                     )?
                     .get(0);
@@ -2891,7 +2929,7 @@ fn test_invalid_webhook_body() {
 
     // Send non-UTF8 text which will fail to get deserialized.
     let non_utf8 = vec![255, 255, 255, 255];
-    assert!(std::str::from_utf8(&non_utf8).is_err());
+    assert_err!(std::str::from_utf8(&non_utf8));
 
     let resp = http_client
         .post(webhook_url)
@@ -2997,7 +3035,7 @@ fn test_github_20262() {
             .retry(|_| {
                 let conn_id: String = client
                     .query_one(
-                        "SELECT session_id::text FROM mz_internal.mz_subscriptions",
+                        "SELECT s.connection_id::text FROM mz_internal.mz_subscriptions b JOIN mz_internal.mz_sessions s ON s.id = b.session_id",
                         &[],
                     )?
                     .get(0);
@@ -3050,14 +3088,14 @@ fn test_github_20262() {
 }
 
 // Test that the server properly handles cancellation requests of read-then-write queries.
-// See #20404.
+// See database-issues#6134.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_read_then_write() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
         .start_blocking();
-    server.enable_feature_flags(&["enable_unsafe_functions"]);
+    server.enable_feature_flags(&["unsafe_enable_unsafe_functions"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     client
@@ -3123,6 +3161,7 @@ async fn test_http_metrics() {
     ))
     .unwrap();
 
+    // Handled query (successful)
     let json = r#"{ "query": "SHOW application_name;" }"#;
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
     let response = reqwest::Client::new()
@@ -3133,7 +3172,27 @@ async fn test_http_metrics() {
         .unwrap();
     assert!(response.status().is_success());
 
+    // Handled query (error)
     let json = r#"{ "query": "invalid sql 123;" }"#;
+    let json: serde_json::Value = serde_json::from_str(json).unwrap();
+    let response = reqwest::Client::new()
+        .post(http_url.clone())
+        .json(&json)
+        .send()
+        .await
+        .unwrap();
+    let body: serde_json::Value = response.json().await.unwrap();
+    let is_error = body
+        .get("results")
+        .unwrap()
+        .get(0)
+        .unwrap()
+        .get("error")
+        .is_some();
+    assert!(is_error);
+
+    // Invalid request
+    let json = r#"{ "q": "invalid sql 123;" }"#;
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
     let response = reqwest::Client::new()
         .post(http_url)
@@ -3171,14 +3230,14 @@ async fn test_http_metrics() {
 
     let request_metric = request_metrics.pop().unwrap();
     let success_metric = &request_metric.get_metric()[0];
-    assert_eq!(success_metric.get_counter().get_value(), 1.0);
+    assert_eq!(success_metric.get_counter().get_value(), 2.0);
     assert_eq!(success_metric.get_label()[0].get_value(), "/api/sql");
     assert_eq!(success_metric.get_label()[2].get_value(), "200");
 
     let failure_metric = &request_metric.get_metric()[1];
     assert_eq!(failure_metric.get_counter().get_value(), 1.0);
     assert_eq!(failure_metric.get_label()[0].get_value(), "/api/sql");
-    assert_eq!(failure_metric.get_label()[2].get_value(), "400");
+    assert_eq!(failure_metric.get_label()[2].get_value(), "422");
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
@@ -3343,10 +3402,15 @@ async fn webhook_concurrent_actions() {
 #[cfg_attr(miri, ignore)] // too slow
 fn webhook_concurrency_limit() {
     let concurrency_limit = 15;
-    let server = test_util::TestHarness::default().start_blocking();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
 
     // Note: we need enable_unstable_dependencies to use mz_sleep.
-    server.enable_feature_flags(&["enable_unstable_dependencies", "enable_unsafe_functions"]);
+    server.enable_feature_flags(&[
+        "unsafe_enable_unstable_dependencies",
+        "unsafe_enable_unsafe_functions",
+    ]);
 
     // Reduce the webhook concurrency limit;
     let mut mz_client = server
@@ -3505,7 +3569,7 @@ fn test_webhook_url_notice() {
         .expect("contains notice")
         .expect("contains message");
     // We should only get the one notice.
-    assert!(rx.try_next().is_err());
+    assert_err!(rx.try_next());
 
     // Print the notice to stderr for future debug-ability.
     eprintln!("notice: {}", url_notice.message());
@@ -3818,7 +3882,7 @@ async fn test_github_25388() {
         .start()
         .await;
     server
-        .enable_feature_flags(&["enable_unsafe_functions"])
+        .enable_feature_flags(&["unsafe_enable_unsafe_functions"])
         .await;
     let client1 = server.connect().await.unwrap();
 
@@ -4029,6 +4093,12 @@ async fn test_startup_cluster_notice_with_http_options() {
     insta::assert_json_snapshot!(notices, @r###"
     [
       {
+        "message": "session default cluster \"i_do_not_exist\" does not exist",
+        "code": "MZ005",
+        "severity": "notice",
+        "hint": "Pick an extant cluster with SET CLUSTER = name. Run SHOW CLUSTERS to see available clusters."
+      },
+      {
         "message": "cluster \"i_do_not_exist\" does not exist",
         "code": "MZ007",
         "severity": "notice",
@@ -4087,7 +4157,7 @@ async fn test_startup_cluster_notice() {
                     "MZ005",
                 ),
             ),
-            message: "default cluster \"quickstart\" does not exist",
+            message: "system default cluster \"quickstart\" does not exist",
             detail: None,
             hint: Some(
                 "Set a default cluster for the current role with `ALTER ROLE <role> SET cluster TO <cluster>;`.",
@@ -4154,44 +4224,39 @@ async fn test_startup_cluster_notice() {
     "###);
 }
 
-#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
-async fn test_durable_oids() {
+fn test_durable_oids() {
     let data_dir = tempfile::tempdir().unwrap();
     let harness = test_util::TestHarness::default().data_directory(data_dir.path());
 
     let table_oid: u32 = {
-        let server = harness.clone().start().await;
-        let client = server.connect().await.unwrap();
+        let server = harness.clone().start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
         client
             .execute("CREATE TABLE t (a INT);", &[])
-            .await
             .expect("failed to create table");
         client
             .query_one("SELECT oid FROM mz_tables WHERE name = 't'", &[])
-            .await
             .expect("failed to select")
             .get(0)
     };
 
     {
-        let server = harness.clone().start().await;
-        let client = server.connect().await.unwrap();
+        let server = harness.clone().start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
 
         let restarted_table_oid: u32 = client
             .query_one("SELECT oid FROM mz_tables WHERE name = 't'", &[])
-            .await
             .expect("failed to select")
             .get(0);
         assert_eq!(table_oid, restarted_table_oid);
 
         client
             .execute("CREATE VIEW v AS SELECT 1;", &[])
-            .await
             .expect("failed to create table");
         let view_oid: u32 = client
             .query_one("SELECT oid FROM mz_views WHERE name = 'v'", &[])
-            .await
             .expect("failed to select")
             .get(0);
         assert_ne!(table_oid, view_oid);
@@ -4325,6 +4390,8 @@ async fn test_cert_reloading() {
     let initial_api_tokens = vec![ApiToken {
         client_id: client_id.clone(),
         secret: secret.clone(),
+        description: None,
+        created_at: Utc::now(),
     }];
     let roles = Vec::new();
     let users = BTreeMap::from([(
@@ -4362,6 +4429,7 @@ async fn test_cert_reloading() {
         Some(Duration::from_millis(100)),
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
@@ -4473,7 +4541,7 @@ async fn test_cert_reloading() {
     let (tx, rx) = oneshot::channel();
     reload_tx.try_send(Some(tx)).unwrap();
     let res = rx.await.unwrap();
-    assert!(res.is_err());
+    assert_err!(res);
 
     // We should still be on the old cert because now the cert and key mismatch.
     let resp = client
@@ -4495,7 +4563,7 @@ async fn test_cert_reloading() {
     let (tx, rx) = oneshot::channel();
     reload_tx.try_send(Some(tx)).unwrap();
     let res = rx.await.unwrap();
-    assert!(res.is_ok());
+    assert_ok!(res);
     let resp = client
         .post(&https_url)
         .header("Content-Type", "application/json")
@@ -4508,4 +4576,103 @@ async fn test_cert_reloading() {
     let resp_x509 = X509::from_der(tlsinfo.peer_certificate().unwrap()).unwrap();
     assert_eq!(resp_x509, next_x509);
     check_pgwire(&conn_str, &ca.ca_cert_path(), next_x509.clone()).await;
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_builtin_connection_alterations_are_preserved_across_restarts() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let harness = test_util::TestHarness::default()
+        .data_directory(data_dir.path())
+        .unsafe_mode();
+
+    {
+        let server = harness.clone().start_blocking();
+        let mut client = server
+            .pg_config_internal()
+            .user(&ANALYTICS_USER.name)
+            .connect(postgres::NoTls)
+            .unwrap();
+
+        let row = client
+            .query_one(
+                "SELECT create_sql
+            FROM mz_catalog.mz_connections
+            WHERE name = 'mz_analytics'",
+                &[],
+            )
+            .expect("success");
+        let sql: String = row.get("create_sql");
+        assert_eq!(
+            sql,
+            "CREATE CONNECTION \"mz_internal\".\"mz_analytics\" TO AWS (ASSUME ROLE ARN = '')"
+        );
+    }
+
+    {
+        let server = harness.clone().start_blocking();
+        let mut client = server
+            .pg_config_internal()
+            .user(&ANALYTICS_USER.name)
+            .connect(postgres::NoTls)
+            .unwrap();
+
+        let row = client
+            .query_one(
+                "SELECT create_sql
+            FROM mz_catalog.mz_connections
+            WHERE name = 'mz_analytics'",
+                &[],
+            )
+            .expect("success");
+        let sql: String = row.get("create_sql");
+        assert_eq!(
+            sql,
+            "CREATE CONNECTION \"mz_internal\".\"mz_analytics\" TO AWS (ASSUME ROLE ARN = '')"
+        );
+
+        client
+            .execute(
+                "ALTER CONNECTION mz_internal.mz_analytics SET (ASSUME ROLE ARN = 'foo')",
+                &[],
+            )
+            .expect("success");
+
+        let row = client
+            .query_one(
+                "SELECT create_sql
+            FROM mz_catalog.mz_connections
+            WHERE name = 'mz_analytics'",
+                &[],
+            )
+            .expect("success");
+        let sql: String = row.get("create_sql");
+        assert_eq!(
+            sql,
+            "CREATE CONNECTION \"mz_internal\".\"mz_analytics\" TO AWS (ASSUME ROLE ARN = 'foo')"
+        );
+    }
+
+    {
+        let server = harness.clone().start_blocking();
+        let mut client = server
+            .pg_config_internal()
+            .user(&ANALYTICS_USER.name)
+            .connect(postgres::NoTls)
+            .unwrap();
+
+        let row = client
+            .query_one(
+                "SELECT create_sql
+            FROM mz_catalog.mz_connections
+            WHERE name = 'mz_analytics'",
+                &[],
+            )
+            .expect("success");
+        let sql: String = row.get("create_sql");
+        assert_eq!(
+            sql,
+            "CREATE CONNECTION \"mz_internal\".\"mz_analytics\" TO AWS (ASSUME ROLE ARN = 'foo')"
+        );
+    }
 }

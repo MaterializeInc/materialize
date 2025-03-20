@@ -179,7 +179,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{consolidation, AsCollection, Collection, ExchangeData};
 use mz_ore::collections::CollectionExt;
-use timely::communication::{Message, Pull, Push};
+use timely::communication::{Pull, Push};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::Event;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -200,7 +200,7 @@ pub fn reclock<G, D, FromTime, IntoTime, R>(
     remap_collection: &Collection<G, FromTime, i64>,
     as_of: Antichain<G::Timestamp>,
 ) -> (
-    Box<dyn Push<Message<Event<FromTime, Vec<(D, FromTime, R)>>>>>,
+    Box<dyn Push<Event<FromTime, Vec<(D, FromTime, R)>>>>,
     Collection<G, D, R>,
 )
 where
@@ -219,7 +219,7 @@ where
     let info = builder.operator_info();
     let channel_id = scope.new_identifier();
     let (pusher, mut events) =
-        scope.pipeline::<Event<FromTime, Vec<(D, FromTime, R)>>>(channel_id, &info.address);
+        scope.pipeline::<Event<FromTime, Vec<(D, FromTime, R)>>>(channel_id, info.address);
 
     let mut remap_input = builder.new_input(&remap_collection.inner, Pipeline);
     let (mut output, reclocked) = builder.new_output();
@@ -238,7 +238,7 @@ where
         // complicated API to traverse it. This is left for future work if the naive trace
         // maintenance implemented in this operator becomes problematic.
         let mut remap_upper = Antichain::from_elem(IntoTime::minimum());
-        let mut remap_since = as_of;
+        let mut remap_since = as_of.clone();
         let mut remap_trace = Vec::new();
 
         // A stash of source updates for which we don't know the corresponding binding yet.
@@ -247,8 +247,11 @@ where
         let mut source_frontier = MutableAntichain::new_bottom(FromTime::minimum());
 
         let mut binding_buffer = Vec::new();
-        let mut remap_buffer = Vec::new();
         let mut interesting_times = Vec::new();
+
+        // Accumulation buffer for `remap_input` updates.
+        use timely::progress::ChangeBatch;
+        let mut remap_accum_buffer: ChangeBatch<(IntoTime, FromTime)> = ChangeBatch::new();
 
         // The operator drains `remap_input` and organizes new bindings that are not beyond
         // `remap_input`'s frontier into the time ordered `remap_trace`.
@@ -269,9 +272,18 @@ where
             let mut session = output.session(cap);
 
             // STEP 1. Accept new bindings into `pending_remap`.
+            // Advance all `into` times by `as_of`, and consolidate all updates at that frontier.
             while let Some((_, data)) = remap_input.next() {
-                data.swap(&mut remap_buffer);
-                for (from, into, diff) in remap_buffer.drain(..) {
+                for (from, mut into, diff) in data.drain(..) {
+                    into.advance_by(as_of.borrow());
+                    remap_accum_buffer.update((into, from), diff);
+                }
+            }
+            // Drain consolidated bindings into the `pending_remap` heap.
+            // Only do this once any of the `remap_input` frontier has passed `as_of`.
+            // For as long as the input frontier is less-equal `as_of`, we have no finalized times.
+            if !PartialOrder::less_equal(&frontiers[0].frontier(), &as_of.borrow()) {
+                for ((into, from), diff) in remap_accum_buffer.drain() {
                     pending_remap.push(Reverse((into, from, diff)));
                 }
             }
@@ -299,7 +311,7 @@ where
             //         violated.
             let mut stash = Vec::new();
             while let Some(event) = events.pull() {
-                match event.as_mut() {
+                match event {
                     Event::Progress(changes) => {
                         source_frontier.update_iter(changes.drain(..));
                     }
@@ -427,7 +439,7 @@ where
 
 /// A batch of differential updates that vary over some partial order. This type maintains the data
 /// as a set of chains that allows for efficient extraction of batches given a frontier.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct ChainBatch<D, T, R> {
     /// A list of chains (sets of mutually comparable times) sorted by the partial order.
     chains: Vec<VecDeque<(D, T, R)>>,
@@ -485,11 +497,7 @@ impl<D, T: Timestamp, R> ChainBatch<D, T, R> {
                             {
                                 r1.plus_equals(&r);
                             }
-                            if r1.is_zero() {
-                                None
-                            } else {
-                                Some((d1, t1, r1))
-                            }
+                            Some((d1, t1, r1))
                         }
                     }
                 }
@@ -537,14 +545,18 @@ impl<D, T: Timestamp, R> FromIterator<(D, T, R)> for ChainBatch<D, T, R> {
 
 #[cfg(test)]
 mod test {
+    use std::sync::atomic::AtomicUsize;
     use std::sync::mpsc::{Receiver, TryRecvError};
 
     use differential_dataflow::consolidation;
     use differential_dataflow::input::{Input, InputSession};
+    use serde::{Deserialize, Serialize};
     use timely::communication::allocator::Thread;
     use timely::dataflow::operators::capture::{Event, Extract};
     use timely::dataflow::operators::unordered_input::UnorderedHandle;
     use timely::dataflow::operators::{ActivateCapability, Capture, UnorderedInput};
+    use timely::progress::timestamp::Refines;
+    use timely::progress::PathSummary;
     use timely::worker::Worker;
 
     use crate::capture::PusherCapture;
@@ -554,8 +566,8 @@ mod test {
 
     type FromTime = Partitioned<u64, u64>;
     type IntoTime = u64;
-    type BindingHandle = InputSession<IntoTime, FromTime, i64>;
-    type DataHandle<D> = (
+    type BindingHandle<FromTime> = InputSession<IntoTime, FromTime, i64>;
+    type DataHandle<D, FromTime> = (
         UnorderedHandle<FromTime, (D, FromTime, i64)>,
         ActivateCapability<FromTime>,
     );
@@ -568,10 +580,16 @@ mod test {
     /// * A `BindingHandle` that allows the test to manipulate the remap bindings
     /// * A `DataHandle` that allows the test to submit the data to be reclocked
     /// * A `ReclockedStream` that allows observing the result of the reclocking process
-    fn harness<D, F, R>(as_of: Antichain<IntoTime>, test_logic: F) -> R
+    fn harness<FromTime, D, F, R>(as_of: Antichain<IntoTime>, test_logic: F) -> R
     where
+        FromTime: Timestamp + Refines<()>,
         D: ExchangeData,
-        F: FnOnce(&mut Worker<Thread>, BindingHandle, DataHandle<D>, ReclockedStream<D>) -> R
+        F: FnOnce(
+                &mut Worker<Thread>,
+                BindingHandle<FromTime>,
+                DataHandle<D, FromTime>,
+                ReclockedStream<D>,
+            ) -> R
             + Send
             + Sync
             + 'static,
@@ -612,7 +630,7 @@ mod test {
     #[mz_ore::test]
     fn basic_reclocking() {
         let as_of = Antichain::from_elem(IntoTime::minimum());
-        harness(
+        harness::<FromTime, _, _, _>(
             as_of,
             |worker, bindings, (mut data, data_cap), reclocked| {
                 // Reclock everything at the minimum IntoTime
@@ -711,7 +729,7 @@ mod test {
     #[mz_ore::test]
     fn test_reclock_frontier() {
         let as_of = Antichain::from_elem(IntoTime::minimum());
-        harness::<(), _, _>(
+        harness::<_, (), _, _>(
             as_of,
             |worker, mut bindings, (_data, data_cap), reclocked| {
                 // Initialize the bindings such that the minimum IntoTime contains the minimum FromTime
@@ -991,5 +1009,124 @@ mod test {
         )];
         assert_eq!(expected, reclock_compact_remap);
         assert_eq!(expected, compact_reclock_remap);
+    }
+
+    #[mz_ore::test]
+    fn test_chainbatch_merge() {
+        let a = ChainBatch::from_iter([('a', 0, 1)]);
+        let b = ChainBatch::from_iter([('a', 0, -1), ('a', 1, 1)]);
+        assert_eq!(a.merge_with(b), ChainBatch::from_iter([('a', 1, 1)]));
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn test_binding_consolidation() {
+        use std::sync::atomic::Ordering;
+
+        #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+        struct Time(u64);
+
+        // A counter of the number of active Time instances
+        static INSTANCES: AtomicUsize = AtomicUsize::new(0);
+
+        impl Time {
+            fn new(time: u64) -> Self {
+                INSTANCES.fetch_add(1, Ordering::Relaxed);
+                Self(time)
+            }
+        }
+
+        impl Clone for Time {
+            fn clone(&self) -> Self {
+                INSTANCES.fetch_add(1, Ordering::Relaxed);
+                Self(self.0)
+            }
+        }
+
+        impl Drop for Time {
+            fn drop(&mut self) {
+                INSTANCES.fetch_sub(1, Ordering::Relaxed);
+            }
+        }
+
+        impl Timestamp for Time {
+            type Summary = ();
+
+            fn minimum() -> Self {
+                Time::new(0)
+            }
+        }
+
+        impl PathSummary<Time> for () {
+            fn results_in(&self, src: &Time) -> Option<Time> {
+                Some(src.clone())
+            }
+
+            fn followed_by(&self, _other: &()) -> Option<Self> {
+                Some(())
+            }
+        }
+
+        impl Refines<()> for Time {
+            fn to_inner(_: ()) -> Self {
+                Self::minimum()
+            }
+            fn to_outer(self) -> () {}
+            fn summarize(_path: ()) {}
+        }
+
+        impl PartialOrder for Time {
+            fn less_equal(&self, other: &Self) -> bool {
+                self.0.less_equal(&other.0)
+            }
+        }
+
+        let as_of = 1000;
+
+        // Test that supplying a single big batch of unconsolidated bindings gets
+        // consolidated after a single worker step.
+        harness::<Time, u64, _, _>(
+            Antichain::from_elem(as_of),
+            move |worker, mut bindings, _, _| {
+                step(worker);
+                let instances_before = INSTANCES.load(Ordering::Relaxed);
+                for ts in 0..as_of {
+                    if ts > 0 {
+                        bindings.update_at(Time::new(ts - 1), ts, -1);
+                    }
+                    bindings.update_at(Time::new(ts), ts, 1);
+                }
+                bindings.advance_to(as_of);
+                bindings.flush();
+                step(worker);
+                let instances_after = INSTANCES.load(Ordering::Relaxed);
+                // The extra instances live in a ChangeBatch which considers compaction when more
+                // than 32 elements are inside.
+                assert!(instances_after - instances_before < 32);
+            },
+        );
+
+        // Test that a slow feed of uncompacted bindings over multiple steps never leads to an
+        // excessive number of bindings held in memory.
+        harness::<Time, u64, _, _>(
+            Antichain::from_elem(as_of),
+            move |worker, mut bindings, _, _| {
+                step(worker);
+                let instances_before = INSTANCES.load(Ordering::Relaxed);
+                for ts in 0..as_of {
+                    if ts > 0 {
+                        bindings.update_at(Time::new(ts - 1), ts, -1);
+                    }
+                    bindings.update_at(Time::new(ts), ts, 1);
+                    bindings.advance_to(ts + 1);
+                    bindings.flush();
+                    step(worker);
+                    let instances_now = INSTANCES.load(Ordering::Relaxed);
+                    // The extra instances live in a ChangeBatch which considers compaction when
+                    // more than 32 elements are inside.
+                    assert!(instances_now - instances_before < 32);
+                }
+            },
+        );
     }
 }

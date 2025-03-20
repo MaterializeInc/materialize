@@ -14,9 +14,6 @@ $ set-arg-default single-replica-cluster=quickstart
 #
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_create_source_denylist_with_options = true
-
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET min_timestamp_interval = '10ms'
 
 $ set int={"type": "record", "name": "field_int", "fields": [ {"name": "f1", "type": "int"} ] }
@@ -29,23 +26,25 @@ $ kafka-create-topic topic=fetch-concurrent-same-source
 > CREATE SOURCE fetch_concurrent_same_source
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-fetch-concurrent-same-source-${testdrive.seed}')
+  WITH (TIMESTAMP INTERVAL '10ms')
+
+> CREATE TABLE fetch_concurrent_same_source_tbl FROM SOURCE fetch_concurrent_same_source (REFERENCE "testdrive-fetch-concurrent-same-source-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
-  WITH (TIMESTAMP INTERVAL '10ms')
 
 $ kafka-ingest format=avro topic=fetch-concurrent-same-source schema=${int} timestamp=1
 {"f1": 123}
 {"f1": 234}
 {"f1": 345}
 
-> SELECT COUNT(*) FROM fetch_concurrent_same_source;
+> SELECT COUNT(*) FROM fetch_concurrent_same_source_tbl;
 3
 
 > BEGIN
 
-> DECLARE c1 CURSOR FOR SELECT * FROM fetch_concurrent_same_source;
+> DECLARE c1 CURSOR FOR SELECT * FROM fetch_concurrent_same_source_tbl;
 
-> DECLARE c2 CURSOR FOR SELECT * FROM fetch_concurrent_same_source;
+> DECLARE c2 CURSOR FOR SELECT * FROM fetch_concurrent_same_source_tbl;
 
 > FETCH ALL c1;
 123
@@ -57,7 +56,7 @@ $ kafka-ingest format=avro topic=fetch-concurrent-same-source schema=${int} time
 234
 345
 
-> DECLARE c3 CURSOR FOR SELECT * FROM fetch_concurrent_same_source;
+> DECLARE c3 CURSOR FOR SELECT * FROM fetch_concurrent_same_source_tbl;
 
 > FETCH ALL c3;
 123

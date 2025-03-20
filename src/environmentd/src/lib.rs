@@ -14,22 +14,27 @@
 //! [timely dataflow]: ../timely/index.html
 
 use std::collections::BTreeMap;
-use std::env;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
-use std::str::FromStr;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use std::{env, io};
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, Context};
 use derivative::Derivative;
+use ipnet::IpNet;
 use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
-use mz_adapter::load_remote_system_parameters;
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
+use mz_adapter::{load_remote_system_parameters, AdapterError};
+use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
+use mz_adapter_types::dyncfgs::{
+    ENABLE_0DT_DEPLOYMENT, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT,
+    WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL, WITH_0DT_DEPLOYMENT_MAX_WAIT,
+};
 use mz_build_info::{build_info, BuildInfo};
 use mz_catalog::config::ClusterReplicaSizeMap;
-use mz_catalog::durable::{BootstrapArgs, CatalogError};
+use mz_catalog::durable::BootstrapArgs;
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
@@ -37,27 +42,32 @@ use mz_ore::future::OreFutureExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::TracingHandle;
+use mz_ore::url::SensitiveUrl;
 use mz_ore::{instrument, task};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::usage::StorageUsageClient;
+use mz_pgwire_common::ConnectionCounter;
+use mz_repr::strconv;
 use mz_secrets::SecretsController;
-use mz_server_core::{ConnectionStream, ListenerHandle, ReloadTrigger, TlsCertConfig};
+use mz_server_core::{ConnectionStream, ListenerHandle, ReloadTrigger, ServeConfig, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
-use mz_sql::session::vars::{ConnectionCounter, Var, TXN_WAL_TABLES};
-use mz_storage_types::controller::TxnWalTablesImpl;
+use mz_sql::session::vars::{Value, VarInput};
 use tokio::sync::oneshot;
-use tokio::sync::oneshot::error::RecvError;
 use tower_http::cors::AllowOrigin;
 use tracing::{info, info_span, Instrument};
 
+use crate::deployment::preflight::{PreflightInput, PreflightOutput};
+use crate::deployment::state::DeploymentState;
 use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
 
+pub use crate::http::{SqlResponse, WebSocketAuth, WebSocketResponse};
+
+mod deployment;
+pub mod environmentd;
 pub mod http;
 mod telemetry;
 #[cfg(feature = "test")]
 pub mod test_util;
-
-pub use crate::http::{SqlResponse, WebSocketAuth, WebSocketResponse};
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 
@@ -86,7 +96,7 @@ pub struct Config {
     pub cors_allowed_origin: AllowOrigin,
     /// Public IP addresses which the cloud environment has configured for
     /// egress.
-    pub egress_ips: Vec<Ipv4Addr>,
+    pub egress_addresses: Vec<IpNet>,
     /// The external host name to connect to the HTTP server of this
     /// environment.
     ///
@@ -104,12 +114,6 @@ pub struct Config {
     pub secrets_controller: Arc<dyn SecretsController>,
     /// VpcEndpoint controller configuration.
     pub cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
-    /// Whether to use the new txn-wal tables implementation or the legacy
-    /// one.
-    ///
-    /// If specified, this overrides the value stored in Launch Darkly (and
-    /// mirrored to the catalog storage's "config" collection).
-    pub txn_wal_tables_cli: Option<TxnWalTablesImpl>,
 
     // === Storage options. ===
     /// The interval at which to collect storage usage information.
@@ -126,9 +130,12 @@ pub struct Config {
     /// A map from size name to resource allocations for cluster replicas.
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
     /// The PostgreSQL URL for the Postgres-backed timestamp oracle.
-    pub timestamp_oracle_url: Option<String>,
+    pub timestamp_oracle_url: Option<SensitiveUrl>,
     /// An API key for Segment. Enables export of audit events to Segment.
     pub segment_api_key: Option<String>,
+    /// Whether the Segment client is being used on the client side
+    /// (rather than the server side).
+    pub segment_client_side: bool,
     /// An SDK key for LaunchDarkly. Enables system parameter synchronization
     /// with LaunchDarkly.
     pub launchdarkly_sdk_key: Option<String>,
@@ -147,17 +154,21 @@ pub struct Config {
     pub bootstrap_role: Option<String>,
     /// The size of the default cluster replica if bootstrapping.
     pub bootstrap_default_cluster_replica_size: String,
-    /// The size of the builtin system cluster replicas if bootstrapping.
-    pub bootstrap_builtin_system_cluster_replica_size: String,
-    /// The size of the builtin catalog server cluster replicas if bootstrapping.
-    pub bootstrap_builtin_catalog_server_cluster_replica_size: String,
-    /// The size of the builtin probe cluster replicas if bootstrapping.
-    pub bootstrap_builtin_probe_cluster_replica_size: String,
-    /// The size of the builtin support cluster replicas if bootstrapping.
-    pub bootstrap_builtin_support_cluster_replica_size: String,
+    /// The config of the builtin system cluster replicas if bootstrapping.
+    pub bootstrap_builtin_system_cluster_config: BootstrapBuiltinClusterConfig,
+    /// The config of the builtin catalog server cluster replicas if bootstrapping.
+    pub bootstrap_builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig,
+    /// The config of the builtin probe cluster replicas if bootstrapping.
+    pub bootstrap_builtin_probe_cluster_config: BootstrapBuiltinClusterConfig,
+    /// The config of the builtin support cluster replicas if bootstrapping.
+    pub bootstrap_builtin_support_cluster_config: BootstrapBuiltinClusterConfig,
+    /// The config of the builtin analytics cluster replicas if bootstrapping.
+    pub bootstrap_builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig,
     /// Values to set for system parameters, if those system parameters have not
     /// already been set by the system user.
     pub system_parameter_defaults: BTreeMap<String, String>,
+    /// Helm chart version
+    pub helm_chart_version: Option<String>,
 
     // === AWS options. ===
     /// The AWS account ID, which will be used to generate ARNs for
@@ -175,10 +186,6 @@ pub struct Config {
     // === Testing options. ===
     /// A now generation function for mocking time.
     pub now: NowFn,
-    /// Whether or not to start controllers in read-only mode. This is only
-    /// meant for use during development of read-only clusters and 0dt upgrades
-    /// and should go away once we have proper orchestration during upgrades.
-    pub read_only_controllers: bool,
 }
 
 /// Configuration for network listeners.
@@ -187,11 +194,6 @@ pub struct ListenersConfig {
     pub sql_listen_addr: SocketAddr,
     /// The IP address and port to listen for HTTP connections on.
     pub http_listen_addr: SocketAddr,
-    /// The IP address and port to listen on for pgwire connections from the cloud
-    /// balancer pods.
-    pub balancer_sql_listen_addr: SocketAddr,
-    /// The IP address and port to listen for HTTP connections from the cloud balancer pods.
-    pub balancer_http_listen_addr: SocketAddr,
     /// The IP address and port to listen for pgwire connections from the cloud
     /// system on.
     pub internal_sql_listen_addr: SocketAddr,
@@ -213,8 +215,6 @@ pub struct Listeners {
     // Drop order matters for these fields.
     sql: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
     http: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
-    balancer_sql: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
-    balancer_http: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
     internal_sql: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
     internal_http: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
 }
@@ -235,23 +235,17 @@ impl Listeners {
         ListenersConfig {
             sql_listen_addr,
             http_listen_addr,
-            balancer_sql_listen_addr,
-            balancer_http_listen_addr,
             internal_sql_listen_addr,
             internal_http_listen_addr,
         }: ListenersConfig,
-    ) -> Result<Listeners, anyhow::Error> {
+    ) -> Result<Listeners, io::Error> {
         let sql = mz_server_core::listen(&sql_listen_addr).await?;
         let http = mz_server_core::listen(&http_listen_addr).await?;
-        let balancer_sql = mz_server_core::listen(&balancer_sql_listen_addr).await?;
-        let balancer_http = mz_server_core::listen(&balancer_http_listen_addr).await?;
         let internal_sql = mz_server_core::listen(&internal_sql_listen_addr).await?;
         let internal_http = mz_server_core::listen(&internal_http_listen_addr).await?;
         Ok(Listeners {
             sql,
             http,
-            balancer_sql,
-            balancer_http,
             internal_sql,
             internal_http,
         })
@@ -259,12 +253,10 @@ impl Listeners {
 
     /// Like [`Listeners::bind`], but binds each ports to an arbitrary free
     /// local address.
-    pub async fn bind_any_local() -> Result<Listeners, anyhow::Error> {
+    pub async fn bind_any_local() -> Result<Listeners, io::Error> {
         Listeners::bind(ListenersConfig {
             sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-            balancer_sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-            balancer_http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             internal_sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             internal_http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         })
@@ -275,12 +267,14 @@ impl Listeners {
     ///
     /// Returns a handle to the server once it is fully booted.
     #[instrument(name = "environmentd::serve")]
-    pub async fn serve(self, config: Config) -> Result<Server, anyhow::Error> {
+    pub async fn serve(self, config: Config) -> Result<Server, AdapterError> {
+        let serve_start = Instant::now();
+        info!("startup: envd serve: beginning");
+        info!("startup: envd serve: preamble beginning");
+
         let Listeners {
             sql: (sql_listener, sql_conns),
             http: (http_listener, http_conns),
-            balancer_sql: (balancer_sql_listener, balancer_sql_conns),
-            balancer_http: (balancer_http_listener, balancer_http_conns),
             internal_sql: (internal_sql_listener, internal_sql_conns),
             internal_http: (internal_http_listener, internal_http_conns),
         } = self;
@@ -302,10 +296,8 @@ impl Listeners {
             }
         };
 
-        let active_connection_count = Arc::new(Mutex::new(ConnectionCounter::new(0, 0)));
-
-        let (ready_to_promote_tx, ready_to_promote_rx) = oneshot::channel();
-        let (promote_leader_tx, promote_leader_rx) = oneshot::channel();
+        let active_connection_counter = ConnectionCounter::default();
+        let (deployment_state, deployment_state_handle) = DeploymentState::new();
 
         // Start the internal HTTP server.
         //
@@ -318,30 +310,53 @@ impl Listeners {
             let internal_http_server = InternalHttpServer::new(InternalHttpConfig {
                 metrics_registry: config.metrics_registry.clone(),
                 adapter_client_rx: internal_http_adapter_client_rx,
-                active_connection_count: Arc::clone(&active_connection_count),
-                promote_leader: promote_leader_tx,
-                ready_to_promote: ready_to_promote_rx,
+                active_connection_counter: active_connection_counter.clone(),
+                helm_chart_version: config.helm_chart_version.clone(),
+                deployment_state_handle,
                 internal_console_redirect_url: config.internal_console_redirect_url,
             });
-            mz_server_core::serve(internal_http_conns, internal_http_server, None)
+            mz_server_core::serve(ServeConfig {
+                server: internal_http_server,
+                conns: internal_http_conns,
+                // `environmentd` does not currently need to dynamically
+                // configure graceful termination behavior.
+                dyncfg: None,
+            })
         });
 
+        info!(
+            "startup: envd serve: preamble complete in {:?}",
+            serve_start.elapsed()
+        );
+
+        let catalog_init_start = Instant::now();
+        info!("startup: envd serve: catalog init beginning");
+
         // Get the current timestamp so we can record when we booted.
-        let boot_ts = (config.now)();
+        let boot_ts = (config.now)().into();
 
         let persist_client = config
             .catalog_config
             .persist_clients
             .open(config.controller.persist_location.clone())
-            .await?;
+            .await
+            .context("opening persist client")?;
         let mut openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
             persist_client.clone(),
             config.environment_id.organization_id(),
             BUILD_INFO.semver_version(),
+            Some(config.controller.deploy_generation),
             Arc::clone(&config.catalog_config.metrics),
         )
         .await?;
 
+        info!(
+            "startup: envd serve: catalog init complete in {:?}",
+            catalog_init_start.elapsed()
+        );
+
+        let system_param_sync_start = Instant::now();
+        info!("startup: envd serve: system parameter sync beginning");
         // Initialize the system parameter frontend if `launchdarkly_sdk_key` is set.
         let system_parameter_sync_config = if let Some(ld_sdk_key) = config.launchdarkly_sdk_key {
             Some(SystemParameterSyncConfig::new(
@@ -361,116 +376,265 @@ impl Listeners {
             config.config_sync_timeout,
         )
         .await?;
+        info!(
+            "startup: envd serve: system parameter sync complete in {:?}",
+            system_param_sync_start.elapsed()
+        );
 
-        'leader_promotion: {
-            let deploy_generation = config.controller.deploy_generation;
-            tracing::info!("Requested deploy generation {deploy_generation}");
+        let preflight_checks_start = Instant::now();
+        info!("startup: envd serve: preflight checks beginning");
 
-            if !openable_adapter_storage.is_initialized().await? {
-                tracing::info!("Catalog storage doesn't exist so there's no current deploy generation. We won't wait to be leader");
-                break 'leader_promotion;
-            }
-            let catalog_generation = openable_adapter_storage.get_deployment_generation().await?;
-            tracing::info!("Found catalog generation {catalog_generation:?}");
-            if catalog_generation < deploy_generation {
-                tracing::info!("Catalog generation {catalog_generation:?} is less than deploy generation {deploy_generation}. Performing pre-flight checks");
-                match openable_adapter_storage
-                    .open_savepoint(
-                        boot_ts.clone(),
-                        &BootstrapArgs {
-                            default_cluster_replica_size: config
-                                .bootstrap_default_cluster_replica_size
-                                .clone(),
-                            bootstrap_role: config.bootstrap_role.clone(),
-                        },
-                        deploy_generation,
-                        None,
-                    )
-                    .await
-                {
-                    Ok(adapter_storage) => Box::new(adapter_storage).expire().await,
-                    Err(CatalogError::Durable(e)) if e.can_recover_with_write_mode() => {
-                        // This is theoretically possible if catalog implementation A is
-                        // initialized, implementation B is uninitialized, and we are going to
-                        // migrate from A to B. The current code avoids this by always
-                        // initializing all implementations, regardless of the target
-                        // implementation. Still it's easy to protect against this and worth it in
-                        // case things change in the future.
-                        tracing::warn!("Unable to perform upgrade test because the target implementation is uninitialized");
-                        openable_adapter_storage =
-                            mz_catalog::durable::persist_backed_catalog_state(
-                                persist_client,
-                                config.environment_id.organization_id(),
-                                BUILD_INFO.semver_version(),
-                                Arc::clone(&config.catalog_config.metrics),
-                            )
-                            .await?;
-                        break 'leader_promotion;
-                    }
-                    Err(e) => {
-                        return Err(
-                            anyhow!(e).context("Catalog upgrade would have failed with this error")
+        // Determine whether we should perform a 0dt deployment.
+        let enable_0dt_deployment = {
+            let cli_default = config
+                .system_parameter_defaults
+                .get(ENABLE_0DT_DEPLOYMENT.name())
+                .map(|x| {
+                    strconv::parse_bool(x).map_err(|err| {
+                        anyhow!(
+                            "failed to parse default for {}: {}",
+                            ENABLE_0DT_DEPLOYMENT.name(),
+                            err
                         )
-                    }
-                }
-
-                if let Err(()) = ready_to_promote_tx.send(()) {
-                    return Err(anyhow!(
-                        "internal http server closed its end of ready_to_promote"
-                    ));
-                }
-
-                tracing::info!("Waiting for user to promote this envd to leader");
-                if let Err(RecvError { .. }) = promote_leader_rx.await {
-                    return Err(anyhow!(
-                        "internal http server closed its end of promote_leader"
-                    ));
-                }
-
-                openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
-                    persist_client,
-                    config.environment_id.organization_id(),
-                    BUILD_INFO.semver_version(),
-                    Arc::clone(&config.catalog_config.metrics),
-                )
+                    })
+                })
+                .transpose()?;
+            let compiled_default = ENABLE_0DT_DEPLOYMENT.default().clone();
+            let ld = get_ld_value("enable_0dt_deployment", &remote_system_parameters, |x| {
+                strconv::parse_bool(x).map_err(|x| x.to_string())
+            })?;
+            let catalog = openable_adapter_storage.get_enable_0dt_deployment().await?;
+            let computed = ld.or(catalog).or(cli_default).unwrap_or(compiled_default);
+            info!(
+                %computed,
+                ?ld,
+                ?catalog,
+                ?cli_default,
+                ?compiled_default,
+                "determined value for enable_0dt_deployment system parameter",
+            );
+            computed
+        };
+        // Determine the maximum wait time when doing a 0dt deployment.
+        let with_0dt_deployment_max_wait = {
+            let cli_default = config
+                .system_parameter_defaults
+                .get(WITH_0DT_DEPLOYMENT_MAX_WAIT.name())
+                .map(|x| {
+                    Duration::parse(VarInput::Flat(x)).map_err(|err| {
+                        anyhow!(
+                            "failed to parse default for {}: {:?}",
+                            WITH_0DT_DEPLOYMENT_MAX_WAIT.name(),
+                            err
+                        )
+                    })
+                })
+                .transpose()?;
+            let compiled_default = WITH_0DT_DEPLOYMENT_MAX_WAIT.default().clone();
+            let ld = get_ld_value(
+                WITH_0DT_DEPLOYMENT_MAX_WAIT.name(),
+                &remote_system_parameters,
+                |x| {
+                    Duration::parse(VarInput::Flat(x)).map_err(|err| {
+                        format!(
+                            "failed to parse LD value {} for {}: {:?}",
+                            x,
+                            WITH_0DT_DEPLOYMENT_MAX_WAIT.name(),
+                            err
+                        )
+                    })
+                },
+            )?;
+            let catalog = openable_adapter_storage
+                .get_0dt_deployment_max_wait()
                 .await?;
-            } else if catalog_generation == deploy_generation {
-                tracing::info!("Server requested generation {deploy_generation} which is equal to catalog's generation");
-            } else {
-                mz_ore::halt!("Server started with requested generation {deploy_generation} but catalog was already at {catalog_generation:?}. Deploy generations must increase monotonically");
-            }
-        }
+            let computed = ld.or(catalog).or(cli_default).unwrap_or(compiled_default);
+            info!(
+                ?computed,
+                ?ld,
+                ?catalog,
+                ?cli_default,
+                ?compiled_default,
+                "determined value for {} system parameter",
+                WITH_0DT_DEPLOYMENT_MAX_WAIT.name()
+            );
+            computed
+        };
+        // Determine the DDL check interval when doing a 0dt deployment.
+        let with_0dt_deployment_ddl_check_interval = {
+            let cli_default = config
+                .system_parameter_defaults
+                .get(WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name())
+                .map(|x| {
+                    Duration::parse(VarInput::Flat(x)).map_err(|err| {
+                        anyhow!(
+                            "failed to parse default for {}: {:?}",
+                            WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name(),
+                            err
+                        )
+                    })
+                })
+                .transpose()?;
+            let compiled_default = WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.default().clone();
+            let ld = get_ld_value(
+                WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name(),
+                &remote_system_parameters,
+                |x| {
+                    Duration::parse(VarInput::Flat(x)).map_err(|err| {
+                        format!(
+                            "failed to parse LD value {} for {}: {:?}",
+                            x,
+                            WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name(),
+                            err
+                        )
+                    })
+                },
+            )?;
+            let catalog = openable_adapter_storage
+                .get_0dt_deployment_ddl_check_interval()
+                .await?;
+            let computed = ld.or(catalog).or(cli_default).unwrap_or(compiled_default);
+            info!(
+                ?computed,
+                ?ld,
+                ?catalog,
+                ?cli_default,
+                ?compiled_default,
+                "determined value for {} system parameter",
+                WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name()
+            );
+            computed
+        };
+
+        // Determine whether we should panic if we reach the maximum wait time
+        // without the preflight checks succeeding.
+        let enable_0dt_deployment_panic_after_timeout = {
+            let cli_default = config
+                .system_parameter_defaults
+                .get(ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT.name())
+                .map(|x| {
+                    strconv::parse_bool(x).map_err(|err| {
+                        anyhow!(
+                            "failed to parse default for {}: {}",
+                            ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT.name(),
+                            err
+                        )
+                    })
+                })
+                .transpose()?;
+            let compiled_default = ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT.default().clone();
+            let ld = get_ld_value(
+                "enable_0dt_deployment_panic_after_timeout",
+                &remote_system_parameters,
+                |x| strconv::parse_bool(x).map_err(|x| x.to_string()),
+            )?;
+            let catalog = openable_adapter_storage
+                .get_enable_0dt_deployment_panic_after_timeout()
+                .await?;
+            let computed = ld.or(catalog).or(cli_default).unwrap_or(compiled_default);
+            info!(
+                %computed,
+                ?ld,
+                ?catalog,
+                ?cli_default,
+                ?compiled_default,
+                "determined value for enable_0dt_deployment_panic_after_timeout system parameter",
+            );
+            computed
+        };
+
+        // Perform preflight checks.
+        //
+        // Preflight checks determine whether to boot in read-only mode or not.
+        let mut read_only = false;
+        let mut caught_up_trigger = None;
+        let bootstrap_args = BootstrapArgs {
+            default_cluster_replica_size: config.bootstrap_default_cluster_replica_size.clone(),
+            bootstrap_role: config.bootstrap_role.clone(),
+            cluster_replica_size_map: config.cluster_replica_sizes.clone(),
+        };
+        let preflight_config = PreflightInput {
+            boot_ts,
+            environment_id: config.environment_id.clone(),
+            persist_client,
+            deploy_generation: config.controller.deploy_generation,
+            deployment_state: deployment_state.clone(),
+            openable_adapter_storage,
+            catalog_metrics: Arc::clone(&config.catalog_config.metrics),
+            caught_up_max_wait: with_0dt_deployment_max_wait,
+            panic_after_timeout: enable_0dt_deployment_panic_after_timeout,
+            bootstrap_args,
+            ddl_check_interval: with_0dt_deployment_ddl_check_interval,
+        };
+        if enable_0dt_deployment {
+            PreflightOutput {
+                openable_adapter_storage,
+                read_only,
+                caught_up_trigger,
+            } = deployment::preflight::preflight_0dt(preflight_config).await?;
+        } else {
+            openable_adapter_storage =
+                deployment::preflight::preflight_legacy(preflight_config).await?;
+        };
+
+        info!(
+            "startup: envd serve: preflight checks complete in {:?}",
+            preflight_checks_start.elapsed()
+        );
+
+        let catalog_open_start = Instant::now();
+        info!("startup: envd serve: durable catalog open beginning");
 
         let bootstrap_args = BootstrapArgs {
             default_cluster_replica_size: config.bootstrap_default_cluster_replica_size.clone(),
             bootstrap_role: config.bootstrap_role,
+            cluster_replica_size_map: config.cluster_replica_sizes.clone(),
         };
 
-        let mut adapter_storage = openable_adapter_storage
-            .open(
-                boot_ts,
-                &bootstrap_args,
-                config.controller.deploy_generation,
-                None,
-            )
-            .await?;
+        // Load the adapter durable storage.
+        let (adapter_storage, audit_logs_iterator) = if read_only {
+            // TODO: behavior of migrations when booting in savepoint mode is
+            // not well defined.
+            let (adapter_storage, audit_logs_iterator) = openable_adapter_storage
+                .open_savepoint(boot_ts, &bootstrap_args)
+                .await?;
+            // In read-only mode, we intentionally do not call `set_is_leader`,
+            // because we are by definition not the leader if we are in
+            // read-only mode.
 
-        let txn_wal_tables_current_ld =
-            get_ld_value(TXN_WAL_TABLES.name(), &remote_system_parameters, |x| {
-                TxnWalTablesImpl::from_str(x).map_err(|x| x.to_string())
-            })?;
-        // Get the value from Launch Darkly as of the last time this environment
-        // was running. (Ideally it would be the above current value, but that's
-        // not guaranteed: we don't want to block startup on it if LD is down.)
-        let txn_wal_tables_stash_ld = adapter_storage.get_txn_wal_tables().await?;
+            (adapter_storage, audit_logs_iterator)
+        } else {
+            let (adapter_storage, audit_logs_iterator) = openable_adapter_storage
+                .open(boot_ts, &bootstrap_args)
+                .await?;
 
-        // Load the adapter catalog from disk.
+            // Once we have successfully opened the adapter storage in
+            // read/write mode, we can announce we are the leader, as we've
+            // fenced out all other environments using the adapter storage.
+            deployment_state.set_is_leader();
+
+            (adapter_storage, audit_logs_iterator)
+        };
+
+        // Enable Persist compaction if we're not in read only.
+        if !read_only {
+            config.controller.persist_clients.cfg().enable_compaction();
+        }
+
+        info!(
+            "startup: envd serve: durable catalog open complete in {:?}",
+            catalog_open_start.elapsed()
+        );
+
+        let coord_init_start = Instant::now();
+        info!("startup: envd serve: coordinator init beginning");
+
         if !config
             .cluster_replica_sizes
             .0
             .contains_key(&config.bootstrap_default_cluster_replica_size)
         {
-            bail!("bootstrap default cluster replica size is unknown");
+            return Err(anyhow!("bootstrap default cluster replica size is unknown").into());
         }
         let envd_epoch = adapter_storage.epoch();
 
@@ -484,48 +648,27 @@ impl Listeners {
                 .context("opening storage usage client")?,
         );
 
-        // Initialize controller.
-        let txn_wal_tables_default = config
-            .system_parameter_defaults
-            .get(TXN_WAL_TABLES.name())
-            .map(|x| {
-                TxnWalTablesImpl::from_str(x).map_err(|err| {
-                    anyhow!(
-                        "failed to parse default for {}: {}",
-                        TXN_WAL_TABLES.name(),
-                        err
-                    )
-                })
-            })
-            .transpose()?;
-        let mut txn_wal_tables = txn_wal_tables_default.unwrap_or(TxnWalTablesImpl::Eager);
-        if let Some(value) = txn_wal_tables_stash_ld {
-            txn_wal_tables = value;
-        }
-        if let Some(value) = txn_wal_tables_current_ld {
-            txn_wal_tables = value;
-        }
-        if let Some(value) = config.txn_wal_tables_cli {
-            txn_wal_tables = value;
-        }
-        info!(
-            "persist_txn_tables value of {} computed from default {:?} catalog {:?} LD {:?} and flag {:?}",
-            txn_wal_tables,
-            txn_wal_tables_default,
-            txn_wal_tables_stash_ld,
-            txn_wal_tables_current_ld,
-            config.txn_wal_tables_cli,
-        );
-
         // Initialize adapter.
-        let segment_client = config.segment_api_key.map(mz_segment::Client::new);
+        let segment_client = config.segment_api_key.map(|api_key| {
+            mz_segment::Client::new(mz_segment::Config {
+                api_key,
+                client_side: config.segment_client_side,
+            })
+        });
+        let connection_limiter = active_connection_counter.clone();
+        let connection_limit_callback = Box::new(move |limit, superuser_reserved| {
+            connection_limiter.update_limit(limit);
+            connection_limiter.update_superuser_reserved(superuser_reserved);
+        });
+
         let webhook_concurrency_limit = WebhookConcurrencyLimiter::default();
         let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
             connection_context: config.controller.connection_context.clone(),
+            connection_limit_callback,
             controller_config: config.controller,
             controller_envd_epoch: envd_epoch,
-            controller_txn_wal_tables: txn_wal_tables,
             storage: adapter_storage,
+            audit_logs_iterator,
             timestamp_oracle_url: config.timestamp_oracle_url,
             unsafe_mode: config.unsafe_mode,
             all_features: config.all_features,
@@ -536,31 +679,40 @@ impl Listeners {
             secrets_controller: config.secrets_controller,
             cloud_resource_controller: config.cloud_resource_controller,
             cluster_replica_sizes: config.cluster_replica_sizes,
-            builtin_system_cluster_replica_size: config
-                .bootstrap_builtin_system_cluster_replica_size,
-            builtin_catalog_server_cluster_replica_size: config
-                .bootstrap_builtin_catalog_server_cluster_replica_size,
-            builtin_probe_cluster_replica_size: config.bootstrap_builtin_probe_cluster_replica_size,
-            builtin_support_cluster_replica_size: config
-                .bootstrap_builtin_support_cluster_replica_size,
+            builtin_system_cluster_config: config.bootstrap_builtin_system_cluster_config,
+            builtin_catalog_server_cluster_config: config
+                .bootstrap_builtin_catalog_server_cluster_config,
+            builtin_probe_cluster_config: config.bootstrap_builtin_probe_cluster_config,
+            builtin_support_cluster_config: config.bootstrap_builtin_support_cluster_config,
+            builtin_analytics_cluster_config: config.bootstrap_builtin_analytics_cluster_config,
             availability_zones: config.availability_zones,
             system_parameter_defaults: config.system_parameter_defaults,
             storage_usage_client,
             storage_usage_collection_interval: config.storage_usage_collection_interval,
             storage_usage_retention_period: config.storage_usage_retention_period,
             segment_client: segment_client.clone(),
-            egress_ips: config.egress_ips,
+            egress_addresses: config.egress_addresses,
             remote_system_parameters,
             aws_account_id: config.aws_account_id,
             aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
-            active_connection_count: Arc::clone(&active_connection_count),
             webhook_concurrency_limit: webhook_concurrency_limit.clone(),
             http_host_name: config.http_host_name,
             tracing_handle: config.tracing_handle,
-            read_only_controllers: config.read_only_controllers,
+            read_only_controllers: read_only,
+            enable_0dt_deployment,
+            caught_up_trigger,
+            helm_chart_version: config.helm_chart_version.clone(),
         })
         .instrument(info_span!("adapter::serve"))
         .await?;
+
+        info!(
+            "startup: envd serve: coordinator init complete in {:?}",
+            coord_init_start.elapsed()
+        );
+
+        let serve_postamble_start = Instant::now();
+        info!("startup: envd serve: postamble beginning");
 
         // Install an adapter client in the internal HTTP server.
         internal_http_adapter_client_tx
@@ -577,9 +729,16 @@ impl Listeners {
                 frontegg: config.frontegg.clone(),
                 metrics: metrics.clone(),
                 internal: false,
-                active_connection_count: Arc::clone(&active_connection_count),
+                active_connection_counter: active_connection_counter.clone(),
+                helm_chart_version: config.helm_chart_version.clone(),
             });
-            mz_server_core::serve(sql_conns, sql_server, None)
+            mz_server_core::serve(ServeConfig {
+                conns: sql_conns,
+                server: sql_server,
+                // `environmentd` does not currently need to dynamically
+                // configure graceful termination behavior.
+                dyncfg: None,
+            })
         });
 
         // Launch internal SQL server.
@@ -600,9 +759,16 @@ impl Listeners {
                 frontegg: None,
                 metrics: metrics.clone(),
                 internal: true,
-                active_connection_count: Arc::clone(&active_connection_count),
+                active_connection_counter: active_connection_counter.clone(),
+                helm_chart_version: config.helm_chart_version.clone(),
             });
-            mz_server_core::serve(internal_sql_conns, internal_sql_server, None)
+            mz_server_core::serve(ServeConfig {
+                conns: internal_sql_conns,
+                server: internal_sql_server,
+                // `environmentd` does not currently need to dynamically
+                // configure graceful termination behavior.
+                dyncfg: None,
+            })
         });
 
         // Launch HTTP server.
@@ -614,41 +780,18 @@ impl Listeners {
                 frontegg: config.frontegg.clone(),
                 adapter_client: adapter_client.clone(),
                 allowed_origin: config.cors_allowed_origin.clone(),
-                active_connection_count: Arc::clone(&active_connection_count),
+                active_connection_counter: active_connection_counter.clone(),
+                helm_chart_version: config.helm_chart_version.clone(),
                 concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
                 metrics: http_metrics.clone(),
             });
-            mz_server_core::serve(http_conns, http_server, None)
-        });
-
-        // Launch HTTP server exposed to balancers
-        task::spawn(|| "balancer_http_server", {
-            let balancer_http_server = HttpServer::new(HttpConfig {
-                source: "balancer",
-                // TODO(Alex): implement self-signed TLS for all internal connections
-                tls: None,
-                frontegg: config.frontegg.clone(),
-                adapter_client: adapter_client.clone(),
-                allowed_origin: config.cors_allowed_origin,
-                active_connection_count: Arc::clone(&active_connection_count),
-                concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
-                metrics: http_metrics,
-            });
-            mz_server_core::serve(balancer_http_conns, balancer_http_server, None)
-        });
-
-        // Launch SQL server exposed to balancers
-        task::spawn(|| "balancer_sql_server", {
-            let balancer_sql_server = mz_pgwire::Server::new(mz_pgwire::Config {
-                label: "balancer_pgwire",
-                tls: None,
-                adapter_client: adapter_client.clone(),
-                frontegg: config.frontegg.clone(),
-                metrics,
-                internal: false,
-                active_connection_count: Arc::clone(&active_connection_count),
-            });
-            mz_server_core::serve(balancer_sql_conns, balancer_sql_server, None)
+            mz_server_core::serve(ServeConfig {
+                conns: http_conns,
+                server: http_server,
+                // `environmentd` does not currently need to dynamically
+                // configure graceful termination behavior.
+                dyncfg: None,
+            })
         });
 
         // Start telemetry reporting loop.
@@ -674,11 +817,18 @@ impl Listeners {
             );
         }
 
+        info!(
+            "startup: envd serve: postamble complete in {:?}",
+            serve_postamble_start.elapsed()
+        );
+        info!(
+            "startup: envd serve: complete in {:?}",
+            serve_start.elapsed()
+        );
+
         Ok(Server {
             sql_listener,
             http_listener,
-            balancer_sql_listener,
-            balancer_http_listener,
             internal_sql_listener,
             internal_http_listener,
             _adapter_handle: adapter_handle,
@@ -721,8 +871,6 @@ pub struct Server {
     // Drop order matters for these fields.
     sql_listener: ListenerHandle,
     http_listener: ListenerHandle,
-    balancer_sql_listener: ListenerHandle,
-    balancer_http_listener: ListenerHandle,
     internal_sql_listener: ListenerHandle,
     internal_http_listener: ListenerHandle,
     _adapter_handle: mz_adapter::Handle,
@@ -735,14 +883,6 @@ impl Server {
 
     pub fn http_local_addr(&self) -> SocketAddr {
         self.http_listener.local_addr()
-    }
-
-    pub fn balancer_sql_local_addr(&self) -> SocketAddr {
-        self.balancer_sql_listener.local_addr()
-    }
-
-    pub fn balancer_http_local_addr(&self) -> SocketAddr {
-        self.balancer_http_listener.local_addr()
     }
 
     pub fn internal_sql_local_addr(&self) -> SocketAddr {

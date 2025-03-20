@@ -28,9 +28,11 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from enum import Enum, auto
 from functools import cache
 from pathlib import Path
 from tempfile import TemporaryFile
@@ -38,6 +40,7 @@ from typing import IO, Any, cast
 
 import yaml
 
+from materialize import bazel as bazel_utils
 from materialize import cargo, git, rustc_flags, spawn, ui, xcompile
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch, target
@@ -55,6 +58,12 @@ class Fingerprint(bytes):
         return base64.b32encode(self).decode()
 
 
+class Profile(Enum):
+    RELEASE = auto()
+    OPTIMIZED = auto()
+    DEV = auto()
+
+
 class RepositoryDetails:
     """Immutable details about a `Repository`.
 
@@ -63,7 +72,7 @@ class RepositoryDetails:
     Attributes:
         root: The path to the root of the repository.
         arch: The CPU architecture to build for.
-        release_mode: Whether the repository is being built in release mode.
+        profile: What profile the repository is being built with.
         coverage: Whether the repository has code coverage instrumentation
             enabled.
         sanitizer: Whether to use a sanitizer (address, hwaddress, cfi, thread, leak, memory, none)
@@ -71,50 +80,96 @@ class RepositoryDetails:
         image_registry: The Docker image registry to pull images from and push
             images to.
         image_prefix: A prefix to apply to all Docker image names.
+        bazel: Whether or not to use Bazel as the build system instead of Cargo.
+        bazel_remote_cache: URL of a Bazel Remote Cache that we can build with.
     """
 
     def __init__(
         self,
         root: Path,
         arch: Arch,
-        release_mode: bool,
+        profile: Profile,
         coverage: bool,
         sanitizer: Sanitizer,
         image_registry: str,
         image_prefix: str,
+        bazel: bool,
+        bazel_remote_cache: str | None,
     ):
         self.root = root
         self.arch = arch
-        self.release_mode = release_mode
+        self.profile = profile
         self.coverage = coverage
         self.sanitizer = sanitizer
         self.cargo_workspace = cargo.Workspace(root)
         self.image_registry = image_registry
         self.image_prefix = image_prefix
+        self.bazel = bazel
+        self.bazel_remote_cache = bazel_remote_cache
 
-    def cargo(
+    def build(
         self,
         subcommand: str,
         rustflags: list[str],
         channel: str | None = None,
         extra_env: dict[str, str] = {},
     ) -> list[str]:
-        """Start a cargo invocation for the configured architecture."""
-        return xcompile.cargo(
-            arch=self.arch,
-            channel=channel,
-            subcommand=subcommand,
-            rustflags=rustflags,
-            extra_env=extra_env,
-        )
+        """Start a build invocation for the configured architecture."""
+        if self.bazel:
+            assert not channel, "Bazel doesn't support building for multiple channels."
+            return xcompile.bazel(
+                arch=self.arch,
+                subcommand=subcommand,
+                rustflags=rustflags,
+                extra_env=extra_env,
+            )
+        else:
+            return xcompile.cargo(
+                arch=self.arch,
+                channel=channel,
+                subcommand=subcommand,
+                rustflags=rustflags,
+                extra_env=extra_env,
+            )
 
     def tool(self, name: str) -> list[str]:
         """Start a binutils tool invocation for the configured architecture."""
-        return xcompile.tool(self.arch, name)
+        if self.bazel:
+            return ["bazel", "run", f"@//misc/bazel/tools:{name}", "--"]
+        else:
+            return xcompile.tool(self.arch, name)
 
     def cargo_target_dir(self) -> Path:
         """Determine the path to the target directory for Cargo."""
         return self.root / "target-xcompile" / xcompile.target(self.arch)
+
+    def bazel_workspace_dir(self) -> Path:
+        """Determine the path to the root of the Bazel workspace."""
+        return self.root
+
+    def bazel_config(self) -> list[str]:
+        """Returns a set of Bazel config flags to set for the build."""
+        flags = []
+
+        if self.profile == Profile.RELEASE:
+            # If we're a tagged build, then we'll use stamping to update our
+            # build info, otherwise we'll use our side channel/best-effort
+            # approach to update it.
+            if ui.env_is_truthy("BUILDKITE_TAG"):
+                flags.append("--config=release-tagged")
+            else:
+                flags.append("--config=release-dev")
+                bazel_utils.write_git_hash()
+        elif self.profile == Profile.OPTIMIZED:
+            flags.append("--config=optimized")
+
+        if self.bazel_remote_cache:
+            flags.append(f"--remote_cache={self.bazel_remote_cache}")
+
+        if ui.env_is_truthy("CI"):
+            flags.append("--config=ci")
+
+        return flags
 
     def rewrite_builder_path_for_host(self, path: Path) -> Path:
         """Rewrite a path that is relative to the target directory inside the
@@ -174,16 +229,22 @@ class PreImage:
         self.path = path
 
     @classmethod
-    def prepare_batch(cls, instances: list["PreImage"]) -> None:
+    def prepare_batch(cls, instances: list["PreImage"]) -> Any:
         """Prepare a batch of actions.
 
         This is useful for `PreImage` actions that are more efficient when
         their actions are applied to several images in bulk.
+
+        Returns an arbitrary output that is passed to `PreImage.run`.
         """
         pass
 
-    def run(self) -> None:
-        """Perform the action."""
+    def run(self, prep: Any) -> None:
+        """Perform the action.
+
+        Args:
+            prep: Any prep work returned by `prepare_batch`.
+        """
         pass
 
     def inputs(self) -> set[str]:
@@ -215,8 +276,8 @@ class Copy(PreImage):
 
         self.matching = config.pop("matching", "*")
 
-    def run(self) -> None:
-        super().run()
+    def run(self, prep: Any) -> None:
+        super().run(prep)
         for src in self.inputs():
             dst = self.path / self.destination / src
             dst.parent.mkdir(parents=True, exist_ok=True)
@@ -230,7 +291,7 @@ class CargoPreImage(PreImage):
     """A `PreImage` action that uses Cargo."""
 
     def inputs(self) -> set[str]:
-        return {
+        inputs = {
             "ci/builder",
             "Cargo.toml",
             # TODO(benesch): we could in theory fingerprint only the subset of
@@ -238,14 +299,29 @@ class CargoPreImage(PreImage):
             # *lot* of work.
             "Cargo.lock",
             ".cargo/config",
+            # Even though we are not always building with Bazel, consider its
+            # inputs so that developers with CI_BAZEL_BUILD=0 can still
+            # download the images from Dockerhub
+            ".bazelrc",
+            "WORKSPACE",
         }
+
+        # Bazel has some rules and additive files that aren't directly
+        # associated with a crate, but can change how it's built.
+        additive_path = self.rd.root / "misc" / "bazel"
+        additive_files = ["BUILD.bazel", "*.bzl"]
+        inputs |= set(git.expand_globs(additive_path, *additive_files))
+
+        return inputs
 
     def extra(self) -> str:
         # Cargo images depend on the release mode and whether
         # coverage/sanitizer is enabled.
         flags: list[str] = []
-        if self.rd.release_mode:
+        if self.rd.profile == Profile.RELEASE:
             flags += "release"
+        if self.rd.profile == Profile.OPTIMIZED:
+            flags += "optimized"
         if self.rd.coverage:
             flags += "coverage"
         if self.rd.sanitizer != Sanitizer.none:
@@ -269,8 +345,69 @@ class CargoBuild(CargoPreImage):
         self.examples = example if isinstance(example, list) else [example]
         self.strip = config.pop("strip", True)
         self.extract = config.pop("extract", {})
+
+        bazel_bins = config.pop("bazel-bin")
+        self.bazel_bins = (
+            bazel_bins if isinstance(bazel_bins, dict) else {self.bins[0]: bazel_bins}
+        )
+        self.bazel_tars = config.pop("bazel-tar", {})
+
         if len(self.bins) == 0 and len(self.examples) == 0:
             raise ValueError("mzbuild config is missing pre-build target")
+        for bin in self.bins:
+            if bin not in self.bazel_bins:
+                raise ValueError(
+                    f"need to specify a 'bazel-bin' for '{bin}' at '{path}'"
+                )
+
+    @staticmethod
+    def generate_bazel_build_command(
+        rd: RepositoryDetails,
+        bins: list[str],
+        examples: list[str],
+        bazel_bins: dict[str, str],
+        bazel_tars: dict[str, str],
+    ) -> list[str]:
+        assert (
+            rd.bazel
+        ), "Programming error, tried to invoke Bazel when it is not enabled."
+
+        rustflags = []
+        cflags = []
+
+        if rd.coverage:
+            assert (
+                rd.sanitizer == Sanitizer.none
+            ), "cannot get coverage and run a sanitizer at the same time"
+            rustflags += rustc_flags.coverage
+        elif rd.sanitizer != Sanitizer.none:
+            rustflags += rustc_flags.sanitizer[rd.sanitizer]
+            cflags += rustc_flags.sanitizer_cflags[rd.sanitizer]
+        else:
+            rustflags += ["--cfg=tokio_unstable"]
+
+        extra_env = {
+            "TSAN_OPTIONS": "report_bugs=0",  # build-scripts fail
+        }
+
+        bazel_build = rd.build(
+            "build",
+            channel=None,
+            rustflags=rustflags,
+            extra_env=extra_env,
+        )
+
+        for bin in bins:
+            bazel_build.append(bazel_bins[bin])
+        for tar in bazel_tars:
+            bazel_build.append(tar)
+        # TODO(parkmycar): Make sure cargo-gazelle generates rust_binary targets for examples.
+        assert len(examples) == 0, "Bazel doesn't support building examples."
+
+        # Add extra Bazel config flags.
+        bazel_build.extend(rd.bazel_config())
+
+        return bazel_build
 
     @staticmethod
     def generate_cargo_build_command(
@@ -278,6 +415,10 @@ class CargoBuild(CargoPreImage):
         bins: list[str],
         examples: list[str],
     ) -> list[str]:
+        assert (
+            not rd.bazel
+        ), "Programming error, tried to invoke Cargo when Bazel is enabled."
+
         rustflags = (
             rustc_flags.coverage
             if rd.coverage
@@ -317,18 +458,23 @@ class CargoBuild(CargoPreImage):
             else {}
         )
 
-        cargo_build = [
-            *rd.cargo("build", channel=None, rustflags=rustflags, extra_env=extra_env),
-            "--workspace",
-        ]
+        cargo_build = rd.build(
+            "build", channel=None, rustflags=rustflags, extra_env=extra_env
+        )
 
+        packages = set()
         for bin in bins:
             cargo_build.extend(["--bin", bin])
+            packages.add(rd.cargo_workspace.crate_for_bin(bin).name)
         for example in examples:
             cargo_build.extend(["--example", example])
+            packages.add(rd.cargo_workspace.crate_for_example(example).name)
+        cargo_build.extend(f"--package={p}" for p in packages)
 
-        if rd.release_mode:
+        if rd.profile == Profile.RELEASE:
             cargo_build.append("--release")
+        if rd.profile == Profile.OPTIMIZED:
+            cargo_build.extend(["--profile", "optimized"])
         if rd.sanitizer != Sanitizer.none:
             # ASan doesn't work with jemalloc
             cargo_build.append("--no-default-features")
@@ -340,11 +486,11 @@ class CargoBuild(CargoPreImage):
         return cargo_build
 
     @classmethod
-    def prepare_batch(cls, cargo_builds: list["PreImage"]) -> None:
+    def prepare_batch(cls, cargo_builds: list["PreImage"]) -> dict[str, Any]:
         super().prepare_batch(cargo_builds)
 
         if not cargo_builds:
-            return
+            return {}
 
         # Building all binaries and examples in the same `cargo build` command
         # allows Cargo to link in parallel with other work, which can
@@ -354,24 +500,86 @@ class CargoBuild(CargoPreImage):
         builds = cast(list[CargoBuild], cargo_builds)
         bins = set()
         examples = set()
+        bazel_bins = dict()
+        bazel_tars = dict()
         for build in builds:
             if not rd:
                 rd = build.rd
             bins.update(build.bins)
             examples.update(build.examples)
+            bazel_bins.update(build.bazel_bins)
+            bazel_tars.update(build.bazel_tars)
         assert rd
 
-        ui.say(f"Common cargo build for: {', '.join(bins | examples)}")
-        cargo_build = cls.generate_cargo_build_command(rd, list(bins), list(examples))
+        ui.section(f"Common build for: {', '.join(bins | examples)}")
+
+        if rd.bazel:
+            cargo_build = cls.generate_bazel_build_command(
+                rd, list(bins), list(examples), bazel_bins, bazel_tars
+            )
+        else:
+            cargo_build = cls.generate_cargo_build_command(
+                rd, list(bins), list(examples)
+            )
+
         spawn.runv(cargo_build, cwd=rd.root)
 
-    def build(self) -> None:
-        cargo_profile = "release" if self.rd.release_mode else "debug"
+        # Re-run with JSON-formatted messages and capture the output so we can
+        # later analyze the build artifacts in `run`. This should be nearly
+        # instantaneous since we just compiled above with the same crates and
+        # features. (We don't want to do the compile above with JSON-formatted
+        # messages because it wouldn't be human readable.)
+        if rd.bazel:
+            # TODO(parkmycar): Having to assign the same compilation flags as the build process
+            # is a bit brittle. It would be better if the Bazel build process itself could
+            # output the file to a known location.
+            options = rd.bazel_config()
+            paths_to_binaries = {}
+            for bin in bins:
+                paths = bazel_utils.output_paths(bazel_bins[bin], options)
+                assert len(paths) == 1, f"{bazel_bins[bin]} output more than 1 file"
+                paths_to_binaries[bin] = paths[0]
+            for tar in bazel_tars:
+                paths = bazel_utils.output_paths(tar, options)
+                assert len(paths) == 1, f"more than one output path found for '{tar}'"
+                paths_to_binaries[tar] = paths[0]
+            prep = {"bazel": paths_to_binaries}
+        else:
+            json_output = spawn.capture(
+                cargo_build + ["--message-format=json"],
+                cwd=rd.root,
+            )
+            prep = {"cargo": json_output}
 
-        def copy(exe: Path) -> None:
-            exe_path = self.path / exe
+        return prep
+
+    def build(self, build_output: dict[str, Any]) -> None:
+        cargo_profile = (
+            "release"
+            if self.rd.profile == Profile.RELEASE
+            else "optimized" if self.rd.profile == Profile.OPTIMIZED else "debug"
+        )
+
+        def copy(src: Path, relative_dst: Path) -> None:
+            exe_path = self.path / relative_dst
             exe_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(self.rd.cargo_target_dir() / cargo_profile / exe, exe_path)
+            shutil.copy(src, exe_path)
+
+            # Bazel doesn't add write or exec permissions for built binaries
+            # but `strip` and `objcopy` need write permissions and we add exec
+            # permissions for the built Docker images.
+            current_perms = os.stat(exe_path).st_mode
+            new_perms = (
+                current_perms
+                # chmod +wx
+                | stat.S_IWUSR
+                | stat.S_IWGRP
+                | stat.S_IWOTH
+                | stat.S_IXUSR
+                | stat.S_IXGRP
+                | stat.S_IXOTH
+            )
+            os.chmod(exe_path, new_perms)
 
             if self.strip:
                 # The debug information is large enough that it slows down CI,
@@ -403,21 +611,23 @@ class CargoBuild(CargoPreImage):
                 )
 
         for bin in self.bins:
-            copy(Path(bin))
+            if "bazel" in build_output:
+                src_path = self.rd.bazel_workspace_dir() / build_output["bazel"][bin]
+            else:
+                src_path = self.rd.cargo_target_dir() / cargo_profile / bin
+            copy(src_path, bin)
         for example in self.examples:
-            copy(Path("examples") / example)
-
-        if self.extract:
-            cargo_build = self.generate_cargo_build_command(
-                self.rd, self.bins, self.examples
+            src_path = (
+                self.rd.cargo_target_dir() / cargo_profile / Path("examples") / example
             )
+            copy(src_path, Path("examples") / example)
 
-            output = spawn.capture(
-                cargo_build + ["--message-format=json"],
-                cwd=self.rd.root,
-            )
+        # Bazel doesn't support 'extract', instead you need to use 'bazel-tar'
+        if self.extract and "bazel" not in build_output:
+            cargo_build_json_output = build_output["cargo"]
+
             target_dir = self.rd.cargo_target_dir()
-            for line in output.split("\n"):
+            for line in cargo_build_json_output.split("\n"):
                 if line.strip() == "" or not line.startswith("{"):
                     continue
                 message = json.loads(line)
@@ -443,11 +653,24 @@ class CargoBuild(CargoPreImage):
                 for src, dst in self.extract.get(package, {}).items():
                     spawn.runv(["cp", "-R", out_dir / src, self.path / dst])
 
+        if self.bazel_tars and "bazel" in build_output:
+            ui.section("Extracing 'bazel-tar'")
+            for tar in self.bazel_tars:
+                # Where Bazel built the tarball.
+                tar_path = self.rd.bazel_workspace_dir() / build_output["bazel"][tar]
+                # Where we need to extract it into.
+                tar_dest = self.path / self.bazel_tars[tar]
+                ui.say(f"extracing {tar_path} to {tar_dest}")
+
+                with tarfile.open(tar_path, "r") as tar_file:
+                    os.makedirs(tar_dest, exist_ok=True)
+                    tar_file.extractall(path=tar_dest)
+
         self.acquired = True
 
-    def run(self) -> None:
-        super().run()
-        self.build()
+    def run(self, prep: dict[str, Any]) -> None:
+        super().run(prep)
+        self.build(prep)
 
     def inputs(self) -> set[str]:
         deps = set()
@@ -455,14 +678,18 @@ class CargoBuild(CargoPreImage):
         for bin in self.bins:
             crate = self.rd.cargo_workspace.crate_for_bin(bin)
             deps |= self.rd.cargo_workspace.transitive_path_dependencies(crate)
-
         for example in self.examples:
             crate = self.rd.cargo_workspace.crate_for_example(example)
             deps |= self.rd.cargo_workspace.transitive_path_dependencies(
                 crate, dev=True
             )
+        inputs = super().inputs() | set(inp for dep in deps for inp in dep.inputs())
+        # Even though we are not always building with Bazel, consider its
+        # inputs so that developers with CI_BAZEL_BUILD=0 can still
+        # download the images from Dockerhub
+        inputs |= {"BUILD.bazel"}
 
-        return super().inputs() | set(inp for dep in deps for inp in dep.inputs())
+        return inputs
 
 
 class Image:
@@ -609,21 +836,22 @@ class ResolvedImage:
         f.seek(0)
         return f
 
-    def build(self) -> None:
+    def build(self, prep: dict[type[PreImage], Any]) -> None:
         """Build the image from source.
 
         Requires that the caller has already acquired all dependencies and
         prepared all `PreImage` actions via `PreImage.prepare_batch`.
         """
-        ui.header(f"Building {self.spec()}")
+        ui.section(f"Building {self.spec()}")
         spawn.runv(["git", "clean", "-ffdX", self.image.path])
 
         for pre_image in self.image.pre_images:
-            pre_image.run()
+            pre_image.run(prep[type(pre_image)])
         build_args = {
             **self.image.build_args,
             "ARCH_GCC": str(self.image.rd.arch),
             "ARCH_GO": self.image.rd.arch.go_str(),
+            "CI_SANITIZER": str(self.image.rd.sanitizer),
         }
         f = self.write_dockerfile()
         cmd: Sequence[str] = [
@@ -642,11 +870,17 @@ class ResolvedImage:
     def try_pull(self, max_retries: int) -> bool:
         """Download the image if it does not exist locally. Returns whether it was found."""
         ui.header(f"Acquiring {self.spec()}")
+        command = ["docker", "pull"]
+        # --quiet skips printing the progress bar, which does not display well in CI.
+        if ui.env_is_truthy("CI"):
+            command.append("--quiet")
+        command.append(self.spec())
         if not self.acquired:
+            sleep_time = 1
             for retry in range(1, max_retries + 1):
                 try:
                     spawn.runv(
-                        ["docker", "pull", self.spec()],
+                        command,
                         stdout=sys.stderr.buffer,
                     )
                     self.acquired = True
@@ -656,8 +890,9 @@ class ResolvedImage:
                         # happened based on error code
                         # (https://github.com/docker/cli/issues/538) and we
                         # want to print output directly to terminal.
-                        print("Retrying ...")
-                        time.sleep(1)
+                        print(f"Retrying in {sleep_time}s ...")
+                        time.sleep(sleep_time)
+                        sleep_time *= 2
                         continue
                     else:
                         break
@@ -670,23 +905,32 @@ class ResolvedImage:
             return True
         return False
 
-    def run(self, args: list[str] = [], docker_args: list[str] = []) -> None:
+    def run(
+        self,
+        args: list[str] = [],
+        docker_args: list[str] = [],
+        env: dict[str, str] = {},
+    ) -> None:
         """Run a command in the image.
 
         Creates a container from the image and runs the command described by
         `args` in the image.
         """
+        envs = []
+        for key, val in env.items():
+            envs.extend(["--env", f"{key}={val}"])
         spawn.runv(
             [
                 "docker",
                 "run",
                 "--tty",
                 "--rm",
+                *envs,
                 "--init",
                 *docker_args,
                 self.spec(),
                 *args,
-            ]
+            ],
         )
 
     def list_dependencies(self, transitive: bool = False) -> set[str]:
@@ -796,13 +1040,16 @@ class DependencySet:
             image.acquired = image.spec() in known_images
             self._dependencies[d.name] = image
 
-    def _prepare_batch(self, images: list[ResolvedImage]) -> None:
+    def _prepare_batch(self, images: list[ResolvedImage]) -> dict[type[PreImage], Any]:
         pre_images = collections.defaultdict(list)
         for image in images:
             for pre_image in image.image.pre_images:
                 pre_images[type(pre_image)].append(pre_image)
+        pre_image_prep = {}
         for cls, instances in pre_images.items():
-            cast(PreImage, cls).prepare_batch(instances)
+            pre_image = cast(PreImage, cls)
+            pre_image_prep[cls] = pre_image.prepare_batch(instances)
+        return pre_image_prep
 
     def acquire(self, max_retries: int | None = None) -> None:
         """Download or build all of the images in the dependency set that do not
@@ -814,13 +1061,25 @@ class DependencySet:
 
         # Only retry in CI runs since we struggle with flaky docker pulls there
         if not max_retries:
-            max_retries = 3 if ui.env_is_truthy("CI") else 1
+            max_retries = 5 if ui.env_is_truthy("CI") else 1
         assert max_retries > 0
 
-        deps_to_build = [dep for dep in self if not dep.try_pull(max_retries)]
-        self._prepare_batch(deps_to_build)
+        deps_to_build = [
+            dep for dep in self if not dep.publish or not dep.try_pull(max_retries)
+        ]
+
+        # Don't attempt to build in CI, as our timeouts and small machines won't allow it anyway
+        if ui.env_is_truthy("CI"):
+            expected_deps = [dep for dep in deps_to_build if dep.publish]
+            if expected_deps:
+                print(
+                    f"+++ Expected builds to be available, the build probably failed, so not proceeding: {expected_deps}"
+                )
+                sys.exit(5)
+
+        prep = self._prepare_batch(deps_to_build)
         for dep in deps_to_build:
-            dep.build()
+            dep.build(prep)
 
     def ensure(self, post_build: Callable[[ResolvedImage], None] | None = None):
         """Ensure all publishable images in this dependency set exist on Docker
@@ -833,34 +1092,50 @@ class DependencySet:
                 locally.
         """
         deps_to_build = [dep for dep in self if not dep.is_published_if_necessary()]
-        self._prepare_batch(deps_to_build)
+        prep = self._prepare_batch(deps_to_build)
 
         images_to_push = []
         for dep in deps_to_build:
-            dep.build()
+            dep.build(prep)
             if post_build:
                 post_build(dep)
             if dep.publish:
                 images_to_push.append(dep.spec())
 
         # Push all Docker images in parallel to minimize build time.
-        ui.header("Pushing images")
-        pushes: list[subprocess.Popen] = []
-        for image in images_to_push:
-            # Piping through `cat` disables terminal control codes, and so the
-            # interleaved progress output from multiple pushes is less hectic.
-            # We don't use `docker push --quiet`, as that disables progress
-            # output entirely.
-            push = subprocess.Popen(
-                f"docker push {shlex.quote(image)} | cat",
-                shell=True,
-            )
-            pushes.append(push)
+        ui.section("Pushing images")
+        # Attempt to upload images a maximum of 3 times before giving up.
+        for attempts_remaining in reversed(range(3)):
+            pushes: list[subprocess.Popen] = []
+            for image in images_to_push:
+                # Piping through `cat` disables terminal control codes, and so the
+                # interleaved progress output from multiple pushes is less hectic.
+                # We don't use `docker push --quiet`, as that disables progress
+                # output entirely. Use `set -o pipefail` so the return code of
+                # `docker push` is passed through.
+                push = subprocess.Popen(
+                    [
+                        "/bin/bash",
+                        "-c",
+                        f"set -o pipefail; docker push {shlex.quote(image)} | cat",
+                    ]
+                )
+                pushes.append(push)
 
-        for push in pushes:
-            returncode = push.wait()
-            if returncode:
-                raise subprocess.CalledProcessError(returncode, push.args)
+            for i, push in reversed(list(enumerate(pushes))):
+                returncode = push.wait()
+                if returncode:
+                    if attempts_remaining == 0:
+                        # Last attempt, fail
+                        raise subprocess.CalledProcessError(returncode, push.args)
+                    else:
+                        print(f"docker push {push.args} failed: {returncode}")
+                else:
+                    del images_to_push[i]
+
+            if images_to_push:
+                time.sleep(10)
+                print("Retrying in 10 seconds")
 
     def check(self) -> bool:
         """Check all publishable images in this dependency set exist on Docker
@@ -886,7 +1161,7 @@ class Repository:
     Args:
         root: The path to the root of the repository.
         arch: The CPU architecture to build for.
-        release_mode: Whether to build the repository in release mode.
+        profile: What profile to build the repository in.
         coverage: Whether to enable code coverage instrumentation.
         sanitizer: Whether to a sanitizer (address, thread, leak, memory, none)
         image_registry: The Docker image registry to pull images from and push
@@ -902,14 +1177,24 @@ class Repository:
         self,
         root: Path,
         arch: Arch = Arch.host(),
-        release_mode: bool = True,
+        profile: Profile = Profile.RELEASE,
         coverage: bool = False,
         sanitizer: Sanitizer = Sanitizer.none,
         image_registry: str = "materialize",
         image_prefix: str = "",
+        bazel: bool = False,
+        bazel_remote_cache: str | None = None,
     ):
         self.rd = RepositoryDetails(
-            root, arch, release_mode, coverage, sanitizer, image_registry, image_prefix
+            root,
+            arch,
+            profile,
+            coverage,
+            sanitizer,
+            image_registry,
+            image_prefix,
+            bazel,
+            bazel_remote_cache,
         )
         self.images: dict[str, Image] = {}
         self.compositions: dict[str, Path] = {}
@@ -955,8 +1240,8 @@ class Repository:
 
         This function installs the following options:
 
-          * The mutually-exclusive `--dev`/`--release` options to control the
-            `release_mode` repository attribute.
+          * The mutually-exclusive `--dev`/`--optimized`/`--release` options to control the
+            `profile` repository attribute.
           * The `--coverage` boolean option to control the `coverage` repository
             attribute.
 
@@ -966,14 +1251,18 @@ class Repository:
         build_mode = parser.add_mutually_exclusive_group()
         build_mode.add_argument(
             "--dev",
-            dest="release",
-            action="store_false",
+            action="store_true",
             help="build Rust binaries with the dev profile",
         )
         build_mode.add_argument(
             "--release",
             action="store_true",
             help="build Rust binaries with the release profile (default)",
+        )
+        build_mode.add_argument(
+            "--optimized",
+            action="store_true",
+            help="build Rust binaries with the optimized profile (optimizations, no LTO, no debug symbols)",
         )
         parser.add_argument(
             "--coverage",
@@ -1005,6 +1294,16 @@ class Repository:
             default="",
             help="a prefix to apply to all Docker image names",
         )
+        parser.add_argument(
+            "--bazel",
+            default=ui.env_is_truthy("CI_BAZEL_BUILD"),
+            action="store_true",
+        )
+        parser.add_argument(
+            "--bazel-remote-cache",
+            default=os.getenv("CI_BAZEL_REMOTE_CACHE"),
+            action="store",
+        )
 
     @classmethod
     def from_arguments(cls, root: Path, args: argparse.Namespace) -> "Repository":
@@ -1013,14 +1312,25 @@ class Repository:
         The provided namespace must contain the options installed by
         `Repository.install_arguments`.
         """
+        if args.release:
+            profile = Profile.RELEASE
+        elif args.optimized:
+            profile = Profile.OPTIMIZED
+        elif args.dev:
+            profile = Profile.DEV
+        else:
+            profile = Profile.RELEASE
+
         return cls(
             root,
-            release_mode=args.release,
+            profile=profile,
             coverage=args.coverage,
             sanitizer=args.sanitizer,
             image_registry=args.image_registry,
             image_prefix=args.image_prefix,
             arch=args.arch,
+            bazel=args.bazel,
+            bazel_remote_cache=args.bazel_remote_cache,
         )
 
     @property

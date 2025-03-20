@@ -31,7 +31,7 @@ statement ok
 CREATE MATERIALIZED VIEW mv_using_dataflow_rendering AS
   SELECT data FROM t_base, repeat_row(diff);
 
-# see also: https://github.com/MaterializeInc/materialize/issues/17758
+# see also: https://github.com/MaterializeInc/database-issues/issues/5172
 # query error
 # SELECT SUM(data)
 # FROM mv_using_dataflow_rendering;
@@ -41,10 +41,14 @@ CREATE MATERIALIZED VIEW mv_using_dataflow_rendering AS
 # 2023-04-18T09:50:00.705649Z  WARN mz_storage_client::controller::rehydration: storage cluster produced error, reconnecting: status: Unknown, message: "error reading a body from connection: broken pipe", details: [], metadata: MetadataMap { headers: {} }
 
 query T multiline
-EXPLAIN SELECT SUM(data)
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT SUM(data)
 FROM mv_using_dataflow_rendering;
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[sum(#0)]
+        ReadStorage materialize.public.mv_using_dataflow_rendering
   Return
     Union
       Get l0
@@ -55,10 +59,6 @@ Explained Query:
               Get l0
           Constant
             - ()
-  With
-    cte l0 =
-      Reduce aggregates=[sum(#0)]
-        ReadStorage materialize.public.mv_using_dataflow_rendering
 
 Source materialize.public.mv_using_dataflow_rendering
 

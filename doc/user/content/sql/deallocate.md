@@ -20,7 +20,7 @@ Field | Use
 
 ## Example
 
-```sql
+```mzsql
 DEALLOCATE a;
 ```
 

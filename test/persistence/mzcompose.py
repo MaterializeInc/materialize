@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Basic tests for Persistence layer.
+"""
+
 import os
 import time
 from argparse import Namespace
@@ -15,6 +19,7 @@ from textwrap import dedent
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -25,6 +30,7 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     Redpanda(),
+    Mz(app_password=""),
     Materialized(),
     Testdrive(no_reset=True),
 ]
@@ -193,7 +199,7 @@ def workflow_inspect_shard(c: Composition) -> None:
         part
         for batch in json_dict["batches"]
         for part_run in batch["part_runs"]
-        for part in part_run
+        for part in part_run[1]
     ]
     non_empty_part = next(part for part in parts if part["encoded_size_bytes"] > 0)
     cols = non_empty_part["stats"]["cols"]["ok"]
@@ -212,14 +218,15 @@ def workflow_inspect_shard(c: Composition) -> None:
 
 
 def workflow_default(c: Composition) -> None:
-    for name in c.workflows:
+    def process(name: str) -> None:
         if name == "default":
-            continue
+            return
 
         if name in ["failpoints", "compaction"]:
             # Legacy tests, not currently operational
-            continue
+            return
 
         with c.test_case(name):
-            c.down(destroy_volumes=True)
             c.workflow(name)
+
+    c.test_parts(list(c.workflows.keys()), process)

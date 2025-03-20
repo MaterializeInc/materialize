@@ -29,7 +29,7 @@ _table_name_ | The name of the table to remove.
 ### Remove a table with no dependent objects
 Create a table *t* and verify that it was created:
 
-```sql
+```mzsql
 CREATE TABLE t (a int, b text NOT NULL);
 SHOW TABLES;
 ```
@@ -41,14 +41,14 @@ t
 
 Remove the table:
 
-```sql
+```mzsql
 DROP TABLE t;
 ```
 ### Remove a table with dependent objects
 
 Create a table *t*:
 
-```sql
+```mzsql
 CREATE TABLE t (a int, b text NOT NULL);
 INSERT INTO t VALUES (1, 'yes'), (2, 'no'), (3, 'maybe');
 SELECT * FROM t;
@@ -64,7 +64,7 @@ a |   b
 
 Create a materialized view from *t*:
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW t_view AS SELECT sum(a) AS sum FROM t;
 SHOW MATERIALIZED VIEWS;
 ```
@@ -77,7 +77,7 @@ t_view  | default
 
 Remove table *t*:
 
-```sql
+```mzsql
 DROP TABLE t CASCADE;
 ```
 
@@ -85,16 +85,16 @@ DROP TABLE t CASCADE;
 
 You can use either of the following commands:
 
-- ```sql
+- ```mzsql
   DROP TABLE t;
   ```
-- ```sql
+- ```mzsql
   DROP TABLE t RESTRICT;
   ```
 
 ### Do not issue an error if attempting to remove a nonexistent table
 
-```sql
+```mzsql
 DROP TABLE IF EXISTS t;
 ```
 

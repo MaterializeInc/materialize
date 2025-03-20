@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Verify how much storage is being used, based on mz_storage_usage and
+mz_recent_storage_usage.
+"""
+
 import time
 from dataclasses import dataclass
 from textwrap import dedent
@@ -97,7 +102,7 @@ database_objects = [
         expected_size=1024 * 1024,
     ),
     # Deleted/updated rows should be garbage-collected
-    # https://github.com/MaterializeInc/materialize/issues/15093
+    # https://github.com/MaterializeInc/database-issues/issues/4313
     # DatabaseObject(
     #    name="table_delete",
     #    testdrive=dedent(
@@ -122,6 +127,9 @@ database_objects = [
     #
     #        > CREATE SOURCE obj
     #          FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-update-${{testdrive.seed}}')
+    #
+    #        > CREATE TABLE obj_tbl
+    #          FROM SOURCE obj (REFERENCE "testdrive-upsert-update-${{testdrive.seed}}")
     #          FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
     #          ENVELOPE UPSERT
     #        """) + "\n".join([dedent(
@@ -131,7 +139,7 @@ database_objects = [
     #            """
     #        ) for i in range(1,11)]) + dedent(
     #        """
-    #        > SELECT COUNT(*) FROM obj WHERE a::integer = 10;
+    #        > SELECT COUNT(*) FROM obj_tbl WHERE a::integer = 10;
     #        5000000
     #        """
     #    ),
@@ -144,7 +152,8 @@ database_objects = [
             > CREATE MATERIALIZED VIEW obj AS SELECT generate_series::text , REPEAT('x', 1024) FROM generate_series(1, 1024)
             """
         ),
-        expected_size=1024 * 1024,
+        # Dictionary encoding in Persist greatly reduces the size of repeated characters.
+        expected_size=1024 * 10,
     ),
     # If a materialized view returns a small number of rows,
     # it should not require storage proportional to its input
@@ -172,8 +181,8 @@ database_objects = [
             ALTER TABLE pg_table REPLICA IDENTITY FULL;
 
             > CREATE SOURCE obj
-              FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-              FOR TABLES (pg_table);
+              FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+            > CREATE TABLE pg_table FROM SOURCE obj (REFERENCE pg_table);
             """
         ),
         expected_size=4 * 1024,
@@ -199,8 +208,8 @@ database_objects = [
             ALTER TABLE pg_table3 REPLICA IDENTITY FULL;
 
             > CREATE SOURCE pg_source
-              FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-              FOR TABLES (pg_table1 AS obj);
+              FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+            > CREATE TABLE obj FROM SOURCE pg_source (REFERENCE pg_table1);
 
             > SELECT COUNT(*) FROM obj;
             1024
@@ -261,6 +270,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                   FROM mz_storage_usage
                   WHERE collection_timestamp = ( SELECT MAX(collection_timestamp) FROM mz_storage_usage )
                   AND object_id = ( SELECT id FROM mz_objects WHERE name = 'obj' );
+                <SIZE> true
+
+                > SELECT size_bytes, size_bytes BETWEEN {database_object.expected_size//3} AND {database_object.expected_size*3}
+                  FROM mz_recent_storage_usage
+                  WHERE object_id = ( SELECT id FROM mz_objects WHERE name = 'obj' );
                 <SIZE> true
                 """
             )

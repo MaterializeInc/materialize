@@ -1,0 +1,214 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# Start from a pristine state
+reset-server
+
+query T
+SHOW CLUSTER;
+----
+quickstart
+
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER quickstart OWNER TO materialize
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE append_only (key INT, val STRING)
+
+statement ok
+CREATE CONTINUAL TASK upsert_snap WITH (SNAPSHOT = true) ON INPUT append_only AS (
+    DELETE FROM upsert_snap WHERE key IN (SELECT key FROM append_only);
+    INSERT INTO upsert_snap SELECT key, max(val) FROM append_only GROUP BY key;
+)
+
+statement ok
+CREATE CONTINUAL TASK upsert_no_snap WITH (SNAPSHOT = false) ON INPUT append_only AS (
+    DELETE FROM upsert_no_snap WHERE key IN (SELECT key FROM append_only);
+    INSERT INTO upsert_no_snap SELECT key, max(val) FROM append_only GROUP BY key;
+)
+
+statement ok
+INSERT INTO append_only VALUES (1, 'A');
+
+query IT
+SELECT * FROM upsert_snap
+----
+1 A
+
+query IT
+SELECT * FROM upsert_no_snap
+----
+1 A
+
+
+# The upsert CT and restarting the dataflow repeatedly turns out to be a great
+# way to shake out liveness issues without the full overhead of testdrive.
+
+statement ok
+ALTER CLUSTER quickstart SET (REPLICATION FACTOR = 0);
+
+statement ok
+ALTER CLUSTER quickstart SET (REPLICATION FACTOR = 1);
+
+statement ok
+INSERT INTO append_only VALUES (1, 'B');
+
+query IT
+SELECT * FROM upsert_snap
+----
+1 B
+
+query IT
+SELECT * FROM upsert_no_snap
+----
+1 B
+
+
+statement ok
+ALTER CLUSTER quickstart SET (REPLICATION FACTOR = 0);
+
+statement ok
+ALTER CLUSTER quickstart SET (REPLICATION FACTOR = 1);
+
+statement ok
+INSERT INTO append_only VALUES (1, 'C');
+
+query IT
+SELECT * FROM upsert_snap
+----
+1 C
+
+query IT
+SELECT * FROM upsert_no_snap
+----
+1 C
+
+
+statement ok
+ALTER CLUSTER quickstart SET (REPLICATION FACTOR = 0);
+
+statement ok
+ALTER CLUSTER quickstart SET (REPLICATION FACTOR = 1);
+
+statement ok
+INSERT INTO append_only VALUES (1, 'D');
+
+query IT
+SELECT * FROM upsert_snap
+----
+1 D
+
+query IT
+SELECT * FROM upsert_no_snap
+----
+1 D
+
+
+statement ok
+ALTER CLUSTER quickstart SET (REPLICATION FACTOR = 0);
+
+statement ok
+ALTER CLUSTER quickstart SET (REPLICATION FACTOR = 1);
+
+statement ok
+INSERT INTO append_only VALUES (1, 'E');
+
+query IT
+SELECT * FROM upsert_snap
+----
+1 E
+
+query IT
+SELECT * FROM upsert_no_snap
+----
+1 E
+
+
+statement ok
+ALTER CLUSTER quickstart SET (REPLICATION FACTOR = 0);
+
+statement ok
+ALTER CLUSTER quickstart SET (REPLICATION FACTOR = 1);
+
+statement ok
+INSERT INTO append_only VALUES (1, 'F');
+
+query IT
+SELECT * FROM upsert_snap
+----
+1 F
+
+query IT
+SELECT * FROM upsert_no_snap
+----
+1 F
+
+
+statement ok
+ALTER CLUSTER quickstart SET (REPLICATION FACTOR = 0);
+
+statement ok
+ALTER CLUSTER quickstart SET (REPLICATION FACTOR = 1);
+
+statement ok
+INSERT INTO append_only VALUES (1, 'G');
+
+query IT
+SELECT * FROM upsert_snap
+----
+1 G
+
+query IT
+SELECT * FROM upsert_no_snap
+----
+1 G
+
+
+statement ok
+ALTER CLUSTER quickstart SET (REPLICATION FACTOR = 0);
+
+statement ok
+ALTER CLUSTER quickstart SET (REPLICATION FACTOR = 1);
+
+statement ok
+INSERT INTO append_only VALUES (1, 'H');
+
+query IT
+SELECT * FROM upsert_snap
+----
+1 H
+
+query IT
+SELECT * FROM upsert_no_snap
+----
+1 H
+
+
+statement ok
+ALTER CLUSTER quickstart SET (REPLICATION FACTOR = 0);
+
+statement ok
+ALTER CLUSTER quickstart SET (REPLICATION FACTOR = 1);
+
+statement ok
+INSERT INTO append_only VALUES (1, 'I');
+
+query IT
+SELECT * FROM upsert_snap
+----
+1 I
+
+query IT
+SELECT * FROM upsert_no_snap
+----
+1 I

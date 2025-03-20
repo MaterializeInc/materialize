@@ -16,18 +16,19 @@ use crate::parser::BuiltinCommand;
 
 // Note(parkmycar): We wrap this in a `mod` block soley for the purpose of allowing lints for the
 // generated protobuf code.
-#[allow(clippy::enum_variant_names)]
+#[allow(clippy::as_conversions, clippy::clone_on_ref_ptr)]
 mod proto {
     pub mod fivetran {
-        include!(concat!(env!("OUT_DIR"), "/fivetran_sdk.rs"));
+        include!(concat!(env!("OUT_DIR"), "/fivetran_sdk.v2.rs"));
     }
+}
 
-    // We explicitly generate and then include the "well known types" for Protobuf so we can derive
-    // `serde` traits.
-    mod google {
-        pub mod protobuf {
-            include!(concat!(env!("OUT_DIR"), "/google.protobuf.rs"));
-        }
+// We explicitly generate and then include the "well known types" for Protobuf so we can derive
+// `serde` traits.
+#[allow(clippy::as_conversions, clippy::clone_on_ref_ptr)]
+mod google {
+    pub mod protobuf {
+        include!(concat!(env!("OUT_DIR"), "/google.protobuf.rs"));
     }
 }
 
@@ -81,11 +82,12 @@ pub async fn run_destination_command(
 
     // Connect to the destination.
     println!("{action} @ {}", state.fivetran_destination_url);
-    let mut fivetran_client = proto::fivetran::destination_client::DestinationClient::connect(
-        state.fivetran_destination_url.clone(),
-    )
-    .await
-    .context("connecting to fivetran destination")?;
+    let mut fivetran_client =
+        proto::fivetran::destination_connector_client::DestinationConnectorClient::connect(
+            state.fivetran_destination_url.clone(),
+        )
+        .await
+        .context("connecting to fivetran destination")?;
 
     match action.as_str() {
         "describe" => {

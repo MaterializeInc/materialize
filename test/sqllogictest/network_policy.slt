@@ -1,0 +1,109 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Test for `NETWORK POLICIES`.
+
+mode standard
+
+# Start from a pristine state
+reset-server
+
+# Verify initial Network Policies.
+query TTT
+select * from (SHOW NETWORK POLICIES)
+----
+default
+open_ingress
+(empty)
+
+
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_network_policies=on
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE NETWORK POLICY np (RULES (  r1 (address='0.0.0.0/32', action='allow', direction='ingress'), r2 (address='0.0.0.1/32', action='allow', direction='ingress') ))
+----
+COMPLETE 0
+
+query TTT rowsort
+SELECT * FROM (SHOW NETWORK POLICIES)
+----
+default
+open_ingress
+(empty)
+np
+r1,r2
+(empty)
+
+query TTT
+SELECT id, name, owner_id FROM mz_internal.mz_network_policies
+----
+u2
+np
+s1
+u1
+default
+s1
+
+
+query TTTTT colnames
+SELECT * FROM mz_internal.mz_network_policy_rules
+----
+name policy_id action address direction
+r1
+u2
+allow
+0.0.0.0/32
+ingress
+r2
+u2
+allow
+0.0.0.1/32
+ingress
+open_ingress
+u1
+allow
+0.0.0.0/0
+ingress
+
+
+simple conn=mz_system,user=mz_system
+ALTER NETWORK POLICY np SET (RULES (r1 (address='1.1.1.1/32', action='allow', direction='ingress') ));
+----
+COMPLETE 0
+
+query TTTTT colnames
+SELECT * FROM mz_internal.mz_network_policy_rules
+----
+name policy_id action address direction
+r1
+u2
+allow
+1.1.1.1/32
+ingress
+open_ingress
+u1
+allow
+0.0.0.0/0
+ingress
+
+simple conn=mz_system,user=mz_system
+DROP NETWORK POLICY np;
+----
+COMPLETE 0
+
+query TTT rowsort
+select * from (SHOW NETWORK POLICIES)
+----
+default
+open_ingress
+(empty)

@@ -27,7 +27,7 @@ In our example, for each rule in a `bird_rules` dataset, we filter the `birds` d
 ### Create Resources
 
 1. Create the `birds` table and insert some birds.
-    ```sql
+    ```mzsql
     CREATE TABLE birds (
     id INT,
     name VARCHAR(50),
@@ -48,7 +48,7 @@ In our example, for each rule in a `bird_rules` dataset, we filter the `birds` d
     (10, 'Pelican', 180.4, '["White"]');
     ```
 1. Create the `bird_rules` table and insert a few rules.
-    ```sql
+    ```mzsql
     CREATE TABLE bird_rules (
     id INT,
     starts_with CHAR(1),
@@ -69,7 +69,7 @@ In our example, for each rule in a `bird_rules` dataset, we filter the `birds` d
 
 Here is the view that will execute our bird rules:
 
-```sql
+```mzsql
 CREATE VIEW birds_filtered AS
 SELECT r.id AS rule_id, b.name, b.colors, b.wingspan_cm
 FROM
@@ -92,7 +92,7 @@ LATERAL (
 ### Subscribe to Changes
 
 1. Subscribe to the changes of `birds_filtered`.
-    ```sql
+    ```mzsql
     COPY(SUBSCRIBE birds_filtered) TO STDOUT;
     ```
     ```nofmt
@@ -102,7 +102,7 @@ LATERAL (
     ```
     Notice that the majestic penguin satisfies rule 2. None of the other birds satisfy any of the rules.
 1. In a separate session, insert a new bird that satisfies rule 3. Rule 3 requires a bird whose first letter is 'R', with a wingspan greater than or equal to 20 centimeters, and whose colors contain "Red". We will insert a "Really big robin" that satisfies this rule.
-    ```sql
+    ```mzsql
     INSERT INTO birds VALUES (11, 'Really big robin', 25.0, '["Red"]');
     ```
     Back in the `SUBSCRIBE` terminal, notice the output was immediately updated.
@@ -112,7 +112,7 @@ LATERAL (
     1688674195279      1         3       Really big robin     ["Red"]        25
     ```
 1. For fun, let's delete rule 3 and see what happens.
-    ```sql
+    ```mzsql
     DELETE FROM bird_rules WHERE id = 3;
     ```
     ```nofmt
@@ -122,7 +122,7 @@ LATERAL (
     ```
     Notice the bird was removed because the rule no longer exists.
 1. Now let's update an existing bird so that it satisfies a new rule. It turns out our penguin also has some blue coloration we didn't notice before.
-    ```sql
+    ```mzsql
     UPDATE birds SET colors = '["Black","White","Blue"]' WHERE name = 'Penguin';
     ```
     ```nofmt
@@ -138,7 +138,7 @@ LATERAL (
 
 Press `Ctrl+C` to stop your `SUBSCRIBE` query and then drop the tables to clean up.
 
-```sql
+```mzsql
 DROP TABLE birds CASCADE;
 DROP TABLE bird_rules CASCADE;
 ```

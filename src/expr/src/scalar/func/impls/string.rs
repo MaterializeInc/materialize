@@ -9,6 +9,7 @@
 
 use std::borrow::Cow;
 use std::fmt;
+use std::sync::LazyLock;
 
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use mz_lowertest::MzReflect;
@@ -26,7 +27,6 @@ use mz_repr::adt::system::{Oid, PgLegacyChar};
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampPrecision};
 use mz_repr::adt::varchar::{VarChar, VarCharMaxLength};
 use mz_repr::{strconv, ColumnType, Datum, RowArena, ScalarType};
-use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -333,7 +333,7 @@ impl LazyUnaryFunc for CastStringToArray {
             },
         )?;
 
-        Ok(temp_storage.try_make_datum(|packer| packer.push_array(&dims, datums))?)
+        Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, datums))?)
     }
 
     /// The output ColumnType of this function
@@ -553,7 +553,7 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToChar {
         let s = format_str_trim(a, self.length, self.fail_on_len).map_err(|_| {
             assert!(self.fail_on_len);
             EvalError::StringValueTooLong {
-                target_type: "character".to_string(),
+                target_type: "character".into(),
                 length: usize::cast_from(self.length.unwrap().into_u32()),
             }
         })?;
@@ -579,7 +579,17 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToChar {
 
 impl fmt::Display for CastStringToChar {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("text_to_char")
+        match self.length {
+            Some(length) => {
+                write!(
+                    f,
+                    "text_to_char[len={}, fail_on_len={}]",
+                    length.into_u32(),
+                    self.fail_on_len
+                )
+            }
+            None => f.write_str("text_to_char[len=unbounded]"),
+        }
     }
 }
 
@@ -677,7 +687,7 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToVarChar {
             mz_repr::adt::varchar::format_str(a, self.length, self.fail_on_len).map_err(|_| {
                 assert!(self.fail_on_len);
                 EvalError::StringValueTooLong {
-                    target_type: "character varying".to_string(),
+                    target_type: "character varying".into(),
                     length: usize::cast_from(self.length.unwrap().into_u32()),
                 }
             })?;
@@ -707,13 +717,23 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToVarChar {
 
 impl fmt::Display for CastStringToVarChar {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("text_to_varchar")
+        match self.length {
+            Some(length) => {
+                write!(
+                    f,
+                    "text_to_varchar[len={}, fail_on_len={}]",
+                    length.into_u32(),
+                    self.fail_on_len
+                )
+            }
+            None => f.write_str("text_to_varchar[len=unbounded]"),
+        }
     }
 }
 
 // If we support another vector type, this should likely get hoisted into a
 // position akin to array parsing.
-static INT2VECTOR_CAST_EXPR: Lazy<MirScalarExpr> = Lazy::new(|| MirScalarExpr::CallUnary {
+static INT2VECTOR_CAST_EXPR: LazyLock<MirScalarExpr> = LazyLock::new(|| MirScalarExpr::CallUnary {
     func: UnaryFunc::CastStringToInt16(CastStringToInt16),
     expr: Box::new(MirScalarExpr::Column(0)),
 });
@@ -831,14 +851,10 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "ascii"]
     fn ascii<'a>(a: &'a str) -> i32 {
-        match a
-            .chars()
+        a.chars()
             .next()
             .and_then(|c| i32::try_from(u32::from(c)).ok())
-        {
-            None => 0,
-            Some(v) => v,
-        }
+            .unwrap_or(0)
     }
 );
 
@@ -846,7 +862,7 @@ sqlfunc!(
     #[sqlname = "char_length"]
     fn char_length<'a>(a: &'a str) -> Result<i32, EvalError> {
         let length = a.chars().count();
-        i32::try_from(length).or(Err(EvalError::Int32OutOfRange(length.to_string())))
+        i32::try_from(length).or(Err(EvalError::Int32OutOfRange(length.to_string().into())))
     }
 );
 
@@ -854,7 +870,7 @@ sqlfunc!(
     #[sqlname = "bit_length"]
     fn bit_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {
         let length = a.as_bytes().len() * 8;
-        i32::try_from(length).or(Err(EvalError::Int32OutOfRange(length.to_string())))
+        i32::try_from(length).or(Err(EvalError::Int32OutOfRange(length.to_string().into())))
     }
 );
 
@@ -862,7 +878,7 @@ sqlfunc!(
     #[sqlname = "octet_length"]
     fn byte_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {
         let length = a.as_bytes().len();
-        i32::try_from(length).or(Err(EvalError::Int32OutOfRange(length.to_string())))
+        i32::try_from(length).or(Err(EvalError::Int32OutOfRange(length.to_string().into())))
     }
 );
 
@@ -900,7 +916,7 @@ impl fmt::Display for IsLikeMatch {
             f,
             "{}like[{}]",
             if self.0.case_insensitive { "i" } else { "" },
-            self.0.pattern.quoted()
+            self.0.pattern.escaped()
         )
     }
 }
@@ -926,7 +942,7 @@ impl fmt::Display for IsRegexpMatch {
         write!(
             f,
             "is_regexp_match[{}, case_insensitive={}]",
-            self.0.pattern.quoted(),
+            self.0.pattern().escaped(),
             self.0.case_insensitive
         )
     }
@@ -984,7 +1000,7 @@ impl fmt::Display for RegexpMatch {
         write!(
             f,
             "regexp_match[{}, case_insensitive={}]",
-            self.0.pattern.quoted(),
+            self.0.pattern().escaped(),
             self.0.case_insensitive
         )
     }
@@ -1041,7 +1057,7 @@ impl fmt::Display for RegexpSplitToArray {
         write!(
             f,
             "regexp_split_to_array[{}, case_insensitive={}]",
-            self.0.pattern.quoted(),
+            self.0.pattern().escaped(),
             self.0.case_insensitive
         )
     }
@@ -1073,8 +1089,8 @@ impl LazyUnaryFunc for QuoteIdent {
         }
         let v = d.unwrap_str();
         let i = mz_sql_parser::ast::Ident::new(v).map_err(|err| EvalError::InvalidIdentifier {
-            ident: v.to_string(),
-            detail: Some(err.to_string()),
+            ident: v.into(),
+            detail: Some(err.to_string().into()),
         })?;
         let r = temp_storage.push_string(i.to_string());
 

@@ -12,10 +12,11 @@
 use std::num::NonZeroUsize;
 
 use mz_compute_types::plan::LirId;
+use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Diff, GlobalId, Row, RowCollection};
+use mz_repr::{Diff, GlobalId, Row};
 use mz_timely_util::progress::any_antichain;
 use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Just, Strategy, Union};
@@ -66,8 +67,8 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     /// [`AllowCompaction` command]: super::command::ComputeCommand::AllowCompaction
     /// [`CreateDataflow` command]: super::command::ComputeCommand::CreateDataflow
     /// [`CreateInstance` command]: super::command::ComputeCommand::CreateInstance
-    /// [#16271]: https://github.com/MaterializeInc/materialize/issues/16271
-    /// [#16274]: https://github.com/MaterializeInc/materialize/issues/16274
+    /// [#16271]: https://github.com/MaterializeInc/database-issues/issues/4699
+    /// [#16274]: https://github.com/MaterializeInc/database-issues/issues/4701
     Frontiers(GlobalId, FrontiersResponse<T>),
 
     /// `PeekResponse` reports the result of a previous [`Peek` command]. The peek is identified by
@@ -257,12 +258,28 @@ pub struct FrontiersResponse<T = mz_repr::Timestamp> {
     /// `input_frontier` as the empty frontier, the replica must no longer read from the
     /// collection's inputs.
     pub input_frontier: Option<Antichain<T>>,
+    /// The collection's new output frontier, if any.
+    ///
+    /// Upon receiving an updated `output_frontier`, the controller may assume that the replica
+    /// has finished processing the collection's input up to that frontier.
+    ///
+    /// The `output_frontier` is often equal to the `write_frontier`, but not always. Some
+    /// collections can jump their write frontiers ahead of the times they have finished
+    /// processing, causing the `output_frontier` to lag behind the `write_frontier`. Collections
+    /// writing materialized views do so in two cases:
+    ///
+    ///  * `REFRESH` MVs jump their write frontier ahead to the next refresh time.
+    ///  * In a multi-replica cluster, slower replicas observe and report the write frontier of the
+    ///    fastest replica, by witnessing advancements of the target persist shard's `upper`.
+    pub output_frontier: Option<Antichain<T>>,
 }
 
 impl<T> FrontiersResponse<T> {
     /// Returns whether there are any contained updates.
     pub fn has_updates(&self) -> bool {
-        self.write_frontier.is_some() || self.input_frontier.is_some()
+        self.write_frontier.is_some()
+            || self.input_frontier.is_some()
+            || self.output_frontier.is_some()
     }
 }
 
@@ -271,6 +288,7 @@ impl RustType<ProtoFrontiersResponse> for FrontiersResponse {
         ProtoFrontiersResponse {
             write_frontier: self.write_frontier.into_proto(),
             input_frontier: self.input_frontier.into_proto(),
+            output_frontier: self.output_frontier.into_proto(),
         }
     }
 
@@ -278,6 +296,7 @@ impl RustType<ProtoFrontiersResponse> for FrontiersResponse {
         Ok(Self {
             write_frontier: proto.write_frontier.into_rust()?,
             input_frontier: proto.input_frontier.into_rust()?,
+            output_frontier: proto.output_frontier.into_rust()?,
         })
     }
 }
@@ -287,10 +306,11 @@ impl Arbitrary for FrontiersResponse {
     type Parameters = ();
 
     fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        (any_antichain(), any_antichain())
-            .prop_map(|(write, input)| Self {
+        (any_antichain(), any_antichain(), any_antichain())
+            .prop_map(|(write, input, compute)| Self {
                 write_frontier: Some(write),
                 input_frontier: Some(input),
+                output_frontier: Some(compute),
             })
             .boxed()
     }
@@ -346,7 +366,7 @@ impl Arbitrary for PeekResponse {
                 ),
                 1..11,
             )
-            .prop_map(|rows| PeekResponse::Rows(RowCollection::new(&rows)))
+            .prop_map(|rows| PeekResponse::Rows(RowCollection::new(rows, &[])))
             .boxed(),
             ".*".prop_map(PeekResponse::Error).boxed(),
             Just(PeekResponse::Canceled).boxed(),
@@ -632,6 +652,7 @@ impl RustType<ProtoOperatorHydrationStatus> for OperatorHydrationStatus {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::ProptestConfig;
     use proptest::proptest;
@@ -644,7 +665,7 @@ mod tests {
         #[mz_ore::test]
         fn compute_response_protobuf_roundtrip(expect in any::<ComputeResponse<mz_repr::Timestamp>>() ) {
             let actual = protobuf_roundtrip::<_, ProtoComputeResponse>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }

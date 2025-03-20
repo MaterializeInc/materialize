@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
+ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true
 
 > DROP SOURCE IF EXISTS mz_source CASCADE;
 > DROP SECRET IF EXISTS pgpass CASCADE;
@@ -16,10 +16,10 @@ ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
 
 > CREATE CLUSTER storage REPLICAS (
     r1 (
-      STORAGECTL ADDRESSES ['storage:2100'],
-      STORAGE ADDRESSES ['storage:2103'],
-      COMPUTECTL ADDRESSES ['storage:2101'],
-      COMPUTE ADDRESSES ['storage:2102'],
+      STORAGECTL ADDRESSES ['clusterd1:2100'],
+      STORAGE ADDRESSES ['clusterd1:2103'],
+      COMPUTECTL ADDRESSES ['clusterd1:2101'],
+      COMPUTE ADDRESSES ['clusterd1:2102'],
       WORKERS 4
     )
   )
@@ -36,5 +36,7 @@ ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
   IN CLUSTER storage
   FROM POSTGRES
   CONNECTION pg
-  (PUBLICATION 'mz_source')
-  FOR ALL TABLES;
+  (PUBLICATION 'mz_source');
+
+> CREATE TABLE ten FROM SOURCE mz_source (REFERENCE ten);
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);

@@ -7,35 +7,38 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-syntax = "proto3";
+// Unlike other Persist proto definitions, these messages are not sent between
+// versions and do not have special compatibility requirements.
 
-import "proto/src/proto.proto";
+syntax = "proto3";
 
 package mz_persist_client.internal.service;
 
+import "proto/src/proto.proto";
+
 message ProtoPushDiff {
-    string shard_id = 1;
-    uint64 seqno = 2;
-    bytes diff = 3;
+  string shard_id = 1;
+  uint64 seqno = 2;
+  bytes diff = 3;
 }
 
 message ProtoSubscribe {
-    string shard_id = 1;
+  string shard_id = 1;
 }
 
 message ProtoUnsubscribe {
-    string shard_id = 1;
+  string shard_id = 1;
 }
 
 message ProtoPubSubMessage {
-    mz_proto.ProtoDuration timestamp = 1;
-    oneof message {
-        ProtoPushDiff push_diff = 2;
-        ProtoSubscribe subscribe = 3;
-        ProtoUnsubscribe unsubscribe = 4;
-    }
+  mz_proto.ProtoDuration timestamp = 1;
+  oneof message {
+    ProtoPushDiff push_diff = 2;
+    ProtoSubscribe subscribe = 3;
+    ProtoUnsubscribe unsubscribe = 4;
+  }
 }
 
 service ProtoPersistPubSub {
-    rpc PubSub (stream ProtoPubSubMessage) returns (stream ProtoPubSubMessage);
+  rpc PubSub(stream ProtoPubSubMessage) returns (stream ProtoPubSubMessage);
 }

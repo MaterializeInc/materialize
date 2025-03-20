@@ -28,7 +28,7 @@ pub const DEFAULT_PG_SOURCE_TCP_KEEPALIVES_IDLE: Duration = Duration::from_secs(
 pub const DEFAULT_PG_SOURCE_TCP_KEEPALIVES_RETRIES: u32 = 5;
 // This is meant to be DEFAULT_KEEPALIVE_IDLE
 // + DEFAULT_KEEPALIVE_RETRIES * DEFAULT_KEEPALIVE_INTERVAL
-pub const DEFAULT_PG_SOURCE_TCP_USER_TIMEOUT: Duration = Duration::from_secs(60);
+pub const DEFAULT_PG_SOURCE_TCP_USER_TIMEOUT: Duration = Duration::from_secs(40);
 
 /// Whether to apply TCP settings to the server as well as the client.
 ///
@@ -65,6 +65,7 @@ pub struct StorageParameters {
     pub keep_n_source_status_history_entries: usize,
     pub keep_n_sink_status_history_entries: usize,
     pub keep_n_privatelink_status_history_entries: usize,
+    pub replica_status_history_retention_window: Duration,
     /// A set of parameters used to tune RocksDB when used with `UPSERT` sources.
     pub upsert_rocksdb_tuning_config: mz_rocksdb_types::RocksDBTuningParameters,
     /// Whether or not to allow shard finalization to occur. Note that this will
@@ -111,6 +112,8 @@ pub struct StorageParameters {
 pub const STATISTICS_INTERVAL_DEFAULT: Duration = Duration::from_secs(60);
 pub const STATISTICS_COLLECTION_INTERVAL_DEFAULT: Duration = Duration::from_secs(10);
 pub const STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT: Duration = Duration::from_secs(1);
+pub const REPLICA_STATUS_HISTORY_RETENTION_WINDOW_DEFAULT: Duration =
+    Duration::from_secs(30 * 24 * 60 * 60); // 30 days
 
 // Implement `Default` manually, so that the default can match the
 // LD default. This is not strictly necessary, but improves clarity.
@@ -130,6 +133,8 @@ impl Default for StorageParameters {
             keep_n_source_status_history_entries: Default::default(),
             keep_n_sink_status_history_entries: Default::default(),
             keep_n_privatelink_status_history_entries: Default::default(),
+            replica_status_history_retention_window:
+                REPLICA_STATUS_HISTORY_RETENTION_WINDOW_DEFAULT,
             upsert_rocksdb_tuning_config: Default::default(),
             finalize_shards: Default::default(),
             tracing: Default::default(),
@@ -234,6 +239,7 @@ impl StorageParameters {
             keep_n_source_status_history_entries,
             keep_n_sink_status_history_entries,
             keep_n_privatelink_status_history_entries,
+            replica_status_history_retention_window,
             upsert_rocksdb_tuning_config,
             finalize_shards,
             tracing,
@@ -263,6 +269,7 @@ impl StorageParameters {
         self.keep_n_source_status_history_entries = keep_n_source_status_history_entries;
         self.keep_n_sink_status_history_entries = keep_n_sink_status_history_entries;
         self.keep_n_privatelink_status_history_entries = keep_n_privatelink_status_history_entries;
+        self.replica_status_history_retention_window = replica_status_history_retention_window;
         self.upsert_rocksdb_tuning_config = upsert_rocksdb_tuning_config;
         self.finalize_shards = finalize_shards;
         self.tracing.update(tracing);
@@ -282,6 +289,11 @@ impl StorageParameters {
         self.user_storage_managed_collections_batch_duration =
             user_storage_managed_collections_batch_duration;
         self.dyncfg_updates.extend(dyncfg_updates);
+    }
+
+    /// Return whether all parameters are unset.
+    pub fn all_unset(&self) -> bool {
+        *self == Self::default()
     }
 }
 
@@ -307,6 +319,9 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             ),
             keep_n_privatelink_status_history_entries: u64::cast_from(
                 self.keep_n_privatelink_status_history_entries,
+            ),
+            replica_status_history_retention_window: Some(
+                self.replica_status_history_retention_window.into_proto(),
             ),
             upsert_rocksdb_tuning_config: Some(self.upsert_rocksdb_tuning_config.into_proto()),
             finalize_shards: self.finalize_shards,
@@ -361,6 +376,11 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             keep_n_privatelink_status_history_entries: usize::cast_from(
                 proto.keep_n_privatelink_status_history_entries,
             ),
+            replica_status_history_retention_window: proto
+                .replica_status_history_retention_window
+                .into_rust_if_some(
+                    "ProtoStorageParameters::replica_status_history_retention_window",
+                )?,
             upsert_rocksdb_tuning_config: proto
                 .upsert_rocksdb_tuning_config
                 .into_rust_if_some("ProtoStorageParameters::upsert_rocksdb_tuning_config")?,
@@ -473,9 +493,6 @@ impl RustType<ProtoKafkaTimeouts> for mz_kafka_util::client::TimeoutConfig {
             ),
             fetch_metadata_timeout: Some(self.fetch_metadata_timeout.into_proto()),
             progress_record_fetch_timeout: Some(self.progress_record_fetch_timeout.into_proto()),
-            default_metadata_fetch_interval: Some(
-                self.default_metadata_fetch_interval.into_proto(),
-            ),
         }
     }
 
@@ -499,11 +516,6 @@ impl RustType<ProtoKafkaTimeouts> for mz_kafka_util::client::TimeoutConfig {
             progress_record_fetch_timeout: proto
                 .progress_record_fetch_timeout
                 .into_rust_if_some("ProtoKafkaSourceTcpTimeouts::progress_record_fetch_timeout")?,
-            default_metadata_fetch_interval: proto
-                .default_metadata_fetch_interval
-                .into_rust_if_some(
-                    "ProtoKafkaSourceTcpTimeouts::default_metadata_fetch_interval",
-                )?,
         })
     }
 }
@@ -514,6 +526,7 @@ impl RustType<ProtoMySqlSourceTimeouts> for mz_mysql_util::TimeoutConfig {
             tcp_keepalive: self.tcp_keepalive.into_proto(),
             snapshot_max_execution_time: self.snapshot_max_execution_time.into_proto(),
             snapshot_lock_wait_timeout: self.snapshot_lock_wait_timeout.into_proto(),
+            connect_timeout: self.connect_timeout.into_proto(),
         }
     }
 
@@ -522,6 +535,7 @@ impl RustType<ProtoMySqlSourceTimeouts> for mz_mysql_util::TimeoutConfig {
             tcp_keepalive: proto.tcp_keepalive.into_rust()?,
             snapshot_max_execution_time: proto.snapshot_max_execution_time.into_rust()?,
             snapshot_lock_wait_timeout: proto.snapshot_lock_wait_timeout.into_rust()?,
+            connect_timeout: proto.connect_timeout.into_rust()?,
         })
     }
 }

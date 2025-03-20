@@ -31,14 +31,16 @@ $ kafka-ingest format=avro topic=resolution-union-concrete schema=${union-int} t
 > CREATE SOURCE resolution_union_concrete
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-resolution-union-concrete-${testdrive.seed}')
+
+> CREATE TABLE resolution_union_concrete_tbl FROM SOURCE resolution_union_concrete (REFERENCE "testdrive-resolution-union-concrete-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
 $ kafka-ingest format=avro topic=resolution-union-concrete schema=${concrete-double} timestamp=2
 {"f1": 123.456 }
 
-! SELECT f1 FROM resolution_union_concrete
+! SELECT f1 FROM resolution_union_concrete_tbl
 contains:No matching schema in reader union for writer type `Double` for field `schema_union.f1`
 
-! SELECT f1 FROM resolution_union_concrete
+! SELECT f1 FROM resolution_union_concrete_tbl
 contains:failed to resolve Avro schema (id =

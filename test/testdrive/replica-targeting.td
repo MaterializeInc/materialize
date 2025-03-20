@@ -33,12 +33,12 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 > SET cluster_replica = r1
 
-> SELECT DISTINCT worker_id FROM mz_internal.mz_compute_frontiers_per_worker ORDER BY worker_id
+> SELECT DISTINCT worker_id FROM mz_introspection.mz_compute_frontiers_per_worker ORDER BY worker_id
 0
 
 > BEGIN
 > DECLARE c CURSOR FOR SUBSCRIBE (
-    SELECT count(DISTINCT worker_id) FROM mz_internal.mz_compute_frontiers_per_worker
+    SELECT count(DISTINCT worker_id) FROM mz_introspection.mz_compute_frontiers_per_worker
   )
 > FETCH c
 <TIMESTAMP> 1 1
@@ -46,13 +46,13 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 > SET cluster_replica = r2
 
-> SELECT DISTINCT worker_id FROM mz_internal.mz_compute_frontiers_per_worker ORDER BY worker_id
+> SELECT DISTINCT worker_id FROM mz_introspection.mz_compute_frontiers_per_worker ORDER BY worker_id
 0
 1
 
 > BEGIN
 > DECLARE c CURSOR FOR SUBSCRIBE (
-    SELECT count(DISTINCT worker_id) FROM mz_internal.mz_compute_frontiers_per_worker
+    SELECT count(DISTINCT worker_id) FROM mz_introspection.mz_compute_frontiers_per_worker
   )
 > FETCH c
 <TIMESTAMP> 1 2
@@ -60,7 +60,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 > SET cluster_replica = r4
 
-> SELECT DISTINCT worker_id FROM mz_internal.mz_compute_frontiers_per_worker ORDER BY worker_id
+> SELECT DISTINCT worker_id FROM mz_introspection.mz_compute_frontiers_per_worker ORDER BY worker_id
 0
 1
 2
@@ -68,14 +68,14 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 > BEGIN
 > DECLARE c CURSOR FOR SUBSCRIBE (
-    SELECT count(DISTINCT worker_id) FROM mz_internal.mz_compute_frontiers_per_worker
+    SELECT count(DISTINCT worker_id) FROM mz_introspection.mz_compute_frontiers_per_worker
   )
 > FETCH c
 <TIMESTAMP> 1 4
 > COMMIT
 
 # Test that replica-targeted subscribes work when the subscribed collection
-# advances to the empty frontier. Regression test for #24981.
+# advances to the empty frontier. Regression test for database-issues#7457.
 
 > DROP CLUSTER test CASCADE
 > CREATE CLUSTER test SIZE '4-4', REPLICATION FACTOR 4

@@ -17,9 +17,8 @@ use std::os::raw::c_int;
 
 use anyhow::bail;
 use pprof::ProfilerGuard;
+use pprof_util::{StackProfile, WeightedStack};
 use tokio::time::{self, Duration};
-
-use crate::{StackProfile, WeightedStack};
 
 /// # Safety
 ///

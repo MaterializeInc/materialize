@@ -9,60 +9,59 @@
 
 syntax = "proto3";
 
-import "google/protobuf/empty.proto";
+package mz_storage_types.sources.encoding;
 
+import "google/protobuf/empty.proto";
 import "repr/src/adt/regex.proto";
 import "repr/src/relation_and_scalar.proto";
 import "storage-types/src/connections.proto";
 
-package mz_storage_types.sources.encoding;
-
 message ProtoSourceDataEncoding {
-    reserved 1, 2;
-    optional ProtoDataEncoding key = 3;
-    ProtoDataEncoding value = 4;
+  reserved 1, 2;
+  optional ProtoDataEncoding key = 3;
+  ProtoDataEncoding value = 4;
 }
 
 message ProtoDataEncoding {
-    reserved 1, 2;
-    oneof kind {
-        ProtoAvroEncoding avro = 3;
-        ProtoProtobufEncoding protobuf = 4;
-        ProtoCsvEncoding csv = 5;
-        ProtoRegexEncoding regex = 6;
-        google.protobuf.Empty bytes = 7;
-        google.protobuf.Empty text = 8;
-        google.protobuf.Empty json = 9;
-    }
+  reserved 1, 2;
+  oneof kind {
+    ProtoAvroEncoding avro = 3;
+    ProtoProtobufEncoding protobuf = 4;
+    ProtoCsvEncoding csv = 5;
+    ProtoRegexEncoding regex = 6;
+    google.protobuf.Empty bytes = 7;
+    google.protobuf.Empty text = 8;
+    google.protobuf.Empty json = 9;
+  }
 }
 
 message ProtoAvroEncoding {
-    string schema = 1;
-    mz_storage_types.connections.ProtoCsrConnection csr_connection = 2;
-    bool confluent_wire_format = 3;
+  string schema = 1;
+  mz_storage_types.connections.ProtoCsrConnection csr_connection = 2;
+  bool confluent_wire_format = 3;
 }
 
 message ProtoProtobufEncoding {
-    bytes descriptors = 1;
-    string message_name = 2;
-    bool confluent_wire_format = 3;
+  bytes descriptors = 1;
+  string message_name = 2;
+  bool confluent_wire_format = 3;
 }
 
 message ProtoCsvEncoding {
-    ProtoColumnSpec columns = 1;
-    uint32 delimiter = 2;
+  ProtoColumnSpec columns = 1;
+  uint32 delimiter = 2;
 }
 
 message ProtoColumnSpec {
-    message ProtoHeader {
-        repeated string names = 1;
-    }
-    oneof kind {
-        uint64 count = 1;
-        ProtoHeader header = 2;
-    }
+  message ProtoHeader {
+    repeated string names = 1;
+  }
+  oneof kind {
+    uint64 count = 1;
+    ProtoHeader header = 2;
+  }
 }
 
 message ProtoRegexEncoding {
-    mz_repr.adt.regex.ProtoRegex regex = 1;
+  mz_repr.adt.regex.ProtoRegex regex = 1;
 }

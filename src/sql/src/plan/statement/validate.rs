@@ -30,7 +30,7 @@ pub fn plan_validate_connection(
     let item = scx.get_item_by_resolved_name(&stmt.name)?;
 
     // Validate the target of the validate statement.
-    match item.connection().cloned() {
+    match item.connection() {
         Ok(connection) => Ok(Plan::ValidateConnection(ValidateConnectionPlan {
             id: item.id(),
             connection,

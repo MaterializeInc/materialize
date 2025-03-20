@@ -20,8 +20,9 @@ pub mod sink;
 pub mod source;
 pub mod statistics;
 pub mod storage_state;
-mod upsert;
+pub(crate) mod upsert;
+mod upsert_continual_feedback;
 
 pub(crate) mod healthcheck;
 
-pub use server::{serve, Config, Server};
+pub use server::serve;

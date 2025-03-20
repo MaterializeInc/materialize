@@ -74,7 +74,7 @@ sqlfunc!(
         if (f >= (i16::MIN as f32)) && (f < -(i16::MIN as f32)) {
             Ok(f as i16)
         } else {
-            Err(EvalError::Int16OutOfRange(f.to_string()))
+            Err(EvalError::Int16OutOfRange(f.to_string().into()))
         }
     }
 );
@@ -95,7 +95,7 @@ sqlfunc!(
         if (f >= (i32::MIN as f32)) && (f < -(i32::MIN as f32)) {
             Ok(f as i32)
         } else {
-            Err(EvalError::Int32OutOfRange(f.to_string()))
+            Err(EvalError::Int32OutOfRange(f.to_string().into()))
         }
     }
 );
@@ -116,7 +116,7 @@ sqlfunc!(
         if (f >= (i64::MIN as f32)) && (f < -(i64::MIN as f32)) {
             Ok(f as i64)
         } else {
-            Err(EvalError::Int64OutOfRange(f.to_string()))
+            Err(EvalError::Int64OutOfRange(f.to_string().into()))
         }
     }
 );
@@ -154,7 +154,7 @@ sqlfunc!(
         if (f >= 0.0) && (f <= (u16::MAX as f32)) {
             Ok(f as u16)
         } else {
-            Err(EvalError::UInt16OutOfRange(f.to_string()))
+            Err(EvalError::UInt16OutOfRange(f.to_string().into()))
         }
     }
 );
@@ -171,7 +171,7 @@ sqlfunc!(
         if (f >= 0.0) && (f <= (u32::MAX as f32)) {
             Ok(f as u32)
         } else {
-            Err(EvalError::UInt32OutOfRange(f.to_string()))
+            Err(EvalError::UInt32OutOfRange(f.to_string().into()))
         }
     }
 );
@@ -188,7 +188,7 @@ sqlfunc!(
         if (f >= 0.0) && (f <= (u64::MAX as f32)) {
             Ok(f as u64)
         } else {
-            Err(EvalError::UInt64OutOfRange(f.to_string()))
+            Err(EvalError::UInt64OutOfRange(f.to_string().into()))
         }
     }
 );
@@ -203,7 +203,7 @@ impl<'a> EagerUnaryFunc<'a> for CastFloat32ToNumeric {
     fn call(&self, a: f32) -> Result<Numeric, EvalError> {
         if a.is_infinite() {
             return Err(EvalError::InfinityOutOfDomain(
-                "casting real to numeric".to_owned(),
+                "casting real to numeric".into(),
             ));
         }
         let mut a = Numeric::from(a);

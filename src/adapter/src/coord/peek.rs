@@ -21,12 +21,14 @@ use futures::TryFutureExt;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_cluster_client::ReplicaId;
+use mz_compute_client::controller::PeekNotification;
 use mz_compute_client::protocol::command::PeekTarget;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_types::dataflows::{DataflowDescription, IndexImport};
 use mz_compute_types::ComputeInstanceId;
 use mz_controller_types::ClusterId;
 use mz_expr::explain::{fmt_text_constant_rows, HumanizedExplain, HumanizerMode};
+use mz_expr::row::RowCollection;
 use mz_expr::{
     permutation_for_arrangement, EvalError, Id, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, RowSetFinishing,
@@ -36,10 +38,9 @@ use mz_ore::str::{separated, StrExt};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalars, IndexUsageType, PlanRenderingContext, UsedIndexes};
-use mz_repr::{Diff, GlobalId, IntoRowIterator, RelationType, Row, RowCollection, RowIterator};
+use mz_repr::{Diff, GlobalId, IntoRowIterator, RelationType, Row, RowIterator};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
-use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::coord::timestamp_selection::TimestampDetermination;
@@ -48,19 +49,20 @@ use crate::statement_logging::{StatementEndedExecutionReason, StatementExecution
 use crate::util::ResultExt;
 use crate::{AdapterError, ExecuteContextExtra, ExecuteResponse};
 
+/// A peek is a request to read data from a maintained arrangement.
 #[derive(Debug)]
 pub(crate) struct PendingPeek {
-    pub(crate) sender: oneshot::Sender<PeekResponse>,
+    /// The connection that initiated the peek.
     pub(crate) conn_id: ConnectionId,
+    /// The cluster that the peek is being executed on.
     pub(crate) cluster_id: ClusterId,
     /// All `GlobalId`s that the peek depend on.
     pub(crate) depends_on: BTreeSet<GlobalId>,
     /// Context about the execute that produced this peek,
     /// needed by the coordinator for retiring it.
     pub(crate) ctx_extra: ExecuteContextExtra,
+    /// Is this a fast-path peek, i.e. one that doesn't require a dataflow?
     pub(crate) is_fast_path: bool,
-    pub(crate) limit: Option<usize>,
-    pub(crate) offset: usize,
 }
 
 /// The response from a `Peek`, with row multiplicities represented in unary.
@@ -79,7 +81,7 @@ pub struct PeekDataflowPlan<T = mz_repr::Timestamp> {
     pub(crate) desc: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
     pub(crate) id: GlobalId,
     key: Vec<MirScalarExpr>,
-    permutation: BTreeMap<usize, usize>,
+    permutation: Vec<usize>,
     thinned_arity: usize,
 }
 
@@ -152,7 +154,7 @@ impl<'a, T: 'a> DisplayText<PlanRenderingContext<'a, T>> for FastPathPlan {
                 if redacted {
                     writeln!(f, "{}Error █", ctx.as_mut())
                 } else {
-                    writeln!(f, "{}Error {}", ctx.as_mut(), err.to_string().quoted())
+                    writeln!(f, "{}Error {}", ctx.as_mut(), err.to_string().escaped())
                 }
             }
             FastPathPlan::PeekExisting(coll_id, idx_id, literal_constraints, mfp) => {
@@ -280,7 +282,7 @@ fn mfp_to_safe_plan(
     mfp.into_plan()
         .map_err(OptimizerError::Internal)?
         .into_nontemporal()
-        .map_err(|_e| OptimizerError::Internal("OneShot plan has temporal constraints".to_string()))
+        .map_err(|_e| OptimizerError::UnsafeMfpPlan)
 }
 
 fn permute_oneshot_mfp_around_index(
@@ -290,7 +292,7 @@ fn permute_oneshot_mfp_around_index(
     let input_arity = mfp.input_arity;
     let mut safe_mfp = mfp_to_safe_plan(mfp)?;
     let (permute, thinning) = mz_expr::permutation_for_arrangement(key, input_arity);
-    safe_mfp.permute(permute, key.len() + thinning.len());
+    safe_mfp.permute_fn(|c| permute[c], key.len() + thinning.len());
     Ok(safe_mfp)
 }
 
@@ -313,13 +315,12 @@ pub fn create_fast_path_plan<T: Timestamp>(
     if dataflow_plan.objects_to_build.len() >= 1 && dataflow_plan.objects_to_build[0].id == view_id
     {
         let mut mir = &*dataflow_plan.objects_to_build[0].plan.as_inner_mut();
-        if let Some((rows, ..)) = mir.as_const() {
+        if let Some((rows, found_typ)) = mir.as_const() {
             // In the case of a constant, we can return the result now.
             return Ok(Some(FastPathPlan::Constant(
                 rows.clone()
                     .map(|rows| rows.into_iter().map(|(row, diff)| (row, diff)).collect()),
-                // For best accuracy, we need to recalculate typ.
-                mir.typ(),
+                found_typ.clone(),
             )));
         } else {
             // If there is a TopK that would be completely covered by the finishing, then jump
@@ -363,8 +364,7 @@ pub fn create_fast_path_plan<T: Timestamp>(
                     id: Id::Global(get_id),
                     ..
                 } => {
-                    // Just grab any arrangement
-                    // Nothing to be done if an arrangement does not exist
+                    // Just grab any arrangement if an arrangement exists
                     for (index_id, IndexImport { desc, .. }) in dataflow_plan.index_imports.iter() {
                         if desc.on_id == *get_id {
                             return Ok(Some(FastPathPlan::PeekExisting(
@@ -467,10 +467,9 @@ impl crate::coord::Coordinator {
             let mut results = Vec::new();
             for (row, count) in rows {
                 if count < 0 {
-                    Err(EvalError::InvalidParameterValue(format!(
-                        "Negative multiplicity in constant result: {}",
-                        count
-                    )))?
+                    Err(EvalError::InvalidParameterValue(
+                        format!("Negative multiplicity in constant result: {}", count).into(),
+                    ))?
                 };
                 if count > 0 {
                     let count = usize::cast_from(
@@ -482,25 +481,32 @@ impl crate::coord::Coordinator {
                     ));
                 }
             }
-            let row_collection = RowCollection::new(&results);
+            let row_collection = RowCollection::new(results, &finishing.order_by);
+            let duration_histogram = self.metrics.row_set_finishing_seconds();
 
-            let (ret, reason) =
-                match finishing.finish(row_collection, max_result_size, max_returned_query_size) {
-                    Ok(rows) => {
-                        let rows_returned = u64::cast_from(rows.count());
-                        (
-                            Ok(Self::send_immediate_rows(rows)),
-                            StatementEndedExecutionReason::Success {
-                                rows_returned: Some(rows_returned),
-                                execution_strategy: Some(StatementExecutionStrategy::Constant),
-                            },
-                        )
-                    }
-                    Err(error) => (
-                        Err(AdapterError::ResultSize(error.clone())),
-                        StatementEndedExecutionReason::Errored { error },
-                    ),
-                };
+            let (ret, reason) = match finishing.finish(
+                row_collection,
+                max_result_size,
+                max_returned_query_size,
+                &duration_histogram,
+            ) {
+                Ok((rows, row_size_bytes)) => {
+                    let result_size = u64::cast_from(row_size_bytes);
+                    let rows_returned = u64::cast_from(rows.count());
+                    (
+                        Ok(Self::send_immediate_rows(rows)),
+                        StatementEndedExecutionReason::Success {
+                            result_size: Some(result_size),
+                            rows_returned: Some(rows_returned),
+                            execution_strategy: Some(StatementExecutionStrategy::Constant),
+                        },
+                    )
+                }
+                Err(error) => (
+                    Err(AdapterError::ResultSize(error.clone())),
+                    StatementEndedExecutionReason::Errored { error },
+                ),
+            };
             self.retire_execution(reason, std::mem::take(ctx_extra));
             return ret;
         }
@@ -523,14 +529,14 @@ impl crate::coord::Coordinator {
                 literal_constraints,
                 map_filter_project,
             )) => (
-                (idx_id, literal_constraints, timestamp, map_filter_project),
+                (literal_constraints, timestamp, map_filter_project),
                 None,
                 true,
                 PeekTarget::Index { id: idx_id },
                 StatementExecutionStrategy::FastPath,
             ),
             PeekPlan::FastPath(FastPathPlan::PeekPersist(coll_id, map_filter_project)) => {
-                let peek_command = (coll_id, None, timestamp, map_filter_project);
+                let peek_command = (None, timestamp, map_filter_project);
                 let metadata = self
                     .controller
                     .storage
@@ -563,7 +569,7 @@ impl crate::coord::Coordinator {
                 // Very important: actually create the dataflow (here, so we can destructure).
                 self.controller
                     .compute
-                    .create_dataflow(compute_instance, dataflow)
+                    .create_dataflow(compute_instance, dataflow, None)
                     .unwrap_or_terminate("cannot fail to create dataflows");
                 self.initialize_compute_read_policies(
                     output_ids,
@@ -575,16 +581,13 @@ impl crate::coord::Coordinator {
 
                 // Create an identity MFP operator.
                 let mut map_filter_project = mz_expr::MapFilterProject::new(source_arity);
-                map_filter_project
-                    .permute(index_permutation, index_key.len() + index_thinned_arity);
+                map_filter_project.permute_fn(
+                    |c| index_permutation[c],
+                    index_key.len() + index_thinned_arity,
+                );
                 let map_filter_project = mfp_to_safe_plan(map_filter_project)?;
                 (
-                    (
-                        index_id, // transient identifier produced by `dataflow_plan`.
-                        None,
-                        timestamp,
-                        map_filter_project,
-                    ),
+                    (None, timestamp, map_filter_project),
                     Some(index_id),
                     false,
                     PeekTarget::Index { id: index_id },
@@ -611,44 +614,47 @@ impl crate::coord::Coordinator {
         self.pending_peeks.insert(
             uuid,
             PendingPeek {
-                sender: rows_tx,
                 conn_id: conn_id.clone(),
                 cluster_id: compute_instance,
                 depends_on: source_ids,
                 ctx_extra: std::mem::take(ctx_extra),
                 is_fast_path,
-                limit: finishing.limit.map(|x| usize::cast_from(u64::from(x))),
-                offset: finishing.offset,
             },
         );
         self.client_pending_peeks
             .entry(conn_id)
             .or_default()
             .insert(uuid, compute_instance);
-        let (id, literal_constraints, timestamp, map_filter_project) = peek_command;
+        let (literal_constraints, timestamp, map_filter_project) = peek_command;
 
         self.controller
             .compute
             .peek(
                 compute_instance,
-                id,
+                peek_target,
                 literal_constraints,
                 uuid,
                 timestamp,
                 finishing.clone(),
                 map_filter_project,
                 target_replica,
-                peek_target,
+                rows_tx,
             )
             .unwrap_or_terminate("cannot fail to peek");
+        let duration_histogram = self.metrics.row_set_finishing_seconds();
 
         // Prepare the receiver to return as a response.
         let rows_rx = rows_rx.map_ok_or_else(
             |e| PeekResponseUnary::Error(e.to_string()),
             move |resp| match resp {
                 PeekResponse::Rows(rows) => {
-                    match finishing.finish(rows, max_result_size, max_returned_query_size) {
-                        Ok(rows) => PeekResponseUnary::Rows(Box::new(rows)),
+                    match finishing.finish(
+                        rows,
+                        max_result_size,
+                        max_returned_query_size,
+                        &duration_histogram,
+                    ) {
+                        Ok((rows, _size_bytes)) => PeekResponseUnary::Rows(Box::new(rows)),
                         Err(e) => PeekResponseUnary::Error(e),
                     }
                 }
@@ -689,7 +695,11 @@ impl crate::coord::Coordinator {
                 // because the dataflow no longer exists.
                 // TODO(jkosh44) Dropping a cluster should actively cancel all pending queries.
                 for uuid in uuids {
-                    let _ = self.controller.compute.cancel_peek(compute_instance, uuid);
+                    let _ = self.controller.compute.cancel_peek(
+                        compute_instance,
+                        uuid,
+                        PeekResponse::Canceled,
+                    );
                 }
             }
 
@@ -699,52 +709,49 @@ impl crate::coord::Coordinator {
                 .collect::<Vec<_>>();
             for peek in peeks {
                 self.retire_execution(StatementEndedExecutionReason::Canceled, peek.ctx_extra);
-                let _ = peek.sender.send(PeekResponse::Canceled);
             }
         }
     }
 
-    pub(crate) fn send_peek_response(
+    /// Handle a peek notification and retire the corresponding execution. Does nothing for
+    /// already-removed peeks.
+    pub(crate) fn handle_peek_notification(
         &mut self,
         uuid: Uuid,
-        response: PeekResponse,
+        notification: PeekNotification,
         otel_ctx: OpenTelemetryContext,
     ) {
         // We expect exactly one peek response, which we forward. Then we clean up the
         // peek's state in the coordinator.
         if let Some(PendingPeek {
-            sender: rows_tx,
             conn_id: _,
             cluster_id: _,
             depends_on: _,
             ctx_extra,
             is_fast_path,
-            limit,
-            offset,
         }) = self.remove_pending_peek(&uuid)
         {
-            let reason = match &response {
-                PeekResponse::Rows(r) => {
-                    let rows_returned = r.count(offset, limit);
+            let reason = match notification {
+                PeekNotification::Success {
+                    rows: num_rows,
+                    result_size,
+                } => {
+                    let strategy = if is_fast_path {
+                        StatementExecutionStrategy::FastPath
+                    } else {
+                        StatementExecutionStrategy::Standard
+                    };
                     StatementEndedExecutionReason::Success {
-                        rows_returned: Some(u64::cast_from(rows_returned)),
-                        execution_strategy: Some(if is_fast_path {
-                            StatementExecutionStrategy::FastPath
-                        } else {
-                            StatementExecutionStrategy::Standard
-                        }),
+                        result_size: Some(result_size),
+                        rows_returned: Some(num_rows),
+                        execution_strategy: Some(strategy),
                     }
                 }
-                PeekResponse::Error(e) => {
-                    StatementEndedExecutionReason::Errored { error: e.clone() }
-                }
-                PeekResponse::Canceled => StatementEndedExecutionReason::Canceled,
+                PeekNotification::Error(error) => StatementEndedExecutionReason::Errored { error },
+                PeekNotification::Canceled => StatementEndedExecutionReason::Canceled,
             };
-            self.retire_execution(reason, ctx_extra);
             otel_ctx.attach_as_parent();
-            // Peek cancellations are best effort, so we might still
-            // receive a response, even though the recipient is gone.
-            let _ = rows_tx.send(response);
+            self.retire_execution(reason, ctx_extra);
         }
         // Cancellation may cause us to receive responses for peeks no
         // longer in `self.pending_peeks`, so we quietly ignore them.

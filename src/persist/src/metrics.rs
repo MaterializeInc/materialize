@@ -9,6 +9,7 @@
 
 //! Implementation-specific metrics for persist blobs and consensus
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use mz_dyncfg::ConfigSet;
@@ -25,6 +26,7 @@ pub struct S3BlobMetrics {
     pub(crate) connect_timeouts: IntCounter,
     pub(crate) read_timeouts: IntCounter,
     pub(crate) get_part: IntCounter,
+    pub(crate) get_invalid_resp: IntCounter,
     pub(crate) set_single: IntCounter,
     pub(crate) set_multi_create: IntCounter,
     pub(crate) set_multi_part: IntCounter,
@@ -32,6 +34,7 @@ pub struct S3BlobMetrics {
     pub(crate) delete_head: IntCounter,
     pub(crate) delete_object: IntCounter,
     pub(crate) list_objects: IntCounter,
+    pub(crate) error_counts: IntCounterVec,
 
     /// Metrics for all usages of LgBytes. Exposed as public for convenience in
     /// persist boot, we'll have to pull this out and do the plumbing
@@ -46,6 +49,11 @@ impl S3BlobMetrics {
             name: "mz_persist_s3_operations",
             help: "number of raw s3 calls on behalf of Blob interface methods",
             var_labels: ["op"],
+        ));
+        let errors: IntCounterVec = registry.register(metric!(
+            name: "mz_persist_s3_errors",
+            help: "errors",
+            var_labels: ["op", "code"],
         ));
         Self {
             operation_timeouts: registry.register(metric!(
@@ -65,6 +73,7 @@ impl S3BlobMetrics {
                 help: "number of timeouts waiting on first response byte from S3",
             )),
             get_part: operations.with_label_values(&["get_part"]),
+            get_invalid_resp: operations.with_label_values(&["get_invalid_resp"]),
             set_single: operations.with_label_values(&["set_single"]),
             set_multi_create: operations.with_label_values(&["set_multi_create"]),
             set_multi_part: operations.with_label_values(&["set_multi_part"]),
@@ -72,6 +81,7 @@ impl S3BlobMetrics {
             delete_head: operations.with_label_values(&["delete_head"]),
             delete_object: operations.with_label_values(&["delete_object"]),
             list_objects: operations.with_label_values(&["list_objects"]),
+            error_counts: errors,
             lgbytes: LgBytesMetrics::new(registry),
         }
     }
@@ -84,6 +94,7 @@ pub struct ArrowMetrics {
     pub(crate) val: ArrowColumnMetrics,
     pub(crate) part_build_seconds: Counter,
     pub(crate) part_build_count: IntCounter,
+    pub(crate) concat_bytes: IntCounter,
 }
 
 impl ArrowMetrics {
@@ -108,12 +119,17 @@ impl ArrowMetrics {
             name: "mz_persist_columnar_part_build_count",
             help: "number of times we've encoded our structured columnar format",
         ));
+        let concat_bytes: IntCounter = registry.register(metric!(
+            name: "mz_persist_columnar_part_concat_bytes",
+            help: "number of bytes we've copied when concatenating updates",
+        ));
 
         ArrowMetrics {
             key: ArrowColumnMetrics::new(&op_count, &op_seconds, "key"),
             val: ArrowColumnMetrics::new(&op_count, &op_seconds, "val"),
             part_build_seconds,
             part_build_count,
+            concat_bytes,
         }
     }
 
@@ -194,6 +210,7 @@ pub struct ParquetMetrics {
     pub(crate) d_metrics: ParquetColumnMetrics,
     pub(crate) k_s_metrics: ParquetColumnMetrics,
     pub(crate) v_s_metrics: ParquetColumnMetrics,
+    pub(crate) elided_null_buffers: IntCounter,
 }
 
 impl ParquetMetrics {
@@ -224,6 +241,10 @@ impl ParquetMetrics {
             d_metrics: ParquetColumnMetrics::new("d", &column_size),
             k_s_metrics: ParquetColumnMetrics::new("k_s", &column_size),
             v_s_metrics: ParquetColumnMetrics::new("v_s", &column_size),
+            elided_null_buffers: registry.register(metric!(
+                name: "mz_persist_parquet_elided_null_buffer_count",
+                help: "times we dropped an unnecessary null buffer returned by parquet decoding",
+            )),
         }
     }
 }
@@ -257,7 +278,7 @@ pub struct ColumnarMetrics {
     pub(crate) arrow: ArrowMetrics,
     // TODO: Having these two here isn't quite the right thing to do, but it
     // saves a LOT of plumbing.
-    pub(crate) cfg: ConfigSet,
+    pub(crate) cfg: Arc<ConfigSet>,
     pub(crate) is_cc_active: bool,
 }
 
@@ -266,7 +287,7 @@ impl ColumnarMetrics {
     pub fn new(
         registry: &MetricsRegistry,
         lgbytes: &LgBytesMetrics,
-        cfg: ConfigSet,
+        cfg: Arc<ConfigSet>,
         is_cc_active: bool,
     ) -> Self {
         ColumnarMetrics {
@@ -296,6 +317,6 @@ impl ColumnarMetrics {
         let lgbytes = LgBytesMetrics::new(&registry);
         let cfg = crate::cfg::all_dyn_configs(ConfigSet::default());
 
-        Self::new(&registry, &lgbytes, cfg, false)
+        Self::new(&registry, &lgbytes, Arc::new(cfg), false)
     }
 }

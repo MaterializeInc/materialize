@@ -33,27 +33,26 @@ use mz_compute_types::plan::Plan;
 use mz_repr::explain::trace_plan;
 use mz_repr::GlobalId;
 use mz_sql::names::QualifiedItemName;
+use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::notice::{IndexAlreadyExists, IndexKeyEmpty};
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
 use mz_transform::TransformCtx;
 
-use crate::catalog::Catalog;
 use crate::optimize::dataflows::{
     prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle,
 };
-use crate::optimize::metrics::OptimizerMetrics;
 use crate::optimize::{
     trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode,
-    OptimizerConfig, OptimizerError,
+    OptimizerCatalog, OptimizerConfig, OptimizerError,
 };
 
 pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.
     typecheck_ctx: TypecheckContext,
     /// A snapshot of the catalog state.
-    catalog: Arc<Catalog>,
+    catalog: Arc<dyn OptimizerCatalog>,
     /// A snapshot of the cluster that will run the dataflows.
     compute_instance: ComputeInstanceSnapshot,
     /// A durable GlobalId to be used with the exported index arrangement.
@@ -68,7 +67,7 @@ pub struct Optimizer {
 
 impl Optimizer {
     pub fn new(
-        catalog: Arc<Catalog>,
+        catalog: Arc<dyn OptimizerCatalog>,
         compute_instance: ComputeInstanceSnapshot,
         exported_index_id: GlobalId,
         config: OptimizerConfig,
@@ -94,16 +93,9 @@ pub struct Index {
 }
 
 impl Index {
-    pub fn new(
-        name: &QualifiedItemName,
-        on: &GlobalId,
-        keys: &Vec<mz_expr::MirScalarExpr>,
-    ) -> Self {
-        Self {
-            name: name.clone(),
-            on: on.clone(),
-            keys: keys.clone(),
-        }
+    /// Construct a new [`Index`]. Arguments are recorded as-is.
+    pub fn new(name: QualifiedItemName, on: GlobalId, keys: Vec<mz_expr::MirScalarExpr>) -> Self {
+        Self { name, on, keys }
     }
 }
 
@@ -148,21 +140,21 @@ impl Optimize<Index> for Optimizer {
     fn optimize(&mut self, index: Index) -> Result<Self::To, OptimizerError> {
         let time = Instant::now();
 
-        let state = self.catalog.state();
-        let on_entry = state.get_entry(&index.on);
-        let full_name = state.resolve_full_name(&index.name, on_entry.conn_id());
+        let on_entry = self.catalog.get_entry(&index.on);
+        let full_name = self
+            .catalog
+            .resolve_full_name(&index.name, on_entry.conn_id());
         let on_desc = on_entry
             .desc(&full_name)
             .expect("can only create indexes on items with a valid description");
 
         let mut df_builder = {
-            let catalog = self.catalog.state();
             let compute = self.compute_instance.clone();
-            DataflowBuilder::new(catalog, compute).with_config(&self.config)
+            DataflowBuilder::new(&*self.catalog, compute).with_config(&self.config)
         };
         let mut df_desc = MirDataflowDescription::new(full_name.to_string());
 
-        df_builder.import_into_dataflow(&index.on, &mut df_desc)?;
+        df_builder.import_into_dataflow(&index.on, &mut df_desc, &self.config.features)?;
         df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
         let index_desc = IndexDesc {
@@ -186,9 +178,10 @@ impl Optimize<Index> for Optimizer {
             &self.config.features,
             &self.typecheck_ctx,
             &mut df_meta,
+            Some(&self.metrics),
         );
         // Run global optimization.
-        mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx)?;
+        mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx, false)?;
 
         if self.config.mode == OptimizeMode::Explain {
             // Collect the list of indexes used by the dataflow at this point.
@@ -204,11 +197,11 @@ impl Optimize<Index> for Optimizer {
         // currently optimizing.
         for (index_id, idx) in df_builder
             .indexes_on(index.on)
-            .filter(|(_id, idx)| idx.keys == index.keys)
+            .filter(|(_id, idx)| idx.keys.as_ref() == &index.keys)
         {
             df_meta.push_optimizer_notice_dedup(IndexAlreadyExists {
                 index_id,
-                index_key: idx.keys.clone(),
+                index_key: idx.keys.to_vec(),
                 index_on_id: idx.on,
                 exported_index_id: self.exported_index_id,
             });

@@ -1,0 +1,77 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for database-issues#5723.
+
+statement ok
+CREATE SOURCE tpch
+              FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.00001);
+
+statement ok
+CREATE TABLE customer FROM SOURCE tpch (REFERENCE customer);
+
+statement ok
+CREATE TABLE lineitem FROM SOURCE tpch (REFERENCE lineitem);
+
+statement ok
+CREATE TABLE nation FROM SOURCE tpch (REFERENCE nation);
+
+statement ok
+CREATE TABLE orders FROM SOURCE tpch (REFERENCE orders);
+
+statement ok
+CREATE TABLE part FROM SOURCE tpch (REFERENCE part);
+
+statement ok
+CREATE TABLE partsupp FROM SOURCE tpch (REFERENCE partsupp);
+
+statement ok
+CREATE TABLE region FROM SOURCE tpch (REFERENCE region);
+
+statement ok
+CREATE TABLE supplier FROM SOURCE tpch (REFERENCE supplier);
+
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR
+  SELECT DISTINCT ON(l_linenumber) l_linenumber, l_discount
+  FROM lineitem
+  ORDER BY l_linenumber, l_orderkey;
+----
+Explained Query:
+  Finish order_by=[#3 asc nulls_last, #0 asc nulls_last] output=[#3, #6]
+    TopK::MonotonicTop1 group_by=[#3] order_by=[#0 asc nulls_last] must_consolidate
+      Get::PassArrangements materialize.public.lineitem
+        raw=true
+
+Source materialize.public.lineitem
+
+Target cluster: quickstart
+
+EOF
+
+statement ok
+SET transaction_isolation = 'serializable'
+
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR
+  SELECT DISTINCT ON(l_linenumber) l_linenumber, l_discount
+  FROM lineitem
+  ORDER BY l_linenumber, l_orderkey;
+----
+Explained Query:
+  Finish order_by=[#3 asc nulls_last, #0 asc nulls_last] output=[#3, #6]
+    TopK::MonotonicTop1 group_by=[#3] order_by=[#0 asc nulls_last] must_consolidate
+      Get::PassArrangements materialize.public.lineitem
+        raw=true
+
+Source materialize.public.lineitem
+
+Target cluster: quickstart
+
+EOF

@@ -7,9 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::marker::PhantomData;
+use std::pin::pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -17,12 +19,13 @@ use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use futures_util::TryFutureExt;
+use futures_util::{StreamExt, TryFutureExt};
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
+use mz_persist::indexed::columnar::ColumnarRecords;
+use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceUpdates};
 use mz_persist::location::Blob;
-use mz_persist_types::codec_impls::VecU8Schema;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -31,17 +34,22 @@ use tokio::sync::{mpsc, oneshot, TryAcquireError};
 use tracing::{debug, debug_span, error, trace, warn, Instrument, Span};
 
 use crate::async_runtime::IsolatedRuntime;
-use crate::batch::{BatchBuilderConfig, BatchBuilderInternal, PartDeletes};
-use crate::cfg::MiB;
+use crate::batch::{BatchBuilderConfig, BatchBuilderInternal, BatchParts, PartDeletes};
+use crate::cfg::{
+    MiB, COMPACTION_HEURISTIC_MIN_INPUTS, COMPACTION_HEURISTIC_MIN_PARTS,
+    COMPACTION_HEURISTIC_MIN_UPDATES, COMPACTION_MEMORY_BOUND_BYTES,
+    GC_BLOB_DELETE_CONCURRENCY_LIMIT,
+};
 use crate::fetch::FetchBatchFilter;
 use crate::internal::encoding::Schemas;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::Machine;
+use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::ShardMetrics;
-use crate::internal::state::{BatchPart, HollowBatch};
+use crate::internal::state::{HollowBatch, RunMeta, RunOrder, RunPart};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
-use crate::iter::{Consolidator, SPLIT_OLD_RUNS};
-use crate::{Metrics, PersistConfig, ShardId, WriterId};
+use crate::iter::{CodecSort, Consolidator, StructuredSort};
+use crate::{Metrics, PersistConfig, ShardId};
 
 /// A request for compaction.
 ///
@@ -72,27 +80,21 @@ pub struct CompactRes<T> {
 pub struct CompactConfig {
     pub(crate) compaction_memory_bound_bytes: usize,
     pub(crate) compaction_yield_after_n_updates: usize,
-    pub(crate) split_old_runs: bool,
+    pub(crate) compaction_output_structured_only: bool,
     pub(crate) version: semver::Version,
     pub(crate) batch: BatchBuilderConfig,
 }
 
 impl CompactConfig {
     /// Initialize the compaction config from Persist configuration.
-    pub fn new(value: &PersistConfig, writer_id: &WriterId) -> Self {
-        let mut ret = CompactConfig {
-            compaction_memory_bound_bytes: value.dynamic.compaction_memory_bound_bytes(),
+    pub fn new(value: &PersistConfig, shard_id: ShardId) -> Self {
+        CompactConfig {
+            compaction_memory_bound_bytes: COMPACTION_MEMORY_BOUND_BYTES.get(value),
             compaction_yield_after_n_updates: value.compaction_yield_after_n_updates,
-            split_old_runs: SPLIT_OLD_RUNS.get(&value.configs),
+            compaction_output_structured_only: COMPACTION_OUTPUT_STRUCTURED_ONLY.get(value),
             version: value.build_version.clone(),
-            batch: BatchBuilderConfig::new(value, writer_id),
-        };
-        // Use compaction as a method of getting inline writes out of state, to
-        // make room for more inline writes. We could instead do this at the end
-        // of compaction by flushing out the batch, but doing it here based on
-        // the config allows BatchBuilder to do its normal pipelining of writes.
-        ret.batch.inline_writes_single_max_bytes = 0;
-        ret
+            batch: BatchBuilderConfig::new(value, shard_id),
+        }
     }
 }
 
@@ -136,19 +138,42 @@ pub(crate) const COMPACTION_MINIMUM_TIMEOUT: Config<Duration> = Config::new(
     before timing it out (Materialize).",
 );
 
+pub(crate) const COMPACTION_USE_MOST_RECENT_SCHEMA: Config<bool> = Config::new(
+    "persist_compaction_use_most_recent_schema",
+    true,
+    "\
+    Use the most recent schema from all the Runs that are currently being \
+    compacted, instead of the schema on the current write handle (Materialize).
+    ",
+);
+
+pub(crate) const COMPACTION_CHECK_PROCESS_FLAG: Config<bool> = Config::new(
+    "persist_compaction_check_process_flag",
+    true,
+    "Whether Compactor will obey the process_requests flag in PersistConfig, \
+        which allows dynamically disabling compaction. If false, all compaction requests will be processed.",
+);
+
+pub(crate) const COMPACTION_OUTPUT_STRUCTURED_ONLY: Config<bool> = Config::new(
+    "persist_compaction_output_structured_only",
+    true,
+    "\
+    If our columnar batch format is structured only, then during compaction \
+    don't generate Codec data and just output the structured data.
+    ",
+);
+
 impl<K, V, T, D> Compactor<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Ord + Codec64 + Send + Sync,
 {
     pub fn new(
         cfg: PersistConfig,
         metrics: Arc<Metrics>,
-        isolated_runtime: Arc<IsolatedRuntime>,
-        writer_id: WriterId,
-        schemas: Schemas<K, V>,
+        write_schemas: Schemas<K, V>,
         gc: GarbageCollector<K, V, T, D>,
     ) -> Self {
         let (compact_req_sender, mut compact_req_receiver) = mpsc::channel::<(
@@ -160,15 +185,29 @@ where
         let concurrency_limit = Arc::new(tokio::sync::Semaphore::new(
             cfg.compaction_concurrency_limit,
         ));
+        let check_process_requests = COMPACTION_CHECK_PROCESS_FLAG.handle(&cfg.configs);
+        let process_requests = Arc::clone(&cfg.compaction_process_requests);
 
         // spin off a single task responsible for executing compaction requests.
         // work is enqueued into the task through a channel
         let _worker_handle = mz_ore::task::spawn(|| "PersistCompactionScheduler", async move {
-            while let Some((enqueued, req, mut machine, completer)) =
-                compact_req_receiver.recv().await
+            while let Some((enqueued, req, machine, completer)) = compact_req_receiver.recv().await
             {
                 assert_eq!(req.shard_id, machine.shard_id());
                 let metrics = Arc::clone(&machine.applier.metrics);
+
+                // Only allow skipping compaction requests if the dyncfg is enabled.
+                if check_process_requests.get()
+                    && !process_requests.load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    // Respond to the requester, track in our metrics, and log
+                    // that compaction is disabled.
+                    let _ = completer.send(Err(anyhow::anyhow!("compaction disabled")));
+                    metrics.compaction.disabled.inc();
+                    tracing::warn!(shard_id = ?req.shard_id, "Dropping compaction request on the floor.");
+
+                    continue;
+                }
 
                 let permit = {
                     let inner = Arc::clone(&concurrency_limit);
@@ -196,30 +235,20 @@ where
                     .queued_seconds
                     .inc_by(enqueued.elapsed().as_secs_f64());
 
-                let cfg = machine.applier.cfg.clone();
-                let blob = Arc::clone(&machine.applier.state_versions.blob);
-                let isolated_runtime = Arc::clone(&isolated_runtime);
-                let writer_id = writer_id.clone();
-                let schemas = schemas.clone();
+                let write_schemas = write_schemas.clone();
 
                 let compact_span =
                     debug_span!(parent: None, "compact::apply", shard_id=%machine.shard_id());
                 compact_span.follows_from(&Span::current());
                 let gc = gc.clone();
                 mz_ore::task::spawn(|| "PersistCompactionWorker", async move {
-                    let res = Self::compact_and_apply(
-                        cfg,
-                        blob,
-                        metrics,
-                        isolated_runtime,
-                        req,
-                        writer_id,
-                        schemas,
-                        &mut machine,
-                        &gc,
-                    )
-                    .instrument(compact_span)
-                    .await;
+                    let res = Self::compact_and_apply(&machine, req, write_schemas)
+                        .instrument(compact_span)
+                        .await;
+                    let res = res.map(|(res, maintenance)| {
+                        maintenance.start_performing(&machine, &gc);
+                        res
+                    });
 
                     // we can safely ignore errors here, it's possible the caller
                     // wasn't interested in waiting and dropped their receiver
@@ -253,11 +282,11 @@ where
         // were just written, but it does result in non-trivial blob traffic
         // (especially in aggregate). This heuristic is something we'll need to
         // tune over time.
-        let should_compact = req.inputs.len() >= self.cfg.dynamic.compaction_heuristic_min_inputs()
+        let should_compact = req.inputs.len() >= COMPACTION_HEURISTIC_MIN_INPUTS.get(&self.cfg)
             || req.inputs.iter().map(|x| x.part_count()).sum::<usize>()
-                >= self.cfg.dynamic.compaction_heuristic_min_parts()
+                >= COMPACTION_HEURISTIC_MIN_PARTS.get(&self.cfg)
             || req.inputs.iter().map(|x| x.len).sum::<usize>()
-                >= self.cfg.dynamic.compaction_heuristic_min_updates();
+                >= COMPACTION_HEURISTIC_MIN_UPDATES.get(&self.cfg);
         if !should_compact {
             self.metrics.compaction.skipped.inc();
             return None;
@@ -286,17 +315,12 @@ where
         Some(compaction_completed_receiver)
     }
 
-    async fn compact_and_apply(
-        cfg: PersistConfig,
-        blob: Arc<dyn Blob>,
-        metrics: Arc<Metrics>,
-        isolated_runtime: Arc<IsolatedRuntime>,
+    pub(crate) async fn compact_and_apply(
+        machine: &Machine<K, V, T, D>,
         req: CompactReq<T>,
-        writer_id: WriterId,
-        schemas: Schemas<K, V>,
-        machine: &mut Machine<K, V, T, D>,
-        gc: &GarbageCollector<K, V, T, D>,
-    ) -> Result<ApplyMergeResult, anyhow::Error> {
+        write_schemas: Schemas<K, V>,
+    ) -> Result<(ApplyMergeResult, RoutineMaintenance), anyhow::Error> {
+        let metrics = Arc::clone(&machine.applier.metrics);
         metrics.compaction.started.inc();
         let start = Instant::now();
 
@@ -309,33 +333,70 @@ where
             .sum::<usize>();
         let timeout = Duration::max(
             // either our minimum timeout
-            COMPACTION_MINIMUM_TIMEOUT.get(&cfg),
+            COMPACTION_MINIMUM_TIMEOUT.get(&machine.applier.cfg),
             // or 1s per MB of input data
             Duration::from_secs(u64::cast_from(total_input_bytes / MiB)),
         );
+        // always use most recent schema from all the Runs we're compacting to prevent Compactors
+        // created before the schema was evolved, from trying to "de-evolve" a Part.
+        let compaction_schema_id = req
+            .inputs
+            .iter()
+            .flat_map(|batch| batch.run_meta.iter())
+            .filter_map(|run_meta| run_meta.schema)
+            // It's an invariant that SchemaIds are ordered.
+            .max();
+        let maybe_compaction_schema = match compaction_schema_id {
+            Some(id) => machine
+                .get_schema(id)
+                .map(|(key_schema, val_schema)| (id, key_schema, val_schema)),
+            None => None,
+        };
+        let use_most_recent_schema = COMPACTION_USE_MOST_RECENT_SCHEMA.get(&machine.applier.cfg);
+
+        let compaction_schema = match maybe_compaction_schema {
+            Some((id, key_schema, val_schema)) if use_most_recent_schema => {
+                metrics.compaction.schema_selection.recent_schema.inc();
+                Schemas {
+                    id: Some(id),
+                    key: Arc::new(key_schema),
+                    val: Arc::new(val_schema),
+                }
+            }
+            Some(_) => {
+                metrics.compaction.schema_selection.disabled.inc();
+                write_schemas
+            }
+            None => {
+                metrics.compaction.schema_selection.no_schema.inc();
+                write_schemas
+            }
+        };
 
         trace!(
-            "compaction request for {}MBs ({} bytes), with timeout of {}s.",
+            "compaction request for {}MBs ({} bytes), with timeout of {}s, and schema {:?}.",
             total_input_bytes / MiB,
             total_input_bytes,
-            timeout.as_secs_f64()
+            timeout.as_secs_f64(),
+            compaction_schema.id,
         );
 
         let compact_span = debug_span!("compact::consolidate");
         let res = tokio::time::timeout(
             timeout,
             // Compaction is cpu intensive, so be polite and spawn it on the isolated runtime.
-            isolated_runtime
+            machine
+                .isolated_runtime
                 .spawn_named(
                     || "persist::compact::consolidate",
                     Self::compact(
-                        CompactConfig::new(&cfg, &writer_id),
-                        Arc::clone(&blob),
+                        CompactConfig::new(&machine.applier.cfg, machine.shard_id()),
+                        Arc::clone(&machine.applier.state_versions.blob),
                         Arc::clone(&metrics),
                         Arc::clone(&machine.applier.shard_metrics),
-                        Arc::clone(&isolated_runtime),
+                        Arc::clone(&machine.isolated_runtime),
                         req,
-                        schemas.clone(),
+                        compaction_schema,
                     )
                     .instrument(compact_span),
                 )
@@ -360,19 +421,18 @@ where
             Ok(Ok(res)) => {
                 let res = FueledMergeRes { output: res.output };
                 let (apply_merge_result, maintenance) = machine.merge_res(&res).await;
-                maintenance.start_performing(machine, gc);
                 match &apply_merge_result {
                     ApplyMergeResult::AppliedExact => {
                         metrics.compaction.applied.inc();
                         metrics.compaction.applied_exact_match.inc();
                         machine.applier.shard_metrics.compaction_applied.inc();
-                        Ok(apply_merge_result)
+                        Ok((apply_merge_result, maintenance))
                     }
                     ApplyMergeResult::AppliedSubset => {
                         metrics.compaction.applied.inc();
                         metrics.compaction.applied_subset_match.inc();
                         machine.applier.shard_metrics.compaction_applied.inc();
-                        Ok(apply_merge_result)
+                        Ok((apply_merge_result, maintenance))
                     }
                     ApplyMergeResult::NotAppliedNoMatch
                     | ApplyMergeResult::NotAppliedInvalidSince
@@ -387,12 +447,14 @@ where
                         }
                         let () = part_deletes
                             .delete(
-                                &blob,
+                                machine.applier.state_versions.blob.as_ref(),
                                 machine.shard_id(),
+                                GC_BLOB_DELETE_CONCURRENCY_LIMIT.get(&machine.applier.cfg),
+                                &*metrics,
                                 &metrics.retries.external.compaction_noop_delete,
                             )
                             .await;
-                        Ok(apply_merge_result)
+                        Ok((apply_merge_result, maintenance))
                     }
                 }
             }
@@ -438,7 +500,7 @@ where
         shard_metrics: Arc<ShardMetrics>,
         isolated_runtime: Arc<IsolatedRuntime>,
         req: CompactReq<T>,
-        schemas: Schemas<K, V>,
+        write_schemas: Schemas<K, V>,
     ) -> Result<CompactRes<T>, anyhow::Error> {
         let () = Self::validate_req(&req)?;
 
@@ -459,7 +521,7 @@ where
             }
         }
         if let Some(single_nonempty_batch) = single_nonempty_batch {
-            if single_nonempty_batch.runs.len() == 0
+            if single_nonempty_batch.run_splits.len() == 0
                 && single_nonempty_batch.desc.since() != &Antichain::from_elem(T::minimum())
             {
                 metrics.compaction.fast_path_eligible.inc();
@@ -475,11 +537,14 @@ where
             cfg.compaction_memory_bound_bytes - in_progress_part_reserved_memory_bytes;
 
         let mut all_parts = vec![];
-        let mut all_runs = vec![];
+        let mut all_run_splits = vec![];
+        let mut all_run_meta = vec![];
         let mut len = 0;
 
+        let ordered_runs =
+            Self::order_runs(&req, cfg.batch.preferred_order, &*blob, &*metrics).await?;
         for (runs, run_chunk_max_memory_usage) in
-            Self::chunk_runs(&req, &cfg, metrics.as_ref(), run_reserved_memory_bytes)
+            Self::chunk_runs(&ordered_runs, &cfg, &*metrics, run_reserved_memory_bytes)
         {
             metrics.compaction.chunks_compacted.inc();
             metrics
@@ -504,10 +569,11 @@ where
                 Arc::clone(&metrics),
                 Arc::clone(&shard_metrics),
                 Arc::clone(&isolated_runtime),
-                schemas.clone(),
+                write_schemas.clone(),
             )
             .await?;
-            let (parts, runs, updates) = (batch.parts, batch.runs, batch.len);
+            let (parts, run_splits, run_meta, updates) =
+                (batch.parts, batch.run_splits, batch.run_meta, batch.len);
             assert!(
                 (updates == 0 && parts.len() == 0) || (updates > 0 && parts.len() > 0),
                 "updates={}, parts={}",
@@ -535,20 +601,22 @@ where
             //         runs:  [    1       3   4 ]
             let run_offset = all_parts.len();
             if all_parts.len() > 0 {
-                all_runs.push(run_offset);
+                all_run_splits.push(run_offset);
             }
-            all_runs.extend(runs.iter().map(|run_start| run_start + run_offset));
+            all_run_splits.extend(run_splits.iter().map(|run_start| run_start + run_offset));
+            all_run_meta.extend(run_meta);
             all_parts.extend(parts);
             len += updates;
         }
 
         Ok(CompactRes {
-            output: HollowBatch {
-                desc: req.desc.clone(),
-                parts: all_parts,
-                runs: all_runs,
+            output: HollowBatch::new(
+                req.desc.clone(),
+                all_parts,
                 len,
-            },
+                all_run_meta,
+                all_run_splits,
+            ),
         })
     }
 
@@ -557,32 +625,32 @@ where
     /// were written with a different target size than this build. Uses [Self::order_runs] to
     /// determine the order in which runs are selected.
     fn chunk_runs<'a>(
-        req: &'a CompactReq<T>,
+        ordered_runs: &'a [(&'a Description<T>, &'a RunMeta, Cow<'a, [RunPart<T>]>)],
         cfg: &CompactConfig,
         metrics: &Metrics,
         run_reserved_memory_bytes: usize,
-    ) -> Vec<(Vec<(&'a Description<T>, &'a [BatchPart<T>])>, usize)> {
-        let ordered_runs = Self::order_runs(req);
-        let mut ordered_runs = ordered_runs.iter().peekable();
+    ) -> Vec<(
+        Vec<(&'a Description<T>, &'a RunMeta, &'a [RunPart<T>])>,
+        usize,
+    )> {
+        let mut ordered_runs = ordered_runs.into_iter().peekable();
 
         let mut chunks = vec![];
         let mut current_chunk = vec![];
         let mut current_chunk_max_memory_usage = 0;
-        while let Some(run) = ordered_runs.next() {
+        while let Some((desc, meta, run)) = ordered_runs.next() {
             let run_greatest_part_size = run
-                .1
                 .iter()
-                .map(|x| x.encoded_size_bytes())
+                .map(|x| x.max_part_bytes())
                 .max()
                 .unwrap_or(cfg.batch.blob_target_size);
-            current_chunk.push(*run);
+            current_chunk.push((*desc, *meta, &**run));
             current_chunk_max_memory_usage += run_greatest_part_size;
 
-            if let Some(next_run) = ordered_runs.peek() {
+            if let Some((_next_desc, _next_meta, next_run)) = ordered_runs.peek() {
                 let next_run_greatest_part_size = next_run
-                    .1
                     .iter()
-                    .map(|x| x.encoded_size_bytes())
+                    .map(|x| x.max_part_bytes())
                     .max()
                     .unwrap_or(cfg.batch.blob_target_size);
 
@@ -633,8 +701,17 @@ where
     ///     b1 runs=[C]                           output=[A, C, D, B, E, F]
     ///     b2 runs=[D, E, F]
     /// ```
-    fn order_runs(req: &CompactReq<T>) -> Vec<(&Description<T>, &[BatchPart<T>])> {
-        let total_number_of_runs = req.inputs.iter().map(|x| x.runs.len() + 1).sum::<usize>();
+    async fn order_runs<'a>(
+        req: &'a CompactReq<T>,
+        target_order: RunOrder,
+        blob: &'a dyn Blob,
+        metrics: &'a Metrics,
+    ) -> anyhow::Result<Vec<(&'a Description<T>, &'a RunMeta, Cow<'a, [RunPart<T>]>)>> {
+        let total_number_of_runs = req
+            .inputs
+            .iter()
+            .map(|x| x.run_splits.len() + 1)
+            .sum::<usize>();
 
         let mut batch_runs: VecDeque<_> = req
             .inputs
@@ -645,29 +722,51 @@ where
         let mut ordered_runs = Vec::with_capacity(total_number_of_runs);
 
         while let Some((desc, mut runs)) = batch_runs.pop_front() {
-            if let Some(run) = runs.next() {
-                ordered_runs.push((desc, run));
+            if let Some((meta, run)) = runs.next() {
+                let same_order = meta.order.unwrap_or(RunOrder::Codec) == target_order;
+                if same_order {
+                    ordered_runs.push((desc, meta, Cow::Borrowed(run)));
+                } else {
+                    // The downstream consolidation step will handle a long run that's not in
+                    // the desired order by splitting it up into many single-element runs. This preserves
+                    // correctness, but it means that we may end up needing to iterate through
+                    // many more parts concurrently than expected, increasing memory use. Instead,
+                    // we break up those runs into individual batch parts, fetching hollow runs as
+                    // necessary, before they're grouped together to be passed to consolidation.
+                    // The downside is that this breaks the usual property that compaction produces
+                    // fewer runs than it takes in. This should generally be resolved by future
+                    // runs of compaction.
+                    for part in run {
+                        let mut batch_parts = pin!(part.part_stream(req.shard_id, blob, metrics));
+                        while let Some(part) = batch_parts.next().await {
+                            ordered_runs.push((
+                                desc,
+                                meta,
+                                Cow::Owned(vec![RunPart::Single(part?.into_owned())]),
+                            ));
+                        }
+                    }
+                }
                 batch_runs.push_back((desc, runs));
             }
         }
 
-        ordered_runs
+        Ok(ordered_runs)
     }
 
     /// Compacts runs together. If the input runs are sorted, a single run will be created as output.
     ///
     /// Maximum possible memory usage is `(# runs + 2) * [crate::PersistConfig::blob_target_size]`
-    async fn compact_runs<'a>(
-        // note: 'a cannot be elided due to https://github.com/rust-lang/rust/issues/63033
-        cfg: &'a CompactConfig,
-        shard_id: &'a ShardId,
-        desc: &'a Description<T>,
-        runs: Vec<(&'a Description<T>, &'a [BatchPart<T>])>,
+    pub(crate) async fn compact_runs(
+        cfg: &CompactConfig,
+        shard_id: &ShardId,
+        desc: &Description<T>,
+        runs: Vec<(&Description<T>, &RunMeta, &[RunPart<T>])>,
         blob: Arc<dyn Blob>,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
         isolated_runtime: Arc<IsolatedRuntime>,
-        real_schemas: Schemas<K, V>,
+        write_schemas: Schemas<K, V>,
     ) -> Result<HollowBatch<T>, anyhow::Error> {
         // TODO: Figure out a more principled way to allocate our memory budget.
         // Currently, we give any excess budget to write parallelism. If we had
@@ -680,77 +779,181 @@ where
 
         let mut timings = Timings::default();
 
-        // Old style compaction operates on the encoded bytes and doesn't need
-        // the real schema, so we synthesize one. We use the real schema for
-        // stats though (see below).
-        let fake_compaction_schema = Schemas {
-            key: Arc::new(VecU8Schema),
-            val: Arc::new(VecU8Schema),
-        };
+        let mut batch_cfg = cfg.batch.clone();
 
-        let mut batch = BatchBuilderInternal::<Vec<u8>, Vec<u8>, T, D>::new(
-            cfg.batch.clone(),
+        // Use compaction as a method of getting inline writes out of state, to
+        // make room for more inline writes. We could instead do this at the end
+        // of compaction by flushing out the batch, but doing it here based on
+        // the config allows BatchBuilder to do its normal pipelining of writes.
+        batch_cfg.inline_writes_single_max_bytes = 0;
+
+        let parts = BatchParts::new_ordered(
+            batch_cfg,
+            cfg.batch.preferred_order,
             Arc::clone(&metrics),
             Arc::clone(&shard_metrics),
-            fake_compaction_schema,
-            metrics.compaction.batch.clone(),
-            desc.lower().clone(),
+            *shard_id,
             Arc::clone(&blob),
             Arc::clone(&isolated_runtime),
+            &metrics.compaction.batch,
+        );
+        let mut batch = BatchBuilderInternal::<K, V, T, D>::new(
+            cfg.batch.clone(),
+            parts,
+            Arc::clone(&metrics),
+            write_schemas.clone(),
+            Arc::clone(&blob),
             shard_id.clone(),
             cfg.version.clone(),
-            desc.since().clone(),
-            Some(desc.upper().clone()),
-            true,
         );
 
-        let mut consolidator = Consolidator::new(
-            format!(
-                "{}[lower={:?},upper={:?}]",
-                shard_id,
-                desc.lower().elements(),
-                desc.upper().elements()
-            ),
-            *shard_id,
-            blob,
-            Arc::clone(&metrics),
-            shard_metrics,
-            metrics.read.compaction.clone(),
-            FetchBatchFilter::Compaction {
-                since: desc.since().clone(),
-            },
-            prefetch_budget_bytes,
-            cfg.split_old_runs,
-        );
+        // Duplicating a large codepath here during the migration.
+        // TODO(database-issues#7188): dedup once the migration is complete.
+        if cfg.batch.preferred_order == RunOrder::Structured {
+            // If we're not writing down the record metadata, we must always use the old compaction
+            // order. (Since that's the default when the metadata's not present.)
+            let mut consolidator = Consolidator::new(
+                format!(
+                    "{}[lower={:?},upper={:?}]",
+                    shard_id,
+                    desc.lower().elements(),
+                    desc.upper().elements()
+                ),
+                *shard_id,
+                StructuredSort::<K, V, T, D>::new(write_schemas.clone()),
+                blob,
+                Arc::clone(&metrics),
+                shard_metrics,
+                metrics.read.compaction.clone(),
+                FetchBatchFilter::Compaction {
+                    since: desc.since().clone(),
+                },
+                prefetch_budget_bytes,
+            );
 
-        for (desc, parts) in runs {
-            consolidator.enqueue_run(desc, parts.iter().cloned());
-        }
-
-        let remaining_budget = consolidator.start_prefetches();
-        if remaining_budget.is_none() {
-            metrics.compaction.not_all_prefetched.inc();
-        }
-
-        // Reuse the allocations for individual keys and values
-        let mut key_vec = vec![];
-        let mut val_vec = vec![];
-        loop {
-            let fetch_start = Instant::now();
-            let Some(updates) = consolidator.next().await? else {
-                break;
-            };
-            timings.part_fetching += fetch_start.elapsed();
-            for (k, v, t, d) in updates.take(cfg.compaction_yield_after_n_updates) {
-                key_vec.clear();
-                key_vec.extend_from_slice(k);
-                val_vec.clear();
-                val_vec.extend_from_slice(v);
-                batch.add(&real_schemas, &key_vec, &val_vec, &t, &d).await?;
+            for (desc, meta, parts) in runs {
+                consolidator.enqueue_run(desc, meta, parts.iter().cloned());
             }
-            tokio::task::yield_now().await;
+
+            let remaining_budget = consolidator.start_prefetches();
+            if remaining_budget.is_none() {
+                metrics.compaction.not_all_prefetched.inc();
+            }
+
+            loop {
+                let mut chunks = vec![];
+                let mut total_bytes = 0;
+                // We attempt to pull chunks out of the consolidator that match our target size,
+                // but it's possible that we may get smaller chunks... for example, if not all
+                // parts have been fetched yet. Loop until we've got enough data to justify flushing
+                // it out to blob (or we run out of data.)
+                while total_bytes < cfg.batch.blob_target_size {
+                    let fetch_start = Instant::now();
+                    let Some(chunk) = consolidator
+                        .next_chunk(
+                            cfg.compaction_yield_after_n_updates,
+                            cfg.batch.blob_target_size - total_bytes,
+                        )
+                        .await?
+                    else {
+                        break;
+                    };
+                    timings.part_fetching += fetch_start.elapsed();
+                    total_bytes += chunk.goodbytes();
+                    chunks.push(chunk);
+                    tokio::task::yield_now().await;
+                }
+
+                if chunks.is_empty() {
+                    break;
+                }
+
+                // If we're going to write this Batch in a structured format, and our CYA
+                // dyncfg is enabled, then don't worry about making sure Codec data exists.
+                let ensure_codec = !(cfg.compaction_output_structured_only
+                    && cfg.batch.batch_columnar_format == BatchColumnarFormat::Structured);
+                // In the hopefully-common case of a single chunk, this will not copy.
+                let updates = BlobTraceUpdates::concat::<K, V>(
+                    chunks,
+                    write_schemas.key.as_ref(),
+                    write_schemas.val.as_ref(),
+                    &metrics.columnar,
+                    ensure_codec,
+                )?;
+                batch.flush_part(desc.clone(), updates).await;
+            }
+        } else {
+            let mut consolidator = Consolidator::<T, D, CodecSort<K, V, T, D>>::new(
+                format!(
+                    "{}[lower={:?},upper={:?}]",
+                    shard_id,
+                    desc.lower().elements(),
+                    desc.upper().elements()
+                ),
+                *shard_id,
+                CodecSort::new(write_schemas.clone()),
+                blob,
+                Arc::clone(&metrics),
+                shard_metrics,
+                metrics.read.compaction.clone(),
+                FetchBatchFilter::Compaction {
+                    since: desc.since().clone(),
+                },
+                prefetch_budget_bytes,
+            );
+
+            for (desc, meta, parts) in runs {
+                consolidator.enqueue_run(desc, meta, parts.iter().cloned());
+            }
+
+            let remaining_budget = consolidator.start_prefetches();
+            if remaining_budget.is_none() {
+                metrics.compaction.not_all_prefetched.inc();
+            }
+
+            loop {
+                let mut chunks = vec![];
+                let mut total_bytes = 0;
+                // We attempt to pull chunks out of the consolidator that match our target size,
+                // but it's possible that we may get smaller chunks... for example, if not all
+                // parts have been fetched yet. Loop until we've got enough data to justify flushing
+                // it out to blob (or we run out of data.)
+                while total_bytes < cfg.batch.blob_target_size {
+                    let fetch_start = Instant::now();
+                    let Some(mut chunk) = consolidator
+                        .next_chunk(
+                            cfg.compaction_yield_after_n_updates,
+                            cfg.batch.blob_target_size - total_bytes,
+                        )
+                        .await?
+                    else {
+                        break;
+                    };
+                    timings.part_fetching += fetch_start.elapsed();
+                    total_bytes += chunk.goodbytes();
+                    chunks.push(
+                        chunk
+                            .get_or_make_codec::<K, V>(
+                                write_schemas.key.as_ref(),
+                                write_schemas.val.as_ref(),
+                            )
+                            .clone(),
+                    );
+                    tokio::task::yield_now().await;
+                }
+
+                if chunks.is_empty() {
+                    break;
+                }
+
+                // In the hopefully-common case of a single chunk, this will not copy.
+                let updates = ColumnarRecords::concat(&chunks, &metrics.columnar);
+                batch
+                    .flush_part(desc.clone(), BlobTraceUpdates::Row(updates))
+                    .await;
+            }
         }
-        let mut batch = batch.finish(&real_schemas, desc.upper().clone()).await?;
+        let mut batch = batch.finish(desc.clone()).await?;
 
         // We use compaction as a method of getting inline writes out of state,
         // to make room for more inline writes. This happens in
@@ -765,7 +968,7 @@ where
                     &cfg.batch,
                     &metrics.compaction.batch,
                     &isolated_runtime,
-                    &real_schemas,
+                    &write_schemas,
                 )
                 .await;
         }
@@ -834,18 +1037,18 @@ impl Timings {
 #[cfg(test)]
 mod tests {
     use mz_dyncfg::ConfigUpdates;
-    use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
+    use mz_ore::{assert_contains, assert_err};
+    use mz_persist_types::codec_impls::StringSchema;
     use timely::order::Product;
     use timely::progress::Antichain;
 
     use crate::batch::BLOB_TARGET_SIZE;
-
     use crate::tests::{all_ok, expect_fetch_part, new_test_client_cache};
     use crate::PersistLocation;
 
     use super::*;
 
-    // A regression test for a bug caught during development of #13160 (never
+    // A regression test for a bug caught during development of materialize#13160 (never
     // made it to main) where batches written by compaction would always have a
     // since of the minimum timestamp.
     #[mz_persist_proc::test(tokio::test)]
@@ -884,17 +1087,18 @@ mod tests {
             inputs: vec![b0, b1],
         };
         let schemas = Schemas {
+            id: None,
             key: Arc::new(StringSchema),
-            val: Arc::new(UnitSchema),
+            val: Arc::new(StringSchema),
         };
-        let res = Compactor::<String, (), u64, i64>::compact(
-            CompactConfig::new(&write.cfg, &write.writer_id),
+        let res = Compactor::<String, String, u64, i64>::compact(
+            CompactConfig::new(&write.cfg, write.shard_id()),
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
             write.metrics.shards.shard(&write.machine.shard_id(), ""),
             Arc::new(IsolatedRuntime::default()),
             req.clone(),
-            schemas,
+            schemas.clone(),
         )
         .await
         .expect("compaction failed");
@@ -902,14 +1106,12 @@ mod tests {
         assert_eq!(res.output.desc, req.desc);
         assert_eq!(res.output.len, 1);
         assert_eq!(res.output.part_count(), 1);
-        let part = match &res.output.parts[0] {
-            BatchPart::Hollow(x) => x,
-            BatchPart::Inline { .. } => panic!("test outputs a hollow part"),
-        };
+        let part = res.output.parts[0].expect_hollow_part();
         let (part, updates) = expect_fetch_part(
             write.blob.as_ref(),
             &part.key.complete(&write.machine.shard_id()),
             &write.metrics,
+            &schemas,
         )
         .await;
         assert_eq!(part.desc, res.output.desc);
@@ -962,17 +1164,18 @@ mod tests {
             inputs: vec![b0, b1],
         };
         let schemas = Schemas {
+            id: None,
             key: Arc::new(StringSchema),
-            val: Arc::new(UnitSchema),
+            val: Arc::new(StringSchema),
         };
-        let res = Compactor::<String, (), Product<u32, u32>, i64>::compact(
-            CompactConfig::new(&write.cfg, &write.writer_id),
+        let res = Compactor::<String, String, Product<u32, u32>, i64>::compact(
+            CompactConfig::new(&write.cfg, write.shard_id()),
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
             write.metrics.shards.shard(&write.machine.shard_id(), ""),
             Arc::new(IsolatedRuntime::default()),
             req.clone(),
-            schemas,
+            schemas.clone(),
         )
         .await
         .expect("compaction failed");
@@ -980,17 +1183,109 @@ mod tests {
         assert_eq!(res.output.desc, req.desc);
         assert_eq!(res.output.len, 2);
         assert_eq!(res.output.part_count(), 1);
-        let part = match &res.output.parts[0] {
-            BatchPart::Hollow(x) => x,
-            BatchPart::Inline { .. } => panic!("test outputs a hollow part"),
-        };
+        let part = res.output.parts[0].expect_hollow_part();
         let (part, updates) = expect_fetch_part(
             write.blob.as_ref(),
             &part.key.complete(&write.machine.shard_id()),
             &write.metrics,
+            &schemas,
         )
         .await;
         assert_eq!(part.desc, res.output.desc);
         assert_eq!(updates, all_ok(&data, Product::new(10, 0)));
+    }
+
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn disable_compaction(dyncfgs: ConfigUpdates) {
+        let data = [
+            (("0".to_owned(), "zero".to_owned()), 0, 1),
+            (("0".to_owned(), "zero".to_owned()), 1, -1),
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+        ];
+
+        let cache = new_test_client_cache(&dyncfgs);
+        cache.cfg.set_config(&BLOB_TARGET_SIZE, 100);
+        let (mut write, _) = cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .expect("client construction failed")
+            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .await;
+        let b0 = write
+            .expect_batch(&data[..1], 0, 1)
+            .await
+            .into_hollow_batch();
+        let b1 = write
+            .expect_batch(&data[1..], 1, 2)
+            .await
+            .into_hollow_batch();
+
+        let req = CompactReq {
+            shard_id: write.machine.shard_id(),
+            desc: Description::new(
+                b0.desc.lower().clone(),
+                b1.desc.upper().clone(),
+                Antichain::from_elem(10u64),
+            ),
+            inputs: vec![b0, b1],
+        };
+        write.cfg.set_config(&COMPACTION_HEURISTIC_MIN_INPUTS, 1);
+        let compactor = write.compact.as_ref().expect("compaction hard disabled");
+
+        write.cfg.disable_compaction();
+        let result = compactor
+            .compact_and_apply_background(req.clone(), &write.machine)
+            .expect("listener")
+            .await
+            .expect("channel closed");
+        assert_err!(result);
+        assert_contains!(result.unwrap_err().to_string(), "compaction disabled");
+
+        write.cfg.enable_compaction();
+        compactor
+            .compact_and_apply_background(req, &write.machine)
+            .expect("listener")
+            .await
+            .expect("channel closed")
+            .expect("compaction success");
+
+        // Make sure our CYA dyncfg works.
+        let data2 = [
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+            (("2".to_owned(), "two".to_owned()), 3, -1),
+            (("3".to_owned(), "three".to_owned()), 3, 1),
+        ];
+
+        let b2 = write
+            .expect_batch(&data2[..1], 2, 3)
+            .await
+            .into_hollow_batch();
+        let b3 = write
+            .expect_batch(&data2[1..], 3, 4)
+            .await
+            .into_hollow_batch();
+
+        let req = CompactReq {
+            shard_id: write.machine.shard_id(),
+            desc: Description::new(
+                b2.desc.lower().clone(),
+                b3.desc.upper().clone(),
+                Antichain::from_elem(20u64),
+            ),
+            inputs: vec![b2, b3],
+        };
+        let compactor = write.compact.as_ref().expect("compaction hard disabled");
+
+        // When the dyncfg is set to false we should ignore the process flag.
+        write.cfg.set_config(&COMPACTION_CHECK_PROCESS_FLAG, false);
+        write.cfg.disable_compaction();
+        // Compaction still succeeded!
+        compactor
+            .compact_and_apply_background(req, &write.machine)
+            .expect("listener")
+            .await
+            .expect("channel closed")
+            .expect("compaction success");
     }
 }

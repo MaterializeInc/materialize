@@ -50,16 +50,26 @@
 //! The error streams from both of those operators are published to the source status and also
 //! trigger a restart of the dataflow.
 
+use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::fmt;
 use std::io;
 use std::rc::Rc;
 
-use differential_dataflow::Collection;
+use differential_dataflow::containers::TimelyStack;
+use differential_dataflow::AsCollection;
+use itertools::Itertools;
+use mz_mysql_util::quote_identifier;
+use mz_ore::cast::CastFrom;
+use mz_repr::Diff;
+use mz_repr::GlobalId;
+use mz_storage_types::errors::{DataflowError, SourceError};
 use mz_storage_types::sources::SourceExport;
+use mz_timely_util::containers::stack::AccountedStackBuilder;
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pushers::Tee;
+use timely::dataflow::operators::core::Partition;
 use timely::dataflow::operators::{CapabilitySet, Concat, Map, ToStream};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
@@ -70,16 +80,16 @@ use mz_mysql_util::{
     MySqlError, MySqlTableDesc,
 };
 use mz_ore::error::ErrorExt;
-use mz_repr::{Diff, Row};
 use mz_storage_types::errors::SourceErrorDetails;
 use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition, GtidState};
-use mz_storage_types::sources::{MySqlSourceConnection, SourceTimestamp};
+use mz_storage_types::sources::{MySqlSourceConnection, SourceExportDetails, SourceTimestamp};
 use mz_timely_util::builder_async::{AsyncOutputHandle, PressOnDropButton};
 use mz_timely_util::order::Extrema;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::{ProgressStatisticsUpdate, SourceRender};
-use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
+use crate::source::types::Probe;
+use crate::source::types::{ProgressStatisticsUpdate, SourceRender, StackedCollection};
+use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 mod replication;
 mod schemas;
@@ -96,33 +106,34 @@ impl SourceRender for MySqlSourceConnection {
     fn render<G: Scope<Timestamp = GtidPartition>>(
         self,
         scope: &mut G,
-        config: RawSourceCreationConfig,
+        config: &RawSourceCreationConfig,
         resume_uppers: impl futures::Stream<Item = Antichain<GtidPartition>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
-        Option<Stream<G, Infallible>>,
+        BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
+        Stream<G, Infallible>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
+        Option<Stream<G, Probe<GtidPartition>>>,
         Vec<PressOnDropButton>,
     ) {
-        // Collect the subsources that we will be exporting.
-        let mut subsources = Vec::new();
-        for (
-            id,
-            SourceExport {
-                ingestion_output, ..
-            },
-        ) in &config.source_exports
-        {
-            // Output index 0 is the primary source which is not a table.
-            if *ingestion_output == 0 {
-                continue;
-            }
+        // Collect the source outputs that we will be exporting.
+        let mut source_outputs = Vec::new();
+        for (idx, (id, export)) in config.source_exports.iter().enumerate() {
+            let SourceExport {
+                details,
+                storage_metadata: _,
+                data_config: _,
+            } = export;
+            let details = match details {
+                SourceExportDetails::MySql(details) => details,
+                // This is an export that doesn't need any data output to it.
+                SourceExportDetails::None => continue,
+                _ => panic!("unexpected source export details: {:?}", details),
+            };
 
-            let table_index = ingestion_output - 1;
-            let desc = self.details.tables[table_index].clone();
-            let initial_gtid_set = self.details.table_initial_gtid_set(table_index).to_string();
+            let desc = details.table.clone();
+            let initial_gtid_set = details.initial_gtid_set.to_string();
             let resume_upper = Antichain::from_iter(
                 config
                     .source_resume_uppers
@@ -131,10 +142,13 @@ impl SourceRender for MySqlSourceConnection {
                     .iter()
                     .map(GtidPartition::decode_row),
             );
-            subsources.push(SubsourceInfo {
-                name: MySqlTableName::new(&desc.schema_name, &desc.name),
-                output_index: *ingestion_output,
+            let name = MySqlTableName::new(&desc.schema_name, &desc.name);
+            source_outputs.push(SourceOutputInfo {
+                output_index: idx,
+                table_name: name.clone(),
                 desc,
+                text_columns: details.text_columns.clone(),
+                exclude_columns: details.exclude_columns.clone(),
                 initial_gtid_set: gtid_set_frontier(&initial_gtid_set).expect("invalid gtid set"),
                 resume_upper,
             });
@@ -147,7 +161,7 @@ impl SourceRender for MySqlSourceConnection {
                 scope.clone(),
                 config.clone(),
                 self.clone(),
-                subsources.clone(),
+                source_outputs.clone(),
                 metrics.snapshot_metrics.clone(),
             );
 
@@ -155,27 +169,38 @@ impl SourceRender for MySqlSourceConnection {
             scope.clone(),
             config.clone(),
             self.clone(),
-            subsources,
+            source_outputs,
             &rewinds,
             metrics,
         );
 
-        let (stats_stream, stats_err, stats_token) =
-            statistics::render(scope.clone(), config, self, resume_uppers);
+        let (stats_stream, stats_err, probe_stream, stats_token) =
+            statistics::render(scope.clone(), config.clone(), self, resume_uppers);
 
         let stats_stream = stats_stream.concat(&snapshot_stats);
 
-        let updates = snapshot_updates.concat(&repl_updates).map(|(output, res)| {
-            let res = res.map(|row| SourceMessage {
-                key: Row::default(),
-                value: row,
-                metadata: Row::default(),
-            });
-            (output, res)
-        });
+        let updates = snapshot_updates.concat(&repl_updates);
+        let partition_count = u64::cast_from(config.source_exports.len());
+        let data_streams: Vec<_> = updates
+            .inner
+            .partition::<CapacityContainerBuilder<_>, _, _>(
+                partition_count,
+                |((output, data), time, diff): &(
+                    (usize, Result<SourceMessage, DataflowError>),
+                    _,
+                    Diff,
+                )| {
+                    let output = u64::cast_from(*output);
+                    (output, (data.clone(), time.clone(), diff.clone()))
+                },
+            );
+        let mut data_collections = BTreeMap::new();
+        for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
+            data_collections.insert(*id, data_stream.as_collection());
+        }
 
         let health_init = std::iter::once(HealthStatusMessage {
-            index: 0,
+            id: None,
             namespace: Self::STATUS_NAMESPACE,
             update: HealthStatusUpdate::Running,
         })
@@ -199,7 +224,7 @@ impl SourceRender for MySqlSourceConnection {
                 };
 
                 HealthStatusMessage {
-                    index: 0,
+                    id: None,
                     namespace: namespace.clone(),
                     update,
                 }
@@ -207,20 +232,23 @@ impl SourceRender for MySqlSourceConnection {
         let health = health_init.concat(&health_errs);
 
         (
-            updates,
-            Some(uppers),
+            data_collections,
+            uppers,
             health,
             stats_stream,
+            Some(probe_stream),
             vec![snapshot_token, repl_token, stats_token],
         )
     }
 }
 
 #[derive(Clone, Debug)]
-struct SubsourceInfo {
+struct SourceOutputInfo {
     output_index: usize,
-    name: MySqlTableName,
+    table_name: MySqlTableName,
     desc: MySqlTableDesc,
+    text_columns: Vec<String>,
+    exclude_columns: Vec<String>,
     initial_gtid_set: Antichain<GtidPartition>,
     resume_upper: Antichain<GtidPartition>,
 }
@@ -271,15 +299,30 @@ pub enum DefiniteError {
     BinlogNotAvailable,
     #[error("mysql server binlog frontier at {0} is beyond required frontier {1}")]
     BinlogMissingResumePoint(String, String),
-    #[error("mysql server configuration error: {0}")]
+    #[error("mysql server configuration: {0}")]
     ServerConfigurationError(String),
 }
 
-impl From<DefiniteError> for SourceReaderError {
+impl From<DefiniteError> for DataflowError {
     fn from(err: DefiniteError) -> Self {
-        SourceReaderError {
-            inner: SourceErrorDetails::Other(err.to_string()),
-        }
+        let m = err.to_string().into();
+        DataflowError::SourceError(Box::new(SourceError {
+            error: match &err {
+                DefiniteError::ValueDecodeError(_) => SourceErrorDetails::Other(m),
+                DefiniteError::TableTruncated(_) => SourceErrorDetails::Other(m),
+                DefiniteError::TableDropped(_) => SourceErrorDetails::Other(m),
+                DefiniteError::IncompatibleSchema(_) => SourceErrorDetails::Other(m),
+                DefiniteError::UnsupportedGtidState(_) => SourceErrorDetails::Other(m),
+                DefiniteError::BinlogGtidMonotonicityViolation(_, _) => {
+                    SourceErrorDetails::Other(m)
+                }
+                DefiniteError::BinlogNotAvailable => SourceErrorDetails::Initialization(m),
+                DefiniteError::BinlogMissingResumePoint(_, _) => {
+                    SourceErrorDetails::Initialization(m)
+                }
+                DefiniteError::ServerConfigurationError(_) => SourceErrorDetails::Initialization(m),
+            },
+        }))
     }
 }
 
@@ -297,7 +340,12 @@ impl MySqlTableName {
 
 impl fmt::Display for MySqlTableName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "`{}`.`{}`", self.0, self.1)
+        write!(
+            f,
+            "{}.{}",
+            quote_identifier(&self.0),
+            quote_identifier(&self.1)
+        )
     }
 }
 
@@ -309,43 +357,46 @@ impl From<&MySqlTableDesc> for MySqlTableName {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct RewindRequest {
-    /// The table that should be rewound.
-    pub(crate) table: MySqlTableName,
+    /// The output index that should be rewound.
+    pub(crate) output_index: usize,
     /// The frontier of GTIDs that this snapshot represents; all GTIDs that are not beyond this
     /// frontier have been committed by the snapshot operator at timestamp 0.
     pub(crate) snapshot_upper: Antichain<GtidPartition>,
 }
 
+type StackedAsyncOutputHandle<T, D> = AsyncOutputHandle<
+    T,
+    AccountedStackBuilder<CapacityContainerBuilder<TimelyStack<(D, T, Diff)>>>,
+    Tee<T, TimelyStack<(D, T, Diff)>>,
+>;
+
 async fn return_definite_error(
     err: DefiniteError,
     outputs: &[usize],
-    data_handle: &mut AsyncOutputHandle<
+    data_handle: &StackedAsyncOutputHandle<
         GtidPartition,
-        CapacityContainerBuilder<Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>>,
-        Tee<GtidPartition, Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>>,
+        (usize, Result<SourceMessage, DataflowError>),
     >,
     data_cap_set: &CapabilitySet<GtidPartition>,
-    definite_error_handle: &mut AsyncOutputHandle<
+    definite_error_handle: &AsyncOutputHandle<
         GtidPartition,
         CapacityContainerBuilder<Vec<ReplicationError>>,
         Tee<GtidPartition, Vec<ReplicationError>>,
     >,
     definite_error_cap_set: &CapabilitySet<GtidPartition>,
-) -> () {
+) {
     for output_index in outputs {
         let update = (
-            (*output_index, Err(err.clone())),
+            (*output_index, Err(err.clone().into())),
             GtidPartition::new_range(Uuid::minimum(), Uuid::maximum(), GtidState::MAX),
             1,
         );
-        data_handle.give(&data_cap_set[0], update).await;
+        data_handle.give_fueled(&data_cap_set[0], update).await;
     }
-    definite_error_handle
-        .give(
-            &definite_error_cap_set[0],
-            ReplicationError::Definite(Rc::new(err)),
-        )
-        .await;
+    definite_error_handle.give(
+        &definite_error_cap_set[0],
+        ReplicationError::Definite(Rc::new(err)),
+    );
     ()
 }
 

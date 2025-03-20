@@ -274,6 +274,7 @@ impl Handle {
 
     /// Attempts to handle a msg as a service response, returning it back if it
     /// isn't one.
+    #[allow(clippy::result_large_err)]
     pub fn maybe_handle_service_res(&self, src: &NodeId, msg: Body) -> Result<(), Body> {
         let in_reply_to = match msg.in_reply_to() {
             Some(x) => x,

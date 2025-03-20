@@ -1,0 +1,12 @@
+{{ $dataFile := .Get "data" }}
+{{ $planType := .Get "planType" }}
+{{ $data := index $.Site.Data $dataFile }}
+
+{{ $filteredOperators := slice }}
+{{ range $data.operators }}
+  {{ if in .plan_types $planType }}
+    {{ $filteredOperators = $filteredOperators | append . }}
+  {{ end }}
+{{ end }}
+
+{{ partial "explain-plans/operator-table.html" (dict "operators" $filteredOperators "planType" $planType) }}

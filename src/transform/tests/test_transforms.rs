@@ -158,9 +158,9 @@ fn handle_apply(
             let transform = ANF::default();
             apply_transform(transform, catalog, input)
         }
-        "column_knowledge" => {
-            use mz_transform::column_knowledge::ColumnKnowledge;
-            let transform = ColumnKnowledge::default();
+        "equivalence_propagation" => {
+            use mz_transform::equivalence_propagation::EquivalencePropagation;
+            let transform = EquivalencePropagation::default();
             apply_transform(transform, catalog, input)
         }
         "flatmap_to_map" => {
@@ -257,11 +257,13 @@ fn apply_transform<T: mz_transform::Transform>(
     // Parse the relation, returning early on parse error.
     let mut relation = try_parse_mir(catalog, input)?;
 
-    let features = mz_repr::optimize::OptimizerFeatures::default();
+    let mut features = mz_repr::optimize::OptimizerFeatures::default();
+    // Apply a non-default feature flag to test the right implementation.
+    features.enable_letrec_fixpoint_analysis = true;
     let typecheck_ctx = mz_transform::typecheck::empty_context();
     let mut df_meta = DataflowMetainfo::default();
     let mut transform_ctx =
-        mz_transform::TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+        mz_transform::TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None);
 
     // Apply the transformation, returning early on TransformError.
     transform
@@ -300,7 +302,11 @@ fn parse_explain_config(mut flags: BTreeSet<String>) -> Result<ExplainConfig, St
 struct Identity;
 
 impl mz_transform::Transform for Identity {
-    fn transform(
+    fn name(&self) -> &'static str {
+        "Identity"
+    }
+
+    fn actually_perform_transform(
         &self,
         _relation: &mut mz_expr::MirRelationExpr,
         _ctx: &mut mz_transform::TransformCtx,

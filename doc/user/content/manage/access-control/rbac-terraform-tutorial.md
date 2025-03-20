@@ -20,9 +20,9 @@ In this scenario, you are a DevOps engineer responsible for managing your Materi
 
 * Make sure you have a [Materialize account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation) and already have a password to connect with.
 
-* You should be familiar with setting up a [Terraform project in Materialize](https://materialize.com/docs/manage/terraform/).
+* You should be familiar with setting up a [Terraform project in Materialize](/manage/terraform/).
 
-* Have an understanding of permissions in Materialize. These grant resources in this tutorial are modeled after the [access-control tutorial](https://materialize.com/docs/manage/access-control/rbac-tutorial/).
+* Have an understanding of permissions in Materialize. These grant resources in this tutorial are modeled after the [access-control tutorial](/manage/access-control/rbac-tutorial/).
 
 ## Step 1. Create Role
 
@@ -46,9 +46,11 @@ In this scenario, you are a DevOps engineer responsible for managing your Materi
 
 3. Each role you create has default role attributes that determine how they can interact with Materialize objects. Let’s look at the role attributes of the role you created:
 
-    ```sql
+    ```mzsql
     SELECT * FROM mz_roles WHERE name = 'dev_role';
     ```
+
+    <p></p>
 
     ```nofmt
     -[ RECORD 1 ]--+------
@@ -113,9 +115,11 @@ Your `dev_role` has the default system-level permissions and needs object-level 
 
 3. Now that our resources exist, we can query their privileges before they have been associated with our role created in step 1.
 
-    ```sql
+    ```mzsql
     SELECT name, privileges FROM mz_tables WHERE name = 'dev_table';
     ```
+
+    <p></p>
 
     ```nofmt
     name|privileges
@@ -160,9 +164,11 @@ In this example, let's say your `dev_role` needs the following permissions:
 
 3. We can now check the privileges on our table again
 
-    ```sql
+    ```mzsql
     SELECT name, privileges FROM mz_tables WHERE name = 'dev_table';
     ```
+
+    <p></p>
 
     ```nofmt
     name|privileges
@@ -224,7 +230,7 @@ The dev_role now has the acceptable privileges it needs. Let’s apply this role
 
 3. To review the permissions a roles, you can view the object data:
 
-    ```sql
+    ```mzsql
     SELECT name, privileges FROM mz_tables WHERE name = 'dev_table';
     ```
 
@@ -300,7 +306,7 @@ Your `dev_role` also needs access to `qa_db`. You can apply these privileges ind
 
 3. Review the privileges of `qa_role` and `dev_role`:
 
-   ```sql
+   ```mzsql
    SELECT name, privileges FROM mz_databases WHERE name='qa_db';
    ```
 
@@ -329,7 +335,7 @@ You can revoke certain privileges for each role, even if they are inherited from
 
     Because Terraform is responsible for maintaining the state of our project, removing this grant resource and running an `apply` is the equivalent of running a revoke statement:
 
-    ```sql
+    ```mzsql
     REVOKE CREATE ON DATABASE dev_table FROM dev_role;
     ```
 
@@ -341,9 +347,9 @@ To destroy the roles and objects you created, you can remove all resources from 
 
 For more information on RBAC in Materialize, review the reference documentation:
 
-* [`GRANT ROLE`](https://materialize.com/docs/sql/grant-role/)
-* [`CREATE ROLE`](https://materialize.com/docs/sql/create-role/)
-* [`GRANT PRIVILEGE`](https://materialize.com/docs/sql/grant-privilege/)
-* [`ALTER ROLE`](https://materialize.com/docs/sql/alter-role/)
-* [`REVOKE PRIVILEGE`](https://materialize.com/docs/sql/revoke-privilege/)
-* [`DROP ROLE`](https://materialize.com/docs/sql/drop-role/)
+* [`GRANT ROLE`](/sql/grant-role/)
+* [`CREATE ROLE`](/sql/create-role/)
+* [`GRANT PRIVILEGE`](/sql/grant-privilege/)
+* [`ALTER ROLE`](/sql/alter-role/)
+* [`REVOKE PRIVILEGE`](/sql/revoke-privilege/)
+* [`DROP ROLE`](/sql/drop-role/)

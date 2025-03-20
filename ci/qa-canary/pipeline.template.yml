@@ -7,13 +7,23 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+priority: 40
+
+env:
+  CI_BAZEL_BUILD: 1
+  CI_BAZEL_REMOTE_CACHE: $BAZEL_REMOTE_CACHE
+
 steps:
   - id: build-aarch64
-    label: Build aarch64
-    command: bin/ci-builder run stable bin/pyactivate -m ci.test.build aarch64
+    label: ":bazel: Build aarch64"
+    command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
+    inputs:
+      - "*"
+    artifact_paths: bazel-explain.log
+    depends_on: []
     timeout_in_minutes: 60
     agents:
-      queue: builder-linux-aarch64
+      queue: builder-linux-aarch64-mem
 
   - wait: ~
 
@@ -25,6 +35,36 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: canary-load
+          args: ["--runtime=82800"] # 23 hours
+    agents:
+      queue: linux-aarch64-small
+
+  - id: remote-parallel-benchmark
+    label: "Parallel Benchmark against QA Benchmarking Staging Environment"
+    depends_on: build-aarch64
+    timeout_in_minutes: 1440 # 24 hours
+    concurrency: 1
+    concurrency_group: 'parallel-benchmark-canary'
+    agents:
+      queue: linux-aarch64-small
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: parallel-benchmark
+          args:
+            - --benchmarking-env
+            - --scenario=StagingBench
+            - --sqlite-store
+
+  - id: terraform-aws-persistent-test
+    label: "Terraform AWS Persistent Test"
+    timeout_in_minutes: 1440 # 24 hours
+    concurrency: 1
+    concurrency_group: 'terraform-aws-persistent-test'
+    plugins:
+      - ./ci/plugins/scratch-aws-access: ~
+      - ./ci/plugins/mzcompose:
+          composition: terraform
+          run: aws-persistent-test
           args: ["--runtime=82800"] # 23 hours
     agents:
       queue: linux-aarch64-small

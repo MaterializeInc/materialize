@@ -1,5 +1,5 @@
 ---
-title: "Ingest data from Amazon RDS for MySQL"
+title: "Ingest data from Amazon RDS"
 description: "How to stream data from Amazon RDS for MySQL to Materialize"
 menu:
   main:
@@ -8,16 +8,20 @@ menu:
     identifier: "mysql-amazon-rds"
 ---
 
-{{< private-preview />}}
-
 This page shows you how to stream data from [Amazon RDS for MySQL](https://aws.amazon.com/rds/mysql/)
 to Materialize using the [MySQL source](/sql/create-source/mysql).
+
+{{< tip >}}
+{{< guided-tour-blurb-for-ingest-data >}}
+{{< /tip >}}
 
 ## Before you begin
 
 {{% mysql-direct/before-you-begin %}}
 
-## Step 1. Enable GTID-based binlog replication
+## A. Configure Amazon RDS
+
+### 1. Enable GTID-based binlog replication
 
 Before creating a source in Materialize, you **must** configure Amazon RDS for
 GTID-based binlog replication. For guidance on enabling GTID-based
@@ -60,13 +64,13 @@ binary logging.
    reasonable value. To check the current value of the [`binlog retention hours`](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/mysql-stored-proc-configuring.html#mysql_rds_set_configuration-usage-notes.binlog-retention-hours)
    configuration parameter, connect to your RDS instance and run:
 
-   ```sql
+   ```mysql
    CALL mysql.rds_show_configuration;
    ```
 
    If the value returned is `NULL`, or less than `168` (i.e. 7 days), run:
 
-   ```sql
+   ```mysql
    CALL mysql.rds_set_configuration('binlog retention hours', 168);
    ```
 
@@ -78,12 +82,12 @@ binary logging.
 1. To validate that all configuration parameters are set to the expected values
    after the above configuration changes, run:
 
-    ```sql
+    ```mysql
     -- Validate "binlog retention hours" configuration parameter
     CALL mysql.rds_show_configuration;
     ```
 
-    ```sql
+    ```mysql
     -- Validate parameter group configuration parameters
     SHOW VARIABLES WHERE variable_name IN (
       'log_bin',
@@ -95,14 +99,16 @@ binary logging.
     );
     ```
 
-## Step 2. Create a user for replication
+### 2. Create a user for replication
 
 {{% mysql-direct/create-a-user-for-replication %}}
 
-## Step 3. Configure network security
+## B. (Optional) Configure network security
 
 {{< note >}}
-Support for AWS PrivateLink connections is planned for a future release.
+If you are prototyping and your RDS instance is publicly accessible, **you can
+skip this step**. For production scenarios, we recommend configuring one of the
+network security options below.
 {{< /note >}}
 
 There are various ways to configure your database's network to allow Materialize
@@ -112,10 +118,12 @@ to connect:
     configure your database's security group to allow connections from a set of
     static Materialize IP addresses.
 
+- **Use AWS PrivateLink**: If your database is running in a private network, you
+    can use [AWS PrivateLink](/ingest-data/network-security/privatelink/) to
+    connect Materialize to the database. For details, see [AWS PrivateLink](/ingest-data/network-security/privatelink/).
+
 - **Use an SSH tunnel:** If your database is running in a private network, you
     can use an SSH tunnel to connect Materialize to the database.
-
-Select the option that works best for you.
 
 {{< tabs >}}
 
@@ -125,7 +133,7 @@ Select the option that works best for you.
    client connected to Materialize, find the static egress IP addresses for the
    Materialize region you are running in:
 
-    ```sql
+    ```mzsql
     SELECT * FROM mz_egress_ips;
     ```
 
@@ -136,6 +144,102 @@ Select the option that works best for you.
 
     - Set **Type** to **MySQL**.
     - Set **Source** to the IP address in CIDR notation.
+
+{{< /tab >}}
+
+{{< tab "Use AWS PrivateLink">}}
+
+[AWS PrivateLink](https://aws.amazon.com/privatelink/) lets you connect
+Materialize to your RDS instance without exposing traffic to the public
+internet. To use AWS PrivateLink, you create a network load balancer in the
+same VPC as your RDS instance and a VPC endpoint service that Materialize
+connects to. The VPC endpoint service then routes requests from Materialize to
+RDS via the network load balancer.
+
+{{< note >}}
+Materialize provides a Terraform module that automates the creation and
+configuration of AWS resources for a PrivateLink connection. For more details,
+see the [Terraform module repository](https://github.com/MaterializeInc/terraform-aws-rds-privatelink).
+{{</ note >}}
+
+1. Get the IP address of your RDS instance. You'll need this address to register
+   your RDS instance as the target for the network load balancer in the next
+   step.
+
+    To get the IP address of your RDS instance:
+
+    1. Select your database in the RDS Console.
+
+    1. Find your RDS endpoint under **Connectivity & security**.
+
+    1. Use the `dig` or `nslooklup` command to find the IP address that the
+    endpoint resolves to:
+
+       ```sh
+       dig +short <RDS_ENDPOINT>
+       ```
+
+1. [Create a dedicated target group for your RDS instance](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-target-group.html).
+
+    - Choose the **IP addresses** type.
+
+    - Set the protocol and port to **TCP** and **3306**.
+
+    - Choose the same VPC as your RDS instance.
+
+    - Use the IP address from the previous step to register your RDS instance as
+      the target.
+
+    **Warning:** The IP address of your RDS instance can change without notice.
+      For this reason, it's best to set up automation to regularly check the IP
+      of the instance and update your target group accordingly. You can use a
+      lambda function to automate this process - see Materialize's
+      [Terraform module for AWS PrivateLink](https://github.com/MaterializeInc/terraform-aws-rds-privatelink/blob/main/lambda_function.py)
+      for an example. Another approach is to [configure an EC2 instance as an
+      RDS router](https://aws.amazon.com/blogs/database/how-to-use-amazon-rds-and-amazon-aurora-with-a-static-ip-address/)
+      for your network load balancer.
+
+1. [Create a network load balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-network-load-balancer.html).
+
+    - For **Network mapping**, choose the same VPC as your RDS instance and
+      select all of the availability zones and subnets that you RDS instance is
+      in.
+
+    - For **Listeners and routing**, set the protocol and port to **TCP**
+      and **3306** and select the target group you created in the previous
+      step.
+
+1. In the security group of your RDS instance, [allow traffic from the network load balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html).
+
+    If [client IP preservation](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/load-balancer-target-groups.html#client-ip-preservation)
+    is disabled, the easiest approach is to add an inbound rule with the VPC
+    CIDR of the network load balancer. If you don't want to grant access to the
+    entire VPC CIDR, you can add inbound rules for the private IP addresses of
+    the load balancer subnets.
+
+    - To find the VPC CIDR, go to your network load balancer and look
+      under **Network mapping**.
+    - To find the private IP addresses of the load balancer subnets, go
+      to **Network Interfaces**, search for the name of the network load
+      balancer, and look on the **Details** tab for each matching network
+      interface.
+
+1. [Create a VPC endpoint service](https://docs.aws.amazon.com/vpc/latest/privatelink/create-endpoint-service.html).
+
+    - For **Load balancer type**, choose **Network** and then select the network
+      load balancer you created in the previous step.
+
+    - After creating the VPC endpoint service, note its **Service name**. You'll
+      use this service name when connecting Materialize later.
+
+    **Remarks**: By disabling [Acceptance Required](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests),
+      while still strictly managing who can view your endpoint via IAM,
+      Materialze will be able to seamlessly recreate and migrate endpoints as
+      we work to stabilize this feature.
+
+1. Go back to the target group you created for the network load balancer and
+   make sure that the [health checks](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-health-checks.html)
+   are reporting the targets as healthy.
 
 {{< /tab >}}
 
@@ -171,7 +275,7 @@ configuration of resources for an SSH tunnel. For more details, see the
        SQL client connected to Materialize, get the static egress IP addresses for
        the Materialize region you are running in:
 
-       ```sql
+       ```mzsql
        SELECT * FROM mz_egress_ips;
        ```
 
@@ -193,18 +297,20 @@ configuration of resources for an SSH tunnel. For more details, see the
 
 {{< /tabs >}}
 
-## Step 4. (Optional) Create a cluster
+## C. Ingest data in Materialize
+
+### 1. (Optional) Create a cluster
 
 {{< note >}}
 If you are prototyping and already have a cluster to host your MySQL
 source (e.g. `quickstart`), **you can skip this step**. For production
 scenarios, we recommend separating your workloads into multiple clusters for
-[resource isolation](https://materialize.com/docs/sql/create-cluster/#resource-isolation).
+[resource isolation](/sql/create-cluster/#resource-isolation).
 {{< /note >}}
 
 {{% mysql-direct/create-a-cluster %}}
 
-## Step 5. Start ingesting data
+### 2. Start ingesting data
 
 [//]: # "TODO(morsapaes) MySQL connections support multiple SSL modes. We should
 adapt to that, rather than just state SSL MODE REQUIRED."
@@ -220,6 +326,10 @@ start by selecting the relevant option.
 {{% mysql-direct/ingesting-data/allow-materialize-ips %}}
 {{< /tab >}}
 
+{{< tab "Use AWS PrivateLink">}}
+{{% mysql-direct/ingesting-data/use-aws-privatelink %}}
+{{< /tab >}}
+
 {{< tab "Use an SSH tunnel">}}
 {{% mysql-direct/ingesting-data/use-ssh-tunnel %}}
 {{< /tab >}}
@@ -228,16 +338,16 @@ start by selecting the relevant option.
 
 [//]: # "TODO(morsapaes) Replace these Step 6. and 7. with guidance using the
 new progress metrics in mz_source_statistics + console monitoring, when
-available(also for PostgreSQL)."
+available (also for PostgreSQL)."
 
-## Step 6. Check the ingestion status
+### 3. Monitor the ingestion status
 
-{{% postgres-direct/check-the-ingestion-status %}}
+{{% mysql-direct/check-the-ingestion-status %}}
 
-## Step 7. Right-size the cluster
+### 4. Right-size the cluster
 
-{{% postgres-direct/right-size-the-cluster %}}
+{{% mysql-direct/right-size-the-cluster %}}
 
 ## Next steps
 
-{{% postgres-direct/next-steps %}}
+{{% mysql-direct/next-steps %}}

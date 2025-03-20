@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_table_keys TO true
+ALTER SYSTEM SET unsafe_enable_table_keys TO true
 ----
 COMPLETE 0
 
@@ -24,6 +24,12 @@ ALTER SYSTEM SET enable_rbac_checks TO false
 COMPLETE 0
 
 statement ok
+CREATE SCHEMA notices;
+
+statement ok
+SET SCHEMA = notices;
+
+statement ok
 CREATE TABLE t (
   a int,
   b int
@@ -35,13 +41,13 @@ CREATE INDEX t_idx_empty_key ON t();
 
 # Verify that the notice is shown in EXPLAIN.
 query T multiline
-EXPLAIN WITH(humanized expressions) INDEX t_idx_empty_key;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR INDEX t_idx_empty_key;
 ----
-materialize.public.t_idx_empty_key:
+materialize.notices.t_idx_empty_key:
   ArrangeBy keys=[[]]
-    ReadStorage materialize.public.t
+    ReadStorage materialize.notices.t
 
-Source materialize.public.t
+Source materialize.notices.t
 
 Target cluster: quickstart
 
@@ -84,3 +90,7 @@ FROM
 WHERE
   idx.name = 't_idx_empty_key'
 ----
+
+# This further tests `drop_plans_and_metainfos`
+statement ok
+DROP SCHEMA notices CASCADE;

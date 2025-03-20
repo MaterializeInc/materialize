@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Test the detection and reporting of source/sink errors by introducing a
+Disruption and then checking the mz_internal.mz_*_statuses tables
+"""
+
 import random
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -15,7 +20,7 @@ from typing import Protocol
 
 from materialize import buildkite
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
-from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -24,6 +29,7 @@ from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
+from materialize.util import selected_by_name
 
 
 def schema() -> str:
@@ -37,8 +43,18 @@ SERVICES = [
     Clusterd(),
     Postgres(),
     Zookeeper(),
-    Kafka(),
-    SchemaRegistry(),
+    Kafka(
+        name="badkafka",
+        environment=[
+            "KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181",
+            # Setting the following values to 3 to trigger a failure
+            # sets the transaction.state.log.min.isr config
+            "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=3",
+            # sets the transaction.state.log.replication.factor config
+            "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=3",
+        ],
+    ),
+    SchemaRegistry(kafka_servers=[("badkafka", "9092")]),
 ]
 
 
@@ -60,25 +76,13 @@ class KafkaTransactionLogGreaterThan1:
         c.up("testdrive", persistent=True)
 
         with c.override(
-            Kafka(
-                name="badkafka",
-                environment=[
-                    "KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181",
-                    # Setting the following values to 3 to trigger a failure
-                    # sets the transaction.state.log.min.isr config
-                    "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=3",
-                    # sets the transaction.state.log.replication.factor config
-                    "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=3",
-                ],
-            ),
-            SchemaRegistry(kafka_servers=[("badkafka", "9092")]),
             Testdrive(
                 no_reset=True,
                 seed=seed,
+                kafka_url="badkafka",
                 entrypoint_extra=[
                     "--initial-backoff=1s",
                     "--backoff-factor=0",
-                    "--kafka-addr=badkafka",
                 ],
             ),
         ):
@@ -181,28 +185,25 @@ class KafkaDisruption:
                 $ kafka-ingest topic=source-topic format=bytes
                 ABC
 
-                # Specify a faster metadata refresh interval so errors are detected every second
-                # instead of every minute
                 > CREATE SOURCE source1
-                  FROM KAFKA CONNECTION kafka_conn (
-                    TOPIC 'testdrive-source-topic-${testdrive.seed}',
-                    TOPIC METADATA REFRESH INTERVAL '1s'
-                  )
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-source-topic-${testdrive.seed}')
+
+                > CREATE TABLE source1_tbl FROM SOURCE source1 (REFERENCE "testdrive-source-topic-${testdrive.seed}")
                   FORMAT BYTES
                   ENVELOPE NONE
-                # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
+                # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/database-issues/issues/4800
 
                 # Ensure the source makes _real_ progress before we disrupt it. This also
                 # ensures the sink makes progress, which is required to hit certain stalls.
                 # As of implementing correctness property #2, this is required.
-                > SELECT count(*) from source1
+                > SELECT count(*) from source1_tbl
                 1
 
-                > CREATE SINK sink1 FROM source1
+                > CREATE SINK sink1 FROM source1_tbl
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-topic-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM
-                # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
+                # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/database-issues/issues/4800
 
                 $ kafka-verify-topic sink=materialize.public.sink1
                 """
@@ -228,7 +229,7 @@ class KafkaDisruption:
                 $ kafka-ingest topic=source-topic format=bytes
                 ABC
 
-                > SELECT COUNT(*) FROM source1;
+                > SELECT COUNT(*) FROM source1_tbl;
                 2
 
                 > SELECT status, error
@@ -297,15 +298,17 @@ class KafkaSinkDisruption:
 
                 > CREATE SOURCE source1
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-source-topic-${testdrive.seed}')
+
+                > CREATE TABLE source1_tbl FROM SOURCE source1 (REFERENCE "testdrive-source-topic-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
-                # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
+                # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/database-issues/issues/4800
 
-                > CREATE SINK sink1 FROM source1
+                > CREATE SINK sink1 FROM source1_tbl
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-topic-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM
-                # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
+                # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/database-issues/issues/4800
 
                 $ kafka-verify-data format=avro sink=materialize.public.sink1 sort-messages=true
                 {"before": null, "after": {"row":{"f1": "A"}}}
@@ -399,8 +402,8 @@ class PgDisruption:
                 INSERT INTO source1 VALUES (2, NULL);
 
                 > CREATE SOURCE "pg_source"
-                  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-                  FOR TABLES ("source1");
+                  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+                > CREATE TABLE "source1_tbl" FROM SOURCE "pg_source" (REFERENCE "source1");
                 """
             )
         )
@@ -414,9 +417,11 @@ class PgDisruption:
                 # check that the latest stall has the error we expect.
                 > SELECT error ~* '{error}'
                     FROM mz_internal.mz_source_status_history
-                    JOIN mz_sources ON mz_sources.id = source_id
+                    JOIN (
+                      SELECT name, id FROM mz_sources UNION SELECT name, id FROM mz_tables
+                    ) ON id = source_id
                     WHERE (
-                        name = 'source1' OR name = 'pg_source'
+                        name = 'source1_tbl' OR name = 'pg_source'
                     ) AND (status = 'stalled' OR status = 'ceased')
                     ORDER BY occurred_at DESC LIMIT 1;
                 true
@@ -433,10 +438,11 @@ class PgDisruption:
 
                 > SELECT status, error
                   FROM mz_internal.mz_source_statuses
-                  WHERE name = 'source1'
+                  WHERE name = 'source1_tbl'
+                  AND type = 'table'
                 running <null>
 
-                > SELECT f1 FROM source1;
+                > SELECT f1 FROM source1_tbl;
                 1
                 2
                 3
@@ -449,7 +455,7 @@ disruptions: list[Disruption] = [
     KafkaSinkDisruption(
         name="delete-sink-topic-delete-progress-fix",
         breakage=lambda c, seed: delete_sink_topic(c, seed),
-        expected_error="sink data topic is missing",
+        expected_error="topic testdrive-sink-topic-\\d+ does not exist",
         # If we delete the progress topic, we will re-create the sink as if it is new.
         fixage=lambda c, seed: c.exec(
             "redpanda", "rpk", "topic", "delete", f"testdrive-progress-topic-{seed}"
@@ -458,7 +464,7 @@ disruptions: list[Disruption] = [
     KafkaSinkDisruption(
         name="delete-sink-topic-recreate-topic-fix",
         breakage=lambda c, seed: delete_sink_topic(c, seed),
-        expected_error="sink data topic is missing",
+        expected_error="topic testdrive-sink-topic-\\d+ does not exist",
         # If we recreate the sink topic, the sink will work but will likely be inconsistent.
         fixage=lambda c, seed: c.exec(
             "redpanda", "rpk", "topic", "create", f"testdrive-sink-topic-{seed}"
@@ -493,7 +499,7 @@ disruptions: list[Disruption] = [
         expected_error="BrokerTransportFailure|Resolve|Broker transport failure|Timed out",
         fixage=lambda c, _: c.up("redpanda"),
     ),
-    # https://github.com/MaterializeInc/materialize/issues/16582
+    # https://github.com/MaterializeInc/database-issues/issues/4800
     # KafkaDisruption(
     #     name="kill-redpanda-clusterd",
     #     breakage=lambda c, _: c.kill("redpanda", "clusterd"),
@@ -540,12 +546,14 @@ disruptions: list[Disruption] = [
 ]
 
 
-def workflow_default(c: Composition) -> None:
-    """Test the detection and reporting of source/sink errors by
-    introducing a Disruption and then checking the mz_internal.mz_*_statuses tables
-    """
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument("disruptions", nargs="*", default=[d.name for d in disruptions])
 
-    sharded_disruptions = buildkite.shard_list(disruptions, lambda s: s.name)
+    args = parser.parse_args()
+
+    sharded_disruptions = buildkite.shard_list(
+        list(selected_by_name(args.disruptions, disruptions)), lambda s: s.name
+    )
     print(
         f"Disruptions in shard with index {buildkite.get_parallelism_index()}: {[d.name for d in sharded_disruptions]}"
     )
@@ -567,7 +575,7 @@ def delete_sink_topic(c: Composition, seed: int) -> None:
             $ kafka-ingest topic=source-topic format=avro schema=${schema}
             {"f1": "B"}
 
-            > SELECT COUNT(*) FROM source1;
+            > SELECT COUNT(*) FROM source1_tbl;
             2
             """
         )

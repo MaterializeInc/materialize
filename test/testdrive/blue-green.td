@@ -79,7 +79,7 @@ SELECT id FROM mz_schemas WHERE name = 'green';
 > SELECT * FROM blue.mv1;
 60
 
-? EXPLAIN SELECT * FROM blue.mv1;
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM blue.mv1;
 Explained Query (fast path):
   ReadIndex on=materialize.blue.mv1 mv1_primary_idx=[*** full scan ***]
 
@@ -105,7 +105,7 @@ Target cluster: blue_serving
 > SELECT * FROM green.mv1;
 20
 
-? EXPLAIN SELECT * FROM green.mv1;
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM green.mv1;
 Explained Query (fast path):
   ReadIndex on=materialize.green.mv1 mv1_primary_idx=[*** full scan ***]
 
@@ -142,7 +142,7 @@ SELECT id FROM mz_clusters WHERE name = 'green_serving';
 > SELECT * FROM blue.mv1;
 20
 
-? EXPLAIN SELECT * FROM blue.mv1;
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM blue.mv1;
 Explained Query (fast path):
   ReadIndex on=materialize.blue.mv1 mv1_primary_idx=[*** full scan ***]
 
@@ -170,7 +170,7 @@ Target cluster: blue_serving
 > SELECT * FROM blue.mv1;
 20
 
-? EXPLAIN SELECT * FROM blue.mv1;
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM blue.mv1;
 Explained Query (fast path):
   ReadIndex on=materialize.blue.mv1 mv1_primary_idx=[*** full scan ***]
 

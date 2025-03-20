@@ -10,9 +10,8 @@ import math
 from decimal import Decimal
 from typing import Any, cast
 
-from materialize.output_consistency.execution.sql_dialect_adjuster import (
-    SqlDialectAdjuster,
-)
+from materialize.output_consistency.execution.query_output_mode import QueryOutputMode
+from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
     GenericInconsistencyIgnoreFilter,
 )
@@ -43,7 +42,7 @@ class ResultComparator:
     def __init__(
         self,
         ignore_filter: GenericInconsistencyIgnoreFilter,
-        error_message_normalizer: ErrorMessageNormalizer = ErrorMessageNormalizer(),
+        error_message_normalizer: ErrorMessageNormalizer,
     ):
         self.ignore_filter = ignore_filter
         self.error_message_normalizer = error_message_normalizer
@@ -66,11 +65,20 @@ class ResultComparator:
             # do not continue with value comparison if metadata differs
             return validation_outcome
 
-        queries_succeeded = query_execution.outcomes[0].successful
+        # this statement must not be before the metadata validation (otherwise successful of the outcomes may differ)
+        validation_outcome.query_execution_succeeded_in_all_strategies = (
+            query_execution.outcomes[0].successful
+        )
 
-        if queries_succeeded:
+        if validation_outcome.query_execution_succeeded_in_all_strategies:
             self.validate_outcomes_data(query_execution, validation_outcome)
-            validation_outcome.success_reason = "result data matches"
+            if query_execution.query_output_mode in {
+                QueryOutputMode.EXPLAIN,
+                QueryOutputMode.EXPLAIN_PHYSICAL,
+            }:
+                validation_outcome.success_reason = "explain plan matches"
+            else:
+                validation_outcome.success_reason = "result data matches"
         else:
             # error messages were already validated at metadata validation
             validation_outcome.success_reason = "error message matches"
@@ -96,6 +104,8 @@ class ResultComparator:
         validation_outcome: ValidationOutcome,
     ) -> None:
         if outcome1.successful != outcome2.successful:
+            expression = self._expression_if_only_one_in_query(query_execution)
+
             validation_outcome.add_error(
                 self.ignore_filter,
                 ValidationError(
@@ -122,6 +132,7 @@ class ResultComparator:
                             else None
                         ),
                     ),
+                    concerned_expression=expression,
                 ),
             )
             return
@@ -176,6 +187,8 @@ class ResultComparator:
         num_rows2 = len(result2.result_rows)
 
         if num_rows1 != num_rows2:
+            expression = self._expression_if_only_one_in_query(query_execution)
+
             validation_outcome.add_error(
                 self.ignore_filter,
                 ValidationError(
@@ -188,6 +201,7 @@ class ResultComparator:
                     details2=ValidationErrorDetails(
                         strategy=result2.strategy, value=str(num_rows2), sql=result2.sql
                     ),
+                    concerned_expression=expression,
                 ),
             )
 
@@ -206,6 +220,8 @@ class ResultComparator:
         )
 
         if norm_error_message_1 != norm_error_message_2:
+            expression = self._expression_if_only_one_in_query(query_execution)
+
             validation_outcome.add_error(
                 self.ignore_filter,
                 ValidationError(
@@ -224,6 +240,7 @@ class ResultComparator:
                         sql=failure2.sql,
                         sql_error=failure2.error_message,
                     ),
+                    concerned_expression=expression,
                 ),
             )
 
@@ -273,9 +290,18 @@ class ResultComparator:
 
         for index in range(1, len(outcomes)):
             other_result = cast(QueryResult, outcomes[index])
-            self.validate_data_of_two_outcomes(
-                query_execution, result1, other_result, validation_outcome
-            )
+
+            if query_execution.query_output_mode in {
+                QueryOutputMode.EXPLAIN,
+                QueryOutputMode.EXPLAIN_PHYSICAL,
+            }:
+                self.validate_explain_plan(
+                    query_execution, result1, other_result, validation_outcome
+                )
+            else:
+                self.validate_data_of_two_outcomes(
+                    query_execution, result1, other_result, validation_outcome
+                )
 
     def validate_data_of_two_outcomes(
         self,
@@ -291,7 +317,13 @@ class ResultComparator:
             raise RuntimeError("Result contains no columns!")
 
         if num_columns1 != num_columns2:
-            raise RuntimeError("Results count different number of columns!")
+            raise RuntimeError("Results contain a different number of columns!")
+
+        if num_columns1 != len(query_execution.query_template.select_expressions):
+            # This would happen with the disabled .* operator on a row() function
+            raise RuntimeError(
+                "Number of columns in the result does not match the number of select expressions!"
+            )
 
         for col_index in range(0, num_columns1):
             self.validate_column(
@@ -309,14 +341,23 @@ class ResultComparator:
         # both results are known to be not empty and have the same number of rows
         row_length = len(result1.result_rows)
 
-        for row_index in range(0, row_length):
-            result_value1 = result1.result_rows[row_index][col_index]
-            result_value2 = result2.result_rows[row_index][col_index]
-            expression = query_execution.query_template.select_expressions[
-                col_index
-            ].to_sql(SqlDialectAdjuster(), True)
+        column_values1 = []
+        column_values2 = []
+        expression = query_execution.query_template.select_expressions[col_index]
 
-            if not self.is_value_equal(result_value1, result_value2):
+        for row_index in range(0, row_length):
+            column_values1.append(result1.result_rows[row_index][col_index])
+            column_values2.append(result2.result_rows[row_index][col_index])
+
+        if self.ignore_row_order(expression):
+            column_values1 = self._sort_column_values(column_values1)
+            column_values2 = self._sort_column_values(column_values2)
+
+        for row_index in range(0, row_length):
+            result_value1 = column_values1[row_index]
+            result_value2 = column_values2[row_index]
+
+            if not self.is_value_equal(result_value1, result_value2, expression):
                 error_type = ValidationErrorType.CONTENT_MISMATCH
                 error_message = "Value differs"
             elif not self.is_type_equal(result_value1, result_value2):
@@ -342,9 +383,67 @@ class ResultComparator:
                     ),
                     col_index=col_index,
                     concerned_expression=expression,
-                    location=f"row index {row_index}, column index {col_index} ('{expression}')",
+                    location=f"row index {row_index}, column index {col_index}",
                 ),
             )
+
+    def validate_explain_plan(
+        self,
+        query_execution: QueryExecution,
+        outcome1: QueryResult,
+        outcome2: QueryResult,
+        validation_outcome: ValidationOutcome,
+    ) -> None:
+        num_columns1 = len(outcome1.result_rows[0])
+        num_columns2 = len(outcome2.result_rows[0])
+
+        assert num_columns1 == 1
+        assert num_columns2 == 1
+
+        explain_plan1 = outcome1.result_rows[0][0]
+        explain_plan2 = outcome2.result_rows[0][0]
+
+        for data_source in query_execution.query_template.get_all_data_sources():
+            new_source_name = f"<db_object-{data_source.table_index or 1}>"
+            explain_plan1 = explain_plan1.replace(
+                data_source.get_db_object_name(
+                    outcome1.strategy.get_db_object_name(
+                        query_execution.query_template.storage_layout,
+                        data_source=data_source,
+                    ),
+                ),
+                new_source_name,
+            )
+            explain_plan2 = explain_plan2.replace(
+                data_source.get_db_object_name(
+                    outcome2.strategy.get_db_object_name(
+                        query_execution.query_template.storage_layout,
+                        data_source=data_source,
+                    ),
+                ),
+                new_source_name,
+            )
+
+        if explain_plan1 == explain_plan2:
+            return
+
+        expression = self._expression_if_only_one_in_query(query_execution)
+
+        validation_outcome.add_error(
+            self.ignore_filter,
+            ValidationError(
+                query_execution,
+                ValidationErrorType.EXPLAIN_PLAN_MISMATCH,
+                "Explain plan differs",
+                details1=ValidationErrorDetails(
+                    strategy=outcome1.strategy, value=explain_plan1, sql=outcome1.sql
+                ),
+                details2=ValidationErrorDetails(
+                    strategy=outcome2.strategy, value=explain_plan2, sql=outcome2.sql
+                ),
+                concerned_expression=expression,
+            ),
+        )
 
     def is_type_equal(self, value1: Any, value2: Any) -> bool:
         if value1 is None or value2 is None:
@@ -353,12 +452,23 @@ class ResultComparator:
 
         return type(value1) == type(value2)
 
-    def is_value_equal(self, value1: Any, value2: Any) -> bool:
+    def is_value_equal(
+        self,
+        value1: Any,
+        value2: Any,
+        expression: Expression,
+        is_tolerant: bool = False,
+    ) -> bool:
         if value1 == value2:
             return True
 
-        if isinstance(value1, list) and isinstance(value2, list):
-            return self.is_list_equal(value1, value2)
+        if (isinstance(value1, list) and isinstance(value2, list)) or (
+            isinstance(value1, tuple) and isinstance(value2, tuple)
+        ):
+            return self.is_list_or_tuple_equal(value1, value2, expression)
+
+        if isinstance(value1, dict) and isinstance(value2, dict):
+            return self.is_dict_equal(value1, value2, expression)
 
         if isinstance(value1, Decimal) and isinstance(value2, Decimal):
             if value1.is_nan() and value2.is_nan():
@@ -374,12 +484,72 @@ class ResultComparator:
 
         return False
 
-    def is_list_equal(self, list1: list[Any], list2: list[Any]) -> bool:
-        if len(list1) != len(list2):
+    def is_list_or_tuple_equal(
+        self,
+        collection1: list[Any] | tuple[Any],
+        collection2: list[Any] | tuple[Any],
+        expression: Expression,
+    ) -> bool:
+        if len(collection1) != len(collection2):
             return False
 
-        for value1, value2 in zip(list1, list2):
-            if not self.is_value_equal(value1, value2):
+        if (
+            self.ignore_order_when_comparing_collection(expression)
+            and self._can_be_sorted(collection1)
+            and self._can_be_sorted(collection2)
+        ):
+            collection1 = sorted(collection1)
+            collection2 = sorted(collection2)
+
+        for value1, value2 in zip(collection1, collection2):
+            # use is_tolerant because tuples may contain all values as strings
+            if not self.is_value_equal(value1, value2, expression, is_tolerant=True):
                 return False
 
         return True
+
+    def is_dict_equal(
+        self,
+        dict1: dict[Any, Any],
+        dict2: dict[Any, Any],
+        expression: Expression,
+    ) -> bool:
+        if len(dict1) != len(dict2):
+            return False
+
+        if not self.is_value_equal(dict1.keys(), dict2.keys(), expression):
+            return False
+
+        for key in dict1.keys():
+            if not self.is_value_equal(dict1[key], dict2[key], expression):
+                return False
+
+        return True
+
+    def ignore_row_order(self, expression: Expression) -> bool:
+        return False
+
+    def ignore_order_when_comparing_collection(self, expression: Expression) -> bool:
+        return False
+
+    def _can_be_sorted(self, collection: list[Any] | tuple[Any]) -> bool:
+        for element in collection:
+            if isinstance(element, dict):
+                return False
+
+        return True
+
+    def _expression_if_only_one_in_query(
+        self, query_execution: QueryExecution
+    ) -> Expression | None:
+        if len(query_execution.query_template.select_expressions) == 1:
+            return query_execution.query_template.select_expressions[0]
+
+        return None
+
+    def _sort_column_values(self, column_values: list[Any]) -> list[Any]:
+        # needed because, for example, None values have no order
+        def sort_key(value: Any) -> Any:
+            return str(value)
+
+        return sorted(column_values, key=sort_key)

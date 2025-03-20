@@ -12,17 +12,26 @@
 // https://github.com/tokio-rs/prost/issues/237
 // #![allow(missing_docs)]
 
+use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::fmt::Debug;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{ready, Context, Poll};
 
+use differential_dataflow::containers::TimelyStack;
 use differential_dataflow::Collection;
-use mz_repr::{Diff, Row};
-use mz_storage_types::errors::{DecodeError, SourceErrorDetails};
+use mz_repr::{Diff, GlobalId, Row};
+use mz_storage_types::errors::{DataflowError, DecodeError};
 use mz_storage_types::sources::SourceTimestamp;
 use mz_timely_util::builder_async::PressOnDropButton;
+use pin_project::pin_project;
 use serde::{Deserialize, Serialize};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, ScopeParent, Stream};
 use timely::progress::Antichain;
+use tokio::sync::Semaphore;
+use tokio_util::sync::PollSemaphore;
 
 use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
 use crate::source::RawSourceCreationConfig;
@@ -45,6 +54,9 @@ pub enum ProgressStatisticsUpdate {
     },
 }
 
+pub type StackedCollection<G, T> =
+    Collection<G, T, Diff, TimelyStack<(T, <G as ScopeParent>::Timestamp, Diff)>>;
+
 /// Describes a source that can render itself in a timely scope.
 pub trait SourceRender {
     type Time: SourceTimestamp;
@@ -64,10 +76,8 @@ pub trait SourceRender {
     /// First, a source must produce a collection that is produced by the rendered dataflow and
     /// must contain *definite*[^1] data for all times beyond the resumption frontier.
     ///
-    /// Second, a source may produce an optional progress stream that will be used to drive
-    /// reclocking. This is useful for sources that can query the highest offsets of the external
-    /// source before reading the data for those offsets. In those cases it is preferable to
-    /// produce this additional stream.
+    /// Second, a source must produce a progress stream that will be used to drive reclocking.
+    /// The frontier of this stream decides for which upstream offsets bindings can be minted.
     ///
     /// Third, a source must produce a stream of health status updates.
     ///
@@ -78,14 +88,15 @@ pub trait SourceRender {
     fn render<G: Scope<Timestamp = Self::Time>>(
         self,
         scope: &mut G,
-        config: RawSourceCreationConfig,
+        config: &RawSourceCreationConfig,
         resume_uppers: impl futures::Stream<Item = Antichain<Self::Time>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
-        Option<Stream<G, Infallible>>,
+        BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
+        Stream<G, Infallible>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
+        Option<Stream<G, Probe<Self::Time>>>,
         Vec<PressOnDropButton>,
     );
 }
@@ -102,8 +113,73 @@ pub struct SourceMessage {
     pub metadata: Row,
 }
 
+/// The result of probing an upstream system for its write frontier.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Probe<T> {
+    /// The timestamp at which this probe was initiated.
+    pub probe_ts: mz_repr::Timestamp,
+    /// The frontier obtain from the upstream system.
+    pub upstream_frontier: Antichain<T>,
+}
+
+mod columnation {
+    use columnation::{Columnation, Region};
+    use mz_repr::Row;
+
+    use super::SourceMessage;
+
+    impl Columnation for SourceMessage {
+        type InnerRegion = SourceMessageRegion;
+    }
+
+    #[derive(Default)]
+    pub struct SourceMessageRegion {
+        inner: <Row as Columnation>::InnerRegion,
+    }
+
+    impl Region for SourceMessageRegion {
+        type Item = SourceMessage;
+
+        unsafe fn copy(&mut self, item: &Self::Item) -> Self::Item {
+            SourceMessage {
+                key: self.inner.copy(&item.key),
+                value: self.inner.copy(&item.value),
+                metadata: self.inner.copy(&item.metadata),
+            }
+        }
+
+        fn clear(&mut self) {
+            self.inner.clear()
+        }
+
+        fn reserve_items<'a, I>(&mut self, items: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = &'a Self::Item> + Clone,
+        {
+            self.inner.reserve_items(
+                items
+                    .map(|item| [&item.key, &item.value, &item.metadata])
+                    .flatten(),
+            )
+        }
+
+        fn reserve_regions<'a, I>(&mut self, regions: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = &'a Self> + Clone,
+        {
+            self.inner.reserve_regions(regions.map(|r| &r.inner))
+        }
+
+        fn heap_size(&self, callback: impl FnMut(usize, usize)) {
+            self.inner.heap_size(callback)
+        }
+    }
+}
+
 /// A record produced by a source
-#[derive(Clone, Serialize, Debug, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Clone, Serialize, Deserialize)]
 pub struct SourceOutput<FromTime> {
     /// The record's key (or some empty/default value for sources without the concept of key)
     pub key: Row,
@@ -130,19 +206,30 @@ pub struct DecodeResult<FromTime> {
     pub from_time: FromTime,
 }
 
-/// A structured error for `SourceReader::get_next_message` implementors.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SourceReaderError {
-    pub inner: SourceErrorDetails,
+#[pin_project]
+pub struct SignaledFuture<F> {
+    #[pin]
+    fut: F,
+    semaphore: PollSemaphore,
 }
 
-impl SourceReaderError {
-    /// This is an unclassified but definite error. This is typically only appropriate
-    /// when the error is permanently fatal for the source... some critical invariant
-    /// is violated or data is corrupted, for example.
-    pub fn other_definite(e: anyhow::Error) -> SourceReaderError {
-        SourceReaderError {
-            inner: SourceErrorDetails::Other(format!("{}", e)),
+impl<F: Future> SignaledFuture<F> {
+    pub fn new(semaphore: Arc<Semaphore>, fut: F) -> Self {
+        Self {
+            fut,
+            semaphore: PollSemaphore::new(semaphore),
         }
+    }
+}
+
+impl<F: Future> Future for SignaledFuture<F> {
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        let permit = ready!(this.semaphore.poll_acquire(cx));
+        let ret = this.fut.poll(cx);
+        drop(permit);
+        ret
     }
 }

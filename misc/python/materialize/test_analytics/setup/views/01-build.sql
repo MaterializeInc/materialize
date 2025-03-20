@@ -1,58 +1,43 @@
 -- Copyright Materialize, Inc. and contributors. All rights reserved.
 --
--- Licensed under the Apache License, Version 2.0 (the "License");
--- you may not use this file except in compliance with the License.
--- You may obtain a copy of the License in the LICENSE file at the
--- root of this repository, or online at
+-- Use of this software is governed by the Business Source License
+-- included in the LICENSE file at the root of this repository.
 --
---     http://www.apache.org/licenses/LICENSE-2.0
---
--- Unless required by applicable law or agreed to in writing, software
--- distributed under the License is distributed on an "AS IS" BASIS,
--- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
--- See the License for the specific language governing permissions and
--- limitations under the License.
+-- As of the Change Date specified in that file, in accordance with
+-- the Business Source License, use of this software will be governed
+-- by the Apache License, Version 2.0.
 
-CREATE OR REPLACE VIEW v_count_builds_per_week AS
+CREATE OR REPLACE VIEW v_most_recent_build AS
 SELECT
-    EXTRACT(YEAR FROM date) AS year,
-    EXTRACT(WEEK FROM date) AS week,
     b.branch,
     b.pipeline,
-    count(b.build_id) AS count,
-    max(b.mz_version) AS max_mz_version
+    max(b.build_number) AS highest_build_number
 FROM build b
 GROUP BY
-    EXTRACT(YEAR FROM date),
-    EXTRACT(WEEK FROM date),
     b.branch,
-    b.pipeline;
+    b.pipeline
+;
 
-CREATE OR REPLACE VIEW v_count_builds_per_mz_version AS
+CREATE OR REPLACE VIEW v_branch_type AS
+WITH data AS
+(
+    SELECT
+        b.branch,
+        (b.branch = 'main') AS is_main_branch,
+        (b.branch LIKE 'v%.%.%') AS is_release_branch,
+        (b.branch <> 'main' AND b.branch NOT LIKE 'v%.%.%') AS is_feature_branch
+    FROM build b
+    GROUP BY
+        b.branch
+)
 SELECT
-    b.mz_version,
-    b.branch,
-    b.pipeline,
-    count(b.build_id) AS count,
-    min(b.date) AS first_build_date,
-    max(b.date) AS last_build_date
-FROM build b
-WHERE branch = 'main'
-GROUP BY
-    b.mz_version,
-    b.branch,
-    b.pipeline;
+    branch,
+    CASE WHEN is_main_branch THEN 'main' WHEN is_release_branch THEN 'release' WHEN is_feature_branch THEN 'feature' ELSE '?' END AS branch_type,
+    is_main_branch,
+    is_release_branch,
+    is_feature_branch
+FROM data
+;
 
-CREATE OR REPLACE VIEW v_last_build_per_week AS
-SELECT
-    EXTRACT(YEAR FROM date) AS year,
-    EXTRACT(WEEK FROM date) AS week,
-    b.branch,
-    b.pipeline,
-    max(b.build_id)
-FROM build b
-GROUP BY
-    EXTRACT(YEAR FROM date),
-    EXTRACT(WEEK FROM date),
-    b.branch,
-    b.pipeline;
+ALTER VIEW v_most_recent_build OWNER TO qa;
+ALTER VIEW v_branch_type OWNER TO qa;

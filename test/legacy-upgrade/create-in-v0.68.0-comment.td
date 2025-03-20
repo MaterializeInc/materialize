@@ -9,7 +9,7 @@
 
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
-$ postgres-execute connection=mz_system
+$[version<=12600] postgres-execute connection=mz_system
 ALTER SYSTEM SET enable_comment = true;
 
 > CREATE TABLE comment_table ( x int8, y text );

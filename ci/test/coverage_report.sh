@@ -13,6 +13,9 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
+STEP_START_TIMESTAMP_WITH_TZ=$(date +"%Y-%m-%d %H:%M:%S%z")
+export STEP_START_TIMESTAMP_WITH_TZ
+
 ci_unimportant_heading "Download coverage data from run"
 mkdir -p coverage
 buildkite-agent artifact download 'coverage/*.zst' coverage/

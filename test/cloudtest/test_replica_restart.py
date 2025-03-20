@@ -49,7 +49,7 @@ def assert_notice(conn: Connection, contains: bytes) -> None:
 
 # Test that an OOMing cluster replica generates expected entries in
 # `mz_cluster_replica_statuses`
-@pytest.mark.skip(reason="Now fails after a Buildkite upgrade #20948")
+@pytest.mark.skip(reason="Now fails after a Buildkite upgrade database-issues#6307")
 def test_oom_clusterd(mz: MaterializeApplication) -> None:
     def verify_cluster_oomed() -> None:
         with mz.environmentd.sql_cursor(autocommit=False) as cur:
@@ -72,7 +72,7 @@ def test_oom_clusterd(mz: MaterializeApplication) -> None:
                 for _, diff, status, reason in cur.fetchall():
                     if diff < 1:
                         continue
-                    if status == "not-ready" and reason == "oom-killed":
+                    if status == "offline" and reason == "oom-killed":
                         return
 
     # Once we create an index on this view in a cluster limited to 2Gb, it is practically guaranteed to OOM
@@ -160,7 +160,7 @@ def test_crash_clusterd(mz: MaterializeApplication) -> None:
     assert podcount > 0
 
     # Wait for expected notices on all connections.
-    msg = b'cluster replica quickstart.r1 changed status to "not-ready"'
+    msg = b'cluster replica quickstart.r1 changed status to "offline"'
     assert_notice(c_select, msg)
     assert_notice(c_subscribe, msg)
     assert_notice(c_copy, msg)

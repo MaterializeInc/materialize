@@ -9,6 +9,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# cut-release -- cuts a new Materialize version and pushes it to the Materialize repo.
+# cut-release -- cuts a new release and pushes the tag to the upstream
+# Materialize repository.
 
-exec "$(dirname "$0")"/pyactivate -m materialize.cut-release "$@"
+exec "$(dirname "$0")"/pyactivate -m materialize.release.cut_release "$@"

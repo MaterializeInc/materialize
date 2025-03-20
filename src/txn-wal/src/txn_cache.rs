@@ -77,7 +77,7 @@ use crate::TxnsCodecDefault;
 /// unchanged and simply manipulating capabilities in response to data and txns
 /// shard progress. See [crate::operator::txns_progress].
 #[derive(Debug)]
-pub struct TxnsCacheState<T: Timestamp + Lattice + Codec64> {
+pub struct TxnsCacheState<T> {
     txns_id: ShardId,
     /// The since of the txn_shard when this cache was initialized.
     /// Some writes with a timestamp < than this may have been applied and
@@ -119,7 +119,7 @@ pub struct TxnsCacheState<T: Timestamp + Lattice + Codec64> {
 
 /// A self-updating [TxnsCacheState].
 #[derive(Debug)]
-pub struct TxnsCache<T: Timestamp + Lattice + Codec64, C: TxnsCodec = TxnsCodecDefault> {
+pub struct TxnsCache<T, C: TxnsCodec = TxnsCodecDefault> {
     /// A subscribe over the txn shard.
     pub(crate) txns_subscribe: Subscribe<C::Key, C::Val, T, i64>,
     /// Pending updates for timestamps that haven't closed.
@@ -127,7 +127,7 @@ pub struct TxnsCache<T: Timestamp + Lattice + Codec64, C: TxnsCodec = TxnsCodecD
     state: TxnsCacheState<T>,
 }
 
-impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState<T> {
+impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync> TxnsCacheState<T> {
     /// Creates a new empty [`TxnsCacheState`].
     ///
     /// `init_ts` must be == the critical handle's since of the txn shard.
@@ -560,7 +560,13 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             let times = self.datas.get_mut(&data_id).expect("data is initialized");
             // Sanity check that shard is registered.
             assert_eq!(times.last_reg().forget_ts, None);
-            times.writes.push_back(ts);
+
+            // Only add the timestamp if it's not already in the deque. We don't
+            // track all writes in this but track at what timestamps we have
+            // _any_ writes.
+            if times.writes.back() != Some(&ts) {
+                times.writes.push_back(ts);
+            }
         } else if diff == -1 {
             debug!(
                 "cache learned {:.9} applied t={:?} b={}",
@@ -786,7 +792,11 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
     }
 }
 
-impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> TxnsCache<T, C> {
+impl<T, C> TxnsCache<T, C>
+where
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
+    C: TxnsCodec,
+{
     /// Initialize the txn shard at `init_ts` and returns a [TxnsCache] reading
     /// from that shard.
     pub(crate) async fn init(
@@ -964,14 +974,14 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     }
 }
 
-impl<T: Timestamp + Lattice + Codec64, C: TxnsCodec> Deref for TxnsCache<T, C> {
+impl<T, C: TxnsCodec> Deref for TxnsCache<T, C> {
     type Target = TxnsCacheState<T>;
     fn deref(&self) -> &Self::Target {
         &self.state
     }
 }
 
-impl<T: Timestamp + Lattice + Codec64, C: TxnsCodec> DerefMut for TxnsCache<T, C> {
+impl<T, C: TxnsCodec> DerefMut for TxnsCache<T, C> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.state
     }
@@ -1114,6 +1124,7 @@ pub(crate) enum Unapplied<'a> {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_err;
     use mz_persist_client::PersistClient;
     use mz_persist_types::codec_impls::{ShardIdSchema, VecU8Schema};
     use DataListenNext::*;
@@ -1214,7 +1225,7 @@ mod tests {
 
         // empty
         assert_eq!(c.progress_exclusive, 0);
-        assert!(mz_ore::panic::catch_unwind(|| c.data_snapshot(d0, 0)).is_err());
+        assert_err!(mz_ore::panic::catch_unwind(|| c.data_snapshot(d0, 0)));
         assert_eq!(c.data_listen_next(&d0, &0), WaitForTxnsProgress);
 
         // ts 0 (never registered)
@@ -1263,7 +1274,7 @@ mod tests {
 
         // ts 11 (forget)
         // Revisit when
-        // https://github.com/MaterializeInc/materialize/issues/25992 is fixed,
+        // https://github.com/MaterializeInc/database-issues/issues/7746 is fixed,
         // it's unclear how to encode the register timestamp in a forget.
         c.push_register(d0, 11, -1, 11);
         testcase(&mut c, 11, d0, ds(None, 11, 12), ReadDataTo(12));
@@ -1285,7 +1296,7 @@ mod tests {
 
         // ts 16 (forgotten, registered at preceding ts)
         // Revisit when
-        // https://github.com/MaterializeInc/materialize/issues/25992 is fixed,
+        // https://github.com/MaterializeInc/database-issues/issues/7746 is fixed,
         // it's unclear how to encode the register timestamp in a forget.
         c.push_register(d0, 16, -1, 16);
         testcase(&mut c, 16, d0, ds(None, 16, 17), ReadDataTo(17));
@@ -1481,7 +1492,7 @@ mod tests {
         let mut c = TxnsCacheState::new(ShardId::new(), 10, None);
         c.progress_exclusive = 20;
 
-        assert!(mz_ore::panic::catch_unwind(|| c.data_listen_next(&d0, &0)).is_err());
+        assert_err!(mz_ore::panic::catch_unwind(|| c.data_listen_next(&d0, &0)));
 
         let ds = c.data_snapshot(d0, 0);
         assert_eq!(

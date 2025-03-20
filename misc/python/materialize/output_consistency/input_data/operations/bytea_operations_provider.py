@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mz_version import MzVersion
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
@@ -95,7 +94,6 @@ BYTEA_OPERATION_TYPES.append(
         [ByteaOperationParam(), ByteaOperationParam()],
         BooleanReturnTypeSpec(),
         is_pg_compatible=False,
-        since_mz_version=MzVersion.parse_mz("v0.77.0"),
     )
 )
 

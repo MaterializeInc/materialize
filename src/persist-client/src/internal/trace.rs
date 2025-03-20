@@ -30,7 +30,7 @@
 //!   (analogous to `Batch::Merger`) that allows us to represent a merge as it
 //!   is fueling. Normally, this would represent real incremental compaction
 //!   progress, but in persist, it's simply a bookkeeping mechanism. Once fully
-//!   fueled, the `FuelingMerge` is turned into a [SpineBatch::Fueled] variant,
+//!   fueled, the `FuelingMerge` is turned into a fueled [SpineBatch],
 //!   which to the Spine is indistinguishable from a merged batch. At this
 //!   point, it is eligible for asynchronous compaction and a `FueledMergeReq`
 //!   is generated.
@@ -54,6 +54,7 @@ use std::fmt::Debug;
 use std::mem;
 use std::sync::Arc;
 
+use crate::internal::paths::WriterKey;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
@@ -112,7 +113,7 @@ impl<T: Timestamp + Lattice> Default for Trace<T> {
     fn default() -> Self {
         Self {
             spine: Spine::new(),
-            roundtrip_structure: false,
+            roundtrip_structure: true,
         }
     }
 }
@@ -195,9 +196,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
     pub(crate) fn flatten(&self) -> FlatTrace<T> {
         let since = self.spine.since.clone();
         let mut legacy_batches = BTreeMap::new();
-        // Since we store all batches in the legacy-batch collection for the moment,
-        // this doesn't need to be mutable.
-        let hollow_batches = BTreeMap::new();
+        let mut hollow_batches = BTreeMap::new();
         let mut spine_batches = BTreeMap::new();
         let mut merges = BTreeMap::new();
 
@@ -206,10 +205,21 @@ impl<T: Timestamp + Lattice> Trace<T> {
             let desc = batch.desc.clone();
             let mut parts = Vec::with_capacity(batch.parts.len());
             let mut descs = Vec::with_capacity(batch.parts.len());
-            for id_batch in &batch.parts {
-                parts.push(id_batch.id);
-                descs.push(id_batch.batch.desc.clone());
-                legacy_batches.insert(Arc::clone(&id_batch.batch), ());
+            for IdHollowBatch { id, batch } in &batch.parts {
+                parts.push(*id);
+                descs.push(batch.desc.clone());
+                // Ideally, we'd like to put all batches in the hollow_batches collection, since
+                // tracking the spine id reduces ambiguity and makes diffing cheaper. However,
+                // we currently keep most batches in the legacy collection for backwards
+                // compatibility.
+                // As an exception, we add batches with empty time ranges to hollow_batches:
+                // they're otherwise not guaranteed to be unique, and since we only started writing
+                // them down recently there's no backwards compatibility risk.
+                if batch.desc.lower() == batch.desc.upper() {
+                    hollow_batches.insert(*id, Arc::clone(batch));
+                } else {
+                    legacy_batches.insert(Arc::clone(batch), ());
+                }
             }
 
             let spine_batch = ThinSpineBatch {
@@ -265,11 +275,9 @@ impl<T: Timestamp + Lattice> Trace<T> {
             mut merges,
         } = value;
 
-        // If the flattened representation has spine batches, we know to preserve the structure for
-        // this trace.
-        // Note that for empty spines, roundtrip_structure will default to false. This is done for
-        // backwards-compatability.
-        let roundtrip_structure = !spine_batches.is_empty();
+        // If the flattened representation has spine batches (or is empty)
+        // we know to preserve the structure for this trace.
+        let roundtrip_structure = !spine_batches.is_empty() || legacy_batches.is_empty();
 
         // We need to look up legacy batches somehow, but we don't have a spine id for them.
         // Instead, we rely on the fact that the spine must store them in antichain order.
@@ -290,9 +298,14 @@ impl<T: Timestamp + Lattice> Trace<T> {
 
         let mut pop_batch =
             |id: SpineId, expected_desc: Option<&Description<T>>| -> Result<_, String> {
-                let mut batch = hollow_batches
-                    .remove(&id)
-                    .or_else(|| legacy_batches.pop())
+                if let Some(batch) = hollow_batches.remove(&id) {
+                    if let Some(desc) = expected_desc {
+                        assert_eq!(*desc, batch.desc);
+                    }
+                    return Ok(IdHollowBatch { id, batch });
+                }
+                let mut batch = legacy_batches
+                    .pop()
                     .ok_or_else(|| format!("missing referenced hollow batch {id:?}"))?;
 
                 let Some(expected_desc) = expected_desc else {
@@ -309,7 +322,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
 
                 // Empty legacy batches are not deterministic: different nodes may split them up
                 // in different ways. For now, we rearrange them such to match the spine data.
-                if batch.parts.is_empty() && batch.runs.is_empty() && batch.len == 0 {
+                if batch.parts.is_empty() && batch.run_splits.is_empty() && batch.len == 0 {
                     let mut new_upper = batch.desc.upper().clone();
 
                     // While our current batch is too small, and there's another empty batch
@@ -515,9 +528,31 @@ impl<T: Timestamp + Lattice> Trace<T> {
     }
 
     /// The same as [Self::push_batch] but without the `FueledMergeReq`s, which
-    /// account for a surprising amount of cpu in prod. #18368
+    /// account for a surprising amount of cpu in prod. database-issues#5411
     pub(crate) fn push_batch_no_merge_reqs(&mut self, batch: HollowBatch<T>) {
         self.spine.insert(batch, &mut SpineLog::Disabled);
+    }
+
+    /// Apply some amount of effort to trace maintenance.
+    ///
+    /// The units of effort are updates, and the method should be thought of as
+    /// analogous to inserting as many empty updates, where the trace is
+    /// permitted to perform proportionate work.
+    ///
+    /// Returns true if this did work and false if it left the spine unchanged.
+    #[must_use]
+    pub fn exert(&mut self, fuel: usize) -> (Vec<FueledMergeReq<T>>, bool) {
+        let mut merge_reqs = Vec::new();
+        let did_work = self.spine.exert(
+            fuel,
+            &mut SpineLog::Enabled {
+                merge_reqs: &mut merge_reqs,
+            },
+        );
+        debug_assert_eq!(self.spine.validate(), Ok(()), "{:?}", self);
+        // See the comment in [Self::push_batch].
+        let merge_reqs = Self::remove_redundant_merge_reqs(merge_reqs);
+        (merge_reqs, did_work)
     }
 
     /// Validates invariants.
@@ -538,14 +573,26 @@ impl<T: Timestamp + Lattice> Trace<T> {
     }
 
     /// Obtain all fueled merge reqs that either have no active compaction, or the previous
-    /// compaction was started at or before the threshold time.
+    /// compaction was started at or before the threshold time, in order from oldest to newest.
     pub(crate) fn fueled_merge_reqs_before_ms(
         &self,
         threshold_ms: u64,
+        threshold_writer: Option<WriterKey>,
     ) -> impl Iterator<Item = FueledMergeReq<T>> + '_ {
         self.spine
             .spine_batches()
-            .filter(|b| !b.is_compact())
+            .filter(move |b| {
+                let noncompact = !b.is_compact();
+                let old_writer = threshold_writer.as_ref().map_or(false, |min_writer| {
+                    b.parts.iter().any(|b| {
+                        b.batch
+                            .parts
+                            .iter()
+                            .any(|p| p.writer_key().map_or(false, |writer| writer < *min_writer))
+                    })
+                });
+                noncompact || old_writer
+            })
             .filter(move |b| {
                 // Either there's no active compaction, or the last active compaction
                 // is not after the timeout timestamp.
@@ -715,7 +762,7 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
     pub fn is_compact(&self) -> bool {
         // This definition is extremely likely to change, but for now, we consider a batch
         // "compact" if it has at most one hollow batch with at most one run.
-        self.parts.len() <= 1 && self.parts.iter().all(|p| p.batch.runs.is_empty())
+        self.parts.len() <= 1 && self.parts.iter().all(|p| p.batch.run_splits.is_empty())
     }
 
     pub fn is_merging(&self) -> bool {
@@ -1089,10 +1136,12 @@ struct Spine<T> {
 }
 
 impl<T> Spine<T> {
+    /// All batches in the spine, oldest to newest.
     pub fn spine_batches(&self) -> impl Iterator<Item = &SpineBatch<T>> {
         self.merging.iter().rev().flat_map(|m| &m.batches)
     }
 
+    /// All (mutable) batches in the spine, oldest to newest.
     pub fn spine_batches_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut SpineBatch<T>> {
         self.merging.iter_mut().rev().flat_map(|m| &mut m.batches)
     }
@@ -1115,6 +1164,50 @@ impl<T: Timestamp + Lattice> Spine<T> {
         }
     }
 
+    /// Apply some amount of effort to trace maintenance.
+    ///
+    /// The units of effort are updates, and the method should be thought of as
+    /// analogous to inserting as many empty updates, where the trace is
+    /// permitted to perform proportionate work.
+    ///
+    /// Returns true if this did work and false if it left the spine unchanged.
+    fn exert(&mut self, effort: usize, log: &mut SpineLog<'_, T>) -> bool {
+        self.tidy_layers();
+        if self.reduced() {
+            return false;
+        }
+
+        if self.merging.iter().any(|b| b.merge.is_some()) {
+            let fuel = isize::try_from(effort).unwrap_or(isize::MAX);
+            // If any merges exist, we can directly call `apply_fuel`.
+            self.apply_fuel(&fuel, log);
+        } else {
+            // Otherwise, we'll need to introduce fake updates to move merges
+            // along.
+
+            // Introduce an empty batch with roughly *effort number of virtual updates.
+            let level = usize::cast_from(effort.next_power_of_two().trailing_zeros());
+            let id = self.next_id();
+            self.introduce_batch(
+                SpineBatch::empty(
+                    id,
+                    self.upper.clone(),
+                    self.upper.clone(),
+                    self.since.clone(),
+                ),
+                level,
+                log,
+            );
+        }
+        true
+    }
+
+    pub fn next_id(&mut self) -> SpineId {
+        let id = self.next_id;
+        self.next_id += 1;
+        SpineId(id, self.next_id)
+    }
+
     // Ideally, this method acts as insertion of `batch`, even if we are not yet
     // able to begin merging the batch. This means it is a good time to perform
     // amortized work proportional to the size of batch.
@@ -1122,11 +1215,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
         assert!(batch.desc.lower() != batch.desc.upper());
         assert_eq!(batch.desc.lower(), &self.upper);
 
-        let id = {
-            let id = self.next_id;
-            self.next_id += 1;
-            SpineId(id, self.next_id)
-        };
+        let id = self.next_id();
         let batch = SpineBatch::merged(IdHollowBatch {
             id,
             batch: Arc::new(batch),
@@ -1153,6 +1242,18 @@ impl<T: Timestamp + Lattice> Spine<T> {
         // Normal insertion for the batch.
         let index = batch.len().next_power_of_two();
         self.introduce_batch(batch, usize::cast_from(index.trailing_zeros()), log);
+    }
+
+    /// True iff there is at most one HollowBatch in `self.merging`.
+    ///
+    /// When true, there is no maintenance work to perform in the trace, other
+    /// than compaction. We do not yet have logic in place to determine if
+    /// compaction would improve a trace, so for now we are ignoring that.
+    fn reduced(&self) -> bool {
+        self.spine_batches()
+            .flat_map(|b| b.parts.as_slice())
+            .count()
+            < 2
     }
 
     /// Describes the merge progress of layers in the trace.
@@ -1722,6 +1823,7 @@ pub(crate) mod tests {
     use std::ops::Range;
 
     use proptest::prelude::*;
+    use semver::Version;
 
     use crate::internal::state::tests::any_hollow_batch;
 
@@ -1758,7 +1860,9 @@ pub(crate) mod tests {
                     lower.clone_from(batch.desc.upper());
                     let _merge_req = trace.push_batch(batch);
                 }
-                let reqs: Vec<_> = trace.fueled_merge_reqs_before_ms(timeout_ms).collect();
+                let reqs: Vec<_> = trace
+                    .fueled_merge_reqs_before_ms(timeout_ms, None)
+                    .collect();
                 for req in reqs {
                     trace.claim_compaction(req.id, ActiveCompaction { start_ms: 0 })
                 }
@@ -1779,6 +1883,44 @@ pub(crate) mod tests {
         }
 
         proptest!(|(trace in any_trace::<i64>(1..10))| { check(trace) })
+    }
+
+    #[mz_ore::test]
+    fn fueled_merge_reqs() {
+        let mut trace: Trace<u64> = Trace::default();
+        let fueled_reqs = trace.push_batch(crate::internal::state::tests::hollow(
+            0,
+            10,
+            &["n0011500/p3122e2a1-a0c7-429f-87aa-1019bf4f5f86"],
+            1000,
+        ));
+
+        assert!(fueled_reqs.is_empty());
+        assert_eq!(
+            trace.fueled_merge_reqs_before_ms(u64::MAX, None).count(),
+            0,
+            "no merge reqs when not filtering by version"
+        );
+        assert_eq!(
+            trace
+                .fueled_merge_reqs_before_ms(
+                    u64::MAX,
+                    Some(WriterKey::for_version(&Version::new(0, 50, 0)))
+                )
+                .count(),
+            0,
+            "zero batches are older than a past version"
+        );
+        assert_eq!(
+            trace
+                .fueled_merge_reqs_before_ms(
+                    u64::MAX,
+                    Some(WriterKey::for_version(&Version::new(99, 99, 0)))
+                )
+                .count(),
+            1,
+            "one batch is older than a future version"
+        );
     }
 
     #[mz_ore::test]

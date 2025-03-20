@@ -25,13 +25,13 @@ count
 > CREATE VIEW delta_join (t1_f1, t1_f2, t2_f1, t2_f2) AS SELECT * FROM t1, t2 WHERE t1.f1 = t2.f1;
 
 # This should cause a delta join to be executed.
-# But this test is currently broken: https://github.com/MaterializeInc/materialize/issues/16478
+# But this test is currently broken: https://github.com/MaterializeInc/database-issues/issues/4772
 > SELECT COUNT(*) FROM delta_join;
 count
 ----
 1
 
-? EXPLAIN WITH(join implementations) SELECT * FROM delta_join;
+? EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS VERBOSE TEXT FOR SELECT * FROM delta_join;
 Explained Query:
   Project (#0, #1, #0, #3)
     Filter (#0) IS NOT NULL
@@ -66,16 +66,16 @@ count
 > SELECT
     sent
   FROM
-    mz_internal.mz_dataflow_channels AS channels
-    LEFT JOIN mz_internal.mz_message_counts AS counts
+    mz_introspection.mz_dataflow_channels AS channels
+    LEFT JOIN mz_introspection.mz_message_counts AS counts
         ON channels.id = counts.channel_id
   WHERE
     id IN
         (SELECT id
-         FROM mz_internal.mz_dataflow_addresses
+         FROM mz_introspection.mz_dataflow_addresses
          WHERE address[1] =
              (SELECT id
-              FROM mz_internal.mz_dataflows
+              FROM mz_introspection.mz_dataflows
               WHERE name LIKE '%.delta_join%'))
     AND sent > 100
   ORDER BY sent;

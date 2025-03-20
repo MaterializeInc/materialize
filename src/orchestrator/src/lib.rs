@@ -57,14 +57,14 @@ pub trait NamespacedOrchestrator: fmt::Debug + Send + Sync {
     /// If a service with the same ID already exists, its configuration is
     /// updated to match `config`. This may or may not involve restarting the
     /// service, depending on whether the existing service matches `config`.
-    async fn ensure_service(
+    fn ensure_service(
         &self,
         id: &str,
-        config: ServiceConfig<'_>,
+        config: ServiceConfig,
     ) -> Result<Box<dyn Service>, anyhow::Error>;
 
     /// Drops the identified service, if it exists.
-    async fn drop_service(&self, id: &str) -> Result<(), anyhow::Error>;
+    fn drop_service(&self, id: &str) -> Result<(), anyhow::Error>;
 
     /// Lists the identifiers of all known services.
     async fn list_services(&self) -> Result<Vec<String>, anyhow::Error>;
@@ -97,14 +97,16 @@ pub struct ServiceEvent {
 
 /// Why the service is not ready, if known
 #[derive(Debug, Clone, Copy, Serialize, Eq, PartialEq)]
-pub enum NotReadyReason {
+pub enum OfflineReason {
     OomKilled,
+    Initializing,
 }
 
-impl fmt::Display for NotReadyReason {
+impl fmt::Display for OfflineReason {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            NotReadyReason::OomKilled => f.write_str("oom-killed"),
+            OfflineReason::OomKilled => f.write_str("oom-killed"),
+            OfflineReason::Initializing => f.write_str("initializing"),
         }
     }
 }
@@ -113,19 +115,19 @@ impl fmt::Display for NotReadyReason {
 #[derive(Debug, Clone, Copy, Serialize, Eq, PartialEq)]
 pub enum ServiceStatus {
     /// Service is ready to accept requests.
-    Ready,
+    Online,
     /// Service is not ready to accept requests.
     /// The inner element is `None` if the reason
     /// is unknown
-    NotReady(Option<NotReadyReason>),
+    Offline(Option<OfflineReason>),
 }
 
 impl ServiceStatus {
     /// Returns the service status as a kebab-case string.
     pub fn as_kebab_case_str(&self) -> &'static str {
         match self {
-            ServiceStatus::Ready => "ready",
-            ServiceStatus::NotReady(_) => "not-ready",
+            ServiceStatus::Online => "online",
+            ServiceStatus::Offline(_) => "offline",
         }
     }
 }
@@ -183,9 +185,9 @@ pub struct LabelSelector {
 }
 
 /// Describes the desired state of a service.
-#[derive(Derivative, Clone)]
+#[derive(Derivative)]
 #[derivative(Debug)]
-pub struct ServiceConfig<'a> {
+pub struct ServiceConfig {
     /// An opaque identifier for the executable or container image to run.
     ///
     /// Often names a container on Docker Hub or a path on the local machine.
@@ -196,7 +198,7 @@ pub struct ServiceConfig<'a> {
     /// A function that generates the arguments for each process of the service
     /// given the assigned listen addresses for each named port.
     #[derivative(Debug = "ignore")]
-    pub args: &'a (dyn Fn(&BTreeMap<String, String>) -> Vec<String> + Send + Sync),
+    pub args: Box<dyn Fn(&BTreeMap<String, String>) -> Vec<String> + Send + Sync>,
     /// Ports to expose.
     pub ports: Vec<ServicePort>,
     /// An optional limit on the memory that the service can use.
@@ -362,6 +364,7 @@ impl Serialize for CpuLimit {
 pub struct DiskLimit(pub ByteSize);
 
 impl DiskLimit {
+    pub const ZERO: Self = Self(ByteSize(0));
     pub const MAX: Self = Self(ByteSize(u64::MAX));
     pub const ARBITRARY: Self = Self(ByteSize::gib(1));
 }

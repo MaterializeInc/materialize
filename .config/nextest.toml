@@ -13,6 +13,22 @@ threads-required = 8
 slow-timeout = { period = "300s", terminate-after = 2 }
 
 [[profile.default.overrides]]
+filter = "package(mz-environmentd) and test(test_storage_usage_collection_interval)"
+slow-timeout = { period = "300s", terminate-after = 2 }
+
+[[profile.default.overrides]]
+filter = "package(mz-catalog) and test(global_expr_cache_roundtrip)"
+slow-timeout = { period = "300s", terminate-after = 2 }
+
+[[profile.default.overrides]]
+filter = "package(mz-catalog) and test(local_expr_cache_roundtrip)"
+slow-timeout = { period = "300s", terminate-after = 2 }
+
+[[profile.default.overrides]]
+filter = "package(mz-catalog) and test(expression_cache)"
+slow-timeout = { period = "300s", terminate-after = 2 }
+
+[[profile.default.overrides]]
 filter = "package(mz-environmentd)"
 threads-required = 8
 slow-timeout = { period = "120s", terminate-after = 2 }
@@ -20,6 +36,18 @@ slow-timeout = { period = "120s", terminate-after = 2 }
 [[profile.default.overrides]]
 filter = "package(mz-storage-types) and test(all_datums_parquet_roundtrip)"
 slow-timeout = { period = "120s", terminate-after = 2 }
+
+[[profile.default.overrides]]
+filter = "package(mz-storage-types) and test(all_datums_produce_valid_stats)"
+slow-timeout = { period = "450s", terminate-after = 2 }
+
+[[profile.default.overrides]]
+filter = "package(mz-storage-types) and test(all_source_data_roundtrips)"
+slow-timeout = { period = "300s", terminate-after = 2 }
+
+[[profile.default.overrides]]
+filter = "package(mz-adapter) and test(test_smoketest_all_builtins)"
+slow-timeout = { period = "300s", terminate-after = 2 }
 
 [profile.ci]
 junit = { path = "junit_cargo-test.xml" }

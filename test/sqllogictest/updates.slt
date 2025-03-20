@@ -135,7 +135,7 @@ SELECT * FROM t1
 statement error db error: ERROR: column "t1\.x" does not exist
 UPDATE t1 AS m SET x = 5 WHERE t1.x < 10
 
-# Regression for #24612
+# Regression for database-issues#7334
 simple
 BEGIN;
 SELECT 1;
@@ -173,3 +173,49 @@ INSERT INTO t1 VALUES((SELECT 1 ORDER BY (SELECT x FROM t1 LIMIT 1)));
 COMMIT;
 ----
 db error: ERROR: INSERT INTO t1 VALUES ((SELECT 1 ORDER BY (SELECT x FROM t1 LIMIT 1))) cannot be run inside a transaction block
+
+statement ok
+ROLLBACK
+
+# Verify that max_query_result_size doesn't affect read part of RTW queries.
+# See database-issues#8099
+statement ok
+SET max_query_result_size = '8B';
+
+query error db error: ERROR: result exceeds max size of 8 B
+SELECT generate_series(1, 1000000)
+
+statement ok
+CREATE TABLE t_big (a int);
+
+# Slow in coverage
+statement ok
+SET statement_timeout = '120s'
+
+statement ok
+INSERT INTO t_big SELECT generate_series(1, 1000000)
+
+statement ok
+INSERT INTO t SELECT * FROM t_big
+
+# But the internal var does limit.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET max_result_size = '1MB'
+----
+COMPLETE 0
+
+statement error db error: ERROR: result exceeds max size of 1048.6 KB
+INSERT INTO t SELECT * FROM t_big
+
+# Test unmat fns in the SET clause.
+statement ok
+CREATE TABLE dt (t TIMESTAMP)
+
+statement count 1
+INSERT INTO dt VALUES (now())
+
+statement count 1
+UPDATE dt SET t = now()
+
+statement error db error: ERROR: calls to mz_now in write statements are not supported
+UPDATE dt SET t = mz_now()

@@ -30,8 +30,9 @@ class ShrinkGrow:
                 $ kafka-ingest format=avro key-format=avro topic=upsert-update-{name} key-schema=${{keyschema}} schema=${{schema}} repeat=10000
                 {{"key1": "${{kafka-ingest.iteration}}"}} {{"f1": "A${{kafka-ingest.iteration}}{pads[0]}A"}}
 
-                > CREATE SOURCE upsert_update_{name}
+                > CREATE SOURCE upsert_update_{name}_src
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-update-{name}-${{testdrive.seed}}')
+                > CREATE TABLE upsert_update_{name} FROM SOURCE upsert_update_{name}_src (REFERENCE "testdrive-upsert-update-{name}-${{testdrive.seed}}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 

@@ -9,8 +9,6 @@
 
 # Test creating a MySQL source using SSH
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_mysql_source = true
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
 
@@ -32,7 +30,9 @@ CREATE TABLE dummy (f1 INTEGER);
 INSERT INTO dummy VALUES (1), (2);
 COMMIT;
 
-> CREATE SOURCE mysql_source FROM MYSQL CONNECTION mysql FOR ALL TABLES;
+> CREATE SOURCE mysql_source FROM MYSQL CONNECTION mysql;
+
+> CREATE TABLE dummy FROM SOURCE mysql_source (REFERENCE dummyschema.dummy);
 
 > SELECT COUNT(*) FROM dummy;
 2

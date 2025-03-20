@@ -43,16 +43,18 @@ $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 > CREATE SOURCE s1
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-materialized-views-${testdrive.seed}')
+
+> CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-materialized-views-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
 $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 {"f1": "234"}
 
-> SELECT COUNT(*) FROM s1;
+> SELECT COUNT(*) FROM s1_tbl;
 2
 
-> CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(f1::integer) AS c1 FROM s1;
+> CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(f1::integer) AS c1 FROM s1_tbl;
 
 $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 {"f1": "345"}
@@ -74,6 +76,8 @@ $ kafka-verify-topic sink=materialize.public.sink1 await-value-schema=true
   FROM KAFKA CONNECTION kafka_conn (
     TOPIC 'testdrive-materialized-views-sink-${testdrive.seed}'
   )
+
+> CREATE TABLE sink1_check_tbl FROM SOURCE sink1_check (REFERENCE "testdrive-materialized-views-sink-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
@@ -85,7 +89,7 @@ $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 > SELECT * FROM v1;
 4
 
-> SELECT MAX((after).c1) FROM sink1_check;
+> SELECT MAX((after).c1) FROM sink1_check_tbl;
 4
 
 # Inject failure in the source

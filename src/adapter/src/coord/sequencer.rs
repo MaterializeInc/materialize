@@ -15,26 +15,33 @@
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use inner::return_if_err;
+use mz_expr::row::RowCollection;
 use mz_expr::{MirRelationExpr, RowSetFinishing};
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{Diff, GlobalId, RowCollection};
+use mz_repr::{CatalogItemId, Diff, GlobalId};
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
-    self, AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, CreateSourcePlanBundle,
-    FetchPlan, MutationKind, Params, Plan, PlanKind, RaisePlan,
+    self, AbortTransactionPlan, CommitTransactionPlan, CopyFromSource, CreateRolePlan,
+    CreateSourcePlanBundle, FetchPlan, MutationKind, Params, Plan, PlanKind, RaisePlan,
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast::{Raw, Statement};
+use mz_storage_client::client::TableData;
 use mz_storage_types::connections::inline::IntoInlineConnection;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use tracing::{event, Instrument, Level, Span};
 
 use crate::catalog::Catalog;
 use crate::command::{Command, ExecuteResponse, Response};
-use crate::coord::{catalog_serving, Coordinator, Message, TargetCluster};
+use crate::coord::appends::{DeferredOp, DeferredPlan};
+use crate::coord::validity::PlanValidity;
+use crate::coord::{
+    catalog_serving, Coordinator, DeferredPlanStatement, Message, PlanStatement, TargetCluster,
+};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
@@ -56,8 +63,7 @@ use crate::ExecuteContext;
 // `sequence_create_role_for_startup` for this purpose.
 // - Methods that continue the execution of some plan that was being run asynchronously, such as
 // `sequence_peek_stage` and `sequence_create_connection_stage_finish`.
-mod alter_set_cluster;
-mod cluster;
+
 mod inner;
 
 impl Coordinator {
@@ -73,6 +79,44 @@ impl Coordinator {
         async move {
             let responses = ExecuteResponse::generated_from(&PlanKind::from(&plan));
             ctx.tx_mut().set_allowed(responses);
+
+            if self.controller.read_only() && !plan.allowed_in_read_only() {
+                ctx.retire(Err(AdapterError::ReadOnly));
+                return;
+            }
+
+            // Check if we're still waiting for any of the builtin table appends from when we
+            // started the Session to complete.
+            if let Some((dependencies, wait_future)) =
+                super::appends::waiting_on_startup_appends(self.catalog(), ctx.session_mut(), &plan)
+            {
+                let conn_id = ctx.session().conn_id();
+                tracing::debug!(%conn_id, "deferring plan for startup appends");
+
+                let role_metadata = ctx.session().role_metadata().clone();
+                let validity = PlanValidity::new(
+                    self.catalog.transient_revision(),
+                    dependencies,
+                    None,
+                    None,
+                    role_metadata,
+                );
+                let deferred_plan = DeferredPlan {
+                    ctx,
+                    plan,
+                    validity,
+                    requires_locks: BTreeSet::default(),
+                };
+                // Defer op accepts an optional write lock, but there aren't any writes occurring
+                // here, since the map to `None`.
+                let acquire_future = wait_future.map(|()| None);
+
+                self.defer_op(acquire_future, DeferredOp::Plan(deferred_plan));
+
+                // Return early because our op is deferred on waiting for the builtin writes to
+                // complete.
+                return;
+            };
 
             // Scope the borrow of the Catalog because we need to mutate the Coordinator state below.
             let target_cluster = match ctx.session().transaction().cluster() {
@@ -116,13 +160,14 @@ impl Coordinator {
 
             if let Err(e) = rbac::check_plan(
                 &session_catalog,
-                &self
-                    .active_conns()
-                    .into_iter()
-                    .map(|(conn_id, conn_meta)| {
-                        (conn_id.unhandled(), *conn_meta.authenticated_role_id())
-                    })
-                    .collect(),
+                |id| {
+                    // We use linear search through active connections if needed, which is fine
+                    // because the RBAC check will call the closure at most once.
+                    self.active_conns()
+                        .into_iter()
+                        .find(|(conn_id, _)| conn_id.unhandled() == id)
+                        .map(|(_, conn_meta)| *conn_meta.authenticated_role_id())
+                },
                 ctx.session(),
                 &plan,
                 target_cluster_id,
@@ -133,15 +178,18 @@ impl Coordinator {
 
             match plan {
                 Plan::CreateSource(plan) => {
-                    let source_id =
-                        return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
+                    let id_ts = self.get_catalog_write_ts().await;
+                    let (item_id, global_id) =
+                        return_if_err!(self.catalog_mut().allocate_user_id(id_ts).await, ctx);
                     let result = self
                         .sequence_create_source(
                             ctx.session_mut(),
                             vec![CreateSourcePlanBundle {
-                                source_id,
+                                item_id,
+                                global_id,
                                 plan,
                                 resolved_ids,
+                                available_source_references: None,
                             }],
                         )
                         .await;
@@ -149,7 +197,7 @@ impl Coordinator {
                 }
                 Plan::CreateSources(plans) => {
                     assert!(
-                        resolved_ids.0.is_empty(),
+                        resolved_ids.is_empty(),
                         "each plan has separate resolved_ids"
                     );
                     let result = self.sequence_create_source(ctx.session_mut(), plans).await;
@@ -205,6 +253,12 @@ impl Coordinator {
                     self.sequence_create_materialized_view(ctx, plan, resolved_ids)
                         .await;
                 }
+                Plan::CreateContinualTask(plan) => {
+                    let res = self
+                        .sequence_create_continual_task(ctx.session(), plan, resolved_ids)
+                        .await;
+                    ctx.retire(res);
+                }
                 Plan::CreateIndex(plan) => {
                     self.sequence_create_index(ctx, plan, resolved_ids).await;
                 }
@@ -213,6 +267,12 @@ impl Coordinator {
                         .sequence_create_type(ctx.session(), plan, resolved_ids)
                         .await;
                     ctx.retire(result);
+                }
+                Plan::CreateNetworkPolicy(plan) => {
+                    let res = self
+                        .sequence_create_network_policy(ctx.session(), plan)
+                        .await;
+                    ctx.retire(res);
                 }
                 Plan::Comment(plan) => {
                     let result = self.sequence_comment_on(ctx.session(), plan).await;
@@ -278,6 +338,29 @@ impl Coordinator {
                 | Plan::AbortTransaction(AbortTransactionPlan {
                     ref transaction_type,
                 }) => {
+                    // Serialize DDL transactions. Statements that use this mode must return false
+                    // in `must_serialize_ddl()`.
+                    if ctx.session().transaction().is_ddl() {
+                        if let Ok(guard) = self.serialized_ddl.try_lock_owned() {
+                            let prev = self
+                                .active_conns
+                                .get_mut(ctx.session().conn_id())
+                                .expect("connection must exist")
+                                .deferred_lock
+                                .replace(guard);
+                            assert!(
+                                prev.is_none(),
+                                "connections should have at most one lock guard"
+                            );
+                        } else {
+                            self.serialized_ddl.push_back(DeferredPlanStatement {
+                                ctx,
+                                ps: PlanStatement::Plan { plan, resolved_ids },
+                            });
+                            return;
+                        }
+                    }
+
                     let action = match &plan {
                         Plan::CommitTransaction(_) => EndTransactionAction::Commit,
                         Plan::AbortTransaction(_) => EndTransactionAction::Rollback,
@@ -296,7 +379,8 @@ impl Coordinator {
                     self.sequence_end_transaction(ctx, action).await;
                 }
                 Plan::Select(plan) => {
-                    self.sequence_peek(ctx, plan, target_cluster).await;
+                    let max = Some(ctx.session().vars().max_query_result_size());
+                    self.sequence_peek(ctx, plan, target_cluster, max).await;
                 }
                 Plan::Subscribe(plan) => {
                     self.sequence_subscribe(ctx, plan, target_cluster).await;
@@ -308,21 +392,27 @@ impl Coordinator {
                     ctx.retire(Ok(Self::send_immediate_rows(plan.row)));
                 }
                 Plan::ShowColumns(show_columns_plan) => {
-                    self.sequence_peek(ctx, show_columns_plan.select_plan, target_cluster)
+                    let max = Some(ctx.session().vars().max_query_result_size());
+                    self.sequence_peek(ctx, show_columns_plan.select_plan, target_cluster, max)
                         .await;
                 }
-                Plan::CopyFrom(plan) => {
-                    let (tx, _, session, ctx_extra) = ctx.into_parts();
-                    tx.send(
-                        Ok(ExecuteResponse::CopyFrom {
-                            id: plan.id,
-                            columns: plan.columns,
-                            params: plan.params,
-                            ctx_extra,
-                        }),
-                        session,
-                    );
-                }
+                Plan::CopyFrom(plan) => match plan.source {
+                    CopyFromSource::Stdin => {
+                        let (tx, _, session, ctx_extra) = ctx.into_parts();
+                        tx.send(
+                            Ok(ExecuteResponse::CopyFrom {
+                                id: plan.id,
+                                columns: plan.columns,
+                                params: plan.params,
+                                ctx_extra,
+                            }),
+                            session,
+                        );
+                    }
+                    CopyFromSource::Url(_) | CopyFromSource::AwsS3 { .. } => {
+                        self.sequence_copy_from(ctx, plan, target_cluster).await;
+                    }
+                },
                 Plan::ExplainPlan(plan) => {
                     self.sequence_explain_plan(ctx, plan, target_cluster).await;
                 }
@@ -348,8 +438,7 @@ impl Coordinator {
                     ctx.retire(Ok(ExecuteResponse::AlteredObject(plan.object_type)));
                 }
                 Plan::AlterCluster(plan) => {
-                    let result = self.sequence_alter_cluster(ctx.session(), plan).await;
-                    ctx.retire(result);
+                    self.sequence_alter_cluster_staged(ctx, plan).await;
                 }
                 Plan::AlterClusterRename(plan) => {
                     let result = self
@@ -387,11 +476,6 @@ impl Coordinator {
                         .sequence_alter_item_rename(ctx.session_mut(), plan)
                         .await;
                     ctx.retire(result);
-                }
-                Plan::AlterItemSwap(_plan) => {
-                    // Note: we should never reach this point because we return an unsupported error in
-                    // planning.
-                    ctx.retire(Err(AdapterError::Unsupported("ALTER ... SWAP ...")));
                 }
                 Plan::AlterSchemaRename(plan) => {
                     let result = self
@@ -432,6 +516,16 @@ impl Coordinator {
                         .sequence_alter_system_reset_all(ctx.session(), plan)
                         .await;
                     ctx.retire(result);
+                }
+                Plan::AlterTableAddColumn(plan) => {
+                    let result = self.sequence_alter_table(ctx.session(), plan).await;
+                    ctx.retire(result);
+                }
+                Plan::AlterNetworkPolicy(plan) => {
+                    let res = self
+                        .sequence_alter_network_policy(ctx.session(), plan)
+                        .await;
+                    ctx.retire(res);
                 }
                 Plan::DiscardTemp => {
                     self.drop_temp_items(ctx.session().conn_id()).await;
@@ -671,7 +765,7 @@ impl Coordinator {
         self.sequence_create_role(None, plan).await
     }
 
-    pub(crate) fn allocate_transient_id(&self) -> GlobalId {
+    pub(crate) fn allocate_transient_id(&self) -> (CatalogItemId, GlobalId) {
         self.transient_id_gen.allocate_id()
     }
 
@@ -686,13 +780,15 @@ impl Coordinator {
     pub(crate) fn insert_constant(
         catalog: &Catalog,
         session: &mut Session,
-        id: GlobalId,
+        id: CatalogItemId,
         constants: MirRelationExpr,
     ) -> Result<ExecuteResponse, AdapterError> {
         // Insert can be queued, so we need to re-verify the id exists.
         let desc = match catalog.try_get_entry(&id) {
             Some(table) => {
-                table.desc(&catalog.resolve_full_name(table.name(), Some(session.conn_id())))?
+                let full_name = catalog.resolve_full_name(table.name(), Some(session.conn_id()));
+                // Inserts always happen at the latest version of a table.
+                table.desc_latest(&full_name)?
             }
             None => {
                 return Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
@@ -775,7 +871,7 @@ impl Coordinator {
 
         session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
             id: plan.id,
-            rows: plan.updates,
+            rows: TableData::Rows(plan.updates),
         }]))?;
         if !plan.returning.is_empty() {
             let finishing = RowSetFinishing {
@@ -785,13 +881,15 @@ impl Coordinator {
                 project: (0..plan.returning[0].0.iter().count()).collect(),
             };
             let max_returned_query_size = session.vars().max_query_result_size();
+            let duration_histogram = session.metrics().row_set_finishing_seconds();
 
             return match finishing.finish(
-                RowCollection::new(&plan.returning),
+                RowCollection::new(plan.returning, &finishing.order_by),
                 plan.max_result_size,
                 Some(max_returned_query_size),
+                duration_histogram,
             ) {
-                Ok(rows) => Ok(Self::send_immediate_rows(rows)),
+                Ok((rows, _size_bytes)) => Ok(Self::send_immediate_rows(rows)),
                 Err(e) => Err(AdapterError::ResultSize(e)),
             };
         }

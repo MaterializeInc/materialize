@@ -12,10 +12,24 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, TypeVar, Union
 
+from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition
 
 if TYPE_CHECKING:
     from materialize.zippy.scenarios import Scenario
+
+
+class State:
+    mz_service: str
+    deploy_generation: int
+    system_parameter_defaults: dict[str, str]
+
+    def __init__(self, zero_downtime: bool):
+        self.mz_service = "materialized"
+        self.deploy_generation = 0
+        self.system_parameter_defaults = get_default_system_parameters(
+            zero_downtime=zero_downtime
+        )
 
 
 class Capability:
@@ -125,9 +139,9 @@ class Action:
         """Compute the capabilities that this action will make available."""
         return []
 
-    def run(self, c: Composition) -> None:
-        """Run this action on the provided copmosition."""
-        assert False
+    def run(self, c: Composition, state: State) -> None:
+        """Run this action on the provided composition."""
+        raise NotImplementedError
 
     @classmethod
     def require_explicit_mention(cls) -> bool:
@@ -138,11 +152,15 @@ class Action:
         return f"--- #{self.seqno}: {self.__class__.__name__}"
 
 
+class Mz0dtDeployBaseAction(Action):
+    pass
+
+
 class ActionFactory:
     """Base class for Action Factories that return parameterized Actions to execute."""
 
     def new(self, capabilities: Capabilities) -> list[Action]:
-        assert False
+        raise NotImplementedError
 
     @classmethod
     def requires(cls) -> set[type[Capability]] | list[set[type[Capability]]]:
@@ -174,6 +192,14 @@ class Test:
         self._actions_with_weight: dict[ActionOrFactory, float] = (
             self._scenario.actions_with_weight()
         )
+        self._state = State(
+            zero_downtime=any(
+                [
+                    isinstance(action, Mz0dtDeployBaseAction)
+                    for action in self._actions_with_weight
+                ]
+            )
+        )
         self._max_execution_time: timedelta = max_execution_time
 
         for action_or_factory in self._scenario.bootstrap():
@@ -192,7 +218,9 @@ class Test:
         elif issubclass(action_def, Action):
             actions = [action_def(capabilities=self._capabilities)]
         else:
-            assert False
+            raise RuntimeError(
+                f"{type(action_def)} is not a subclass of {ActionFactory} or {Action}"
+            )
 
         for action in actions:
             print("test:", action)
@@ -208,7 +236,7 @@ class Test:
         max_time = datetime.now() + self._max_execution_time
         for action in self._actions:
             print(action)
-            action.run(c)
+            action.run(c, self._state)
             if datetime.now() > max_time:
                 print(
                     f"--- Desired execution time of {self._max_execution_time} has been reached."
@@ -217,7 +245,7 @@ class Test:
 
         for action in self._final_actions:
             print(action)
-            action.run(c)
+            action.run(c, self._state)
 
     def _pick_action_or_factory(self) -> ActionOrFactory:
         """Select the next Action to run in the Test"""

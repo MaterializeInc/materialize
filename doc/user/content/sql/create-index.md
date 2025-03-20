@@ -8,16 +8,23 @@ menu:
     parent: 'commands'
 ---
 
-`CREATE INDEX` creates an in-memory [index](/get-started/key-concepts/#indexes) on a source, view, or materialized
+`CREATE INDEX` creates an in-memory [index](/concepts/indexes/) on a source, view, or materialized
 view.
 
-Indexes assemble and maintain a query's results in memory within a [cluster](/get-started/key-concepts#clusters),
-which provides future queries the data
-they need in a format they can immediately use. In particular, creating indexes
-can be very helpful for the [`JOIN`](../join) operator, which needs to build
-and maintain the appropriate indexes if they do not otherwise exist.
+In Materialize, indexes store query results in memory within a [cluster](/concepts/clusters/),
+and keep these results incrementally updated as new data arrives. By making
+up-to-date results available in memory, indexes can help [optimize query
+performance](/transform-data/optimization/),
+both when serving results and maintaining resource-heavy operations like joins.
 
 ### Usage patterns
+
+#### Indexes on views vs. materialized views
+
+{{% views-indexes/table-usage-pattern-intro %}}
+{{% views-indexes/table-usage-pattern %}}
+
+#### Indexes and query optimizations
 
 You might want to create indexes when...
 
@@ -25,8 +32,11 @@ You might want to create indexes when...
     this case, you could create an index on the columns in the join condition.
 -   You want to speed up searches filtering by literal values or expressions.
 
-[//]: # "TODO(morsapaes) Point to relevant operational guide on indexes once
-this exists."
+{{% views-indexes/index-query-optimization-specific-instances %}}
+
+#### Best practices
+
+{{% views-indexes/index-best-practices %}}
 
 ## Syntax
 
@@ -44,7 +54,7 @@ _obj&lowbar;name_ | The name of the source, view, or materialized view on which 
 _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this index. If not specified, defaults to the active cluster.
 _method_ | The name of the index method to use. The only supported method is [`arrangement`](/overview/arrangements).
 _col&lowbar;expr_**...** | The expressions to use as the key for the index.
-_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data for performing [time travel queries](/transform-data/patterns/time-travel-queries). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* <br>Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). **Note:** Configuring indexes to retain history is not recommended. As an alternative, consider creating a materialized view for your subscription query and configuring the history retention period on the view instead. See [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). <br>Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). <br>Default: `1s`.
 
 ## Details
 
@@ -92,8 +102,7 @@ When creating your own indexes, you can choose the indexed expressions.
 The in-memory sizes of indexes are proportional to the current size of the source
 or view they represent. The actual amount of memory required depends on several
 details related to the rate of compaction and the representation of the types of
-data in the source or view. We are working on a feature to let you see the size
-each index consumes {{% gh 1532 %}}.
+data in the source or view.
 
 Creating an index may also force the first materialization of a view, which may
 cause Materialize to install a dataflow to determine and maintain the results of
@@ -107,7 +116,7 @@ of the index.
 You can optimize the performance of `JOIN` on two relations by ensuring their
 join keys are the key columns in an index.
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW active_customers AS
     SELECT guid, geo_id, last_active_on
     FROM customer_source
@@ -138,7 +147,7 @@ In the above example, the index `active_customers_geo_idx`...
 
 If you commonly filter by a certain column being equal to a literal value, you can set up an index over that column to speed up your queries:
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW active_customers AS
     SELECT guid, geo_id, last_active_on
     FROM customer_source

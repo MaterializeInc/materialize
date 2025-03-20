@@ -9,12 +9,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
+use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 
 use derivative::Derivative;
 use enum_kinds::EnumKind;
-use futures::future::BoxFuture;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_compute_types::ComputeInstanceId;
 use mz_ore::collections::CollectionExt;
@@ -22,17 +22,18 @@ use mz_ore::soft_assert_no_log;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, RowIterator};
+use mz_repr::{CatalogItemId, RowIterator};
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
 use mz_sql::plan::{ExecuteTimeout, Plan, PlanKind};
 use mz_sql::session::user::User;
-use mz_sql::session::vars::{OwnedVarInput, Var};
+use mz_sql::session::vars::{OwnedVarInput, SystemVars};
 use mz_sql_parser::ast::{AlterObjectRenameStatement, AlterOwnerStatement, DropObjectsStatement};
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
+use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::consistency::CoordinatorInconsistencies;
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::ExecuteContextExtra;
@@ -58,6 +59,7 @@ pub enum Command {
         tx: oneshot::Sender<Result<StartupResponse, AdapterError>>,
         user: User,
         conn_id: ConnectionId,
+        client_ip: Option<IpAddr>,
         secret_key: u32,
         uuid: Uuid,
         application_name: String,
@@ -71,6 +73,10 @@ pub enum Command {
         outer_ctx_extra: Option<ExecuteContextExtra>,
     },
 
+    /// Attempts to commit or abort the session's transaction. Guarantees that the Coordinator's
+    /// transaction state has been cleared, even if the commit or abort fails. (A failure can
+    /// happen, for example, if the session's role id has been dropped which will prevent
+    /// sequence_end_transaction from running.)
     Commit {
         action: EndTransactionAction,
         session: Session,
@@ -94,8 +100,7 @@ pub enum Command {
     },
 
     GetSystemVars {
-        conn_id: ConnectionId,
-        tx: oneshot::Sender<Result<GetVariablesResponse, AdapterError>>,
+        tx: oneshot::Sender<SystemVars>,
     },
 
     SetSystemVars {
@@ -127,10 +132,6 @@ pub enum Command {
     Dump {
         tx: oneshot::Sender<Result<serde_json::Value, anyhow::Error>>,
     },
-
-    ControllerAllowWrites {
-        tx: oneshot::Sender<Result<bool, anyhow::Error>>,
-    },
 }
 
 impl Command {
@@ -147,8 +148,7 @@ impl Command {
             | Command::SetSystemVars { .. }
             | Command::RetireExecute { .. }
             | Command::CheckConsistency { .. }
-            | Command::Dump { .. }
-            | Command::ControllerAllowWrites { .. } => None,
+            | Command::Dump { .. } => None,
         }
     }
 
@@ -165,8 +165,7 @@ impl Command {
             | Command::SetSystemVars { .. }
             | Command::RetireExecute { .. }
             | Command::CheckConsistency { .. }
-            | Command::Dump { .. }
-            | Command::ControllerAllowWrites { .. } => None,
+            | Command::Dump { .. } => None,
         }
     }
 }
@@ -188,7 +187,7 @@ pub struct StartupResponse {
     pub role_id: RoleId,
     /// A future that completes when all necessary Builtin Table writes have completed.
     #[derivative(Debug = "ignore")]
-    pub write_notify: BoxFuture<'static, ()>,
+    pub write_notify: BuiltinTableAppendNotify,
     /// Map of (name, VarInput::Flat) tuples of session default variables that should be set.
     pub session_defaults: BTreeMap<String, OwnedVarInput>,
     pub catalog: Arc<Catalog>,
@@ -224,36 +223,10 @@ impl Transmittable for CatalogDump {
     }
 }
 
-/// The response to [`SessionClient::get_system_vars`](crate::SessionClient::get_system_vars).
-#[derive(Debug, Clone)]
-pub struct GetVariablesResponse(BTreeMap<String, String>);
-
-impl GetVariablesResponse {
-    pub fn new<'a>(vars: impl Iterator<Item = &'a dyn Var>) -> Self {
-        GetVariablesResponse(
-            vars.map(|var| (var.name().to_string(), var.value()))
-                .collect(),
-        )
-    }
-
-    pub fn get(&self, name: &str) -> Option<&str> {
-        self.0.get(name).map(|s| s.as_str())
-    }
-}
-
-impl Transmittable for GetVariablesResponse {
+impl Transmittable for SystemVars {
     type Allowed = bool;
     fn to_allowed(&self) -> Self::Allowed {
         true
-    }
-}
-
-impl IntoIterator for GetVariablesResponse {
-    type Item = (String, String);
-    type IntoIter = std::collections::btree_map::IntoIter<String, String>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
     }
 }
 
@@ -282,7 +255,7 @@ pub enum ExecuteResponse {
         resp: Box<ExecuteResponse>,
     },
     CopyFrom {
-        id: GlobalId,
+        id: CatalogItemId,
         columns: Vec<usize>,
         params: CopyFormatParams<'static>,
         ctx_extra: ExecuteContextExtra,
@@ -301,6 +274,8 @@ pub enum ExecuteResponse {
     CreatedClusterReplica,
     /// The requested index was created.
     CreatedIndex,
+    /// The requested introspection subscribe was created.
+    CreatedIntrospectionSubscribe,
     /// The requested secret was created.
     CreatedSecret,
     /// The requested sink was created.
@@ -315,8 +290,12 @@ pub enum ExecuteResponse {
     CreatedViews,
     /// The requested materialized view was created.
     CreatedMaterializedView,
+    /// The requested continual task was created.
+    CreatedContinualTask,
     /// The requested type was created.
     CreatedType,
+    /// The requested network policy was created.
+    CreatedNetworkPolicy,
     /// The requested prepared statement was removed.
     Deallocate { all: bool },
     /// The requested cursor was declared.
@@ -482,6 +461,8 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
             ExecuteResponseKind::CreatedMaterializedView => {
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
+            ExecuteResponseKind::CreatedNetworkPolicy => Ok(ExecuteResponse::CreatedNetworkPolicy),
+            ExecuteResponseKind::CreatedContinualTask => Ok(ExecuteResponse::CreatedContinualTask),
             ExecuteResponseKind::CreatedType => Ok(ExecuteResponse::CreatedType),
             ExecuteResponseKind::Deallocate => Err(()),
             ExecuteResponseKind::DeclaredCursor => Ok(ExecuteResponse::DeclaredCursor),
@@ -509,6 +490,9 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
             ExecuteResponseKind::Updated => Err(()),
             ExecuteResponseKind::ValidatedConnection => Ok(ExecuteResponse::ValidatedConnection),
             ExecuteResponseKind::SendingRowsImmediate => Err(()),
+            ExecuteResponseKind::CreatedIntrospectionSubscribe => {
+                Ok(ExecuteResponse::CreatedIntrospectionSubscribe)
+            }
         }
     }
 }
@@ -540,7 +524,9 @@ impl ExecuteResponse {
             CreatedView { .. } => Some("CREATE VIEW".into()),
             CreatedViews { .. } => Some("CREATE VIEWS".into()),
             CreatedMaterializedView { .. } => Some("CREATE MATERIALIZED VIEW".into()),
+            CreatedContinualTask { .. } => Some("CREATE CONTINUAL TASK".into()),
             CreatedType => Some("CREATE TYPE".into()),
+            CreatedNetworkPolicy => Some("CREATE NETWORKPOLICY".into()),
             Deallocate { all } => Some(format!("DEALLOCATE{}", if *all { " ALL" } else { "" })),
             DeclaredCursor => Some("DECLARE CURSOR".into()),
             Deleted(n) => Some(format!("DELETE {}", n)),
@@ -576,6 +562,7 @@ impl ExecuteResponse {
             TransactionRolledBack { .. } => Some("ROLLBACK".into()),
             Updated(n) => Some(format!("UPDATE {}", n)),
             ValidatedConnection => Some("VALIDATE CONNECTION".into()),
+            CreatedIntrospectionSubscribe => Some("CREATE INTROSPECTION SUBSCRIBE".into()),
         }
     }
 
@@ -595,14 +582,15 @@ impl ExecuteResponse {
             | AlterOwner
             | AlterItemRename
             | AlterRetainHistory
-            | AlterItemSwap
             | AlterNoop
             | AlterSchemaRename
             | AlterSchemaSwap
             | AlterSecret
             | AlterConnection
             | AlterSource
-            | AlterSink => &[AlteredObject],
+            | AlterSink
+            | AlterTableAddColumn
+            | AlterNetworkPolicy => &[AlteredObject],
             AlterDefaultPrivileges => &[AlteredDefaultPrivileges],
             AlterSetCluster => &[AlteredObject],
             AlterRole => &[AlteredRole],
@@ -610,7 +598,7 @@ impl ExecuteResponse {
                 &[AlteredSystemConfiguration]
             }
             Close => &[ClosedCursor],
-            PlanKind::CopyFrom => &[ExecuteResponseKind::CopyFrom],
+            PlanKind::CopyFrom => &[ExecuteResponseKind::CopyFrom, ExecuteResponseKind::Copied],
             PlanKind::CopyTo => &[ExecuteResponseKind::Copied],
             PlanKind::Comment => &[ExecuteResponseKind::Comment],
             CommitTransaction => &[TransactionCommitted, TransactionRolledBack],
@@ -626,9 +614,11 @@ impl ExecuteResponse {
             CreateTable => &[CreatedTable],
             CreateView => &[CreatedView],
             CreateMaterializedView => &[CreatedMaterializedView],
+            CreateContinualTask => &[CreatedContinualTask],
             CreateIndex => &[CreatedIndex],
             CreateType => &[CreatedType],
             PlanKind::Deallocate => &[ExecuteResponseKind::Deallocate],
+            CreateNetworkPolicy => &[CreatedNetworkPolicy],
             Declare => &[DeclaredCursor],
             DiscardTemp => &[DiscardedTemp],
             DiscardAll => &[DiscardedAll],

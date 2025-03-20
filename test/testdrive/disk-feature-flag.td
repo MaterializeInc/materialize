@@ -11,39 +11,37 @@ $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.mater
 ALTER SYSTEM SET enable_disk_cluster_replicas = false
 ALTER SYSTEM SET disk_cluster_replicas_default = false
 
-! CREATE CLUSTER no SIZE = '1', REPLICATION FACTOR 0, DISK;
-exact:`WITH (DISK)` for cluster replicas is not supported
+! CREATE CLUSTER no SIZE = '1-no-disk', REPLICATION FACTOR 0, DISK;
+exact:`WITH (DISK)` for cluster replicas is not available
 
-> CREATE CLUSTER no SIZE = '1', REPLICATION FACTOR 0;
+> CREATE CLUSTER no SIZE = '1-no-disk', REPLICATION FACTOR 0;
 
 ! ALTER CLUSTER no SET (REPLICATION FACTOR 1, DISK);
-exact:`WITH (DISK)` for cluster replicas is not supported
+exact:`WITH (DISK)` for cluster replicas is not available
 
 > DROP CLUSTER no;
 
-# Test that with `enable_create_source_denylist_with_options` off, if
-# `enable_disk_cluster_replicas` is on, we can use `WITH(DISK)`.
+# Test that if `enable_disk_cluster_replicas` is on, we can use `WITH(DISK)`.
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_create_source_denylist_with_options = false
 ALTER SYSTEM SET enable_disk_cluster_replicas = true
 
 > DROP CLUSTER IF EXISTS c;
 
 # Can set unmanaged cluster replica options directly, mixing and matching disk
-> CREATE CLUSTER c REPLICAS (r1 (SIZE '1', DISK), r2 (SIZE '1'))
+> CREATE CLUSTER c REPLICAS (r1 (SIZE '1-no-disk', DISK), r2 (SIZE '1-no-disk'))
 
 > SELECT r.name, r.size, r.disk FROM mz_catalog.mz_clusters c, mz_catalog.mz_cluster_replicas r WHERE c.name = 'c' AND c.id = r.cluster_id;
-r1 1 true
-r2 1 false
+r1 1-no-disk true
+r2 1-no-disk false
 
 > DROP CLUSTER c;
 
 # Can set on managed clusters
-> CREATE CLUSTER c SIZE '1', REPLICATION FACTOR = 2, DISK;
+> CREATE CLUSTER c SIZE '1-no-disk', REPLICATION FACTOR = 2, DISK;
 
 > SELECT r.name, r.size, r.disk FROM mz_catalog.mz_clusters c, mz_catalog.mz_cluster_replicas r WHERE c.name = 'c' AND c.id = r.cluster_id;
-r1 1 true
-r2 1 true
+r1 1-no-disk true
+r2 1-no-disk true
 
 > DROP CLUSTER c;
 
@@ -51,11 +49,11 @@ r2 1 true
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET disk_cluster_replicas_default = true
 
-> CREATE CLUSTER c REPLICAS (r1 (SIZE '1', DISK), r2 (SIZE '1'))
+> CREATE CLUSTER c REPLICAS (r1 (SIZE '1-no-disk', DISK), r2 (SIZE '1-no-disk'))
 
 > SELECT r.name, r.size, r.disk FROM mz_catalog.mz_clusters c, mz_catalog.mz_cluster_replicas r WHERE c.name = 'c' AND c.id = r.cluster_id;
-r1 1 true
-r2 1 true
+r1 1-no-disk true
+r2 1-no-disk true
 
 > DROP CLUSTER c;
 
@@ -66,11 +64,11 @@ ALTER SYSTEM RESET disk_cluster_replicas_default
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_disk_cluster_replicas = false
 
-! CREATE CLUSTER c REPLICAS (dff_3 (size '1', disk))
-contains:`WITH (DISK)` for cluster replicas is not supported
+! CREATE CLUSTER c REPLICAS (dff_3 (size '1-no-disk', disk))
+contains:`WITH (DISK)` for cluster replicas is not available
 
 # Cannot set DISK on unmanaged clusters (the option is per replica)
-! CREATE CLUSTER c REPLICAS (dff_3 (size '1')), DISK;
+! CREATE CLUSTER c REPLICAS (dff_3 (size '1-no-disk')), DISK;
 contains:DISK not supported for unmanaged clusters
 
 # The following test that we don't crash envd with bad parameters, and instead just fallback

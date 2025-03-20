@@ -77,7 +77,7 @@ class ServiceConfig(TypedDict, total=False):
     host user.
 
     This is an mzcompose extension to Docker Compose. It is equivalent to
-    passing `--user $(id -u):$(id -g)` to `docker run`. The defualt is `False`.
+    passing `--user $(id -u):$(id -g)` to `docker run`. The default is `False`.
     """
 
     allow_host_ports: bool
@@ -164,6 +164,15 @@ class ServiceConfig(TypedDict, total=False):
 
     platform: str
     """Target platform for service to run on. Syntax: os[/arch[/variant]]"""
+
+    publish: bool | None
+    """Override whether an image is publishable. Unpublishable images can be built during normal test runs in CI."""
+
+    stop_grace_period: str | None
+    """Time to wait when stopping a container."""
+
+    network_mode: str | None
+    """Network mode."""
 
 
 class Service:

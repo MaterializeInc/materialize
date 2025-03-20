@@ -12,7 +12,7 @@
 //! This module houses the handlers for statements that manipulate the session,
 //! like `DISCARD` and `SET`.
 
-use mz_repr::{GlobalId, RelationDesc, ScalarType};
+use mz_repr::{CatalogItemId, RelationDesc, RelationVersionSelector, ScalarType};
 use mz_sql_parser::ast::InspectShardStatement;
 use std::time::Duration;
 use uncased::UncasedStr;
@@ -25,7 +25,6 @@ use crate::ast::{
 };
 use crate::names::{self, Aug};
 use crate::plan::statement::{StatementContext, StatementDesc};
-use crate::plan::with_options::TryFromValue;
 use crate::plan::{
     describe, query, ClosePlan, DeallocatePlan, DeclarePlan, ExecutePlan, ExecuteTimeout,
     FetchPlan, InspectShardPlan, Params, Plan, PlanError, PreparePlan, ResetVariablePlan,
@@ -104,14 +103,19 @@ pub fn describe_show_variable(
     ShowVariableStatement { variable, .. }: ShowVariableStatement,
 ) -> Result<StatementDesc, PlanError> {
     let desc = if variable.as_str() == UncasedStr::new("ALL") {
-        RelationDesc::empty()
+        RelationDesc::builder()
             .with_column("name", ScalarType::String.nullable(false))
             .with_column("setting", ScalarType::String.nullable(false))
             .with_column("description", ScalarType::String.nullable(false))
+            .finish()
     } else if variable.as_str() == SCHEMA_ALIAS {
-        RelationDesc::empty().with_column(variable.as_str(), ScalarType::String.nullable(true))
+        RelationDesc::builder()
+            .with_column(variable.as_str(), ScalarType::String.nullable(true))
+            .finish()
     } else {
-        RelationDesc::empty().with_column(variable.as_str(), ScalarType::String.nullable(false))
+        RelationDesc::builder()
+            .with_column(variable.as_str(), ScalarType::String.nullable(false))
+            .finish()
     };
     Ok(StatementDesc::new(Some(desc)))
 }
@@ -133,16 +137,25 @@ pub fn describe_inspect_shard(
     _: &StatementContext,
     InspectShardStatement { .. }: InspectShardStatement,
 ) -> Result<StatementDesc, PlanError> {
-    let desc = RelationDesc::empty().with_column("state", ScalarType::Jsonb.nullable(false));
+    let desc = RelationDesc::builder()
+        .with_column("state", ScalarType::Jsonb.nullable(false))
+        .finish();
     Ok(StatementDesc::new(Some(desc)))
 }
 
 pub fn plan_inspect_shard(
-    _: &StatementContext,
+    scx: &StatementContext,
     InspectShardStatement { id }: InspectShardStatement,
 ) -> Result<Plan, PlanError> {
-    let id: GlobalId = id.parse().map_err(|_| sql_err!("invalid shard id"))?;
-    Ok(Plan::InspectShard(InspectShardPlan { id }))
+    let id: CatalogItemId = id.parse().map_err(|_| sql_err!("invalid shard id"))?;
+    // Always inspect the shard at the latest GlobalId.
+    let gid = scx
+        .catalog
+        .try_get_item(&id)
+        .ok_or_else(|| sql_err!("item doesn't exist"))?
+        .at_version(RelationVersionSelector::Latest)
+        .global_id();
+    Ok(Plan::InspectShard(InspectShardPlan { id: gid }))
 }
 
 pub fn describe_discard(
@@ -277,7 +290,7 @@ pub fn describe_execute(
     // means if the statement is now invalid due to an object having been dropped,
     // describe is unable to notice that. This is currently an existing problem
     // with prepared statements over pgwire as well, so we can leave this for now.
-    // See #8397.
+    // See database-issues#2563.
     Ok(plan_execute_desc(scx, stmt)?.0.clone())
 }
 

@@ -8,25 +8,28 @@
 // by the Apache License, Version 2.0.
 
 use std::env;
+use std::net::Ipv4Addr;
+use std::sync::LazyLock;
 
-use hyper::server::conn::AddrIncoming;
-use hyper::{service, Body, Response, Server, StatusCode};
+use hyper::{service, Response, StatusCode};
+use hyper_util::rt::TokioIo;
 use mz_ccsr::tls::Identity;
 use mz_ccsr::{
     Client, CompatibilityLevel, DeleteError, GetByIdError, GetBySubjectError,
     GetSubjectConfigError, PublishError, SchemaReference, SchemaType,
 };
-use once_cell::sync::Lazy;
+use tokio::net::TcpListener;
 
-pub static SCHEMA_REGISTRY_URL: Lazy<reqwest::Url> =
-    Lazy::new(|| match env::var("SCHEMA_REGISTRY_URL") {
+pub static SCHEMA_REGISTRY_URL: LazyLock<reqwest::Url> =
+    LazyLock::new(|| match env::var("SCHEMA_REGISTRY_URL") {
         Ok(addr) => addr.parse().expect("unable to parse SCHEMA_REGISTRY_URL"),
         _ => "http://localhost:8081".parse().unwrap(),
     });
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18900
+#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5588
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method` on OS `linux`
+#[ignore] // TODO: Reenable when database-issues#8701 is fixed
 async fn test_client() -> Result<(), anyhow::Error> {
     let client = mz_ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build()?;
 
@@ -252,7 +255,7 @@ async fn test_client_subject_and_references() -> Result<(), anyhow::Error> {
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method` on OS `linux`
-#[ignore] // TODO: Reenable when #22557 is fixed
+#[ignore] // TODO: Reenable when database-issues#6818 is fixed
 async fn test_client_errors() -> Result<(), anyhow::Error> {
     let invalid_schema_registry_url: reqwest::Url = "data::text/plain,Info".parse().unwrap();
     match mz_ccsr::ClientConfig::new(invalid_schema_registry_url).build() {
@@ -305,7 +308,8 @@ async fn test_server_errors() -> Result<(), anyhow::Error> {
     let client_graceful = start_server(
         StatusCode::INTERNAL_SERVER_ERROR,
         r#"{ "error_code": 50001, "message": "overloaded; try again later" }"#,
-    )?;
+    )
+    .await?;
 
     match client_graceful
         .publish_schema("foo", "bar", SchemaType::Avro, &[])
@@ -348,7 +352,8 @@ async fn test_server_errors() -> Result<(), anyhow::Error> {
     let client_crash = start_server(
         StatusCode::INTERNAL_SERVER_ERROR,
         r#"panic! an exception occured!"#,
-    )?;
+    )
+    .await?;
 
     match client_crash
         .publish_schema("foo", "bar", SchemaType::Avro, &[])
@@ -388,26 +393,32 @@ async fn test_server_errors() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn start_server(status_code: StatusCode, body: &'static str) -> Result<Client, anyhow::Error> {
-    let addr = {
-        let incoming = AddrIncoming::bind(&([127, 0, 0, 1], 0).into()).unwrap();
-        let addr = incoming.local_addr();
-        let server =
-            Server::builder(incoming).serve(service::make_service_fn(move |_conn| async move {
-                Ok::<_, hyper::Error>(service::service_fn(move |_req| async move {
+async fn start_server(
+    status_code: StatusCode,
+    body: &'static str,
+) -> Result<Client, anyhow::Error> {
+    let addr = (Ipv4Addr::LOCALHOST, 0);
+    let listener = TcpListener::bind(addr).await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    mz_ore::task::spawn(|| "start_server", async move {
+        loop {
+            let (conn, remote_addr) = listener.accept().await.unwrap();
+            mz_ore::task::spawn(|| format!("start_server:{remote_addr}"), async move {
+                let service = service::service_fn(move |_req| async move {
                     Response::builder()
                         .status(status_code)
-                        .body(Body::from(body))
-                }))
-            }));
-        mz_ore::task::spawn(|| "start_server", async {
-            match server.await {
-                Ok(()) => (),
-                Err(err) => eprintln!("server error: {}", err),
-            }
-        });
-        addr
-    };
+                        .body(body.to_string())
+                });
+                if let Err(error) = hyper::server::conn::http1::Builder::new()
+                    .serve_connection(TokioIo::new(conn), service)
+                    .await
+                {
+                    eprintln!("error handling client connection: {error}");
+                }
+            });
+        }
+    });
 
     let url: reqwest::Url = format!("http://{}", addr).parse().unwrap();
     mz_ccsr::ClientConfig::new(url).build()

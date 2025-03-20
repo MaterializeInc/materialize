@@ -29,7 +29,7 @@ CREATE MATERIALIZED VIEW distinct_on_group_by_limit AS
   LIMIT 2;
 
 query T multiline
-EXPLAIN PLAN FOR MATERIALIZED VIEW distinct_on_group_by_limit;
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR MATERIALIZED VIEW distinct_on_group_by_limit;
 ----
 materialize.public.distinct_on_group_by_limit:
   TopK order_by=[#1 asc nulls_last, #0 asc nulls_last] limit=2 exp_group_size=1000
@@ -68,7 +68,7 @@ CREATE MATERIALIZED VIEW distinct_on_group_by_limit AS
   LIMIT 2;
 
 query T multiline
-EXPLAIN PLAN FOR MATERIALIZED VIEW distinct_on_group_by_limit;
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR MATERIALIZED VIEW distinct_on_group_by_limit;
 ----
 materialize.public.distinct_on_group_by_limit:
   TopK order_by=[#1 asc nulls_last, #0 asc nulls_last] limit=2 exp_group_size=50
@@ -106,7 +106,7 @@ CREATE MATERIALIZED VIEW distinct_on_group_by_limit AS
   LIMIT 2;
 
 query T multiline
-EXPLAIN PLAN FOR MATERIALIZED VIEW distinct_on_group_by_limit;
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR MATERIALIZED VIEW distinct_on_group_by_limit;
 ----
 materialize.public.distinct_on_group_by_limit:
   TopK order_by=[#1 asc nulls_last, #0 asc nulls_last] limit=2 exp_group_size=50
@@ -138,7 +138,7 @@ CREATE MATERIALIZED VIEW distinct_on_group_by_limit AS
   LIMIT 2;
 
 query T multiline
-EXPLAIN PLAN FOR MATERIALIZED VIEW distinct_on_group_by_limit;
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR MATERIALIZED VIEW distinct_on_group_by_limit;
 ----
 materialize.public.distinct_on_group_by_limit:
   TopK order_by=[#1 asc nulls_last, #0 asc nulls_last] limit=2 exp_group_size=50
@@ -170,7 +170,7 @@ CREATE MATERIALIZED VIEW distinct_on_group_by_limit AS
   LIMIT 2;
 
 query T multiline
-EXPLAIN PLAN FOR MATERIALIZED VIEW distinct_on_group_by_limit;
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR MATERIALIZED VIEW distinct_on_group_by_limit;
 ----
 materialize.public.distinct_on_group_by_limit:
   TopK order_by=[#1 asc nulls_last, #0 asc nulls_last] limit=2 exp_group_size=50
@@ -202,7 +202,7 @@ CREATE MATERIALIZED VIEW distinct_on_group_by_limit AS
   LIMIT 2;
 
 query T multiline
-EXPLAIN PLAN FOR MATERIALIZED VIEW distinct_on_group_by_limit;
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR MATERIALIZED VIEW distinct_on_group_by_limit;
 ----
 materialize.public.distinct_on_group_by_limit:
   TopK order_by=[#1 asc nulls_last, #0 asc nulls_last] limit=2 exp_group_size=50
@@ -245,7 +245,7 @@ FROM teachers grp,
               LIMIT 3);
 
 query T multiline
-EXPLAIN PLAN FOR MATERIALIZED VIEW sections_of_top_3_courses_per_teacher;
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR MATERIALIZED VIEW sections_of_top_3_courses_per_teacher;
 ----
 materialize.public.sections_of_top_3_courses_per_teacher:
   Project (#0, #2)
@@ -294,7 +294,7 @@ FROM teachers grp,
               LIMIT 3);
 
 query T multiline
-EXPLAIN PLAN FOR MATERIALIZED VIEW max_sections_of_top_3_courses_per_teacher;
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR MATERIALIZED VIEW max_sections_of_top_3_courses_per_teacher;
 ----
 materialize.public.max_sections_of_top_3_courses_per_teacher:
   Project (#0, #2)

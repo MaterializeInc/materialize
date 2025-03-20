@@ -329,6 +329,8 @@ impl MapFilterProject {
                 let (mfp, expr) = Self::extract_from_expression(input);
                 (mfp.project(outputs.iter().cloned()), expr)
             }
+            // TODO: The recursion is quadratic in the number of Map/Filter/Project operators due to
+            // this call to `arity()`.
             x => (Self::new(x.arity()), x),
         }
     }
@@ -502,7 +504,9 @@ impl MapFilterProject {
     ///
     /// The argument `mfps` are mutated so that each are functionaly equivalent to their
     /// corresponding input, when composed atop the resulting `Self`.
-    pub fn extract_common(mfps: &mut [&mut Self]) -> Self {
+    ///
+    /// The `extract_exprs` argument is temporary, as we roll out the `extract_common_mfp_expressions` flag.
+    pub fn extract_common(mfps: &mut [&mut Self], extract_exprs: bool) -> Self {
         match mfps.len() {
             0 => {
                 panic!("Cannot call method on empty arguments");
@@ -512,18 +516,122 @@ impl MapFilterProject {
                 std::mem::replace(mfps[0], MapFilterProject::new(output_arity))
             }
             _ => {
+                // More generally, we convert each mfp to ANF, at which point we can
+                // repeatedly extract atomic expressions that depend only on input
+                // columns, migrate them to an input mfp, and repeat until no such
+                // expressions exist. At this point, we can also migrate predicates
+                // and then determine and push down projections.
+
                 // Prepare a return `Self`.
-                let input_arity = mfps[0].input_arity;
-                let mut result_mfp = MapFilterProject::new(input_arity);
+                let mut result_mfp = MapFilterProject::new(mfps[0].input_arity);
 
-                // Naive strategy:
-                // First, look for identical predicates and extract them.
-                // Then, look for unused columns and project them away.
+                if extract_exprs {
+                    // We convert each mfp to ANF, using `memoize_expressions`.
+                    for mfp in mfps.iter_mut() {
+                        mfp.memoize_expressions();
+                    }
 
-                // First, look for identical predicates and extract them.
-                // The trouble here is CSE, as predicates may not "look"
-                // identical despite being identical.
-                // unimplemented!()
+                    // We repeatedly extract common expressions, until none remain.
+                    let mut done = false;
+                    while !done {
+                        // We use references to determine common expressions, and must
+                        // introduce a scope here to drop the borrows before mutation.
+                        let common = {
+                            // The input arity may increase as we iterate, so recapture.
+                            let input_arity = result_mfp.projection.len();
+                            let mut prev: BTreeSet<_> = mfps[0]
+                                .expressions
+                                .iter()
+                                .filter(|e| e.support().iter().max() < Some(&input_arity))
+                                .collect();
+                            let mut next = BTreeSet::default();
+                            for mfp in mfps[1..].iter() {
+                                for expr in mfp.expressions.iter() {
+                                    if prev.contains(expr) {
+                                        next.insert(expr);
+                                    }
+                                }
+                                std::mem::swap(&mut prev, &mut next);
+                                next.clear();
+                            }
+                            prev.into_iter().cloned().collect::<Vec<_>>()
+                        };
+                        // Without new common expressions, we should terminate the loop.
+                        done = common.is_empty();
+
+                        // Migrate each expression in `common` to `result_mfp`.
+                        for expr in common.into_iter() {
+                            // Update each mfp by removing expr and updating column references.
+                            for mfp in mfps.iter_mut() {
+                                // With `expr` next in `result_mfp`, it is as if we are rotating it to
+                                // be the first expression in `mfp`, and then removing it from `mfp` and
+                                // increasing the input arity of `mfp`.
+                                let arity = result_mfp.projection.len();
+                                let found =
+                                    mfp.expressions.iter().position(|e| e == &expr).unwrap();
+                                let index = arity + found;
+                                // Column references change due to the rotation from `index` to `arity`.
+                                let action = |c: &mut usize| {
+                                    if arity <= *c && *c < index {
+                                        *c += 1;
+                                    } else if *c == index {
+                                        *c = arity;
+                                    }
+                                };
+                                // Rotate `expr` from `found` to first, and then snip.
+                                // Short circuit by simply removing and incrementing the input arity.
+                                mfp.input_arity += 1;
+                                mfp.expressions.remove(found);
+                                // Update column references in expressions, predicates, and projections.
+                                for e in mfp.expressions.iter_mut() {
+                                    e.visit_columns(action);
+                                }
+                                for (o, e) in mfp.predicates.iter_mut() {
+                                    e.visit_columns(action);
+                                    // Max out the offset for the predicate; optimization will correct.
+                                    *o = mfp.input_arity + mfp.expressions.len();
+                                }
+                                for c in mfp.projection.iter_mut() {
+                                    action(c);
+                                }
+                            }
+                            // Install the expression and update
+                            result_mfp.expressions.push(expr);
+                            result_mfp.projection.push(result_mfp.projection.len());
+                        }
+                    }
+                    // As before, but easier: predicates in common to all mfps.
+                    let common_preds: Vec<MirScalarExpr> = {
+                        let input_arity = result_mfp.projection.len();
+                        let mut prev: BTreeSet<_> = mfps[0]
+                            .predicates
+                            .iter()
+                            .map(|(_, e)| e)
+                            .filter(|e| e.support().iter().max() < Some(&input_arity))
+                            .collect();
+                        let mut next = BTreeSet::default();
+                        for mfp in mfps[1..].iter() {
+                            for (_, expr) in mfp.predicates.iter() {
+                                if prev.contains(expr) {
+                                    next.insert(expr);
+                                }
+                            }
+                            std::mem::swap(&mut prev, &mut next);
+                            next.clear();
+                        }
+                        // Expressions in common, that we will append to `result_mfp.expressions`.
+                        prev.into_iter().cloned().collect::<Vec<_>>()
+                    };
+                    for mfp in mfps.iter_mut() {
+                        mfp.predicates.retain(|(_, p)| !common_preds.contains(p));
+                        mfp.optimize();
+                    }
+                    result_mfp.predicates.extend(
+                        common_preds
+                            .into_iter()
+                            .map(|e| (result_mfp.projection.len(), e)),
+                    );
+                }
 
                 // Then, look for unused columns and project them away.
                 let mut common_demand = BTreeSet::new();
@@ -532,7 +640,7 @@ impl MapFilterProject {
                 }
                 // columns in `common_demand` must be retained, but others
                 // may be discarded.
-                let common_demand = (0..input_arity)
+                let common_demand = (0..result_mfp.projection.len())
                     .filter(|x| common_demand.contains(x))
                     .collect::<Vec<_>>();
                 let remap = common_demand
@@ -542,11 +650,12 @@ impl MapFilterProject {
                     .map(|(new, old)| (old, new))
                     .collect::<BTreeMap<_, _>>();
                 for mfp in mfps.iter_mut() {
-                    mfp.permute(remap.clone(), common_demand.len());
+                    mfp.permute_fn(|c| remap[&c], common_demand.len());
                 }
                 result_mfp = result_mfp.project(common_demand);
 
                 // Return the resulting MFP.
+                result_mfp.optimize();
                 result_mfp
             }
         }
@@ -814,24 +923,31 @@ impl MapFilterProject {
     /// with the expectation that `shuffle` describes all input columns, and so the
     /// intermediate results will be able to start at position `shuffle.len()`.
     ///
-    /// The supplied `shuffle` may not list columns that are not "demanded" by the
+    /// The supplied `shuffle` might not list columns that are not "demanded" by the
     /// instance, and so we should ensure that `self` is optimized to not reference
     /// columns that are not demanded.
-    pub fn permute(&mut self, mut shuffle: BTreeMap<usize, usize>, new_input_arity: usize) {
+    pub fn permute_fn<F>(&mut self, remap: F, new_input_arity: usize)
+    where
+        F: Fn(usize) -> usize,
+    {
         let (mut map, mut filter, mut project) = self.as_map_filter_project();
-        for index in 0..map.len() {
-            // Intermediate columns are just shifted.
-            shuffle.insert(self.input_arity + index, new_input_arity + index);
-        }
+        let map_len = map.len();
+        let action = |col: &mut usize| {
+            if self.input_arity <= *col && *col < self.input_arity + map_len {
+                *col = new_input_arity + (*col - self.input_arity);
+            } else {
+                *col = remap(*col);
+            }
+        };
         for expr in map.iter_mut() {
-            expr.permute_map(&shuffle);
+            expr.visit_columns(action);
         }
         for pred in filter.iter_mut() {
-            pred.permute_map(&shuffle);
+            pred.visit_columns(action);
         }
         for proj in project.iter_mut() {
-            assert!(shuffle[proj] < new_input_arity + map.len());
-            *proj = shuffle[proj];
+            action(proj);
+            assert!(*proj < new_input_arity + map.len());
         }
         *self = Self::new(new_input_arity)
             .map(map)
@@ -1412,12 +1528,30 @@ pub mod util {
 
     use crate::MirScalarExpr;
 
-    /// Return the map associating columns in the logical,
-    /// unthinned representation of a collection to columns in the
-    /// thinned representation of the arrangement corresponding to `key`.
+    #[allow(dead_code)]
+    /// A triple of actions that map from rows to (key, val) pairs and back again.
+    struct KeyValRowMapping {
+        /// Expressions to apply to a row to produce key datums.
+        to_key: Vec<MirScalarExpr>,
+        /// Columns to project from a row to produce residual value datums.
+        to_val: Vec<usize>,
+        /// Columns to project from the concatenation of key and value to reconstruct the row.
+        to_row: Vec<usize>,
+    }
+
+    /// Derive supporting logic to support transforming rows to (key, val) pairs,
+    /// and back again.
     ///
-    /// Returns the permutation and the thinning
-    /// expression that should be used to create the arrangement.
+    /// We are given as input a list of key expressions and an input arity, and the
+    /// requirement the produced key should be the application of the key expressions.
+    /// To produce the `val` output, we will identify those input columns not found in
+    /// the key expressions, and name all other columns.
+    /// To reconstitute the original row, we identify the sequence of columns from the
+    /// concatenation of key and val which would reconstruct the original row.
+    ///
+    /// The output is a pair of column sequences, the first used to reconstruct a row
+    /// from the concatenation of key and value, and the second to identify the columns
+    /// of a row that should become the value associated with its key.
     ///
     /// The permutations and thinning expressions generated here will be tracked in
     /// `dataflow::plan::AvailableCollections`; see the
@@ -1425,7 +1559,7 @@ pub mod util {
     pub fn permutation_for_arrangement(
         key: &[MirScalarExpr],
         unthinned_arity: usize,
-    ) -> (BTreeMap<usize, usize>, Vec<usize>) {
+    ) -> (Vec<usize>, Vec<usize>) {
         let columns_in_key: BTreeMap<_, _> = key
             .iter()
             .enumerate()
@@ -1444,7 +1578,6 @@ pub mod util {
                     input_cursor - 1
                 }
             })
-            .enumerate()
             .collect();
         let thinning = (0..unthinned_arity)
             .filter(|c| !columns_in_key.contains_key(c))
@@ -1458,29 +1591,19 @@ pub mod util {
     /// computes the permutation for the result of joining them.
     pub fn join_permutations(
         key_arity: usize,
-        stream_permutation: BTreeMap<usize, usize>,
+        stream_permutation: Vec<usize>,
         thinned_stream_arity: usize,
-        lookup_permutation: BTreeMap<usize, usize>,
+        lookup_permutation: Vec<usize>,
     ) -> BTreeMap<usize, usize> {
-        let stream_arity = stream_permutation
-            .keys()
-            .cloned()
-            .max()
-            .map(|i| i + 1)
-            .unwrap_or(0);
-        let lookup_arity = lookup_permutation
-            .keys()
-            .cloned()
-            .max()
-            .map(|i| i + 1)
-            .unwrap_or(0);
+        let stream_arity = stream_permutation.len();
+        let lookup_arity = lookup_permutation.len();
 
         (0..stream_arity + lookup_arity)
             .map(|i| {
                 let location = if i < stream_arity {
-                    stream_permutation[&i]
+                    stream_permutation[i]
                 } else {
-                    let location_in_lookup = lookup_permutation[&(i - stream_arity)];
+                    let location_in_lookup = lookup_permutation[i - stream_arity];
                     if location_in_lookup < key_arity {
                         location_in_lookup
                     } else {
@@ -1494,7 +1617,6 @@ pub mod util {
 }
 
 pub mod plan {
-    use std::collections::BTreeMap;
     use std::iter;
 
     use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -1529,8 +1651,14 @@ pub mod plan {
     }
 
     impl SafeMfpPlan {
-        pub fn permute(&mut self, map: BTreeMap<usize, usize>, new_arity: usize) {
-            self.mfp.permute(map, new_arity);
+        /// Remaps references to input columns according to `remap`.
+        ///
+        /// Leaves other column references, e.g. to newly mapped columns, unchanged.
+        pub fn permute_fn<F>(&mut self, remap: F, new_arity: usize)
+        where
+            F: Fn(usize) -> usize,
+        {
+            self.mfp.permute_fn(remap, new_arity);
         }
         /// Evaluates the linear operator on a supplied list of datums.
         ///
@@ -1808,6 +1936,7 @@ pub mod plan {
         /// Attempt to convert self into a non-temporal MapFilterProject plan.
         ///
         /// If that is not possible, the original instance is returned as an error.
+        #[allow(clippy::result_large_err)]
         pub fn into_nontemporal(self) -> Result<SafeMfpPlan, Self> {
             if self.lower_bounds.is_empty() && self.upper_bounds.is_empty() {
                 Ok(self.mfp)
@@ -1969,6 +2098,7 @@ pub mod plan {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
 
     use crate::linear::plan::*;
@@ -1982,7 +2112,7 @@ mod tests {
         #[cfg_attr(miri, ignore)] // too slow
         fn mfp_plan_protobuf_roundtrip(expect in any::<MfpPlan>()) {
             let actual = protobuf_roundtrip::<_, ProtoMfpPlan>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }

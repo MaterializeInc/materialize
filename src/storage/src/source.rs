@@ -25,16 +25,19 @@
 // https://github.com/tokio-rs/prost/issues/237
 #![allow(missing_docs)]
 
-use crate::source::types::{SourceMessage, SourceReaderError};
+use crate::source::types::SourceMessage;
 
 pub mod generator;
 mod kafka;
 mod mysql;
 mod postgres;
+mod probe;
 pub(crate) mod reclock;
 mod source_reader_pipeline;
 mod statistics;
 pub mod types;
 
 pub use kafka::KafkaSourceReader;
-pub use source_reader_pipeline::{create_raw_source, RawSourceCreationConfig};
+pub use source_reader_pipeline::{
+    create_raw_source, RawSourceCreationConfig, SourceExportCreationConfig,
+};

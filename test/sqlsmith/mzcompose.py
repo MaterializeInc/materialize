@@ -7,6 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Use SQLsmith to generate random queries (AST/code based) and run them against
+Materialize: https://github.com/MaterializeInc/sqlsmith The queries can be
+complex, but we can't verify correctness or performance.
+"""
+
 import json
 import random
 import time
@@ -79,7 +85,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--num-sqlsmith", default=len(MZ_SERVERS), type=int)
     # parser.add_argument("--queries", default=10000, type=int)
     parser.add_argument("--runtime", default=600, type=int)
-    # https://github.com/MaterializeInc/materialize/issues/2392
+    # https://github.com/MaterializeInc/database-issues/issues/835
     parser.add_argument("--max-joins", default=2, type=int)
     parser.add_argument("--explain-only", action="store_true")
     parser.add_argument("--exclude-catalog", default=False, type=bool)
@@ -93,12 +99,25 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.sql(
             """
             CREATE SOURCE tpch
-              FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.00001)
-              FOR ALL TABLES;
+              FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.00001);
+
+            CREATE TABLE customer FROM SOURCE tpch (REFERENCE customer);
+            CREATE TABLE lineitem FROM SOURCE tpch (REFERENCE lineitem);
+            CREATE TABLE nation FROM SOURCE tpch (REFERENCE nation);
+            CREATE TABLE orders FROM SOURCE tpch (REFERENCE orders);
+            CREATE TABLE part FROM SOURCE tpch (REFERENCE part);
+            CREATE TABLE partsupp FROM SOURCE tpch (REFERENCE partsupp);
+            CREATE TABLE region FROM SOURCE tpch (REFERENCE region);
+            CREATE TABLE supplier FROM SOURCE tpch (REFERENCE supplier);
 
             CREATE SOURCE auction
-              FROM LOAD GENERATOR AUCTION
-              FOR ALL TABLES;
+              FROM LOAD GENERATOR AUCTION;
+
+            CREATE TABLE accounts FROM SOURCE auction (REFERENCE accounts);
+            CREATE TABLE auctions FROM SOURCE auction (REFERENCE auctions);
+            CREATE TABLE bids FROM SOURCE auction (REFERENCE bids);
+            CREATE TABLE organizations FROM SOURCE auction (REFERENCE organizations);
+            CREATE TABLE users FROM SOURCE auction (REFERENCE users);
 
             CREATE SOURCE counter
               FROM LOAD GENERATOR COUNTER;

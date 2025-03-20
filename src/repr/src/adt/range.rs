@@ -727,7 +727,7 @@ impl<'a, const UPPER: bool> RangeBound<Datum<'a>, UPPER> {
             self.bound = Some(
                 cur.step()
                     .ok_or_else(|| {
-                        InvalidRangeError::CanonicalizationOverflow(T::err_type_name().to_string())
+                        InvalidRangeError::CanonicalizationOverflow(T::err_type_name().into())
                     })?
                     .into(),
             );
@@ -743,7 +743,7 @@ impl<'a, const UPPER: bool> RangeBound<Datum<'a>, UPPER> {
 )]
 pub enum InvalidRangeError {
     MisorderedRangeBounds,
-    CanonicalizationOverflow(String),
+    CanonicalizationOverflow(Box<str>),
     InvalidRangeBoundFlags,
     DiscontiguousUnion,
     DiscontiguousDifference,
@@ -792,7 +792,9 @@ impl RustType<ProtoInvalidRangeError> for InvalidRangeError {
         use Kind::*;
         let kind = match self {
             InvalidRangeError::MisorderedRangeBounds => MisorderedRangeBounds(()),
-            InvalidRangeError::CanonicalizationOverflow(s) => CanonicalizationOverflow(s.clone()),
+            InvalidRangeError::CanonicalizationOverflow(s) => {
+                CanonicalizationOverflow(s.into_proto())
+            }
             InvalidRangeError::InvalidRangeBoundFlags => InvalidRangeBoundFlags(()),
             InvalidRangeError::DiscontiguousUnion => DiscontiguousUnion(()),
             InvalidRangeError::DiscontiguousDifference => DiscontiguousDifference(()),
@@ -806,7 +808,9 @@ impl RustType<ProtoInvalidRangeError> for InvalidRangeError {
         match proto.kind {
             Some(kind) => Ok(match kind {
                 MisorderedRangeBounds(()) => InvalidRangeError::MisorderedRangeBounds,
-                CanonicalizationOverflow(s) => InvalidRangeError::CanonicalizationOverflow(s),
+                CanonicalizationOverflow(s) => {
+                    InvalidRangeError::CanonicalizationOverflow(s.into())
+                }
                 InvalidRangeBoundFlags(()) => InvalidRangeError::InvalidRangeBoundFlags,
                 DiscontiguousUnion(()) => InvalidRangeError::DiscontiguousUnion,
                 DiscontiguousDifference(()) => InvalidRangeError::DiscontiguousDifference,

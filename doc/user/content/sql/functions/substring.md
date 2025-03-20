@@ -10,7 +10,13 @@ menu:
 
 ## Signatures
 
-{{< diagram "func-substring.svg" >}}
+```mzsql
+substring(str, start_pos)
+substring(str, start_pos, len)
+substring(str FROM start_pos)
+substring(str FOR len)
+substring(str FROM start_pos FOR len)
+```
 
 Parameter | Type | Description
 ----------|------|------------
@@ -24,7 +30,7 @@ _len_ | [`int`](../../types/int) | The length of the substring you want to retur
 
 ## Examples
 
-```sql
+```mzsql
 SELECT substring('abcdefg', 3) AS substr;
 ```
 ```nofmt
@@ -35,7 +41,7 @@ SELECT substring('abcdefg', 3) AS substr;
 
  <hr/>
 
-```sql
+```mzsql
 SELECT substring('abcdefg', 3, 3) AS substr;
 ```
 ```nofmt

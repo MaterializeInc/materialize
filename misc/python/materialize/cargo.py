@@ -9,7 +9,7 @@
 
 """A pure Python metadata parser for Cargo, Rust's package manager.
 
-See the [Cargo] documentation for details. Only the features that are presently
+See the [Cargo][] documentation for details. Only the features that are presently
 necessary to support this repository are implemented.
 
 [Cargo]: https://doc.rust-lang.org/cargo/
@@ -154,6 +154,8 @@ class Workspace:
                         crate = Crate(root, root / item)
                         self.exclude[crate.name] = crate
         self.all_crates = self.crates | self.exclude
+
+        self.default_members: list[str] = workspace_config.get("default-members", [])
 
         self.rust_version: str | None = None
         try:

@@ -11,11 +11,18 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-roles.svg" >}}
+```mzsql
+SHOW ROLES [ LIKE <pattern>  | WHERE <condition(s)> ]
+```
+
+Option                     | Description
+---------------------------|------------
+**LIKE** \<pattern\>       | If specified, only show roles whose name matches the pattern.
+**WHERE** <condition(s)>   | If specified, only show roles that meet the condition(s).
 
 ## Examples
 
-```sql
+```mzsql
 SHOW ROLES;
 ```
 ```nofmt
@@ -25,7 +32,7 @@ SHOW ROLES;
  mike@ko.sh
 ```
 
-```sql
+```mzsql
 SHOW ROLES LIKE 'jo%';
 ```
 ```nofmt
@@ -34,7 +41,7 @@ SHOW ROLES LIKE 'jo%';
  joe@ko.sh
 ```
 
-```sql
+```mzsql
 SHOW ROLES WHERE name = 'mike@ko.sh';
 ```
 ```nofmt

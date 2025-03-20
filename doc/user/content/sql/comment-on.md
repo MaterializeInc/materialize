@@ -6,8 +6,6 @@ menu:
     parent: 'commands'
 ---
 
-{{< public-preview />}}
-
 `COMMENT ON ...` adds or updates the comment of an object.
 
 ## Syntax
@@ -31,7 +29,7 @@ information on ownership and privileges, see [Role-based access control](/manage
 
 ## Examples
 
-```sql
+```mzsql
 --- Add comments.
 COMMENT ON TABLE foo IS 'this table is important';
 COMMENT ON COLUMN foo.x IS 'holds all of the important data';

@@ -21,7 +21,7 @@ A Test is a sequence of Actions that will be performed during the test. Zippy co
 
 A Scenario is a description of what Actions will participate in the test and what their frequency should be. The available scenarios are defined here:
 
-[materialize.zippy.scenarios API documentation](https://dev.materialize.com/api/python/materialize/zippy/scenarios.html)
+[materialize.zippy.scenarios API documentation](https://dev.materialize.com/api/python/misc/python/materialize/zippy.html)
 
 A `Scenario` class is essentially a list of Actions and their relative weights. When generating the sequence of Actions that will form a test, the framework will figure out which Actions are currently runable given the state of the system and will pick one of them, taking weights into account.
 
@@ -40,7 +40,7 @@ The complete list of actions is available here:
 
 An ActionFactory is a way to pass parameters to Actions, so that e.g. a different number of database objects will be created.
 
-[materialize.zippy.framework API documentation](https://dev.materialize.com/api/python/materialize/zippy/framework.html#materialize.zippy.framework.Action)
+[materialize.zippy.framework API documentation](https://dev.materialize.com/api/python/misc/python/materialize/zippy.html)
 
 ## Capabilities
 

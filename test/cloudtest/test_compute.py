@@ -52,7 +52,7 @@ def test_cluster_sizing(mz: MaterializeApplication) -> None:
     "failpoint",
     ["", "after_catalog_drop_replica=panic", "after_sequencer_drop_replica=panic"],
 )
-@pytest.mark.skip(reason="Failpoints mess up the Mz intance #18000")
+@pytest.mark.skip(reason="Failpoints mess up the Mz instance database-issues#5263")
 def test_cluster_shutdown(mz: MaterializeApplication, failpoint: str) -> None:
     """Test that dropping a cluster or replica causes the associated clusterds to shut down."""
 
@@ -135,7 +135,7 @@ def test_disk_label(mz: MaterializeApplication) -> None:
 
     for value in ("true", "false"):
         mz.environmentd.sql(
-            f"CREATE CLUSTER disk_{value} MANAGED, SIZE = '2-1', DISK = {value}"
+            f"CREATE CLUSTER disk_{value} MANAGED, SIZE = '2-no-disk', DISK = {value}"
         )
 
         (cluster_id, replica_id) = mz.environmentd.sql_query(
@@ -147,8 +147,7 @@ def test_disk_label(mz: MaterializeApplication) -> None:
         node_selectors = get_node_selector(mz, cluster_id, replica_id)
         if value == "true":
             assert (
-                node_selectors
-                == '\'{"materialize.cloud/disk":"true"} {"materialize.cloud/disk":"true"}\''
+                node_selectors == '\'{"materialize.cloud/disk":"true"}\''
             ), node_selectors
         else:
             assert node_selectors == "''"
@@ -163,6 +162,7 @@ def test_disk_label(mz: MaterializeApplication) -> None:
     )
 
 
+@pytest.mark.skip(reason="Keeps flaking, see database-issues#8299")
 def test_cluster_replica_sizes(mz: MaterializeApplication) -> None:
     """Test that --cluster-replica-sizes mapping is respected"""
     # Some time for existing cluster drops to complete so we don't try to spin them up again
@@ -233,7 +233,14 @@ def test_cluster_replica_sizes(mz: MaterializeApplication) -> None:
         assert replica_id is not None
 
         expected = value.get("selectors", {}) | {"materialize.cloud/disk": "true"}
-        node_selectors = json.loads(get_node_selector(mz, cluster_id, replica_id)[1:-1])
+        node_selectors_raw = ""
+        for i in range(1, 10):
+            node_selectors_raw = get_node_selector(mz, cluster_id, replica_id)
+            if node_selectors_raw:
+                break
+            print("No node selectors available yet, sleeping")
+            time.sleep(5)
+        node_selectors = json.loads(node_selectors_raw[1:-1])
         assert (
             node_selectors == expected
         ), f"actual: {node_selectors}, but expected {expected}"

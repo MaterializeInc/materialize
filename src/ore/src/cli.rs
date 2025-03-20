@@ -55,7 +55,8 @@ where
     // Construct the prefixed environment variable names for all
     // environment-enabled arguments, if requested. We have to construct these
     // names before constructing `clap` below to get the lifetimes to work out.
-    let arg_envs: Vec<_> = O::command()
+    let command = O::command();
+    let arg_envs: Vec<_> = command
         .get_arguments()
         .filter_map(|arg| match (config.env_prefix, arg.get_env()) {
             (Some(prefix), Some(env)) => {

@@ -40,7 +40,7 @@ pub enum Item {
 }
 
 impl Item {
-    pub fn fields<'a>(&'a self) -> Box<dyn Iterator<Item = &Field> + 'a> {
+    pub fn fields<'a>(&'a self) -> Box<dyn Iterator<Item = &'a Field> + 'a> {
         match self {
             Item::Struct(s) => Box::new(s.fields.iter()),
             Item::Enum(e) => Box::new(e.variants.iter().flat_map(|v| &v.fields)),

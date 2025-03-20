@@ -31,5 +31,8 @@ class DataTypeCategory(Enum):
     ARRAY = 300
     LIST = 301
     MAP = 302
+    RANGE = 303
 
-    OTHER_UNSUPPORTED = 400
+    RECORD = 400
+
+    UNDETERMINED = 500

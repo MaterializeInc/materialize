@@ -25,10 +25,11 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::optimize::Optimize;
 use crate::session::{Session, TransactionOps};
-use crate::util::ResultExt;
 use crate::{optimize, AdapterNotice, ExecuteContext, TimelineContext};
 
 impl Staged for SubscribeStage {
+    type Ctx = ExecuteContext;
+
     fn validity(&mut self) -> &mut PlanValidity {
         match self {
             SubscribeStage::OptimizeMir(stage) => &mut stage.validity,
@@ -95,6 +96,13 @@ impl Coordinator {
             .resolve_target_cluster(target_cluster, session)?;
         let cluster_id = cluster.id;
 
+        if cluster.replicas().next().is_none() {
+            return Err(AdapterError::NoClusterReplicasAvailable {
+                name: cluster.name.clone(),
+                is_managed: cluster.is_managed(),
+            });
+        }
+
         let mut replica_id = session
             .vars()
             .cluster_replica()
@@ -129,25 +137,32 @@ impl Coordinator {
         session.add_notices(notices);
 
         // Determine timeline.
-        let mut timeline = self.validate_timeline_context(depends_on.clone())?;
+        let mut timeline = self.validate_timeline_context(depends_on.iter().copied())?;
         if matches!(timeline, TimelineContext::TimestampIndependent) && from.contains_temporal() {
             // If the from IDs are timestamp independent but the query contains temporal functions
             // then the timeline context needs to be upgraded to timestamp dependent.
             timeline = TimelineContext::TimestampDependent;
         }
 
-        let validity = PlanValidity {
-            transient_revision: self.catalog().transient_revision(),
-            dependency_ids: depends_on,
-            cluster_id: Some(cluster_id),
+        let dependencies = depends_on
+            .iter()
+            .map(|id| self.catalog().resolve_item_id(id))
+            .collect();
+        let validity = PlanValidity::new(
+            self.catalog().transient_revision(),
+            dependencies,
+            Some(cluster_id),
             replica_id,
-            role_metadata: session.role_metadata().clone(),
-        };
+            session.role_metadata().clone(),
+        );
 
         Ok(SubscribeStage::OptimizeMir(SubscribeOptimizeMir {
             validity,
             plan,
             timeline,
+            dependency_ids: depends_on,
+            cluster_id,
+            replica_id,
         }))
     }
 
@@ -159,6 +174,9 @@ impl Coordinator {
             mut validity,
             plan,
             timeline,
+            dependency_ids,
+            cluster_id,
+            replica_id,
         }: SubscribeOptimizeMir,
     ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
         let plan::SubscribePlan {
@@ -168,12 +186,11 @@ impl Coordinator {
         } = &plan;
 
         // Collect optimizer parameters.
-        let cluster_id = validity.cluster_id.expect("cluser_id");
         let compute_instance = self
             .instance_snapshot(cluster_id)
             .expect("compute instance does not exist");
-        let view_id = self.allocate_transient_id();
-        let sink_id = self.allocate_transient_id();
+        let (_, view_id) = self.allocate_transient_id();
+        let (_, sink_id) = self.allocate_transient_id();
         let conn_id = session.conn_id().clone();
         let up_to = up_to
             .as_ref()
@@ -189,13 +206,14 @@ impl Coordinator {
             compute_instance,
             view_id,
             sink_id,
-            conn_id,
+            Some(conn_id),
             *with_snapshot,
             up_to,
             debug_name,
             optimizer_config,
             self.optimizer_metrics(),
         );
+        let catalog = self.owned_catalog();
 
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
@@ -205,9 +223,12 @@ impl Coordinator {
                     // MIR ⇒ MIR optimization (global)
                     let global_mir_plan = optimizer.catch_unwind_optimize(plan.from.clone())?;
                     // Add introduced indexes as validity dependencies.
-                    validity
-                        .dependency_ids
-                        .extend(global_mir_plan.id_bundle(optimizer.cluster_id()).iter());
+                    validity.extend_dependencies(
+                        global_mir_plan
+                            .id_bundle(optimizer.cluster_id())
+                            .iter()
+                            .map(|id| catalog.resolve_item_id(&id)),
+                    );
 
                     let stage =
                         SubscribeStage::TimestampOptimizeLir(SubscribeTimestampOptimizeLir {
@@ -216,6 +237,8 @@ impl Coordinator {
                             timeline,
                             optimizer,
                             global_mir_plan,
+                            dependency_ids,
+                            replica_id,
                         });
                     Ok(Box::new(stage))
                 })
@@ -233,6 +256,8 @@ impl Coordinator {
             timeline,
             mut optimizer,
             global_mir_plan,
+            dependency_ids,
+            replica_id,
         }: SubscribeTimestampOptimizeLir,
     ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
         let plan::SubscribePlan { when, .. } = &plan;
@@ -283,6 +308,8 @@ impl Coordinator {
                         cluster_id: optimizer.cluster_id(),
                         plan,
                         global_lir_plan,
+                        dependency_ids,
+                        replica_id,
                     });
                     Ok(Box::new(stage))
                 })
@@ -295,7 +322,7 @@ impl Coordinator {
         &mut self,
         ctx: &mut ExecuteContext,
         SubscribeFinish {
-            validity,
+            validity: _,
             cluster_id,
             plan:
                 plan::SubscribePlan {
@@ -305,6 +332,8 @@ impl Coordinator {
                     ..
                 },
             global_lir_plan,
+            dependency_ids,
+            replica_id,
         }: SubscribeFinish,
     ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
         let sink_id = global_lir_plan.sink_id();
@@ -312,6 +341,7 @@ impl Coordinator {
         let (tx, rx) = mpsc::unbounded_channel();
         let active_subscribe = ActiveSubscribe {
             conn_id: ctx.session().conn_id().clone(),
+            session_uuid: ctx.session().uuid(),
             channel: tx,
             emit_progress,
             as_of: global_lir_plan
@@ -319,13 +349,14 @@ impl Coordinator {
                 .expect("set to Some in an earlier stage"),
             arity: global_lir_plan.sink_desc().from_desc.arity(),
             cluster_id,
-            depends_on: validity.dependency_ids,
+            depends_on: dependency_ids,
             start_time: self.now(),
             output,
         };
         active_subscribe.initialize();
 
         let (df_desc, df_meta) = global_lir_plan.unapply();
+
         // Emit notices.
         self.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);
 
@@ -334,7 +365,7 @@ impl Coordinator {
             .add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe))
             .await;
         // Ship dataflow.
-        let ship_dataflow_fut = self.ship_dataflow(df_desc, cluster_id);
+        let ship_dataflow_fut = self.ship_dataflow(df_desc, cluster_id, replica_id);
 
         // Both adding metadata for the new SUBSCRIBE and shipping the underlying dataflow, send
         // requests to external services, which can take time, so we run them concurrently.
@@ -348,13 +379,6 @@ impl Coordinator {
 
         // Explicitly drop read holds, just to make it obvious what's happening.
         drop(txn_read_holds);
-
-        if let Some(target) = validity.replica_id {
-            self.controller
-                .compute
-                .set_subscribe_target_replica(cluster_id, sink_id, target)
-                .unwrap_or_terminate("cannot fail to set subscribe target replica");
-        }
 
         let resp = ExecuteResponse::Subscribing {
             rx,

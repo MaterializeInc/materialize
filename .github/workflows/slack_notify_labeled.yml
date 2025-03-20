@@ -22,7 +22,7 @@
 name: Slack Label Notifications
 
 on:
-  issues:
+  pull_request:
     types:
       - labeled
 
@@ -31,29 +31,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
-        if: ${{ github.event.label.name == 'P1' }}
-        with:
-          slack_token: ${{ secrets.SLACK_TOKEN }}
-          channel: github-p1
-          message: |
-            `${{ github.event.label.name }}` label has been added to "${{ github.event.issue.title }}" (${{ github.event.issue.html_url }}) (assigned to: ${{ github.event.issue.assignee.login || 'unassigned' }}).
-          color: red
-          verbose: false
-      - uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
-        if: ${{ github.event.label.name == 'C-bug' }}
-        with:
-          slack_token: ${{ secrets.SLACK_TOKEN }}
-          channel: github-bugs
-          message: |
-            `${{ github.event.label.name }}` label has been added to "${{ github.event.issue.title }}" (${{ github.event.issue.html_url }}) (assigned to: ${{ github.event.issue.assignee.login || 'unassigned' }}).
-          color: red
-          verbose: false
-      - uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
         if: ${{ github.event.label.name == 'release-blocker' }}
         with:
           slack_token: ${{ secrets.SLACK_TOKEN }}
           channel: release
           message: |
-            `${{ github.event.label.name }}` label has been added to "${{ github.event.issue.title }}" (${{ github.event.issue.html_url }}) (assigned to: ${{ github.event.issue.assignee.login || 'unassigned' }}).
+            `${{ github.event.label.name }}` label has been added to "${{ github.event.pull_request.title }}" (${{ github.event.pull_request.html_url }}) (assigned to: ${{ github.event.pull_request.assignee.login || 'unassigned' }}).
           color: red
           verbose: false

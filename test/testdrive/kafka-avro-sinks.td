@@ -51,7 +51,7 @@ $ kafka-verify-data format=avro sink=materialize.public.interval_data_sink sort-
 {"before": null, "after": {"row": {"interval": [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]}}}
 {"before": null, "after": {"row": {"interval": [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255]}}}
 
-# See #9723
+# See database-issues#2957
 #> CREATE MATERIALIZED VIEW unnamed_cols AS SELECT 1, 2 AS b, 3;
 #
 #> CREATE SINK unnamed_cols_sink
@@ -65,7 +65,7 @@ $ kafka-verify-data format=avro sink=materialize.public.interval_data_sink sort-
 
 # Test that invented field names do not clash with named columns.
 
-# See #9723
+# See database-issues#2957
 #> CREATE MATERIALIZED VIEW clashing_cols AS SELECT 1, 2 AS column1, 3 as b, 4 as b2, 5 as b3;
 #
 #> CREATE SINK clashing_cols_sink
@@ -121,7 +121,7 @@ $ kafka-verify-data format=avro sink=materialize.public.time_data_sink sort-mess
 
 > CREATE MATERIALIZED VIEW json_data (a, b) AS VALUES ('{"a":1, "b":2}'::jsonb, 2)
 
-# Sinks with JSON columns should not crash - see https://github.com/MaterializeInc/materialize/issues/4722
+# Sinks with JSON columns should not crash - see https://github.com/MaterializeInc/database-issues/issues/1477
 > CREATE CLUSTER json_data_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK json_data_sink
   IN CLUSTER json_data_sink_cluster
@@ -198,6 +198,9 @@ $ schema-registry-verify schema-type=avro subject=testdrive-namespace-key-value-
 $ kafka-verify-data format=avro sink=materialize.public.namespace_key_value_sink sort-messages=true
 {"b": 2} {"before": null, "after": {"row": {"a": 1, "b": 2}}}
 
+> SELECT key_format, value_format, format FROM mz_sinks WHERE name = 'namespace_key_value_sink'
+avro avro avro
+
 # Test setting the compatibility level for both topics
 > CREATE MATERIALIZED VIEW compat_level_data (a, b) AS SELECT * FROM (VALUES (1, 2));
 
@@ -221,6 +224,31 @@ $ schema-registry-verify schema-type=avro subject=testdrive-compat-level-sink-${
 
 $ kafka-verify-data format=avro sink=materialize.public.compat_level_sink sort-messages=true
 {"b": 2} {"before": null, "after": {"row": {"a": 1, "b": 2}}}
+
+# Test a sink with an Avro value format and Json key format
+> CREATE MATERIALIZED VIEW mixed_format_data (a, b) AS SELECT * FROM (VALUES (1, 2));
+
+> CREATE CLUSTER mixed_format_sink_cluster SIZE '${arg.default-storage-size}';
+> CREATE SINK mixed_format_sink
+  IN CLUSTER mixed_format_sink_cluster
+  FROM mixed_format_data
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-mixed-format-sink-${testdrive.seed}')
+  KEY (b)
+  KEY FORMAT JSON
+  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (
+    VALUE COMPATIBILITY LEVEL 'FORWARD_TRANSITIVE'
+  )
+  ENVELOPE DEBEZIUM
+
+$ schema-registry-verify schema-type=avro subject=testdrive-mixed-format-sink-${testdrive.seed}-value compatibility-level=FORWARD_TRANSITIVE
+{"type":"record","name":"envelope","fields":[{"name":"before","type":["null",{"type":"record","name":"row","fields":[{"name":"a","type":"int"},{"name":"b","type":"int"}]}]},{"name":"after","type":["null","row"]}]}
+
+$ kafka-verify-data key-format=json value-format=avro sink=materialize.public.mixed_format_sink sort-messages=true
+{"b": 2} {"before": null, "after": {"row": {"a": 1, "b": 2}}}
+
+> SELECT key_format, value_format, format FROM mz_sinks WHERE name = 'mixed_format_sink'
+json avro key-json-value-avro
+
 
 # Test a sink over a view whose column names are not directly usable as
 # Avro schema names.
@@ -267,7 +295,7 @@ contains:Invalid name. Must start with [A-Za-z_] and subsequently only contain [
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
-contains:Repeated column name in sink key: a
+contains:duplicate column referenced in KEY: a
 
 ! CREATE SINK bad_sink
   IN CLUSTER ${arg.single-replica-cluster}

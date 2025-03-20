@@ -12,51 +12,52 @@ aliases:
 
 ## Syntax
 
-{{< diagram "show-sinks.svg" >}}
+```mzsql
+SHOW SINKS [ FROM <schema_name> ] [ IN CLUSTER <cluster_name> ]
+```
 
 ## Details
 
-Field | Use
-------|-----
-_schema&lowbar;name_ | The schema to show sinks from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
-_cluster&lowbar;name_ | The cluster to show sinks from. If omitted, sinks from all clusters are shown. For available clusters, see [`SHOW CLUSTERS`](../show-clusters).
+Option                        | Description
+------------------------------|------------
+**FROM** <schema_name>        | If specified, only show sinks from the specified schema. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+**IN CLUSTER** <cluster_name> | If specified, only show sinks from the specified cluster. For available clusters, see [`SHOW CLUSTERS`](../show-clusters).
 
 ### Output format
 
 `SHOW SINKS`'s output is a table, with this structure:
 
 ```nofmt
-name  | type | size | cluster
-------+------+------+--------
-...   | ...  | ...  | ...
+name  | type | cluster
+------+------+--------
+...   | ...  | ...
 ```
 
 Field       | Meaning
 ------------|--------
 **name**    | The name of the sink.
 **type**    | The type of the sink: currently only `kafka` is supported.
-**size**    | The size of the sink. Null if the sink is created using the `IN CLUSTER` clause.
 **cluster** | The cluster the sink is associated with.
 
 ## Examples
 
-```sql
+```mzsql
 SHOW SINKS;
 ```
 ```nofmt
-name          | type  | size    | cluster
---------------+-------+---------+--------
-my_sink       | kafka |         | c1
-my_other_sink | kafka |         | c2
+name          | type  | cluster
+--------------+-------+--------
+my_sink       | kafka | c1
+my_other_sink | kafka | c2
 ```
 
-```sql
+```mzsql
 SHOW SINKS IN CLUSTER c1;
 ```
 ```nofmt
-name    | type  | size    | cluster
---------+-------+---------+--------
-my_sink | kafka |         | c1
+name    | type  | cluster
+--------+-------+--------
+my_sink | kafka | c1
 ```
 
 ## Related pages

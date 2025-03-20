@@ -9,21 +9,20 @@
 
 //! Apache Arrow encodings and utils for persist data
 
+use std::ptr::NonNull;
 use std::sync::Arc;
 
-use arrow::array::{Array, AsArray, BinaryArray, PrimitiveArray};
-use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
-use arrow::datatypes::{DataType, Field, Schema};
+use anyhow::anyhow;
+use arrow::array::{make_array, Array, ArrayData, ArrayRef, BinaryArray, Int64Array, RecordBatch};
+use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer};
+use arrow::datatypes::ToByteSlice;
 use mz_dyncfg::Config;
-use mz_ore::bytes::MaybeLgBytes;
-use mz_ore::iter::IteratorExt;
-use mz_ore::lgbytes::{LgBytes, MetricsRegion};
-use once_cell::sync::Lazy;
 
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
+use crate::indexed::encoding::BlobTraceUpdates;
 use crate::metrics::ColumnarMetrics;
 
-/// The Arrow schema we use to encode ((K, V), T, D) tuples.
+/// Converts a [`ColumnarRecords`] into [`arrow`] columns.
 ///
 /// Both Time and Diff are presented externally to persist users as a type
 /// parameter that implements [mz_persist_types::Codec64]. Our columnar format
@@ -38,71 +37,28 @@ use crate::metrics::ColumnarMetrics;
 /// time after year 2200). Using a i64 might be a pessimization for a
 /// non-realtime mz source with u64 timestamps in the range `(i64::MAX,
 /// u64::MAX]`, but realtime sources are overwhelmingly the common case.
-pub static SCHEMA_ARROW_RS_KVTD: Lazy<Arc<Schema>> = Lazy::new(|| {
-    let schema = Schema::new(vec![
-        Field::new("k", DataType::Binary, false),
-        Field::new("v", DataType::Binary, false),
-        Field::new("t", DataType::Int64, false),
-        Field::new("d", DataType::Int64, false),
-    ]);
-    Arc::new(schema)
-});
-
-/// Converts a [`ColumnarRecords`] into `(K, V, T, D)` [`arrow`] columns.
-pub fn encode_arrow_batch_kvtd(x: &ColumnarRecords) -> Vec<arrow::array::ArrayRef> {
-    let key = BinaryArray::try_new(
-        OffsetBuffer::new(ScalarBuffer::from((*x.key_offsets).as_ref().to_vec())),
-        Buffer::from_vec(x.key_data.as_ref().to_vec()),
-        None,
-    )
-    .expect("valid key array");
-    let val = BinaryArray::try_new(
-        OffsetBuffer::new(ScalarBuffer::from((*x.val_offsets).as_ref().to_vec())),
-        Buffer::from_vec(x.val_data.as_ref().to_vec()),
-        None,
-    )
-    .expect("valid val array");
-    let ts = PrimitiveArray::<arrow::datatypes::Int64Type>::try_new(
-        (*x.timestamps).as_ref().to_vec().into(),
-        None,
-    )
-    .expect("valid ts array");
-    let diff = PrimitiveArray::<arrow::datatypes::Int64Type>::try_new(
-        (*x.diffs).as_ref().to_vec().into(),
-        None,
-    )
-    .expect("valid diff array");
-
-    vec![Arc::new(key), Arc::new(val), Arc::new(ts), Arc::new(diff)]
-}
-
-/// Converts a [`ColumnarRecords`] and [`ColumnarRecordsStructuredExt`] pair
-/// (aka [`BlobTraceUpdates::Both`]) into [`arrow::array::Array`]s with columns
-/// [(K, V, T, D, K_S, V_S)].
-///
-/// [`BlobTraceUpdates::Both`]: crate::indexed::encoding::BlobTraceUpdates::Both
-pub fn encode_arrow_batch_kvtd_ks_vs(
-    records: &ColumnarRecords,
-    structured: &ColumnarRecordsStructuredExt,
-) -> (Vec<Arc<Field>>, Vec<Arc<dyn Array>>) {
-    let mut fields: Vec<_> = (*SCHEMA_ARROW_RS_KVTD).fields().iter().cloned().collect();
-    let mut arrays = encode_arrow_batch_kvtd(records);
-
-    if let Some(key_array) = &structured.key {
-        let key_field = Field::new("k_s", key_array.data_type().clone(), false);
-
-        fields.push(Arc::new(key_field));
-        arrays.push(Arc::new(key_array.clone()));
+pub fn encode_arrow_batch(updates: &BlobTraceUpdates) -> RecordBatch {
+    fn array_ref<A: Array + Clone + 'static>(a: &A) -> ArrayRef {
+        Arc::new(a.clone())
     }
+    // For historical reasons, the codec-encoded columns are placed before T/D,
+    // and the structured-encoding columns are placed after.
+    let kv = updates
+        .records()
+        .into_iter()
+        .flat_map(|x| [("k", array_ref(&x.key_data)), ("v", array_ref(&x.val_data))]);
+    let td = [
+        ("t", array_ref(updates.timestamps())),
+        ("d", array_ref(updates.diffs())),
+    ];
+    let ks_vs = updates
+        .structured()
+        .into_iter()
+        .flat_map(|x| [("k_s", Arc::clone(&x.key)), ("v_s", Arc::clone(&x.val))]);
 
-    if let Some(val_array) = &structured.val {
-        let val_field = Field::new("v_s", val_array.data_type().clone(), false);
-
-        fields.push(Arc::new(val_field));
-        arrays.push(Arc::new(val_array.clone()));
-    }
-
-    (fields, arrays)
+    // We expect all the top-level fields to be fully defined.
+    let fields = kv.chain(td).chain(ks_vs).map(|(f, a)| (f, a, false));
+    RecordBatch::try_from_iter_with_nullable(fields).expect("valid field definitions")
 }
 
 pub(crate) const ENABLE_ARROW_LGALLOC_CC_SIZES: Config<bool> = Config::new(
@@ -117,120 +73,165 @@ pub(crate) const ENABLE_ARROW_LGALLOC_NONCC_SIZES: Config<bool> = Config::new(
     "A feature flag to enable copying decoded arrow data into lgalloc on non-cc sized clusters.",
 );
 
-/// Converts an [`arrow`] [(K, V, T, D)] [`RecordBatch`] into a [`ColumnarRecords`].
-///
-/// [`RecordBatch`]: `arrow::array::RecordBatch`
-pub fn decode_arrow_batch_kvtd(
-    columns: &[Arc<dyn Array>],
-    metrics: &ColumnarMetrics,
-) -> Result<ColumnarRecords, String> {
-    let (key_col, val_col, ts_col, diff_col) = match &columns {
-        x @ &[k, v, t, d] => {
-            // The columns need to all have the same logical length.
-            if !x.iter().map(|col| col.len()).all_equal() {
-                return Err(format!(
-                    "columns don't all have equal length {k_len}, {v_len}, {t_len}, {d_len}",
-                    k_len = k.len(),
-                    v_len = v.len(),
-                    t_len = t.len(),
-                    d_len = d.len()
-                ));
-            }
-
-            (k, v, t, d)
-        }
-        _ => return Err(format!("expected 4 columns got {}", columns.len())),
-    };
-
-    let key = key_col
-        .as_binary_opt::<i32>()
-        .ok_or_else(|| "key column is wrong type".to_string())?;
-    let val = val_col
-        .as_binary_opt::<i32>()
-        .ok_or_else(|| "val column is wrong type".to_string())?;
-    let time = ts_col
-        .as_primitive_opt::<arrow::datatypes::Int64Type>()
-        .ok_or_else(|| "time column is wrong type".to_string())?;
-    let diff = diff_col
-        .as_primitive_opt::<arrow::datatypes::Int64Type>()
-        .ok_or_else(|| "diff column is wrong type".to_string())?;
-
-    let key_offsets = to_region(&key.offsets()[..], metrics);
-    let key_data = to_region(key.value_data(), metrics);
-
-    let val_offsets = to_region(&val.offsets()[..], metrics);
-    let val_data = to_region(val.value_data(), metrics);
-
-    let timestamps = to_region(&time.values()[..], metrics);
-    let diffs = to_region(&diff.values()[..], metrics);
-
-    let len = key.len();
-    let ret = ColumnarRecords {
-        len,
-        key_data: MaybeLgBytes::LgBytes(LgBytes::from(key_data)),
-        key_offsets,
-        val_data: MaybeLgBytes::LgBytes(LgBytes::from(val_data)),
-        val_offsets,
-        timestamps,
-        diffs,
-    };
-    ret.borrow().validate()?;
-
-    Ok(ret)
-}
-
-/// Converts an arrow [(K, V, T, D)] Chunk into a ColumnarRecords.
-pub fn decode_arrow_batch_kvtd_ks_vs(
-    cols: &[Arc<dyn Array>],
-    maybe_key_col: Option<&dyn Array>,
-    maybe_val_col: Option<&dyn Array>,
-    metrics: &ColumnarMetrics,
-) -> Result<(ColumnarRecords, ColumnarRecordsStructuredExt), String> {
-    let same_length = cols
+fn realloc_data(data: ArrayData, nullable: bool, metrics: &ColumnarMetrics) -> ArrayData {
+    // NB: Arrow generally aligns buffers very coarsely: see arrow::alloc::ALIGNMENT.
+    // However, lgalloc aligns buffers even more coarsely - to the page boundary -
+    // so we never expect alignment issues in practice. If that changes, build()
+    // will return an error below, as it does for all invalid data.
+    let buffers = data
+        .buffers()
         .iter()
-        .map(|col| col.as_ref())
-        .chain(maybe_key_col.as_deref().into_iter())
-        .chain(maybe_val_col.as_deref().into_iter())
-        .map(|col| col.len())
-        .all_equal();
-    if !same_length {
-        return Err("not all columns (included structured) have the same length".to_string());
-    }
-
-    // We always have (K, V, T, D) columns.
-    let primary_records = decode_arrow_batch_kvtd(cols, metrics)?;
-
-    // Optionally we might have 'K_S' and/or 'V_S' columns.
-    let key = maybe_key_col
-        .map(|col| {
-            col.as_any()
-                .downcast_ref::<arrow::array::StructArray>()
-                .ok_or_else(|| format!("k_s column doesn't match schema"))
+        .map(|b| realloc_buffer(b, metrics))
+        .collect();
+    let child_data = {
+        let field_iter = mz_persist_types::arrow::fields_for_type(data.data_type()).iter();
+        let child_iter = data.child_data().iter();
+        field_iter
+            .zip(child_iter)
+            .map(|(f, d)| realloc_data(d.clone(), f.is_nullable(), metrics))
+            .collect()
+    };
+    let nulls = if nullable {
+        data.nulls().map(|n| {
+            let buffer = realloc_buffer(n.buffer(), metrics);
+            NullBuffer::new(BooleanBuffer::new(buffer, n.offset(), n.len()))
         })
-        .transpose()?
-        .cloned();
-    let val = maybe_val_col
-        .map(|col| {
-            col.as_any()
-                .downcast_ref::<arrow::array::StructArray>()
-                .ok_or_else(|| format!("v_s column doesn't match schema"))
-        })
-        .transpose()?
-        .cloned();
+    } else {
+        if data.nulls().is_some() {
+            // This is a workaround for: https://github.com/apache/arrow-rs/issues/6510
+            // It should always be safe to drop the null buffer for a non-nullable field, since
+            // any nulls cannot possibly represent real data and thus must be masked off at
+            // some higher level. We always realloc data we get back from parquet, so this is
+            // a convenient and efficient place to do the rewrite.
+            // Why does this help? Parquet decoding can generate nulls in non-nullable fields
+            // that are only masked by eg. a grandparent, not the direct parent... but some arrow
+            // code expects the parent to mask any nulls in its non-nullable children. Dropping
+            // the buffer here prevents those validations from failing. (Top-level arrays are always
+            // marked nullable, but since they don't have parents that's not a problem either.)
+            metrics.parquet.elided_null_buffers.inc();
+        }
+        None
+    };
 
-    Ok((primary_records, ColumnarRecordsStructuredExt { key, val }))
+    // Note that `build` only performs shallow validations, but since we rebuild the array
+    // recursively we will have performed the equivalent of `ArrayData::validation_full` on
+    // the output.
+    data.into_builder()
+        .buffers(buffers)
+        .child_data(child_data)
+        .nulls(nulls)
+        .build()
+        .expect("reconstructing valid arrow array")
 }
 
-/// Copies a slice of data into a possibly disk-backed lgalloc region.
-fn to_region<T: Copy>(buf: &[T], metrics: &ColumnarMetrics) -> Arc<MetricsRegion<T>> {
+/// Re-allocate the backing storage for a specific array using lgalloc, if it's configured.
+/// (And hopefully-temporarily work around a parquet decoding issue upstream.)
+pub fn realloc_array<A: Array + From<ArrayData>>(array: &A, metrics: &ColumnarMetrics) -> A {
+    let data = array.to_data();
+    // Top-level arrays are always nullable.
+    let data = realloc_data(data, true, metrics);
+    A::from(data)
+}
+
+/// Re-allocate the backing storage for an array ref using lgalloc, if it's configured.
+/// (And hopefully-temporarily work around a parquet decoding issue upstream.)
+pub fn realloc_any(array: ArrayRef, metrics: &ColumnarMetrics) -> ArrayRef {
+    let data = array.into_data();
+    // Top-level arrays are always nullable.
+    let data = realloc_data(data, true, metrics);
+    make_array(data)
+}
+
+fn realloc_buffer(buffer: &Buffer, metrics: &ColumnarMetrics) -> Buffer {
     let use_lgbytes_mmap = if metrics.is_cc_active {
         ENABLE_ARROW_LGALLOC_CC_SIZES.get(&metrics.cfg)
     } else {
         ENABLE_ARROW_LGALLOC_NONCC_SIZES.get(&metrics.cfg)
     };
-    if use_lgbytes_mmap {
-        Arc::new(metrics.lgbytes_arrow.try_mmap_region(buf))
+    let region = if use_lgbytes_mmap {
+        metrics
+            .lgbytes_arrow
+            .try_mmap_region(buffer.as_slice())
+            .ok()
     } else {
-        Arc::new(metrics.lgbytes_arrow.heap_region(buf.to_owned()))
+        None
+    };
+    let Some(region) = region else {
+        return buffer.clone();
+    };
+    let bytes: &[u8] = region.as_ref().to_byte_slice();
+    let ptr: NonNull<[u8]> = bytes.into();
+    // This is fine: see [[NonNull::as_non_null_ptr]] for an unstable version of this usage.
+    let ptr: NonNull<u8> = ptr.cast();
+    // SAFETY: `ptr` is valid for `len` bytes, and kept alive as long as `region` lives.
+    unsafe { Buffer::from_custom_allocation(ptr, bytes.len(), Arc::new(region)) }
+}
+
+/// Converts an [`arrow`] [RecordBatch] into a [BlobTraceUpdates] and reallocate the backing data.
+pub fn decode_arrow_batch(
+    batch: &RecordBatch,
+    metrics: &ColumnarMetrics,
+) -> anyhow::Result<BlobTraceUpdates> {
+    fn try_downcast<A: Array + From<ArrayData> + 'static>(
+        batch: &RecordBatch,
+        name: &'static str,
+        metrics: &ColumnarMetrics,
+    ) -> anyhow::Result<Option<A>> {
+        let Some(array_ref) = batch.column_by_name(name) else {
+            return Ok(None);
+        };
+        let col_ref = array_ref
+            .as_any()
+            .downcast_ref::<A>()
+            .ok_or_else(|| anyhow!("wrong datatype for column {}", name))?;
+        let col = realloc_array(col_ref, metrics);
+        Ok(Some(col))
     }
+
+    let codec_key = try_downcast::<BinaryArray>(batch, "k", metrics)?;
+    let codec_val = try_downcast::<BinaryArray>(batch, "v", metrics)?;
+    let timestamps = try_downcast::<Int64Array>(batch, "t", metrics)?
+        .ok_or_else(|| anyhow!("missing timestamp column"))?;
+    let diffs = try_downcast::<Int64Array>(batch, "d", metrics)?
+        .ok_or_else(|| anyhow!("missing diff column"))?;
+    let structured_key = batch
+        .column_by_name("k_s")
+        .map(|a| realloc_any(Arc::clone(a), metrics));
+    let structured_val = batch
+        .column_by_name("v_s")
+        .map(|a| realloc_any(Arc::clone(a), metrics));
+
+    let updates = match (codec_key, codec_val, structured_key, structured_val) {
+        (Some(codec_key), Some(codec_val), Some(structured_key), Some(structured_val)) => {
+            BlobTraceUpdates::Both(
+                ColumnarRecords::new(codec_key, codec_val, timestamps, diffs),
+                ColumnarRecordsStructuredExt {
+                    key: structured_key,
+                    val: structured_val,
+                },
+            )
+        }
+        (Some(codec_key), Some(codec_val), None, None) => BlobTraceUpdates::Row(
+            ColumnarRecords::new(codec_key, codec_val, timestamps, diffs),
+        ),
+        (None, None, Some(structured_key), Some(structured_val)) => BlobTraceUpdates::Structured {
+            key_values: ColumnarRecordsStructuredExt {
+                key: structured_key,
+                val: structured_val,
+            },
+            timestamps,
+            diffs,
+        },
+        (k, v, ks, vs) => {
+            anyhow::bail!(
+                "unexpected mix of key/value columns: k={:?}, v={}, k_s={}, v_s={}",
+                k.is_some(),
+                v.is_some(),
+                ks.is_some(),
+                vs.is_some(),
+            );
+        }
+    };
+
+    Ok(updates)
 }

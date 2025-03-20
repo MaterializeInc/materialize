@@ -21,7 +21,7 @@ class TerminationCondition:
         self._data: list[float] = []
 
     def terminate(self, measurement: Measurement) -> bool:
-        assert False
+        raise NotImplementedError
 
 
 class NormalDistributionOverlap(TerminationCondition):

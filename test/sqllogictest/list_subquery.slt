@@ -140,7 +140,7 @@ SELECT LIST(SELECT first_name, last_name FROM customer)::text
 query T
 SELECT LIST(SELECT LIST[customer.first_name] FROM customer)::text
 ----
-{{bob},{alice},{charlie}}
+{{alice},{bob},{charlie}}
 
 # Check CTE syntax can be included in a query
 query T

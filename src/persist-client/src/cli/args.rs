@@ -20,6 +20,7 @@ use mz_build_info::BuildInfo;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_ore::url::SensitiveUrl;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{
     Blob, BlobMetadata, CaSResult, Consensus, ExternalError, ResultStream, SeqNo, Tasked,
@@ -49,7 +50,7 @@ pub struct StoreArgs {
     /// ```
     ///
     #[clap(long, verbatim_doc_comment, env = "CONSENSUS_URI")]
-    pub(crate) consensus_uri: String,
+    pub(crate) consensus_uri: SensitiveUrl,
 
     /// Blob to use
     ///
@@ -57,7 +58,7 @@ pub struct StoreArgs {
     /// place. e.g. for S3, sign into SSO, set AWS_PROFILE and AWS_REGION appropriately, with a blob
     /// URI scoped to the environment's bucket prefix.
     #[clap(long, env = "BLOB_URI")]
-    pub(crate) blob_uri: String,
+    pub(crate) blob_uri: SensitiveUrl,
 }
 
 /// Arguments for viewing the current state of a given shard
@@ -82,7 +83,7 @@ pub struct StateArgs {
     /// ```
     ///
     #[clap(long, verbatim_doc_comment, env = "CONSENSUS_URI")]
-    pub(crate) consensus_uri: String,
+    pub(crate) consensus_uri: SensitiveUrl,
 
     /// Blob to use
     ///
@@ -90,7 +91,7 @@ pub struct StateArgs {
     /// place. e.g. for S3, sign into SSO, set AWS_PROFILE and AWS_REGION appropriately, with a blob
     /// URI scoped to the environment's bucket prefix.
     #[clap(long, env = "BLOB_URI")]
-    pub(crate) blob_uri: String,
+    pub(crate) blob_uri: SensitiveUrl,
 }
 
 // BuildInfo with a larger version than any version we expect to see in prod,
@@ -99,7 +100,6 @@ pub struct StateArgs {
 pub(crate) const READ_ALL_BUILD_INFO: BuildInfo = BuildInfo {
     version: "99.999.99+test",
     sha: "0000000000000000000000000000000000000000",
-    time: "",
 };
 
 // All `inspect` command are read-only.
@@ -122,7 +122,7 @@ impl StateArgs {
 
 pub(super) async fn make_consensus(
     cfg: &PersistConfig,
-    consensus_uri: &str,
+    consensus_uri: &SensitiveUrl,
     commit: bool,
     metrics: Arc<Metrics>,
 ) -> anyhow::Result<Arc<dyn Consensus>> {
@@ -144,7 +144,7 @@ pub(super) async fn make_consensus(
 
 pub(super) async fn make_blob(
     cfg: &PersistConfig,
-    blob_uri: &str,
+    blob_uri: &SensitiveUrl,
     commit: bool,
     metrics: Arc<Metrics>,
 ) -> anyhow::Result<Arc<dyn Blob>> {
@@ -152,7 +152,7 @@ pub(super) async fn make_blob(
         blob_uri,
         Box::new(cfg.clone()),
         metrics.s3_blob.clone(),
-        cfg.configs.clone(),
+        Arc::clone(&cfg.configs),
     )
     .await?;
     let blob = blob.clone().open().await?;

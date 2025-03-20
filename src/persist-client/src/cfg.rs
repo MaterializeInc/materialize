@@ -11,12 +11,12 @@
 
 //! The tunable knobs for persist.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mz_build_info::BuildInfo;
-use mz_dyncfg::{Config, ConfigSet, ConfigType, ConfigUpdates};
+use mz_dyncfg::{Config, ConfigDefault, ConfigSet, ConfigUpdates};
 use mz_ore::instrument;
 use mz_ore::now::NowFn;
 use mz_persist::cfg::BlobKnobs;
@@ -32,12 +32,14 @@ use crate::internal::machine::{
     NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER,
 };
 use crate::internal::state::ROLLUP_THRESHOLD;
-use crate::operators::{
-    PERSIST_SINK_MINIMUM_BATCH_UPDATES, STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES,
-    STORAGE_SOURCE_DECODE_FUEL,
-};
+use crate::operators::STORAGE_SOURCE_DECODE_FUEL;
 use crate::project::OPTIMIZE_IGNORED_DATA_DECODE;
 use crate::read::READER_LEASE_DURATION;
+
+const LTS_VERSIONS: &[Version] = &[
+    // 25.1
+    Version::new(0, 130, 0),
+];
 
 /// The tunable knobs for persist.
 ///
@@ -106,14 +108,14 @@ pub struct PersistConfig {
     /// of a process.
     ///
     /// TODO(cfg): Entirely replace dynamic with this.
-    pub configs: ConfigSet,
+    pub configs: Arc<ConfigSet>,
     /// Indicates whether `configs` has been synced at least once with an
     /// upstream source.
     configs_synced_once: Arc<watch::Sender<bool>>,
-    /// Configurations that can be dynamically updated.
-    pub dynamic: Arc<DynamicConfig>,
     /// Whether to physically and logically compact batches in blob storage.
     pub compaction_enabled: bool,
+    /// Whether the `Compactor` will process compaction requests, or drop them on the floor.
+    pub compaction_process_requests: Arc<AtomicBool>,
     /// In Compactor::compact_and_apply_background, the maximum number of concurrent
     /// compaction requests that can execute for a given shard.
     pub compaction_concurrency_limit: usize,
@@ -123,11 +125,6 @@ pub struct PersistConfig {
     /// In Compactor::compact_and_apply_background, how many updates to encode or
     /// decode before voluntarily yielding the task.
     pub compaction_yield_after_n_updates: usize,
-    /// The maximum size of the connection pool to Postgres/CRDB when performing
-    /// consensus reads and writes.
-    pub consensus_connection_pool_max_size: usize,
-    /// The maximum time to wait when attempting to obtain a connection from the pool.
-    pub consensus_connection_pool_max_wait: Option<Duration>,
     /// Length of time after a writer's last operation after which the writer
     /// may be expired.
     pub writer_lease_duration: Duration,
@@ -183,26 +180,13 @@ impl PersistConfig {
             is_cc_active: false,
             announce_memory_limit: None,
             now,
-            configs,
+            configs: Arc::new(configs),
             configs_synced_once: Arc::new(configs_synced_once),
-            dynamic: Arc::new(DynamicConfig {
-                batch_builder_max_outstanding_parts: AtomicUsize::new(2),
-                compaction_heuristic_min_inputs: AtomicUsize::new(8),
-                compaction_heuristic_min_parts: AtomicUsize::new(8),
-                compaction_heuristic_min_updates: AtomicUsize::new(1024),
-                compaction_memory_bound_bytes: AtomicUsize::new(1024 * MiB),
-                gc_blob_delete_concurrency_limit: AtomicUsize::new(32),
-                state_versions_recent_live_diffs_limit: AtomicUsize::new(
-                    30 * ROLLUP_THRESHOLD.default(),
-                ),
-                usage_state_fetch_concurrency_limit: AtomicUsize::new(8),
-            }),
             compaction_enabled: !compaction_disabled,
+            compaction_process_requests: Arc::new(AtomicBool::new(true)),
             compaction_concurrency_limit: 5,
             compaction_queue_size: 20,
             compaction_yield_after_n_updates: 100_000,
-            consensus_connection_pool_max_size: 50,
-            consensus_connection_pool_max_wait: Some(Duration::from_secs(60)),
             writer_lease_duration: 60 * Duration::from_secs(60),
             critical_downgrade_interval: Duration::from_secs(30),
             pubsub_connect_attempt_timeout: Duration::from_secs(5),
@@ -222,7 +206,7 @@ impl PersistConfig {
         }
     }
 
-    pub(crate) fn set_config<T: ConfigType>(&self, cfg: &Config<T>, val: T) {
+    pub(crate) fn set_config<T: ConfigDefault>(&self, cfg: &Config<T>, val: T) {
         let mut updates = ConfigUpdates::default();
         updates.add(cfg, val);
         updates.apply(self)
@@ -253,19 +237,6 @@ impl PersistConfig {
             .wait_for(|synced| *synced)
             .await
             .expect("we have a borrow on sender so it cannot drop");
-    }
-
-    /// The minimum number of updates that justify writing out a batch in `persist_sink`'s
-    /// `write_batches` operator. (If there are fewer than this minimum number of updates,
-    /// they'll be forwarded on to `append_batch` to be combined and written there.)
-    pub fn sink_minimum_batch_updates(&self) -> usize {
-        PERSIST_SINK_MINIMUM_BATCH_UPDATES.get(self)
-    }
-
-    /// The same as `Self::sink_minimum_batch_updates`, but
-    /// for storage `persist_sink`'s.
-    pub fn storage_sink_minimum_batch_updates(&self) -> usize {
-        STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES.get(self)
     }
 
     /// The maximum amount of work to do in the persist_source mfp_and_decode
@@ -301,6 +272,18 @@ impl PersistConfig {
         self.set_config(&NEXT_LISTEN_BATCH_RETRYER_CLAMP, val.clamp);
     }
 
+    pub fn disable_compaction(&self) {
+        tracing::info!("Disabling Persist Compaction");
+        self.compaction_process_requests
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn enable_compaction(&self) {
+        tracing::info!("Enabling Persist Compaction");
+        self.compaction_process_requests
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// Returns a new instance of [PersistConfig] for tests.
     pub fn new_for_tests() -> Self {
         use mz_build_info::DUMMY_BUILD_INFO;
@@ -325,8 +308,22 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::batch::BATCH_DELETE_ENABLED)
         .add(&crate::batch::BATCH_COLUMNAR_FORMAT)
         .add(&crate::batch::BLOB_TARGET_SIZE)
+        .add(&crate::batch::BUILDER_STRUCTURED)
         .add(&crate::batch::INLINE_WRITES_TOTAL_MAX_BYTES)
         .add(&crate::batch::INLINE_WRITES_SINGLE_MAX_BYTES)
+        .add(&crate::batch::ENCODING_ENABLE_DICTIONARY)
+        .add(&crate::batch::ENCODING_COMPRESSION_FORMAT)
+        .add(&crate::batch::STRUCTURED_ORDER)
+        .add(&crate::batch::STRUCTURED_ORDER_UNTIL_SHARD)
+        .add(&crate::batch::STRUCTURED_KEY_LOWER_LEN)
+        .add(&crate::batch::MAX_RUN_LEN)
+        .add(&crate::batch::MAX_RUNS)
+        .add(&BLOB_OPERATION_TIMEOUT)
+        .add(&BLOB_OPERATION_ATTEMPT_TIMEOUT)
+        .add(&BLOB_CONNECT_TIMEOUT)
+        .add(&BLOB_READ_TIMEOUT)
+        .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_MAX_SIZE)
+        .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_MAX_WAIT)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL)
         .add(&crate::cfg::CRDB_CONNECT_TIMEOUT)
@@ -336,28 +333,43 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::cfg::USE_CRITICAL_SINCE_SOURCE)
         .add(&crate::cfg::USE_CRITICAL_SINCE_SNAPSHOT)
         .add(&crate::cfg::USE_GLOBAL_TXN_CACHE_SOURCE)
+        .add(&BATCH_BUILDER_MAX_OUTSTANDING_PARTS)
+        .add(&COMPACTION_HEURISTIC_MIN_INPUTS)
+        .add(&COMPACTION_HEURISTIC_MIN_PARTS)
+        .add(&COMPACTION_HEURISTIC_MIN_UPDATES)
+        .add(&COMPACTION_MEMORY_BOUND_BYTES)
+        .add(&GC_BLOB_DELETE_CONCURRENCY_LIMIT)
+        .add(&STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT)
+        .add(&USAGE_STATE_FETCH_CONCURRENCY_LIMIT)
+        .add(&crate::cli::admin::CATALOG_FORCE_COMPACTION_FUEL)
+        .add(&crate::cli::admin::CATALOG_FORCE_COMPACTION_WAIT)
+        .add(&crate::cli::admin::EXPRESSION_CACHE_FORCE_COMPACTION_FUEL)
+        .add(&crate::cli::admin::EXPRESSION_CACHE_FORCE_COMPACTION_WAIT)
         .add(&crate::fetch::FETCH_SEMAPHORE_COST_ADJUSTMENT)
         .add(&crate::fetch::FETCH_SEMAPHORE_PERMIT_ADJUSTMENT)
         .add(&crate::internal::cache::BLOB_CACHE_MEM_LIMIT_BYTES)
+        .add(&crate::internal::cache::BLOB_CACHE_SCALE_WITH_THREADS)
+        .add(&crate::internal::cache::BLOB_CACHE_SCALE_FACTOR_BYTES)
         .add(&crate::internal::compact::COMPACTION_MINIMUM_TIMEOUT)
+        .add(&crate::internal::compact::COMPACTION_USE_MOST_RECENT_SCHEMA)
+        .add(&crate::internal::compact::COMPACTION_CHECK_PROCESS_FLAG)
+        .add(&crate::internal::compact::COMPACTION_OUTPUT_STRUCTURED_ONLY)
         .add(&crate::internal::machine::CLAIM_UNCLAIMED_COMPACTIONS)
+        .add(&crate::internal::machine::CLAIM_COMPACTION_PERCENT)
+        .add(&crate::internal::machine::CLAIM_COMPACTION_MIN_VERSION)
         .add(&crate::internal::machine::NEXT_LISTEN_BATCH_RETRYER_CLAMP)
         .add(&crate::internal::machine::NEXT_LISTEN_BATCH_RETRYER_FIXED_SLEEP)
         .add(&crate::internal::machine::NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
         .add(&crate::internal::machine::NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER)
         .add(&crate::internal::machine::RECORD_COMPACTIONS)
         .add(&crate::internal::state::ROLLUP_THRESHOLD)
-        .add(&crate::internal::state::WRITE_DIFFS_SUM)
-        .add(&crate::internal::apply::ROUNDTRIP_SPINE)
-        .add(&crate::iter::SPLIT_OLD_RUNS)
-        .add(&crate::operators::PERSIST_SINK_MINIMUM_BATCH_UPDATES)
-        .add(&crate::operators::STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
         .add(&crate::operators::STORAGE_SOURCE_DECODE_FUEL)
         .add(&crate::project::OPTIMIZE_IGNORED_DATA_DECODE)
         .add(&crate::project::OPTIMIZE_IGNORED_DATA_FETCH)
         .add(&crate::read::READER_LEASE_DURATION)
         .add(&crate::rpc::PUBSUB_CLIENT_ENABLED)
         .add(&crate::rpc::PUBSUB_PUSH_DIFF_ENABLED)
+        .add(&crate::rpc::PUBSUB_SAME_PROCESS_DELEGATE_ENABLED)
         .add(&crate::stats::STATS_AUDIT_PERCENT)
         .add(&crate::stats::STATS_BUDGET_BYTES)
         .add(&crate::stats::STATS_COLLECTION_ENABLED)
@@ -366,19 +378,35 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::stats::STATS_UNTRIMMABLE_COLUMNS_PREFIX)
         .add(&crate::stats::STATS_UNTRIMMABLE_COLUMNS_SUFFIX)
         .add(&crate::fetch::PART_DECODE_FORMAT)
+        .add(&crate::write::COMBINE_INLINE_WRITES)
 }
 
 impl PersistConfig {
     pub(crate) const DEFAULT_FALLBACK_ROLLUP_THRESHOLD_MULTIPLIER: usize = 3;
 
-    // TODO: Get rid of this in favor of using dyncfgs at the
-    // relevant callsites.
     pub fn set_state_versions_recent_live_diffs_limit(&self, val: usize) {
-        self.dynamic
-            .state_versions_recent_live_diffs_limit
-            .store(val, DynamicConfig::STORE_ORDERING);
+        self.set_config(&STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT, val);
     }
 }
+
+/// Sets the maximum size of the connection pool that is used by consensus.
+///
+/// Requires a restart of the process to take effect.
+pub const CONSENSUS_CONNECTION_POOL_MAX_SIZE: Config<usize> = Config::new(
+    "persist_consensus_connection_pool_max_size",
+    50,
+    "The maximum size the connection pool to Postgres/CRDB will grow to.",
+);
+
+/// Sets the maximum amount of time we'll wait to acquire a connection from
+/// the connection pool.
+///
+/// Requires a restart of the process to take effect.
+const CONSENSUS_CONNECTION_POOL_MAX_WAIT: Config<Duration> = Config::new(
+    "persist_consensus_connection_pool_max_wait",
+    Duration::from_secs(60),
+    "The amount of time we'll wait for a connection to become available.",
+);
 
 /// The minimum TTL of a connection to Postgres/CRDB before it is proactively
 /// terminated. Connections are routinely culled to balance load against the
@@ -459,13 +487,88 @@ pub const USE_GLOBAL_TXN_CACHE_SOURCE: Config<bool> = Config::new(
     "Use the process global txn cache (instead of an operator local one) in the Persist source.",
 );
 
+/// The maximum number of parts (s3 blobs) that [crate::batch::BatchBuilder]
+/// will pipeline before back-pressuring [crate::batch::BatchBuilder::add]
+/// calls on previous ones finishing.
+pub const BATCH_BUILDER_MAX_OUTSTANDING_PARTS: Config<usize> = Config::new(
+    "persist_batch_builder_max_outstanding_parts",
+    2,
+    "The number of writes a batch builder can have outstanding before we slow down the writer.",
+);
+
+/// In Compactor::compact_and_apply, we do the compaction (don't skip it)
+/// if the number of inputs is at least this many. Compaction is performed
+/// if any of the heuristic criteria are met (they are OR'd).
+pub const COMPACTION_HEURISTIC_MIN_INPUTS: Config<usize> = Config::new(
+    "persist_compaction_heuristic_min_inputs",
+    8,
+    "Don't skip compaction if we have more than this many hollow batches as input.",
+);
+
+/// In Compactor::compact_and_apply, we do the compaction (don't skip it)
+/// if the number of batch parts is at least this many. Compaction is performed
+/// if any of the heuristic criteria are met (they are OR'd).
+pub const COMPACTION_HEURISTIC_MIN_PARTS: Config<usize> = Config::new(
+    "persist_compaction_heuristic_min_parts",
+    8,
+    "Don't skip compaction if we have more than this many parts as input.",
+);
+
+/// In Compactor::compact_and_apply, we do the compaction (don't skip it)
+/// if the number of updates is at least this many. Compaction is performed
+/// if any of the heuristic criteria are met (they are OR'd).
+pub const COMPACTION_HEURISTIC_MIN_UPDATES: Config<usize> = Config::new(
+    "persist_compaction_heuristic_min_updates",
+    1024,
+    "Don't skip compaction if we have more than this many updates as input.",
+);
+
+/// The upper bound on compaction's memory consumption. The value must be at
+/// least 4*`blob_target_size`. Increasing this value beyond the minimum allows
+/// compaction to merge together more runs at once, providing greater
+/// consolidation of updates, at the cost of greater memory usage.
+pub const COMPACTION_MEMORY_BOUND_BYTES: Config<usize> = Config::new(
+    "persist_compaction_memory_bound_bytes",
+    1024 * MiB,
+    "Attempt to limit compaction to this amount of memory.",
+);
+
+/// The maximum number of concurrent blob deletes during garbage collection.
+pub const GC_BLOB_DELETE_CONCURRENCY_LIMIT: Config<usize> = Config::new(
+    "persist_gc_blob_delete_concurrency_limit",
+    32,
+    "Limit the number of concurrent deletes GC can perform to this threshold.",
+);
+
+/// The # of diffs to initially scan when fetching the latest consensus state, to
+/// determine which requests go down the fast vs slow path. Should be large enough
+/// to fetch all live diffs in the steady-state, and small enough to query Consensus
+/// at high volume. Steady-state usage should accommodate readers that require
+/// seqno-holds for reasonable amounts of time, which to start we say is 10s of minutes.
+///
+/// This value ought to be defined in terms of `NEED_ROLLUP_THRESHOLD` to approximate
+/// when we expect rollups to be written and therefore when old states will be truncated
+/// by GC.
+pub const STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT: Config<usize> = Config::new(
+    "persist_state_versions_recent_live_diffs_limit",
+    30 * 128,
+    "Fetch this many diffs when fetching recent diffs.",
+);
+
+/// The maximum number of concurrent state fetches during usage computation.
+pub const USAGE_STATE_FETCH_CONCURRENCY_LIMIT: Config<usize> = Config::new(
+    "persist_usage_state_fetch_concurrency_limit",
+    8,
+    "Limit the concurrency in of fetching in the perioding Persist-storage-usage calculation.",
+);
+
 impl PostgresClientKnobs for PersistConfig {
     fn connection_pool_max_size(&self) -> usize {
-        self.consensus_connection_pool_max_size
+        CONSENSUS_CONNECTION_POOL_MAX_SIZE.get(self)
     }
 
     fn connection_pool_max_wait(&self) -> Option<Duration> {
-        self.consensus_connection_pool_max_wait
+        Some(CONSENSUS_CONNECTION_POOL_MAX_WAIT.get(self))
     }
 
     fn connection_pool_ttl(&self) -> Duration {
@@ -483,37 +586,6 @@ impl PostgresClientKnobs for PersistConfig {
     fn tcp_user_timeout(&self) -> Duration {
         CRDB_TCP_USER_TIMEOUT.get(self)
     }
-}
-
-/// Persist configurations that can be dynamically updated.
-///
-/// Persist is expected to react to each of these such that updating the value
-/// returned by the function takes effect in persist (i.e. no caching it). This
-/// should happen "as promptly as reasonably possible" where that's defined by
-/// the tradeoffs of complexity vs promptness. For example, we might use a
-/// consistent version of `BLOB_TARGET_SIZE` for the entirety of a single
-/// compaction call. However, it should _never_ require a process restart for an
-/// update of these to take effect.
-///
-/// These are hooked up to LaunchDarkly. Specifically, LaunchDarkly configs are
-/// serialized into a [mz_dyncfg::ConfigUpdates]. In environmentd, these are applied
-/// directly via [mz_dyncfg::ConfigUpdates::apply] to the [PersistConfig] in
-/// [crate::cache::PersistClientCache]. There is one `PersistClientCache` per
-/// process, and every `PersistConfig` shares the same `Arc<DynamicConfig>`, so
-/// this affects all [DynamicConfig] usage in the process. The
-/// `ConfigUpdates` is also sent via the compute and storage command
-/// streams, which then apply it to all computed/storaged/clusterd processes as
-/// well.
-#[derive(Debug)]
-pub struct DynamicConfig {
-    batch_builder_max_outstanding_parts: AtomicUsize,
-    compaction_heuristic_min_inputs: AtomicUsize,
-    compaction_heuristic_min_parts: AtomicUsize,
-    compaction_heuristic_min_updates: AtomicUsize,
-    compaction_memory_bound_bytes: AtomicUsize,
-    gc_blob_delete_concurrency_limit: AtomicUsize,
-    state_versions_recent_live_diffs_limit: AtomicUsize,
-    usage_state_fetch_concurrency_limit: AtomicUsize,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Arbitrary, Serialize, Deserialize)]
@@ -539,111 +611,54 @@ impl RetryParameters {
     }
 }
 
-impl DynamicConfig {
-    // TODO: Decide if we can relax these.
-    const LOAD_ORDERING: Ordering = Ordering::SeqCst;
-    const STORE_ORDERING: Ordering = Ordering::SeqCst;
+pub(crate) const BLOB_OPERATION_TIMEOUT: Config<Duration> = Config::new(
+    "persist_blob_operation_timeout",
+    Duration::from_secs(180),
+    "Maximum time allowed for a network call, including retry attempts.",
+);
 
-    /// The maximum number of parts (s3 blobs) that [crate::batch::BatchBuilder]
-    /// will pipeline before back-pressuring [crate::batch::BatchBuilder::add]
-    /// calls on previous ones finishing.
-    pub fn batch_builder_max_outstanding_parts(&self) -> usize {
-        self.batch_builder_max_outstanding_parts
-            .load(Self::LOAD_ORDERING)
-    }
+pub(crate) const BLOB_OPERATION_ATTEMPT_TIMEOUT: Config<Duration> = Config::new(
+    "persist_blob_operation_attempt_timeout",
+    Duration::from_secs(90),
+    "Maximum time allowed for a single network call.",
+);
 
-    /// In Compactor::compact_and_apply, we do the compaction (don't skip it)
-    /// if the number of inputs is at least this many. Compaction is performed
-    /// if any of the heuristic criteria are met (they are OR'd).
-    pub fn compaction_heuristic_min_inputs(&self) -> usize {
-        self.compaction_heuristic_min_inputs
-            .load(Self::LOAD_ORDERING)
-    }
+pub(crate) const BLOB_CONNECT_TIMEOUT: Config<Duration> = Config::new(
+    "persist_blob_connect_timeout",
+    Duration::from_secs(7),
+    "Maximum time to wait for a socket connection to be made.",
+);
 
-    /// In Compactor::compact_and_apply, we do the compaction (don't skip it)
-    /// if the number of batch parts is at least this many. Compaction is performed
-    /// if any of the heuristic criteria are met (they are OR'd).
-    pub fn compaction_heuristic_min_parts(&self) -> usize {
-        self.compaction_heuristic_min_parts
-            .load(Self::LOAD_ORDERING)
-    }
+pub(crate) const BLOB_READ_TIMEOUT: Config<Duration> = Config::new(
+    "persist_blob_read_timeout",
+    Duration::from_secs(10),
+    "Maximum time to wait to read the first byte of a response, including connection time.",
+);
 
-    /// In Compactor::compact_and_apply, we do the compaction (don't skip it)
-    /// if the number of updates is at least this many. Compaction is performed
-    /// if any of the heuristic criteria are met (they are OR'd).
-    pub fn compaction_heuristic_min_updates(&self) -> usize {
-        self.compaction_heuristic_min_updates
-            .load(Self::LOAD_ORDERING)
-    }
-
-    /// The upper bound on compaction's memory consumption. The value must be at
-    /// least 4*`blob_target_size`. Increasing this value beyond the minimum allows
-    /// compaction to merge together more runs at once, providing greater
-    /// consolidation of updates, at the cost of greater memory usage.
-    pub fn compaction_memory_bound_bytes(&self) -> usize {
-        self.compaction_memory_bound_bytes.load(Self::LOAD_ORDERING)
-    }
-
-    /// The maximum number of concurrent blob deletes during garbage collection.
-    pub fn gc_blob_delete_concurrency_limit(&self) -> usize {
-        self.gc_blob_delete_concurrency_limit
-            .load(Self::LOAD_ORDERING)
-    }
-
-    /// The # of diffs to initially scan when fetching the latest consensus state, to
-    /// determine which requests go down the fast vs slow path. Should be large enough
-    /// to fetch all live diffs in the steady-state, and small enough to query Consensus
-    /// at high volume. Steady-state usage should accommodate readers that require
-    /// seqno-holds for reasonable amounts of time, which to start we say is 10s of minutes.
-    ///
-    /// This value ought to be defined in terms of `NEED_ROLLUP_THRESHOLD` to approximate
-    /// when we expect rollups to be written and therefore when old states will be truncated
-    /// by GC.
-    pub fn state_versions_recent_live_diffs_limit(&self) -> usize {
-        self.state_versions_recent_live_diffs_limit
-            .load(Self::LOAD_ORDERING)
-    }
-
-    /// The maximum number of concurrent state fetches during usage computation.
-    pub fn usage_state_fetch_concurrency_limit(&self) -> usize {
-        self.usage_state_fetch_concurrency_limit
-            .load(Self::LOAD_ORDERING)
-    }
-
-    // TODO: Get rid of these in favor of using dyncfgs at the
-    // relevant callsites.
-    #[cfg(test)]
-    pub fn set_batch_builder_max_outstanding_parts(&self, val: usize) {
-        self.batch_builder_max_outstanding_parts
-            .store(val, Self::LOAD_ORDERING);
-    }
-    pub fn set_compaction_memory_bound_bytes(&self, val: usize) {
-        self.compaction_memory_bound_bytes
-            .store(val, Self::LOAD_ORDERING);
-    }
-}
-
-// TODO: Replace with dynamic values when PersistConfig is integrated with LD
 impl BlobKnobs for PersistConfig {
     fn operation_timeout(&self) -> Duration {
-        Duration::from_secs(180)
+        BLOB_OPERATION_TIMEOUT.get(self)
     }
 
     fn operation_attempt_timeout(&self) -> Duration {
-        Duration::from_secs(90)
+        BLOB_OPERATION_ATTEMPT_TIMEOUT.get(self)
     }
 
     fn connect_timeout(&self) -> Duration {
-        Duration::from_secs(7)
+        BLOB_CONNECT_TIMEOUT.get(self)
     }
 
     fn read_timeout(&self) -> Duration {
-        Duration::from_secs(10)
+        BLOB_READ_TIMEOUT.get(self)
     }
 
     fn is_cc_active(&self) -> bool {
         self.is_cc_active
     }
+}
+
+pub fn check_data_version(code_version: &Version, data_version: &Version) -> Result<(), String> {
+    check_data_version_with_lts_versions(code_version, data_version, LTS_VERSIONS)
 }
 
 // If persist gets some encoded ProtoState from the future (e.g. two versions of
@@ -670,7 +685,44 @@ impl BlobKnobs for PersistConfig {
 // data we read is going to be because we fetched it using a pointer stored in
 // some persist state. If we can handle the state, we can handle the blobs it
 // references, too.
-pub fn check_data_version(code_version: &Version, data_version: &Version) -> Result<(), String> {
+pub(crate) fn check_data_version_with_lts_versions(
+    code_version: &Version,
+    data_version: &Version,
+    lts_versions: &[Version],
+) -> Result<(), String> {
+    // Allow upgrades specifically between consecutive LTS releases.
+    let base_code_version = Version {
+        patch: 0,
+        ..code_version.clone()
+    };
+    let base_data_version = Version {
+        patch: 0,
+        ..data_version.clone()
+    };
+    if data_version >= code_version {
+        for window in lts_versions.windows(2) {
+            if base_code_version == window[0] && base_data_version <= window[1] {
+                return Ok(());
+            }
+        }
+
+        if let Some(last) = lts_versions.last() {
+            if base_code_version == *last
+                // kind of arbitrary, but just ensure we don't accidentally
+                // upgrade too far (the previous check should ensure that a
+                // new version won't take over from a too-old previous
+                // version, but we want to make sure the other side also
+                // doesn't get confused)
+                && base_data_version
+                    .minor
+                    .saturating_sub(base_code_version.minor)
+                    < 40
+            {
+                return Ok(());
+            }
+        }
+    }
+
     // Allow one minor version of forward compatibility. We could avoid the
     // clone with some nested comparisons of the semver fields, but this code
     // isn't particularly performance sensitive and I find this impl easier to

@@ -55,7 +55,7 @@ where
 
 # EXPLAIN and EXPLAIN REPLAN should coincide.
 query T multiline
-EXPLAIN WITH(join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS VERBOSE TEXT FOR
 MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
@@ -87,7 +87,7 @@ EOF
 
 # EXPLAIN and EXPLAIN REPLAN should coincide.
 query T multiline
-EXPLAIN WITH(join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS VERBOSE TEXT FOR
 REPLAN MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
@@ -119,7 +119,7 @@ EOF
 
 # EXPLAIN REPLAN WITH(enable eager delta joins) should differ.
 query T multiline
-EXPLAIN WITH(join implementations, enable eager delta joins)
+EXPLAIN OPTIMIZED PLAN WITH(join implementations, enable eager delta joins) AS VERBOSE TEXT FOR
 REPLAN MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
@@ -172,7 +172,7 @@ CREATE INDEX v_idx ON v(c1);
 
 # EXPLAIN and EXPLAIN REPLAN should coincide.
 query T multiline
-EXPLAIN WITH(join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS VERBOSE TEXT FOR
 INDEX v_idx;
 ----
 materialize.public.v_idx:
@@ -208,7 +208,7 @@ EOF
 
 # EXPLAIN and EXPLAIN REPLAN should coincide.
 query T multiline
-EXPLAIN WITH(join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS VERBOSE TEXT FOR
 REPLAN INDEX v_idx;
 ----
 materialize.public.v_idx:
@@ -244,7 +244,7 @@ EOF
 
 # EXPLAIN REPLAN WITH(enable eager delta joins) should differ.
 query T multiline
-EXPLAIN WITH(join implementations, enable eager delta joins)
+EXPLAIN OPTIMIZED PLAN WITH(join implementations, enable eager delta joins) AS VERBOSE TEXT FOR
 REPLAN INDEX v_idx;
 ----
 materialize.public.v_idx:

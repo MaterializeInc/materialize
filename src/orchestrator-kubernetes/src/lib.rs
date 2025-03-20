@@ -8,15 +8,18 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
-use std::fmt;
+use std::future::Future;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+use std::{env, fmt};
 
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use chrono::Utc;
-use clap::ArgEnum;
+use clap::ValueEnum;
 use cloud_resource_controller::KubernetesResourceReader;
 use futures::stream::{BoxStream, StreamExt};
+use futures::TryFutureExt;
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Affinity, Capabilities, Container, ContainerPort, EnvVar, EnvVarSource, EphemeralVolumeSource,
@@ -25,13 +28,16 @@ use k8s_openapi::api::core::v1::{
     PersistentVolumeClaimTemplate, Pod, PodAffinity, PodAffinityTerm, PodAntiAffinity,
     PodSecurityContext, PodSpec, PodTemplateSpec, PreferredSchedulingTerm, ResourceRequirements,
     SeccompProfile, Secret, SecurityContext, Service as K8sService, ServicePort, ServiceSpec,
-    Toleration, TopologySpreadConstraint, Volume, VolumeMount, WeightedPodAffinityTerm,
+    Toleration, TopologySpreadConstraint, Volume, VolumeMount, VolumeResourceRequirements,
+    WeightedPodAffinityTerm,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, LabelSelectorRequirement};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{
+    LabelSelector, LabelSelectorRequirement, OwnerReference,
+};
 use kube::api::{Api, DeleteParams, ObjectMeta, Patch, PatchParams};
 use kube::client::Client;
-use kube::error::Error;
+use kube::error::Error as K8sError;
 use kube::runtime::{watcher, WatchStreamExt};
 use kube::ResourceExt;
 use maplit::btreemap;
@@ -39,12 +45,15 @@ use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpoint;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_orchestrator::{
     scheduling_config::*, DiskLimit, LabelSelectionLogic, LabelSelector as MzLabelSelector,
-    NamespacedOrchestrator, NotReadyReason, Orchestrator, Service, ServiceConfig, ServiceEvent,
+    NamespacedOrchestrator, OfflineReason, Orchestrator, Service, ServiceConfig, ServiceEvent,
     ServiceProcessMetrics, ServiceStatus,
 };
+use mz_ore::retry::Retry;
+use mz_ore::task::AbortOnDropHandle;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use tracing::warn;
+use tokio::sync::{mpsc, oneshot};
+use tracing::{info, warn};
 
 pub mod cloud_resource_controller;
 pub mod secrets;
@@ -52,6 +61,8 @@ pub mod util;
 
 const FIELD_MANAGER: &str = "environmentd";
 const NODE_FAILURE_THRESHOLD_SECONDS: i64 = 30;
+
+const POD_TEMPLATE_HASH_ANNOTATION: &str = "environmentd.materialize.cloud/pod-template-hash";
 
 /// Configures a [`KubernetesOrchestrator`].
 #[derive(Debug, Clone)]
@@ -82,10 +93,22 @@ pub struct KubernetesOrchestratorConfig {
     pub ephemeral_volume_storage_class: Option<String>,
     /// The optional fs group for service's pods' `securityContext`.
     pub service_fs_group: Option<i64>,
+    /// The prefix to prepend to all object names
+    pub name_prefix: Option<String>,
+    /// Whether we should attempt to collect metrics from kubernetes
+    pub collect_pod_metrics: bool,
+    /// Whether to annotate pods for prometheus service discovery.
+    pub enable_prometheus_scrape_annotations: bool,
+}
+
+impl KubernetesOrchestratorConfig {
+    pub fn name_prefix(&self) -> String {
+        self.name_prefix.clone().unwrap_or_default()
+    }
 }
 
 /// Specifies whether Kubernetes should pull Docker images when creating pods.
-#[derive(ArgEnum, Debug, Clone, Copy)]
+#[derive(ValueEnum, Debug, Clone, Copy)]
 pub enum KubernetesImagePullPolicy {
     /// Always pull the Docker image from the registry.
     Always,
@@ -101,6 +124,16 @@ impl fmt::Display for KubernetesImagePullPolicy {
             KubernetesImagePullPolicy::Always => f.write_str("Always"),
             KubernetesImagePullPolicy::IfNotPresent => f.write_str("IfNotPresent"),
             KubernetesImagePullPolicy::Never => f.write_str("Never"),
+        }
+    }
+}
+
+impl KubernetesImagePullPolicy {
+    pub fn as_kebab_case_str(&self) -> &'static str {
+        match self {
+            Self::Always => "always",
+            Self::IfNotPresent => "if-not-present",
+            Self::Never => "never",
         }
     }
 }
@@ -146,11 +179,21 @@ impl Orchestrator for KubernetesOrchestrator {
     fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator> {
         let mut namespaces = self.namespaces.lock().expect("lock poisoned");
         Arc::clone(namespaces.entry(namespace.into()).or_insert_with(|| {
-            Arc::new(NamespacedKubernetesOrchestrator {
+            let (command_tx, command_rx) = mpsc::unbounded_channel();
+            let worker = OrchestratorWorker {
                 metrics_api: Api::default_namespaced(self.client.clone()),
                 custom_metrics_api: Api::default_namespaced(self.client.clone()),
                 service_api: Api::default_namespaced(self.client.clone()),
                 stateful_set_api: Api::default_namespaced(self.client.clone()),
+                pod_api: Api::default_namespaced(self.client.clone()),
+                owner_references: vec![],
+                command_rx,
+                name_prefix: self.config.name_prefix.clone().unwrap_or_default(),
+                collect_pod_metrics: self.config.collect_pod_metrics,
+            }
+            .spawn(format!("kubernetes-orchestrator-worker:{namespace}"));
+
+            Arc::new(NamespacedKubernetesOrchestrator {
                 pod_api: Api::default_namespaced(self.client.clone()),
                 kubernetes_namespace: self.kubernetes_namespace.clone(),
                 namespace: namespace.into(),
@@ -158,6 +201,8 @@ impl Orchestrator for KubernetesOrchestrator {
                 // TODO(guswynn): make this configurable.
                 scheduling_config: Default::default(),
                 service_infos: std::sync::Mutex::new(BTreeMap::new()),
+                command_tx,
+                _worker: worker,
             })
         }))
     }
@@ -171,16 +216,14 @@ struct ServiceInfo {
 }
 
 struct NamespacedKubernetesOrchestrator {
-    metrics_api: Api<PodMetrics>,
-    custom_metrics_api: Api<MetricValueList>,
-    service_api: Api<K8sService>,
-    stateful_set_api: Api<StatefulSet>,
     pod_api: Api<Pod>,
     kubernetes_namespace: String,
     namespace: String,
     config: KubernetesOrchestratorConfig,
     scheduling_config: std::sync::RwLock<ServiceSchedulingConfig>,
     service_infos: std::sync::Mutex<BTreeMap<String, ServiceInfo>>,
+    command_tx: mpsc::UnboundedSender<WorkerCommand>,
+    _worker: AbortOnDropHandle<()>,
 }
 
 impl fmt::Debug for NamespacedKubernetesOrchestrator {
@@ -191,6 +234,62 @@ impl fmt::Debug for NamespacedKubernetesOrchestrator {
             .field("config", &self.config)
             .finish()
     }
+}
+
+/// Commands sent from a [`NamespacedKubernetesOrchestrator`] to its
+/// [`OrchestratorWorker`].
+///
+/// Commands for which the caller expects a result include a `result_tx` on which the
+/// [`OrchestratorWorker`] will deliver the result.
+enum WorkerCommand {
+    EnsureService {
+        desc: ServiceDescription,
+    },
+    DropService {
+        name: String,
+    },
+    ListServices {
+        namespace: String,
+        result_tx: oneshot::Sender<Vec<String>>,
+    },
+    FetchServiceMetrics {
+        name: String,
+        info: ServiceInfo,
+        result_tx: oneshot::Sender<Vec<ServiceProcessMetrics>>,
+    },
+}
+
+/// A description of a service to be created by an [`OrchestratorWorker`].
+#[derive(Debug, Clone)]
+struct ServiceDescription {
+    name: String,
+    scale: u16,
+    service: K8sService,
+    stateful_set: StatefulSet,
+    pod_template_hash: String,
+}
+
+/// A task executing blocking work for a [`NamespacedKubernetesOrchestrator`] in the background.
+///
+/// This type exists to enable making [`NamespacedKubernetesOrchestrator::ensure_service`] and
+/// [`NamespacedKubernetesOrchestrator::drop_service`] non-blocking, allowing invocation of these
+/// methods in latency-sensitive contexts.
+///
+/// Note that, apart from `ensure_service` and `drop_service`, this worker also handles blocking
+/// orchestrator calls that query service state (such as `list_services`). These need to be
+/// sequenced through the worker loop to ensure they linearize as expected. For example, we want to
+/// ensure that a `list_services` result contains exactly those services that were previously
+/// created with `ensure_service` and not yet dropped with `drop_service`.
+struct OrchestratorWorker {
+    metrics_api: Api<PodMetrics>,
+    custom_metrics_api: Api<MetricValueList>,
+    service_api: Api<K8sService>,
+    stateful_set_api: Api<StatefulSet>,
+    pod_api: Api<Pod>,
+    owner_references: Vec<OwnerReference>,
+    command_rx: mpsc::UnboundedReceiver<WorkerCommand>,
+    name_prefix: String,
+    collect_pod_metrics: bool,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -290,7 +389,15 @@ impl k8s_openapi::Metadata for MetricValueList {
 }
 
 impl NamespacedKubernetesOrchestrator {
-    /// Return a `wather::Config` instance that limits results to the namespace
+    fn service_name(&self, id: &str) -> String {
+        format!(
+            "{}{}-{id}",
+            self.config.name_prefix.as_deref().unwrap_or(""),
+            self.namespace
+        )
+    }
+
+    /// Return a `watcher::Config` instance that limits results to the namespace
     /// assigned to this orchestrator.
     fn watch_pod_params(&self) -> watcher::Config {
         let ns_selector = format!(
@@ -299,11 +406,13 @@ impl NamespacedKubernetesOrchestrator {
         );
         watcher::Config::default().labels(&ns_selector)
     }
+
     /// Convert a higher-level label key to the actual one we
     /// will give to Kubernetes
     fn make_label_key(&self, key: &str) -> String {
         format!("{}.environmentd.materialize.cloud/{}", self.namespace, key)
     }
+
     fn label_selector_to_k8s(
         &self,
         MzLabelSelector { label_name, logic }: MzLabelSelector,
@@ -339,6 +448,10 @@ impl NamespacedKubernetesOrchestrator {
         };
         Ok(lsr)
     }
+
+    fn send_command(&self, cmd: WorkerCommand) {
+        self.command_tx.send(cmd).expect("worker task not dropped");
+    }
 }
 
 #[derive(Debug)]
@@ -362,7 +475,7 @@ impl ScaledQuantity {
             }
         } else {
             for _ in 0..exponent {
-                result = result.checked_mul(2)?;
+                result = result.checked_mul(base)?;
             }
         }
         Some(result)
@@ -448,19 +561,887 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             tracing::error!("Failed to get info for {id}");
             anyhow::bail!("Failed to get info for {id}");
         };
+
+        let (result_tx, result_rx) = oneshot::channel();
+        self.send_command(WorkerCommand::FetchServiceMetrics {
+            name: self.service_name(id),
+            info,
+            result_tx,
+        });
+
+        let metrics = result_rx.await.expect("worker task not dropped");
+        Ok(metrics)
+    }
+
+    fn ensure_service(
+        &self,
+        id: &str,
+        ServiceConfig {
+            image,
+            init_container_image,
+            args,
+            ports: ports_in,
+            memory_limit,
+            cpu_limit,
+            scale,
+            labels: labels_in,
+            availability_zones,
+            other_replicas_selector,
+            replicas_selector,
+            disk: disk_in,
+            disk_limit,
+            node_selector,
+        }: ServiceConfig,
+    ) -> Result<Box<dyn Service>, anyhow::Error> {
+        // This is extremely cheap to clone, so just look into the lock once.
+        let scheduling_config: ServiceSchedulingConfig =
+            self.scheduling_config.read().expect("poisoned").clone();
+
+        // Determining whether to enable disk is subtle because we need to
+        // support historical sizes in the managed service and custom sizes in
+        // self hosted deployments.
+        let disk = {
+            // Whether the user specified `DISK = TRUE` when creating the
+            // replica OR whether the feature flag to force disk is enabled.
+            let user_requested_disk = disk_in || scheduling_config.always_use_disk;
+            // Whether the cluster replica size map provided by the
+            // administrator explicitly indicates that the size does not support
+            // disk.
+            let size_disables_disk = disk_limit == Some(DiskLimit::ZERO);
+            // Enable disk if the user requested it and the size does not
+            // disable it.
+            //
+            // Arguably we should not allow the user to request disk with sizes
+            // that have a zero disk limit, but configuring disk on a replica by
+            // replica basis is a legacy option that we hope to remove someday.
+            user_requested_disk && !size_disables_disk
+        };
+
+        let name = self.service_name(id);
+        // The match labels should be the minimal set of labels that uniquely
+        // identify the pods in the stateful set. Changing these after the
+        // `StatefulSet` is created is not permitted by Kubernetes, and we're
+        // not yet smart enough to handle deleting and recreating the
+        // `StatefulSet`.
+        let match_labels = btreemap! {
+            "environmentd.materialize.cloud/namespace".into() => self.namespace.clone(),
+            "environmentd.materialize.cloud/service-id".into() => id.into(),
+        };
+        let mut labels = match_labels.clone();
+        for (key, value) in labels_in {
+            labels.insert(self.make_label_key(&key), value);
+        }
+
+        labels.insert(self.make_label_key("scale"), scale.to_string());
+
+        for port in &ports_in {
+            labels.insert(
+                format!("environmentd.materialize.cloud/port-{}", port.name),
+                "true".into(),
+            );
+        }
+        for (key, value) in &self.config.service_labels {
+            labels.insert(key.clone(), value.clone());
+        }
+        let mut limits = BTreeMap::new();
+        if let Some(memory_limit) = memory_limit {
+            limits.insert(
+                "memory".into(),
+                Quantity(memory_limit.0.as_u64().to_string()),
+            );
+        }
+        if let Some(cpu_limit) = cpu_limit {
+            limits.insert(
+                "cpu".into(),
+                Quantity(format!("{}m", cpu_limit.as_millicpus())),
+            );
+        }
+        let service = K8sService {
+            metadata: ObjectMeta {
+                name: Some(name.clone()),
+                ..Default::default()
+            },
+            spec: Some(ServiceSpec {
+                ports: Some(
+                    ports_in
+                        .iter()
+                        .map(|port| ServicePort {
+                            port: port.port_hint.into(),
+                            name: Some(port.name.clone()),
+                            ..Default::default()
+                        })
+                        .collect(),
+                ),
+                cluster_ip: Some("None".to_string()),
+                selector: Some(match_labels.clone()),
+                ..Default::default()
+            }),
+            status: None,
+        };
+
+        let hosts = (0..scale)
+            .map(|i| {
+                format!(
+                    "{name}-{i}.{name}.{}.svc.cluster.local",
+                    self.kubernetes_namespace
+                )
+            })
+            .collect::<Vec<_>>();
+        let ports = ports_in
+            .iter()
+            .map(|p| (p.name.clone(), p.port_hint))
+            .collect::<BTreeMap<_, _>>();
+        let listen_addrs = ports_in
+            .iter()
+            .map(|p| (p.name.clone(), format!("0.0.0.0:{}", p.port_hint)))
+            .collect::<BTreeMap<_, _>>();
+        let mut args = args(&listen_addrs);
+
+        // This constrains the orchestrator (for those orchestrators that support
+        // anti-affinity, today just k8s) to never schedule pods for different replicas
+        // of the same cluster on the same node. Pods from the _same_ replica are fine;
+        // pods from different clusters are also fine.
+        //
+        // The point is that if pods of two replicas are on the same node, that node
+        // going down would kill both replicas, and so the replication factor of the
+        // cluster in question is illusory.
+        let anti_affinity = Some({
+            let label_selector_requirements = other_replicas_selector
+                .clone()
+                .into_iter()
+                .map(|ls| self.label_selector_to_k8s(ls))
+                .collect::<Result<Vec<_>, _>>()?;
+            let ls = LabelSelector {
+                match_expressions: Some(label_selector_requirements),
+                ..Default::default()
+            };
+            let pat = PodAffinityTerm {
+                label_selector: Some(ls),
+                topology_key: "kubernetes.io/hostname".to_string(),
+                ..Default::default()
+            };
+
+            if !scheduling_config.soften_replication_anti_affinity {
+                PodAntiAffinity {
+                    required_during_scheduling_ignored_during_execution: Some(vec![pat]),
+                    ..Default::default()
+                }
+            } else {
+                PodAntiAffinity {
+                    preferred_during_scheduling_ignored_during_execution: Some(vec![
+                        WeightedPodAffinityTerm {
+                            weight: scheduling_config.soften_replication_anti_affinity_weight,
+                            pod_affinity_term: pat,
+                        },
+                    ]),
+                    ..Default::default()
+                }
+            }
+        });
+
+        let pod_affinity = if let Some(weight) = scheduling_config.multi_pod_az_affinity_weight {
+            // `match_labels` sufficiently selects pods in the same replica.
+            let ls = LabelSelector {
+                match_labels: Some(match_labels.clone()),
+                ..Default::default()
+            };
+            let pat = PodAffinityTerm {
+                label_selector: Some(ls),
+                topology_key: "topology.kubernetes.io/zone".to_string(),
+                ..Default::default()
+            };
+
+            Some(PodAffinity {
+                preferred_during_scheduling_ignored_during_execution: Some(vec![
+                    WeightedPodAffinityTerm {
+                        weight,
+                        pod_affinity_term: pat,
+                    },
+                ]),
+                ..Default::default()
+            })
+        } else {
+            None
+        };
+
+        let topology_spread = if scheduling_config.topology_spread.enabled {
+            let config = &scheduling_config.topology_spread;
+
+            if !config.ignore_non_singular_scale || scale <= 1 {
+                let label_selector_requirements = (if config.ignore_non_singular_scale {
+                    let mut replicas_selector_ignoring_scale = replicas_selector.clone();
+
+                    replicas_selector_ignoring_scale.push(mz_orchestrator::LabelSelector {
+                        label_name: "scale".into(),
+                        logic: mz_orchestrator::LabelSelectionLogic::Eq {
+                            value: "1".to_string(),
+                        },
+                    });
+
+                    replicas_selector_ignoring_scale
+                } else {
+                    replicas_selector
+                })
+                .into_iter()
+                .map(|ls| self.label_selector_to_k8s(ls))
+                .collect::<Result<Vec<_>, _>>()?;
+                let ls = LabelSelector {
+                    match_expressions: Some(label_selector_requirements),
+                    ..Default::default()
+                };
+
+                let constraint = TopologySpreadConstraint {
+                    label_selector: Some(ls),
+                    min_domains: None,
+                    max_skew: config.max_skew,
+                    topology_key: "topology.kubernetes.io/zone".to_string(),
+                    when_unsatisfiable: if config.soft {
+                        "ScheduleAnyway".to_string()
+                    } else {
+                        "DoNotSchedule".to_string()
+                    },
+                    // TODO(guswynn): restore these once they are supported.
+                    // Consider node affinities when calculating topology spread. This is the
+                    // default: <https://docs.rs/k8s-openapi/latest/k8s_openapi/api/core/v1/struct.TopologySpreadConstraint.html#structfield.node_affinity_policy>,
+                    // made explicit.
+                    // node_affinity_policy: Some("Honor".to_string()),
+                    // Do not consider node taints when calculating topology spread. This is the
+                    // default: <https://docs.rs/k8s-openapi/latest/k8s_openapi/api/core/v1/struct.TopologySpreadConstraint.html#structfield.node_taints_policy>,
+                    // made explicit.
+                    // node_taints_policy: Some("Ignore".to_string()),
+                    match_label_keys: None,
+                    // Once the above are restorted, we should't have `..Default::default()` here because the specifics of these fields are
+                    // subtle enough where we want compilation failures when we upgrade
+                    ..Default::default()
+                };
+                Some(vec![constraint])
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let mut pod_annotations = btreemap! {
+            // Prevent the cluster-autoscaler (or karpenter) from evicting these pods in attempts to scale down
+            // and terminate nodes.
+            // This will cost us more money, but should give us better uptime.
+            // This does not prevent all evictions by Kubernetes, only the ones initiated by the
+            // cluster-autoscaler (or karpenter). Notably, eviction of pods for resource overuse is still enabled.
+            "cluster-autoscaler.kubernetes.io/safe-to-evict".to_owned() => "false".to_string(),
+            "karpenter.sh/do-not-evict".to_owned() => "true".to_string(),
+
+            // It's called do-not-disrupt in newer versions of karpenter, so adding for forward/backward compatibility
+            "karpenter.sh/do-not-disrupt".to_owned() => "true".to_string(),
+        };
+        if self.config.enable_prometheus_scrape_annotations {
+            if let Some(internal_http_port) = ports_in
+                .iter()
+                .find(|port| port.name == "internal-http")
+                .map(|port| port.port_hint.to_string())
+            {
+                // Enable prometheus scrape discovery
+                pod_annotations.insert("prometheus.io/scrape".to_owned(), "true".to_string());
+                pod_annotations.insert("prometheus.io/port".to_owned(), internal_http_port);
+                pod_annotations.insert("prometheus.io/path".to_owned(), "/metrics".to_string());
+                pod_annotations.insert("prometheus.io/scheme".to_owned(), "http".to_string());
+            }
+        }
+
+        let default_node_selector = if disk {
+            vec![("materialize.cloud/disk".to_string(), disk.to_string())]
+        } else {
+            // if the cluster doesn't require disk, we can omit the selector
+            // allowing it to be scheduled onto nodes with and without the
+            // selector
+            vec![]
+        };
+
+        let node_selector: BTreeMap<String, String> = default_node_selector
+            .into_iter()
+            .chain(self.config.service_node_selector.clone())
+            .chain(node_selector)
+            .collect();
+
+        let node_affinity = if let Some(availability_zones) = availability_zones {
+            let selector = NodeSelectorTerm {
+                match_expressions: Some(vec![NodeSelectorRequirement {
+                    key: "materialize.cloud/availability-zone".to_string(),
+                    operator: "In".to_string(),
+                    values: Some(availability_zones),
+                }]),
+                match_fields: None,
+            };
+
+            if scheduling_config.soften_az_affinity {
+                Some(NodeAffinity {
+                    preferred_during_scheduling_ignored_during_execution: Some(vec![
+                        PreferredSchedulingTerm {
+                            preference: selector,
+                            weight: scheduling_config.soften_az_affinity_weight,
+                        },
+                    ]),
+                    required_during_scheduling_ignored_during_execution: None,
+                })
+            } else {
+                Some(NodeAffinity {
+                    preferred_during_scheduling_ignored_during_execution: None,
+                    required_during_scheduling_ignored_during_execution: Some(NodeSelector {
+                        node_selector_terms: vec![selector],
+                    }),
+                })
+            }
+        } else {
+            None
+        };
+
+        let container_name = image
+            .rsplit_once('/')
+            .and_then(|(_, name_version)| name_version.rsplit_once(':'))
+            .context("`image` is not ORG/NAME:VERSION")?
+            .0
+            .to_string();
+
+        let container_security_context = if scheduling_config.security_context_enabled {
+            Some(SecurityContext {
+                privileged: Some(false),
+                run_as_non_root: Some(true),
+                allow_privilege_escalation: Some(false),
+                seccomp_profile: Some(SeccompProfile {
+                    type_: "RuntimeDefault".to_string(),
+                    ..Default::default()
+                }),
+                capabilities: Some(Capabilities {
+                    drop: Some(vec!["ALL".to_string()]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+        } else {
+            None
+        };
+
+        let init_containers = init_container_image.map(|image| {
+            vec![Container {
+                name: "init".to_string(),
+                image: Some(image),
+                image_pull_policy: Some(self.config.image_pull_policy.to_string()),
+                resources: Some(ResourceRequirements {
+                    claims: None,
+                    // Set both limits and requests to the same values, to ensure a
+                    // `Guaranteed` QoS class for the pod.
+                    limits: Some(limits.clone()),
+                    requests: Some(limits.clone()),
+                }),
+                security_context: container_security_context.clone(),
+                env: Some(vec![
+                    EnvVar {
+                        name: "MZ_NAMESPACE".to_string(),
+                        value_from: Some(EnvVarSource {
+                            field_ref: Some(ObjectFieldSelector {
+                                field_path: "metadata.namespace".to_string(),
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    EnvVar {
+                        name: "MZ_POD_NAME".to_string(),
+                        value_from: Some(EnvVarSource {
+                            field_ref: Some(ObjectFieldSelector {
+                                field_path: "metadata.name".to_string(),
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    EnvVar {
+                        name: "MZ_NODE_NAME".to_string(),
+                        value_from: Some(EnvVarSource {
+                            field_ref: Some(ObjectFieldSelector {
+                                field_path: "spec.nodeName".to_string(),
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                ]),
+                ..Default::default()
+            }]
+        });
+
+        let env = if self.config.coverage {
+            Some(vec![EnvVar {
+                name: "LLVM_PROFILE_FILE".to_string(),
+                value: Some(format!("/coverage/{}-%p-%9m%c.profraw", self.namespace)),
+                ..Default::default()
+            }])
+        } else {
+            None
+        };
+
+        let mut volume_mounts = vec![];
+
+        if self.config.coverage {
+            volume_mounts.push(VolumeMount {
+                name: "coverage".to_string(),
+                mount_path: "/coverage".to_string(),
+                ..Default::default()
+            })
+        }
+
+        let volumes = match (disk, &self.config.ephemeral_volume_storage_class) {
+            (true, Some(ephemeral_volume_storage_class)) => {
+                volume_mounts.push(VolumeMount {
+                    name: "scratch".to_string(),
+                    mount_path: "/scratch".to_string(),
+                    ..Default::default()
+                });
+                args.push("--scratch-directory=/scratch".into());
+
+                Some(vec![Volume {
+                    name: "scratch".to_string(),
+                    ephemeral: Some(EphemeralVolumeSource {
+                        volume_claim_template: Some(PersistentVolumeClaimTemplate {
+                            spec: PersistentVolumeClaimSpec {
+                                access_modes: Some(vec!["ReadWriteOnce".to_string()]),
+                                storage_class_name: Some(
+                                    ephemeral_volume_storage_class.to_string(),
+                                ),
+                                resources: Some(VolumeResourceRequirements {
+                                    requests: Some(BTreeMap::from([(
+                                        "storage".to_string(),
+                                        Quantity(
+                                            disk_limit
+                                                .unwrap_or(DiskLimit::ARBITRARY)
+                                                .0
+                                                .as_u64()
+                                                .to_string(),
+                                        ),
+                                    )])),
+                                    ..Default::default()
+                                }),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }])
+            }
+            (true, None) => {
+                return Err(anyhow!(
+                    "service requested disk but no ephemeral volume storage class was configured"
+                ));
+            }
+            (false, _) => None,
+        };
+
+        if let Some(name_prefix) = &self.config.name_prefix {
+            args.push(format!("--secrets-reader-name-prefix={}", name_prefix));
+        }
+
+        let volume_claim_templates = if self.config.coverage {
+            Some(vec![PersistentVolumeClaim {
+                metadata: ObjectMeta {
+                    name: Some("coverage".to_string()),
+                    ..Default::default()
+                },
+                spec: Some(PersistentVolumeClaimSpec {
+                    access_modes: Some(vec!["ReadWriteOnce".to_string()]),
+                    resources: Some(VolumeResourceRequirements {
+                        requests: Some(BTreeMap::from([(
+                            "storage".to_string(),
+                            Quantity("10Gi".to_string()),
+                        )])),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }])
+        } else {
+            None
+        };
+
+        let security_context = if let Some(fs_group) = self.config.service_fs_group {
+            Some(PodSecurityContext {
+                fs_group: Some(fs_group),
+                run_as_user: Some(fs_group),
+                run_as_group: Some(fs_group),
+                ..Default::default()
+            })
+        } else {
+            None
+        };
+
+        let tolerations = Some(vec![
+            // When the node becomes `NotReady` it indicates there is a problem
+            // with the node. By default Kubernetes waits 300s (5 minutes)
+            // before descheduling the pod, but we tune this to 30s for faster
+            // recovery in the case of node failure.
+            Toleration {
+                effect: Some("NoExecute".into()),
+                key: Some("node.kubernetes.io/not-ready".into()),
+                operator: Some("Exists".into()),
+                toleration_seconds: Some(NODE_FAILURE_THRESHOLD_SECONDS),
+                value: None,
+            },
+            Toleration {
+                effect: Some("NoExecute".into()),
+                key: Some("node.kubernetes.io/unreachable".into()),
+                operator: Some("Exists".into()),
+                toleration_seconds: Some(NODE_FAILURE_THRESHOLD_SECONDS),
+                value: None,
+            },
+        ]);
+
+        let mut pod_template_spec = PodTemplateSpec {
+            metadata: Some(ObjectMeta {
+                labels: Some(labels.clone()),
+                annotations: Some(pod_annotations), // Do not delete, we insert into it below.
+                ..Default::default()
+            }),
+            spec: Some(PodSpec {
+                init_containers,
+                containers: vec![Container {
+                    name: container_name,
+                    image: Some(image),
+                    args: Some(args),
+                    image_pull_policy: Some(self.config.image_pull_policy.to_string()),
+                    ports: Some(
+                        ports_in
+                            .iter()
+                            .map(|port| ContainerPort {
+                                container_port: port.port_hint.into(),
+                                name: Some(port.name.clone()),
+                                ..Default::default()
+                            })
+                            .collect(),
+                    ),
+                    security_context: container_security_context.clone(),
+                    resources: Some(ResourceRequirements {
+                        claims: None,
+                        // Set both limits and requests to the same values, to ensure a
+                        // `Guaranteed` QoS class for the pod.
+                        limits: Some(limits.clone()),
+                        requests: Some(limits),
+                    }),
+                    volume_mounts: if !volume_mounts.is_empty() {
+                        Some(volume_mounts)
+                    } else {
+                        None
+                    },
+                    env,
+                    ..Default::default()
+                }],
+                volumes,
+                security_context,
+                node_selector: Some(node_selector),
+                scheduler_name: self.config.scheduler_name.clone(),
+                service_account: self.config.service_account.clone(),
+                affinity: Some(Affinity {
+                    pod_anti_affinity: anti_affinity,
+                    pod_affinity,
+                    node_affinity,
+                    ..Default::default()
+                }),
+                topology_spread_constraints: topology_spread,
+                tolerations,
+                // Setting a 0s termination grace period has the side effect of
+                // automatically starting a new pod when the previous pod is
+                // currently terminating. This enables recovery from a node
+                // failure with no manual intervention. Without this setting,
+                // the StatefulSet controller will refuse to start a new pod
+                // until the failed node is manually removed from the Kubernetes
+                // cluster.
+                //
+                // The Kubernetes documentation strongly advises against this
+                // setting, as StatefulSets attempt to provide "at most once"
+                // semantics [0]--that is, the guarantee that for a given pod in
+                // a StatefulSet there is *at most* one pod with that identity
+                // running in the cluster.
+                //
+                // Materialize services, however, are carefully designed to
+                // *not* rely on this guarantee. In fact, we do not believe that
+                // correct distributed systems can meaningfully rely on
+                // Kubernetes's guarantee--network packets from a pod can be
+                // arbitrarily delayed, long past that pod's termination.
+                //
+                // [0]: https://kubernetes.io/docs/tasks/run-application/force-delete-stateful-set-pod/#statefulset-considerations
+                termination_grace_period_seconds: Some(0),
+                ..Default::default()
+            }),
+        };
+        let pod_template_json = serde_json::to_string(&pod_template_spec).unwrap();
+        let mut hasher = Sha256::new();
+        hasher.update(pod_template_json);
+        let pod_template_hash = format!("{:x}", hasher.finalize());
+        pod_template_spec
+            .metadata
+            .as_mut()
+            .unwrap()
+            .annotations
+            .as_mut()
+            .unwrap()
+            .insert(
+                POD_TEMPLATE_HASH_ANNOTATION.to_owned(),
+                pod_template_hash.clone(),
+            );
+
+        let stateful_set = StatefulSet {
+            metadata: ObjectMeta {
+                name: Some(name.clone()),
+                ..Default::default()
+            },
+            spec: Some(StatefulSetSpec {
+                selector: LabelSelector {
+                    match_labels: Some(match_labels),
+                    ..Default::default()
+                },
+                service_name: name.clone(),
+                replicas: Some(scale.into()),
+                template: pod_template_spec,
+                pod_management_policy: Some("Parallel".to_string()),
+                volume_claim_templates,
+                ..Default::default()
+            }),
+            status: None,
+        };
+
+        self.send_command(WorkerCommand::EnsureService {
+            desc: ServiceDescription {
+                name,
+                scale,
+                service,
+                stateful_set,
+                pod_template_hash,
+            },
+        });
+
+        self.service_infos.lock().expect("poisoned lock").insert(
+            id.to_string(),
+            ServiceInfo {
+                scale,
+                disk,
+                disk_limit,
+            },
+        );
+
+        Ok(Box::new(KubernetesService { hosts, ports }))
+    }
+
+    /// Drops the identified service, if it exists.
+    fn drop_service(&self, id: &str) -> Result<(), anyhow::Error> {
+        fail::fail_point!("kubernetes_drop_service", |_| Err(anyhow!("failpoint")));
+        self.service_infos.lock().expect("poisoned lock").remove(id);
+
+        self.send_command(WorkerCommand::DropService {
+            name: self.service_name(id),
+        });
+
+        Ok(())
+    }
+
+    /// Lists the identifiers of all known services.
+    async fn list_services(&self) -> Result<Vec<String>, anyhow::Error> {
+        let (result_tx, result_rx) = oneshot::channel();
+        self.send_command(WorkerCommand::ListServices {
+            namespace: self.namespace.clone(),
+            result_tx,
+        });
+
+        let list = result_rx.await.expect("worker task not dropped");
+        Ok(list)
+    }
+
+    fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
+        fn into_service_event(pod: Pod) -> Result<ServiceEvent, anyhow::Error> {
+            let process_id = pod.name_any().split('-').last().unwrap().parse()?;
+            let service_id_label = "environmentd.materialize.cloud/service-id";
+            let service_id = pod
+                .labels()
+                .get(service_id_label)
+                .ok_or_else(|| anyhow!("missing label: {service_id_label}"))?
+                .clone();
+
+            let oomed = pod
+                .status
+                .as_ref()
+                .and_then(|status| status.container_statuses.as_ref())
+                .map(|container_statuses| {
+                    container_statuses.iter().any(|cs| {
+                        // The container might have already transitioned from "terminated" to
+                        // "waiting"/"running" state, in which case we need to check its previous
+                        // state to find out why it terminated.
+                        let current_state = cs.state.as_ref().and_then(|s| s.terminated.as_ref());
+                        let last_state = cs.last_state.as_ref().and_then(|s| s.terminated.as_ref());
+                        let termination_state = current_state.or(last_state);
+
+                        // The interesting exit codes are 135 (SIGBUS) and 137 (SIGKILL). SIGKILL
+                        // occurs when the OOM killer terminates the container, SIGBUS occurs when
+                        // the container runs out of disk. We treat the latter as an OOM condition
+                        // too since we only use disk for spilling memory.
+                        let exit_code = termination_state.map(|s| s.exit_code);
+                        exit_code == Some(135) || exit_code == Some(137)
+                    })
+                })
+                .unwrap_or(false);
+
+            let (pod_ready, last_probe_time) = pod
+                .status
+                .and_then(|status| status.conditions)
+                .and_then(|conditions| conditions.into_iter().find(|c| c.type_ == "Ready"))
+                .map(|c| (c.status == "True", c.last_probe_time))
+                .unwrap_or((false, None));
+
+            let status = if pod_ready {
+                ServiceStatus::Online
+            } else {
+                ServiceStatus::Offline(oomed.then_some(OfflineReason::OomKilled))
+            };
+            let time = if let Some(time) = last_probe_time {
+                time.0
+            } else {
+                Utc::now()
+            };
+
+            Ok(ServiceEvent {
+                service_id,
+                process_id,
+                status,
+                time,
+            })
+        }
+
+        let stream = watcher(self.pod_api.clone(), self.watch_pod_params())
+            .touched_objects()
+            .filter_map(|object| async move {
+                match object {
+                    Ok(pod) => Some(into_service_event(pod)),
+                    Err(error) => {
+                        // We assume that errors returned by Kubernetes are usually transient, so we
+                        // just log a warning and ignore them otherwise.
+                        tracing::warn!("service watch error: {error}");
+                        None
+                    }
+                }
+            });
+        Box::pin(stream)
+    }
+
+    fn update_scheduling_config(&self, config: ServiceSchedulingConfig) {
+        *self.scheduling_config.write().expect("poisoned") = config;
+    }
+}
+
+impl OrchestratorWorker {
+    fn spawn(self, name: String) -> AbortOnDropHandle<()> {
+        mz_ore::task::spawn(|| name, self.run()).abort_on_drop()
+    }
+
+    async fn run(mut self) {
+        {
+            info!("initializing Kubernetes orchestrator worker");
+            let start = Instant::now();
+
+            // Fetch the owner reference for our own pod (usually a
+            // StatefulSet), so that we can propagate it to the services we
+            // create.
+            let hostname = env::var("HOSTNAME").unwrap_or_else(|_| panic!("HOSTNAME environment variable missing or invalid; required for Kubernetes orchestrator"));
+            let orchestrator_pod = Retry::default()
+                .clamp_backoff(Duration::from_secs(10))
+                .retry_async(|_| self.pod_api.get(&hostname))
+                .await
+                .expect("always retries on error");
+            self.owner_references
+                .extend(orchestrator_pod.owner_references().into_iter().cloned());
+
+            info!(
+                "Kubernetes orchestrator worker initialized in {:?}",
+                start.elapsed()
+            );
+        }
+
+        while let Some(cmd) = self.command_rx.recv().await {
+            self.handle_command(cmd).await;
+        }
+    }
+
+    /// Handle a worker command.
+    ///
+    /// If handling the command fails, it is automatically retried. All command handlers return
+    /// [`K8sError`], so we can reasonably assume that a failure is caused by issues communicating
+    /// with the K8S server and that retrying resolves them eventually.
+    async fn handle_command(&self, cmd: WorkerCommand) {
+        async fn retry<F, U, R>(f: F, cmd_type: &str) -> R
+        where
+            F: Fn() -> U,
+            U: Future<Output = Result<R, K8sError>>,
+        {
+            Retry::default()
+                .clamp_backoff(Duration::from_secs(10))
+                .retry_async(|_| {
+                    f().map_err(
+                        |error| tracing::error!(%cmd_type, "orchestrator call failed: {error}"),
+                    )
+                })
+                .await
+                .expect("always retries on error")
+        }
+
+        use WorkerCommand::*;
+        match cmd {
+            EnsureService { desc } => {
+                retry(|| self.ensure_service(desc.clone()), "EnsureService").await
+            }
+            DropService { name } => retry(|| self.drop_service(&name), "DropService").await,
+            ListServices {
+                namespace,
+                result_tx,
+            } => {
+                let result = retry(|| self.list_services(&namespace), "ListServices").await;
+                let _ = result_tx.send(result);
+            }
+            FetchServiceMetrics {
+                name,
+                info,
+                result_tx,
+            } => {
+                let result = self.fetch_service_metrics(&name, &info).await;
+                let _ = result_tx.send(result);
+            }
+        }
+    }
+
+    async fn fetch_service_metrics(
+        &self,
+        name: &str,
+        info: &ServiceInfo,
+    ) -> Vec<ServiceProcessMetrics> {
+        if !self.collect_pod_metrics {
+            return (0..info.scale)
+                .map(|_| ServiceProcessMetrics::default())
+                .collect();
+        }
+
         /// Get metrics for a particular service and process, converting them into a sane (i.e., numeric) format.
         ///
         /// Note that we want to keep going even if a lookup fails for whatever reason,
         /// so this function is infallible. If we fail to get cpu or memory for a particular pod,
         /// we just log a warning and install `None` in the returned struct.
         async fn get_metrics(
-            self_: &NamespacedKubernetesOrchestrator,
-            id: &str,
+            self_: &OrchestratorWorker,
+            service_name: &str,
             i: usize,
             disk: bool,
             disk_limit: Option<DiskLimit>,
         ) -> ServiceProcessMetrics {
-            let name = format!("{}-{id}-{i}", self_.namespace);
+            let name = format!("{service_name}-{i}");
 
             let disk_usage_fut = async {
                 if disk {
@@ -510,7 +1491,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
                     let disk_usage = match disk_usage {
                         Some(Ok(disk_usage)) => Some(disk_usage),
-                        Some(Err(e)) if !matches!(&e, Error::Api(e) if e.code == 404) => {
+                        Some(Err(e)) if !matches!(&e, K8sError::Api(e) if e.code == 404) => {
                             warn!(
                                 "Failed to fetch `kubelet_volume_stats_used_bytes` for {name}: {e}"
                             );
@@ -521,7 +1502,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
                     let disk_capacity = match disk_capacity {
                         Some(Ok(disk_capacity)) => Some(disk_capacity),
-                        Some(Err(e)) if !matches!(&e, Error::Api(e) if e.code == 404) => {
+                        Some(Err(e)) if !matches!(&e, K8sError::Api(e) if e.code == 404) => {
                             warn!("Failed to fetch `kubelet_volume_stats_capacity_bytes` for {name}: {e}");
                             None
                         }
@@ -678,645 +1659,58 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             }
         }
         let ret = futures::future::join_all(
-            (0..info.scale).map(|i| get_metrics(self, id, i.into(), info.disk, info.disk_limit)),
+            (0..info.scale).map(|i| get_metrics(self, name, i.into(), info.disk, info.disk_limit)),
         );
 
-        Ok(ret.await)
+        ret.await
     }
 
-    async fn ensure_service(
-        &self,
-        id: &str,
-        ServiceConfig {
-            image,
-            init_container_image,
-            args,
-            ports: ports_in,
-            memory_limit,
-            cpu_limit,
-            scale,
-            labels: labels_in,
-            availability_zones,
-            other_replicas_selector,
-            replicas_selector,
-            disk,
-            disk_limit,
-            node_selector,
-        }: ServiceConfig<'_>,
-    ) -> Result<Box<dyn Service>, anyhow::Error> {
-        // This is extremely cheap to clone, so just look into the lock once.
-        let scheduling_config: ServiceSchedulingConfig =
-            self.scheduling_config.read().expect("poisoned").clone();
-        let disk = scheduling_config.always_use_disk || disk;
-
-        let name = format!("{}-{id}", self.namespace);
-        // The match labels should be the minimal set of labels that uniquely
-        // identify the pods in the stateful set. Changing these after the
-        // `StatefulSet` is created is not permitted by Kubernetes, and we're
-        // not yet smart enough to handle deleting and recreating the
-        // `StatefulSet`.
-        let match_labels = btreemap! {
-            "environmentd.materialize.cloud/namespace".into() => self.namespace.clone(),
-            "environmentd.materialize.cloud/service-id".into() => id.into(),
-        };
-        let mut labels = match_labels.clone();
-        for (key, value) in labels_in {
-            labels.insert(self.make_label_key(&key), value);
-        }
-
-        labels.insert(self.make_label_key("scale"), scale.to_string());
-
-        for port in &ports_in {
-            labels.insert(
-                format!("environmentd.materialize.cloud/port-{}", port.name),
-                "true".into(),
-            );
-        }
-        for (key, value) in &self.config.service_labels {
-            labels.insert(key.clone(), value.clone());
-        }
-        let mut limits = BTreeMap::new();
-        if let Some(memory_limit) = memory_limit {
-            limits.insert(
-                "memory".into(),
-                Quantity(memory_limit.0.as_u64().to_string()),
-            );
-        }
-        if let Some(cpu_limit) = cpu_limit {
-            limits.insert(
-                "cpu".into(),
-                Quantity(format!("{}m", cpu_limit.as_millicpus())),
-            );
-        }
-        let service = K8sService {
-            metadata: ObjectMeta {
-                name: Some(name.clone()),
-                ..Default::default()
-            },
-            spec: Some(ServiceSpec {
-                ports: Some(
-                    ports_in
-                        .iter()
-                        .map(|port| ServicePort {
-                            port: port.port_hint.into(),
-                            name: Some(port.name.clone()),
-                            ..Default::default()
-                        })
-                        .collect(),
-                ),
-                cluster_ip: None,
-                selector: Some(match_labels.clone()),
-                ..Default::default()
-            }),
-            status: None,
-        };
-
-        let hosts = (0..scale)
-            .map(|i| {
-                format!(
-                    "{name}-{i}.{name}.{}.svc.cluster.local",
-                    self.kubernetes_namespace
-                )
-            })
-            .collect::<Vec<_>>();
-        let ports = ports_in
-            .iter()
-            .map(|p| (p.name.clone(), p.port_hint))
-            .collect::<BTreeMap<_, _>>();
-        let listen_addrs = ports_in
-            .iter()
-            .map(|p| (p.name.clone(), format!("0.0.0.0:{}", p.port_hint)))
-            .collect::<BTreeMap<_, _>>();
-        let mut args = args(&listen_addrs);
-
-        // This constrains the orchestrator (for those orchestrators that support
-        // anti-affinity, today just k8s) to never schedule pods for different replicas
-        // of the same cluster on the same node. Pods from the _same_ replica are fine;
-        // pods from different clusters are also fine.
-        //
-        // The point is that if pods of two replicas are on the same node, that node
-        // going down would kill both replicas, and so the replication factor of the
-        // cluster in question is illusory.
-        let anti_affinity = Some({
-            let label_selector_requirements = other_replicas_selector
-                .clone()
-                .into_iter()
-                .map(|ls| self.label_selector_to_k8s(ls))
-                .collect::<Result<Vec<_>, _>>()?;
-            let ls = LabelSelector {
-                match_expressions: Some(label_selector_requirements),
-                ..Default::default()
-            };
-            let pat = PodAffinityTerm {
-                label_selector: Some(ls),
-                topology_key: "kubernetes.io/hostname".to_string(),
-                ..Default::default()
-            };
-
-            if !scheduling_config.soften_replication_anti_affinity {
-                PodAntiAffinity {
-                    required_during_scheduling_ignored_during_execution: Some(vec![pat]),
-                    ..Default::default()
-                }
-            } else {
-                PodAntiAffinity {
-                    preferred_during_scheduling_ignored_during_execution: Some(vec![
-                        WeightedPodAffinityTerm {
-                            weight: scheduling_config.soften_replication_anti_affinity_weight,
-                            pod_affinity_term: pat,
-                        },
-                    ]),
-                    ..Default::default()
-                }
-            }
-        });
-
-        let pod_affinity = if let Some(weight) = scheduling_config.multi_pod_az_affinity_weight {
-            // `match_labels` sufficiently selects pods in the same replica.
-            let ls = LabelSelector {
-                match_labels: Some(match_labels.clone()),
-                ..Default::default()
-            };
-            let pat = PodAffinityTerm {
-                label_selector: Some(ls),
-                topology_key: "topology.kubernetes.io/zone".to_string(),
-                ..Default::default()
-            };
-
-            Some(PodAffinity {
-                preferred_during_scheduling_ignored_during_execution: Some(vec![
-                    WeightedPodAffinityTerm {
-                        weight,
-                        pod_affinity_term: pat,
-                    },
-                ]),
-                ..Default::default()
-            })
-        } else {
-            None
-        };
-
-        let topology_spread = if scheduling_config.topology_spread.enabled {
-            let config = &scheduling_config.topology_spread;
-
-            if !config.ignore_non_singular_scale || scale <= 1 {
-                let label_selector_requirements = (if config.ignore_non_singular_scale {
-                    let mut replicas_selector_ignoring_scale = replicas_selector.clone();
-
-                    replicas_selector_ignoring_scale.push(mz_orchestrator::LabelSelector {
-                        label_name: "scale".into(),
-                        logic: mz_orchestrator::LabelSelectionLogic::Eq {
-                            value: "1".to_string(),
-                        },
-                    });
-
-                    replicas_selector_ignoring_scale
-                } else {
-                    replicas_selector
-                })
-                .into_iter()
-                .map(|ls| self.label_selector_to_k8s(ls))
-                .collect::<Result<Vec<_>, _>>()?;
-                let ls = LabelSelector {
-                    match_expressions: Some(label_selector_requirements),
-                    ..Default::default()
-                };
-
-                let constraint = TopologySpreadConstraint {
-                    label_selector: Some(ls),
-                    min_domains: None,
-                    max_skew: config.max_skew,
-                    topology_key: "topology.kubernetes.io/zone".to_string(),
-                    when_unsatisfiable: if config.soft {
-                        "ScheduleAnyway".to_string()
-                    } else {
-                        "DoNotSchedule".to_string()
-                    },
-                    // TODO(guswynn): restore these once they are supported.
-                    // Consider node affinities when calculating topology spread. This is the
-                    // default: <https://docs.rs/k8s-openapi/latest/k8s_openapi/api/core/v1/struct.TopologySpreadConstraint.html#structfield.node_affinity_policy>,
-                    // made explicit.
-                    // node_affinity_policy: Some("Honor".to_string()),
-                    // Do not consider node taints when calculating topology spread. This is the
-                    // default: <https://docs.rs/k8s-openapi/latest/k8s_openapi/api/core/v1/struct.TopologySpreadConstraint.html#structfield.node_taints_policy>,
-                    // made explicit.
-                    // node_taints_policy: Some("Ignore".to_string()),
-                    match_label_keys: None,
-                    // Once the above are restorted, we should't have `..Default::default()` here because the specifics of these fields are
-                    // subtle enough where we want compilation failures when we upgrade
-                    ..Default::default()
-                };
-                Some(vec![constraint])
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        let pod_annotations = btreemap! {
-            // Prevent the cluster-autoscaler (or karpenter) from evicting these pods in attempts to scale down
-            // and terminate nodes.
-            // This will cost us more money, but should give us better uptime.
-            // This does not prevent all evictions by Kubernetes, only the ones initiated by the
-            // cluster-autoscaler (or karpenter). Notably, eviction of pods for resource overuse is still enabled.
-            "cluster-autoscaler.kubernetes.io/safe-to-evict".to_owned() => "false".to_string(),
-            "karpenter.sh/do-not-evict".to_owned() => "true".to_string(),
-
-            // It's called do-not-disrupt in newer versions of karpenter, so adding for forward/backward compatibility
-            "karpenter.sh/do-not-disrupt".to_owned() => "true".to_string(),
-        };
-
-        let default_node_selector = if disk {
-            vec![("materialize.cloud/disk".to_string(), disk.to_string())]
-        } else {
-            // if the cluster doesn't require disk, we can omit the selector
-            // allowing it to be scheduled onto nodes with and without the
-            // selector
-            vec![]
-        };
-
-        let node_selector: BTreeMap<String, String> = default_node_selector
-            .into_iter()
-            .chain(self.config.service_node_selector.clone())
-            .chain(node_selector)
-            .collect();
-
-        let node_affinity = if let Some(availability_zones) = availability_zones {
-            let selector = NodeSelectorTerm {
-                match_expressions: Some(vec![NodeSelectorRequirement {
-                    key: "materialize.cloud/availability-zone".to_string(),
-                    operator: "In".to_string(),
-                    values: Some(availability_zones),
-                }]),
-                match_fields: None,
-            };
-
-            if scheduling_config.soften_az_affinity {
-                Some(NodeAffinity {
-                    preferred_during_scheduling_ignored_during_execution: Some(vec![
-                        PreferredSchedulingTerm {
-                            preference: selector,
-                            weight: scheduling_config.soften_az_affinity_weight,
-                        },
-                    ]),
-                    required_during_scheduling_ignored_during_execution: None,
-                })
-            } else {
-                Some(NodeAffinity {
-                    preferred_during_scheduling_ignored_during_execution: None,
-                    required_during_scheduling_ignored_during_execution: Some(NodeSelector {
-                        node_selector_terms: vec![selector],
-                    }),
-                })
-            }
-        } else {
-            None
-        };
-
-        let container_name = image
-            .splitn(2, '/')
-            .skip(1)
-            .next()
-            .and_then(|name_version| name_version.splitn(2, ':').next())
-            .context("`image` is not ORG/NAME:VERSION")?
-            .to_string();
-
-        let container_security_context = if scheduling_config.security_context_enabled {
-            Some(SecurityContext {
-                privileged: Some(false),
-                run_as_non_root: Some(true),
-                allow_privilege_escalation: Some(false),
-                seccomp_profile: Some(SeccompProfile {
-                    type_: "RuntimeDefault".to_string(),
-                    ..Default::default()
-                }),
-                capabilities: Some(Capabilities {
-                    drop: Some(vec!["ALL".to_string()]),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            })
-        } else {
-            None
-        };
-
-        let init_containers = init_container_image.map(|image| {
-            vec![Container {
-                name: "init".to_string(),
-                image: Some(image),
-                image_pull_policy: Some(self.config.image_pull_policy.to_string()),
-                resources: Some(ResourceRequirements {
-                    claims: None,
-                    // Set both limits and requests to the same values, to ensure a
-                    // `Guaranteed` QoS class for the pod.
-                    limits: Some(limits.clone()),
-                    requests: Some(limits.clone()),
-                }),
-                security_context: container_security_context.clone(),
-                env: Some(vec![
-                    EnvVar {
-                        name: "MZ_NAMESPACE".to_string(),
-                        value_from: Some(EnvVarSource {
-                            field_ref: Some(ObjectFieldSelector {
-                                field_path: "metadata.namespace".to_string(),
-                                ..Default::default()
-                            }),
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    },
-                    EnvVar {
-                        name: "MZ_POD_NAME".to_string(),
-                        value_from: Some(EnvVarSource {
-                            field_ref: Some(ObjectFieldSelector {
-                                field_path: "metadata.name".to_string(),
-                                ..Default::default()
-                            }),
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    },
-                    EnvVar {
-                        name: "MZ_NODE_NAME".to_string(),
-                        value_from: Some(EnvVarSource {
-                            field_ref: Some(ObjectFieldSelector {
-                                field_path: "spec.nodeName".to_string(),
-                                ..Default::default()
-                            }),
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    },
-                ]),
-                ..Default::default()
-            }]
-        });
-
-        let env = if self.config.coverage {
-            Some(vec![EnvVar {
-                name: "LLVM_PROFILE_FILE".to_string(),
-                value: Some(format!("/coverage/{}-%p-%9m%c.profraw", self.namespace)),
-                ..Default::default()
-            }])
-        } else {
-            None
-        };
-
-        let mut volume_mounts = vec![];
-
-        if self.config.coverage {
-            volume_mounts.push(VolumeMount {
-                name: "coverage".to_string(),
-                mount_path: "/coverage".to_string(),
-                ..Default::default()
-            })
-        }
-
-        let volumes = match (disk, &self.config.ephemeral_volume_storage_class) {
-            (true, Some(ephemeral_volume_storage_class)) => {
-                volume_mounts.push(VolumeMount {
-                    name: "scratch".to_string(),
-                    mount_path: "/scratch".to_string(),
-                    ..Default::default()
-                });
-                args.push("--scratch-directory=/scratch".into());
-
-                Some(vec![Volume {
-                    name: "scratch".to_string(),
-                    ephemeral: Some(EphemeralVolumeSource {
-                        volume_claim_template: Some(PersistentVolumeClaimTemplate {
-                            spec: PersistentVolumeClaimSpec {
-                                access_modes: Some(vec!["ReadWriteOnce".to_string()]),
-                                storage_class_name: Some(
-                                    ephemeral_volume_storage_class.to_string(),
-                                ),
-                                resources: Some(ResourceRequirements {
-                                    requests: Some(BTreeMap::from([(
-                                        "storage".to_string(),
-                                        Quantity(
-                                            disk_limit
-                                                .unwrap_or(DiskLimit::ARBITRARY)
-                                                .0
-                                                .as_u64()
-                                                .to_string(),
-                                        ),
-                                    )])),
-                                    ..Default::default()
-                                }),
-                                ..Default::default()
-                            },
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }])
-            }
-            (true, None) => {
-                return Err(anyhow!(
-                    "service requested disk but no ephemeral volume storage class was configured"
-                ));
-            }
-            (false, _) => None,
-        };
-
-        let volume_claim_templates = if self.config.coverage {
-            Some(vec![PersistentVolumeClaim {
-                metadata: ObjectMeta {
-                    name: Some("coverage".to_string()),
-                    ..Default::default()
-                },
-                spec: Some(PersistentVolumeClaimSpec {
-                    access_modes: Some(vec!["ReadWriteOnce".to_string()]),
-                    resources: Some(ResourceRequirements {
-                        requests: Some(BTreeMap::from([(
-                            "storage".to_string(),
-                            Quantity("10Gi".to_string()),
-                        )])),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }])
-        } else {
-            None
-        };
-
-        let security_context = if let Some(fs_group) = self.config.service_fs_group {
-            Some(PodSecurityContext {
-                fs_group: Some(fs_group),
-                run_as_user: Some(fs_group),
-                run_as_group: Some(fs_group),
-                ..Default::default()
-            })
-        } else {
-            None
-        };
-
-        let tolerations = Some(vec![
-            // When the node becomes `NotReady` it indicates there is a problem
-            // with the node. By default Kubernetes waits 300s (5 minutes)
-            // before descheduling the pod, but we tune this to 30s for faster
-            // recovery in the case of node failure.
-            Toleration {
-                effect: Some("NoExecute".into()),
-                key: Some("node.kubernetes.io/not-ready".into()),
-                operator: Some("Exists".into()),
-                toleration_seconds: Some(NODE_FAILURE_THRESHOLD_SECONDS),
-                value: None,
-            },
-            Toleration {
-                effect: Some("NoExecute".into()),
-                key: Some("node.kubernetes.io/unreachable".into()),
-                operator: Some("Exists".into()),
-                toleration_seconds: Some(NODE_FAILURE_THRESHOLD_SECONDS),
-                value: None,
-            },
-        ]);
-
-        let mut pod_template_spec = PodTemplateSpec {
-            metadata: Some(ObjectMeta {
-                labels: Some(labels.clone()),
-                annotations: Some(pod_annotations), // Do not delete, we insert into it below.
-                ..Default::default()
-            }),
-            spec: Some(PodSpec {
-                init_containers,
-                containers: vec![Container {
-                    name: container_name,
-                    image: Some(image),
-                    args: Some(args),
-                    image_pull_policy: Some(self.config.image_pull_policy.to_string()),
-                    ports: Some(
-                        ports_in
-                            .iter()
-                            .map(|port| ContainerPort {
-                                container_port: port.port_hint.into(),
-                                name: Some(port.name.clone()),
-                                ..Default::default()
-                            })
-                            .collect(),
-                    ),
-                    security_context: container_security_context.clone(),
-                    resources: Some(ResourceRequirements {
-                        claims: None,
-                        // Set both limits and requests to the same values, to ensure a
-                        // `Guaranteed` QoS class for the pod.
-                        limits: Some(limits.clone()),
-                        requests: Some(limits),
-                    }),
-                    volume_mounts: if !volume_mounts.is_empty() {
-                        Some(volume_mounts)
-                    } else {
-                        None
-                    },
-                    env,
-                    ..Default::default()
-                }],
-                volumes,
-                security_context,
-                node_selector: Some(node_selector),
-                scheduler_name: self.config.scheduler_name.clone(),
-                service_account: self.config.service_account.clone(),
-                affinity: Some(Affinity {
-                    pod_anti_affinity: anti_affinity,
-                    pod_affinity,
-                    node_affinity,
-                    ..Default::default()
-                }),
-                topology_spread_constraints: topology_spread,
-                tolerations,
-                // Setting a 0s termination grace period has the side effect of
-                // automatically starting a new pod when the previous pod is
-                // currently terminating. This enables recovery from a node
-                // failure with no manual intervention. Without this setting,
-                // the StatefulSet controller will refuse to start a new pod
-                // until the failed node is manually removed from the Kubernetes
-                // cluster.
-                //
-                // The Kubernetes documentation strongly advises against this
-                // setting, as StatefulSets attempt to provide "at most once"
-                // semantics [0]--that is, the guarantee that for a given pod in
-                // a StatefulSet there is *at most* one pod with that identity
-                // running in the cluster.
-                //
-                // Materialize services, however, are carefully designed to
-                // *not* rely on this guarantee. In fact, we do not believe that
-                // correct distributed systems can meaningfully rely on
-                // Kubernetes's guarantee--network packets from a pod can be
-                // arbitrarily delayed, long past that pod's termination.
-                //
-                // [0]: https://kubernetes.io/docs/tasks/run-application/force-delete-stateful-set-pod/#statefulset-considerations
-                termination_grace_period_seconds: Some(0),
-                ..Default::default()
-            }),
-        };
-        let pod_template_json = serde_json::to_string(&pod_template_spec).unwrap();
-        let mut hasher = Sha256::new();
-        hasher.update(pod_template_json);
-        let pod_template_hash = format!("{:x}", hasher.finalize());
-        let pod_template_hash_annotation = "environmentd.materialize.cloud/pod-template-hash";
-        pod_template_spec
+    async fn ensure_service(&self, mut desc: ServiceDescription) -> Result<(), K8sError> {
+        // We inject our own pod's owner references into the Kubernetes objects
+        // created for the service so that if the
+        // Deployment/StatefulSet/whatever that owns the pod running the
+        // orchestrator gets deleted, so do all services spawned by this
+        // orchestrator.
+        desc.service
             .metadata
-            .as_mut()
-            .unwrap()
-            .annotations
-            .as_mut()
-            .unwrap()
-            .insert(
-                pod_template_hash_annotation.to_owned(),
-                pod_template_hash.clone(),
-            );
-
-        let stateful_set = StatefulSet {
-            metadata: ObjectMeta {
-                name: Some(name.clone()),
-                ..Default::default()
-            },
-            spec: Some(StatefulSetSpec {
-                selector: LabelSelector {
-                    match_labels: Some(match_labels),
-                    ..Default::default()
-                },
-                service_name: name.clone(),
-                replicas: Some(scale.into()),
-                template: pod_template_spec,
-                pod_management_policy: Some("Parallel".to_string()),
-                volume_claim_templates,
-                ..Default::default()
-            }),
-            status: None,
-        };
+            .owner_references
+            .get_or_insert(vec![])
+            .extend(self.owner_references.iter().cloned());
+        desc.stateful_set
+            .metadata
+            .owner_references
+            .get_or_insert(vec![])
+            .extend(self.owner_references.iter().cloned());
 
         self.service_api
             .patch(
-                &name,
+                &desc.name,
                 &PatchParams::apply(FIELD_MANAGER).force(),
-                &Patch::Apply(service),
+                &Patch::Apply(desc.service),
             )
             .await?;
         self.stateful_set_api
             .patch(
-                &name,
+                &desc.name,
                 &PatchParams::apply(FIELD_MANAGER).force(),
-                &Patch::Apply(stateful_set),
+                &Patch::Apply(desc.stateful_set),
             )
             .await?;
+
         // Explicitly delete any pods in the stateful set that don't match the
         // template. In theory, Kubernetes would do this automatically, but
         // in practice we have observed that it does not.
         // See: https://github.com/kubernetes/kubernetes/issues/67250
-        for pod_id in 0..scale {
-            let pod_name = format!("{}-{}", &name, pod_id);
+        for pod_id in 0..desc.scale {
+            let pod_name = format!("{}-{pod_id}", desc.name);
             let pod = match self.pod_api.get(&pod_name).await {
                 Ok(pod) => pod,
                 // Pod already doesn't exist.
                 Err(kube::Error::Api(e)) if e.code == 404 => continue,
-                Err(e) => return Err(e.into()),
+                Err(e) => return Err(e),
             };
-            if pod.annotations().get(pod_template_hash_annotation) != Some(&pod_template_hash) {
+            if pod.annotations().get(POD_TEMPLATE_HASH_ANNOTATION) != Some(&desc.pod_template_hash)
+            {
                 match self
                     .pod_api
                     .delete(&pod_name, &DeleteParams::default())
@@ -1325,51 +1719,39 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     Ok(_) => (),
                     // Pod got deleted while we were looking at it.
                     Err(kube::Error::Api(e)) if e.code == 404 => (),
-                    Err(e) => return Err(e.into()),
+                    Err(e) => return Err(e),
                 }
             }
         }
-        self.service_infos.lock().expect("poisoned lock").insert(
-            id.to_string(),
-            ServiceInfo {
-                scale,
-                disk,
-                disk_limit,
-            },
-        );
-        Ok(Box::new(KubernetesService { hosts, ports }))
+
+        Ok(())
     }
 
-    /// Drops the identified service, if it exists.
-    async fn drop_service(&self, id: &str) -> Result<(), anyhow::Error> {
-        fail::fail_point!("kubernetes_drop_service", |_| Err(anyhow!("failpoint")));
-        self.service_infos.lock().expect("poisoned lock").remove(id);
-        let name = format!("{}-{id}", self.namespace);
+    async fn drop_service(&self, name: &str) -> Result<(), K8sError> {
         let res = self
             .stateful_set_api
-            .delete(&name, &DeleteParams::default())
+            .delete(name, &DeleteParams::default())
             .await;
         match res {
             Ok(_) => (),
-            Err(Error::Api(e)) if e.code == 404 => (),
-            Err(e) => return Err(e.into()),
+            Err(K8sError::Api(e)) if e.code == 404 => (),
+            Err(e) => return Err(e),
         }
 
         let res = self
             .service_api
-            .delete(&name, &DeleteParams::default())
+            .delete(name, &DeleteParams::default())
             .await;
         match res {
             Ok(_) => Ok(()),
-            Err(Error::Api(e)) if e.code == 404 => Ok(()),
-            Err(e) => Err(e.into()),
+            Err(K8sError::Api(e)) if e.code == 404 => Ok(()),
+            Err(e) => Err(e),
         }
     }
 
-    /// Lists the identifiers of all known services.
-    async fn list_services(&self) -> Result<Vec<String>, anyhow::Error> {
+    async fn list_services(&self, namespace: &str) -> Result<Vec<String>, K8sError> {
         let stateful_sets = self.stateful_set_api.list(&Default::default()).await?;
-        let name_prefix = format!("{}-", self.namespace);
+        let name_prefix = format!("{}{namespace}-", self.name_prefix);
         Ok(stateful_sets
             .into_iter()
             .filter_map(|ss| {
@@ -1380,85 +1762,6 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     .map(Into::into)
             })
             .collect())
-    }
-
-    fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
-        fn into_service_event(pod: Pod) -> Result<ServiceEvent, anyhow::Error> {
-            let process_id = pod.name_any().split('-').last().unwrap().parse()?;
-            let service_id_label = "environmentd.materialize.cloud/service-id";
-            let service_id = pod
-                .labels()
-                .get(service_id_label)
-                .ok_or_else(|| anyhow!("missing label: {service_id_label}"))?
-                .clone();
-
-            let oomed = pod
-                .status
-                .as_ref()
-                .and_then(|status| status.container_statuses.as_ref())
-                .map(|container_statuses| {
-                    container_statuses.iter().any(|cs| {
-                        // The container might have already transitioned from "terminated" to
-                        // "waiting"/"running" state, in which case we need to check its previous
-                        // state to find out why it terminated.
-                        let current_state = cs.state.as_ref().and_then(|s| s.terminated.as_ref());
-                        let last_state = cs.last_state.as_ref().and_then(|s| s.terminated.as_ref());
-                        let termination_state = current_state.or(last_state);
-
-                        // The interesting exit codes are 135 (SIGBUS) and 137 (SIGKILL). SIGKILL
-                        // occurs when the OOM killer terminates the container, SIGBUS occurs when
-                        // the container runs out of disk. We treat the latter as an OOM condition
-                        // too since we only use disk for spilling memory.
-                        let exit_code = termination_state.map(|s| s.exit_code);
-                        exit_code == Some(135) || exit_code == Some(137)
-                    })
-                })
-                .unwrap_or(false);
-
-            let (pod_ready, last_probe_time) = pod
-                .status
-                .and_then(|status| status.conditions)
-                .and_then(|conditions| conditions.into_iter().find(|c| c.type_ == "Ready"))
-                .map(|c| (c.status == "True", c.last_probe_time))
-                .unwrap_or((false, None));
-
-            let status = if pod_ready {
-                ServiceStatus::Ready
-            } else {
-                ServiceStatus::NotReady(oomed.then_some(NotReadyReason::OomKilled))
-            };
-            let time = if let Some(time) = last_probe_time {
-                time.0
-            } else {
-                Utc::now()
-            };
-
-            Ok(ServiceEvent {
-                service_id,
-                process_id,
-                status,
-                time,
-            })
-        }
-
-        let stream = watcher(self.pod_api.clone(), self.watch_pod_params())
-            .touched_objects()
-            .filter_map(|object| async move {
-                match object {
-                    Ok(pod) => Some(into_service_event(pod)),
-                    Err(error) => {
-                        // We assume that errors returned by Kubernetes are usually transient, so we
-                        // just log a warning and ignore them otherwise.
-                        tracing::warn!("service watch error: {error}");
-                        None
-                    }
-                }
-            });
-        Box::pin(stream)
-    }
-
-    fn update_scheduling_config(&self, config: ServiceSchedulingConfig) {
-        *self.scheduling_config.write().expect("poisoned") = config;
     }
 }
 
@@ -1475,5 +1778,56 @@ impl Service for KubernetesService {
             .iter()
             .map(|host| format!("{host}:{port}"))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn k8s_quantity_base10_large() {
+        let cases = &[
+            ("42", 42),
+            ("42k", 42000),
+            ("42M", 42000000),
+            ("42G", 42000000000),
+            ("42T", 42000000000000),
+            ("42P", 42000000000000000),
+        ];
+
+        for (input, expected) in cases {
+            let quantity = parse_k8s_quantity(input).unwrap();
+            let number = quantity.try_to_integer(0, true).unwrap();
+            assert_eq!(number, *expected, "input={input}, quantity={quantity:?}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn k8s_quantity_base10_small() {
+        let cases = &[("42n", 42), ("42u", 42000), ("42m", 42000000)];
+
+        for (input, expected) in cases {
+            let quantity = parse_k8s_quantity(input).unwrap();
+            let number = quantity.try_to_integer(-9, true).unwrap();
+            assert_eq!(number, *expected, "input={input}, quantity={quantity:?}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn k8s_quantity_base2() {
+        let cases = &[
+            ("42Ki", 42 << 10),
+            ("42Mi", 42 << 20),
+            ("42Gi", 42 << 30),
+            ("42Ti", 42 << 40),
+            ("42Pi", 42 << 50),
+        ];
+
+        for (input, expected) in cases {
+            let quantity = parse_k8s_quantity(input).unwrap();
+            let number = quantity.try_to_integer(0, false).unwrap();
+            assert_eq!(number, *expected, "input={input}, quantity={quantity:?}");
+        }
     }
 }

@@ -13,9 +13,6 @@ $ set-arg-default single-replica-cluster=quickstart
 
 $ kafka-create-topic topic=thetopic partitions=1
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_create_source_denylist_with_options = true
-
 > CREATE CONNECTION kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 ! CREATE CONNECTION no_broker TO KAFKA (BROKER '');
@@ -25,7 +22,7 @@ contains:Meta data fetch error: BrokerTransportFailure (Local: Broker transport 
 
 ! CREATE CONNECTION fawlty_kafka_conn
   TO KAFKA (BROKER 'non-existent-broker:9092');
-contains:Failed to resolve hostname
+regex:Failed to resolve hostname|Broker transport failure
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
@@ -36,19 +33,20 @@ contains:Failed to resolve hostname
   );
 contains:failed to lookup address information
 
-# Check that for all tables clause is rejected
 ! CREATE SOURCE bad_definition1
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'any_topic')
-  FORMAT BYTES FOR ALL TABLES;
-contains: FOR ALL TABLES is only valid for multi-output sources
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'any_topic');
+contains:Topic does not exist
 
-# Check that for tables() clause is rejected
-! CREATE SOURCE bad_definition2
+# Check that for all tables clause is rejected (old syntax on purpose)
+! CREATE SOURCE bad_definition1_src
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'any_topic')
-  FORMAT BYTES FOR TABLES (t1);
-contains: FOR TABLES (t1) is only valid for multi-output sources
+  FROM KAFKA CONNECTION kafka_conn (
+    TOPIC 'testdrive-thetopic-${testdrive.seed}'
+  )
+  FORMAT BYTES
+  FOR ALL TABLES;
+contains: FOR ALL TABLES is only valid for multi-output sources
 
 # Ensure the `TOPIC METADATA REFRESH INTERVAL` rejects too large and too
 # small values.
@@ -58,8 +56,6 @@ contains: FOR TABLES (t1) is only valid for multi-output sources
     TOPIC 'testdrive-thetopic-${testdrive.seed}',
     TOPIC METADATA REFRESH INTERVAL '-30s'
   )
-  FORMAT TEXT
-  ENVELOPE NONE
 contains:cannot convert negative interval to duration
 
 ! CREATE SOURCE bad_topic_metadata_refresh_interval
@@ -68,13 +64,4 @@ contains:cannot convert negative interval to duration
     TOPIC 'testdrive-thetopic-${testdrive.seed}',
     TOPIC METADATA REFRESH INTERVAL '1hr 1ms'
   )
-  FORMAT TEXT
-  ENVELOPE NONE
 contains:TOPIC METADATA REFRESH INTERVAL cannot be greater than 1 hour
-
-! CREATE SOURCE bad_topic
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'whatever')
-  FORMAT TEXT
-  ENVELOPE NONE
-contains:Topic does not exist

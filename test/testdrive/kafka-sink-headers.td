@@ -80,8 +80,13 @@ b         d         {"k": 5, "h": {"a": "b", "c": "d"}}
 
 > INSERT INTO text_tbl VALUES (6, '{"a" => "b", "c" => null}')
 
-$ kafka-verify-data headers=a,c format=json sink=materialize.public.text_snk key=false sort-messages=true
-b         <null>    {"k": 6, "h": {"a": "b", "c": null}}
+$ kafka-verify-data headers=a,c format=json sink=materialize.public.text_snk key=true sort-messages=true
+b         <null>    {"k": 6} {"k": 6, "h": {"a": "b", "c": null}}
+
+> DELETE FROM text_tbl WHERE k = 6
+
+$ kafka-verify-data headers=a,c format=json sink=materialize.public.text_snk key=true sort-messages=true
+b         <null>    {"k": 6}
 
 # Test successful use with `map[text => bytea]`.
 

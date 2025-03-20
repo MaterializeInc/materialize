@@ -75,13 +75,13 @@ where
         | DateTimeUnits::DayOfWeek
         | DateTimeUnits::IsoDayOfYear
         | DateTimeUnits::IsoDayOfWeek => Err(EvalError::UnsupportedUnits(
-            format!("{}", units),
-            "time".to_string(),
+            format!("{}", units).into(),
+            "time".into(),
         )),
         DateTimeUnits::Timezone | DateTimeUnits::TimezoneHour | DateTimeUnits::TimezoneMinute => {
             Err(EvalError::Unsupported {
-                feature: format!("'{}' timestamp units", units),
-                issue_no: None,
+                feature: format!("'{}' timestamp units", units).into(),
+                discussion_no: None,
             })
         }
     }

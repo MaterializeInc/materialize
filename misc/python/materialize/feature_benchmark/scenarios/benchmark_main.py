@@ -9,10 +9,12 @@
 import random
 import re
 from math import ceil, floor
+from pathlib import Path
 from textwrap import dedent
 
 from parameterized import parameterized_class  # type: ignore
 
+import materialize.optbench.sql
 from materialize.feature_benchmark.action import Action, Kgen, TdAction
 from materialize.feature_benchmark.measurement_source import (
     Lambda,
@@ -26,7 +28,6 @@ from materialize.feature_benchmark.scenario import (
     ScenarioDisabled,
 )
 from materialize.feature_benchmark.scenario_version import ScenarioVersion
-from materialize.mz_version import MzVersion
 
 # for pdoc ignores
 __pdoc__ = {}
@@ -176,7 +177,7 @@ true
 
 
 class FastPathLimit(FastPath):
-    """Benchmark the case SELECT * FROM source LIMIT <i> , optimized by #21615"""
+    """Benchmark the case SELECT * FROM source LIMIT <i> , optimized by materialize#21615"""
 
     def init(self) -> list[Action]:
         return [
@@ -217,6 +218,10 @@ class Insert(DML):
     def benchmark(self) -> MeasurementSource:
         return Td(
             f"""
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_result_size = 17179869184;
+
 > DROP TABLE IF EXISTS t1;
 
 > CREATE TABLE t1 (f1 INTEGER)
@@ -231,7 +236,8 @@ class Insert(DML):
 class ManySmallInserts(DML):
     """Measure the time it takes for several small INSERT statements to return."""
 
-    SCALE = 4
+    # Sometimes goes OoM
+    SCALE = 3
 
     def init(self) -> Action:
         return self.table_ten()
@@ -288,7 +294,10 @@ class InsertBatch(DML):
 
 
 class InsertMultiRow(DML):
-    """Measure the time it takes for a single multi-row INSERT statement to return."""
+    """Measure the time it takes for a single multi-row INSERT statement to return.
+    When `sequence_insert` calls `constant_optimizer`, it should be able to reach a constant. Otherwise, we run the full
+    logical optimizer, which makes this test show a regression.
+    """
 
     SCALE = 4  # FATAL:  request larger than 2.0 MB
 
@@ -341,10 +350,10 @@ class Update(DML):
 class ManySmallUpdates(DML):
     """Measure the time it takes for several small UPDATE statements to return to client"""
 
-    SCALE = 3  # runs > 4 hours with SCALE = 4
+    SCALE = 2  # runs ~2.5 hours with SCALE = 3
 
     def version(self) -> ScenarioVersion:
-        return ScenarioVersion.create(1, 1, 0)
+        return ScenarioVersion.create(1, 2, 0)
 
     def init(self) -> list[Action]:
         return [
@@ -384,7 +393,7 @@ class ManySmallUpdates(DML):
 
 
 class UpdateMultiNoIndex(DML):
-    """Measure the time it takes to perform multiple updates over the same records in a non-indexed table. GitHub Issue #11071"""
+    """Measure the time it takes to perform multiple updates over the same records in a non-indexed table. GitHub Issue database-issues#3233"""
 
     def before(self) -> Action:
         # Due to exterme variability in the results, we have no option but to drop and re-create
@@ -427,6 +436,10 @@ class InsertAndSelect(DML):
     def benchmark(self) -> MeasurementSource:
         return Td(
             f"""
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_result_size = 17179869184;
+
 > DROP TABLE IF EXISTS t1;
 
 > CREATE TABLE t1 (f1 INTEGER)
@@ -696,8 +709,13 @@ class AccumulateReductions(Dataflow):
 
 > SET CLUSTER = idx_cluster;
 
-? EXPLAIN SELECT count(*) FROM accumulable;
+?[version>=13500] EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT count(*) FROM accumulable;
 Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[count(*)] // { arity: 1 }
+        Project () // { arity: 0 }
+          ReadIndex on=accumulable i_accumulable=[*** full scan ***] // { arity: 5 }
   Return // { arity: 1 }
     Union // { arity: 1 }
       Get l0 // { arity: 1 }
@@ -708,11 +726,29 @@ Explained Query:
               Get l0 // { arity: 1 }
           Constant // { arity: 0 }
             - ()
+
+Used Indexes:
+  - materialize.public.i_accumulable (*** full scan ***)
+
+Target cluster: idx_cluster
+
+?[version<13500] EXPLAIN OPTIMIZED PLAN FOR SELECT count(*) FROM accumulable;
+Explained Query:
   With
     cte l0 =
       Reduce aggregates=[count(*)] // { arity: 1 }
         Project () // { arity: 0 }
           ReadIndex on=accumulable i_accumulable=[*** full scan ***] // { arity: 5 }
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Get l0 // { arity: 1 }
+      Map (0) // { arity: 1 }
+        Union // { arity: 0 }
+          Negate // { arity: 0 }
+            Project () // { arity: 0 }
+              Get l0 // { arity: 1 }
+          Constant // { arity: 0 }
+            - ()
 
 Used Indexes:
   - materialize.public.i_accumulable (*** full scan ***)
@@ -725,12 +761,6 @@ Target cluster: idx_cluster
 
 > SET CLUSTER = default;
 """
-
-        if self._mz_version < MzVersion.parse_mz("v0.83.0-dev"):
-            sql = remove_arity_information_from_explain(sql)
-
-        if self._mz_version < MzVersion.parse_mz("v0.96.0-dev"):
-            sql = remove_target_cluster_from_explain(sql)
 
         return Td(sql)
 
@@ -989,19 +1019,20 @@ $ kafka-ingest format=bytes topic=kafka-envelope-none-bytes repeat={self.n()}
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 > DROP CLUSTER IF EXISTS source_cluster CASCADE
 
->[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
->[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+> CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
 
 > CREATE SOURCE s1
   IN CLUSTER source_cluster
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-envelope-none-bytes-${{testdrive.seed}}')
+
+> CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-kafka-envelope-none-bytes-${{testdrive.seed}}")
   FORMAT BYTES
   ENVELOPE NONE
   /* A */
 
-> SELECT COUNT(*) = {self.n()} FROM s1
+> SELECT COUNT(*) = {self.n()} FROM s1_tbl
   /* B */
 true
 """
@@ -1030,8 +1061,7 @@ $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keys
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 > DROP CLUSTER IF EXISTS source_cluster CASCADE
 
->[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
->[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+> CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${{testdrive.schema-registry-url}}'
@@ -1042,11 +1072,13 @@ $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keys
 > CREATE SOURCE s1
   IN CLUSTER source_cluster
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-upsert-${{testdrive.seed}}')
+
+> CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-kafka-upsert-${{testdrive.seed}}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
   /* A */
 
-> SELECT f1 FROM s1
+> SELECT f1 FROM s1_tbl
   /* B */
 1
 2
@@ -1074,8 +1106,7 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{key
 > DROP CONNECTION IF EXISTS s1_csr_conn CASCADE
 > DROP CLUSTER IF EXISTS source_cluster CASCADE
 
->[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
->[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+> CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS s1_csr_conn
   TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
@@ -1086,10 +1117,12 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{key
 > CREATE SOURCE s1
   IN CLUSTER source_cluster
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-upsert-unique-${{testdrive.seed}}')
+
+> CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-upsert-unique-${{testdrive.seed}}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
   ENVELOPE UPSERT
 
-> SELECT COUNT(*) FROM s1;
+> SELECT COUNT(*) FROM s1_tbl;
   /* B */
 {self.n()}
 """
@@ -1122,8 +1155,7 @@ $ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{ke
 > DROP CONNECTION IF EXISTS s1_csr_conn CASCADE
 > DROP CLUSTER IF EXISTS source_cluster CASCADE
 
->[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
->[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+> CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS s1_csr_conn
   TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
@@ -1132,17 +1164,18 @@ $ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{ke
 
 > CREATE SOURCE s1
   IN CLUSTER source_cluster
-  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-recovery-${{testdrive.seed}}')
+  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-recovery-${{testdrive.seed}}');
+
+> CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-kafka-recovery-${{testdrive.seed}}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
   ENVELOPE UPSERT;
 
 # Make sure we are fully caught up before continuing
-> SELECT COUNT(*) FROM s1;
+> SELECT COUNT(*) FROM s1_tbl;
 {self.n()}
 
 # Give time for any background tasks (e.g. compaction) to settle down
-> SELECT mz_unsafe.mz_sleep(10)
-<null>
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="10s"
 """
         )
 
@@ -1151,7 +1184,7 @@ $ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{ke
             Lambda(lambda e: e.RestartMzClusterd()),
             Td(
                 f"""
-> SELECT COUNT(*) /* {self.n()} */ FROM s1;
+> SELECT COUNT(*) /* {self.n()} */ FROM s1_tbl;
   /* B */
 {self.n()}
 """
@@ -1203,21 +1236,22 @@ class KafkaRestartBig(ScenarioBig):
     def init(self) -> Action:
         return TdAction(
             f"""
->[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
->[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+> CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > DROP CLUSTER IF EXISTS source_cluster CASCADE
 > CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
 
 > CREATE SOURCE s1
   IN CLUSTER source_cluster
-  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-recovery-big-${{testdrive.seed}}')
+  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-recovery-big-${{testdrive.seed}}');
+
+> CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-kafka-recovery-big-${{testdrive.seed}}")
   KEY FORMAT BYTES
   VALUE FORMAT BYTES
   ENVELOPE UPSERT;
 
 # Confirm that all the EOF markers generated above have been processed
-> CREATE MATERIALIZED VIEW s1_is_complete AS SELECT COUNT(*) = 256 FROM s1 WHERE key <= '\\x00000000000000ff'
+> CREATE MATERIALIZED VIEW s1_is_complete AS SELECT COUNT(*) = 256 FROM s1_tbl WHERE key <= '\\x00000000000000ff'
 
 > SELECT * FROM s1_is_complete;
 true
@@ -1274,20 +1308,21 @@ $ kafka-create-topic topic=kafka-scalability partitions=8
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 > DROP CLUSTER IF EXISTS source_cluster CASCADE
 
->[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
->[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+> CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
 
 > CREATE SOURCE s1
   IN CLUSTER source_cluster
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-scalability-${{testdrive.seed}}')
+
+> CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-kafka-scalability-${{testdrive.seed}}")
   KEY FORMAT BYTES
   VALUE FORMAT BYTES
   ENVELOPE NONE
   /* A */
 
-> CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) AS c FROM s1;
+> CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) AS c FROM s1_tbl;
 
 > SELECT c = {self.n()} FROM v1
   /* B */
@@ -1306,6 +1341,11 @@ class ExactlyOnce(Sink):
     the data to determine completion.
     """
 
+    FIXED_SCALE = True  # TODO: Remove when database-issues#8705 is fixed
+
+    def version(self) -> ScenarioVersion:
+        return ScenarioVersion.create(1, 1, 0)
+
     def shared(self) -> Action:
         return TdAction(
             self.keyschema()
@@ -1321,8 +1361,7 @@ $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keysch
     def init(self) -> Action:
         return TdAction(
             f"""
->[version<7800]  CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
->[version>=7800] CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > DROP CLUSTER IF EXISTS source_cluster CASCADE
 
@@ -1334,11 +1373,13 @@ $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keysch
 
 > CREATE SOURCE source1
   IN CLUSTER source_cluster
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-input-${{testdrive.seed}}')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-input-${{testdrive.seed}}');
+
+> CREATE TABLE source1_tbl FROM SOURCE source1 (REFERENCE "testdrive-sink-input-${{testdrive.seed}}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
 
-> SELECT COUNT(*) FROM source1;
+> SELECT COUNT(*) FROM source1_tbl;
 {self.n()}
 """
         )
@@ -1355,7 +1396,7 @@ $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keysch
 
 > CREATE SINK sink1
   IN CLUSTER sink_cluster
-  FROM source1
+  FROM source1_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${{testdrive.seed}}')
   KEY (f1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -1367,18 +1408,113 @@ $ kafka-verify-topic sink=materialize.public.sink1 await-value-schema=true await
 
 > CREATE SOURCE sink1_check
   IN CLUSTER source_cluster
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${{testdrive.seed}}')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${{testdrive.seed}}');
+
+> CREATE TABLE sink1_check_tbl FROM SOURCE sink1_check (REFERENCE "testdrive-sink-output-${{testdrive.seed}}")
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
 
-> CREATE MATERIALIZED VIEW sink1_check_v AS SELECT COUNT(*) FROM sink1_check;
+> CREATE MATERIALIZED VIEW sink1_check_v AS SELECT COUNT(*) FROM sink1_check_tbl;
 
 > SELECT * FROM sink1_check_v
   /* B */
 """
             + str(self.n())
         )
+
+
+class ManyKafkaSourcesOnSameCluster(Scenario):
+    """Measure the time it takes to ingest data from many Kafka sources"""
+
+    # Runs ~2 hours with 300 sources
+    SCALE = 2  # 100 sources
+    FIXED_SCALE = True
+
+    COUNT_SOURCE_ENTRIES = 100000
+
+    def version(self) -> ScenarioVersion:
+        return ScenarioVersion.create(1, 1, 0)
+
+    def shared(self) -> Action:
+        create_topics = "\n".join(
+            f"""
+$ kafka-create-topic topic=many-kafka-sources-{i}
+
+$ kafka-ingest format=avro topic=many-kafka-sources-{i} schema=${{schema}} repeat={self.COUNT_SOURCE_ENTRIES}
+{{"f2": ${{kafka-ingest.iteration}}}}
+"""
+            for i in range(0, self.n())
+        )
+
+        return TdAction(self.schema() + create_topics)
+
+    def init(self) -> Action:
+        return TdAction(
+            f"""
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_sources = {self.n() * 4};
+ALTER SYSTEM SET max_tables = {self.n() * 4};
+
+> DROP OWNED BY materialize CASCADE;
+
+> CREATE CONNECTION IF NOT EXISTS s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+
+> CREATE CONNECTION IF NOT EXISTS s1_csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${{testdrive.schema-registry-url}}';
+
+> DROP CLUSTER IF EXISTS kafka_source_cluster CASCADE;
+> CREATE CLUSTER kafka_source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+"""
+        )
+
+    def benchmark(self) -> BenchmarkingSequence:
+        drop_sources = "\n".join(
+            f"""
+> DROP SOURCE IF EXISTS kafka_source{i} CASCADE;
+"""
+            for i in range(0, self.n())
+        )
+
+        create_sources = "\n".join(
+            f"""
+> CREATE SOURCE kafka_source{i}
+  IN CLUSTER kafka_source_cluster
+  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-many-kafka-sources-{i}-${{testdrive.seed}}');
+
+> CREATE TABLE kafka_source{i}_tbl FROM SOURCE kafka_source{i} (REFERENCE "testdrive-many-kafka-sources-{i}-${{testdrive.seed}}")
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
+  ENVELOPE NONE;
+"""
+            for i in range(0, self.n())
+        )
+
+        check_sources = "\n".join(
+            f"> SELECT COUNT(*) = {self.COUNT_SOURCE_ENTRIES} FROM kafka_source{i}_tbl;\ntrue"
+            for i in range(0, self.n())
+        )
+
+        return [
+            Td(
+                self.schema()
+                + f"""
+{drop_sources}
+
+> SELECT 1;
+  /* A */
+1
+
+{create_sources}
+{check_sources}
+
+> SELECT 1;
+  /* B */
+1
+"""
+            ),
+        ]
 
 
 class PgCdc(Scenario):
@@ -1430,8 +1566,9 @@ ALTER TABLE pk_table REPLICA IDENTITY FULL;
 
 > CREATE SOURCE mz_source_pgcdc
   IN CLUSTER source_cluster
-  FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'mz_source')
-  FOR TABLES ("pk_table")
+  FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'mz_source');
+
+> CREATE TABLE pk_table FROM SOURCE mz_source_pgcdc (REFERENCE pk_table);
   /* A */
 
 > SELECT count(*) FROM pk_table
@@ -1483,8 +1620,9 @@ ALTER TABLE t1 REPLICA IDENTITY FULL;
 
 > CREATE SOURCE s1
   IN CLUSTER source_cluster
-  FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'p1')
-  FOR TABLES ("t1")
+  FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'p1');
+
+> CREATE TABLE t1 FROM SOURCE s1 (REFERENCE t1);
             """
         )
 
@@ -1520,7 +1658,7 @@ class MySqlInitialLoad(MySqlCdc):
     """Measure the time it takes to read 1M existing records from MySQL
     when creating a materialized source"""
 
-    FIXED_SCALE = True  # TODO: Remove when #25323 is fixed
+    FIXED_SCALE = True  # TODO: Remove when database-issues#7556 is fixed
 
     def shared(self) -> Action:
         return TdAction(
@@ -1560,8 +1698,8 @@ INSERT INTO pk_table SELECT @i:=@i+1, @i*@i FROM mysql.time_zone t1, mysql.time_
 
 > CREATE SOURCE mz_source_mysqlcdc
   IN CLUSTER source_cluster
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.pk_table)
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE pk_table FROM SOURCE mz_source_mysqlcdc (REFERENCE public.pk_table);
   /* A */
 
 > SELECT count(*) FROM pk_table
@@ -1575,10 +1713,6 @@ class MySqlStreaming(MySqlCdc):
     """Measure the time it takes to ingest records from MySQL post-snapshot"""
 
     SCALE = 5
-
-    @classmethod
-    def can_run(cls, version: MzVersion) -> bool:
-        return version >= MzVersion.parse_mz("v0.88.0-dev")
 
     def shared(self) -> Action:
         return TdAction(
@@ -1618,8 +1752,9 @@ CREATE TABLE t1 (pk SERIAL PRIMARY KEY, f2 BIGINT);
 
 > CREATE SOURCE s1
   IN CLUSTER source_cluster
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.t1)
+  FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE t1 FROM SOURCE s1 (REFERENCE public.t1);
             """
         )
 
@@ -1771,17 +1906,20 @@ $ kafka-ingest format=avro topic=startup-time schema=${schema} repeat=1
 > CREATE SOURCE source{i}
   IN CLUSTER source{i}_cluster
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-startup-time-${{testdrive.seed}}')
+
+> CREATE TABLE source{i}_tbl FROM SOURCE source{i} (REFERENCE "testdrive-startup-time-${{testdrive.seed}}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
   ENVELOPE NONE
 """
             for i in range(0, self.n())
         )
         join = " ".join(
-            f"LEFT JOIN source{i} USING (f2)" for i in range(1, (ceil(self.scale())))
+            f"LEFT JOIN source{i}_tbl USING (f2)"
+            for i in range(1, (ceil(self.scale())))
         )
 
         create_views = "\n".join(
-            f"> CREATE MATERIALIZED VIEW v{i} AS SELECT * FROM source{i} AS s {join} LIMIT {i+1}"
+            f"> CREATE MATERIALIZED VIEW v{i} AS SELECT * FROM source{i}_tbl AS s {join} LIMIT {i+1}"
             for i in range(0, self.n())
         )
 
@@ -1791,7 +1929,7 @@ $ kafka-ingest format=avro topic=startup-time schema=${schema} repeat=1
 > CREATE CLUSTER sink{i}_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
 > CREATE SINK sink{i}
   IN CLUSTER sink{i}_cluster
-  FROM source{i}
+  FROM source{i}_tbl
   INTO KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-sink-output-${{testdrive.seed}}')
   KEY (f2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
@@ -1813,8 +1951,7 @@ ALTER SYSTEM SET max_clusters = {self.n() * 6};
 
 > DROP OWNED BY materialize CASCADE;
 
->[version<7800]  CREATE CONNECTION IF NOT EXISTS s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
->[version>=7800] CREATE CONNECTION IF NOT EXISTS s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+> CREATE CONNECTION IF NOT EXISTS s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS s1_csr_conn
   FOR CONFLUENT SCHEMA REGISTRY
@@ -1853,6 +1990,108 @@ ALTER SYSTEM SET max_clusters = {self.n() * 6};
         ]
 
 
+class StartupTpch(Scenario):
+    """Measure the time it takes to restart a Mz instance populated with TPC-H and have all the dataflows be ready to return something"""
+
+    # Runs ~3 hours with SCALE = 1.2
+    SCALE = 0.1  # 1 object of each kind
+
+    def version(self) -> ScenarioVersion:
+        return ScenarioVersion.create(1, 1, 0)
+
+    def init(self) -> Action:
+        # We need to massage the SQL statements so that Testdrive doesn't get confused.
+        comment = re.compile(r"--.*?\n", re.IGNORECASE)
+        newline = re.compile(r"\n", re.IGNORECASE)
+
+        create_tables = "\n".join(
+            f"""
+> {newline.sub(" ", comment.sub("", ddl))}
+"""
+            for ddl in materialize.optbench.sql.parse_from_file(
+                Path("misc/python/materialize/optbench/schema/tpch.sql")
+            )
+        )
+
+        queries = [
+            newline.sub(" ", comment.sub("", query))
+            for query in materialize.optbench.sql.parse_from_file(
+                Path("misc/python/materialize/optbench/workload/tpch.sql")
+            )
+        ]
+
+        create_views = "\n".join(
+            f"""
+> CREATE VIEW v_{q}_{i} AS {query}
+"""
+            for q, query in enumerate(queries)
+            for i in range(0, self.n())
+        )
+
+        create_indexes = "\n".join(
+            f"""
+> CREATE DEFAULT INDEX ON v_{q}_{i};
+"""
+            for q in range(0, len(queries))
+            for i in range(0, self.n())
+        )
+
+        create_materialized_views = "\n".join(
+            f"""
+> CREATE MATERIALIZED VIEW mv_{q}_{i} AS {query}
+"""
+            for q, query in enumerate(queries)
+            for i in range(0, self.n())
+        )
+
+        return TdAction(
+            f"""
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_objects_per_schema = {self.n() * 100};
+ALTER SYSTEM SET max_materialized_views = {self.n() * 100};
+ALTER SYSTEM SET max_tables = {self.n() * 100};
+
+> DROP OWNED BY materialize CASCADE;
+
+{create_tables}
+{create_views}
+{create_indexes}
+{create_materialized_views}
+"""
+        )
+
+    def benchmark(self) -> BenchmarkingSequence:
+        num_queries = len(
+            materialize.optbench.sql.parse_from_file(
+                Path("misc/python/materialize/optbench/workload/tpch.sql")
+            )
+        )
+        check_views = "\n".join(
+            f"> SELECT COUNT(*) >= 0 FROM v_{q}_{i}\ntrue"
+            for q in range(0, num_queries)
+            for i in range(0, self.n())
+        )
+        check_materialized_views = "\n".join(
+            f"> SELECT COUNT(*) >= 0 FROM mv_{q}_{i}\ntrue"
+            for q in range(0, num_queries)
+            for i in range(0, self.n())
+        )
+
+        return [
+            Lambda(lambda e: e.RestartMzClusterd()),
+            Td(
+                f"""
+{check_materialized_views}
+{check_views}
+> SELECT 1;
+  /* B */
+1
+"""
+            ),
+        ]
+
+
 class HydrateIndex(Scenario):
     """Measure the time it takes for an index to hydrate when a cluster comes online."""
 
@@ -1883,8 +2122,13 @@ class HydrateIndex(Scenario):
 1
 > ALTER CLUSTER idx_cluster SET (REPLICATION FACTOR 1)
 > SET CLUSTER = idx_cluster
-? EXPLAIN SELECT COUNT(*) FROM t1
+?[version>=13500] EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT COUNT(*) FROM t1
 Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[count(*)] // {{ arity: 1 }}
+        Project () // {{ arity: 0 }}
+          ReadIndex on=t1 i1=[*** full scan ***] // {{ arity: 2 }}
   Return // {{ arity: 1 }}
     Union // {{ arity: 1 }}
       Get l0 // {{ arity: 1 }}
@@ -1895,11 +2139,29 @@ Explained Query:
               Get l0 // {{ arity: 1 }}
           Constant // {{ arity: 0 }}
             - ()
+
+Used Indexes:
+  - materialize.public.i1 (*** full scan ***)
+
+Target cluster: idx_cluster
+
+?[version<13500] EXPLAIN OPTIMIZED PLAN FOR SELECT COUNT(*) FROM t1
+Explained Query:
   With
     cte l0 =
       Reduce aggregates=[count(*)] // {{ arity: 1 }}
         Project () // {{ arity: 0 }}
           ReadIndex on=t1 i1=[*** full scan ***] // {{ arity: 2 }}
+  Return // {{ arity: 1 }}
+    Union // {{ arity: 1 }}
+      Get l0 // {{ arity: 1 }}
+      Map (0) // {{ arity: 1 }}
+        Union // {{ arity: 0 }}
+          Negate // {{ arity: 0 }}
+            Project () // {{ arity: 0 }}
+              Get l0 // {{ arity: 1 }}
+          Constant // {{ arity: 0 }}
+            - ()
 
 Used Indexes:
   - materialize.public.i1 (*** full scan ***)
@@ -1911,12 +2173,6 @@ Target cluster: idx_cluster
 {self._n}
 > SET CLUSTER = default
 """
-
-        if self._mz_version < MzVersion.parse_mz("v0.83.0-dev"):
-            sql = remove_arity_information_from_explain(sql)
-
-        if self._mz_version < MzVersion.parse_mz("v0.96.0-dev"):
-            sql = remove_target_cluster_from_explain(sql)
 
         return Td(sql)
 
@@ -1981,6 +2237,62 @@ class SwapSchema(Scenario):
                 1
 
                 > ALTER SCHEMA blue SWAP WITH green;
+
+                > SELECT 1;
+                  /* B */
+                1
+                """
+            )
+        )
+
+
+class ReplicaExpiration(Scenario):
+    # Causes "tried to kill container, but did not receive an exit event" errors when killing container afterwards
+    SCALE = 5
+    # Too slow with larger scale
+    FIXED_SCALE = True
+
+    def version(self) -> ScenarioVersion:
+        return ScenarioVersion.create(1, 1, 0)
+
+    def init(self) -> list[Action]:
+        return [
+            TdAction(
+                """
+> CREATE TABLE events_scale (
+    scale INT NOT NULL,
+    event_ts TIMESTAMP NOT NULL
+  );
+> CREATE VIEW events AS
+    SELECT concat('somelongstringthatdoesntmattermuchatallbutrequiresmemorytostoreXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX', x::text) AS content, (SELECT event_ts FROM events_scale LIMIT 1) AS event_ts FROM generate_series(1, (SELECT scale FROM events_scale LIMIT 1)) x;
+
+> CREATE MATERIALIZED VIEW last_30_days AS
+  SELECT event_ts, content
+  FROM events
+  WHERE mz_now() <= event_ts + INTERVAL '30 days';
+
+> CREATE DEFAULT INDEX ON last_30_days
+"""
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            dedent(
+                f"""
+                > DELETE FROM events_scale;
+
+                > SELECT COUNT(*) FROM last_30_days
+                0
+
+                > SELECT 1;
+                  /* A */
+                1
+
+                > INSERT INTO events_scale VALUES ({self.n()}, now());
+
+                > SELECT COUNT(*) FROM last_30_days
+                {self.n()}
 
                 > SELECT 1;
                   /* B */

@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use differential_dataflow::capture::{Message, Progress};
 use differential_dataflow::{AsCollection, Collection, Hashable};
+use futures::StreamExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_repr::{Datum, Diff, Row};
@@ -61,18 +62,16 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = mz_repr::Timestamp>, FromTime: T
     let activator_set: Rc<RefCell<Option<SyncActivator>>> = Rc::new(RefCell::new(None));
 
     let mut row_buf = Row::default();
-    let mut vector = vec![];
     let channel_tx = Rc::clone(&channel_rx);
     let activator_get = Rc::clone(&activator_set);
     let pact = Exchange::new(|(x, _, _): &(DecodeResult<FromTime>, _, _)| x.key.hashed());
     input.inner.sink(pact, "CDCv2Unpack", move |input| {
         while let Some((_, data)) = input.next() {
-            data.swap(&mut vector);
             // The inputs are rows containing two columns that encode an enum, i.e only one of them
             // is ever set while the other is unset. This is the convention we follow in our Avro
             // decoder. When the first field of the record is set then we have a data message.
             // Otherwise we have a progress message.
-            for (row, _time, _diff) in vector.drain(..) {
+            for (row, _time, _diff) in data.drain(..) {
                 let mut record = match &row.value {
                     Some(Ok(row)) => row.iter(),
                     Some(Err(err)) => {
@@ -220,26 +219,20 @@ impl PreDelimitedFormat {
             PreDelimitedFormat::Bytes => Ok(Some(Row::pack(Some(Datum::Bytes(bytes))))),
             PreDelimitedFormat::Json => {
                 let j = mz_repr::adt::jsonb::Jsonb::from_slice(bytes).map_err(|e| {
-                    DecodeErrorKind::Bytes(format!(
-                        "Failed to decode JSON: {}",
-                        // See if we can output the string that failed to be converted to JSON.
-                        match std::str::from_utf8(bytes) {
-                            Ok(str) => str.to_string(),
-                            // Otherwise produce the nominally helpful error.
-                            Err(_) => e.display_with_causes().to_string(),
-                        }
-                    ))
+                    DecodeErrorKind::Bytes(
+                        format!("Failed to decode JSON: {}", e.display_with_causes(),).into(),
+                    )
                 })?;
                 Ok(Some(j.into_row()))
             }
             PreDelimitedFormat::Text => {
                 let s = std::str::from_utf8(bytes)
-                    .map_err(|_| DecodeErrorKind::Text("Failed to decode UTF-8".to_string()))?;
+                    .map_err(|_| DecodeErrorKind::Text("Failed to decode UTF-8".into()))?;
                 Ok(Some(Row::pack(Some(Datum::String(s)))))
             }
             PreDelimitedFormat::Regex(regex, row_buf) => {
                 let s = std::str::from_utf8(bytes)
-                    .map_err(|_| DecodeErrorKind::Text("Failed to decode UTF-8".to_string()))?;
+                    .map_err(|_| DecodeErrorKind::Text("Failed to decode UTF-8".into()))?;
                 let captures = match regex.captures(s) {
                     Some(captures) => captures,
                     None => return Ok(None),
@@ -433,9 +426,10 @@ async fn decode_delimited(
                     None => decoder.eof(&mut remaining_buf)?,
                 }
             } else {
-                Err(DecodeErrorKind::Text(format!(
-                    "Unexpected bytes remaining for decoded value: {remaining_buf:?}"
-                )))
+                Err(DecodeErrorKind::Text(
+                    format!("Unexpected bytes remaining for decoded value: {remaining_buf:?}")
+                        .into(),
+                ))
             }
         }
         Err(err) => Err(err),
@@ -482,7 +476,7 @@ pub fn render_decode_delimited<G: Scope, FromTime: Timestamp>(
 
     let mut builder = AsyncOperatorBuilder::new(op_name, input.scope());
 
-    let (mut output_handle, output) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (output_handle, output) = builder.new_output::<CapacityContainerBuilder<_>>();
     let mut input = builder.new_input_for(&input.inner, Exchange::new(dist), &output_handle);
 
     let (_, transient_errors) = builder.build_fallible(move |caps| {
@@ -564,9 +558,7 @@ pub fn render_decode_delimited<G: Scope, FromTime: Timestamp>(
                             value_decoder.log_successes(n_successes);
                         }
 
-                        output_handle
-                            .give_container(&cap, &mut output_container)
-                            .await;
+                        output_handle.give_container(&cap, &mut output_container);
                     }
                     AsyncEvent::Progress(frontier) => cap_set.downgrade(frontier.iter()),
                 }
@@ -579,7 +571,7 @@ pub fn render_decode_delimited<G: Scope, FromTime: Timestamp>(
     let health = transient_errors.map(|err: Rc<CsrConnectError>| {
         let halt_status = HealthStatusUpdate::halting(err.display_with_causes().to_string(), None);
         HealthStatusMessage {
-            index: 0,
+            id: None,
             namespace: if matches!(&*err, CsrConnectError::Ssh(_)) {
                 StatusNamespace::Ssh
             } else {

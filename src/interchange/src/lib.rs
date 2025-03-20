@@ -17,3 +17,4 @@ pub mod encode;
 pub mod envelopes;
 pub mod json;
 pub mod protobuf;
+pub mod text_binary;

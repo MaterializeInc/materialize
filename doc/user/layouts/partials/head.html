@@ -5,6 +5,11 @@
 <meta charset="utf-8" />
 <meta http-equiv="X-UA-Compatible" content="IE=edge" />
 <meta name="description" content="{{ $description }}" />
+
+{{ if .Params.robots }}
+  <meta name="robots" content="{{ .Params.robots }}">
+{{ end }}
+
 <title>{{ $title }}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="true" />
@@ -17,7 +22,7 @@
 <meta name="msapplication-TileColor" content="#7F4EFF" />
 <meta name="theme-color" content="#ffffff" />
 <meta property="og:locale" content="en_US" />
-<meta property="og:url" content="{{ .Site.BaseURL }}{{ .Permalink }}" />
+<meta property="og:url" content="{{ .Permalink }}" />
 <meta property="og:type" content="article" />
 <meta property="og:title" content="{{ $title }}" />
 <meta
@@ -38,22 +43,22 @@
 <link
   rel="shortcut icon"
   type="image/x-icon"
-  href="{{ .Site.BaseURL }}/images/materialize_favicon_32.png"
+  href="{{ .Site.BaseURL }}images/materialize_favicon_32.png"
 />
 <link
   rel="apple-touch-icon"
   sizes="180x180"
-  href="{{ .Site.BaseURL }}/images/materialize_logo_180.png"
+  href="{{ .Site.BaseURL }}images/materialize_logo_180.png"
 />
 <link
   rel="icon"
   type="image/png"
   sizes="32x32"
-  href="{{ .Site.BaseURL }}/images/materialize_favicon_32.png"
+  href="{{ .Site.BaseURL }}images/materialize_favicon_32.png"
 />
 <link
   rel="mask-icon"
-  href="{{ .Site.BaseURL }}/images/materialize_logo.svg"
+  href="{{ .Site.BaseURL }}images/materialize_logo.svg"
   color="#4d7cfe"
 />
 <link rel="canonical" href="{{ .Permalink }}" />
@@ -70,74 +75,43 @@
 toCSS | fingerprint }}
 <link rel="stylesheet" href="{{ $style.RelPermalink }}" />
 
-{{/* Algolia DocSearch */}} {{if (isset .Params "pagerank")}}
-<meta name="docsearch_pagerank" content="{{ .Params.pagerank }}" />
+{{/* Kapa.ai */}}
+<script
+  async
+  src="https://widget.kapa.ai/kapa-widget.bundle.js"
+  data-website-id="c9f86179-22af-46ef-8196-289a621ef96c"
+  data-project-name="Materialize"
+  data-project-color="#472E85"
+  data-project-logo="https://avatars.githubusercontent.com/u/47674186?s=200&v=4"
+  data-modal-title="Materialize"
+  data-modal-disclaimer="This AI bot is experimental and might provide inaccurate or incomplete answers. Always consult the official Materialize documentation to verify any answers provided here. __To search the docs instead__, switch to the __Search__ mode (upper-right hand corner).
+
+  Interactions with this AI bot may be monitored or recorded. By submitting your information on this form, you agree to our [website terms](https://materialize.com/site-terms-of-service/) and [privacy policy](https://materialize.com/privacy-policy/)."
+  data-modal-example-questions="Why is my query slow?,How do I check my source's status?"
+  data-search-mode-enabled="true"
+  data-modal-override-open-class-search="docs-search-button"
+  data-user-analytics-fingerprint-enabled="true"
+  data-modal-open-on-command-k="true"
+  data-modal-command-k-search-mode-default="true"
+  data-search-result-link-target="_self"
+  data-search-include-source-names='["Documentation Cloud"]'
+  >
+</script>
+
+{{if hugo.IsProduction}} {{/* Google Tag Manager */}}
+<script>
+  (function (w, d, s, l, i) {
+    w[l] = w[l] || [];
+    w[l].push({ 'gtm.start': new Date().getTime(), event: 'gtm.js' });
+    var f = d.getElementsByTagName(s)[0],
+      j = d.createElement(s),
+      dl = l != 'dataLayer' ? '&l=' + l : '';
+    j.async = true;
+    j.src = 'https://www.googletagmanager.com/gtm.js?id=' + i + dl;
+    f.parentNode.insertBefore(j, f);
+  })(window, document, 'script', 'dataLayer', 'GTM-5VDFPSJ');
+</script>
 {{end}}
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@docsearch/css@3" />
-<script src="https://cdn.jsdelivr.net/npm/@docsearch/js@3"></script>
-<script defer>
-  addEventListener("DOMContentLoaded", () => {
-    docsearch({
-      apiKey: "c52bbb10b43c177106333976cfe07e11",
-      appId: "9LF5B9GMOF",
-      indexName: "materialize",
-      container: "#docsearch",
-    });
-  });
-</script>
-
-{{if hugo.IsProduction}} {{/* Google Analytics */}}
-<script async src="https://www.googletagmanager.com/gtag/js?id=G-HYXTGZN2KT"></script>
-<script>
-  window.dataLayer = window.dataLayer || [];
-  function gtag(){dataLayer.push(arguments);}
-  gtag('js', new Date());
-
-  gtag('config', 'G-HYXTGZN2KT');
-</script>
-
-{{/* Leadfeeder */}}
-<script>
-  (function () {
-    window.ldfdr = window.ldfdr || {};
-    (function (d, s, ss, fs) {
-      fs = d.getElementsByTagName(s)[0];
-      function ce(src) {
-        var cs = d.createElement(s);
-        cs.src = src;
-        setTimeout(function () {
-          fs.parentNode.insertBefore(cs, fs);
-        }, 1);
-      }
-      ce(ss);
-    })(
-      document,
-      "script",
-      "https://sc.lfeeder.com/lftracker_v1_bElvO73R0rE8ZMqj.js"
-    );
-  })();
-</script>
-{{end}} {{/* Segment */}}
-<script>
-  !function(){var analytics=window.analytics=window.analytics||[];if(!analytics.initialize)if(analytics.invoked)window.console&&console.error&&console.error("Segment snippet included twice.");else{analytics.invoked=!0;analytics.methods=["trackSubmit","trackClick","trackLink","trackForm","pageview","identify","reset","group","track","ready","alias","debug","page","once","off","on","addSourceMiddleware","addIntegrationMiddleware","setAnonymousId","addDestinationMiddleware"];analytics.factory=function(e){return function(){var t=Array.prototype.slice.call(arguments);t.unshift(e);analytics.push(t);return analytics}};for(var e=0;e<analytics.methods.length;e++){var key=analytics.methods[e];analytics[key]=analytics.factory(key)}analytics.load=function(key,e){var t=document.createElement("script");t.type="text/javascript";t.async=!0;t.src="https://cdn.segment.materialize.com/analytics.js/v1/" + key + "/analytics.min.js";var n=document.getElementsByTagName("script")[0];n.parentNode.insertBefore(t,n);analytics._loadOptions=e};analytics.SNIPPET_VERSION="4.15.3";
-  {{ if hugo.IsProduction }}
-    {{/* Prod/Stage */}}
-    var SEGMENT_ID = 'NCe6YQCHM9g04X9yEBUFtoWOuqZU8J1m';
-    if(window.location.hostname.includes('preview')) {
-      SEGMENT_ID = 'fuo8pqI0wvoojiShBQXSZopWLZggS8ny';
-    }
-    analytics._writeKey=SEGMENT_ID;
-    analytics._cdn="https://cdn.segment.materialize.com";
-    {{/* Use cookies for storage by default, since they cross subdomains */}}
-    analytics.load(SEGMENT_ID, { storage: { stores: ["cookie", "localStorage", "memory"] } });
-  {{ else }}
-    {{/* Dev */}}
-    analytics._writeKey="dGeQYRjmGVsqDI0KIARrAhTvk1BdJJhk";
-    analytics.load("dGeQYRjmGVsqDI0KIARrAhTvk1BdJJhk", { storage: { stores: ["cookie", "localStorage", "memory"] } });
-  {{ end }}
-  analytics.page();
-  }}();
-</script>
 
 {{/* Tabs */}}
 <script>
@@ -170,8 +144,6 @@ toCSS | fingerprint }}
 
     // activate first tab
     $(".nav-tabs li:first-child a").click();
-    // if the url anchor matches the id of a tab, activate that tab
-    var deeplinkedTab = $(`.nav-tabs a[href='${document.location.hash}']`);
-    if (deeplinkedTab) deeplinkedTab.click().get(0).scrollIntoView();
+
   });
 </script>

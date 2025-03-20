@@ -10,8 +10,6 @@
 $ set-sql-timeout duration=1s
 $ set-max-tries max-tries=20
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_mysql_source = true
 
 #
 # Test that temporary tables are not replicated
@@ -35,12 +33,12 @@ USE public;
 CREATE TABLE t1 (f1 BOOLEAN);
 CREATE TEMPORARY TABLE t_temp (f1 BOOLEAN);
 
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR SCHEMAS (public);
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
 
 > SELECT count(*) FROM t1;
 0
 
-! SELECT count(*) FROM t_temp;
-contains:unknown catalog item 't_temp'
+! CREATE TABLE t_temp FROM SOURCE mz_source (REFERENCE public.t_temp);
+contains:reference to public.t_temp not found in source

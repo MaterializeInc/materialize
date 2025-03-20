@@ -10,10 +10,23 @@
 //! This module contains all the helpers and code paths for upgrading/migrating the `Catalog`.
 //!
 //! We facilitate migrations by keeping snapshots of the objects we previously stored, and relying
-//! entirely on these snapshots. These exist in the form of `catalog/protos/objects_vXX.proto`. By
-//! maintaining and relying on snapshots we don't have to worry about changes elsewhere in the
-//! codebase effecting our migrations because our application and serialization logic is decoupled,
-//! and the objects of the Catalog for a given version are "frozen in time".
+//! entirely on these snapshots. These snapshots exist in the [`mz_catalog_protos`] crate in the
+//! form of `catalog-protos/protos/objects_vXX.proto`. By maintaining and relying on snapshots we
+//! don't have to worry about changes elsewhere in the codebase effecting our migrations because
+//! our application and serialization logic is decoupled, and the objects of the Catalog for a
+//! given version are "frozen in time".
+//!
+//! > **Note**: The protobuf snapshot files themselves live in a separate crate because it takes a
+//!             relatively significant amount of time to codegen and build them. By placing them in
+//!             a separate crate we don't have to pay this compile time cost when building the
+//!             catalog, allowing for faster iteration.
+//!
+//! You cannot make any changes to the following message or anything that they depend on:
+//!
+//!   - Config
+//!   - Setting
+//!   - FenceToken
+//!   - AuditLog
 //!
 //! When you want to make a change to the `Catalog` you need to follow these steps:
 //!
@@ -27,15 +40,20 @@
 //! 5. We should now have a copy of the protobuf objects as they currently exist, and a copy of
 //!    how we want them to exist. For example, if the version of the Catalog before we made our
 //!    changes was 15, we should now have `objects_v15.proto` and `objects_v16.proto`.
-//! 6. Add `v<CATALOG_VERSION>` to the call to the `objects!` macro in this file.
-//! 7. Add a new file to `catalog/src/durable/upgrade` which is where we'll put the new migration
+//! 6. Rebuild Materialize which will error because the hashes stored in
+//!    `src/catalog-protos/protos/hashes.json` have now changed. Update these to match the new
+//!    hashes for objects.proto and `objects_v<CATALOG_VERSION>.proto`.
+//! 7. Add `v<CATALOG_VERSION>` to the call to the `objects!` macro in this file, and to the
+//!    `proto_objects!` macro in the [`mz_catalog_protos`] crate.
+//! 8. Add a new file to `catalog/src/durable/upgrade` which is where we'll put the new migration
 //!    path.
-//! 8. Write upgrade functions using the two versions of the protos we now have, e.g.
+//! 9. Write upgrade functions using the two versions of the protos we now have, e.g.
 //!    `objects_v15.proto` and `objects_v16.proto`. In this migration code you __should not__
 //!    import any defaults or constants from elsewhere in the codebase, because then a future
 //!    change could then impact a previous migration.
-//! 9. Call your upgrade function in [`run_upgrade()`].
-//! 10. Generate a test file for the new version:
+//! 10. Add an import for your new module to this file: mod v<CATALOG_VERSION-1>_to_v<CATALOG_VERSION>;
+//! 11. Call your upgrade function in [`run_upgrade()`].
+//! 12. Generate a test file for the new version:
 //!     ```ignore
 //!     cargo test --package mz-catalog --lib durable::upgrade::tests::generate_missing_encodings -- --ignored
 //!     ```
@@ -44,11 +62,10 @@
 
 #[cfg(test)]
 mod tests;
+pub mod wire_compatible;
 
 use mz_ore::{soft_assert_eq_or_log, soft_assert_ne_or_log};
 use mz_repr::Diff;
-use timely::progress::Timestamp as TimelyTimestamp;
-
 use paste::paste;
 #[cfg(test)]
 use proptest::prelude::*;
@@ -56,11 +73,12 @@ use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 #[cfg(test)]
 use proptest_derive::Arbitrary;
+use timely::progress::Timestamp as TimelyTimestamp;
 
 use crate::durable::initialize::USER_VERSION_KEY;
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::state_update::{
-    IntoStateUpdateKindRaw, StateUpdate, StateUpdateKind, StateUpdateKindRaw,
+    IntoStateUpdateKindJson, StateUpdate, StateUpdateKind, StateUpdateKindJson,
 };
 use crate::durable::persist::{Mode, Timestamp, UnopenedPersistCatalogState};
 use crate::durable::{CatalogError, DurableCatalogError};
@@ -73,23 +91,23 @@ macro_rules! objects {
         paste! {
             $(
                 pub(crate) mod [<objects_ $x>] {
-                    include!(concat!(env!("OUT_DIR"), "/objects_", stringify!($x), ".rs"));
+                    pub use mz_catalog_protos::[<objects_ $x>]::*;
 
-                    use crate::durable::objects::state_update::StateUpdateKindRaw;
+                    use crate::durable::objects::state_update::StateUpdateKindJson;
 
-                    impl From<StateUpdateKind> for StateUpdateKindRaw {
+                    impl From<StateUpdateKind> for StateUpdateKindJson {
                         fn from(value: StateUpdateKind) -> Self {
                             let kind = value.kind.expect("kind should be set");
                             // TODO: This requires that the json->proto->json roundtrips
-                            // exactly, see #23908.
-                            StateUpdateKindRaw::from_serde(&kind)
+                            // exactly, see database-issues#7179.
+                            StateUpdateKindJson::from_serde(&kind)
                         }
                     }
 
-                    impl TryFrom<StateUpdateKindRaw> for StateUpdateKind {
+                    impl TryFrom<StateUpdateKindJson> for StateUpdateKind {
                         type Error = String;
 
-                        fn try_from(value: StateUpdateKindRaw) -> Result<Self, Self::Error> {
+                        fn try_from(value: StateUpdateKindJson) -> Result<Self, Self::Error> {
                             let kind: state_update_kind::Kind = value.to_serde();
                             Ok(StateUpdateKind { kind: Some(kind) })
                         }
@@ -148,7 +166,7 @@ macro_rules! objects {
                 }
 
                 #[cfg(test)]
-                fn try_from_raw(version: &str, raw: StateUpdateKindRaw) -> Result<Self, String> {
+                fn try_from_raw(version: &str, raw: StateUpdateKindJson) -> Result<Self, String> {
                     match version {
                         $(
                             concat!("objects_", stringify!($x)) => Ok(Self::[<$x:upper>](raw.try_into()?)),
@@ -158,7 +176,7 @@ macro_rules! objects {
                 }
 
                 #[cfg(test)]
-                fn raw(self) -> StateUpdateKindRaw {
+                fn raw(self) -> StateUpdateKindJson {
                     match self {
                         $(
                             Self::[<$x:upper>](kind) => kind.into(),
@@ -170,33 +188,28 @@ macro_rules! objects {
     }
 }
 
-objects!(v54, v55, v56, v57, v58);
+objects!(v67, v68, v69, v70, v71, v72, v73);
 
 /// The current version of the `Catalog`.
-///
-/// We will initialize new `Catalog`es with this version, and migrate existing `Catalog`es to this
-/// version. Whenever the `Catalog` changes, e.g. the protobufs we serialize in the `Catalog`
-/// change, we need to bump this version.
-pub const CATALOG_VERSION: u64 = 58;
-
+pub use mz_catalog_protos::CATALOG_VERSION;
 /// The minimum `Catalog` version number that we support migrating from.
-///
-/// After bumping this we can delete the old migrations.
-pub(crate) const MIN_CATALOG_VERSION: u64 = 54;
+pub use mz_catalog_protos::MIN_CATALOG_VERSION;
 
 // Note(parkmycar): Ideally we wouldn't have to define these extra constants,
 // but const expressions aren't yet supported in match statements.
 const TOO_OLD_VERSION: u64 = MIN_CATALOG_VERSION - 1;
 const FUTURE_VERSION: u64 = CATALOG_VERSION + 1;
 
-mod v54_to_v55;
-mod v55_to_v56;
-mod v56_to_v57;
-mod v57_to_v58;
+mod v67_to_v68;
+mod v68_to_v69;
+mod v69_to_v70;
+mod v70_to_v71;
+mod v71_to_v72;
+mod v72_to_v73;
 
 /// Describes a single action to take during a migration from `V1` to `V2`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum MigrationAction<V1: IntoStateUpdateKindRaw, V2: IntoStateUpdateKindRaw> {
+enum MigrationAction<V1: IntoStateUpdateKindJson, V2: IntoStateUpdateKindJson> {
     /// Deletes the provided key.
     #[allow(unused)]
     Delete(V1),
@@ -208,10 +221,10 @@ enum MigrationAction<V1: IntoStateUpdateKindRaw, V2: IntoStateUpdateKindRaw> {
     Update(V1, V2),
 }
 
-impl<V1: IntoStateUpdateKindRaw, V2: IntoStateUpdateKindRaw> MigrationAction<V1, V2> {
+impl<V1: IntoStateUpdateKindJson, V2: IntoStateUpdateKindJson> MigrationAction<V1, V2> {
     /// Converts `self` into a `Vec<StateUpdate<StateUpdateKindBinary>>` that can be appended
     /// to persist.
-    fn into_updates(self) -> Vec<(StateUpdateKindRaw, Diff)> {
+    fn into_updates(self) -> Vec<(StateUpdateKindJson, Diff)> {
         match self {
             MigrationAction::Delete(kind) => {
                 vec![(kind.into(), -1)]
@@ -232,8 +245,8 @@ impl<V1: IntoStateUpdateKindRaw, V2: IntoStateUpdateKindRaw> MigrationAction<V1,
 #[mz_ore::instrument(name = "persist::upgrade", level = "debug")]
 pub(crate) async fn upgrade(
     persist_handle: &mut UnopenedPersistCatalogState,
-    mode: Mode,
-) -> Result<(), CatalogError> {
+    mut commit_ts: Timestamp,
+) -> Result<Timestamp, CatalogError> {
     soft_assert_ne_or_log!(
         persist_handle.upper,
         Timestamp::minimum(),
@@ -248,11 +261,10 @@ pub(crate) async fn upgrade(
         .expect("initialized catalog must have a version");
     // Run migrations until we're up-to-date.
     while version < CATALOG_VERSION {
-        let new_version = run_upgrade(persist_handle, mode.clone(), version).await?;
-        version = new_version;
+        (version, commit_ts) = run_upgrade(persist_handle, version, commit_ts).await?;
     }
 
-    Ok(())
+    Ok(commit_ts)
 }
 
 /// Determines which upgrade to run for the `version` and executes it.
@@ -260,9 +272,9 @@ pub(crate) async fn upgrade(
 /// Returns the new version and upper.
 async fn run_upgrade(
     unopened_catalog_state: &mut UnopenedPersistCatalogState,
-    mode: Mode,
     version: u64,
-) -> Result<u64, CatalogError> {
+    commit_ts: Timestamp,
+) -> Result<(u64, Timestamp), CatalogError> {
     let incompatible = DurableCatalogError::IncompatibleDataVersion {
         found_version: version,
         min_catalog_version: MIN_CATALOG_VERSION,
@@ -273,21 +285,63 @@ async fn run_upgrade(
     match version {
         ..=TOO_OLD_VERSION => Err(incompatible),
 
-        54 => {
-            run_versioned_upgrade(unopened_catalog_state, mode, version, v54_to_v55::upgrade).await
+        67 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                commit_ts,
+                v67_to_v68::upgrade,
+            )
+            .await
         }
-        55 => {
-            run_versioned_upgrade(unopened_catalog_state, mode, version, v55_to_v56::upgrade).await
+        68 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                commit_ts,
+                v68_to_v69::upgrade,
+            )
+            .await
         }
-        56 => {
-            run_versioned_upgrade(unopened_catalog_state, mode, version, v56_to_v57::upgrade).await
+        69 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                commit_ts,
+                v69_to_v70::upgrade,
+            )
+            .await
         }
-        57 => {
-            run_versioned_upgrade(unopened_catalog_state, mode, version, v57_to_v58::upgrade).await
+        70 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                commit_ts,
+                v70_to_v71::upgrade,
+            )
+            .await
+        }
+        71 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                commit_ts,
+                v71_to_v72::upgrade,
+            )
+            .await
+        }
+        72 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                commit_ts,
+                v72_to_v73::upgrade,
+            )
+            .await
         }
 
         // Up-to-date, no migration needed!
-        CATALOG_VERSION => Ok(CATALOG_VERSION),
+        CATALOG_VERSION => Ok((CATALOG_VERSION, commit_ts)),
         FUTURE_VERSION.. => Err(incompatible),
     }
 }
@@ -296,12 +350,14 @@ async fn run_upgrade(
 /// `current_version`.
 ///
 /// Returns the new version and upper.
-async fn run_versioned_upgrade<V1: IntoStateUpdateKindRaw, V2: IntoStateUpdateKindRaw>(
+async fn run_versioned_upgrade<V1: IntoStateUpdateKindJson, V2: IntoStateUpdateKindJson>(
     unopened_catalog_state: &mut UnopenedPersistCatalogState,
-    mode: Mode,
     current_version: u64,
+    mut commit_ts: Timestamp,
     migration_logic: impl FnOnce(Vec<V1>) -> Vec<MigrationAction<V1, V2>>,
-) -> Result<u64, CatalogError> {
+) -> Result<(u64, Timestamp), CatalogError> {
+    tracing::info!(current_version, "running versioned Catalog upgrade");
+
     // 1. Use the V1 to deserialize the contents of the current snapshot.
     let snapshot: Vec<_> = unopened_catalog_state
         .snapshot
@@ -322,6 +378,12 @@ async fn run_versioned_upgrade<V1: IntoStateUpdateKindRaw, V2: IntoStateUpdateKi
         .into_iter()
         .flat_map(|action| action.into_updates().into_iter())
         .collect();
+    // Validate that we're not migrating an un-migratable collection.
+    for (update, _) in &updates {
+        if update.is_always_deserializable() {
+            panic!("migration to un-migratable collection: {update:?}\nall updates: {updates:?}");
+        }
+    }
 
     // 3. Add a retraction for old version and insertion for new version into updates.
     let next_version = current_version + 1;
@@ -331,24 +393,28 @@ async fn run_versioned_upgrade<V1: IntoStateUpdateKindRaw, V2: IntoStateUpdateKi
     updates.push(version_insertion);
 
     // 4. Apply migration to catalog.
-    if matches!(mode, Mode::Writable) {
-        unopened_catalog_state.compare_and_append(updates).await?;
+    if matches!(unopened_catalog_state.mode, Mode::Writable) {
+        commit_ts = unopened_catalog_state
+            .compare_and_append(updates, commit_ts)
+            .await
+            .map_err(|e| e.unwrap_fence_error())?;
     } else {
-        let ts = unopened_catalog_state.upper;
+        let ts = commit_ts;
         let updates = updates
             .into_iter()
             .map(|(kind, diff)| StateUpdate { kind, ts, diff });
+        commit_ts = commit_ts.step_forward();
         unopened_catalog_state.apply_updates(updates)?;
     }
 
     // 5. Consolidate snapshot to remove old versions.
     unopened_catalog_state.consolidate();
 
-    Ok(next_version)
+    Ok((next_version, commit_ts))
 }
 
 /// Generates a [`proto::StateUpdateKind`] to update the user version.
-fn version_update_kind(version: u64) -> StateUpdateKindRaw {
+fn version_update_kind(version: u64) -> StateUpdateKindJson {
     // We can use the current version because Configs can never be migrated and are always wire
     // compatible.
     StateUpdateKind::Config(

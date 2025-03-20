@@ -20,10 +20,12 @@ one
 
 > CREATE SOURCE data
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}');
+
+> CREATE TABLE data_tbl FROM SOURCE data (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT TEXT;
 
-> SELECT * from data
+> SELECT * from data_tbl
 one
 
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'data_progress';
@@ -42,8 +44,10 @@ $ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d\.\
 > CREATE SOURCE d
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
-  FORMAT TEXT
   EXPOSE PROGRESS AS exposed_progress_data;
+
+> CREATE TABLE d_tbl FROM SOURCE d (REFERENCE "testdrive-data-${testdrive.seed}")
+  FORMAT TEXT;
 
 > SELECT partition::text, "offset" FROM exposed_progress_data
 [0,0] 1

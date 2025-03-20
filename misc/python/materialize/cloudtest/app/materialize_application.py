@@ -69,10 +69,11 @@ class MaterializeApplication(CloudtestApplicationBase):
 
     def get_resources(self, log_filter: str | None) -> list[K8sResource]:
         return [
+            # Run first so it's available for Debezium, which gives up too quickly otherwise
+            *redpanda_resources(apply_node_selectors=self.apply_node_selectors),
             *cockroach_resources(apply_node_selectors=self.apply_node_selectors),
             *postgres_resources(apply_node_selectors=self.apply_node_selectors),
             *mysql_resources(apply_node_selectors=self.apply_node_selectors),
-            *redpanda_resources(apply_node_selectors=self.apply_node_selectors),
             *debezium_resources(apply_node_selectors=self.apply_node_selectors),
             *ssh_resources(apply_node_selectors=self.apply_node_selectors),
             Minio(apply_node_selectors=self.apply_node_selectors),

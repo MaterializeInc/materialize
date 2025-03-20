@@ -66,7 +66,7 @@ $ kafka-ingest topic=basic format=protobuf descriptor-file=basic.pb message=Basi
 {"bool": true, "int32": 1, "int64": 2, "sint32": -1, "sint64": -2, "sfixed32": -3, "sfixed64": -4, "uint32": 3, "uint64": 4, "fixed32": 5, "fixed64": 6, "float": 1.2, "double": 3.2, "bytes": "YWFh", "string": "bbb", "enum": "ENUM1", "message": {"bool": true, "int32": 1, "int64": 2, "sint32": -1, "sint64": -2, "sfixed32": -3, "sfixed64": -4, "uint32": 3, "uint64": 4, "fixed32": 5, "fixed64": 6, "float": 1.2, "double": 3.2, "bytes": "YWFh", "string": "bbb", "enum": "ENUM1"}}
 {}
 # Test the case where the nested message is explicitly set to all default
-# values. This previously crashed Materialize (see #8930).
+# values. This previously crashed Materialize (see database-issues#2723).
 {"message": {}}
 
 > CREATE CONNECTION kafka_conn
@@ -75,32 +75,34 @@ $ kafka-ingest topic=basic format=protobuf descriptor-file=basic.pb message=Basi
 > CREATE SOURCE basic
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-basic-${testdrive.seed}')
+
+> CREATE TABLE basic_tbl FROM SOURCE basic (REFERENCE "testdrive-basic-${testdrive.seed}")
   FORMAT PROTOBUF MESSAGE '.Basic' USING SCHEMA '${basic-schema}'
 
-> SHOW COLUMNS FROM basic
-name       nullable  type
----------------------------------------
-bool       false     boolean
-int32      false     integer
-int64      false     bigint
-sint32     false     integer
-sint64     false     bigint
-sfixed32   false     integer
-sfixed64   false     bigint
-uint32     false     uint4
-uint64     false     uint8
-fixed32    false     uint4
-fixed64    false     uint8
-float      false     real
-double     false     "double precision"
-bytes      false     bytea
-string     false     text
-enum       false     text
-message    true      record
+> SHOW COLUMNS FROM basic_tbl
+name       nullable  type                comment
+------------------------------------------------
+bool       false     boolean             ""
+int32      false     integer             ""
+int64      false     bigint              ""
+sint32     false     integer             ""
+sint64     false     bigint              ""
+sfixed32   false     integer             ""
+sfixed64   false     bigint              ""
+uint32     false     uint4               ""
+uint64     false     uint8               ""
+fixed32    false     uint4               ""
+fixed64    false     uint8               ""
+float      false     real                ""
+double     false     "double precision"  ""
+bytes      false     bytea               ""
+string     false     text                ""
+enum       false     text                ""
+message    true      record              ""
 
-> SELECT bool, int32, int64, sint32, sint64, sfixed32, sfixed64, uint32, uint64, fixed32, fixed64, float, double, bytes, string, enum, message::text FROM basic
+> SELECT bool, int32, int64, sint32, sint64, sfixed32, sfixed64, uint32, uint64, fixed32, fixed64, float, double, bytes, string, enum, message::text FROM basic_tbl
 bool  int32  int64  sint32  sint64  sfixed32  sfixed64  uint32  uint64  fixed32  fixed64  float  double  bytes  string enum  message
 ----
-true  1      2      -1      -2      -3        -4        3       4       5        6        1.2    3.2     aaa    bbb    ENUM1 (t,1,2,-1,-2,-3,-4,3,4,5,6,1.2,3.2,\x616161,bbb,ENUM1)
+true  1      2      -1      -2      -3        -4        3       4       5        6        1.2    3.2     aaa    bbb    ENUM1 "(t,1,2,-1,-2,-3,-4,3,4,5,6,1.2,3.2,\"\\\\x616161\",bbb,ENUM1)"
 false 0      0      0       0       0         0         0       0       0        0        0      0       ""     ""     ENUM0 <null>
-false 0      0      0       0       0         0         0       0       0        0        0      0       ""     ""     ENUM0 "(f,0,0,0,0,0,0,0,0,0,0,0,0,\\x,\"\",ENUM0)"
+false 0      0      0       0       0         0         0       0       0        0        0      0       ""     ""     ENUM0 "(f,0,0,0,0,0,0,0,0,0,0,0,0,\"\\\\x\",\"\",ENUM0)"

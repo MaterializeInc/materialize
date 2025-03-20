@@ -30,18 +30,16 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 CREATE TABLE tbl_a (pk INTEGER PRIMARY KEY);
 INSERT INTO tbl_a VALUES (1);
 
-! CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR TABLES(tbl_a);
+> CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+
+! CREATE TABLE tbl_a FROM SOURCE mz_source (REFERENCE tbl_a);
 contains:referenced items not tables with REPLICA IDENTITY FULL
 detail:referenced items: public.tbl_a
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE tbl_a REPLICA IDENTITY FULL
 
-> CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR TABLES(tbl_a);
+> CREATE TABLE tbl_a FROM SOURCE mz_source (REFERENCE tbl_a);
 
 > SELECT * FROM tbl_a;
 1

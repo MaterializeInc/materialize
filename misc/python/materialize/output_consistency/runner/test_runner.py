@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.output_consistency.common import probability
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
@@ -18,13 +17,6 @@ from materialize.output_consistency.execution.query_execution_manager import (
     QueryExecutionManager,
 )
 from materialize.output_consistency.execution.sql_executors import SqlExecutors
-from materialize.output_consistency.execution.test_summary import (
-    ConsistencyTestSummary,
-    DbOperationOrFunctionStats,
-)
-from materialize.output_consistency.expression.expression_with_args import (
-    ExpressionWithArgs,
-)
 from materialize.output_consistency.generators.expression_generator import (
     ExpressionGenerator,
 )
@@ -35,11 +27,12 @@ from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter im
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )
-from materialize.output_consistency.operation.operation import DbOperationOrFunction
 from materialize.output_consistency.output.output_printer import OutputPrinter
-from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.runner.time_guard import TimeGuard
 from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
+from materialize.output_consistency.status.test_summary import (
+    ConsistencyTestSummary,
+)
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 
 ENABLE_ADDING_WHERE_CONDITIONS = True
@@ -79,24 +72,43 @@ class ConsistencyTestRunner:
         self.output_printer = output_printer
 
     def setup(self) -> None:
+        self.input_data.assign_columns_to_tables(
+            self.config.vertical_join_tables, self.randomized_picker
+        )
+
         self.execution_manager.setup_database_objects(
             self.input_data, self.evaluation_strategies
         )
 
+        # reset cache after having assigned columns to tables as a precaution
+        self.input_data.types_input.cached_max_value_count_per_table_index.clear()
+
     def start(self) -> ConsistencyTestSummary:
         expression_count = 0
-        test_summary = ConsistencyTestSummary(dry_run=self.config.dry_run)
+        test_summary = ConsistencyTestSummary(
+            dry_run=self.config.dry_run,
+            count_available_op_variants=self.input_data.count_available_op_variants(),
+            count_available_data_types=self.input_data.count_available_data_types(),
+            count_predefined_queries=self.input_data.count_predefined_queries(),
+        )
 
         time_guard = TimeGuard(self.config.max_runtime_in_sec)
 
-        self.output_printer.start_section("Running predefined queries")
-        success = self._run_predefined_queries(test_summary)
+        if not self.config.disable_predefined_queries:
+            self.output_printer.start_section("Running predefined queries")
+            success = self._run_predefined_queries(test_summary)
 
-        if not success and self.config.fail_fast:
+            if not success and (
+                test_summary.count_failures() >= self.config.max_failures_until_abort
+            ):
+                self.output_printer.print_info(
+                    f"Ending test run because {test_summary.count_failures()} failures occurred"
+                )
+                return test_summary
+        else:
             self.output_printer.print_info(
-                "Ending test run because the of a comparison mismatch in predefined queries (fail_fast mode)"
+                "Not running predefined queries because they are disabled"
             )
-            return test_summary
 
         self.output_printer.print_empty_line()
         self.output_printer.start_section("Running generated queries")
@@ -118,8 +130,12 @@ class ConsistencyTestRunner:
                 expression_count, time_guard
             )
 
-            expression = self.expression_generator.generate_expression(operation)
-            _record_statistics(test_summary, operation, expression)
+            expression, number_of_args = (
+                self.expression_generator.generate_expression_for_operation(operation)
+            )
+            test_summary.accept_expression_generation_statistics(
+                operation, expression, number_of_args
+            )
 
             if expression is None:
                 continue
@@ -148,24 +164,29 @@ class ConsistencyTestRunner:
         for strategy in self.evaluation_strategies:
             self.execution_manager.complete(strategy)
 
+        test_summary.count_generated_select_expressions = expression_count
         return test_summary
 
     def _consume_and_process_queries(
         self, test_summary: ConsistencyTestSummary, time_guard: TimeGuard
     ) -> bool:
         """
-        :return: if a mismatch occurred
+        :return: if the test run should be aborted
         """
         queries = self.query_generator.consume_queries(test_summary)
 
         for query in queries:
             if ENABLE_ADDING_WHERE_CONDITIONS:
-                self._add_random_where_condition(query)
+                self.query_generator.add_random_where_condition_to_query(
+                    query, test_summary
+                )
             success = self.execution_manager.execute_query(query, test_summary)
 
-            if not success and self.config.fail_fast:
+            if not success and (
+                test_summary.count_failures() >= self.config.max_failures_until_abort
+            ):
                 self.output_printer.print_info(
-                    "Ending test run because the first comparison mismatch has occurred (fail_fast mode)"
+                    f"Ending test run because {test_summary.count_failures()} failures occurred"
                 )
                 return True
             if time_guard.shall_abort():
@@ -175,26 +196,6 @@ class ConsistencyTestRunner:
                 return False
 
         return False
-
-    def _add_random_where_condition(self, query: QueryTemplate) -> None:
-        if not self.randomized_picker.random_boolean(
-            probability.GENERATE_WHERE_EXPRESSION
-        ):
-            return
-
-        where_expression = self.expression_generator.generate_boolean_expression(
-            False, query.storage_layout
-        )
-
-        if where_expression is None:
-            return
-
-        ignore_verdict = self.ignore_filter.shall_ignore_expression(
-            where_expression, query.row_selection
-        )
-
-        if not ignore_verdict.ignore:
-            query.where_expression = where_expression
 
     def _shall_abort(self, iteration_count: int, time_guard: TimeGuard) -> bool:
         if (
@@ -227,7 +228,11 @@ class ConsistencyTestRunner:
             )
             all_passed = all_passed and query_succeeded
 
-            if not query_succeeded and self.config.fail_fast:
+            if (
+                not query_succeeded
+                and test_summary.count_failures()
+                >= self.config.max_failures_until_abort
+            ):
                 return False
 
         self.output_printer.print_status(
@@ -235,35 +240,3 @@ class ConsistencyTestRunner:
         )
 
         return all_passed
-
-
-def _record_statistics(
-    test_summary: ConsistencyTestSummary,
-    operation: DbOperationOrFunction,
-    expression: ExpressionWithArgs | None,
-    is_top_level: bool = True,
-) -> None:
-    stats = test_summary.stats_by_operation_and_function.get(operation)
-
-    if stats is None:
-        stats = DbOperationOrFunctionStats()
-        test_summary.stats_by_operation_and_function[operation] = stats
-
-    if expression is None:
-        assert is_top_level, "expressions at nested levels must not be None"
-        stats.count_generation_failed = stats.count_generation_failed + 1
-        return
-
-    if is_top_level:
-        stats.count_top_level = stats.count_top_level + 1
-    else:
-        stats.count_nested = stats.count_nested + 1
-
-    for arg in expression.args:
-        if isinstance(arg, ExpressionWithArgs):
-            _record_statistics(
-                test_summary,
-                operation=arg.operation,
-                expression=arg,
-                is_top_level=False,
-            )

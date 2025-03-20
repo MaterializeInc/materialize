@@ -11,19 +11,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::pin::Pin;
 
 use mysql_async::BinlogStream;
-use timely::container::CapacityContainerBuilder;
-use timely::dataflow::channels::pushers::Tee;
+use mz_storage_types::errors::DataflowError;
 use timely::dataflow::operators::{Capability, CapabilitySet};
 use timely::progress::Antichain;
 use tracing::trace;
 
-use mz_mysql_util::{Config, MySqlTableDesc};
-use mz_repr::Row;
-use mz_storage_types::sources::mysql::{GtidPartition, GtidState, MySqlColumnRef};
-use mz_timely_util::builder_async::AsyncOutputHandle;
+use mz_mysql_util::Config;
+use mz_storage_types::sources::mysql::{GtidPartition, GtidState};
 
 use crate::metrics::source::mysql::MySqlSourceMetrics;
-use crate::source::mysql::{DefiniteError, MySqlTableName, RewindRequest};
+use crate::source::mysql::{
+    MySqlTableName, RewindRequest, SourceOutputInfo, StackedAsyncOutputHandle,
+};
+use crate::source::types::SourceMessage;
 use crate::source::RawSourceCreationConfig;
 
 /// A container to hold various context information for the replication process, used when
@@ -32,20 +32,17 @@ pub(super) struct ReplContext<'a> {
     pub(super) config: &'a RawSourceCreationConfig,
     pub(super) connection_config: &'a Config,
     pub(super) stream: Pin<&'a mut futures::stream::Peekable<BinlogStream>>,
-    pub(super) table_info: &'a BTreeMap<MySqlTableName, (usize, MySqlTableDesc)>,
+    pub(super) table_info: &'a BTreeMap<MySqlTableName, Vec<SourceOutputInfo>>,
     pub(super) metrics: &'a MySqlSourceMetrics,
-    pub(super) text_columns: &'a Vec<MySqlColumnRef>,
-    pub(super) ignore_columns: &'a Vec<MySqlColumnRef>,
-    pub(super) data_output: &'a mut AsyncOutputHandle<
+    pub(super) data_output: &'a mut StackedAsyncOutputHandle<
         GtidPartition,
-        CapacityContainerBuilder<Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>>,
-        Tee<GtidPartition, Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>>,
+        (usize, Result<SourceMessage, DataflowError>),
     >,
     pub(super) data_cap_set: &'a mut CapabilitySet<GtidPartition>,
     pub(super) upper_cap_set: &'a mut CapabilitySet<GtidPartition>,
     // Owned values:
-    pub(super) rewinds: BTreeMap<MySqlTableName, (Capability<GtidPartition>, RewindRequest)>,
-    pub(super) errored_tables: BTreeSet<MySqlTableName>,
+    pub(super) rewinds: BTreeMap<usize, (Capability<GtidPartition>, RewindRequest)>,
+    pub(super) errored_outputs: BTreeSet<usize>,
 }
 
 impl<'a> ReplContext<'a> {
@@ -53,20 +50,15 @@ impl<'a> ReplContext<'a> {
         config: &'a RawSourceCreationConfig,
         connection_config: &'a Config,
         stream: Pin<&'a mut futures::stream::Peekable<BinlogStream>>,
-        table_info: &'a BTreeMap<MySqlTableName, (usize, MySqlTableDesc)>,
+        table_info: &'a BTreeMap<MySqlTableName, Vec<SourceOutputInfo>>,
         metrics: &'a MySqlSourceMetrics,
-        text_columns: &'a Vec<MySqlColumnRef>,
-        ignore_columns: &'a Vec<MySqlColumnRef>,
-        data_output: &'a mut AsyncOutputHandle<
+        data_output: &'a mut StackedAsyncOutputHandle<
             GtidPartition,
-            CapacityContainerBuilder<
-                Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>,
-            >,
-            Tee<GtidPartition, Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>>,
+            (usize, Result<SourceMessage, DataflowError>),
         >,
         data_cap_set: &'a mut CapabilitySet<GtidPartition>,
         upper_cap_set: &'a mut CapabilitySet<GtidPartition>,
-        rewinds: BTreeMap<MySqlTableName, (Capability<GtidPartition>, RewindRequest)>,
+        rewinds: BTreeMap<usize, (Capability<GtidPartition>, RewindRequest)>,
     ) -> Self {
         Self {
             config,
@@ -74,13 +66,11 @@ impl<'a> ReplContext<'a> {
             stream,
             table_info,
             metrics,
-            text_columns,
-            ignore_columns,
             data_output,
             data_cap_set,
             upper_cap_set,
             rewinds,
-            errored_tables: BTreeSet::new(),
+            errored_outputs: BTreeSet::new(),
         }
     }
 

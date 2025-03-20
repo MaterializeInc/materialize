@@ -26,34 +26,37 @@
 //! # Resumption
 //!
 //! When the dataflow is resumed, the MySQL replication stream is started from the GTID frontier
-//! of the minimum frontier across all subsources. This is compared against the GTID set that may
-//! still be obtained from the MySQL server, using the @@GTID_PURGED value in MySQL to determine
-//! GTIDs that are no longer available in the binlog and to put the source in an error state if
-//! we cannot resume from the GTID frontier.
+//! of the minimum frontier across all source outputs. This is compared against the GTID set that
+//! may still be obtained from the MySQL server, using the @@GTID_PURGED value in MySQL to
+//! determine GTIDs that are no longer available in the binlog and to put the source in an error
+//! state if we cannot resume from the GTID frontier.
 //!
 //! # Rewinds
 //!
-//! The replication stream may be resumed from a point before the snapshot for a specific table
+//! The replication stream may be resumed from a point before the snapshot for a specific output
 //! occurs. To avoid double-counting updates that were present in the snapshot, we store a map
 //! of pending rewinds that we've received from the snapshot operator, and when we see updates
-//! for a table that were present in the snapshot, we negate the snapshot update
+//! for an output that were present in the snapshot, we negate the snapshot update
 //! (at the minimum timestamp) and send it again at the correct GTID.
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::num::NonZeroU64;
 use std::pin::pin;
+use std::sync::Arc;
 
-use differential_dataflow::{AsCollection, Collection};
+use differential_dataflow::AsCollection;
 use futures::StreamExt;
 use itertools::Itertools;
 use mysql_async::prelude::Queryable;
 use mysql_async::{BinlogStream, BinlogStreamRequest, GnoInterval, Sid};
 use mz_ore::future::InTask;
 use mz_ssh_util::tunnel_manager::ManagedSshTunnelHandle;
+use mz_timely_util::containers::stack::AccountedStackBuilder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::{Concat, Map};
+use timely::dataflow::operators::core::Map;
+use timely::dataflow::operators::Concat;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -64,8 +67,8 @@ use mz_mysql_util::{
     query_sys_var, MySqlConn, MySqlError, ER_SOURCE_FATAL_ERROR_READING_BINLOG_CODE,
 };
 use mz_ore::cast::CastFrom;
-use mz_ore::result::ResultExt;
-use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::GlobalId;
+use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition, GtidState};
 use mz_storage_types::sources::MySqlSourceConnection;
 use mz_timely_util::builder_async::{
@@ -73,12 +76,12 @@ use mz_timely_util::builder_async::{
 };
 
 use crate::metrics::source::mysql::MySqlSourceMetrics;
-use crate::source::types::SourceReaderError;
+use crate::source::types::{SignaledFuture, SourceMessage, StackedCollection};
 use crate::source::RawSourceCreationConfig;
 
 use super::{
     return_definite_error, validate_mysql_repl_settings, DefiniteError, ReplicationError,
-    RewindRequest, SubsourceInfo, TransientError,
+    RewindRequest, SourceOutputInfo, TransientError,
 };
 
 mod context;
@@ -101,11 +104,11 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     scope: G,
     config: RawSourceCreationConfig,
     connection: MySqlSourceConnection,
-    subsources: Vec<SubsourceInfo>,
+    source_outputs: Vec<SourceOutputInfo>,
     rewind_stream: &Stream<G, RewindRequest>,
     metrics: MySqlSourceMetrics,
 ) -> (
-    Collection<G, (usize, Result<Row, SourceReaderError>), Diff>,
+    StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
     Stream<G, Infallible>,
     Stream<G, ReplicationError>,
     PressOnDropButton,
@@ -114,10 +117,10 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     let mut builder = AsyncOperatorBuilder::new(op_name, scope);
 
     let repl_reader_id = u64::cast_from(config.responsible_worker(REPL_READER));
-    let (mut data_output, data_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (mut data_output, data_stream) = builder.new_output::<AccountedStackBuilder<_>>();
     let (_upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    // Captures DefiniteErrors that affect the entire source, including all subsources
-    let (mut definite_error_handle, definite_errors) =
+    // Captures DefiniteErrors that affect the entire source, including all outputs
+    let (definite_error_handle, definite_errors) =
         builder.new_output::<CapacityContainerBuilder<_>>();
     let mut rewind_input = builder.new_input_for(
         rewind_stream,
@@ -125,15 +128,16 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
         &data_output,
     );
 
-    let output_indexes = subsources
+    let output_indexes = source_outputs
         .iter()
-        .map(|subsource| subsource.output_index)
+        .map(|output| output.output_index)
         .collect_vec();
 
-    metrics.tables.set(u64::cast_from(subsources.len()));
+    metrics.tables.set(u64::cast_from(source_outputs.len()));
 
     let (button, transient_errors) = builder.build_fallible(move |caps| {
-        Box::pin(async move {
+        let busy_signal = Arc::clone(&config.busy_signal);
+        Box::pin(SignaledFuture::new(busy_signal, async move {
             let (id, worker_id) = (config.id, config.worker_id);
             let [data_cap_set, upper_cap_set, definite_error_cap_set]: &mut [_; 3] =
                 caps.try_into().unwrap();
@@ -175,9 +179,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         return_definite_error(
                             err,
                             &output_indexes,
-                            &mut data_output,
+                            &data_output,
                             data_cap_set,
-                            &mut definite_error_handle,
+                            &definite_error_handle,
                             definite_error_cap_set,
                         )
                         .await,
@@ -187,18 +191,18 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
             trace!(%id, "timely-{worker_id} replication binlog frontier: {binlog_frontier:?}");
 
+            // upstream-table-name: Vec<SourceOutputInfo> since multiple
+            // outputs can refer to the same table
             let mut table_info = BTreeMap::new();
-            let mut subsource_uppers = Vec::new();
+            let mut output_uppers = Vec::new();
 
-            // Calculate the lowest frontier across all subsources, which represents the point which
+            // Calculate the lowest frontier across all outputs, which represents the point which
             // we should start replication from.
             let min_frontier = Antichain::from_elem(GtidPartition::minimum());
-            for subsource in subsources.into_iter() {
-                table_info.insert(subsource.name, (subsource.output_index, subsource.desc));
-
-                // If a subsource is resuming at the minimum frontier then its snapshot
+            for output in source_outputs.into_iter() {
+                // If an output is resuming at the minimum frontier then its snapshot
                 // has not yet been committed.
-                // We need to resume from a frontier before the subsource's snapshot frontier
+                // We need to resume from a frontier before the output's snapshot frontier
                 // to ensure we don't miss updates that happen after the snapshot was taken.
                 //
                 // This also ensures that tables created as part of the same CREATE SOURCE
@@ -207,25 +211,30 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 //
                 // We've chosen the frontier beyond the GTID Set recorded
                 // during purification as this resume point.
-                if &subsource.resume_upper == &min_frontier {
-                    subsource_uppers.push(subsource.initial_gtid_set);
+                if &output.resume_upper == &min_frontier {
+                    output_uppers.push(output.initial_gtid_set.clone());
                 } else {
-                    subsource_uppers.push(subsource.resume_upper);
+                    output_uppers.push(output.resume_upper.clone());
                 }
+
+                table_info
+                    .entry(output.table_name.clone())
+                    .or_insert_with(Vec::new)
+                    .push(output);
             }
-            let resume_upper = match subsource_uppers.len() {
+            let resume_upper = match output_uppers.len() {
                 0 => {
-                    // If there are no subsources to replicate then we will just be updating the
+                    // If there are no outputs to replicate then we will just be updating the
                     // source progress collection. In this case we can just start from the head of
                     // the binlog to avoid wasting time on old events.
-                    trace!(%id, "timely-{worker_id} replication reader found no subsources \
+                    trace!(%id, "timely-{worker_id} replication reader found no outputs \
                                  to replicate, using latest gtid_executed as resume_upper");
                     let executed_gtid_set =
                         query_sys_var(&mut conn, "global.gtid_executed").await?;
 
                     gtid_set_frontier(&executed_gtid_set)?
                 }
-                _ => Antichain::from_iter(subsource_uppers.into_iter().flatten()),
+                _ => Antichain::from_iter(output_uppers.into_iter().flatten()),
             };
 
             // Validate that we can actually resume from this upper.
@@ -237,9 +246,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 return Ok(return_definite_error(
                     err,
                     &output_indexes,
-                    &mut data_output,
+                    &data_output,
                     data_cap_set,
-                    &mut definite_error_handle,
+                    &definite_error_handle,
                     definite_error_cap_set,
                 )
                 .await);
@@ -262,16 +271,16 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             return Ok(return_definite_error(
                                 err,
                                 &output_indexes,
-                                &mut data_output,
+                                &data_output,
                                 data_cap_set,
-                                &mut definite_error_handle,
+                                &definite_error_handle,
                                 definite_error_cap_set,
                             )
                             .await);
                         };
                         // If the snapshot point is the same as the resume point then we don't need to rewind
                         if resume_upper != req.snapshot_upper {
-                            rewinds.insert(req.table.clone(), (caps.clone(), req));
+                            rewinds.insert(req.output_index.clone(), (caps.clone(), req));
                         }
                     }
                 }
@@ -289,9 +298,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         return Ok(return_definite_error(
                             err,
                             &output_indexes,
-                            &mut data_output,
+                            &data_output,
                             data_cap_set,
-                            &mut definite_error_handle,
+                            &definite_error_handle,
                             definite_error_cap_set,
                         )
                         .await)
@@ -312,8 +321,6 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 stream.as_mut(),
                 &table_info,
                 &metrics,
-                &connection.text_columns,
-                &connection.ignore_columns,
                 &mut data_output,
                 data_cap_set,
                 upper_cap_set,
@@ -345,9 +352,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             return Ok(return_definite_error(
                                 err,
                                 &output_indexes,
-                                &mut data_output,
+                                &data_output,
                                 data_cap_set,
-                                &mut definite_error_handle,
+                                &definite_error_handle,
                                 definite_error_cap_set,
                             )
                             .await);
@@ -373,9 +380,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             return Ok(return_definite_error(
                                 err,
                                 &output_indexes,
-                                &mut data_output,
+                                &data_output,
                                 data_cap_set,
-                                &mut definite_error_handle,
+                                &definite_error_handle,
                                 definite_error_cap_set,
                             )
                             .await);
@@ -395,7 +402,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
                         events::handle_rows_event(
                             data,
-                            &mut repl_context,
+                            &repl_context,
                             &cur_gtid,
                             &mut row_event_buffer,
                         )
@@ -408,9 +415,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             return Ok(return_definite_error(
                                 err,
                                 &output_indexes,
-                                &mut data_output,
+                                &data_output,
                                 data_cap_set,
-                                &mut definite_error_handle,
+                                &definite_error_handle,
                                 definite_error_cap_set,
                             )
                             .await);
@@ -441,9 +448,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                                 return Ok(return_definite_error(
                                     err,
                                     &output_indexes,
-                                    &mut data_output,
+                                    &data_output,
                                     data_cap_set,
-                                    &mut definite_error_handle,
+                                    &definite_error_handle,
                                     definite_error_cap_set,
                                 )
                                 .await);
@@ -460,18 +467,15 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
             }
             // We never expect the replication stream to gracefully end
             Err(TransientError::ReplicationEOF)
-        })
+        }))
     });
 
     // TODO: Split row decoding into a separate operator that can be distributed across all workers
-    let replication_updates = data_stream
-        .as_collection()
-        .map(|(output_index, row)| (output_index, row.err_into()));
 
     let errors = definite_errors.concat(&transient_errors.map(ReplicationError::from));
 
     (
-        replication_updates,
+        data_stream.as_collection(),
         upper_stream,
         errors,
         button.press_on_drop(),
@@ -480,7 +484,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
 /// Produces the replication stream from the MySQL server. This will return all transactions
 /// whose GTIDs were not present in the GTID UUIDs referenced in the `resume_uppper` partitions.
-async fn raw_stream<'a>(
+async fn raw_stream(
     config: &RawSourceCreationConfig,
     mut conn: MySqlConn,
     resume_upper: &Antichain<GtidPartition>,

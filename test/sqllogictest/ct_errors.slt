@@ -1,0 +1,61 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+CREATE TABLE foo (key INT)
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_continual_task_create = false
+----
+COMPLETE 0
+
+statement error CREATE CONTINUAL TASK is not available
+CREATE CONTINUAL TASK nope (key INT) ON INPUT foo AS (
+    INSERT INTO nope SELECT * FROM foo;
+)
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_continual_task_create = true
+----
+COMPLETE 0
+
+# INSERT columns do not match
+statement error statement 0: column "key" is of type boolean but expression is of type integer
+CREATE CONTINUAL TASK nope (key BOOL) ON INPUT foo AS (
+    INSERT INTO nope SELECT * FROM foo;
+)
+
+statement error statement 0: INSERT has more target columns than expressions
+CREATE CONTINUAL TASK nope (key INT) ON INPUT foo AS (
+    INSERT INTO nope SELECT FROM foo;
+)
+
+statement error statement 0: INSERT has more expressions than target columns
+CREATE CONTINUAL TASK nope (key INT) ON INPUT foo AS (
+    INSERT INTO nope SELECT *, 'nope' FROM foo;
+)
+
+# Cannot use a VIEW (or other things not directly backed by a persist shard) as
+# an input.
+statement ok
+CREATE VIEW some_view AS SELECT *, 'bar' FROM foo;
+
+statement error CONTINUAL TASK cannot use view as an input
+CREATE CONTINUAL TASK nope (key INT, val STRING) ON INPUT some_view AS (
+    INSERT INTO nope SELECT * FROM foo;
+)
+
+# Must provide columns for recursive CTs
+statement error statement 1: INSERT has more expressions than target columns
+CREATE CONTINUAL TASK nope ON INPUT foo AS (
+    DELETE FROM nope;
+    INSERT INTO nope SELECT *, 'bar' FROM foo;
+)

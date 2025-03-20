@@ -1,0 +1,123 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License in the LICENSE file at the
+# root of this repository, or online at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""
+Rules for executing pre-compiled binaries.
+
+This should only be used for non-essential tools like linters! Anything is used
+for building or running code should be included via a Bazel toolchain.
+"""
+
+load("@bazel_skylib//rules:native_binary.bzl", "native_binary")
+
+native_binary(
+    name = "buildifier",
+    src = select(
+        {
+            "@//misc/bazel/platforms:macos_x86_64": "@buildifier-darwin-amd64//file",
+            "@//misc/bazel/platforms:macos_arm": "@buildifier-darwin-arm64//file",
+            "@//misc/bazel/platforms:linux_x86_64": "@buildifier-linux-amd64//file",
+            "@//misc/bazel/platforms:linux_arm": "@buildifier-linux-arm64//file",
+        },
+        no_match_error = "`buildifier` is not supported on the current platform.",
+    ),
+)
+
+# Note: We don't use `cargo` for building code, but some tools require it for generating metadata
+# for crates in our repo.
+native_binary(
+    name = "cargo",
+    src = select(
+        {
+            "@//misc/bazel/platforms:macos_x86_64": "@rust_darwin_x86_64__x86_64-apple-darwin__stable_tools//:cargo",
+            "@//misc/bazel/platforms:macos_arm": "@rust_darwin_aarch64__aarch64-apple-darwin__stable_tools//:cargo",
+            "@//misc/bazel/platforms:linux_x86_64": "@rust_linux_x86_64__x86_64-apple-darwin__stable_tools//:cargo",
+            "@//misc/bazel/platforms:linux_arm": "@rust_linux_aarch64__aarch64-apple-darwin__stable_tools//:cargo",
+        },
+        no_match_error = "`cargo` is not supported on the current platform.",
+    ),
+)
+
+# Convience wrapper around `cargo-gazelle` that specifies our formatter.
+sh_binary(
+    name = "cargo-gazelle",
+    srcs = ["@//misc/bazel/cargo-gazelle:main"],
+    data = [
+        "@//misc/bazel/tools:buildifier",
+        "@//misc/bazel/tools:cargo",
+    ],
+    env = {
+        "FORMATTER": "$(location @//misc/bazel/tools:buildifier)",
+        "CARGO_BINARY": "$(location @//misc/bazel/tools:cargo)",
+    },
+)
+
+# We alias some tools from the Clang toolchain for easy consumption from other
+# parts of our build system, e.g. `mzbuild.py`.
+#
+# To see all of the available tools, run `bazel cquery @llvm_toolchain_llvm//:bin --output=files`
+#
+# Note: In a _perfect_ Bazel world, we would have some rule that invokes these
+# tools and removes the need for the wrapper, but this is an incremental step.
+
+alias(
+    name = "llvm-dwarfdump",
+    actual = "@llvm_toolchain_llvm//:bin/llvm-dwarfdump",
+)
+
+alias(
+    name = "dwarfdump",
+    actual = ":llvm-dwarfdump",
+)
+
+alias(
+    name = "llvm-objcopy",
+    actual = "@llvm_toolchain_llvm//:bin/llvm-objcopy",
+)
+
+alias(
+    name = "objcopy",
+    actual = ":llvm-objcopy",
+)
+
+alias(
+    name = "llvm-objdump",
+    actual = "@llvm_toolchain_llvm//:bin/llvm-objdump",
+)
+
+alias(
+    name = "objdump",
+    actual = ":llvm-objdump",
+)
+
+alias(
+    name = "llvm-profdata",
+    actual = "@llvm_toolchain_llvm//:bin/llvm-profdata",
+)
+
+alias(
+    name = "profdata",
+    actual = ":llvm-profdata",
+)
+
+alias(
+    name = "llvm-strip",
+    actual = "@llvm_toolchain_llvm//:bin/llvm-strip",
+)
+
+alias(
+    name = "strip",
+    actual = ":llvm-strip",
+)

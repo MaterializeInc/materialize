@@ -56,20 +56,24 @@ pub mod copy_to;
 pub mod dataflows;
 pub mod index;
 pub mod materialized_view;
-pub mod metrics;
 pub mod peek;
 pub mod subscribe;
 pub mod view;
 
+use std::fmt::Debug;
 use std::panic::AssertUnwindSafe;
 
+use mz_adapter_types::connection::ConnectionId;
+use mz_catalog::memory::objects::{CatalogCollectionEntry, CatalogEntry, Index};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
+use mz_controller_types::ClusterId;
 use mz_expr::{EvalError, MirRelationExpr, OptimizedMirRelationExpr, UnmaterializableFunc};
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::optimize::{OptimizerFeatureOverrides, OptimizerFeatures, OverrideFrom};
-use mz_repr::GlobalId;
+use mz_repr::{CatalogItemId, GlobalId};
+use mz_sql::names::{FullItemName, QualifiedItemName};
 use mz_sql::plan::PlanError;
 use mz_sql::session::vars::SystemVars;
 use mz_transform::{TransformCtx, TransformError};
@@ -118,21 +122,16 @@ where
     /// [`OptimizerError::Internal`] error.
     #[mz_ore::instrument(target = "optimizer", level = "debug", name = "optimize")]
     fn catch_unwind_optimize(&mut self, plan: From) -> Result<Self::To, OptimizerError> {
-        match mz_ore::panic::catch_unwind(AssertUnwindSafe(|| self.optimize(plan))) {
-            Ok(result) => {
-                match result.map_err(Into::into) {
-                    Err(OptimizerError::TransformError(TransformError::CallerShouldPanic(msg))) => {
-                        // Promote a `CallerShouldPanic` error from the result
-                        // to a proper panic. This is needed in order to ensure
-                        // that `mz_unsafe.mz_panic('forced panic')` calls still
-                        // panic the caller.
-                        panic!("{}", msg)
-                    }
-                    result => result,
-                }
+        match mz_ore::panic::catch_unwind_str(AssertUnwindSafe(|| self.optimize(plan))) {
+            Ok(Err(OptimizerError::TransformError(TransformError::CallerShouldPanic(msg)))) => {
+                // Promote a `CallerShouldPanic` error from the result to a proper panic. This is
+                // needed in order to ensure that `mz_unsafe.mz_panic('forced panic')` calls still
+                // panic the caller.
+                panic!("{msg}");
             }
-            Err(_) => {
-                let msg = format!("unexpected panic during query optimization");
+            Ok(result) => result,
+            Err(panic) => {
+                let msg = format!("unexpected panic during query optimization: {panic}");
                 Err(OptimizerError::Internal(msg))
             }
         }
@@ -251,6 +250,27 @@ impl From<&OptimizerConfig> for mz_sql::plan::HirToMirConfig {
     }
 }
 
+// OptimizerCatalog
+// ===============
+
+pub trait OptimizerCatalog: Debug + Send + Sync {
+    fn get_entry(&self, id: &GlobalId) -> CatalogCollectionEntry;
+    fn get_entry_by_item_id(&self, id: &CatalogItemId) -> &CatalogEntry;
+    fn resolve_full_name(
+        &self,
+        name: &QualifiedItemName,
+        conn_id: Option<&ConnectionId>,
+    ) -> FullItemName;
+
+    /// Returns all indexes on the given object and cluster known in the
+    /// catalog.
+    fn get_indexes_on(
+        &self,
+        id: GlobalId,
+        cluster: ClusterId,
+    ) -> Box<dyn Iterator<Item = (GlobalId, &Index)> + '_>;
+}
+
 // OptimizerError
 // ===============
 
@@ -272,6 +292,8 @@ pub enum OptimizerError {
         func: UnmaterializableFunc,
         context: &'static str,
     },
+    #[error("MfpPlan couldn't be converted into SafeMfpPlan")]
+    UnsafeMfpPlan,
     #[error("internal optimizer error: {0}")]
     Internal(String),
 }
@@ -330,6 +352,22 @@ fn optimize_mir_local(
     mz_repr::explain::trace_plan(expr.as_inner());
 
     Ok::<_, OptimizerError>(expr)
+}
+
+/// This is just a wrapper around [mz_transform::Optimizer::constant_optimizer],
+/// running it, and tracing the result plan.
+#[mz_ore::instrument(target = "optimizer", level = "debug", name = "constant")]
+fn optimize_mir_constant(
+    expr: MirRelationExpr,
+    ctx: &mut TransformCtx,
+) -> Result<MirRelationExpr, OptimizerError> {
+    let optimizer = mz_transform::Optimizer::constant_optimizer(ctx);
+    let expr = optimizer.optimize(expr, ctx)?;
+
+    // Trace the result of this phase.
+    mz_repr::explain::trace_plan(expr.as_inner());
+
+    Ok::<_, OptimizerError>(expr.0)
 }
 
 macro_rules! trace_plan {

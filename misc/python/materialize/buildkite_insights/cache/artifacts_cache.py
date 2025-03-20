@@ -14,9 +14,9 @@ from materialize.buildkite_insights.cache import generic_cache
 from materialize.buildkite_insights.cache.cache_constants import FetchMode
 from materialize.buildkite_insights.cache.generic_cache import CacheFilePath
 from materialize.util import (
-    compute_sha256_of_utf8_string,
     decompress_zst_to_directory,
     ensure_dir_exists,
+    sha256_of_utf8_string,
 )
 
 
@@ -94,7 +94,11 @@ def get_or_download_artifact(
                 return file.read()
 
     return generic_cache.get_or_query_data(
-        cache_file_path, action, fetch_mode, quiet_mode=True
+        cache_file_path,
+        action,
+        fetch_mode,
+        max_allowed_cache_age_in_hours=96,
+        quiet_mode=True,
     )
 
 
@@ -104,7 +108,7 @@ def _get_file_path_for_job_artifact_list(
     job_id: str,
 ) -> CacheFilePath:
     meta_data = f"{build_number}-{job_id}"
-    hash_value = compute_sha256_of_utf8_string(meta_data)[:8]
+    hash_value = sha256_of_utf8_string(meta_data)[:8]
     return CacheFilePath(
         cache_item_type="build_job_artifact_list",
         pipeline_slug=pipeline_slug,

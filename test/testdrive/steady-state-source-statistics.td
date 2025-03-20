@@ -10,7 +10,6 @@
 $ set-arg-default single-replica-cluster=quickstart
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET kafka_default_metadata_fetch_interval = 1000
 ALTER SYSTEM SET storage_statistics_collection_interval = 1000
 ALTER SYSTEM SET storage_statistics_interval = 2000
 
@@ -61,17 +60,19 @@ goofus,gallant
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-upsert-${testdrive.seed}'
   )
+
+> CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-upsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE OFFSET
   ENVELOPE UPSERT
 
 > CREATE SOURCE counter
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR COUNTER;
+  FROM LOAD GENERATOR COUNTER (UP TO 100);
 
 # Adding a select here so that the ingests after this
 # triggers lookup from the upsert state
-> SELECT key, f1, f2 FROM upsert
+> SELECT key, f1, f2 FROM upsert_tbl
 key           f1      f2
 ------------------------
 fish          fish    1000
@@ -111,7 +112,7 @@ SELECT
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "mammalmore"}
 
-> SELECT key, f1, f2 FROM upsert
+> SELECT key, f1, f2 FROM upsert_tbl
 key           f1      f2
 ------------------------
 fish          fish    1000

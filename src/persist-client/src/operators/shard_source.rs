@@ -92,7 +92,7 @@ where
     F: FnMut(&PartStats, AntichainRef<G::Timestamp>) -> bool + 'static,
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
-    G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder,
+    G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
     T: Refines<G::Timestamp>,
     DT: FnOnce(
         Child<'g, G, T>,
@@ -128,6 +128,11 @@ where
     let (completed_fetches_feedback_handle, completed_fetches_feedback_stream) =
         scope.feedback(T::Summary::default());
 
+    // Sniff out if this is on behalf of a transient dataflow. This doesn't
+    // affect the fetch behavior, it just causes us to use a different set of
+    // metrics.
+    let is_transient = !until.is_empty();
+
     let (descs, descs_token) = shard_source_descs::<K, V, D, _, G>(
         &scope.parent,
         name,
@@ -158,8 +163,15 @@ where
         None => descs,
     };
 
-    let (parts, completed_fetches_stream, fetch_token) =
-        shard_source_fetch(&descs, name, client(), shard_id, key_schema, val_schema);
+    let (parts, completed_fetches_stream, fetch_token) = shard_source_fetch(
+        &descs,
+        name,
+        client(),
+        shard_id,
+        key_schema,
+        val_schema,
+        is_transient,
+    );
     completed_fetches_stream.connect_loop(completed_fetches_feedback_handle);
     tokens.push(fetch_token);
 
@@ -233,7 +245,7 @@ where
     F: FnMut(&PartStats, AntichainRef<G::Timestamp>) -> bool + 'static,
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
-    G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder,
+    G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
 {
     let worker_index = scope.index();
     let num_workers = scope.peers();
@@ -278,7 +290,7 @@ where
     }
     impl<H: FnOnce(String) -> Pin<Box<dyn Future<Output = ()>>> + 'static> ErrorHandler<H> {
         /// Report the error and enforce that we never return.
-        async fn report_and_stop(self, error: String) {
+        async fn report_and_stop(self, error: String) -> ! {
             (self.inner)(error).await;
 
             // We cannot continue, and we cannot shut down. Otherwise downstream
@@ -293,7 +305,7 @@ where
 
     let mut builder =
         AsyncOperatorBuilder::new(format!("shard_source_descs({})", name), scope.clone());
-    let (mut descs_output, descs_stream) = builder.new_output();
+    let (descs_output, descs_stream) = builder.new_output();
 
     #[allow(clippy::await_holding_refcell_ref)]
     let shutdown_button = builder.build(move |caps| async move {
@@ -307,9 +319,6 @@ where
             );
             return;
         }
-
-        // Wait for the start signal before doing any work.
-        let () = start_signal.await;
 
         // Internally, the `open_leased_reader` call registers a new LeasedReaderId and then fires
         // up a background tokio task to heartbeat it. It is possible that we might get a
@@ -342,6 +351,11 @@ where
         .expect("reader creation shouldn't panic")
         .expect("could not open persist shard");
 
+        // Wait for the start signal only after we have obtained a read handle. This makes "cannot
+        // serve requested as_of" panics caused by (database-issues#8729) significantly less
+        // likely.
+        let () = start_signal.await;
+
         let cfg = read.cfg.clone();
         let metrics = Arc::clone(&read.metrics);
 
@@ -372,8 +386,7 @@ where
                         .report_and_stop(format!(
                             "{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}"
                         ))
-                        .await;
-                    unreachable!("error handler must diverge");
+                        .await
                 }
             },
             SnapshotMode::Exclude => vec![],
@@ -396,8 +409,7 @@ where
                     .report_and_stop(format!(
                         "{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}"
                     ))
-                    .await;
-                unreachable!("error handler must diverge");
+                    .await
             }
         };
 
@@ -502,7 +514,7 @@ where
                 if let Some(lease) = lease {
                     leases.borrow_mut().push_at(current_ts.clone(), lease);
                 }
-                descs_output.give(&session_cap, (worker_idx, part)).await;
+                descs_output.give(&session_cap, (worker_idx, part));
             }
 
             current_frontier.join_assign(&progress);
@@ -516,10 +528,11 @@ where
 pub(crate) fn shard_source_fetch<K, V, T, D, G>(
     descs: &Stream<G, (usize, SerdeLeasedBatchPart)>,
     name: &str,
-    client: impl Future<Output = PersistClient> + 'static,
+    client: impl Future<Output = PersistClient> + Send + 'static,
     shard_id: ShardId,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
+    is_transient: bool,
 ) -> (
     Stream<G, FetchedBlob<K, V, T, D>>,
     Stream<G, Infallible>,
@@ -528,14 +541,14 @@ pub(crate) fn shard_source_fetch<K, V, T, D, G>(
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64 + Send + Sync,
     G: Scope,
     G::Timestamp: Refines<T>,
 {
     let mut builder =
         AsyncOperatorBuilder::new(format!("shard_source_fetch({})", name), descs.scope());
-    let (mut fetched_output, fetched_stream) = builder.new_output();
+    let (fetched_output, fetched_stream) = builder.new_output();
     let (completed_fetches_output, completed_fetches_stream) =
         builder.new_output::<CapacityContainerBuilder<Vec<Infallible>>>();
     let mut descs_input = builder.new_input_for_many(
@@ -546,20 +559,27 @@ where
     let name_owned = name.to_owned();
 
     let shutdown_button = builder.build(move |_capabilities| async move {
-        let fetcher = {
-            client
-                .await
-                .create_batch_fetcher::<K, V, T, D>(
-                    shard_id,
-                    key_schema,
-                    val_schema,
-                    Diagnostics {
-                        shard_name: name_owned.clone(),
-                        handle_purpose: format!("shard_source_fetch batch fetcher {}", name_owned),
-                    },
-                )
-                .await
-        };
+        let mut fetcher = mz_ore::task::spawn(|| format!("shard_source_fetch({})", name_owned), {
+            let diagnostics = Diagnostics {
+                shard_name: name_owned.clone(),
+                handle_purpose: format!("shard_source_fetch batch fetcher {}", name_owned),
+            };
+            async move {
+                client
+                    .await
+                    .create_batch_fetcher::<K, V, T, D>(
+                        shard_id,
+                        key_schema,
+                        val_schema,
+                        is_transient,
+                        diagnostics,
+                    )
+                    .await
+            }
+        })
+        .await
+        .expect("fetcher creation shouldn't panic")
+        .expect("shard codecs should not change");
 
         while let Some(event) = descs_input.next().await {
             if let Event::Data([fetched_cap, _completed_fetches_cap], data) = event {
@@ -577,7 +597,7 @@ where
                         // outputs or sessions across await points, which
                         // would prevent messages from being flushed from
                         // the shared timely output buffer.
-                        fetched_output.give(&fetched_cap, fetched).await;
+                        fetched_output.give(&fetched_cap, fetched);
                     }
                 }
             }

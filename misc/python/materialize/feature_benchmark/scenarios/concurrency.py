@@ -10,6 +10,7 @@
 from materialize.feature_benchmark.action import Action, TdAction
 from materialize.feature_benchmark.measurement_source import MeasurementSource, Td
 from materialize.feature_benchmark.scenario import Scenario
+from materialize.feature_benchmark.scenario_version import ScenarioVersion
 
 
 class Concurrency(Scenario):
@@ -21,6 +22,9 @@ class ParallelIngestion(Concurrency):
 
     SOURCES = 10
     FIXED_SCALE = True  # Disk slowness in CRDB leading to CRDB going down
+
+    def version(self) -> ScenarioVersion:
+        return ScenarioVersion.create(1, 1, 0)
 
     def shared(self) -> Action:
         return TdAction(
@@ -39,7 +43,7 @@ $ kafka-ingest format=avro topic=kafka-parallel-ingestion key-format=avro key-sc
         drop_sources = "\n".join(
             [
                 f"""
-> DROP SOURCE IF EXISTS s{s}
+> DROP SOURCE IF EXISTS s{s} CASCADE
 > DROP CLUSTER IF EXISTS s{s}_cluster
 """
                 for s in sources
@@ -53,14 +57,15 @@ $ kafka-ingest format=avro topic=kafka-parallel-ingestion key-format=avro key-sc
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${{testdrive.schema-registry-url}}';
 
->[version<7800]  CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
->[version>=7800] CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CLUSTER s{s}_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
 
 > CREATE SOURCE s{s}
   IN CLUSTER s{s}_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-parallel-ingestion-${{testdrive.seed}}')
+
+> CREATE TABLE s{s}_tbl FROM SOURCE s{s} (REFERENCE "testdrive-kafka-parallel-ingestion-${{testdrive.seed}}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 """
                 for s in sources
@@ -70,7 +75,7 @@ $ kafka-ingest format=avro topic=kafka-parallel-ingestion key-format=avro key-sc
         create_indexes = "\n".join(
             [
                 f"""
-> CREATE DEFAULT INDEX ON s{s}
+> CREATE DEFAULT INDEX ON s{s}_tbl
 """
                 for s in sources
             ]
@@ -79,7 +84,7 @@ $ kafka-ingest format=avro topic=kafka-parallel-ingestion key-format=avro key-sc
         selects = "\n".join(
             [
                 f"""
-> SELECT * FROM s{s} WHERE f2 = {self.n()-1}
+> SELECT * FROM s{s}_tbl WHERE f2 = {self.n()-1}
 {self.n()-1}
 """
                 for s in sources

@@ -24,3 +24,5 @@ MZ_PIPELINES = [
     "test",
     "www",
 ]
+
+MZ_PIPELINES_WITH_WILDCARD = MZ_PIPELINES + ["*"]

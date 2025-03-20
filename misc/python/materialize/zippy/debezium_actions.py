@@ -18,7 +18,7 @@ from materialize.zippy.debezium_capabilities import (
     DebeziumSourceExists,
     PostgresTableExists,
 )
-from materialize.zippy.framework import Action, Capabilities, Capability
+from materialize.zippy.framework import Action, Capabilities, Capability, State
 from materialize.zippy.kafka_capabilities import KafkaRunning
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.replica_capabilities import source_capable_clusters
@@ -31,7 +31,7 @@ class DebeziumStart(Action):
     def provides(self) -> list[Capability]:
         return [DebeziumRunning()]
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         c.up("debezium")
 
 
@@ -45,7 +45,7 @@ class DebeziumStop(Action):
     def withholds(self) -> set[type[Capability]]:
         return {DebeziumRunning}
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         c.kill("debezium")
 
 
@@ -89,11 +89,11 @@ class CreateDebeziumSource(Action):
             assert self.debezium_source.postgres_table is not None
             self.postgres_table = self.debezium_source.postgres_table
         else:
-            assert False
+            raise RuntimeError("More than one Debezium source exists")
 
         super().__init__(capabilities)
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         if self.new_debezium_source:
             c.testdrive(
                 dedent(
@@ -132,6 +132,8 @@ class CreateDebeziumSource(Action):
                     > CREATE SOURCE {self.debezium_source.name}
                       IN CLUSTER {self.cluster_name}
                       FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.{self.postgres_table.name}')
+
+                    > CREATE TABLE {self.debezium_source.get_name_for_query()} FROM SOURCE {self.debezium_source.name} (REFERENCE "postgres.public.{self.postgres_table.name}")
                       FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                       ENVELOPE DEBEZIUM
                     """

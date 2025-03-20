@@ -12,8 +12,11 @@ use std::sync::Arc;
 
 use mz_catalog::memory::objects::{CatalogItem, Secret};
 use mz_expr::MirScalarExpr;
+use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
-use mz_repr::{Datum, GlobalId, RowArena};
+use mz_repr::{CatalogItemId, Datum, RowArena};
+use mz_sql::ast::display::AstDisplay;
+use mz_sql::ast::{ConnectionOption, ConnectionOptionName, Statement, Value, WithOptionValue};
 use mz_sql::catalog::{CatalogError, ObjectType};
 use mz_sql::plan::{self, CreateSecretPlan};
 use mz_sql::session::metadata::SessionMetadata;
@@ -30,6 +33,8 @@ use crate::session::Session;
 use crate::{catalog, AdapterError, AdapterNotice, ExecuteContext, ExecuteResponse};
 
 impl Staged for SecretStage {
+    type Ctx = ExecuteContext;
+
     fn validity(&mut self) -> &mut crate::coord::PlanValidity {
         match self {
             SecretStage::CreateFinish(stage) => &mut stage.validity,
@@ -43,7 +48,7 @@ impl Staged for SecretStage {
     async fn stage(
         self,
         coord: &mut Coordinator,
-        ctx: &mut crate::ExecuteContext,
+        ctx: &mut ExecuteContext,
     ) -> Result<crate::coord::StageResult<Box<Self>>, AdapterError> {
         match self {
             SecretStage::CreateEnsure(stage) => {
@@ -60,7 +65,7 @@ impl Staged for SecretStage {
         }
     }
 
-    fn message(self, ctx: crate::ExecuteContext, span: tracing::Span) -> crate::coord::Message {
+    fn message(self, ctx: ExecuteContext, span: tracing::Span) -> Message {
         Message::SecretStageReady {
             ctx,
             span,
@@ -93,13 +98,13 @@ impl Coordinator {
         plan: plan::CreateSecretPlan,
     ) -> Result<SecretStage, AdapterError> {
         // No dependencies.
-        let validity = PlanValidity {
-            transient_revision: self.catalog().transient_revision(),
-            dependency_ids: BTreeSet::new(),
-            cluster_id: None,
-            replica_id: None,
-            role_metadata: session.role_metadata().clone(),
-        };
+        let validity = PlanValidity::new(
+            self.catalog().transient_revision(),
+            BTreeSet::new(),
+            None,
+            None,
+            session.role_metadata().clone(),
+        );
         Ok(SecretStage::CreateEnsure(CreateSecretEnsure {
             validity,
             plan,
@@ -112,15 +117,22 @@ impl Coordinator {
         session: &Session,
         CreateSecretEnsure { validity, mut plan }: CreateSecretEnsure,
     ) -> Result<StageResult<Box<SecretStage>>, AdapterError> {
-        let id = self.catalog_mut().allocate_user_id().await?;
+        let id_ts = self.get_catalog_write_ts().await;
+        let (item_id, global_id) = self.catalog_mut().allocate_user_id(id_ts).await?;
+
         let secrets_controller = Arc::clone(&self.secrets_controller);
         let payload = self.extract_secret(session, &mut plan.secret.secret_as)?;
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn(
             || "create secret ensure",
             async move {
-                secrets_controller.ensure(id, &payload).await?;
-                let stage = SecretStage::CreateFinish(CreateSecretFinish { validity, id, plan });
+                secrets_controller.ensure(item_id, &payload).await?;
+                let stage = SecretStage::CreateFinish(CreateSecretFinish {
+                    validity,
+                    item_id,
+                    global_id,
+                    plan,
+                });
                 Ok(Box::new(stage))
             }
             .instrument(span),
@@ -182,7 +194,8 @@ impl Coordinator {
         &mut self,
         session: &Session,
         CreateSecretFinish {
-            id,
+            item_id,
+            global_id,
             plan,
             validity: _,
         }: CreateSecretFinish,
@@ -194,10 +207,11 @@ impl Coordinator {
         } = plan;
         let secret = Secret {
             create_sql: secret.create_sql,
+            global_id,
         };
 
         let ops = vec![catalog::Op::CreateItem {
-            id,
+            id: item_id,
             name: name.clone(),
             item: CatalogItem::Secret(secret),
             owner_id: *session.current_role_id(),
@@ -216,7 +230,7 @@ impl Coordinator {
                 Ok(ExecuteResponse::CreatedSecret)
             }
             Err(err) => {
-                if let Err(e) = self.secrets_controller.delete(id).await {
+                if let Err(e) = self.secrets_controller.delete(item_id).await {
                     warn!(
                         "Dropping newly created secrets has encountered an error: {}",
                         e
@@ -238,13 +252,13 @@ impl Coordinator {
         // calls `ensure()` and returns a success result to the client. If there's a concurrent
         // delete of the secret, the persisted secret is in an unknown state (but will be cleaned up
         // if needed at next envd boot), but we will still return success.
-        let validity = PlanValidity {
-            transient_revision: self.catalog().transient_revision(),
-            dependency_ids: BTreeSet::new(),
-            cluster_id: None,
-            replica_id: None,
-            role_metadata: ctx.session().role_metadata().clone(),
-        };
+        let validity = PlanValidity::new(
+            self.catalog().transient_revision(),
+            BTreeSet::new(),
+            None,
+            None,
+            ctx.session().role_metadata().clone(),
+        );
         let stage = SecretStage::Alter(AlterSecret { validity, plan });
         self.sequence_staged(ctx, Span::current(), stage).await;
     }
@@ -270,19 +284,20 @@ impl Coordinator {
     }
 
     #[instrument]
-    pub(crate) async fn sequence_rotate_keys(&mut self, ctx: ExecuteContext, id: GlobalId) {
-        // If the secret is deleted from the catalog during `rotate_keys_ensure()`, this will
-        // prevent `rotate_keys_finish()` from issuing the `WeirdBuiltinTableUpdates` for the
-        // change. The state of the persisted secret is unknown, and if the rotate ensure'd
-        // after the delete (i.e., the secret is persisted to the secret store but not the
-        // catalog), the secret will be cleaned up during next envd boot.
-        let validity = PlanValidity {
-            transient_revision: self.catalog().transient_revision(),
-            dependency_ids: BTreeSet::from_iter(std::iter::once(id)),
-            cluster_id: None,
-            replica_id: None,
-            role_metadata: ctx.session().role_metadata().clone(),
-        };
+    pub(crate) async fn sequence_rotate_keys(&mut self, ctx: ExecuteContext, id: CatalogItemId) {
+        // If the secret is deleted from the catalog during
+        // `rotate_keys_ensure()`, this will prevent `rotate_keys_finish()` from
+        // issuing the catalog update for the change. The state of the persisted
+        // secret is unknown, and if the rotate ensure'd after the delete (i.e.,
+        // the secret is persisted to the secret store but not the catalog), the
+        // secret will be cleaned up during next envd boot.
+        let validity = PlanValidity::new(
+            self.catalog().transient_revision(),
+            BTreeSet::from_iter(std::iter::once(id)),
+            None,
+            None,
+            ctx.session().role_metadata().clone(),
+        );
         let stage = SecretStage::RotateKeysEnsure(RotateKeysSecretEnsure { validity, id });
         self.sequence_staged(ctx, Span::current(), stage).await;
     }
@@ -293,7 +308,7 @@ impl Coordinator {
         RotateKeysSecretEnsure { validity, id }: RotateKeysSecretEnsure,
     ) -> Result<StageResult<Box<SecretStage>>, AdapterError> {
         let secrets_controller = Arc::clone(&self.secrets_controller);
-        let catalog = self.owned_catalog();
+        let entry = self.catalog().get_entry(&id).clone();
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn(
             || "rotate keys ensure",
@@ -305,30 +320,47 @@ impl Coordinator {
                     .ensure(id, &new_key_set.to_bytes())
                     .await?;
 
-                let builtin_table_retraction = catalog.state().pack_ssh_tunnel_connection_update(
+                let mut to_item = entry.item;
+                match &mut to_item {
+                    CatalogItem::Connection(c) => {
+                        let mut stmt = match mz_sql::parse::parse(&c.create_sql)
+                            .expect("invalid create sql persisted to catalog")
+                            .into_element()
+                            .ast
+                        {
+                            Statement::CreateConnection(stmt) => stmt,
+                            _ => coord_bail!("internal error: persisted SQL for {id} is invalid"),
+                        };
+
+                        stmt.values.retain(|v| {
+                            v.name != ConnectionOptionName::PublicKey1
+                                && v.name != ConnectionOptionName::PublicKey2
+                        });
+                        stmt.values.push(ConnectionOption {
+                            name: ConnectionOptionName::PublicKey1,
+                            value: Some(WithOptionValue::Value(Value::String(
+                                new_key_set.primary().ssh_public_key(),
+                            ))),
+                        });
+                        stmt.values.push(ConnectionOption {
+                            name: ConnectionOptionName::PublicKey2,
+                            value: Some(WithOptionValue::Value(Value::String(
+                                new_key_set.secondary().ssh_public_key(),
+                            ))),
+                        });
+
+                        c.create_sql = stmt.to_ast_string_stable();
+                    }
+                    _ => coord_bail!(
+                        "internal error: rotate keys called on non-connection object {id}"
+                    ),
+                }
+
+                let ops = vec![catalog::Op::UpdateItem {
                     id,
-                    &previous_key_set.public_keys(),
-                    -1,
-                );
-                let builtin_table_retraction = catalog
-                    .state()
-                    .resolve_builtin_table_update(builtin_table_retraction);
-                let builtin_table_addition = catalog.state().pack_ssh_tunnel_connection_update(
-                    id,
-                    &new_key_set.public_keys(),
-                    1,
-                );
-                let builtin_table_addition = catalog
-                    .state()
-                    .resolve_builtin_table_update(builtin_table_addition);
-                let ops = vec![
-                    catalog::Op::WeirdBuiltinTableUpdates {
-                        builtin_table_update: builtin_table_retraction,
-                    },
-                    catalog::Op::WeirdBuiltinTableUpdates {
-                        builtin_table_update: builtin_table_addition,
-                    },
-                ];
+                    name: entry.name,
+                    to_item,
+                }];
                 let stage = SecretStage::RotateKeysFinish(RotateKeysSecretFinish { validity, ops });
                 Ok(Box::new(stage))
             }

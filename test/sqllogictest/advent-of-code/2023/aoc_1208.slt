@@ -1,0 +1,104 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# https://github.com/MaterializeInc/advent-of-code-2023/blob/main/week1/aoc_1208.md
+
+mode cockroach
+
+statement ok
+CREATE TABLE steps_input (input TEXT);
+
+statement ok
+CREATE TABLE paths (state TEXT, left TEXT, right TEXT);
+
+# no data
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
+WITH MUTUALLY RECURSIVE
+    route(step TEXT, steps INT) AS (
+        SELECT substring(input, steps, 1), steps
+        FROM steps_input, generate_series(1, length(input)) steps
+    ),
+
+    -- Part 1: Start at 'AAA` and go until `ZZZ`.
+    pos1(state TEXT, steps INT) AS (
+        SELECT 'AAA', 0
+        UNION ALL
+        SELECT
+            CASE WHEN route.step = 'L' THEN paths.left
+                 WHEN route.step = 'R' THEN paths.right
+                 ELSE '???'
+            END,
+            pos1.steps + 1
+        FROM paths, pos1, route
+        WHERE pos1.state = paths.state
+          AND 1 + (pos1.steps % 263) = route.steps
+          AND pos1.state != 'ZZZ'
+          AND pos1.state != '???'
+    ),
+    part1(part1 INT) AS (SELECT steps FROM pos1 WHERE pos1.state = 'ZZZ'),
+
+    -- Part 2: Start at all '**A` and go until all at '**Z'
+    pos2(start TEXT, state TEXT, steps INT) AS (
+        SELECT state, state, 0
+        FROM paths
+        WHERE substring(state, 3, 1) = 'A'
+        UNION ALL
+        SELECT
+            pos2.start,
+            CASE WHEN route.step = 'L' THEN paths.left
+                 WHEN route.step = 'R' THEN paths.right
+                 ELSE '???'
+            END,
+            pos2.steps + 1
+        FROM paths, pos2, route
+        WHERE pos2.state = paths.state
+          AND 1 + (pos2.steps % 263) = route.steps
+          AND substring(pos2.state, 3, 1) != 'Z'
+    )
+
+SELECT * FROM pos2 WHERE substring(state, 3, 1) = 'Z';
+----
+Explained Query:
+  With Mutually Recursive
+    cte l0 =
+      Union // { arity: 3 }
+        Project (#0{state}, #0{state}, #3) // { arity: 3 }
+          Filter ("A" = substr(#0{state}, 3, 1)) // { arity: 4 }
+            Map (0) // { arity: 4 }
+              ReadStorage materialize.public.paths // { arity: 3 }
+        Project (#3, #8, #9) // { arity: 3 }
+          Map (case when (#7 = "L") then #1{"left"} else case when (#7 = "R") then #2{"right"} else "???" end end, (#5 + 1)) // { arity: 10 }
+            Join on=(#0{state} = #4 AND #6 = (1 + (#5 % 263))) type=delta // { arity: 8 }
+              implementation
+                %0:paths » %1:l0[#1]Kf » %2[#0]K
+                %1:l0 » %0:paths[#0]Kf » %2[#0]K
+                %2 » %1:l0[(1 + (#2 % 263))]Kf » %0:paths[#0]Kf
+              ArrangeBy keys=[[#0{state}]] // { arity: 3 }
+                Filter ("Z" != substr(#0{state}, 3, 1)) // { arity: 3 }
+                  ReadStorage materialize.public.paths // { arity: 3 }
+              ArrangeBy keys=[[#1], [(1 + (#2 % 263))]] // { arity: 3 }
+                Filter ("Z" != substr(#1{state}, 3, 1)) // { arity: 3 }
+                  Get l0 // { arity: 3 }
+              ArrangeBy keys=[[#0]] // { arity: 2 }
+                Project (#1, #2) // { arity: 2 }
+                  Map (substr(#0{input}, #1, 1)) // { arity: 3 }
+                    FlatMap generate_series(1, char_length(#0{input}), 1) // { arity: 2 }
+                      ReadStorage materialize.public.steps_input // { arity: 1 }
+  Return // { arity: 3 }
+    Filter ("Z" = substr(#1{state}, 3, 1)) // { arity: 3 }
+      Get l0 // { arity: 3 }
+
+Source materialize.public.steps_input
+Source materialize.public.paths
+
+Target cluster: quickstart
+
+EOF

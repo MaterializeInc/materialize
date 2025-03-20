@@ -20,7 +20,7 @@ import json
 import random
 
 import boto3
-from pg8000.dbapi import ProgrammingError
+from psycopg.errors import SystemError
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
@@ -65,59 +65,46 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # connection's role.
     connection_role = f"testdrive-{ctx.seed}-MaterializeConnection"
     connection_role_arn = f"arn:aws:iam::{ctx.account_id}:role/{connection_role}"
-    ctx.iam.create_role(
-        RoleName=connection_role,
-        AssumeRolePolicyDocument=json.dumps(
-            {
-                "Version": "2012-10-17",
-                "Statement": [
-                    {
-                        "Effect": "Allow",
-                        "Principal": {
-                            "AWS": ctx.materialized_principal,
-                        },
-                        "Action": "sts:AssumeRole",
-                    }
-                ],
-            }
-        ),
-    )
+    _create_role(ctx, connection_role, ctx.materialized_principal)
 
-    # Start Materialize.
-    materialized = Materialized(
-        environment_extra=[
-            "AWS_DEFAULT_REGION=us-east-1",
-            "AWS_ACCESS_KEY_ID",
-            "AWS_PROFILE",
-            "AWS_SECRET_ACCESS_KEY",
-            "AWS_SESSION_TOKEN",
-        ],
-        volumes_extra=[
-            # Mounting the .aws directory in the container allows Materialize to
-            # use SSO credentials, which makes it easier to run this composition
-            # locally. CI doesn't need this.
-            "~/.aws:/home/materialize/.aws",
-        ],
-        options=[
-            f"--aws-connection-role-arn={connection_role_arn}",
-            f"--aws-external-id-prefix={AWS_EXTERNAL_ID_PREFIX}",
-        ],
-    )
-    with c.override(materialized):
-        # (Re)start Materialize and enable AWS connections.
-        c.down()
-        c.up("materialized")
-        c.sql(
-            port=6877,
-            user="mz_system",
-            sql="""
-            ALTER SYSTEM SET enable_connection_validation_syntax = true;
-            """,
+    try:
+        # Start Materialize.
+        materialized = Materialized(
+            environment_extra=[
+                "AWS_DEFAULT_REGION=us-east-1",
+                "AWS_ACCESS_KEY_ID",
+                "AWS_PROFILE",
+                "AWS_SECRET_ACCESS_KEY",
+                "AWS_SESSION_TOKEN",
+            ],
+            volumes_extra=[
+                # Mounting the .aws directory in the container allows Materialize to
+                # use SSO credentials, which makes it easier to run this composition
+                # locally. CI doesn't need this.
+                "~/.aws:/home/materialize/.aws",
+            ],
+            options=[
+                f"--aws-connection-role-arn={connection_role_arn}",
+                f"--aws-external-id-prefix={AWS_EXTERNAL_ID_PREFIX}",
+            ],
         )
+        with c.override(materialized):
+            # (Re)start Materialize and enable AWS connections.
+            c.down()
+            c.up("materialized")
+            c.sql(
+                port=6877,
+                user="mz_system",
+                sql="""
+                ALTER SYSTEM SET enable_connection_validation_syntax = true;
+                """,
+            )
 
-        for fn in [test_credentials, test_assume_role]:
-            with c.test_case(fn.__name__):
-                fn(c, ctx)
+            for fn in [test_credentials, test_assume_role]:
+                with c.test_case(fn.__name__):
+                    fn(c, ctx)
+    finally:
+        _delete_role(ctx, connection_role)
 
 
 def test_credentials(c: Composition, ctx: TestContext):
@@ -148,10 +135,12 @@ def test_credentials(c: Composition, ctx: TestContext):
     c.sql(f"ALTER SECRET aws_secret_access_key AS '{bad_secret_access_key}'")
     try:
         c.sql("VALIDATE CONNECTION aws_credentials")
-    except ProgrammingError as e:
-        assert "SignatureDoesNotMatch" in e.args[0]["M"]
+    except SystemError as e:
+        assert (
+            e.diag.message_primary and "SignatureDoesNotMatch" in e.diag.message_primary
+        ), e
     else:
-        assert False, "connection validation unexpectedly succeeded"
+        raise RuntimeError("connection validation unexpectedly succeeded")
 
     # Changing the access key to a nonexistent access key should fail with an
     # invalid client ID error.
@@ -160,10 +149,12 @@ def test_credentials(c: Composition, ctx: TestContext):
     )
     try:
         c.sql("VALIDATE CONNECTION aws_credentials")
-    except ProgrammingError as e:
-        assert "InvalidClientTokenId" in e.args[0]["M"]
+    except SystemError as e:
+        assert (
+            e.diag.message_primary and "InvalidClientTokenId" in e.diag.message_primary
+        ), e
     else:
-        assert False, "connection validation unexpectedly succeeded"
+        raise RuntimeError("connection validation unexpectedly succeeded")
 
 
 def test_assume_role(c: Composition, ctx: TestContext):
@@ -180,16 +171,63 @@ def test_assume_role(c: Composition, ctx: TestContext):
     # Ensure that validating the connection fails.
     try:
         c.sql("VALIDATE CONNECTION aws_assume_role")
-    except ProgrammingError as e:
-        assert "AccessDenied" in e.args[0]["M"]
+    except SystemError as e:
+        assert e.diag.message_primary and "AccessDenied" in e.diag.message_primary, e
     else:
-        assert False, "connection validation unexpectedly succeeded"
+        raise RuntimeError("connection validation unexpectedly succeeded")
 
     # Create the customer role, but incorrectly fail to constrain the
     # external ID.
     principal = c.sql_query(
         f"SELECT principal FROM mz_internal.mz_aws_connections WHERE id = '{connection_id}'"
     )[0][0]
+
+    _create_role(ctx, customer_role, principal)
+
+    # Wait for IAM to propagate.
+    c.sleep(ctx.iam_propagation_seconds)
+    try:
+        try:
+            c.sql("VALIDATE CONNECTION aws_assume_role")
+        except SystemError as e:
+            # Ensure the top line error message is exactly what we expect.
+            assert (
+                "role trust policy does not require an external ID"
+                == e.diag.message_primary
+            )
+            # We're not as prescriptive about the detail/hint fields. Just ensure
+            # that the details include the exact ARN of the connection's role and
+            # that the hint includes a link to further documentation.
+            assert (
+                e.diag.message_detail and customer_role_arn in e.diag.message_detail
+            ), e
+            assert (
+                e.diag.message_hint
+                and "https://materialize.com/s/aws-connection-role-trust-policy"
+                in e.diag.message_hint
+            ), e
+        else:
+            raise RuntimeError("connection validation unexpectedly succeeded")
+
+        # Update the customer role's trust policy to use Materialize's example.
+        trust_policy = c.sql_query(
+            f"SELECT example_trust_policy FROM mz_internal.mz_aws_connections WHERE id = '{connection_id}'"
+        )[0][0]
+        ctx.iam.update_assume_role_policy(
+            RoleName=customer_role,
+            PolicyDocument=json.dumps(trust_policy),
+        )
+
+        # Wait for IAM to propagate.
+        c.sleep(ctx.iam_propagation_seconds)
+
+        # Ensure that connection validation now succeeds.
+        c.sql("VALIDATE CONNECTION aws_assume_role")
+    finally:
+        _delete_role(ctx, customer_role)
+
+
+def _create_role(ctx: TestContext, customer_role: str, principal: str) -> None:
     ctx.iam.create_role(
         RoleName=customer_role,
         AssumeRolePolicyDocument=json.dumps(
@@ -208,36 +246,8 @@ def test_assume_role(c: Composition, ctx: TestContext):
         ),
     )
 
-    # Wait for IAM to propagate.
-    c.sleep(ctx.iam_propagation_seconds)
 
-    try:
-        c.sql("VALIDATE CONNECTION aws_assume_role")
-    except ProgrammingError as e:
-        # Ensure the top line error message is exactly what we expect.
-        assert "role trust policy does not require an external ID" == e.args[0]["M"]
-        # We're not as prescriptive about the detail/hint fields. Just ensure
-        # that the details include the exact ARN of the connection's role and
-        # that the hint includes a link to further documentation.
-        assert customer_role_arn in e.args[0]["D"]
-        assert (
-            "https://materialize.com/s/aws-connection-role-trust-policy"
-            in e.args[0]["H"]
-        )
-    else:
-        assert False, "connection validation unexpectedly succeeded"
-
-    # Update the customer role's trust policy to use Materialize's example.
-    trust_policy = c.sql_query(
-        f"SELECT example_trust_policy FROM mz_internal.mz_aws_connections WHERE id = '{connection_id}'"
-    )[0][0]
-    ctx.iam.update_assume_role_policy(
+def _delete_role(ctx: TestContext, customer_role: str) -> None:
+    ctx.iam.delete_role(
         RoleName=customer_role,
-        PolicyDocument=json.dumps(trust_policy),
     )
-
-    # Wait for IAM to propagate.
-    c.sleep(ctx.iam_propagation_seconds)
-
-    # Ensure that connection validation now succeeds.
-    c.sql("VALIDATE CONNECTION aws_assume_role")

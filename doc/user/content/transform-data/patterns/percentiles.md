@@ -18,7 +18,7 @@ Histograms have a lower memory footprint, linear to the number of _unique_ value
 
 Histograms reduce the memory footprint by tracking a count for each unique value, in a `bucket`, instead of tracking all values. Given an `input`, define the histogram for `values` as follows:
 
-```sql
+```mzsql
 CREATE VIEW histogram AS
 SELECT
   value AS bucket,
@@ -29,7 +29,7 @@ GROUP BY value;
 
 To query percentiles from the view `histogram`, it's no longer possible to just order the `values` and pick a value from the right spot. Instead, the distribution of values needs to be reconstructed. It is done by determining the cumulative count (the sum of counts up through each bucket that came before) for each `bucket`. This is accomplished through a cross-join in the following view:
 
-```sql
+```mzsql
 CREATE VIEW distribution AS
 SELECT
   h.bucket,
@@ -44,7 +44,7 @@ ORDER BY cumulative_distribution;
 
 The cumulative count and the cumulative distribution can then be used to query for arbitrary percentiles. The following query returns the 90-th percentile.
 
-```sql
+```mzsql
 SELECT bucket AS percentile
 FROM distribution
 WHERE cumulative_distribution >= 0.9
@@ -54,7 +54,7 @@ LIMIT 1;
 
 To increase query performance, it can make sense to keep the `distribution` always up to date by creating an index on the view:
 
-```sql
+```mzsql
 CREATE INDEX distribution_idx ON distribution (cumulative_distribution);
 ```
 
@@ -75,7 +75,7 @@ and the precision of the mantissa is then reduced to compute the respective buck
 
 The basic ideas of using histograms to compute percentiles remain the same; but determining the bucket becomes more involved because it’s now composed of the triple (sign, mantissa, exponent).
 
-```sql
+```mzsql
 -- precision for the representation of the mantissa in bits
 \set precision 4
 
@@ -91,7 +91,7 @@ GROUP BY sign, exponent, mantissa;
 
 The `hdr_distribution` view below reconstructs the `bucket` (with reduced precision), and determines the cumulative count and cumulative distribution.
 
-```sql
+```mzsql
 CREATE VIEW hdr_distribution AS
 SELECT
   h.sign*(1.0+h.mantissa/pow(2.0, :precision))*pow(2.0,h.exponent) AS bucket,
@@ -106,7 +106,7 @@ ORDER BY cumulative_distribution;
 
 This view can then be used to query _approximate_ percentiles. More precisely, the query returns the lower bound for the percentile (the next larger bucket represents the upper bound).
 
-```sql
+```mzsql
 SELECT bucket AS approximate_percentile
 FROM hdr_distribution
 WHERE cumulative_distribution >= 0.9
@@ -116,26 +116,26 @@ LIMIT 1;
 
 As with histograms, increase query performance by creating an index on the `cumulative_distribution` column.
 
-```sql
+```mzsql
 CREATE INDEX hdr_distribution_idx ON hdr_distribution (cumulative_distribution);
 ```
 
 
 ## Examples
 
-```sql
+```mzsql
 CREATE TABLE input (value BIGINT);
 ```
 
 Let's add the values 1 to 10 into the `input` table.
 
-```sql
+```mzsql
 INSERT INTO input SELECT n FROM generate_series(1,10) AS n;
 ```
 
 For small numbers, `distribution` and `hdr_distribution` are identical. Even in `hdr_distribution`, all numbers from 1 to 10 are stored in their own buckets.
 
-```sql
+```mzsql
 SELECT * FROM hdr_distribution;
 
  bucket | frequency | cumulative_frequency | cumulative_distribution
@@ -155,13 +155,13 @@ SELECT * FROM hdr_distribution;
 
 But if values grow larger, buckets can contain more than one value. Let's see what happens if more values are added to the `input` table.
 
-```sql
+```mzsql
 INSERT INTO input SELECT n FROM generate_series(11,10001) AS n;
 ```
 
 In the case of the `hdr_distribution`, a single bucket represents up to 512 distinct values, whereas each bucket of the `distribution` contains only a single value.
 
-```sql
+```mzsql
 SELECT * FROM hdr_distribution ORDER BY cumulative_distribution;
 
  bucket | frequency | cumulative_frequency |          cumulative_distribution
@@ -184,7 +184,7 @@ SELECT * FROM hdr_distribution ORDER BY cumulative_distribution;
 
 Note that `hdr_distribution` only contains 163 rows as opposed to the 10001 rows of `distribution`, which is used in the histogram approach. However, when querying for the 90-th percentile, the query returns an approximate percentile of `8704` (or more precisely between `8704`and `9216`) whereas the precise percentile is `9001`.
 
-```sql
+```mzsql
 SELECT bucket AS approximate_percentile
 FROM hdr_distribution
 WHERE cumulative_distribution >= 0.9

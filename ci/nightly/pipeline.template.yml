@@ -7,65 +7,94 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# Default priority, just set to be explicit
+priority: 0
+
+env:
+  CI_BAZEL_BUILD: 1
+  CI_BAZEL_REMOTE_CACHE: $BAZEL_REMOTE_CACHE
+
 steps:
   - group: Builds
     key: builds
     steps:
-      - id: build-aarch64
-        label: Build aarch64
-        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
+      - id: build-x86_64
+        label: ":bazel: Build x86_64"
+        command: bin/ci-builder run min bin/pyactivate -m ci.test.build
+        inputs:
+          - "*"
+        artifact_paths: bazel-explain.log
         depends_on: []
         timeout_in_minutes: 60
-        # For releases we trigger nightly from the test job directly, no need to build again
-        branches: "!v*.*"
         agents:
-          queue: builder-linux-aarch64
+          queue: builder-linux-x86_64
+
+      - id: build-aarch64
+        label: ":bazel: Build aarch64"
+        command: bin/ci-builder run min bin/pyactivate -m ci.test.build
+        inputs:
+          - "*"
+        artifact_paths: bazel-explain.log
+        depends_on: []
+        timeout_in_minutes: 60
+        agents:
+          queue: builder-linux-aarch64-mem
 
   - group: Linters
     key: linters
     steps:
       - id: closed-issues-detect
-        timeout_in_minutes: 10
+        timeout_in_minutes: 30
         label: Detect references to already closed issues
         command: bin/ci-builder run stable bin/ci-closed-issues-detect
         depends_on: []
         agents:
-          queue: linux-aarch64-small
-        branches: "!v*.*"
+          queue: hetzner-aarch64-4cpu-8gb
+        branches: "main"
         sanitizer: skip
 
       - id: unused-deps
         label: Unused dependencies
         command: bin/ci-builder run nightly bin/unused-deps
         depends_on: []
-        timeout_in_minutes: 30
+        timeout_in_minutes: 45
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
+        sanitizer: skip
+
+      - id: cargo-deny-check-advisories
+        label: Security advisories
+        command: bin/ci-builder run stable cargo deny check advisories
+        depends_on: []
+        timeout_in_minutes: 20
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
         sanitizer: skip
 
   - id: miri-test
-    label: Miri test (full)
+    label: ":rust: Miri test (full)"
     depends_on: []
     timeout_in_minutes: 600
+    env:
+      CI_BAZEL_BUILD: 0
     plugins:
-      - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: cargo-test
           args: [--miri-full]
     agents:
-      queue: builder-linux-aarch64
+      queue: hetzner-aarch64-16cpu-32gb
     sanitizer: skip
 
   - group: Benchmarks
     key: benchmark
     steps:
       - id: feature-benchmark
-        label: "Feature benchmark against merge base or 'latest' %N"
-        depends_on: build-aarch64
+        label: "Feature benchmark against merge base or 'latest'"
+        depends_on: build-x86_64
         timeout_in_minutes: 720
         parallelism: 8
         agents:
-          queue: linux-aarch64-large
+          queue: hetzner-x86-64-dedi-8cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: feature-benchmark
@@ -75,10 +104,11 @@ steps:
                 - common-ancestor
       - id: scalability-benchmark-dml-dql
         label: "Scalability benchmark (read & write) against merge base or 'latest'"
-        depends_on: build-aarch64
-        timeout_in_minutes: 180
+        depends_on: build-x86_64
+        timeout_in_minutes: 240
         agents:
-          queue: linux-aarch64
+          # Larger instance is more stable in performance
+          queue: hetzner-x86-64-dedi-8cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: scalability
@@ -95,10 +125,11 @@ steps:
                 - "256"
       - id: scalability-benchmark-ddl
         label: "Scalability benchmark (DDL) against merge base or 'latest'"
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         timeout_in_minutes: 1200
         agents:
-          queue: linux-aarch64
+          # Larger instance is more stable in performance
+          queue: hetzner-x86-64-dedi-16cpu-64gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: scalability
@@ -119,10 +150,11 @@ steps:
                 - "64"
       - id: scalability-benchmark-connection
         label: "Scalability benchmark (connection) against merge base or 'latest'"
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         timeout_in_minutes: 180
         agents:
-          queue: linux-aarch64-large
+          # Larger instance is more stable in performance
+          queue: hetzner-x86-64-dedi-16cpu-64gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: scalability
@@ -139,6 +171,19 @@ steps:
                 - "2.5"
                 - --max-concurrency
                 - "2048"
+      - id: parallel-benchmark
+        label: "Parallel Benchmark"
+        depends_on: build-x86_64
+        timeout_in_minutes: 120
+        agents:
+          # Larger instance is more stable in performance
+          queue: hetzner-x86-64-dedi-16cpu-64gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-benchmark
+              args:
+                - --other-tag
+                - common-ancestor
 
   - group: Kafka
     key: kafka
@@ -146,9 +191,10 @@ steps:
       - id: kafka-matrix
         label: Kafka smoke test against previous Kafka versions
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
+        parallelism: 2
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: kafka-matrix
@@ -158,10 +204,22 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: kafka-multi-broker
+
+      - id: redpanda-resumption
+        label: ":panda_face: resumption tests"
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: kafka-resumption
+              args: [--redpanda]
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+
 
   - group: Testdrive
     key: testdrive
@@ -171,34 +229,19 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
-          - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
               composition: testdrive
               args: [--redpanda]
-
-      - id: redpanda-testdrive-aarch64
-        label: ":panda_face: :racing_car: testdrive aarch64"
-        depends_on: build-aarch64
-        timeout_in_minutes: 180
-        agents:
-          queue: linux-aarch64
-        plugins:
-          - ./ci/plugins/scratch-aws-access: ~
-          - ./ci/plugins/mzcompose:
-              composition: testdrive
-              args: [--redpanda]
-        skip: "Disabled due to taking too long for the value provided"
 
       - id: testdrive-partitions-5
         label: ":racing_car: testdrive with --kafka-default-partitions 5"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
-          - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
               composition: testdrive
               args: [--kafka-default-partitions=5]
@@ -208,9 +251,8 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
-          queue: linux-aarch64-large
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
-          - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
               composition: testdrive
               args: [--replicas=4]
@@ -220,9 +262,8 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 360
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
-          - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
               composition: testdrive
               args: [--default-size=1]
@@ -232,81 +273,89 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
-          queue: linux-aarch64-large
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
-          - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
               composition: testdrive
               args: [--default-size=8]
-
-      - id: testdrive-structured-persist
-        label: ":racing_car: testdrive with Structured Persist"
-        depends_on: build-aarch64
-        timeout_in_minutes: 180
-        agents:
-          queue: linux-aarch64-large
-        plugins:
-          - ./ci/plugins/scratch-aws-access: ~
-          - ./ci/plugins/mzcompose:
-              composition: testdrive
-              args: [
-                --system-param=persist_part_decode_format=row_with_validate,
-                --system-param=persist_batch_columnar_format=both,
-              ]
-
-      - id: testdrive-in-cloudtest
-        label: Full Testdrive in Cloudtest (K8s)
-        depends_on: build-aarch64
-        timeout_in_minutes: 300
-        env:
-          CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
-        agents:
-          queue: linux-aarch64-large
-        plugins:
-          - ./ci/plugins/scratch-aws-access: ~
-          - ./ci/plugins/cloudtest:
-              args: [-m=long, test/cloudtest/test_full_testdrive.py]
-        sanitizer: skip
 
       - id: persistence-testdrive
         label: ":racing_car: testdrive with --persistent-user-tables"
         depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
-          - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
               composition: testdrive
               args: [--persistent-user-tables]
         skip: "Persistence tests disabled"
+
+      - id: azurite-testdrive
+        label: "testdrive with :azure: blob store"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: testdrive
+              args: [--azurite]
+
+      - id: azurite-testdrive-size-8
+        label: ":racing_car: testdrive with SIZE 8 and :azure: blob store"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: testdrive
+              args: [--default-size=8, --azurite]
+
+      - id: testdrive-in-cloudtest
+        label: "Full Testdrive in Cloudtest (K8s)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        parallelism: 2
+        env:
+          CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
+        agents:
+          # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
+          # queue: hetzner-aarch64-8cpu-16gb
+          queue: linux-aarch64-medium
+        plugins:
+          - ./ci/plugins/cloudtest:
+              # Uses .td-file based parallelism instead
+              args: [-m=long, test/cloudtest/test_full_testdrive.py, --no-test-parallelism]
+        sanitizer: skip
+
 
   - group: Limits
     key: limits-group
     steps:
       - id: limits
         label: "Product limits"
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         agents:
-          queue: linux-aarch64-large
+          queue: hetzner-x86-64-dedi-16cpu-64gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: limits
               run: main
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
+        parallelism: 2
 
       - id: limits-instance-size
         label: "Instance size limits"
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         agents:
-          # A larger instance is needed due to the
-          # many containers that are being created
-          queue: linux-aarch64-large
+          queue: hetzner-x86-64-dedi-8cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: limits
               run: instance-size
-        timeout_in_minutes: 50
+        timeout_in_minutes: 120
 
       - id: bounded-memory
         label: "Bounded Memory"
@@ -314,10 +363,30 @@ steps:
         timeout_in_minutes: 90
         parallelism: 2
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: bounded-memory
+      - id: bounded-memory-search
+        label: "Bounded Memory Search (materialized only)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 150
+        parallelism: 8
+        # disabled by default
+        skip: true
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: bounded-memory
+              run: minimization-search
+              args:
+                [
+                  --materialized-memory-search-step=0.3,
+                  --clusterd-memory-search-step=0,
+                  --materialized-memory-lower-bound-in-gb=0.5,
+                  --clusterd-memory-lower-bound-in-gb=0.5
+                ]
 
   - group: Upsert
     key: upsert
@@ -330,7 +399,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: upsert
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
 
       - id: upsert-compaction-disabled
         label: Upsert (compaction disabled)
@@ -341,7 +410,7 @@ steps:
               composition: upsert
               args: [--compaction-disabled]
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
 
   - id: ssh-connection-extended
     label: Extended SSH connection tests
@@ -352,7 +421,7 @@ steps:
           composition: ssh-connection
           args: [--extended]
     agents:
-      queue: linux-aarch64-small
+      queue: hetzner-aarch64-4cpu-8gb
 
   - group: Zippy
     key: zippy
@@ -362,73 +431,84 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
               args: [--scenario=KafkaSources, --actions=10000, --max-execution-time=30m]
+
+      - id: zippy-kafka-sources-azurite
+        label: "Zippy Kafka Sources with :azure: blob store"
+        depends_on: build-aarch64
+        timeout_in_minutes: 120
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: zippy
+              args: [--scenario=KafkaSources, --actions=10000, --max-execution-time=30m, --azurite]
 
       - id: zippy-kafka-parallel-insert
         label: "Zippy Kafka Parallel Insert"
         depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
               args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=10000, --max-execution-time=30m]
+
+      - id: zippy-kafka-parallel-insert-azurite
+        label: "Zippy Kafka Parallel Insert with :azurite: blob store"
+        depends_on: build-aarch64
+        timeout_in_minutes: 120
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: zippy
+              args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=10000, --max-execution-time=30m, --azurite]
 
       - id: zippy-user-tables
         label: "Zippy User Tables"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
-              args: [--scenario=UserTables, --actions=10000, --max-execution-time=30m]
-
-      - id: zippy-user-tables-txn-wal
-        label: "Zippy User Tables + toggle txn-wal"
-        depends_on: build-aarch64
-        timeout_in_minutes: 180
-        agents:
-          queue: linux-aarch64
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: zippy
-              args: [--scenario=UserTablesToggleTxnWal, --actions=10000, --max-execution-time=30m]
+              args: [--scenario=UserTables, --actions=10000, --max-execution-time=30m, --azurite]
 
       - id: zippy-postgres-cdc
         label: "Zippy Postgres CDC"
         depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
-              args: [--scenario=PostgresCdc, --actions=10000, --max-execution-time=30m]
+              args: [--scenario=PostgresCdc, --actions=10000, --max-execution-time=30m, --azurite]
 
       - id: zippy-mysql-cdc
         label: "Zippy MySQL CDC"
         depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
-              args: [--scenario=MySqlCdc, --actions=10000, --max-execution-time=30m]
+              args: [--scenario=MySqlCdc, --actions=10000, --max-execution-time=30m, --azurite]
 
       - id: zippy-debezium-postgres
         label: "Zippy Debezium Postgres"
         depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
@@ -439,7 +519,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
@@ -450,22 +530,132 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
-              args: [--scenario=KafkaSources, --actions=10000, --cockroach-tag=latest, --max-execution-time=30m]
+              # TODO: Reenable --cockroach-tag=latest when https://github.com/cockroachdb/cockroach/issues/136678 is fixed
+              args: [--scenario=KafkaSources, --actions=10000, --max-execution-time=30m]
 
       - id: zippy-alter-connection
         label: "Zippy w/ alter connection"
         depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
               args: [--scenario=AlterConnectionWithKafkaSources, --actions=10000, --max-execution-time=30m]
+
+  - group: CDC with old source syntax
+    key: cdc-old-source-syntax
+    steps:
+
+      - id: mysql-cdc-old-syntax
+        label: MySQL CDC tests (before source versioning)
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-cdc-old-syntax
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
+      - id: mysql-cdc-migration
+        label: MySQL CDC source-versioning migration tests
+        depends_on: build-aarch64
+        timeout_in_minutes: 360
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-cdc-old-syntax
+              run: migration
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
+      - id: mysql-cdc-resumption-old-syntax
+        label: MySQL CDC resumption tests (before source versioning)
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-cdc-resumption-old-syntax
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
+      - id: mysql-rtr-old-syntax
+        label: MySQL RTR tests (before source versioning)
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-rtr-old-syntax
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
+      - id: pg-cdc-old-syntax
+        label: Postgres CDC tests (before source versioning)
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: pg-cdc-old-syntax
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        # the mzbuild postgres version will be used, which depends on the Dockerfile specification
+
+      - id: pg-cdc-migration
+        label: Postgres CDC source-versioning migration tests
+        depends_on: build-aarch64
+        timeout_in_minutes: 360
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: pg-cdc-old-syntax
+              run: migration
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
+      - id: pg-cdc-resumption-old-syntax
+        label: Postgres CDC resumption tests (before source versioning)
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: pg-cdc-resumption-old-syntax
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
+      - id: pg-rtr-old-syntax
+        label: Postgres RTR tests (before source versioning)
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: pg-rtr-old-syntax
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
+      - id: testdrive-old-kafka-src-syntax
+        label: "Testdrive (before Kafka source versioning) with :azure: blob store"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: testdrive-old-kafka-src-syntax
+              args: [--azurite]
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+
+      - id: testdrive-kafka-migration
+        label: "Testdrive (before Kafka source versioning) migration tests"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: testdrive-old-kafka-src-syntax
+              run: migration
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
 
   - group: AWS
     key: aws
@@ -479,6 +669,7 @@ steps:
             - exit_status: 1
               limit: 1
         agents:
+          # Because of scratch-aws-access
           queue: linux-aarch64-small
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
@@ -490,7 +681,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: aws-localstack
@@ -500,7 +691,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: secrets-local-file
@@ -508,69 +699,58 @@ steps:
   - group: "Platform checks"
     key: platform-checks
     steps:
-      - id: checks-restart-cockroach
-        label: "Checks + restart Cockroach"
+      - id: checks-no-restart-no-upgrade-azurite
+        label: "Checks without restart or upgrade with :azure: blob store"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        inputs: [misc/python/materialize/checks]
+        timeout_in_minutes: 45
+        parallelism: 4
         agents:
-          # A larger instance is needed due to frequent OOMs
-          queue: linux-aarch64-large
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=RestartCockroach, "--seed=$BUILDKITE_JOB_ID"]
+              args: [--scenario=NoRestartNoUpgrade, "--seed=$BUILDKITE_JOB_ID", --azurite]
 
       - id: checks-restart-entire-mz
         label: "Checks + restart of the entire Mz"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 180
+        # Sometimes runs into query timeouts or entire test timeouts with parallelism 1, too much state, same in all other platform-checks
+        parallelism: 2
         agents:
-          # A larger instance is needed due to frequent OOMs
-          queue: linux-aarch64-large
+          # A larger instance is needed due to frequent OOMs, same in all other platform-checks
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=RestartEntireMz, "--seed=$BUILDKITE_JOB_ID"]
+              args: [--scenario=RestartEntireMz, "--seed=$BUILDKITE_JOB_ID", --azurite]
 
-      - id: checks-backup-restore-before-manipulate
-        label: "Checks backup + restore between the two manipulate()"
+      - id: checks-restart-environmentd-clusterd-storage-azurite
+        label: "Checks + restart of environmentd & storage clusterd with :azure: blob store"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        inputs: [misc/python/materialize/checks]
+        timeout_in_minutes: 45
+        parallelism: 4
         agents:
-          queue: linux-aarch64-large
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=BackupAndRestoreBeforeManipulate, "--seed=$BUILDKITE_JOB_ID"]
-
-      - id: checks-backup-restore-after-manipulate
-        label: "Checks backup + restore after manipulate()"
-        depends_on: build-aarch64
-        timeout_in_minutes: 60
-        agents:
-          queue: linux-aarch64-large
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=BackupAndRestoreAfterManipulate, "--seed=$BUILDKITE_JOB_ID"]
-
-      - id: checks-backup-multi
-        label: "Checks + multiple backups/restores"
-        depends_on: build-aarch64
-        timeout_in_minutes: 60
-        agents:
-          queue: linux-aarch64-large
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=BackupAndRestoreMulti, "--seed=$BUILDKITE_JOB_ID"]
+              args:
+                [
+                  --scenario=RestartEnvironmentdClusterdStorage,
+                  "--seed=$BUILDKITE_JOB_ID",
+                  --azurite,
+                ]
 
       - id: checks-backup-rollback
         label: "Checks + backup + rollback to previous"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 180
+        parallelism: 2
         agents:
-          queue: linux-aarch64-large
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -579,252 +759,193 @@ steps:
       - id: checks-parallel-drop-create-default-replica
         label: "Checks parallel + DROP/CREATE replica"
         depends_on: build-aarch64
-        skip: "Affected by #23882"
-        timeout_in_minutes: 60
+        timeout_in_minutes: 180
+        parallelism: 2
         agents:
-          queue: linux-aarch64-large
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=DropCreateDefaultReplica, --execution-mode=parallel]
+              args: [--scenario=DropCreateDefaultReplica, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-restart-clusterd-compute
         label: "Checks parallel + restart compute clusterd"
         depends_on: build-aarch64
-        skip: "Affected by #23882"
-        timeout_in_minutes: 60
+        timeout_in_minutes: 180
+        parallelism: 2
         agents:
-          queue: linux-aarch64-large
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=RestartClusterdCompute, --execution-mode=parallel]
+              args: [--scenario=RestartClusterdCompute, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-restart-entire-mz
         label: "Checks parallel + restart of the entire Mz"
         depends_on: build-aarch64
-        skip: "Affected by #23882"
-        timeout_in_minutes: 60
+        timeout_in_minutes: 180
+        parallelism: 2
         agents:
-          queue: linux-aarch64-large
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=RestartEntireMz, --execution-mode=parallel]
+              args: [--scenario=RestartEntireMz, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-restart-environmentd-clusterd-storage
         label: "Checks parallel + restart of environmentd & storage clusterd"
         depends_on: build-aarch64
-        skip: "Affected by #23882"
-        timeout_in_minutes: 60
+        timeout_in_minutes: 180
+        parallelism: 2
         agents:
-          queue: linux-aarch64-large
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=RestartEnvironmentdClusterdStorage, --execution-mode=parallel]
+              args: [--scenario=RestartEnvironmentdClusterdStorage, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-kill-clusterd-storage
         label: "Checks parallel + kill storage clusterd"
         depends_on: build-aarch64
-        skip: "Affected by #23882"
-        timeout_in_minutes: 60
+        timeout_in_minutes: 180
+        parallelism: 2
         agents:
-          queue: linux-aarch64-large
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=KillClusterdStorage, --execution-mode=parallel]
-
-      - id: checks-parallel-restart-redpanda
-        label: "Checks parallel + restart Redpanda & Debezium"
-        depends_on: build-aarch64
-        skip: "Affected by #23882"
-        timeout_in_minutes: 60
-        agents:
-          queue: linux-aarch64-large
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=RestartRedpandaDebezium, --execution-mode=parallel]
+              args: [--scenario=KillClusterdStorage, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-upgrade-entire-mz
         label: "Checks upgrade, whole-Mz restart"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 180
+        parallelism: 2
         agents:
-          queue: linux-aarch64-large
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=UpgradeEntireMz]
+              args: [--scenario=UpgradeEntireMz, "--seed=$BUILDKITE_JOB_ID"]
 
-      - id: checks-preflight-check-continue
-        label: "Checks preflight-check and continue upgrade"
+      - id: checks-lts-upgrade
+        label: "Checks LTS upgrade, whole-Mz restart"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 180
+        parallelism: 2
         agents:
-          queue: linux-aarch64-large
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=PreflightCheckContinue]
+              args: [--scenario=UpgradeEntireMzFromLatestLTS, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-preflight-check-rollback
         label: "Checks preflight-check and roll back upgrade"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 180
+        parallelism: 2
         agents:
-          queue: linux-aarch64-large
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=PreflightCheckRollback]
+              args: [--scenario=PreflightCheckRollback, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-upgrade-entire-mz-two-versions
         label: "Checks upgrade across two versions"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 180
+        parallelism: 2
         agents:
-          queue: linux-aarch64-large
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=UpgradeEntireMzTwoVersions]
+              args: [--scenario=UpgradeEntireMzTwoVersions, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-upgrade-entire-mz-four-versions
         label: "Checks upgrade across four versions"
         depends_on: build-aarch64
-        timeout_in_minutes: 90
+        timeout_in_minutes: 180
+        parallelism: 2
         agents:
-          queue: linux-aarch64-large
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=UpgradeEntireMzFourVersions]
+              args: [--scenario=UpgradeEntireMzFourVersions, "--seed=$BUILDKITE_JOB_ID"]
 
-      - id: checks-upgrade-clusterd-compute-first
-        label: "Platform checks upgrade, restarting compute clusterd first"
+      - id: checks-0dt-restart-entire-mz-forced-migrations
+        label: "Checks 0dt restart of the entire Mz with forced migrations"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 180
+        parallelism: 2
         agents:
-          queue: linux-aarch64-large
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=UpgradeClusterdComputeFirst]
+              args: [--scenario=ZeroDowntimeRestartEntireMzForcedMigrations, "--seed=$BUILDKITE_JOB_ID"]
 
-      - id: checks-upgrade-clusterd-compute-last
-        label: "Platform checks upgrade, restarting compute clusterd last"
+      - id: checks-0dt-upgrade-entire-mz
+        label: "Checks 0dt upgrade, whole-Mz restart"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
+        parallelism: 2
         agents:
-          queue: linux-aarch64-large
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=UpgradeClusterdComputeLast]
+              args: [--scenario=ZeroDowntimeUpgradeEntireMz, "--seed=$BUILDKITE_JOB_ID"]
 
-      - id: checks-kill-clusterd-storage
-        label: "Checks + kill storage clusterd"
+      - id: checks-0dt-upgrade-entire-mz-two-versions
+        label: "Checks 0dt upgrade across two versions"
         depends_on: build-aarch64
-        timeout_in_minutes: 45
+        timeout_in_minutes: 120
+        parallelism: 2
         agents:
-          queue: linux-aarch64-large
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=KillClusterdStorage, "--seed=$BUILDKITE_JOB_ID"]
+              args: [--scenario=ZeroDowntimeUpgradeEntireMzTwoVersions, "--seed=$BUILDKITE_JOB_ID"]
 
-      - id: checks-restart-source-postgres
-        label: "Checks + restart source Postgres"
+      - id: checks-0dt-upgrade-entire-mz-four-versions
+        label: "Checks 0dt upgrade across four versions"
         depends_on: build-aarch64
-        timeout_in_minutes: 45
+        timeout_in_minutes: 120
+        parallelism: 2
         agents:
-          queue: linux-aarch64-large
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=RestartSourcePostgres, --check=PgCdc, --check=PgCdcNoWait, --check=PgCdcMzNow, --check=SshPg]
+              args: [--scenario=ZeroDowntimeUpgradeEntireMzFourVersions, "--seed=$BUILDKITE_JOB_ID"]
 
-      - id: checks-restart-clusterd-compute
-        label: "Checks + restart clusterd compute"
-        depends_on: build-aarch64
-        timeout_in_minutes: 45
+      - id: checks-0dt-bump-version
+        label: "Checks 0dt upgrade to a bumped version"
+        depends_on: build-x86_64
+        timeout_in_minutes: 240
         agents:
-          queue: linux-aarch64-large
+          queue: hetzner-x86-64-dedi-32cpu-128gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=RestartClusterdCompute, "--seed=$BUILDKITE_JOB_ID"]
-
-      - id: checks-drop-create-default-replica
-        label: "Checks + DROP/CREATE replica"
-        depends_on: build-aarch64
-        timeout_in_minutes: 45
-        agents:
-          # Seems to require more memory on aarch64
-          queue: linux-aarch64-large
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=DropCreateDefaultReplica, "--seed=$BUILDKITE_JOB_ID"]
-
-      - id: checks-txn-wal-toggle
-        label: "Checks + Toggle txn_wal"
-        depends_on: build-aarch64
-        timeout_in_minutes: 60
-        agents:
-          # Seems to require more memory on aarch64
-          queue: linux-aarch64-large
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=TxnWalToggle, "--seed=$BUILDKITE_JOB_ID"]
-
-      - id: checks-txn-wal-fencing
-        label: "Checks + txn_wal fencing"
-        depends_on: build-aarch64
-        timeout_in_minutes: 45
-        agents:
-          queue: linux-aarch64-large
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=TxnWalFencing, "--seed=$BUILDKITE_JOB_ID"]
-
-      - id: checks-toggle-persist-roundtrip-spine
-        label: "Checks toggling persist roundtrip spine"
-        depends_on: build-aarch64
-        timeout_in_minutes: 45
-        agents:
-          queue: linux-aarch64-large
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=TogglePersistRoundtripSpine, "--seed=$BUILDKITE_JOB_ID"]
-
-      - id: checks-toggle-persist-batch-columnar-format
-        label: "Checks toggling persist batch columnar format"
-        depends_on: build-aarch64
-        timeout_in_minutes: 45
-        agents:
-          queue: linux-aarch64-large
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=TogglePersistBatchColumnarFormat, "--seed=$BUILDKITE_JOB_ID"]
+              args: [--scenario=ZeroDowntimeBumpedVersion, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: cloudtest-upgrade
         label: "Platform checks upgrade in Cloudtest/K8s"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 240
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
         agents:
-          queue: linux-aarch64-large
+          # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
+          # queue: hetzner-aarch64-8cpu-16gb
+          queue: linux-aarch64-medium
         plugins:
-          - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/cloudtest:
               args: [-m=long, test/cloudtest/test_upgrade.py]
         sanitizer: skip
@@ -835,13 +956,17 @@ steps:
       - id: k8s-node-recovery-storage-on-failing
         label: "K8s recovery: storage on failing node"
         depends_on: build-aarch64
-        timeout_in_minutes: 30
-        # TODO: #25108 (k8s node recovery tests flaky)
+        timeout_in_minutes: 60
+        # TODO: database-issues#7499 (k8s node recovery tests flaky)
         retry:
           automatic:
             - exit_status: 1
               limit: 2
+            - exit_status: 255
+              limit: 2
         agents:
+          # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
+          # queue: hetzner-aarch64-8cpu-16gb
           queue: linux-aarch64
         inputs:
           - test/cloudtest
@@ -850,22 +975,24 @@ steps:
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster-node-recovery-test.yaml"
         plugins:
-          - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/cloudtest:
-              args: [--exitfirst, -k=test_unreplicated_storage_cluster_on_failing_node, --aws-region=us-east-1, --apply-node-selectors, test/cloudtest]
+              args: [--exitfirst, -k=test_unreplicated_storage_cluster_on_failing_node, --apply-node-selectors, test/cloudtest]
         sanitizer: skip
 
       - id: k8s-node-recovery-compute-on-failing
         label: "K8s recovery: compute on failing node"
         depends_on: build-aarch64
-        timeout_in_minutes: 30
-        # TODO: #25108 (k8s node recovery tests flaky)
+        timeout_in_minutes: 60
+        # TODO: database-issues#7499 (k8s node recovery tests flaky)
         retry:
           automatic:
             - exit_status: 1
-              limit:
-                1
+              limit: 2
+            - exit_status: 255
+              limit: 2
         agents:
+          # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
+          # queue: hetzner-aarch64-8cpu-16gb
           queue: linux-aarch64
         inputs:
           - test/cloudtest
@@ -874,21 +1001,24 @@ steps:
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster-node-recovery-test.yaml"
         plugins:
-          - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/cloudtest:
-              args: [--exitfirst, -k=test_unreplicated_compute_cluster_on_failing_node, --aws-region=us-east-1, --apply-node-selectors, test/cloudtest]
+              args: [--exitfirst, -k=test_unreplicated_compute_cluster_on_failing_node, --apply-node-selectors, test/cloudtest]
         sanitizer: skip
 
       - id: k8s-node-recovery-replicated-compute-on-failing
         label: "K8s recovery: replicated compute on failing node"
         depends_on: build-aarch64
-        timeout_in_minutes: 30
-        # TODO: #25108 (k8s node recovery tests flaky)
+        timeout_in_minutes: 60
+        # TODO: database-issues#7499 (k8s node recovery tests flaky)
         retry:
           automatic:
             - exit_status: 1
-              limit: 1
+              limit: 2
+            - exit_status: 255
+              limit: 2
         agents:
+          # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
+          # queue: hetzner-aarch64-8cpu-16gb
           queue: linux-aarch64
         inputs:
           - test/cloudtest
@@ -897,21 +1027,24 @@ steps:
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster-node-recovery-test.yaml"
         plugins:
-          - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/cloudtest:
-              args: [--exitfirst, -k=test_replicated_compute_cluster_on_failing_node, --aws-region=us-east-1, --apply-node-selectors, test/cloudtest]
+              args: [--exitfirst, -k=test_replicated_compute_cluster_on_failing_node, --apply-node-selectors, test/cloudtest]
         sanitizer: skip
 
       - id: k8s-node-recovery-envd-on-failing
         label: "K8s recovery: envd on failing node"
         depends_on: build-aarch64
-        timeout_in_minutes: 30
-        # TODO: #25108 (k8s node recovery tests flaky)
+        timeout_in_minutes: 60
+        # TODO: database-issues#7499 (k8s node recovery tests flaky)
         retry:
           automatic:
             - exit_status: 1
-              limit: 1
+              limit: 2
+            - exit_status: 255
+              limit: 2
         agents:
+          # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
+          # queue: hetzner-aarch64-8cpu-16gb
           queue: linux-aarch64
         inputs:
           - test/cloudtest
@@ -920,9 +1053,8 @@ steps:
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster-node-recovery-test.yaml"
         plugins:
-          - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/cloudtest:
-              args: [--exitfirst, -k=test_envd_on_failing_node, --aws-region=us-east-1, --apply-node-selectors, test/cloudtest]
+              args: [--exitfirst, -k=test_envd_on_failing_node, --apply-node-selectors, test/cloudtest]
         sanitizer: skip
 
   - group: Persist
@@ -931,21 +1063,21 @@ steps:
       - id: persist-maelstrom
         label: Maelstrom coverage of persist
         depends_on: build-aarch64
-        timeout_in_minutes: 30
+        timeout_in_minutes: 40
         artifact_paths: [test/persist/maelstrom/**/*.log]
         plugins:
           - ./ci/plugins/mzcompose:
               composition: persist
               args: [--consensus=mem, --blob=mem]
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
 
       - id: persist-maelstrom-single-node
         label: Long single-node Maelstrom coverage of persist
         depends_on: build-aarch64
-        timeout_in_minutes: 20
+        timeout_in_minutes: 40
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         artifact_paths: [test/persist/maelstrom/**/*.log]
         plugins:
           - ./ci/plugins/mzcompose:
@@ -955,9 +1087,9 @@ steps:
       - id: persist-maelstrom-multi-node
         label: Long multi-node Maelstrom coverage of persist with postgres consensus
         depends_on: build-aarch64
-        timeout_in_minutes: 20
+        timeout_in_minutes: 40
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         artifact_paths: [test/persist/maelstrom/**/*.log]
         plugins:
           - ./ci/plugins/mzcompose:
@@ -967,9 +1099,9 @@ steps:
       - id: txn-wal-maelstrom
         label: Maelstrom coverage of txn-wal
         depends_on: build-aarch64
-        timeout_in_minutes: 30
+        timeout_in_minutes: 40
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-8cpu-16gb
         artifact_paths: [test/persist/maelstrom/**/*.log]
         plugins:
           - ./ci/plugins/mzcompose:
@@ -981,7 +1113,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: persistence
@@ -996,7 +1128,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sql-feature-flags
@@ -1006,35 +1138,86 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
+          # Requires LAUNCHDARKLY_API_TOKEN
           queue: linux-aarch64-small
         plugins:
           - ./ci/plugins/mzcompose:
               composition: launchdarkly
 
-  - id: cloud-canary
-    label: "Canary Deploy in Staging Cloud"
-    depends_on: build-aarch64
-    timeout_in_minutes: 1200
-    concurrency: 1
-    concurrency_group: 'cloud-canary'
-    agents:
-      queue: linux-aarch64-small
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: cloud-canary
-    branches: "main v*.*"
+  - group: E2E
+    key: e2e
+    steps:
+    - id: cloud-canary
+      label: "Canary Deploy in Staging Cloud"
+      depends_on: build-aarch64
+      timeout_in_minutes: 1200
+      concurrency: 1
+      concurrency_group: 'cloud-canary'
+      agents:
+        queue: linux-aarch64-small
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: cloud-canary
+      branches: "main v*.*"
 
-  - id: mz-e2e
-    label: "Mz E2E Test"
-    depends_on: build-aarch64
-    timeout_in_minutes: 1200
-    concurrency: 1
-    concurrency_group: 'mz-e2e'
-    agents:
-      queue: linux-aarch64-small
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: mz-e2e
+    - id: mz-e2e
+      label: "Mz E2E Test"
+      depends_on: build-aarch64
+      timeout_in_minutes: 1200
+      concurrency: 1
+      concurrency_group: 'mz-e2e'
+      agents:
+        # Requires real Mz access, CONFLUENT_CLOUD_DEVEX_KAFKA_USERNAME, etc.
+        queue: linux-aarch64-small
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: mz-e2e
+
+    - id: terraform-aws
+      label: "Terraform + Helm Chart E2E on AWS"
+      artifact_paths: [test/terraform/aws-temporary/terraform.tfstate, "mz-debug/**/*"]
+      depends_on: build-aarch64
+      timeout_in_minutes: 120
+      concurrency: 1
+      concurrency_group: 'terraform-aws'
+      agents:
+        queue: linux-aarch64-small
+      plugins:
+        - ./ci/plugins/scratch-aws-access: ~
+        - ./ci/plugins/mzcompose:
+            composition: terraform
+            run: aws-temporary
+      branches: "main v*.* lts-v* *aws* *tf* *terraform* *helm* *self-managed*"
+
+    - id: terraform-gcp
+      label: "Terraform + Helm Chart E2E on GCP"
+      artifact_paths: [test/terraform/gcp-temporary/terraform.tfstate, "mz-debug/**/*"]
+      depends_on: build-aarch64
+      timeout_in_minutes: 120
+      concurrency: 1
+      concurrency_group: 'terraform-gcp'
+      agents:
+        queue: linux-aarch64-small
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: terraform
+            run: gcp-temporary
+      branches: "main v*.* lts-v* *gcp* *tf* *terraform* *helm* *self-managed*"
+
+    - id: terraform-azure
+      label: "Terraform + Helm Chart E2E on Azure"
+      artifact_paths: [test/terraform/azure-temporary/terraform.tfstate, "mz-debug/**/*"]
+      depends_on: build-aarch64
+      timeout_in_minutes: 120
+      concurrency: 1
+      concurrency_group: 'terraform-azure'
+      agents:
+        queue: linux-aarch64-small
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: terraform
+            run: azure-temporary
+      branches: "main v*.* lts-v* *azure* *tf* *terraform* *helm* *self-managed*"
 
   - group: "Output consistency"
     key: output-consistency
@@ -1044,44 +1227,60 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: output-consistency
               args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200"]
+        skip: "too flaky currently, find better way to ignore known issues"
 
       - id: output-consistency-postgres
         label: "Output consistency (Postgres)"
         depends_on: build-aarch64
         timeout_in_minutes: 58
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: postgres-consistency
               args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200"]
+        skip: "too flaky currently, find better way to ignore known issues"
 
       - id: output-consistency-version-dfr
         label: "Output consistency (version for DFR)"
         depends_on: build-aarch64
         timeout_in_minutes: 58
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: version-consistency
-              args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200", "--evaluation-strategy=dataflow_rendering"]
+              args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200", "--evaluation-strategy=dataflow_rendering", "--other-tag=common-ancestor"]
+        skip: "too flaky currently, find better way to ignore known issues"
 
       - id: output-consistency-version-ctf
         label: "Output consistency (version for CTF)"
         depends_on: build-aarch64
         timeout_in_minutes: 58
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: version-consistency
-              args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200", "--evaluation-strategy=constant_folding"]
+              args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200", "--evaluation-strategy=constant_folding", "--other-tag=common-ancestor"]
+        skip: "too flaky currently, find better way to ignore known issues"
+
+      - id: output-consistency-feature-flags-dfr
+        label: "Output consistency (feature-flags for DFR)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 58
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: feature-flag-consistency
+              args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200", "--evaluation-strategy=dataflow_rendering"]
+        skip: "too flaky currently, find better way to ignore known issues"
 
 
   - group: SQLsmith
@@ -1092,24 +1291,22 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlsmith
-              # TODO(def-) Increase number of joins when #23451 is fixed
-              args: [--max-joins=1, --runtime=1500]
+              args: [--max-joins=2, --runtime=1500]
 
       - id: sqlsmith-explain
         label: "SQLsmith explain"
         depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlsmith
-              # TODO(def-) Increase number of joins when #23451 is fixed
-              args: [--max-joins=5, --explain-only, --runtime=1500]
+              args: [--max-joins=15, --explain-only, --runtime=1500]
 
   - group: SQLancer
     key: sqlancer
@@ -1119,7 +1316,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 40
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlancer
@@ -1130,7 +1327,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 40
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlancer
@@ -1141,7 +1338,8 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 40
         agents:
-          queue: linux-aarch64-small
+          # Ran out of memory retrieving query results.
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlancer
@@ -1152,7 +1350,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 40
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlancer
@@ -1166,7 +1364,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 45
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: rqg
@@ -1175,10 +1373,10 @@ steps:
       - id: rqg-db3-joins
         label: "RQG dbt3-joins workload"
         depends_on: build-aarch64
-        timeout_in_minutes: 45
+        timeout_in_minutes: 60
         agents:
-          # Runs into timeout on small agents
-          queue: linux-aarch64
+          # Runs into timeout/OoM on small agents
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: rqg
@@ -1187,10 +1385,10 @@ steps:
       - id: rqg-lateral-joins
         label: "RQG lateral-joins workload"
         depends_on: build-aarch64
-        skip: "flaky until #25865 is fixed"
+        skip: "flaky until database-issues#7713 is fixed"
         timeout_in_minutes: 45
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: rqg
@@ -1201,7 +1399,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 45
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: rqg
@@ -1210,9 +1408,10 @@ steps:
       - id: rqg-window-functions
         label: "RQG window functions workload"
         depends_on: build-aarch64
+        skip: "flaky until database-issues#8366 is fixed"
         timeout_in_minutes: 45
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: rqg
@@ -1221,10 +1420,10 @@ steps:
       - id: rqg-wmr
         label: "RQG WMR workload"
         depends_on: build-aarch64
-        skip: "flaky until #24904 is fixed"
+        skip: "flaky until database-issues#7433 is fixed"
         timeout_in_minutes: 45
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: rqg
@@ -1237,7 +1436,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: rqg
@@ -1248,7 +1447,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 45
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: rqg
@@ -1259,7 +1458,7 @@ steps:
     depends_on: build-aarch64
     timeout_in_minutes: 30
     agents:
-      queue: linux-aarch64-small
+      queue: hetzner-aarch64-4cpu-8gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: crdb-restarts
@@ -1267,9 +1466,9 @@ steps:
   - id: pubsub-disruption
     label: "PubSub disruption"
     depends_on: build-aarch64
-    timeout_in_minutes: 15
+    timeout_in_minutes: 60
     agents:
-      queue: linux-aarch64
+      queue: hetzner-aarch64-8cpu-16gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: pubsub-disruption
@@ -1277,27 +1476,57 @@ steps:
   - id: retain-history
     label: "Check retain history"
     depends_on: build-aarch64
-    skip: "#24479"
-    timeout_in_minutes: 15
+    skip: "database-issues#7310"
+    timeout_in_minutes: 30
     agents:
-      queue: linux-aarch64
+      queue: hetzner-aarch64-8cpu-16gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: retain-history
 
-  - id: data-ingest
-    label: "Data Ingest"
-    depends_on: build-aarch64
-    timeout_in_minutes: 60
-    retry:
-      automatic:
-        - exit_status: 75
-          limit: 1
-    agents:
-      queue: linux-aarch64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: data-ingest
+  - group: "Data Ingest"
+    key: data-ingest
+    steps:
+    - id: data-ingest-1-replica
+      label: "Data Ingest (1 replica)"
+      depends_on: build-aarch64
+      timeout_in_minutes: 90
+      parallelism: 2
+      agents:
+        queue: hetzner-aarch64-8cpu-16gb
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: data-ingest
+            # Don't run with Azurite since it's pretty slow, see https://github.com/MaterializeInc/database-issues/issues/8892 for details
+            args: [--replicas=1]
+
+    - id: data-ingest-2-replicas
+      label: "Data Ingest (2 replicas)"
+      depends_on: build-aarch64
+      timeout_in_minutes: 90
+      parallelism: 2
+      agents:
+        queue: hetzner-aarch64-8cpu-16gb
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: data-ingest
+            # Don't run with Azurite since it's pretty slow, see https://github.com/MaterializeInc/database-issues/issues/8892 for details
+            args: [--replicas=2]
+      skip: "Reenable when database-issues#8990 is fixed"
+
+    - id: data-ingest-8-replicas
+      label: "Data Ingest (8 replicas)"
+      depends_on: build-aarch64
+      timeout_in_minutes: 90
+      parallelism: 2
+      agents:
+        queue: hetzner-aarch64-16cpu-32gb
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: data-ingest
+            # Don't run with Azurite since it's pretty slow, see https://github.com/MaterializeInc/database-issues/issues/8892 for details
+            args: [--replicas=8]
+      skip: "Reenable when database-issues#8990 is fixed"
 
   - group: "Parallel Workload"
     key: parallel-workload
@@ -1306,83 +1535,84 @@ steps:
         label: "Parallel Workload (DML)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
               args: [--runtime=1500, --complexity=dml, --threads=16]
 
       - id: parallel-workload-ddl
-        label: "Parallel Workload (DDL)"
+        label: "Parallel Workload (DDL) with :azure: blob store"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --threads=16]
+              args: [--runtime=1500, --threads=8, --azurite]
 
       - id: parallel-workload-ddl-only
         label: "Parallel Workload (DDL Only)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
               args: [--runtime=1500, --complexity=ddl-only, --threads=2]
 
-      - id: parallel-workload-100-threads
-        label: "Parallel Workload (100 threads)"
+      - id: parallel-workload-many-threads
+        label: "Parallel Workload (many threads)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
-          # TODO: Decrease when #26675 is fixed
-          queue: linux-aarch64-large
+          # Sporadic OoM otherwise
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
               args: [--runtime=1500, --threads=100]
+        skip: "Too unstable at the moment"
 
       - id: parallel-workload-rename-naughty
         label: "Parallel Workload (rename + naughty identifiers)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
               args: [--runtime=1500, --scenario=rename, --naughty-identifiers, --threads=16]
 
       - id: parallel-workload-rename
-        label: "Parallel Workload (rename)"
+        label: "Parallel Workload (rename) with :azure: blob store"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=rename, --threads=16]
+              args: [--runtime=1500, --scenario=rename, --threads=16, --azurite]
 
       - id: parallel-workload-cancel
         label: "Parallel Workload (cancel)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
-        skip: "TODO(def-): Reenable when #2392 is fixed"
+        timeout_in_minutes: 90
+        skip: "TODO(def-): Reenable when database-issues#835 is fixed"
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1392,46 +1622,45 @@ steps:
         label: "Parallel Workload (kill)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=kill, --threads=16]
+              args: [--runtime=1500, --scenario=kill, --threads=8]
 
       - id: parallel-workload-backup-restore
         label: "Parallel Workload (backup & restore)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         skip: "TODO(def-): Properly stop all db actions during backup & restore"
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
               args: [--runtime=1500, --scenario=backup-restore, --naughty-identifiers, --threads=16]
 
-      - id: parallel-workload-txn-wal
-        label: "Parallel Workload (toggle txn-wal)"
-        depends_on: build-aarch64
+      - id: parallel-workload-0dt
+        label: "Parallel Workload (0dt deploy)"
+        depends_on: build-x86_64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64
+          queue: hetzner-x86-64-dedi-16cpu-64gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=toggle-txn-wal, --threads=16]
+              args: [--runtime=1500, --scenario=0dt-deploy, --threads=16]
 
   - id: incident-70
     label: "Test for incident 70"
     depends_on: build-aarch64
-    timeout_in_minutes: 15
-    skip: "Affected by #15209"
+    timeout_in_minutes: 60
     agents:
-      queue: linux-aarch64
+      queue: hetzner-aarch64-8cpu-16gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cluster
@@ -1440,67 +1669,95 @@ steps:
   - id: balancerd
     label: "Tests for balancerd"
     depends_on: build-aarch64
-    timeout_in_minutes: 15
+    timeout_in_minutes: 30
     agents:
-      queue: linux-aarch64-small
+      queue: hetzner-aarch64-4cpu-8gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: balancerd
 
-  - id: restarts
-    label: Restart test
-    depends_on: build-aarch64
-    timeout_in_minutes: 30
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: restart
-    agents:
-      queue: linux-aarch64-small
+  - group: Legacy upgrade tests
+    key: legacy-upgrade
+    steps:
+      - id: legacy-upgrade-git
+        label: Legacy upgrade tests (last version from git)
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: legacy-upgrade
+              args: ["--versions-source=git"]
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
 
-  - id: legacy-upgrade
-    label: Legacy upgrade tests (last version from git)
-    depends_on: build-aarch64
-    timeout_in_minutes: 60
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: legacy-upgrade
-          args: ["--versions-source=git"]
-    agents:
-      queue: linux-aarch64-small
+      - id: legacy-upgrade-docs
+        label: "Legacy upgrade tests (last version from docs)"
+        parallelism: 2
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: legacy-upgrade
+              args: ["--versions-source=docs", "--lts-upgrade"]
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
 
-  - id: cloudtest-slow
-    label: "Slow Cloudtest"
-    depends_on: build-aarch64
-    timeout_in_minutes: 45
-    env:
-      CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
-    agents:
-      queue: linux-aarch64
-    plugins:
-      - ./ci/plugins/scratch-aws-access: ~
-      - ./ci/plugins/cloudtest:
-          args: [-m=long, test/cloudtest/test_storage_shared_fate.py]
-    sanitizer: skip
+  - group: Cloud tests
+    key: cloudtests
+    steps:
+      - id: cloudtest
+        label: Cloudtest
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        inputs:
+          - test/cloudtest
+          - misc/python/materialize/cloudtest
+          - misc/kind
+        env:
+          CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
+        plugins:
+          - ./ci/plugins/scratch-aws-access: ~
+          - ./ci/plugins/cloudtest:
+              args:
+                [
+                  --exitfirst,
+                  -m,
+                  "not long and not node_recovery",
+                  test/cloudtest/,
+                ]
+        agents:
+          # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
+          # queue: hetzner-aarch64-8cpu-16gb
+          queue: linux-aarch64
+        sanitizer: skip
+
+
+      - id: cloudtest-slow
+        label: "Slow Cloudtest"
+        depends_on: build-aarch64
+        timeout_in_minutes: 45
+        env:
+          CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
+        agents:
+          # TODO: Debezium DNS flakiness doesn't allow running on hetzner
+          # queue: hetzner-aarch64-8cpu-16gb
+          queue: linux-aarch64-medium
+        plugins:
+          - ./ci/plugins/cloudtest:
+              args: [-m=long, test/cloudtest/test_storage_shared_fate.py]
+        sanitizer: skip
 
   - id: txn-wal-fencing
-    label: Txn-wal fencing
+    label: "Txn-wal fencing with :azure: blob store"
     depends_on: build-aarch64
     timeout_in_minutes: 120
+    parallelism: 2
     plugins:
       - ./ci/plugins/mzcompose:
           composition: txn-wal-fencing
+          args: [--azurite]
     agents:
-      queue: linux-aarch64
-
-  - id: read-only-cluster
-    label: Read-only cluster
-    depends_on: build-aarch64
-    timeout_in_minutes: 30
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: read-only-cluster
-    agents:
-      queue: linux-aarch64
+      queue: hetzner-aarch64-8cpu-16gb
 
   - group: "Copy To S3"
     key: copy-to-s3
@@ -1514,7 +1771,7 @@ steps:
             composition: copy-to-s3
             run: nightly
       agents:
-        queue: linux-aarch64-large
+        queue: hetzner-aarch64-16cpu-32gb
 
     - id: copy-to-s3-2-replicas
       label: "Copy To S3 (2 replicas)"
@@ -1526,7 +1783,83 @@ steps:
             run: nightly
             args: [--default-size=2]
       agents:
-        queue: linux-aarch64-large
+        queue: hetzner-aarch64-16cpu-32gb
+
+  - id: backup-restore
+    label: "CRDB / Persist backup and restore"
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: backup-restore
+
+  - id: backup-restore-postgres
+    label: "Postgres / Persist backup and restore"
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: backup-restore-postgres
+
+  - id: replica-isolation
+    label: Replica isolation
+    depends_on: build-aarch64
+    timeout_in_minutes: 90
+    inputs: [test/replica-isolation]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: replica-isolation
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
+  - id: 0dt
+    label: Zero downtime
+    depends_on: build-aarch64
+    timeout_in_minutes: 180
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: 0dt
+    agents:
+      queue: hetzner-aarch64-16cpu-32gb
+
+  - id: emulator
+    label: Materialize Emulator
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: emulator
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
+  - id: sqllogictest
+    label: ":bulb: SQL logic tests"
+    depends_on: build-aarch64
+    timeout_in_minutes: 240
+    parallelism: 10
+    agents:
+      # Runs faster/more consistently on larger agent
+      queue: hetzner-aarch64-16cpu-32gb
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqllogictest
+          run: slow-tests
+
+  - id: cluster-tests-azurite
+    label: "Cluster tests with :azure: blob store"
+    depends_on: build-aarch64
+    timeout_in_minutes: 120
+    inputs: [test/cluster]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: cluster
+          args: ["--azurite"]
+    agents:
+      queue: hetzner-aarch64-8cpu-16gb
 
   - group: "Language tests"
     key: language-tests
@@ -1534,68 +1867,49 @@ steps:
       - id: lang-csharp
         label: ":csharp: tests"
         depends_on: build-aarch64
-        timeout_in_minutes: 10
+        timeout_in_minutes: 30
         plugins:
           - ./ci/plugins/mzcompose:
               composition: csharp
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
 
       - id: lang-js
         label: ":js: tests"
         depends_on: build-aarch64
-        timeout_in_minutes: 10
+        timeout_in_minutes: 30
         plugins:
           - ./ci/plugins/mzcompose:
               composition: js
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
 
       - id: lang-java
         label: ":java: tests"
         depends_on: build-aarch64
-        timeout_in_minutes: 10
+        timeout_in_minutes: 30
         plugins:
           - ./ci/plugins/mzcompose:
               composition: java
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
 
       - id: lang-python
         label: ":python: tests"
         depends_on: build-aarch64
-        timeout_in_minutes: 10
+        timeout_in_minutes: 30
         plugins:
           - ./ci/plugins/mzcompose:
               composition: python
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
 
       - id: lang-ruby
         label: ":ruby: tests"
         depends_on: build-aarch64
-        timeout_in_minutes: 10
+        timeout_in_minutes: 30
         plugins:
           - ./ci/plugins/mzcompose:
               composition: ruby
         agents:
-          queue: linux-aarch64-small
-
-  - group: ":bazel: Bazel"
-    key: bazel
-    steps:
-      - id: bazel-test-x86_64
-        label: ":bazel: Build (x86_64)"
-        command: bin/ci-builder run stable bin/bazel-temp
-        depends_on: []
-        timeout_in_minutes: 60
-        agents:
-          queue: builder-linux-x86_64
-
-      - id: bazel-test-aarch64
-        label: ":bazel: Build (aarch64)"
-        command: bin/ci-builder run stable bin/bazel-temp
-        depends_on: []
-        timeout_in_minutes: 60
-        agents:
-          queue: builder-linux-aarch64
+          queue: hetzner-aarch64-4cpu-8gb

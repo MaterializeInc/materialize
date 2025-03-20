@@ -24,4 +24,7 @@ try cargo clippy --all-targets -- -D warnings
 # part of lint-slow.sh because it requires building code
 try bin/doc --no-deps
 
+# part of lint-slow.sh because it requires building code
+try bin/doc --document-private-items
+
 try_status_report

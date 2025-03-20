@@ -10,6 +10,15 @@
 .content-wrapper {
     display: flex;
     justify-content: center;
+    padding-top: var(--nav-height);
+
+    @media(max-width: 800px) {
+        padding-top: calc(var(--nav-height) + var(--xx-small));
+    }
+
+    @media(max-width: 380px) {
+        padding-top: calc(var(--nav-height) + var(--medium));
+    }
 }
 
 .content {
@@ -88,7 +97,7 @@ table.inline-headings {
     }
 
     .DocSearch-Button-Placeholder {
-        font-size: 1.6rem;
+        font-size: rem(1.6);
         font-weight: 300;
 
         @media(max-width: 768px) {
@@ -117,7 +126,7 @@ table.inline-headings {
         position: fixed;
         background: var(--bg);
         z-index: 100;
-        top: 0;
+        top: var(--nav-height);
         left: 0;
         border-right: 1px solid var(--divider-light);
         transform: translateX(-100%);
@@ -144,12 +153,12 @@ table.inline-headings {
 .sidebar {
     margin-left: auto;
     position: sticky;
-    top: 0;
-    padding: var(--x-small) var(--nano);
+    top: var(--nav-height);
+    padding: var(--xx-small) var(--small);
     overflow-y: auto;
     height: 100vh;
     display: flex;
-    font-size: 1.3rem;
+    font-size: rem(1.3);
     overflow-x: hidden;
 
     &,
@@ -172,15 +181,12 @@ table.inline-headings {
         padding-bottom: var(--large);
     }
 
-    &>ul>li:last-child {
-        padding-bottom: var(--milli);
-    }
-
     a {
         display: block;
         cursor: pointer;
         position: relative;
         padding: 3px 0 3px 15px;
+        margin-left: 5px;
         text-decoration: none;
         word-wrap: break-word;
         white-space: initial;
@@ -226,11 +232,11 @@ table.inline-headings {
 
     .no-children>a,
     .level-4 a {
-        border-left: 2px solid var(--divider-light);
+
 
         &:hover,
         &.active {
-            border-color: var(--highlight);
+            border-left: 2px solid  var(--highlight);
         }
     }
 
@@ -241,7 +247,7 @@ table.inline-headings {
         padding-left: 0;
 
         ul ul {
-            margin-left: 0.8rem;
+            margin-left: rem(0.8);
         }
     }
 
@@ -250,34 +256,35 @@ table.inline-headings {
     }
 
     li.level-1 {
-        &>div {
-            margin: 0 0 4px -2px;
-            padding: 4px 0;
-            color: var(--highlight);
+        &>a {
             font-weight: 500;
+            color: var(--highlight);
         }
 
         &>ul {
-            margin-bottom: 1.5rem;
+            margin-bottom: rem(1.5);
         }
+        padding: 4px 0;
+        border-bottom: 1px solid var(--gray-light);
     }
 
+    li.level-1,
     li.level-2,
     li.level-3 {
         >ul {
             display: none;
-            padding-top: 0.5rem;
-            margin-bottom: 0.625rem;
+            padding-top: rem(0.5);
+            margin-bottom: rem(0.625);
+            padding-left: rem(0.8);
 
             &:before,
             &:after {
                 content: "";
-                background-image: url("../images/level_three_transition.svg");
                 width: 10px;
                 height: 10px;
                 position: absolute;
-                top: 0;
-                left: -8px;
+                top: 1px;
+                left: 0px;
             }
 
             &:after {
@@ -300,6 +307,10 @@ table.inline-headings {
         }
     }
 
+    li.level-1.has-children.open {
+        padding-bottom: 4px;
+    }
+
     li.level-2.has-children.open {
         padding-bottom: 4px;
     }
@@ -311,6 +322,10 @@ table.inline-headings {
 
 .toc-wrapper {
     flex: 1;
+    position: sticky;
+    top: 90px;
+    height: 100vh;
+    overflow-y: auto;
 
     @media(max-width: 1050px) {
         display: none;
@@ -324,12 +339,13 @@ table.inline-headings {
 .toc {
     max-width: fit-content;
     min-width: 180px;
-    padding: var(--x-small) 2rem;
+    padding: var(--x-small) rem(2);
     position: sticky;
     top: 0;
     height: 100vh;
     overflow-y: auto;
     font-size: var(--sm);
+    padding-bottom: 8.5rem;
 
     &-top {
         margin-top: var(--pico);
@@ -338,7 +354,7 @@ table.inline-headings {
     h2 {
         font-size: var(--xsm);
         letter-spacing: 0.1em;
-        margin: 0 0 0.75rem 0;
+        margin: 0 0 rem(0.75) 0;
         padding: 0;
         display: inline-block;
         color: var(--highlight);
@@ -356,7 +372,7 @@ table.inline-headings {
     }
 
     li {
-        padding: 0.25rem 0;
+        padding: rem(0.25) 0;
     }
 
     a {
@@ -447,8 +463,8 @@ table.inline-headings {
     }
 
     svg {
-        height: 2.2rem;
-        width: 2.2rem;
+        height: rem(2.2);
+        width: rem(2.2);
         fill: var(--gray-mid);
     }
 
@@ -499,4 +515,28 @@ body.dark {
             }
         }
     }
+}
+
+.banner {
+    background-color: var(--tip);
+    padding: var(--pico) var(--milli);
+    text-align: center;
+
+    @media(max-width: 500px) {
+        padding: var(--pico);
+    }
+
+    a {
+        color: var(--link);
+    }
+}
+
+/*
+  Need for subheadings not handled by toc.html.
+  toc.html manually handles h2, h3 - since we only display h2 and h3
+  but if a page has other anchors, want to have the padding.
+  TODO: see about removing scroll logic in toc.html
+*/
+html {
+    scroll-padding-top: 80px;
 }

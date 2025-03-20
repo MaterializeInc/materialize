@@ -12,7 +12,7 @@ use std::fmt;
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use mz_controller::clusters::ClusterStatus;
-use mz_orchestrator::{NotReadyReason, ServiceStatus};
+use mz_orchestrator::{OfflineReason, ServiceStatus};
 use mz_ore::str::{separated, StrExt};
 use mz_pgwire_common::{ErrorResponse, Severity};
 use mz_repr::adt::mz_acl_item::AclMode;
@@ -52,7 +52,7 @@ pub enum AdapterNotice {
     },
     DefaultClusterDoesNotExist {
         name: String,
-        kind: Option<&'static str>,
+        kind: &'static str,
         suggested_action: String,
     },
     NoResolvableSearchPathSchema {
@@ -189,6 +189,7 @@ impl AdapterNotice {
             AdapterNotice::NonApplicablePrivilegeTypes { .. } => Severity::Notice,
             AdapterNotice::PlanNotice(notice) => match notice {
                 PlanNotice::ObjectDoesNotExist { .. } => Severity::Notice,
+                PlanNotice::ColumnAlreadyExists { .. } => Severity::Notice,
                 PlanNotice::UpsertSinkKeyNotEnforced { .. } => Severity::Warning,
             },
             AdapterNotice::UnknownSessionDatabase(_) => Severity::Notice,
@@ -230,9 +231,10 @@ impl AdapterNotice {
             AdapterNotice::DroppedActiveCluster { name: _ } => Some("Choose a new active cluster by executing SET CLUSTER = <name>.".into()),
             AdapterNotice::ClusterReplicaStatusChanged { status, .. } => {
                 match status {
-                    ServiceStatus::NotReady(None) => Some("The cluster replica may be restarting or going offline.".into()),
-                    ServiceStatus::NotReady(Some(NotReadyReason::OomKilled)) => Some("The cluster replica may have run out of memory and been killed.".into()),
-                    ServiceStatus::Ready => None,
+                    ServiceStatus::Offline(None)
+                    | ServiceStatus::Offline(Some(OfflineReason::Initializing)) => Some("The cluster replica may be restarting or going offline.".into()),
+                    ServiceStatus::Offline(Some(OfflineReason::OomKilled)) => Some("The cluster replica may have run out of memory and been killed.".into()),
+                    ServiceStatus::Online => None,
                 }
             },
             AdapterNotice::RbacUserDisabled => Some("To enable RBAC globally run `ALTER SYSTEM SET enable_rbac_checks TO TRUE` as a superuser. TO enable RBAC for just this session run `SET enable_session_rbac_checks TO TRUE`.".into()),
@@ -288,6 +290,7 @@ impl AdapterNotice {
             AdapterNotice::NonApplicablePrivilegeTypes { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::PlanNotice(plan) => match plan {
                 PlanNotice::ObjectDoesNotExist { .. } => SqlState::UNDEFINED_OBJECT,
+                PlanNotice::ColumnAlreadyExists { .. } => SqlState::DUPLICATE_COLUMN,
                 PlanNotice::UpsertSinkKeyNotEnforced { .. } => SqlState::WARNING,
             },
             AdapterNotice::UnknownSessionDatabase(_) => SqlState::from_code("MZ004"),
@@ -330,8 +333,7 @@ impl fmt::Display for AdapterNotice {
                 write!(f, "cluster {} does not exist", name.quoted())
             }
             AdapterNotice::DefaultClusterDoesNotExist { kind, name, .. } => {
-                let kind = kind.map(|k| format!("{k} ")).unwrap_or(String::new());
-                write!(f, "{kind}default cluster {} does not exist", name.quoted())
+                write!(f, "{kind} default cluster {} does not exist", name.quoted())
             }
             AdapterNotice::NoResolvableSearchPathSchema { search_path } => {
                 write!(

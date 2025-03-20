@@ -11,13 +11,15 @@ $ kafka-ingest topic=largeinput format=bytes repeat=11000000
 A,B,0
 
 # Long enough to ingest all the data
-> SELECT mz_unsafe.mz_sleep(60);
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="60s"
 <null>
 
-> SELECT count(*) FROM largeinput
+> SELECT count(*) FROM largeinput_tbl
 11000001
 
-> CREATE SINK output FROM largeinput
+> CREATE SINK output
+  IN CLUSTER singlereplica
+  FROM largeinput_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-byo-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM

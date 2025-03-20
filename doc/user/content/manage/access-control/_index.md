@@ -11,11 +11,12 @@ menu:
 ---
 
 {{< note >}}
-Configuring and managing access control in Materialize requires **administrator** privileges.
+Configuring and managing access control in Materialize
+requires **administrator** privileges.
 {{</ note >}}
 
 Access control in Materialize is configured at two levels: access to the
-[Materialize console](https://console.materialize.com/) and access within the
+[Materialize Console](https://console.materialize.com/) and access within the
 database. The privileges assigned on user invitation have implications at both
 levels, so we recommend carefully evaluating your access control needs ahead of
 expanding the number of users in your Materialize organization.
@@ -24,7 +25,7 @@ expanding the number of users in your Materialize organization.
 
 ### Inviting users
 
-As an **administrator**, you can invite new users via the Materialize console.
+As an **administrator**, you can invite new users via the Materialize Console.
 Depending on the level of access each user should have, you can assign them
 `Organization Admin` or `Organization Member` privileges.
 
@@ -53,16 +54,38 @@ sign-on (SSO) as an additional layer of account security using your existing
 [SAML](https://auth0.com/blog/how-saml-authentication-works/)- or
 [OpenID Connect](https://auth0.com/intro-to-iam/what-is-openid-connect-oidc)-based
 identity provider. This ensures that all users can securely log in to the
-Materialize console using the same authentication scheme and credentials across
+Materialize Console using the same authentication scheme and credentials across
 all systems in your organization.
 
-To configure SSO for your Materialize organization, follow [this step-by-step
-guide](/manage/access-control/sso).
+To configure SSO for your Materialize organization, follow [this step-by-step guide](/manage/access-control/sso).
+
+### Configuring network policies
+
+{{< private-preview />}}
+
+By default, Materialize is available on the public internet without any
+network-layer access control. As an **administrator** of a Materialize
+organization, you can configure network policies to restrict access to a
+Materialize region using IP-based rules.
+
+To configure network policies in your Materialize organization, follow
+[this step-by-step guide](/manage/access-control/manage-network-policies).
+
+### Creating service accounts
+
+It's a best practice to use service accounts (i.e., non-human users) to connect
+external applications and services to Materialize. As an **administrator** of a
+Materialize organization, you can create service accounts manually via the
+[Materialize Console](https://console.materialize.com/), or programatically
+via [Terraform](/manage/terraform/).
+
+To create a service account in your Materialize organization, follow
+[this step-by-step guide](/manage/access-control/create-service-accounts).
+
+### Using an external secret store
 
 [//]: # "NOTE(morsapaes) This sits kind of awkward in here, but feels like the
 best place to plug it. Need to add some more meat if we keep it."
-
-### Using an external secret store
 
 Although Materialize does not integrate directly with external secret stores,
 it’s possible to manage this integration via [Terraform](/manage/terraform).
@@ -124,7 +147,7 @@ databases, or schemas. To modify the default privileges available to all other
 roles in a Materialize region, you can use the [`ALTER DEFAULT PRIVILEGES`](/sql/alter-default-privileges/)
 command.
 
-```sql
+```mzsql
 # Use SHOW ROLES to list existing roles in the system, which are 1:1 with invited users
 SHOW ROLES;
 
@@ -151,7 +174,7 @@ decide to roll out a RBAC strategy for your Materialize organization.
 As an alternative, you can approximate the set of privileges of a _superuser_ by
 instead modifying the default privileges to be wildly permissive:
 
-```sql
+```mzsql
 -- Use SHOW ROLES to list existing roles in the system, which are 1:1 with invited users
 SHOW ROLES;
 
@@ -192,7 +215,7 @@ If your Materialize user base is small and you don't expect it to grow
 significantly over time, you can grant and revoke privileges directly to/from
 user roles.
 
-```sql
+```mzsql
 -- Use SHOW ROLES to list existing roles in the system.
 SHOW ROLES;
 
@@ -222,7 +245,7 @@ As an example, Data Engineers might need a larger scope of permissions to create
 and evolve the data model, while Data Analysts might only need read permissions
 to query Materialize using BI tools.
 
-```sql
+```mzsql
 -- Use SHOW ROLES to list existing roles in the system, which are 1:1 with invited users
 SHOW ROLES;
 
@@ -270,7 +293,7 @@ them to reach out, across the documentation. Standardize on one."
 
 {{< warning >}}
 This strategy relies on the `NOINHERIT` role attribute and the `SET ROLE`
-command, which are unimplemented in Materialize {{% gh 19165 %}} {{% gh 19942 %}}.
+command, which are unimplemented in Materialize.
 Please [reach out](https://materialize.com/contact/) if you're
 interested in this strategy!
 {{< /warning >}}
@@ -283,7 +306,7 @@ roles from inheriting it. This means that users have to explicitly run e.g.,
 `SET ROLE production` before being able to run any commands in the specified
 environment.
 
-```sql
+```mzsql
 -- Step 1: create the dev and prod roles
 CREATE ROLE dev;
 CREATE ROLE prod NOINHERIT;

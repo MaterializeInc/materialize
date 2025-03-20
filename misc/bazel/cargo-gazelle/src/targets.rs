@@ -17,7 +17,6 @@ use guppy::graph::{
 use guppy::platform::EnabledTernary;
 use guppy::DependencyKind;
 
-use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write};
 use std::str::FromStr;
@@ -26,7 +25,7 @@ use crate::config::{CrateConfig, GlobalConfig};
 use crate::context::CrateContext;
 use crate::platforms::PlatformVariant;
 use crate::rules::Rule;
-use crate::{Dict, Field, FileGroup, Glob, List, QuotedString, Select};
+use crate::{Alias, Dict, Field, FileGroup, Glob, List, QuotedString, Select};
 
 use super::{AutoIndentingWriter, ToBazelDefinition};
 
@@ -52,17 +51,20 @@ impl<T: RustTarget> RustTarget for Option<T> {
 #[derive(Debug)]
 pub struct RustLibrary {
     name: Field<QuotedString>,
+    version: Field<QuotedString>,
     is_proc_macro: bool,
     features: Field<List<QuotedString>>,
     aliases: Field<Aliases>,
+    lint_config: Field<QuotedString>,
     deps: Field<List<QuotedString>>,
     proc_macro_deps: Field<List<QuotedString>>,
     data: Field<List<QuotedString>>,
     compile_data: Field<List<QuotedString>>,
+    disable_pipelining: Option<Field<bool>>,
     rustc_flags: Field<List<QuotedString>>,
     rustc_env: Field<Dict<QuotedString, QuotedString>>,
-    unit_test: Option<RustTest>,
-    doc_tests: Option<RustDocTest>,
+    /// Other targets, e.g. unit tests, that we generate for a library.
+    extra_targets: Vec<Box<dyn ToBazelDefinition>>,
 }
 
 impl RustTarget for RustLibrary {
@@ -85,6 +87,16 @@ impl RustLibrary {
         build_script: Option<&CargoBuildScript>,
     ) -> Result<Option<Self>, anyhow::Error> {
         if crate_config.lib().common().skip() {
+            return Ok(None);
+        }
+
+        // Not all crates have a `lib.rs` or require a rust_library target.
+        let library_target = metadata
+            .build_targets()
+            .find(|target| matches!(target.id(), BuildTargetId::Library));
+        if library_target.is_none() {
+            let name = metadata.name();
+            tracing::debug!("no library target found for {name}, skipping rust_library",);
             return Ok(None);
         }
 
@@ -136,9 +148,32 @@ impl RustLibrary {
             proc_macro_deps = proc_macro_deps.concat_other(select);
         }
 
+        // TODO(parkmycar): Make the lint_config configurable.
+        let lint_config = QuotedString::new(":lints");
+
         // For every library we also generate the tests targets.
-        let unit_test = RustTest::library(config, metadata, crate_config)?;
+        let unit_test = RustTest::library(config, metadata, crate_config, features.clone())?;
         let doc_tests = RustDocTest::generate(config, metadata, crate_config)?;
+        let mut extra_targets: Vec<Box<dyn ToBazelDefinition>> =
+            vec![Box::new(unit_test), Box::new(doc_tests)];
+
+        // Generate an alias with the same name as the containing directory that points to the
+        // library target. This allows you to build the library with a short-hand notation, e.g.
+        // `//src/compute-types` instead of `//src/compute-types:mz_compute_types`.
+        let crate_filename = metadata
+            .manifest_path()
+            .parent()
+            .and_then(|path| path.file_name());
+        if let Some(crate_filename) = crate_filename {
+            let other_target_conflicts = metadata
+                .build_targets()
+                .map(|target| target.name())
+                .any(|target_name| target_name.to_case(Case::Snake) == crate_filename);
+            if !other_target_conflicts {
+                let alias = Alias::new(crate_filename, name.unquoted());
+                extra_targets.insert(0, Box::new(alias));
+            }
+        }
 
         // Extend with any extra config specified in the Cargo.toml.
         let lib_common = crate_config.lib().common();
@@ -147,27 +182,43 @@ impl RustLibrary {
         proc_macro_deps.extend(crate_config.lib().extra_proc_macro_deps());
 
         let (paths, globs) = lib_common.data();
-        let data = List::new(paths).concat_other(globs.map(Glob::new));
+        let mut data = List::new(paths);
+        if let Some(globs) = globs {
+            data = data.concat_other(Glob::new(globs));
+        }
 
         let (paths, globs) = lib_common.compile_data();
-        let compile_data = List::new(paths).concat_other(globs.map(Glob::new));
+        let mut compile_data = List::new(paths);
+        if let Some(globs) = globs {
+            compile_data = compile_data.concat_other(Glob::new(globs));
+        }
 
         let rustc_flags = List::new(lib_common.rustc_flags());
         let rustc_env = Dict::new(lib_common.rustc_env());
 
+        let disable_pipelining = if let Some(flag) = crate_config.lib().disable_pipelining() {
+            Some(flag)
+        } else {
+            // If a library target contains compile data then we disable pipelining because it
+            // messes with the crate hash and leads to hard to debug build errors.
+            (!compile_data.is_empty()).then_some(true)
+        };
+
         Ok(Some(RustLibrary {
             name: Field::new("name", name),
+            version: Field::new("version", metadata.version().to_string().into()),
             is_proc_macro: metadata.is_proc_macro(),
             features: Field::new("crate_features", features),
             aliases: Field::new("aliases", Aliases::default().normal().proc_macro()),
+            lint_config: Field::new("lint_config", lint_config),
             deps: Field::new("deps", deps),
             proc_macro_deps: Field::new("proc_macro_deps", proc_macro_deps),
             data: Field::new("data", data),
             compile_data: Field::new("compile_data", compile_data),
+            disable_pipelining: disable_pipelining.map(|v| Field::new("disable_pipelining", v)),
             rustc_flags: Field::new("rustc_flags", rustc_flags),
             rustc_env: Field::new("rustc_env", rustc_env),
-            unit_test,
-            doc_tests,
+            extra_targets,
         }))
     }
 }
@@ -187,23 +238,27 @@ impl ToBazelDefinition for RustLibrary {
             let mut w = w.indent();
 
             self.name.format(&mut w)?;
+            self.version.format(&mut w)?;
 
             writeln!(w, r#"srcs = glob(["src/**/*.rs"]),"#)?;
 
             self.features.format(&mut w)?;
             self.aliases.format(&mut w)?;
+            self.lint_config.format(&mut w)?;
             self.deps.format(&mut w)?;
             self.proc_macro_deps.format(&mut w)?;
-            self.compile_data.format(&mut w)?;
             self.data.format(&mut w)?;
+            self.compile_data.format(&mut w)?;
+            self.disable_pipelining.format(&mut w)?;
             self.rustc_flags.format(&mut w)?;
             self.rustc_env.format(&mut w)?;
         }
-        writeln!(w, ")\n")?;
+        writeln!(w, ")")?;
 
-        self.unit_test.format(&mut w)?;
-        writeln!(w)?;
-        self.doc_tests.format(&mut w)?;
+        for extra_target in &self.extra_targets {
+            writeln!(w)?;
+            extra_target.format(&mut w)?;
+        }
 
         Ok(())
     }
@@ -213,8 +268,10 @@ impl ToBazelDefinition for RustLibrary {
 #[derive(Debug)]
 pub struct RustBinary {
     name: Field<QuotedString>,
+    version: Field<QuotedString>,
     crate_root: Field<QuotedString>,
     features: Field<List<QuotedString>>,
+    lint_config: Field<QuotedString>,
     aliases: Field<Aliases>,
     deps: Field<List<QuotedString>>,
     proc_macro_deps: Field<List<QuotedString>>,
@@ -248,19 +305,24 @@ impl RustBinary {
                 "can only generate `rust_binary` rules for binary build targets, found {x:?}"
             ),
         };
+        let name = name.to_case(Case::Snake);
+
         let maybe_library = metadata
             .build_targets()
             .find(|target| matches!(target.id(), BuildTargetId::Library));
 
         // Adjust the target name to avoid a possible conflict.
+        tracing::debug!(
+            maybe_library = ?maybe_library.as_ref().map(|t| t.name()),
+            binary_name = name,
+            "name for rust_binary"
+        );
         let target_name = match &maybe_library {
-            Some(library) if library.name() == name => {
-                QuotedString::new(format!("{}_bin", name.to_case(Case::Snake)))
-            }
-            _ => QuotedString::new(name.to_case(Case::Snake)),
+            Some(library) if library.name() == name => QuotedString::new(format!("{}_bin", name)),
+            _ => QuotedString::new(&name),
         };
 
-        if crate_config.binary(name).common().skip() {
+        if crate_config.binary(&name).common().skip() {
             return Ok(None);
         }
 
@@ -291,6 +353,9 @@ impl RustBinary {
             proc_macro_deps = proc_macro_deps.concat_other(select);
         }
 
+        // TODO(parkmycar): Make the lint_config configurable.
+        let lint_config = QuotedString::new(":lints");
+
         // Add the library crate as a dep if it isn't already.
         if maybe_library.is_some() {
             let dep = format!(":{}", metadata.name().to_case(Case::Snake));
@@ -306,7 +371,7 @@ impl RustBinary {
         }
 
         // Extend with any extra config specified in the Cargo.toml.
-        let bin_config = crate_config.binary(name);
+        let bin_config = crate_config.binary(&name);
 
         deps.extend(crate_config.lib().extra_deps());
         proc_macro_deps.extend(crate_config.lib().extra_proc_macro_deps());
@@ -323,9 +388,11 @@ impl RustBinary {
 
         Ok(Some(RustBinary {
             name: Field::new("name", target_name),
+            version: Field::new("version", metadata.version().to_string().into()),
             crate_root: Field::new("crate_root", binary_path),
             features: Field::new("features", List::empty()),
             aliases: Field::new("aliases", Aliases::default().normal().proc_macro()),
+            lint_config: Field::new("lint_config", lint_config),
             deps: Field::new("deps", deps),
             proc_macro_deps: Field::new("proc_macro_deps", proc_macro_deps),
             data: Field::new("data", data),
@@ -346,12 +413,14 @@ impl ToBazelDefinition for RustBinary {
             let mut w = w.indent();
 
             self.name.format(&mut w)?;
+            self.version.format(&mut w)?;
             self.crate_root.format(&mut w)?;
 
             writeln!(w, r#"srcs = glob(["src/**/*.rs"]),"#)?;
 
             self.features.format(&mut w)?;
             self.aliases.format(&mut w)?;
+            self.lint_config.format(&mut w)?;
             self.deps.format(&mut w)?;
             self.proc_macro_deps.format(&mut w)?;
             self.compile_data.format(&mut w)?;
@@ -360,7 +429,7 @@ impl ToBazelDefinition for RustBinary {
             self.rustc_flags.format(&mut w)?;
             self.rustc_env.format(&mut w)?;
         }
-        writeln!(w, ")\n")?;
+        writeln!(w, ")")?;
 
         Ok(())
     }
@@ -370,8 +439,11 @@ impl ToBazelDefinition for RustBinary {
 #[derive(Debug)]
 pub struct RustTest {
     name: Field<QuotedString>,
+    version: Field<QuotedString>,
     kind: RustTestKind,
+    features: Field<List<QuotedString>>,
     aliases: Field<Aliases>,
+    lint_config: Field<QuotedString>,
     deps: Field<List<QuotedString>>,
     proc_macro_deps: Field<List<QuotedString>>,
     size: Field<RustTestSize>,
@@ -393,6 +465,7 @@ impl RustTest {
         config: &GlobalConfig,
         metadata: &PackageMetadata,
         crate_config: &CrateConfig,
+        crate_features: List<QuotedString>,
         name: &str,
         kind: RustTestKind,
         size: RustTestSize,
@@ -428,7 +501,10 @@ impl RustTest {
             proc_macro_deps = proc_macro_deps.concat_other(select);
         }
 
-        if matches!(kind, RustTestKind::Integration(_)) {
+        // TODO(parkmycar): Make the lint_config configurable.
+        let lint_config = QuotedString::new(":lints");
+
+        if matches!(kind, RustTestKind::Integration { .. }) {
             let dep = format!(":{crate_name}");
             if metadata.is_proc_macro() {
                 if !proc_macro_deps.iter().any(|d| d.unquoted().ends_with(&dep)) {
@@ -465,8 +541,11 @@ impl RustTest {
 
         Ok(Some(RustTest {
             name: Field::new("name", name),
+            version: Field::new("version", metadata.version().to_string().into()),
             kind,
+            features: Field::new("crate_features", crate_features),
             aliases: Field::new("aliases", aliases),
+            lint_config: Field::new("lint_config", lint_config),
             deps: Field::new("deps", deps),
             proc_macro_deps: Field::new("proc_macro_deps", proc_macro_deps),
             size: Field::new("size", size),
@@ -482,12 +561,14 @@ impl RustTest {
         config: &GlobalConfig,
         metadata: &PackageMetadata,
         crate_config: &CrateConfig,
+        crate_features: List<QuotedString>,
     ) -> Result<Option<Self>, anyhow::Error> {
         let crate_name = metadata.name().to_case(Case::Snake);
         Self::common(
             config,
             metadata,
             crate_config,
+            crate_features,
             "lib",
             RustTestKind::library(crate_name),
             RustTestSize::Medium,
@@ -519,8 +600,9 @@ impl RustTest {
             config,
             metadata,
             crate_config,
+            List::new::<String, _>([]),
             target.name(),
-            RustTestKind::integration([test_target.to_string()]),
+            RustTestKind::integration(target.name(), [test_target.to_string()]),
             RustTestSize::Large,
         )
     }
@@ -535,8 +617,11 @@ impl ToBazelDefinition for RustTest {
             let mut w = w.indent();
 
             self.name.format(&mut w)?;
+            self.version.format(&mut w)?;
             self.kind.format(&mut w)?;
+            self.features.format(&mut w)?;
             self.aliases.format(&mut w)?;
+            self.lint_config.format(&mut w)?;
             self.deps.format(&mut w)?;
             self.proc_macro_deps.format(&mut w)?;
             self.size.format(&mut w)?;
@@ -556,7 +641,18 @@ impl ToBazelDefinition for RustTest {
 #[derive(Debug)]
 pub enum RustTestKind {
     Library(Field<QuotedString>),
-    Integration(Field<List<QuotedString>>),
+    Integration {
+        /// Name we'll give the built Rust binary.
+        ///
+        /// Some test harnesses (e.g. [insta]) use the crate name to generate
+        /// files. We provide the crate name for integration tests for parity
+        /// with cargo test.
+        ///
+        /// [insta]: https://docs.rs/insta/latest/insta/
+        test_name: Field<QuotedString>,
+        /// Source files for the integration test.
+        srcs: Field<List<QuotedString>>,
+    },
 }
 
 impl RustTestKind {
@@ -565,9 +661,16 @@ impl RustTestKind {
         Self::Library(Field::new("crate", crate_name))
     }
 
-    pub fn integration(srcs: impl IntoIterator<Item = String>) -> Self {
+    pub fn integration(
+        test_name: impl Into<String>,
+        srcs: impl IntoIterator<Item = String>,
+    ) -> Self {
+        let test_name = test_name.into().to_case(Case::Snake);
         let srcs = srcs.into_iter().map(QuotedString::new).collect();
-        Self::Integration(Field::new("srcs", srcs))
+        Self::Integration {
+            test_name: Field::new("crate_name", test_name.into()),
+            srcs: Field::new("srcs", srcs),
+        }
     }
 }
 
@@ -575,7 +678,10 @@ impl ToBazelDefinition for RustTestKind {
     fn format(&self, writer: &mut dyn fmt::Write) -> Result<(), fmt::Error> {
         match self {
             RustTestKind::Library(field) => field.format(writer)?,
-            RustTestKind::Integration(srcs) => srcs.format(writer)?,
+            RustTestKind::Integration { test_name, srcs } => {
+                test_name.format(writer)?;
+                srcs.format(writer)?;
+            }
         }
         Ok(())
     }
@@ -684,7 +790,7 @@ impl ToBazelDefinition for RustDocTest {
             self.crate_.format(&mut w)?;
             self.deps.format(&mut w)?;
         }
-        writeln!(w, "\n)")?;
+        writeln!(w, ")")?;
 
         Ok(())
     }
@@ -748,15 +854,15 @@ impl CargoBuildScript {
             all_deps.iter(DependencyKind::Development, true);
 
         let mut deps: List<QuotedString> =
-            List::new(deps).concat_other(AllCrateDeps::default().normal().build());
+            List::new(deps).concat_other(AllCrateDeps::default().build());
         // Add extra platform deps if there are any.
         if !extra_deps.is_empty() {
             let select: Select<List<QuotedString>> = Select::new(extra_deps, vec![]);
             deps = deps.concat_other(select);
         }
 
-        let mut proc_macro_deps: List<QuotedString> = List::new(proc_macro_deps)
-            .concat_other(AllCrateDeps::default().proc_macro().build_proc_macro());
+        let mut proc_macro_deps: List<QuotedString> =
+            List::new(proc_macro_deps).concat_other(AllCrateDeps::default().build_proc_macro());
         // Add extra platform deps if there are any.
         if !extra_proc_macro_deps.is_empty() {
             let select: Select<List<QuotedString>> = Select::new(extra_proc_macro_deps, vec![]);
@@ -865,24 +971,66 @@ impl ToBazelDefinition for CargoBuildScript {
     }
 }
 
-/// An opaque blob of text that we treat as a target.
+/// Reads lint config from a Cargo.toml file.
 #[derive(Debug)]
-pub struct AdditiveContent<'a>(Cow<'a, str>);
+pub struct ExtractCargoLints {
+    name: Field<QuotedString>,
+    manifest: Field<QuotedString>,
+    workspace: Field<QuotedString>,
+}
 
-impl<'a> AdditiveContent<'a> {
-    pub fn new(s: &'a str) -> Self {
-        AdditiveContent(s.into())
+impl RustTarget for ExtractCargoLints {
+    fn rules(&self) -> Vec<Rule> {
+        vec![Rule::ExtractCargoLints]
     }
 }
 
-impl<'a> ToBazelDefinition for AdditiveContent<'a> {
+impl ExtractCargoLints {
+    pub fn generate() -> Self {
+        ExtractCargoLints {
+            name: Field::new("name", QuotedString::new("lints")),
+            manifest: Field::new("manifest", QuotedString::new("Cargo.toml")),
+            workspace: Field::new("workspace", QuotedString::new("@//:Cargo.toml")),
+        }
+    }
+}
+
+impl ToBazelDefinition for ExtractCargoLints {
+    fn format(&self, writer: &mut dyn fmt::Write) -> Result<(), fmt::Error> {
+        let mut w = AutoIndentingWriter::new(writer);
+
+        writeln!(w, "extract_cargo_lints(")?;
+        {
+            let mut w = w.indent();
+
+            self.name.format(&mut w)?;
+            self.manifest.format(&mut w)?;
+            self.workspace.format(&mut w)?;
+        }
+        writeln!(w, ")")?;
+
+        Ok(())
+    }
+}
+
+/// An opaque blob of text that we treat as a target.
+#[derive(Debug)]
+pub struct AdditiveContent(String);
+
+impl AdditiveContent {
+    pub fn new(s: &str) -> Self {
+        AdditiveContent(s.to_string())
+    }
+}
+
+impl ToBazelDefinition for AdditiveContent {
     fn format(&self, writer: &mut dyn fmt::Write) -> Result<(), fmt::Error> {
         writeln!(writer, "{}", self.0)?;
         Ok(())
     }
 }
 
-impl<'a> RustTarget for AdditiveContent<'a> {
+impl RustTarget for AdditiveContent {
     fn rules(&self) -> Vec<Rule> {
         vec![]
     }
@@ -1026,9 +1174,16 @@ impl<'a> WorkspaceDependencies<'a> {
                     .links(DependencyDirection::Reverse)
                     // Filter down to only direct dependencies.
                     .filter(|link| link.from().id() == self.package.id())
-                    // Tests and build scipts can rely on normal dependencies, so always make sure they're
-                    // included.
-                    .filter(move |link| link.req_for_kind(kind).is_present())
+                    .filter(move |link| match kind {
+                        DependencyKind::Build | DependencyKind::Normal => {
+                            link.req_for_kind(kind).is_present()
+                        }
+                        // Tests can rely on normal dependencies, so also check those.
+                        DependencyKind::Development => {
+                            link.req_for_kind(kind).is_present()
+                                || link.req_for_kind(DependencyKind::Normal).is_present()
+                        }
+                    })
                     .map(|link| link.to())
                     // Ignore deps filtered out by the global config.
                     .filter(|meta| self.config.include_dep(meta.name()))
@@ -1139,7 +1294,7 @@ pub fn crate_features<'a>(
 /// TODO(parkmycar): Make the list of platforms configurable.
 pub fn platform_feature_sets<'a>(
     package: &'a PackageMetadata<'a>,
-) -> BTreeMap<PlatformVariant, FeatureSet> {
+) -> BTreeMap<PlatformVariant, FeatureSet<'a>> {
     // Resolve a feature graph for all crates that depend on this one.
     let dependents = package
         .to_package_query(DependencyDirection::Reverse)

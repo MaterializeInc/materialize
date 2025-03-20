@@ -11,12 +11,13 @@
 
 use std::collections::BTreeMap;
 
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 /// A macro for feature flags managed by the optimizer.
 macro_rules! optimizer_feature_flags {
     ({ $($feature:ident: $type:ty,)* }) => {
-        #[derive(Clone, Debug, Default)]
+        #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, Arbitrary)]
         pub struct OptimizerFeatures {
             $(pub $feature: $type),*
         }
@@ -115,6 +116,14 @@ optimizer_feature_flags!({
     // Reoptimize imported views when building and optimizing a
     // `DataflowDescription` in the global MIR optimization phase.
     reoptimize_imported_views: bool,
+    // See the feature flag of the same name.
+    enable_reduce_reduction: bool,
+    // See the feature flag of the same name.
+    enable_join_prioritize_arranged: bool,
+    // Extract expressions in MFP::extract_common, making them available to sources.
+    extract_common_mfp_expressions: bool,
+    // See the feature flag of the same name.
+    enable_projection_pushdown_after_relation_cse: bool,
 });
 
 /// A trait used to implement layered config construction.

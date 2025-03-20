@@ -36,7 +36,8 @@ date +"%Y-%m-%d %H:%M:%S" > step_start_timestamp
 # interfere with this build.
 ci_collapsed_heading ":docker: Purging containers and volumes from previous builds"
 sudo systemctl restart docker
-mzcompose --mz-quiet kill
+# First time we are using ci-builder, allow retrying a few times in case dockerhub has network problems
+mzcompose --mz-quiet kill || mzcompose --mz-quiet kill || mzcompose --mz-quiet kill
 mzcompose --mz-quiet rm --force -v
 mzcompose --mz-quiet down --volumes
 killall -9 clusterd || true # There might be remaining processes from a previous cargo-test run
@@ -56,14 +57,19 @@ cores="$HOME"/cores
 rm -rf "$cores" parallel-workload-queries.log parallel-workload-queries.log.zst
 mkdir -m 777 "$cores"
 # Max 128 characters, so don't use $PWD which will make it too long
-sudo sysctl -w kernel.core_pattern="|/usr/bin/env tee $cores/core.%E.%t"
-echo -n "Core pattern: "
-cat /proc/sys/kernel/core_pattern
+# Ignore SIGABRT
+sudo sysctl -w kernel.core_pattern="|/usr/bin/ci-filter-core.sh %s $cores/core.%E.%t"
 
 # Start dependencies under a different heading so that the main heading is less
 # noisy. But not if the service is actually a workflow, in which case it will
 # do its own dependency management.
-if ! mzcompose --mz-quiet list-workflows | grep -q "$service"; then
+
+# Don't use `grep -q`! It will stop the `grep` process before mzcompose might
+# be finished, thus mzcompose can fail with `write /dev/stdout: broken pipe`.
+# Since we have `pipefail` set in this script, this would lead to a failure and
+# we would attempt to bring up the workflow, which will fail with `no such
+# service: default`.
+if ! mzcompose --mz-quiet list-workflows | grep "$service" > /dev/null; then
     ci_collapsed_heading ":docker: Starting dependencies"
     mzcompose up -d --scale "$service=0" "$service"
 fi
@@ -92,7 +98,19 @@ if is_truthy "${CI_HEAP_PROFILES:-}"; then
     ) &
 fi
 
-ci_uncollapsed_heading ":docker: Running \`bin/mzcompose --find $BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION run ${run_args[*]}\`"
+EXTRA_ARGS=$(echo "${CI_EXTRA_ARGS:-}" | jq -r ".[\"$BUILDKITE_STEP_KEY\"] // \"\"")
+
+if [ "${BUILDKITE_PARALLEL_JOB_COUNT:-1}" -gt 1 ]; then
+    TEST_CMD="BUILDKITE_PARALLEL_JOB=$BUILDKITE_PARALLEL_JOB BUILDKITE_PARALLEL_JOB_COUNT=$BUILDKITE_PARALLEL_JOB_COUNT bin/mzcompose --find $BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION run ${run_args[*]} $EXTRA_ARGS"
+else
+    TEST_CMD="bin/mzcompose --find $BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION run ${run_args[*]} $EXTRA_ARGS"
+fi
+echo "$TEST_CMD" > test_cmd
+TEST_DESC="$(mzcompose description)"
+echo "$TEST_DESC" > test_desc
+
+ci_uncollapsed_heading ":docker: Running \`$TEST_CMD\`"
+echo "$TEST_DESC"
 
 mzcompose run "${run_args[@]}" |& tee run.log
 RESULT=$?

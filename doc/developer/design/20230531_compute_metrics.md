@@ -1,9 +1,9 @@
 - Feature name: Operational metrics for Compute
 - Associated:
-  * [#18745: Improve Compute metrics dashboard](https://github.com/MaterializeInc/materialize/issues/18745)
-  * [#16026: Prometheus metrics for the Compute Controller](https://github.com/MaterializeInc/materialize/issues/16026)
-  * [#16951: Add replica connection metrics](https://github.com/MaterializeInc/materialize/issues/16951)
-  * [#17064: Add replica fully hydrated metric](https://github.com/MaterializeInc/materialize/issues/17064)
+  * [#18745: Improve Compute metrics dashboard](https://github.com/MaterializeInc/database-issues/issues/5547)
+  * [#16026: Prometheus metrics for the Compute Controller](https://github.com/MaterializeInc/database-issues/issues/4621)
+  * [#16951: Add replica connection metrics](https://github.com/MaterializeInc/database-issues/issues/4895)
+  * [#17064: Add replica fully hydrated metric](https://github.com/MaterializeInc/database-issues/issues/4934)
 
 # Summary
 [summary]: #summary
@@ -56,7 +56,7 @@ The Compute components in scope are:
 We consider the following goals useful but outside the scope of this design:
 
 * Providing analytics data to inform product decisions.
-* Providing observability for the optimizer. This work is tracked in <https://github.com/MaterializeInc/materialize/issues/17592>.
+* Providing observability for the optimizer. This work is tracked in <https://github.com/MaterializeInc/database-issues/issues/5111>.
 
 # Explanation
 [explanation]: #explanation
@@ -410,6 +410,6 @@ If it turns out that the additional queries made by the prometheus-exporter plac
 
 Once this design is implemented, Compute observability will be solid but likely not perfect.
 Future work will consist of identifying a) new valuable metrics we should also implement and b) implemented metrics that should be removed because they don't provide enough value.
-A large part of a) will consist of adding metrics for optimizer operation, as tracked by <https://github.com/MaterializeInc/materialize/issues/17592>.
+A large part of a) will consist of adding metrics for optimizer operation, as tracked by <https://github.com/MaterializeInc/database-issues/issues/5111>.
 
 Implementing a reliable and hydration signal for replicas and dataflows is left as future work as well.

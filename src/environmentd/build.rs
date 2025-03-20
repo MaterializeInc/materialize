@@ -13,8 +13,9 @@ fn main() -> Result<(), anyhow::Error> {
     println!("cargo:rustc-env=TARGET_TRIPLE={}", env::var("TARGET")?);
 
     cc::Build::new()
-        .file("src/bin/environmentd/sys.c")
+        .file("src/environmentd/sys.c")
         .compile("environmentd_sys");
 
-    mz_npm::ensure()
+    let out_dir = std::env::var("OUT_DIR").ok().map(std::path::PathBuf::from);
+    mz_npm::ensure(out_dir)
 }

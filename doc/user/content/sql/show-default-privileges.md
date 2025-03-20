@@ -11,18 +11,21 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-default-privileges.svg" >}}
+```sql
+SHOW DEFAULT PRIVILEGES [ON <object_type>] [FOR <role_name>]
+```
 
-Field                                               | Use
-----------------------------------------------------|--------------------------------------------------
-_object_name_                                       | Only shows default privileges for a specific object type.
-_role_name_                                         | Only shows default privileges granted directly or indirectly to _role_name_.
+
+Option                       | Description
+-----------------------------|--------------------------------------------------
+**ON** <object_type>         | If specified, only show default privileges for the specified object type. Accepted object types: <div style="display: flex;"> <ul style="margin-right: 20px;"> <li><strong>CLUSTERS</strong></li> <li><strong>CONNECTION</strong></li> <li><strong>DATABASES</strong></li> <li><strong>SCHEMAS</strong></li> </ul> <ul> <li><strong>SECRETS</strong></li> <li><strong>TABLES</strong></li> <li><strong>TYPES</strong></li> </ul> </div>
+**FOR** <role_name>          | If specified, only show default privileges granted directly or indirectly to the specified role. For available role names, see [`SHOW ROLES`](/sql/show-roles).
 
 [//]: # "TODO(morsapaes) Improve examples."
 
 ## Examples
 
-```sql
+```mzsql
 SHOW DEFAULT PRIVILEGES;
 ```
 
@@ -35,7 +38,7 @@ SHOW DEFAULT PRIVILEGES;
  mike         |          |        | table       | joe     | SELECT
 ```
 
-```sql
+```mzsql
 SHOW DEFAULT PRIVILEGES ON SCHEMAS;
 ```
 
@@ -45,7 +48,7 @@ SHOW DEFAULT PRIVILEGES ON SCHEMAS;
  PUBLIC       |          |        | schema      | mike    | CREATE
 ```
 
-```sql
+```mzsql
 SHOW DEFAULT PRIVILEGES FOR joe;
 ```
 
@@ -60,4 +63,4 @@ SHOW DEFAULT PRIVILEGES FOR joe;
 ## Related pages
 
 - [ALTER DEFAULT PRIVILEGES](../alter-default-privileges)
-- [access control](/manage/access-control/)
+- [Access control](/manage/access-control/#role-based-access-control-rbac)

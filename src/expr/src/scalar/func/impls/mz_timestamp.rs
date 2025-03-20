@@ -7,9 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use mz_ore::result::ResultExt;
-use mz_repr::adt::interval::Interval;
+use mz_repr::adt::date::Date;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{strconv, Timestamp};
@@ -48,7 +48,7 @@ sqlfunc!(
     fn cast_numeric_to_mz_timestamp(a: Numeric) -> Result<Timestamp, EvalError> {
         // The try_into will error if the conversion is lossy (out of range or fractional).
         a.try_into()
-            .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string()))
+            .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string().into()))
     }
 );
 
@@ -76,7 +76,7 @@ sqlfunc!(
     #[is_monotone = true]
     fn cast_int64_to_mz_timestamp(a: i64) -> Result<Timestamp, EvalError> {
         a.try_into()
-            .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string()))
+            .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string().into()))
     }
 );
 
@@ -87,7 +87,7 @@ sqlfunc!(
     fn cast_int32_to_mz_timestamp(a: i32) -> Result<Timestamp, EvalError> {
         i64::from(a)
             .try_into()
-            .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string()))
+            .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string().into()))
     }
 );
 
@@ -99,19 +99,7 @@ sqlfunc!(
     ) -> Result<Timestamp, EvalError> {
         a.timestamp_millis()
             .try_into()
-            .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string()))
-    }
-);
-
-sqlfunc!(
-    #[sqlname = "interval_to_mz_timestamp"]
-    #[is_monotone = true]
-    fn cast_interval_to_mz_timestamp(a: Interval) -> Result<Timestamp, EvalError> {
-        let ms: u64 = a
-            .as_milliseconds()
-            .try_into()
-            .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string()))?;
-        Ok(ms.into())
+            .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string().into()))
     }
 );
 
@@ -124,7 +112,20 @@ sqlfunc!(
         a.and_utc()
             .timestamp_millis()
             .try_into()
-            .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string()))
+            .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string().into()))
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "date_to_mz_timestamp"]
+    #[preserves_uniqueness = true]
+    #[is_monotone = true]
+    fn cast_date_to_mz_timestamp(a: Date) -> Result<Timestamp, EvalError> {
+        let ts = CheckedTimestamp::try_from(NaiveDate::from(a).and_hms_opt(0, 0, 0).unwrap())?;
+        ts.and_utc()
+            .timestamp_millis()
+            .try_into()
+            .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string().into()))
     }
 );
 

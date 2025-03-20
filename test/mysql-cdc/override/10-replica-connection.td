@@ -11,8 +11,6 @@ $ set-max-tries max-tries=20
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_mysql_source = true
 
 $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
 
@@ -55,7 +53,7 @@ START REPLICA;
 #
 # Now try creating a source for this replica, and we should hit an error
 #
-! CREATE SOURCE replica_source FROM MYSQL CONNECTION mysq_replica FOR ALL TABLES;
+! CREATE SOURCE replica_source FROM MYSQL CONNECTION mysq_replica;
 contains:Invalid MySQL system replication settings
 
 #
@@ -75,4 +73,5 @@ START REPLICA;
 #
 # Validate we can now create a source to this replica
 #
-> CREATE SOURCE replica_source FROM MYSQL CONNECTION mysq_replica FOR ALL TABLES;
+> CREATE SOURCE replica_source FROM MYSQL CONNECTION mysq_replica;
+> CREATE TABLE t1 FROM SOURCE replica_source (REFERENCE public.t1);

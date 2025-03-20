@@ -10,11 +10,13 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-tables.svg" >}}
+```mzsql
+SHOW TABLES [FROM <schema_name>]
+```
 
-Field | Use
-------|-----
-_schema&lowbar;name_ | The schema to show tables from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+Option                 | Description
+-----------------------|------------
+**FROM** <schema_name> | If specified, only show tables from the specified schema. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 
 ## Details
 
@@ -25,7 +27,7 @@ _schema&lowbar;name_ | The schema to show tables from. Defaults to first resolva
 ## Examples
 
 ### Show user-created tables
-```sql
+```mzsql
 SHOW TABLES;
 ```
 ```nofmt
@@ -36,7 +38,7 @@ SHOW TABLES;
 ```
 
 ### Show tables from specified schema
-```sql
+```mzsql
 SHOW SCHEMAS;
 ```
 ```nofmt
@@ -44,7 +46,7 @@ SHOW SCHEMAS;
 --------
  public
 ```
-```sql
+```mzsql
 SHOW TABLES FROM public;
 ```
 ```nofmt

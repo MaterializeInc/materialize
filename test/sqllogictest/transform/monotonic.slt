@@ -17,7 +17,7 @@ CREATE SOURCE counter FROM LOAD GENERATOR COUNTER;
 
 # Properly TopK
 query T multiline
-EXPLAIN SELECT * FROM (SELECT counter FROM counter limit 1);
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM (SELECT counter FROM counter limit 1);
 ----
 Explained Query:
   TopK limit=1 monotonic
@@ -31,7 +31,7 @@ EOF
 
 # Infer monotonic Reduce operator
 query T multiline
-EXPLAIN SELECT counter % 3, MAX(counter) as sum FROM counter GROUP BY counter % 3;
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT counter % 3, MAX(counter) as sum FROM counter GROUP BY counter % 3;
 ----
 Explained Query:
   Reduce group_by=[(#0 % 3)] aggregates=[max(#0)] monotonic
@@ -43,7 +43,7 @@ Target cluster: quickstart
 
 EOF
 
-# Propagating monotonicity analysis through materialized views
+# _No_ propagation of monotonicity through materialized views
 
 statement ok
 CREATE MATERIALIZED VIEW v1 AS SELECT DISTINCT counter % 3 as f1 FROM counter GROUP BY counter % 3;
@@ -52,10 +52,10 @@ statement ok
 CREATE MATERIALIZED VIEW v2 AS SELECT f1 as counter FROM v1 WHERE f1 % 7 = 0;
 
 query T multiline
-EXPLAIN SELECT * FROM v1 CROSS JOIN LATERAL (SELECT * FROM v2 WHERE counter < f1 ORDER BY counter DESC LIMIT 3);
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM v1 CROSS JOIN LATERAL (SELECT * FROM v2 WHERE counter < f1 ORDER BY counter DESC LIMIT 3);
 ----
 Explained Query:
-  TopK group_by=[#0] order_by=[#1 desc nulls_first] limit=3 monotonic
+  TopK group_by=[#0] order_by=[#1 desc nulls_first] limit=3
     Filter (#1 < #0)
       CrossJoin type=differential
         ArrangeBy keys=[[]]
@@ -75,7 +75,7 @@ EOF
 # Positive example: both c1 and c2 and consequently the body of the
 # WMR are monotonic.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE
   c0(x INT, y INT) AS (
     SELECT * FROM (VALUES (1, 2), (3, 4), (5, 6))
@@ -93,23 +93,7 @@ WITH MUTUALLY RECURSIVE
 SELECT x, MAX(y) FROM (SELECT * FROM c1 UNION SELECT * FROM c2) GROUP BY x
 ----
 Explained Query:
-  Return
-    Reduce group_by=[#0] aggregates=[max(#1)] monotonic
-      Distinct project=[#0, #1] monotonic
-        Union
-          Get l0
-          Get l1
   With Mutually Recursive
-    cte l1 =
-      Union
-        Distinct project=[#0, (#0 + 1)] monotonic
-          Project (#0)
-            Filter (#0 >= 1)
-              Get l0
-        Constant
-          - (1, 2)
-          - (3, 4)
-          - (5, 6)
     cte l0 =
       Union
         Distinct project=[#0, (#0 - 1)] monotonic
@@ -120,6 +104,22 @@ Explained Query:
           - (1, 2)
           - (3, 4)
           - (5, 6)
+    cte l1 =
+      Union
+        Distinct project=[#0, (#0 + 1)] monotonic
+          Project (#0)
+            Filter (#0 >= 1)
+              Get l0
+        Constant
+          - (1, 2)
+          - (3, 4)
+          - (5, 6)
+  Return
+    Reduce group_by=[#0] aggregates=[max(#1)] monotonic
+      Distinct project=[#0, #1] monotonic
+        Union
+          Get l0
+          Get l1
 
 Target cluster: quickstart
 
@@ -128,7 +128,7 @@ EOF
 # Negative example: c2 (and consequently c2 and the WMR block body) are not
 # monotonic because c2 has a LIMIT clause.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE
   c0(x INT, y INT) AS (
     SELECT * FROM (VALUES (1, 2), (3, 4), (5, 6))
@@ -146,13 +146,17 @@ WITH MUTUALLY RECURSIVE
 SELECT x, MAX(y) FROM (SELECT * FROM c1 UNION SELECT * FROM c2) GROUP BY x
 ----
 Explained Query:
-  Return
-    Reduce group_by=[#0] aggregates=[max(#1)]
-      Distinct project=[#0, #1]
-        Union
-          Get l0
-          Get l1
   With Mutually Recursive
+    cte l0 =
+      Union
+        Distinct project=[#0, (#0 - 1)]
+          Project (#1)
+            Filter (#0 < 1)
+              Get l1
+        Constant
+          - (1, 2)
+          - (3, 4)
+          - (5, 6)
     cte l1 =
       TopK limit=2
         Union
@@ -164,16 +168,12 @@ Explained Query:
             - (1, 2)
             - (3, 4)
             - (5, 6)
-    cte l0 =
-      Union
-        Distinct project=[#0, (#0 - 1)]
-          Project (#1)
-            Filter (#0 < 1)
-              Get l1
-        Constant
-          - (1, 2)
-          - (3, 4)
-          - (5, 6)
+  Return
+    Reduce group_by=[#0] aggregates=[max(#1)]
+      Distinct project=[#0, #1]
+        Union
+          Get l0
+          Get l1
 
 Target cluster: quickstart
 

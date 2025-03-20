@@ -212,7 +212,7 @@ test
 query error pgcode 42P01 relation "d2.v1" does not exist
 SELECT * FROM d2.v1
 
-## drop a database containing tables with foreign key constraints, e.g. #8497
+## drop a database containing tables with foreign key constraints, e.g. materialize#8497
 
 statement ok
 CREATE DATABASE constraint_db

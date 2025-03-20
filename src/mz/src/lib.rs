@@ -17,12 +17,12 @@
 #![warn(missing_docs)]
 
 use mz_build_info::{build_info, BuildInfo};
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 /// Build information about MZ
 pub const BUILD_INFO: BuildInfo = build_info!();
 /// Variable holding the version of MZ
-pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.semver_version().to_string());
+pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.semver_version().to_string());
 
 pub mod command;
 pub mod config_file;

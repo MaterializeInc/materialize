@@ -16,7 +16,7 @@ use crate::parser::BuiltinCommand;
 
 pub async fn run_wait_topic(
     mut cmd: BuiltinCommand,
-    state: &mut State,
+    state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let topic = cmd.args.string("topic")?;
 

@@ -20,7 +20,7 @@ use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
-use mz_persist_client::batch::Batch;
+use mz_persist_client::batch::{Batch, ProtoBatch};
 use mz_persist_client::ShardId;
 use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
 use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
@@ -34,32 +34,26 @@ use crate::txns::{Tidy, TxnsHandle};
 
 /// Pending writes to a shard for an in-progress transaction.
 #[derive(Debug)]
-pub(crate) struct TxnWrite<K, V, T, D>
-where
-    T: Timestamp + Lattice + Codec64,
-{
+pub(crate) struct TxnWrite<K, V, T, D> {
     pub(crate) batches: Vec<Batch<K, V, T, D>>,
+    pub(crate) staged: Vec<ProtoBatch>,
     pub(crate) writes: Vec<(K, V, D)>,
 }
 
-impl<K, V, T, D> TxnWrite<K, V, T, D>
-where
-    T: Timestamp + Lattice + Codec64,
-{
+impl<K, V, T, D> TxnWrite<K, V, T, D> {
     /// Merges the staged writes in `other` into this.
     pub fn merge(&mut self, other: Self) {
         self.batches.extend(other.batches);
+        self.staged.extend(other.staged);
         self.writes.extend(other.writes);
     }
 }
 
-impl<K, V, T, D> Default for TxnWrite<K, V, T, D>
-where
-    T: Timestamp + Lattice + Codec64,
-{
+impl<K, V, T, D> Default for TxnWrite<K, V, T, D> {
     fn default() -> Self {
         Self {
             batches: Vec::default(),
+            staged: Vec::default(),
             writes: Vec::default(),
         }
     }
@@ -67,10 +61,7 @@ where
 
 /// An in-progress transaction.
 #[derive(Debug)]
-pub struct Txn<K, V, T, D>
-where
-    T: Timestamp + Lattice + Codec64,
-{
+pub struct Txn<K, V, T, D> {
     pub(crate) writes: BTreeMap<ShardId, TxnWrite<K, V, T, D>>,
     tidy: Tidy,
 }
@@ -79,7 +70,7 @@ impl<K, V, T, D> Txn<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
     D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
 {
     pub(crate) fn new() -> Self {
@@ -102,6 +93,13 @@ where
             .or_default()
             .writes
             .push((key, val, diff))
+    }
+
+    /// Stage a [`Batch`] to the in-progress txn.
+    ///
+    /// The timestamp will be assigned at commit time.
+    pub fn write_batch(&mut self, data_id: &ShardId, batch: ProtoBatch) {
+        self.writes.entry(*data_id).or_default().staged.push(batch)
     }
 
     /// Commit this transaction at `commit_ts`.
@@ -169,22 +167,22 @@ where
 
                 let txn_batches_updates = FuturesUnordered::new();
                 while let Some((data_id, updates)) = self.writes.pop_first() {
-                    let mut data_write = handle.datas.take_write(&data_id).await;
+                    let data_write =
+                        handle
+                            .datas
+                            .take_write_for_commit(&data_id)
+                            .unwrap_or_else(|| {
+                                panic!(
+                                "data shard {} must be registered with this Txn handle to commit",
+                                data_id
+                            )
+                            });
                     let commit_ts = commit_ts.clone();
                     txn_batches_updates.push(async move {
-                        let mut batches = updates
-                            .batches
-                            .into_iter()
-                            .map(|mut batch| {
-                                batch
-                                    .rewrite_ts(
-                                        &Antichain::from_elem(commit_ts.clone()),
-                                        Antichain::from_elem(commit_ts.step_forward()),
-                                    )
-                                    .expect("invalid usage");
-                                batch.into_transmittable_batch()
-                            })
-                            .collect::<Vec<_>>();
+                        let mut batches =
+                            Vec::with_capacity(updates.staged.len() + updates.batches.len() + 1);
+
+                        // Form batches for any Row data.
                         if !updates.writes.is_empty() {
                             let mut batch = data_write.builder(Antichain::from_elem(T::minimum()));
                             for (k, v, d) in updates.writes.iter() {
@@ -197,6 +195,30 @@ where
                             let batch = batch.into_transmittable_batch();
                             batches.push(batch);
                         }
+
+                        // Append any already staged Batches.
+                        batches.extend(updates.staged.into_iter());
+                        batches.extend(
+                            updates
+                                .batches
+                                .into_iter()
+                                .map(|b| b.into_transmittable_batch()),
+                        );
+
+                        // Rewrite the timestamp for them all.
+                        let batches: Vec<_> = batches
+                            .into_iter()
+                            .map(|batch| {
+                                let mut batch = data_write.batch_from_transmittable_batch(batch);
+                                batch
+                                    .rewrite_ts(
+                                        &Antichain::from_elem(commit_ts.clone()),
+                                        Antichain::from_elem(commit_ts.step_forward()),
+                                    )
+                                    .expect("invalid usage");
+                                batch.into_transmittable_batch()
+                            })
+                            .collect();
 
                         let batch_updates = batches
                             .into_iter()
@@ -285,7 +307,7 @@ where
                                     .commit_bytes
                                     .inc_by(u64::cast_from(batch.encoded_size_bytes()));
                             }
-                            handle.datas.put_write(data_write);
+                            handle.datas.put_write_for_commit(data_write);
                         }
                         return Ok(TxnApply {
                             is_empty: apply_is_empty,
@@ -305,10 +327,11 @@ where
                                 .collect();
                             let txn_write = TxnWrite {
                                 writes: Vec::new(),
+                                staged: Vec::new(),
                                 batches,
                             };
                             self.writes.insert(data_write.shard_id(), txn_write);
-                            handle.datas.put_write(data_write);
+                            handle.datas.put_write_for_commit(data_write);
                         }
                         let _ = handle.txns_cache.update_ge(&txns_upper).await;
                         continue;
@@ -356,28 +379,13 @@ impl<T> TxnApply<T> {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+        T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
         D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
         O: Opaque + Debug + Codec64,
         C: TxnsCodec,
     {
         debug!("txn apply {:?}", self.commit_ts);
         handle.apply_le(&self.commit_ts).await
-    }
-
-    /// [Self::apply] but also advances the physical upper of each data shard
-    /// past the commit timestamp.
-    pub async fn apply_eager<K, V, D, O, C>(self, handle: &mut TxnsHandle<K, V, T, D, O, C>) -> Tidy
-    where
-        K: Debug + Codec,
-        V: Debug + Codec,
-        T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-        D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
-        O: Opaque + Debug + Codec64,
-        C: TxnsCodec,
-    {
-        debug!("txn apply {:?}", self.commit_ts);
-        handle.apply_eager_le(&self.commit_ts).await
     }
 
     /// Returns whether the apply represents a txn with any non-tidy writes.
@@ -395,6 +403,7 @@ mod tests {
 
     use futures::stream::FuturesUnordered;
     use futures::StreamExt;
+    use mz_ore::assert_err;
     use mz_persist_client::PersistClient;
 
     use crate::tests::writer;
@@ -660,7 +669,7 @@ mod tests {
                 txn.commit_at(&mut txns, 1).await
             }
         });
-        assert!(commit.await.is_err());
+        assert_err!(commit.await);
 
         let d0 = txns.expect_register(2).await;
         txns.forget(3, [d0]).await.unwrap();
@@ -675,7 +684,7 @@ mod tests {
                 txn.commit_at(&mut txns, 4).await
             }
         });
-        assert!(commit.await.is_err());
+        assert_err!(commit.await);
     }
 
     #[mz_ore::test(tokio::test)]

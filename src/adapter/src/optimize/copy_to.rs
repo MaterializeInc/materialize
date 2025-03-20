@@ -21,6 +21,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_repr::explain::trace_plan;
 use mz_repr::{GlobalId, Timestamp};
+use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_types::connections::Connection;
@@ -38,7 +39,6 @@ use crate::optimize::dataflows::{
     prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, EvalTime,
     ExprPrepStyle,
 };
-use crate::optimize::metrics::OptimizerMetrics;
 use crate::optimize::{
     optimize_mir_local, trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize,
     OptimizeMode, OptimizerConfig, OptimizerError,
@@ -139,6 +139,10 @@ pub struct GlobalLirPlan {
 }
 
 impl GlobalLirPlan {
+    pub fn df_desc(&self) -> &LirDataflowDescription {
+        &self.df_desc
+    }
+
     pub fn sink_id(&self) -> GlobalId {
         let sink_exports = &self.df_desc.sink_exports;
         let sink_id = sink_exports.keys().next().expect("valid sink");
@@ -156,12 +160,16 @@ impl Optimize<HirRelationExpr> for Optimizer {
         trace_plan!(at: "raw", &expr);
 
         // HIR ⇒ MIR lowering and decorrelation
-        let expr = expr.lower(&self.config)?;
+        let expr = expr.lower(&self.config, Some(&self.metrics))?;
 
         // MIR ⇒ MIR optimization (local)
         let mut df_meta = DataflowMetainfo::default();
-        let mut transform_ctx =
-            TransformCtx::local(&self.config.features, &self.typecheck_ctx, &mut df_meta);
+        let mut transform_ctx = TransformCtx::local(
+            &self.config.features,
+            &self.typecheck_ctx,
+            &mut df_meta,
+            Some(&self.metrics),
+        );
         let expr = optimize_mir_local(expr, &mut transform_ctx)?.into_inner();
 
         self.duration += time.elapsed();
@@ -225,7 +233,12 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         let debug_name = format!("copy-to-{}", self.select_id);
         let mut df_desc = MirDataflowDescription::new(debug_name.to_string());
 
-        df_builder.import_view_into_dataflow(&self.select_id, &expr, &mut df_desc)?;
+        df_builder.import_view_into_dataflow(
+            &self.select_id,
+            &expr,
+            &mut df_desc,
+            &self.config.features,
+        )?;
         df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
         // Creating an S3 sink as currently only s3 sinks are supported. It
@@ -312,9 +325,10 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             &self.config.features,
             &self.typecheck_ctx,
             &mut df_meta,
+            Some(&self.metrics),
         );
         // Run global optimization.
-        mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx)?;
+        mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx, false)?;
 
         if self.config.mode == OptimizeMode::Explain {
             // Collect the list of indexes used by the dataflow at this point.

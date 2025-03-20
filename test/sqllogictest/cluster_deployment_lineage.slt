@@ -1,0 +1,51 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# Start from a pristine server
+reset-server
+
+# Test: Create a cluster and verify blue/green lineage
+
+# Create the clusters for blue/green deployment
+statement ok
+CREATE CLUSTER blue_green (SIZE = '1');
+
+statement ok
+CREATE CLUSTER blue_green_dbt_deploy (SIZE = '1');
+
+# Create a cluster that is not part of the blue/green deployment
+statement ok
+CREATE CLUSTER non_blue_green (SIZE = '1');
+
+query TT
+SELECT id, name FROM mz_clusters WHERE id IN ('u2', 'u3', 'u4') ORDER BY id;
+----
+u2  blue_green
+u3  blue_green_dbt_deploy
+u4  non_blue_green
+
+# Initiate the blue/green deployment
+statement ok
+ALTER CLUSTER blue_green_dbt_deploy SWAP WITH blue_green;
+
+statement ok
+DROP CLUSTER blue_green_dbt_deploy;
+
+# Verify the blue/green lineage
+query TTT
+SELECT cluster_id, current_deployment_cluster_id, cluster_name
+FROM mz_internal.mz_cluster_deployment_lineage
+WHERE cluster_id IN ('u2', 'u3', 'u4')
+ORDER BY cluster_id;
+----
+u2  u3  blue_green
+u3  u3  blue_green
+u4  u4  non_blue_green

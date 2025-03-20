@@ -12,5 +12,5 @@ syntax = "proto3";
 package mz_repr.adt.date;
 
 message ProtoDate {
-    int32 days = 1;
+  int32 days = 1;
 }

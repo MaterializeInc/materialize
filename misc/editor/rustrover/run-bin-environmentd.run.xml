@@ -1,0 +1,27 @@
+<!--
+Copyright Materialize, Inc. and contributors. All rights reserved.
+
+Use of this software is governed by the Business Source License
+included in the LICENSE file at the root of this repository.
+
+As of the Change Date specified in that file, in accordance with
+the Business Source License, use of this software will be governed
+by the Apache License, Version 2.0.
+-->
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="run-bin-environmentd" type="ShConfigurationType">
+    <option name="SCRIPT_TEXT" value="bin/environmentd --reset" />
+    <option name="INDEPENDENT_SCRIPT_PATH" value="true" />
+    <option name="SCRIPT_PATH" value="" />
+    <option name="SCRIPT_OPTIONS" value="" />
+    <option name="INDEPENDENT_SCRIPT_WORKING_DIRECTORY" value="true" />
+    <option name="SCRIPT_WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <option name="INDEPENDENT_INTERPRETER_PATH" value="true" />
+    <option name="INTERPRETER_PATH" value="/nix/store/k69pyqgx9bzzwr24jg7v0bfiibhs2qmv-bash-interactive-5.2p32/bin/bash" />
+    <option name="INTERPRETER_OPTIONS" value="" />
+    <option name="EXECUTE_IN_TERMINAL" value="false" />
+    <option name="EXECUTE_SCRIPT_FILE" value="false" />
+    <envs />
+    <method v="2" />
+  </configuration>
+</component>

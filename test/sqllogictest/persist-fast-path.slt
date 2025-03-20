@@ -9,8 +9,16 @@
 
 mode cockroach
 
+# To make ordering deterministic for fast-path peeks, enable the
+# structured part format and set Persist to use that ordering.
+
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET persist_fast_path_limit = 100
+ALTER SYSTEM SET persist_batch_columnar_format = 'both_v2'
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET persist_batch_structured_order = true
 ----
 COMPLETE 0
 
@@ -26,7 +34,7 @@ CREATE TABLE numbers (
 # projecting is fine.
 
 query T multiline
-EXPLAIN SELECT * from numbers limit 10;
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * from numbers limit 10;
 ----
 Explained Query (fast path):
   Finish limit=10 output=[#0]
@@ -37,7 +45,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN SELECT value + 1000 from numbers LIMIT 10;
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT value + 1000 from numbers LIMIT 10;
 ----
 Explained Query (fast path):
   Finish limit=10 output=[#0]
@@ -50,7 +58,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN SELECT * from numbers LIMIT 10 OFFSET 10;
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * from numbers LIMIT 10 OFFSET 10;
 ----
 Explained Query (fast path):
   Finish limit=10 offset=10 output=[#0]
@@ -68,10 +76,9 @@ INSERT INTO numbers SELECT generate_series(1, 3);
 statement ok
 INSERT INTO numbers SELECT generate_series(1, 10);
 
-# The ordering here is technically nondeterministic, but in practice unlikely to change.
-# Feel free to rewrite or remove if this causes trouble.
+# We should deterministically return the first N values.
 
-query T
+query T valuesort
 SELECT value from numbers LIMIT 20;
 ----
 1
@@ -103,22 +110,22 @@ statement ok
 INSERT INTO numbers SELECT generate_series(5, 100);
 
 statement ok
-INSERT INTO numbers SELECT generate_series(50, 1000);
+INSERT INTO numbers SELECT generate_series(-1, 10);
 
 statement ok
 INSERT INTO numbers SELECT generate_series(500, 10000);
 
-# Since we don't guarantee which of the rows are returned, transform the results
-# in a way that doesn't depend on the specific values.
+# Since we order the data in terms of its structured representation, we see the
+# smallest values regardless of which order they were inserted in.
 
-query T
-SELECT value < 999999 from numbers LIMIT 5;
+query T valuesort
+SELECT value from numbers LIMIT 5;
 ----
-true
-true
-true
-true
-true
+-1
+0
+1
+1
+1
 
 # Errors should always be returned even when the limit is small
 statement ok
@@ -131,7 +138,7 @@ SELECT * FROM erroring LIMIT 10;
 # that might require a full scan.
 
 query T multiline
-EXPLAIN SELECT * from numbers LIMIT 1000;
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * from numbers LIMIT 1000;
 ----
 Explained Query:
   Finish limit=1000 output=[#0]
@@ -144,7 +151,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN SELECT * from numbers ORDER BY value LIMIT 10;
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * from numbers ORDER BY value LIMIT 10;
 ----
 Explained Query:
   Finish order_by=[#0 asc nulls_last] limit=10 output=[#0]
@@ -157,7 +164,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN SELECT * from numbers WHERE value > mz_now() LIMIT 10;
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * from numbers WHERE value > mz_now() LIMIT 10;
 ----
 Explained Query:
   Finish limit=10 output=[#0]
@@ -173,18 +180,22 @@ EOF
 
 # Check that we bound result set size correctly
 
+statement ok
+CREATE TABLE large_rows (a int, b text)
+
+statement ok
+INSERT INTO large_rows SELECT * FROM generate_series(1, 100), repeat('a', 100000)
+
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET max_result_size TO 100;
+ALTER SYSTEM SET max_result_size TO '1MB';
 ----
 COMPLETE 0
 
-query T
-SELECT * FROM numbers LIMIT 1;
-----
-1
+statement ok
+SELECT * FROM large_rows LIMIT 1;
 
-query error db error: ERROR: result exceeds max size of 100 B
-SELECT * FROM numbers LIMIT 99;
+query error db error: ERROR: result exceeds max size of 1048.6 KB
+SELECT * FROM large_rows LIMIT 99;
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM RESET max_result_size
@@ -197,7 +208,7 @@ statement ok
 CREATE DEFAULT INDEX ON numbers;
 
 query T multiline
-EXPLAIN SELECT * from numbers LIMIT 10;
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * from numbers LIMIT 10;
 ----
 Explained Query (fast path):
   Finish limit=10 output=[#0]

@@ -33,7 +33,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::zip_eq;
-use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
+use mz_expr::{
+    Id, JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
+};
+use mz_ore::assert_none;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
 use crate::{TransformCtx, TransformError};
@@ -42,12 +45,25 @@ use crate::{TransformCtx, TransformError};
 #[derive(Debug)]
 pub struct ProjectionPushdown {
     recursion_guard: RecursionGuard,
+    include_joins: bool,
 }
 
 impl Default for ProjectionPushdown {
     fn default() -> Self {
         Self {
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+            include_joins: true,
+        }
+    }
+}
+
+impl ProjectionPushdown {
+    /// Construct a `ProjectionPushdown` that does not push projections through joins (but does
+    /// descend into join inputs).
+    pub fn skip_joins() -> Self {
+        Self {
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+            include_joins: false,
         }
     }
 }
@@ -59,13 +75,17 @@ impl CheckedRecursion for ProjectionPushdown {
 }
 
 impl crate::Transform for ProjectionPushdown {
+    fn name(&self) -> &'static str {
+        "ProjectionPushdown"
+    }
+
     // This method is only used during unit testing.
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "projection_pushdown")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
@@ -151,7 +171,7 @@ impl ProjectionPushdown {
                     // Seed the gets map with empty demand for each non-recursive ID.
                     for id in ids.iter().filter(|id| !rec_ids.contains(id)) {
                         let prior = gets.insert(Id::Local(*id), BTreeSet::new());
-                        assert!(prior.is_none());
+                        assert_none!(prior);
                     }
 
                     // Descend into the body with the supplied desired_projection.
@@ -202,8 +222,13 @@ impl ProjectionPushdown {
                 MirRelationExpr::Join {
                     inputs,
                     equivalences,
-                    ..
-                } => {
+                    implementation,
+                } if self.include_joins => {
+                    assert!(
+                        matches!(implementation, JoinImplementation::Unimplemented),
+                        "ProjectionPushdown can't deal with filled in join implementations. Turn off `include_joins` if you'd like to run it after `JoinImplementation`."
+                    );
+
                     let input_mapper = JoinInputMapper::new(inputs);
 
                     let mut columns_to_pushdown =
@@ -229,6 +254,23 @@ impl ProjectionPushdown {
                         equivalences.iter_mut().flat_map(|e| e.iter_mut()),
                         columns_to_pushdown.iter(),
                     );
+
+                    columns_to_pushdown.into_iter().collect()
+                }
+                // Skip joins if `self.include_joins` is turned off.
+                MirRelationExpr::Join { inputs, equivalences: _, implementation: _ } => {
+                    let input_mapper = JoinInputMapper::new(inputs);
+
+                    // Include all columns.
+                    let columns_to_pushdown: Vec<_> = (0..input_mapper.total_columns()).collect();
+                    let child_columns =
+                        input_mapper.split_column_set_by_input(columns_to_pushdown.iter());
+
+                    // Recursively indicate the requirements.
+                    for (input, inp_columns) in inputs.iter_mut().zip(child_columns) {
+                        let inp_columns = inp_columns.into_iter().collect::<Vec<_>>();
+                        self.action(input, &inp_columns, gets)?;
+                    }
 
                     columns_to_pushdown.into_iter().collect()
                 }

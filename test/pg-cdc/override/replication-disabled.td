@@ -32,6 +32,5 @@ ALTER TABLE pk_table REPLICA IDENTITY FULL;
 INSERT INTO pk_table VALUES (2, 'two');
 
 ! CREATE SOURCE pg_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR TABLES ("pk_table");
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 contains:replication disabled on server

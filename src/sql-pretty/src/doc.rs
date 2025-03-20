@@ -36,6 +36,85 @@ fn doc_display_pass<'a, T: AstDisplay>(v: &T) -> RcDoc<'a, ()> {
     RcDoc::text(v.to_ast_string())
 }
 
+pub(crate) fn doc_create_source<T: AstInfo>(v: &CreateSourceStatement<T>) -> RcDoc {
+    let mut docs = Vec::new();
+    let title = format!(
+        "CREATE SOURCE{}",
+        if v.if_not_exists {
+            " IF NOT EXISTS"
+        } else {
+            ""
+        }
+    );
+    let mut doc = doc_display_pass(&v.name);
+    let mut names = Vec::new();
+    names.extend(v.col_names.iter().map(doc_display_pass));
+    names.extend(v.key_constraint.iter().map(doc_display_pass));
+    if !names.is_empty() {
+        doc = nest(doc, bracket("(", comma_separated(names), ")"));
+    }
+    docs.push(nest_title(title, doc));
+    if let Some(cluster) = &v.in_cluster {
+        docs.push(nest_title("IN CLUSTER", doc_display_pass(cluster)));
+    }
+    docs.push(nest_title("FROM", doc_display_pass(&v.connection)));
+    if let Some(format) = &v.format {
+        docs.push(doc_format_specifier(format));
+    }
+    if !v.include_metadata.is_empty() {
+        docs.push(nest_title(
+            "INCLUDE",
+            comma_separate(doc_display_pass, &v.include_metadata),
+        ));
+    }
+    if let Some(envelope) = &v.envelope {
+        docs.push(nest_title("ENVELOPE", doc_display_pass(envelope)));
+    }
+    if let Some(references) = &v.external_references {
+        docs.push(doc_external_references(references));
+    }
+    if let Some(progress) = &v.progress_subsource {
+        docs.push(nest_title("EXPOSE PROGRESS AS", doc_display_pass(progress)));
+    }
+    if !v.with_options.is_empty() {
+        docs.push(bracket(
+            "WITH (",
+            comma_separate(doc_display_pass, &v.with_options),
+            ")",
+        ));
+    }
+    RcDoc::intersperse(docs, Doc::line()).group()
+}
+
+fn doc_format_specifier<T: AstInfo>(v: &FormatSpecifier<T>) -> RcDoc {
+    match v {
+        FormatSpecifier::Bare(format) => nest_title("FORMAT", doc_display_pass(format)),
+        FormatSpecifier::KeyValue { key, value } => {
+            let docs = vec![
+                nest_title("KEY FORMAT", doc_display_pass(key)),
+                nest_title("VALUE FORMAT", doc_display_pass(value)),
+            ];
+            RcDoc::intersperse(docs, Doc::line()).group()
+        }
+    }
+}
+
+fn doc_external_references(v: &ExternalReferences) -> RcDoc {
+    match v {
+        ExternalReferences::SubsetTables(subsources) => bracket(
+            "FOR TABLES (",
+            comma_separate(doc_display_pass, subsources),
+            ")",
+        ),
+        ExternalReferences::SubsetSchemas(schemas) => bracket(
+            "FOR SCHEMAS (",
+            comma_separate(doc_display_pass, schemas),
+            ")",
+        ),
+        ExternalReferences::All => RcDoc::text("FOR ALL TABLES"),
+    }
+}
+
 pub(crate) fn doc_copy<T: AstInfo>(v: &CopyStatement<T>) -> RcDoc {
     let relation = match &v.relation {
         CopyRelation::Named { name, columns } => {
@@ -452,6 +531,9 @@ fn doc_select<T: AstInfo>(v: &Select<T>) -> RcDoc {
     if let Some(having) = &v.having {
         docs.push(nest_title("HAVING", doc_expr(having)));
     }
+    if let Some(qualify) = &v.qualify {
+        docs.push(nest_title("QUALIFY", doc_expr(qualify)));
+    }
     if !v.options.is_empty() {
         docs.push(bracket(
             "OPTIONS (",
@@ -514,22 +596,7 @@ pub fn doc_expr<T: AstInfo>(v: &Expr<T>) -> RcDoc {
             bracket_doc(RcDoc::text("CASE"), doc, RcDoc::text("END"), RcDoc::line())
         }
         Expr::Cast { expr, data_type } => {
-            // See AstDisplay for Expr for an explanation of this.
-            let needs_wrap = !matches!(
-                **expr,
-                Expr::Nested(_)
-                    | Expr::Value(_)
-                    | Expr::Cast { .. }
-                    | Expr::Function { .. }
-                    | Expr::Identifier { .. }
-                    | Expr::Collate { .. }
-                    | Expr::HomogenizingFunction { .. }
-                    | Expr::NullIf { .. }
-            );
-            let mut doc = doc_expr(expr);
-            if needs_wrap {
-                doc = bracket("(", doc, ")");
-            }
+            let doc = doc_expr(expr);
             RcDoc::concat([doc, RcDoc::text(format!("::{}", data_type.to_ast_string()))])
         }
         Expr::Nested(ast) => bracket("(", doc_expr(ast), ")"),

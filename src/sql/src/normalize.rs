@@ -21,11 +21,13 @@ use mz_repr::{ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
+    ContinualTaskStmt, CreateConnectionStatement, CreateContinualTaskStatement,
+    CreateContinualTaskSugar, CreateIndexStatement, CreateMaterializedViewStatement,
     CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
-    CreateTableStatement, CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement,
-    CteBlock, Function, FunctionArgs, Ident, IfExistsBehavior, MutRecBlock, Op, Query, Statement,
-    TableFactor, UnresolvedItemName, UnresolvedSchemaName, Value, ViewDefinition,
+    CreateTableFromSourceStatement, CreateTableStatement, CreateTypeStatement, CreateViewStatement,
+    CreateWebhookSourceStatement, CteBlock, Function, FunctionArgs, Ident, IfExistsBehavior,
+    MutRecBlock, Op, Query, Statement, TableFactor, TableFromSourceColumns, UnresolvedItemName,
+    UnresolvedSchemaName, Value, ViewDefinition,
 };
 
 use crate::names::{Aug, FullItemName, PartialItemName, PartialSchemaName, RawDatabaseSpecifier};
@@ -270,7 +272,7 @@ pub fn create_statement(
             if_not_exists,
             key_constraint: _,
             with_options: _,
-            referenced_subsources: _,
+            external_references: _,
             progress_subsource: _,
         }) => {
             *name = allocate_name(name)?;
@@ -289,6 +291,31 @@ pub fn create_statement(
             let mut normalizer = QueryNormalizer::new();
             for c in columns {
                 normalizer.visit_column_def_mut(c);
+            }
+            if let Some(err) = normalizer.err {
+                return Err(err);
+            }
+            *if_not_exists = false;
+        }
+
+        Statement::CreateTableFromSource(CreateTableFromSourceStatement {
+            name,
+            columns,
+            constraints: _,
+            external_reference: _,
+            source: _,
+            if_not_exists,
+            format: _,
+            include_metadata: _,
+            envelope: _,
+            with_options: _,
+        }) => {
+            *name = allocate_name(name)?;
+            let mut normalizer = QueryNormalizer::new();
+            if let TableFromSourceColumns::Defined(columns) = columns {
+                for c in columns {
+                    normalizer.visit_column_def_mut(c);
+                }
             }
             if let Some(err) = normalizer.err {
                 return Err(err);
@@ -321,6 +348,7 @@ pub fn create_statement(
 
         Statement::CreateWebhookSource(CreateWebhookSourceStatement {
             name,
+            is_table: _,
             if_not_exists,
             include_headers: _,
             body_format: _,
@@ -391,6 +419,39 @@ pub fn create_statement(
             *if_exists = IfExistsBehavior::Error;
         }
 
+        Statement::CreateContinualTask(CreateContinualTaskStatement {
+            name,
+            columns: _,
+            input,
+            with_options: _,
+            stmts,
+            in_cluster: _,
+            as_of: _,
+            sugar,
+        }) => {
+            let mut normalizer = QueryNormalizer::new();
+            normalizer.visit_item_name_mut(name);
+            normalizer.visit_item_name_mut(input);
+            for stmt in stmts {
+                match stmt {
+                    ContinualTaskStmt::Delete(stmt) => normalizer.visit_delete_statement_mut(stmt),
+                    ContinualTaskStmt::Insert(stmt) => normalizer.visit_insert_statement_mut(stmt),
+                }
+            }
+            match sugar {
+                Some(CreateContinualTaskSugar::Transform { transform }) => {
+                    normalizer.visit_query_mut(transform)
+                }
+                Some(CreateContinualTaskSugar::Retain { retain }) => {
+                    normalizer.visit_expr_mut(retain)
+                }
+                None => {}
+            }
+            if let Some(err) = normalizer.err {
+                return Err(err);
+            }
+        }
+
         Statement::CreateIndex(CreateIndexStatement {
             name: _,
             in_cluster: _,
@@ -453,6 +514,8 @@ pub fn create_statement(
 
 /// Generates a struct capable of taking a `Vec` of types commonly used to
 /// represent `WITH` options into useful data types, such as strings.
+/// Additionally, it is able to convert the useful data types back to the `Vec`
+/// of options.
 ///
 /// # Parameters
 /// - `$option_ty`: Accepts a struct representing a set of `WITH` options, which
@@ -545,7 +608,7 @@ macro_rules! generate_extracted_config {
                                     if !$allow_multiple && !extracted.seen.insert(option.name.clone()) {
                                         sql_bail!("{} specified more than once", option.name.to_ast_string());
                                     }
-                                    let val = <$t>::try_from_value(option.value)
+                                    let val: $t = $crate::plan::with_options::TryFromValue::try_from_value(option.value)
                                         .map_err(|e| sql_err!("invalid {}: {}", option.name.to_ast_string(), e))?;
                                     generate_extracted_config!(
                                         @ifexpr $allow_multiple,
@@ -557,6 +620,38 @@ macro_rules! generate_extracted_config {
                         }
                     }
                     Ok(extracted)
+                }
+            }
+
+            impl [<$option_ty Extracted>] {
+                #[allow(unused)]
+                fn into_values(self, catalog: &dyn crate::catalog::SessionCatalog) -> Vec<$option_ty<Aug>> {
+                    use [<$option_ty Name>]::*;
+                    let mut options = Vec::new();
+                    $(
+                        let value = self.[<$option_name:snake>];
+                        let values: Vec<_> = generate_extracted_config!(
+                            @ifexpr $allow_multiple,
+                            value,
+                            Vec::from([value])
+                        );
+                        for value in values {
+                            // If `try_into_value` returns `None`, then there was no option that
+                            // generated this value. For example, this can happen when `value` is
+                            // `None`.
+                            let maybe_value = <$t as $crate::plan::with_options::TryFromValue<
+                                Option<mz_sql_parser::ast::WithOptionValue<$crate::names::Aug>>
+                            >>::try_into_value(value, catalog);
+                            match maybe_value {
+                                Some(value) => {
+                                    let option = $option_ty {name: $option_name, value};
+                                    options.push(option);
+                                },
+                                None => (),
+                            }
+                        }
+                    )*
+                    options
                 }
             }
         }

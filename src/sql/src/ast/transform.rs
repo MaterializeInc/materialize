@@ -12,7 +12,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mz_ore::str::StrExt;
-use mz_repr::GlobalId;
+use mz_repr::CatalogItemId;
+use mz_sql_parser::ast::CreateTableFromSourceStatement;
 
 use crate::ast::visit::{self, Visit};
 use crate::ast::visit_mut::{self, VisitMut};
@@ -43,6 +44,7 @@ pub fn create_stmt_rename_schema_refs(
         | stmt @ Statement::CreateView(_)
         | stmt @ Statement::CreateMaterializedView(_)
         | stmt @ Statement::CreateTable(_)
+        | stmt @ Statement::CreateTableFromSource(_)
         | stmt @ Statement::CreateIndex(_)
         | stmt @ Statement::CreateType(_)
         | stmt @ Statement::CreateSecret(_) => {
@@ -122,7 +124,7 @@ impl<'a, 'ast> VisitMut<'ast, Raw> for CreateSqlRewriteSchema<'a> {
         item_name: &'ast mut <mz_sql_parser::ast::Raw as AstInfo>::ItemName,
     ) {
         match item_name {
-            RawItemName::Name(n) | RawItemName::Id(_, n) => self.maybe_rewrite_idents(&mut n.0),
+            RawItemName::Name(n) | RawItemName::Id(_, n, _) => self.maybe_rewrite_idents(&mut n.0),
         }
     }
 }
@@ -147,12 +149,13 @@ pub fn create_stmt_rename(create_stmt: &mut Statement<Raw>, to_item_name: String
         })
         | Statement::CreateMaterializedView(CreateMaterializedViewStatement { name, .. })
         | Statement::CreateTable(CreateTableStatement { name, .. })
+        | Statement::CreateTableFromSource(CreateTableFromSourceStatement { name, .. })
         | Statement::CreateSecret(CreateSecretStatement { name, .. })
         | Statement::CreateConnection(CreateConnectionStatement { name, .. })
         | Statement::CreateWebhookSource(CreateWebhookSourceStatement { name, .. }) => {
             // The last name in an ItemName is the item name. The item name
             // does not have a fixed index.
-            // TODO: https://github.com/MaterializeInc/materialize/issues/5591
+            // TODO: https://github.com/MaterializeInc/database-issues/issues/1721
             let item_name_len = name.0.len() - 1;
             name.0[item_name_len] = Ident::new_unchecked(to_item_name);
         }
@@ -182,7 +185,7 @@ pub fn create_stmt_rename_refs(
         if item_name.0 == from_item.0 {
             // The last name in an ItemName is the item name. The item name
             // does not have a fixed index.
-            // TODO: https://github.com/MaterializeInc/materialize/issues/5591
+            // TODO: https://github.com/MaterializeInc/database-issues/issues/1721
             let item_name_len = item_name.0.len() - 1;
             item_name.0[item_name_len] = Ident::new_unchecked(to_item_name.clone());
         }
@@ -206,6 +209,7 @@ pub fn create_stmt_rename_refs(
         Statement::CreateSource(_)
         | Statement::CreateSubsource(_)
         | Statement::CreateTable(_)
+        | Statement::CreateTableFromSource(_)
         | Statement::CreateSecret(_)
         | Statement::CreateConnection(_)
         | Statement::CreateWebhookSource(_) => {}
@@ -383,7 +387,7 @@ impl<'a, 'ast> Visit<'ast, Raw> for QueryIdentAgg<'a> {
 
     fn visit_item_name(&mut self, item_name: &'ast <Raw as AstInfo>::ItemName) {
         match item_name {
-            RawItemName::Name(n) | RawItemName::Id(_, n) => self.visit_unresolved_item_name(n),
+            RawItemName::Name(n) | RawItemName::Id(_, n, _) => self.visit_unresolved_item_name(n),
         }
     }
 }
@@ -417,7 +421,7 @@ impl CreateSqlRewriter {
         v.visit_query_mut(query);
     }
 
-    fn maybe_rewrite_idents(&mut self, name: &mut [Ident]) {
+    fn maybe_rewrite_idents(&self, name: &mut [Ident]) {
         if name.len() > 0 && name.ends_with(&self.from) {
             name[name.len() - 1] = self.to.clone();
         }
@@ -450,22 +454,22 @@ impl<'ast> VisitMut<'ast, Raw> for CreateSqlRewriter {
         item_name: &'ast mut <mz_sql_parser::ast::Raw as AstInfo>::ItemName,
     ) {
         match item_name {
-            RawItemName::Name(n) | RawItemName::Id(_, n) => self.maybe_rewrite_idents(&mut n.0),
+            RawItemName::Name(n) | RawItemName::Id(_, n, _) => self.maybe_rewrite_idents(&mut n.0),
         }
     }
 }
 
-/// Updates all `GlobalId`s from the keys of `ids` to the values of `ids` within `create_stmt`.
+/// Updates all `CatalogItemId`s from the keys of `ids` to the values of `ids` within `create_stmt`.
 pub fn create_stmt_replace_ids(
     create_stmt: &mut Statement<Raw>,
-    ids: &BTreeMap<GlobalId, GlobalId>,
+    ids: &BTreeMap<CatalogItemId, CatalogItemId>,
 ) {
     let mut id_replacer = CreateSqlIdReplacer { ids };
     id_replacer.visit_statement_mut(create_stmt);
 }
 
 struct CreateSqlIdReplacer<'a> {
-    ids: &'a BTreeMap<GlobalId, GlobalId>,
+    ids: &'a BTreeMap<CatalogItemId, CatalogItemId>,
 }
 
 impl<'ast> VisitMut<'ast, Raw> for CreateSqlIdReplacer<'_> {
@@ -474,7 +478,7 @@ impl<'ast> VisitMut<'ast, Raw> for CreateSqlIdReplacer<'_> {
         item_name: &'ast mut <mz_sql_parser::ast::Raw as AstInfo>::ItemName,
     ) {
         match item_name {
-            RawItemName::Id(id, _) => {
+            RawItemName::Id(id, _, _) => {
                 let old_id = match id.parse() {
                     Ok(old_id) => old_id,
                     Err(_) => panic!("invalid persisted global id {id}"),

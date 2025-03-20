@@ -1,0 +1,159 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+CREATE TABLE input (key INT)
+
+statement ok
+CREATE CONTINUAL TASK ct (key INT) ON INPUT input AS (
+    INSERT INTO ct SELECT * FROM input;
+)
+
+statement ok
+COMMENT ON CONTINUAL TASK ct IS 'foo'
+
+query TTT
+SHOW CONTINUAL TASKS;
+----
+ct  quickstart  foo
+
+# Creating in other databases/schemas
+statement ok
+CREATE SCHEMA x
+
+statement ok
+CREATE DATABASE y
+
+statement ok
+CREATE SCHEMA y.z
+
+statement ok
+CREATE CONTINUAL TASK x.ct (key INT) ON INPUT input AS (
+    INSERT INTO x.ct SELECT * FROM input;
+)
+
+statement ok
+CREATE CONTINUAL TASK y.z.ct (key INT) ON INPUT input AS (
+    INSERT INTO y.z.ct SELECT i.key FROM input i JOIN x.ct x_ct ON i.key = x_ct.key;
+)
+
+statement ok
+INSERT INTO input VALUES (1);
+
+query T
+SELECT * FROM x.ct;
+----
+1
+
+query T
+SELECT * FROM y.z.ct;
+----
+1
+
+# Crazy names
+statement ok
+CREATE DATABASE "--";
+
+statement ok
+CREATE SCHEMA "--"."</script><script>alert(123)</script>";
+
+statement ok
+CREATE TABLE "--"."</script><script>alert(123)</script>"."1;DROP TABLE users" (count int);
+
+statement ok
+INSERT INTO "--"."</script><script>alert(123)</script>"."1;DROP TABLE users" VALUES (1);
+
+statement ok
+CREATE CONTINUAL TASK "--"."</script><script>alert(123)</script>"."┬─┬ノ( º _ ºノ)"
+FROM TRANSFORM "--"."</script><script>alert(123)</script>"."1;DROP TABLE users"
+USING (SELECT MAX(COUNT) FROM "--"."</script><script>alert(123)</script>"."1;DROP TABLE users");
+
+query T
+SELECT * FROM "--"."</script><script>alert(123)</script>"."┬─┬ノ( º _ ºノ)";
+----
+1
+
+# Regression test for a bug where we'd panic if no CT inputs were referenced.
+statement ok
+CREATE CONTINUAL TASK no_input_refs (key INT) ON INPUT input AS (
+    INSERT INTO no_input_refs SELECT null::INT
+)
+
+query I
+SELECT * FROM no_input_refs;
+----
+
+# INSERT will put in a cast if necessary
+statement ok
+CREATE CONTINUAL TASK cast_int_to_string (key STRING) ON INPUT input AS (
+    INSERT INTO cast_int_to_string SELECT * FROM input WHERE key > 1;
+)
+
+statement ok
+INSERT INTO input VALUES (2);
+
+query T
+SELECT * FROM cast_int_to_string;
+----
+2
+
+# Regression test for a bug where we'd incorrectly optimize (and panic at
+# runtime) a CT with a monotonic input.
+statement ok
+CREATE SOURCE counter FROM LOAD GENERATOR COUNTER
+
+statement ok
+CREATE CONTINUAL TASK input_not_monotonic FROM TRANSFORM counter USING
+    (SELECT max(counter) FROM counter)
+
+# Give the load generator time to produce some data.
+statement ok
+SELECT mz_unsafe.mz_sleep(3)
+
+# Ensure that we don't get a "monotonic reduction on non-monotonic input" error
+query T
+SELECT COUNT(*) > 0 FROM input_not_monotonic;
+----
+true
+
+# Regression test for a bug where the TRANSFORM USING sugar did not roundtrip
+# the cluster through the catalog's `create_sql`.
+statement ok
+CREATE CLUSTER c2 SIZE '1'
+
+statement ok
+SET CLUSTER TO c2
+
+statement ok
+CREATE CONTINUAL TASK ct_c2 FROM TRANSFORM input USING (SELECT * FROM input)
+
+query T
+SELECT * FROM ct_c2
+----
+1
+2
+
+# Confirm that the catalog knows the ct is in the right cluster.
+statement error cannot drop cluster "c2" because other objects depend on it
+DROP CLUSTER c2;
+
+# Regression test for constant MV (upper of empty antichain). The dataflow
+# previously hung at runtime.
+statement ok
+CREATE MATERIALIZED VIEW mv_const AS SELECT 1 AS value
+
+statement ok
+CREATE CONTINUAL TASK ct_const_mv FROM TRANSFORM mv_const USING (SELECT MIN(value) FROM mv_const)
+
+query T
+SELECT * FROM ct_const_mv
+----
+1

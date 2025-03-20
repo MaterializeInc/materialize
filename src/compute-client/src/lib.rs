@@ -11,6 +11,7 @@
 
 //! The public API for the compute layer.
 
+pub mod as_of_selection;
 pub mod controller;
 pub mod logging;
 pub mod metrics;

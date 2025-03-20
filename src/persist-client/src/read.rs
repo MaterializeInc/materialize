@@ -9,9 +9,11 @@
 
 //! Read capabilities and handles
 
+use async_stream::stream;
 use std::backtrace::Backtrace;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,11 +22,14 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::Stream;
+use futures_util::{stream, StreamExt};
+use itertools::Either;
 use mz_dyncfg::Config;
+use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle, RuntimeExt};
-use mz_ore::{instrument, soft_assert_or_log};
 use mz_persist::location::{Blob, SeqNo};
+use mz_persist_types::columnar::{ColumnDecoder, Schema};
 use mz_persist_types::{Codec, Codec64};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -34,15 +39,17 @@ use tokio::runtime::Handle;
 use tracing::{debug_span, warn, Instrument};
 use uuid::Uuid;
 
-use crate::cfg::RetryParameters;
+use crate::batch::{BLOB_TARGET_SIZE, STRUCTURED_ORDER, STRUCTURED_ORDER_UNTIL_SHARD};
+use crate::cfg::{RetryParameters, COMPACTION_MEMORY_BOUND_BYTES};
 use crate::fetch::{fetch_leased_part, FetchBatchFilter, FetchedPart, Lease, LeasedBatchPart};
 use crate::internal::encoding::Schemas;
-use crate::internal::machine::Machine;
+use crate::internal::machine::{ExpireFn, Machine};
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{BatchPart, HollowBatch};
 use crate::internal::watch::StateWatch;
-use crate::iter::{Consolidator, SPLIT_OLD_RUNS};
-use crate::stats::{SnapshotPartStats, SnapshotPartsStats};
+use crate::iter::{CodecSort, Consolidator, StructuredSort};
+use crate::schema::SchemaCache;
+use crate::stats::{SnapshotPartStats, SnapshotPartsStats, SnapshotStats};
 use crate::{parse_id, GarbageCollector, PersistConfig, ShardId};
 
 pub use crate::internal::encoding::LazyPartStats;
@@ -98,13 +105,7 @@ impl LeasedReaderId {
 ///
 /// For more details, see [`ReadHandle::snapshot`] and [`Listen`].
 #[derive(Debug)]
-pub struct Subscribe<K, V, T, D>
-where
-    T: Timestamp + Lattice + Codec64,
-    K: Debug + Codec,
-    V: Debug + Codec,
-    D: Semigroup + Codec64 + Send + Sync,
-{
+pub struct Subscribe<K: Codec, V: Codec, T, D> {
     snapshot: Option<Vec<LeasedBatchPart<T>>>,
     listen: Listen<K, V, T, D>,
 }
@@ -113,7 +114,7 @@ impl<K, V, T, D> Subscribe<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64 + Send + Sync,
 {
     fn new(snapshot_parts: Vec<LeasedBatchPart<T>>, listen: Listen<K, V, T, D>) -> Self {
@@ -148,9 +149,9 @@ where
 
 impl<K, V, T, D> Subscribe<K, V, T, D>
 where
-    K: Debug + Codec + Default,
-    V: Debug + Codec + Default,
-    T: Timestamp + Lattice + Codec64,
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64 + Send + Sync,
 {
     /// Equivalent to `next`, but rather than returning a [`LeasedBatchPart`],
@@ -195,7 +196,7 @@ impl<K, V, T, D> Subscribe<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64 + Send + Sync,
 {
     /// Politely expires this subscribe, releasing its lease.
@@ -225,13 +226,7 @@ pub enum ListenEvent<T, D> {
 
 /// An ongoing subscription of updates to a shard.
 #[derive(Debug)]
-pub struct Listen<K, V, T, D>
-where
-    T: Timestamp + Lattice + Codec64,
-    K: Debug + Codec,
-    V: Debug + Codec,
-    D: Semigroup + Codec64 + Send + Sync,
-{
+pub struct Listen<K: Codec, V: Codec, T, D> {
     handle: ReadHandle<K, V, T, D>,
     watch: StateWatch<K, V, T, D>,
 
@@ -244,7 +239,7 @@ impl<K, V, T, D> Listen<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64 + Send + Sync,
 {
     async fn new(mut handle: ReadHandle<K, V, T, D>, as_of: Antichain<T>) -> Self {
@@ -355,7 +350,7 @@ where
             as_of: self.as_of.clone(),
             lower: self.frontier.clone(),
         };
-        let parts = self.handle.lease_batch_parts(batch, filter).collect();
+        let parts = self.handle.lease_batch_parts(batch, filter).collect().await;
 
         self.handle.maybe_downgrade_since(&self.since).await;
 
@@ -369,9 +364,9 @@ where
 
 impl<K, V, T, D> Listen<K, V, T, D>
 where
-    K: Debug + Codec + Default,
-    V: Debug + Codec + Default,
-    T: Timestamp + Lattice + Codec64,
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64 + Send + Sync,
 {
     /// Attempt to pull out the next values of this subscription.
@@ -446,7 +441,7 @@ impl<K, V, T, D> Listen<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64 + Send + Sync,
 {
     /// Fetches the contents of `part` and returns its lease.
@@ -462,7 +457,8 @@ where
             &self.handle.metrics.read.listen,
             &self.handle.machine.applier.shard_metrics,
             &self.handle.reader_id,
-            self.handle.schemas.clone(),
+            self.handle.read_schemas.clone(),
+            &mut self.handle.schema_cache,
         )
         .await;
         fetched_part
@@ -502,21 +498,15 @@ where
 /// # };
 /// ```
 #[derive(Debug)]
-pub struct ReadHandle<K, V, T, D>
-where
-    T: Timestamp + Lattice + Codec64,
-    // These are only here so we can use them in the auto-expiring `Drop` impl.
-    K: Debug + Codec,
-    V: Debug + Codec,
-    D: Semigroup + Codec64 + Send + Sync,
-{
+pub struct ReadHandle<K: Codec, V: Codec, T, D> {
     pub(crate) cfg: PersistConfig,
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) gc: GarbageCollector<K, V, T, D>,
     pub(crate) blob: Arc<dyn Blob>,
     pub(crate) reader_id: LeasedReaderId,
-    pub(crate) schemas: Schemas<K, V>,
+    pub(crate) read_schemas: Schemas<K, V>,
+    pub(crate) schema_cache: SchemaCache<K, V, T, D>,
 
     since: Antichain<T>,
     pub(crate) last_heartbeat: EpochMillis,
@@ -536,7 +526,7 @@ impl<K, V, T, D> ReadHandle<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64 + Send + Sync,
 {
     pub(crate) async fn new(
@@ -546,10 +536,12 @@ where
         gc: GarbageCollector<K, V, T, D>,
         blob: Arc<dyn Blob>,
         reader_id: LeasedReaderId,
-        schemas: Schemas<K, V>,
+        read_schemas: Schemas<K, V>,
         since: Antichain<T>,
         last_heartbeat: EpochMillis,
     ) -> Self {
+        let schema_cache = machine.applier.schema_cache();
+        let expire_fn = Self::expire_fn(machine.clone(), gc.clone(), reader_id.clone());
         ReadHandle {
             cfg,
             metrics: Arc::clone(&metrics),
@@ -557,11 +549,13 @@ where
             gc: gc.clone(),
             blob,
             reader_id: reader_id.clone(),
-            schemas,
+            read_schemas,
+            schema_cache,
             since,
             last_heartbeat,
             leased_seqnos: BTreeMap::new(),
             unexpired_state: Some(UnexpiredReadHandleState {
+                expire_fn,
                 _heartbeat_tasks: machine
                     .start_reader_heartbeat_tasks(reader_id, gc)
                     .await
@@ -616,7 +610,7 @@ where
             .downgrade_since(&self.reader_id, outstanding_seqno, new_since, heartbeat_ts)
             .await;
 
-        // Debugging for #15937.
+        // Debugging for database-issues#4590.
         if let Some(outstanding_seqno) = outstanding_seqno {
             let seqnos_held = _seqno.0.saturating_sub(outstanding_seqno.0);
             // We get just over 1 seqno-per-second on average for a shard in
@@ -686,13 +680,9 @@ where
     ) -> Result<Vec<LeasedBatchPart<T>>, Since<T>> {
         let batches = self.machine.snapshot(&as_of).await?;
 
-        soft_assert_or_log!(
-            PartialOrder::less_equal(self.since(), &as_of),
-            "ReadHandle::snapshot called with as_of {:?} not past the handle's since {:?}, \
-            though the read has succeeded. This implies the since is not being held back correctly.",
-            &as_of,
-            self.since()
-        );
+        if !PartialOrder::less_equal(self.since(), &as_of) {
+            return Err(Since(self.since().clone()));
+        }
 
         let filter = FetchBatchFilter::Snapshot { as_of };
         let mut leased_parts = Vec::new();
@@ -701,7 +691,11 @@ where
             // corresponds to a "part" or s3 object. This allows persist_source
             // to distribute work by parts (smallish, more even size) instead of
             // batches (arbitrarily large).
-            leased_parts.extend(self.lease_batch_parts(batch, filter.clone()));
+            leased_parts.extend(
+                self.lease_batch_parts(batch, filter.clone())
+                    .collect::<Vec<_>>()
+                    .await,
+            );
         }
         Ok(leased_parts)
     }
@@ -744,11 +738,15 @@ where
         &mut self,
         batch: HollowBatch<T>,
         filter: FetchBatchFilter<T>,
-    ) -> impl Iterator<Item = LeasedBatchPart<T>> + '_ {
-        batch
-            .parts
-            .into_iter()
-            .map(move |part| self.lease_batch_part(batch.desc.clone(), part, filter.clone()))
+    ) -> impl Stream<Item = LeasedBatchPart<T>> + '_ {
+        stream! {
+            let blob = Arc::clone(&self.blob);
+            let metrics = Arc::clone(&self.metrics);
+            let desc = batch.desc.clone();
+            for await part in batch.part_stream(self.shard_id(), &*blob, &*metrics) {
+                yield self.lease_batch_part(desc.clone(), part.expect("leased part").into_owned(), filter.clone())
+            }
+        }
     }
 
     /// Tracks that the `ReadHandle`'s machine's current `SeqNo` is being
@@ -765,7 +763,7 @@ where
     #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn clone(&self, purpose: &str) -> Self {
         let new_reader_id = LeasedReaderId::new();
-        let mut machine = self.machine.clone();
+        let machine = self.machine.clone();
         let gc = self.gc.clone();
         let heartbeat_ts = (self.cfg.now)();
         let (reader_state, maintenance) = machine
@@ -789,7 +787,7 @@ where
             gc,
             Arc::clone(&self.blob),
             new_reader_id,
-            self.schemas.clone(),
+            self.read_schemas.clone(),
             reader_state.since,
             heartbeat_ts,
         )
@@ -800,65 +798,14 @@ where
     /// A rate-limited version of [Self::downgrade_since].
     ///
     /// This is an internally rate limited helper, designed to allow users to
-    /// call it as frequently as they like. Call this [Self::downgrade_since],
-    /// or Self::maybe_heartbeat_reader on some interval that is "frequent"
-    /// compared to PersistConfig::FAKE_READ_LEASE_DURATION.
-    ///
-    /// This is communicating actual progress information, so is given
-    /// preferential treatment compared to Self::maybe_heartbeat_reader.
+    /// call it as frequently as they like. Call this or [Self::downgrade_since],
+    /// on some interval that is "frequent" compared to the read lease duration.
     pub async fn maybe_downgrade_since(&mut self, new_since: &Antichain<T>) {
-        // NB: min_elapsed is intentionally smaller than the one in
-        // maybe_heartbeat_reader (this is the preferential treatment mentioned
-        // above).
         let min_elapsed = READER_LEASE_DURATION.get(&self.cfg) / 4;
         let elapsed_since_last_heartbeat =
             Duration::from_millis((self.cfg.now)().saturating_sub(self.last_heartbeat));
         if elapsed_since_last_heartbeat >= min_elapsed {
             self.downgrade_since(new_since).await;
-        }
-    }
-
-    /// Heartbeats the read lease if necessary.
-    ///
-    /// This is an internally rate limited helper, designed to allow users to
-    /// call it as frequently as they like. Call this [Self::downgrade_since],
-    /// or [Self::maybe_downgrade_since] on some interval that is "frequent"
-    /// compared to PersistConfig::FAKE_READ_LEASE_DURATION.
-    #[allow(dead_code)]
-    pub(crate) async fn maybe_heartbeat_reader(&mut self) {
-        let min_elapsed = READER_LEASE_DURATION.get(&self.cfg) / 2;
-        let heartbeat_ts = (self.cfg.now)();
-        let elapsed_since_last_heartbeat =
-            Duration::from_millis(heartbeat_ts.saturating_sub(self.last_heartbeat));
-        if elapsed_since_last_heartbeat >= min_elapsed {
-            if elapsed_since_last_heartbeat > READER_LEASE_DURATION.get(&self.machine.applier.cfg) {
-                warn!(
-                    "reader ({}) of shard ({}) went {}s between heartbeats",
-                    self.reader_id,
-                    self.machine.shard_id(),
-                    elapsed_since_last_heartbeat.as_secs_f64()
-                );
-            }
-
-            let (_, existed, maintenance) = self
-                .machine
-                .heartbeat_leased_reader(&self.reader_id, heartbeat_ts)
-                .await;
-            if !existed && !self.machine.applier.is_finalized() {
-                // It's probably surprising to the caller that the shard
-                // becoming a tombstone expired this reader. Possibly the right
-                // thing to do here is pass up a bool to the caller indicating
-                // whether the LeasedReaderId it's trying to heartbeat has been
-                // expired, but that happening on a tombstone vs not is very
-                // different. As a medium-term compromise, pretend we did the
-                // heartbeat here.
-                panic!(
-                    "LeasedReaderId({}) was expired due to inactivity. Did the machine go to sleep?",
-                    self.reader_id
-                )
-            }
-            self.last_heartbeat = heartbeat_ts;
-            maintenance.start_performing(&self.machine, &self.gc);
         }
     }
 
@@ -876,10 +823,23 @@ where
         // heartbeat tasks can never observe the expired state. This doesn't
         // matter for correctness, but avoids confusing log output if the
         // heartbeat task were to discover that its lease has been expired.
-        self.unexpired_state = None;
+        let Some(unexpired_state) = self.unexpired_state.take() else {
+            return;
+        };
+        unexpired_state.expire_fn.0().await;
+    }
 
-        let (_, maintenance) = self.machine.expire_leased_reader(&self.reader_id).await;
-        maintenance.start_performing(&self.machine, &self.gc);
+    fn expire_fn(
+        machine: Machine<K, V, T, D>,
+        gc: GarbageCollector<K, V, T, D>,
+        reader_id: LeasedReaderId,
+    ) -> ExpireFn {
+        ExpireFn(Box::new(move || {
+            Box::pin(async move {
+                let (_, maintenance) = machine.expire_leased_reader(&reader_id).await;
+                maintenance.start_performing(&machine, &gc);
+            })
+        }))
     }
 
     /// Test helper for a [Self::listen] call that is expected to succeed.
@@ -895,6 +855,7 @@ where
 /// State for a read handle that has not been explicitly expired.
 #[derive(Debug)]
 pub(crate) struct UnexpiredReadHandleState {
+    expire_fn: ExpireFn,
     pub(crate) _heartbeat_tasks: Vec<AbortOnDropHandle<()>>,
 }
 
@@ -904,30 +865,85 @@ pub(crate) struct UnexpiredReadHandleState {
 /// client should call `next` until it returns `None`, which signals all data has been returned...
 /// but it's also free to abandon the instance at any time if it eg. only needs a few entries.
 #[derive(Debug)]
-pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D> {
-    consolidator: Consolidator<T, D>,
+pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
+    consolidator: CursorConsolidator<K, V, T, D>,
     _lease: Lease,
-    _schemas: Schemas<K, V>,
+    read_schemas: Schemas<K, V>,
+}
+
+#[derive(Debug)]
+enum CursorConsolidator<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
+    Codec {
+        consolidator: Consolidator<T, D, CodecSort<K, V, T, D>>,
+    },
+    Structured {
+        consolidator: Consolidator<T, D, StructuredSort<K, V, T, D>>,
+        max_len: usize,
+        max_bytes: usize,
+    },
 }
 
 impl<K, V, T, D> Cursor<K, V, T, D>
 where
     K: Debug + Codec + Ord,
     V: Debug + Codec + Ord,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Ord + Codec64 + Send + Sync,
 {
     /// Grab the next batch of consolidated data.
     pub async fn next(
         &mut self,
     ) -> Option<impl Iterator<Item = ((Result<K, String>, Result<V, String>), T, D)> + '_> {
-        let iter = self
-            .consolidator
-            .next()
-            .await
-            .expect("fetching a leased part")?;
-        let iter = iter.map(|(k, v, t, d)| ((K::decode(k), V::decode(v)), t, d));
-        Some(iter)
+        match &mut self.consolidator {
+            CursorConsolidator::Structured {
+                consolidator,
+                max_len,
+                max_bytes,
+            } => {
+                let mut iter = consolidator
+                    .next_chunk(*max_len, *max_bytes)
+                    .await
+                    .expect("fetching a leased part")?;
+                let structured = iter.get_or_make_structured::<K, V>(
+                    self.read_schemas.key.as_ref(),
+                    self.read_schemas.val.as_ref(),
+                );
+                let key_decoder = self
+                    .read_schemas
+                    .key
+                    .decoder_any(structured.key.as_ref())
+                    .expect("ok");
+                let val_decoder = self
+                    .read_schemas
+                    .val
+                    .decoder_any(structured.val.as_ref())
+                    .expect("ok");
+                let iter = (0..iter.len()).map(move |i| {
+                    let mut k = K::default();
+                    let mut v = V::default();
+                    key_decoder.decode(i, &mut k);
+                    val_decoder.decode(i, &mut v);
+                    let t = T::decode(iter.timestamps().value(i).to_le_bytes());
+                    let d = D::decode(iter.diffs().value(i).to_le_bytes());
+                    ((Ok(k), Ok(v)), t, d)
+                });
+
+                Some(Either::Left(iter))
+            }
+            CursorConsolidator::Codec { consolidator } => {
+                let iter = consolidator
+                    .next()
+                    .await
+                    .expect("fetching a leased part")?
+                    .map(|((k, v), t, d)| {
+                        let key = K::decode(k, &self.read_schemas.key);
+                        let val = V::decode(v, &self.read_schemas.val);
+                        ((key, val), t, d)
+                    });
+
+                Some(Either::Right(iter))
+            }
+        }
     }
 }
 
@@ -935,7 +951,7 @@ impl<K, V, T, D> ReadHandle<K, V, T, D>
 where
     K: Debug + Codec + Ord,
     V: Debug + Codec + Ord,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Ord + Codec64 + Send + Sync,
 {
     /// Generates a [Self::snapshot], and fetches all of the batches it
@@ -990,37 +1006,106 @@ where
     ) -> Result<Cursor<K, V, T, D>, Since<T>> {
         let batches = self.machine.snapshot(&as_of).await?;
 
-        let mut consolidator = Consolidator::new(
-            format!("{}[as_of={:?}]", self.shard_id(), as_of.elements()),
-            self.shard_id(),
-            Arc::clone(&self.blob),
-            Arc::clone(&self.metrics),
-            Arc::clone(&self.machine.applier.shard_metrics),
-            self.metrics.read.snapshot.clone(),
-            FetchBatchFilter::Snapshot {
-                as_of: as_of.clone(),
-            },
-            self.cfg.dynamic.compaction_memory_bound_bytes(),
-            SPLIT_OLD_RUNS.get(&self.cfg.configs),
-        );
-
+        let context = format!("{}[as_of={:?}]", self.shard_id(), as_of.elements());
+        let filter = FetchBatchFilter::Snapshot {
+            as_of: as_of.clone(),
+        };
         let lease = self.lease_seqno();
-        for batch in batches {
-            for run in batch.runs() {
-                consolidator.enqueue_run(
-                    &batch.desc,
-                    run.into_iter()
-                        .filter(|p| should_fetch_part(p.stats()))
-                        .cloned(),
-                );
+
+        let structured_order = STRUCTURED_ORDER.get(&self.cfg) && {
+            self.shard_id().to_string() < STRUCTURED_ORDER_UNTIL_SHARD.get(&self.cfg)
+        };
+        let consolidator = if structured_order {
+            let mut consolidator = Consolidator::new(
+                context,
+                self.shard_id(),
+                StructuredSort::new(self.read_schemas.clone()),
+                Arc::clone(&self.blob),
+                Arc::clone(&self.metrics),
+                Arc::clone(&self.machine.applier.shard_metrics),
+                self.metrics.read.snapshot.clone(),
+                filter,
+                COMPACTION_MEMORY_BOUND_BYTES.get(&self.cfg),
+            );
+            for batch in batches {
+                for (meta, run) in batch.runs() {
+                    consolidator.enqueue_run(
+                        &batch.desc,
+                        meta,
+                        run.into_iter()
+                            .filter(|p| should_fetch_part(p.stats()))
+                            .cloned(),
+                    );
+                }
             }
-        }
+            CursorConsolidator::Structured {
+                consolidator,
+                // This default may end up consolidating more records than previously
+                // for cases like fast-path peeks, where only the first few entries are used.
+                // If this is a noticeable performance impact, thread the max-len in from the caller.
+                max_len: self.cfg.compaction_yield_after_n_updates,
+                max_bytes: BLOB_TARGET_SIZE.get(&self.cfg).max(1),
+            }
+        } else {
+            let mut consolidator = Consolidator::new(
+                context,
+                self.shard_id(),
+                CodecSort::new(self.read_schemas.clone()),
+                Arc::clone(&self.blob),
+                Arc::clone(&self.metrics),
+                Arc::clone(&self.machine.applier.shard_metrics),
+                self.metrics.read.snapshot.clone(),
+                filter,
+                COMPACTION_MEMORY_BOUND_BYTES.get(&self.cfg),
+            );
+            for batch in batches {
+                for (meta, run) in batch.runs() {
+                    consolidator.enqueue_run(
+                        &batch.desc,
+                        meta,
+                        run.into_iter()
+                            .filter(|p| should_fetch_part(p.stats()))
+                            .cloned(),
+                    );
+                }
+            }
+            CursorConsolidator::Codec { consolidator }
+        };
 
         Ok(Cursor {
             consolidator,
             _lease: lease,
-            _schemas: self.schemas.clone(),
+            read_schemas: self.read_schemas.clone(),
         })
+    }
+
+    /// Returns aggregate statistics about the contents of the shard TVC at the
+    /// given frontier.
+    ///
+    /// This command returns the contents of this shard as of `as_of` once they
+    /// are known. This may "block" (in an async-friendly way) if `as_of` is
+    /// greater or equal to the current `upper` of the shard. If `None` is given
+    /// for `as_of`, then the latest stats known by this process are used.
+    ///
+    /// The `Since` error indicates that the requested `as_of` cannot be served
+    /// (the caller has out of date information) and includes the smallest
+    /// `as_of` that would have been accepted.
+    pub fn snapshot_stats(
+        &self,
+        as_of: Option<Antichain<T>>,
+    ) -> impl Future<Output = Result<SnapshotStats, Since<T>>> + Send + 'static {
+        let machine = self.machine.clone();
+        async move {
+            let batches = match as_of {
+                Some(as_of) => machine.snapshot(&as_of).await?,
+                None => machine.applier.all_batches(),
+            };
+            let num_updates = batches.iter().map(|b| b.len).sum();
+            Ok(SnapshotStats {
+                shard_id: machine.shard_id(),
+                num_updates,
+            })
+        }
     }
 
     /// Returns aggregate statistics about the contents of the shard TVC at the
@@ -1034,18 +1119,21 @@ where
     /// (the caller has out of date information) and includes the smallest
     /// `as_of` that would have been accepted.
     pub async fn snapshot_parts_stats(
-        &mut self,
+        &self,
         as_of: Antichain<T>,
     ) -> Result<SnapshotPartsStats, Since<T>> {
         let batches = self.machine.snapshot(&as_of).await?;
-        let parts = batches
-            .into_iter()
-            .flat_map(|b| b.parts)
-            .map(|p| SnapshotPartStats {
-                encoded_size_bytes: p.encoded_size_bytes(),
-                stats: p.stats().cloned(),
+        let parts = stream::iter(&batches)
+            .flat_map(|b| b.part_stream(self.shard_id(), &*self.blob, &*self.metrics))
+            .map(|p| {
+                let p = p.expect("live batch");
+                SnapshotPartStats {
+                    encoded_size_bytes: p.encoded_size_bytes(),
+                    stats: p.stats().cloned(),
+                }
             })
-            .collect();
+            .collect()
+            .await;
         Ok(SnapshotPartsStats {
             metrics: Arc::clone(&self.machine.applier.metrics),
             shard_id: self.machine.shard_id(),
@@ -1056,9 +1144,9 @@ where
 
 impl<K, V, T, D> ReadHandle<K, V, T, D>
 where
-    K: Debug + Codec + Ord + Default,
-    V: Debug + Codec + Ord + Default,
-    T: Timestamp + Lattice + Codec64,
+    K: Debug + Codec + Ord,
+    V: Debug + Codec + Ord,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64 + Send + Sync,
 {
     /// Generates a [Self::snapshot], and streams out all of the updates
@@ -1076,7 +1164,8 @@ where
         let snapshot_metrics = self.metrics.read.snapshot.clone();
         let shard_metrics = Arc::clone(&self.machine.applier.shard_metrics);
         let reader_id = self.reader_id.clone();
-        let schemas = self.schemas.clone();
+        let schemas = self.read_schemas.clone();
+        let mut schema_cache = self.schema_cache.clone();
         let persist_cfg = self.cfg.clone();
         let stream = async_stream::stream! {
             for part in snap {
@@ -1089,6 +1178,7 @@ where
                     &shard_metrics,
                     &reader_id,
                     schemas.clone(),
+                    &mut schema_cache,
                 )
                 .await;
 
@@ -1106,7 +1196,7 @@ impl<K, V, T, D> ReadHandle<K, V, T, D>
 where
     K: Debug + Codec + Ord,
     V: Debug + Codec + Ord,
-    T: Timestamp + Lattice + Codec64 + Ord,
+    T: Timestamp + Lattice + Codec64 + Ord + Sync,
     D: Semigroup + Ord + Codec64 + Send + Sync,
 {
     /// Test helper to generate a [Self::snapshot] call that is expected to
@@ -1127,24 +1217,15 @@ where
     }
 }
 
-impl<K, V, T, D> Drop for ReadHandle<K, V, T, D>
-where
-    T: Timestamp + Lattice + Codec64,
-    // These are only here so we can use them in this auto-expiring `Drop` impl.
-    K: Debug + Codec,
-    V: Debug + Codec,
-    D: Semigroup + Codec64 + Send + Sync,
-{
+impl<K: Codec, V: Codec, T, D> Drop for ReadHandle<K, V, T, D> {
     fn drop(&mut self) {
-        if self.unexpired_state.is_none() {
-            return;
-        }
-
         // We drop the unexpired state before expiring the reader to ensure the
         // heartbeat tasks can never observe the expired state. This doesn't
         // matter for correctness, but avoids confusing log output if the
         // heartbeat task were to discover that its lease has been expired.
-        self.unexpired_state = None;
+        let Some(unexpired_state) = self.unexpired_state.take() else {
+            return;
+        };
 
         let handle = match Handle::try_current() {
             Ok(x) => x,
@@ -1153,9 +1234,6 @@ where
                 return;
             }
         };
-        let mut machine = self.machine.clone();
-        let gc = self.gc.clone();
-        let reader_id = self.reader_id.clone();
         // Spawn a best-effort task to expire this read handle. It's fine if
         // this doesn't run to completion, we'd just have to wait out the lease
         // before the shard-global since is unblocked.
@@ -1164,11 +1242,7 @@ where
         let expire_span = debug_span!("drop::expire");
         handle.spawn_named(
             || format!("ReadHandle::expire ({})", self.reader_id),
-            async move {
-                let (_, maintenance) = machine.expire_leased_reader(&reader_id).await;
-                maintenance.start_performing(&machine, &gc);
-            }
-            .instrument(expire_span),
+            unexpired_state.expire_fn.0().instrument(expire_span),
         );
     }
 }
@@ -1317,7 +1391,7 @@ mod tests {
 
     // Verifies the semantics of `SeqNo` leases + checks dropping `LeasedBatchPart` semantics.
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // https://github.com/MaterializeInc/materialize/issues/19983
+    #[cfg_attr(miri, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5964
     async fn seqno_leases(dyncfgs: ConfigUpdates) {
         let mut data = vec![];
         for i in 0..20 {
@@ -1347,14 +1421,16 @@ mod tests {
         offset += width;
 
         // Create machinery for subscribe + fetch
-        let fetcher = client
+        let mut fetcher = client
             .create_batch_fetcher::<String, String, u64, i64>(
                 shard_id,
                 Default::default(),
                 Default::default(),
+                false,
                 Diagnostics::for_tests(),
             )
-            .await;
+            .await
+            .unwrap();
 
         let mut subscribe = read
             .subscribe(timely::progress::Antichain::from_elem(1))

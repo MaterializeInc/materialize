@@ -15,13 +15,16 @@ RUN apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
-        g++ \
-        gcc
+        git \
+        libxml2-dev
 
-# Download the bazel binary from the official GitHub releases since the apt repositories do not
-# contain arm64 releases.
-RUN arch_bazel=$(echo "$ARCH_GCC" | sed "s/aarch64/arm64/") \
-    && curl -fsSL -o /usr/local/bin/bazel https://github.com/bazelbuild/bazel/releases/download/6.3.2/bazel-6.3.2-linux-$arch_bazel \
-    && if [[ "$arch_bazel" = arm64 ]]; then echo '9d88a0b206e22cceb4afe0060be7f294b423f5f49b18750fbbd7abd47cea4054 /usr/local/bin/bazel' | sha256sum --check; fi \
-    && if [[ "$arch_bazel" = amd64 ]]; then echo 'e78fc3394deae5408d6f49a15c7b1e615901969ecf6e50d55ef899996b0b8458 /usr/local/bin/bazel' | sha256sum --check; fi \
+# Bazelisk is a Bazel runner that reads the version from our .bazelversion file.
+ENV BAZELISK_VERSION="1.25.0"
+
+# Download the binary from the official GitHub releases since the apt repositories do not contain
+# arm64 releases.
+RUN arch_bazel=$(echo "$ARCH_GCC" | sed "s/aarch64/arm64/" | sed "s/x86_64/amd64/" ) \
+    && curl -fsSL -o /usr/local/bin/bazel https://github.com/bazelbuild/bazelisk/releases/download/v$BAZELISK_VERSION/bazelisk-linux-$arch_bazel \
+    && if [[ "$arch_bazel" = arm64 ]]; then echo '4c8d966e40ac2c4efcc7f1a5a5cceef2c0a2f16b957e791fa7a867cce31e8fcb /usr/local/bin/bazel' | sha256sum --check; fi \
+    && if [[ "$arch_bazel" = amd64 ]]; then echo 'fd8fdff418a1758887520fa42da7e6ae39aefc788cf5e7f7bb8db6934d279fc4 /usr/local/bin/bazel' | sha256sum --check; fi \
     && chmod +x /usr/local/bin/bazel

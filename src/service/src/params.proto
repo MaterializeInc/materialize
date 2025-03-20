@@ -9,9 +9,9 @@
 
 syntax = "proto3";
 
-import "proto/src/proto.proto";
-
 package mz_service.params;
+
+import "proto/src/proto.proto";
 
 message ProtoGrpcClientParameters {
   optional mz_proto.ProtoDuration connect_timeout = 1;

@@ -33,8 +33,8 @@ $ set schema={
 $ kafka-ingest format=avro topic=offset key-format=avro key-schema=${keyschema} schema=${schema} repeat=${count} timestamp=4
 {"f1": "d${kafka-ingest.iteration}"} {"f2": "d${kafka-ingest.iteration}"}
 
-> SELECT COUNT(*) FROM start_offset;
+> SELECT COUNT(*) FROM start_offset_tbl;
 3900
 
-> SELECT COUNT(*) FROM kafka_time_offset;
+> SELECT COUNT(*) FROM kafka_time_offset_tbl;
 3000

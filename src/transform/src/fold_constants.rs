@@ -18,7 +18,7 @@ use mz_expr::visit::Visit;
 use mz_expr::{
     AggregateExpr, ColumnOrder, EvalError, MirRelationExpr, MirScalarExpr, TableFunc, UnaryFunc,
 };
-use mz_repr::{ColumnType, Datum, Diff, RelationType, Row, RowArena};
+use mz_repr::{Datum, Diff, RelationType, Row, RowArena};
 
 use crate::{any, TransformCtx, TransformError};
 
@@ -34,12 +34,16 @@ pub struct FoldConstants {
 }
 
 impl crate::Transform for FoldConstants {
+    fn name(&self) -> &'static str {
+        "FoldConstants"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "fold_constants")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
@@ -49,11 +53,7 @@ impl crate::Transform for FoldConstants {
             let num_inputs = e.num_inputs();
             let input_types = &type_stack[type_stack.len() - num_inputs..];
             let mut relation_type = e.typ_with_input_types(input_types);
-            self.action(
-                e,
-                &mut relation_type,
-                input_types.iter().map(|typ| &typ.column_types),
-            )?;
+            self.action(e, &mut relation_type)?;
             type_stack.truncate(type_stack.len() - num_inputs);
             type_stack.push(relation_type);
             Ok(())
@@ -69,21 +69,17 @@ impl FoldConstants {
     /// This transform will cease optimization if it encounters constant collections
     /// that are larger than `self.limit`, if that is set. It is not guaranteed that
     /// a constant input within the limit will be reduced to a `Constant` variant.
-    pub fn action<'a, I>(
+    pub fn action(
         &self,
         relation: &mut MirRelationExpr,
         relation_type: &mut RelationType,
-        mut input_types: I,
-    ) -> Result<(), TransformError>
-    where
-        I: Iterator<Item = &'a Vec<ColumnType>>,
-    {
+    ) -> Result<(), TransformError> {
         match relation {
             MirRelationExpr::Constant { .. } => { /* handled after match */ }
             MirRelationExpr::Get { .. } => {}
             MirRelationExpr::Let { .. } | MirRelationExpr::LetRec { .. } => {
                 // Constant propagation through bindings is currently handled by in NormalizeLets.
-                // Maybe we should move it / replicate it here (see #18180 for context)?
+                // Maybe we should move it / replicate it here (see database-issues#5346 for context)?
             }
             MirRelationExpr::Reduce {
                 input,
@@ -92,15 +88,6 @@ impl FoldConstants {
                 monotonic: _,
                 expected_group_size: _,
             } => {
-                let input_typ = input_types.next().unwrap();
-                // Reduce expressions to their simplest form.
-                for key in group_key.iter_mut() {
-                    key.reduce(input_typ);
-                }
-                for aggregate in aggregates.iter_mut() {
-                    aggregate.expr.reduce(input_typ);
-                }
-
                 // Guard against evaluating an expression that may contain
                 // unmaterializable functions.
                 if group_key.iter().any(|e| e.contains_unmaterializable())
@@ -138,12 +125,6 @@ impl FoldConstants {
                 offset,
                 ..
             } => {
-                let input_typ = input_types.next().unwrap();
-
-                if let Some(limit) = limit {
-                    limit.reduce(input_typ);
-                }
-
                 // Only fold constants when:
                 //
                 // 1. The `limit` value is not set, or
@@ -183,16 +164,6 @@ impl FoldConstants {
                 }
             }
             MirRelationExpr::Map { input, scalars } => {
-                // Before reducing the scalar expressions, we need to form an appropriate
-                // RelationType to provide to each. Each expression needs a different
-                // relation type; although we could in principle use `relation_type` here,
-                // we shouldn't rely on `reduce` not looking at its cardinality to assess
-                // the number of columns.
-                let input_arity = input_types.next().unwrap().len();
-                for (index, scalar) in scalars.iter_mut().enumerate() {
-                    scalar.reduce(&relation_type.column_types[..(input_arity + index)]);
-                }
-
                 // Guard against evaluating expression that may contain
                 // unmaterializable functions.
                 if scalars.iter().any(|e| e.contains_unmaterializable()) {
@@ -240,11 +211,6 @@ impl FoldConstants {
                 }
             }
             MirRelationExpr::FlatMap { input, func, exprs } => {
-                let input_typ = input_types.next().unwrap();
-                for expr in exprs.iter_mut() {
-                    expr.reduce(input_typ);
-                }
-
                 // Guard against evaluating expression that may contain unmaterializable functions.
                 if exprs.iter().any(|e| e.contains_unmaterializable()) {
                     return Ok(());
@@ -273,12 +239,6 @@ impl FoldConstants {
                 }
             }
             MirRelationExpr::Filter { input, predicates } => {
-                let input_typ = input_types.next().unwrap();
-                for predicate in predicates.iter_mut() {
-                    predicate.reduce(input_typ);
-                }
-                predicates.retain(|p| !p.is_literal_true());
-
                 // Guard against evaluating expression that may contain
                 // unmaterializable function calls.
                 if predicates.iter().any(|e| e.contains_unmaterializable()) {
@@ -290,7 +250,7 @@ impl FoldConstants {
                     .iter()
                     .any(|p| p.is_literal_false() || p.is_literal_null())
                 {
-                    relation.take_safely();
+                    relation.take_safely(Some(relation_type.clone()));
                 } else if let Some((rows, ..)) = (**input).as_const() {
                     // Evaluate errors last, to reduce risk of spurious errors.
                     predicates.sort_by_key(|p| p.is_literal_err());
@@ -331,7 +291,7 @@ impl FoldConstants {
                 ..
             } => {
                 if inputs.iter().any(|e| e.is_empty()) {
-                    relation.take_safely();
+                    relation.take_safely(Some(relation_type.clone()));
                 } else if let Some(e) = inputs.iter().find_map(|i| i.as_const_err()) {
                     *relation = MirRelationExpr::Constant {
                         rows: Err(e.clone()),
@@ -366,9 +326,9 @@ impl FoldConstants {
                             let mut next_rows = Vec::new();
                             for (old_row, old_count) in old_rows {
                                 for (new_row, new_count) in rows.iter() {
-                                    row_buf
-                                        .packer()
-                                        .extend(old_row.iter().chain(new_row.iter()));
+                                    let mut packer = row_buf.packer();
+                                    packer.extend_by_row(&old_row);
+                                    packer.extend_by_row(new_row);
                                     next_rows.push((row_buf.clone(), old_count * *new_count));
                                 }
                             }
@@ -482,10 +442,9 @@ impl FoldConstants {
             // arrive at a reduce.
 
             if *diff <= 0 {
-                return Some(Err(EvalError::InvalidParameterValue(String::from(
-                    "constant folding encountered reduce on collection \
-                                               with non-positive multiplicities",
-                ))));
+                return Some(Err(EvalError::InvalidParameterValue(
+                    "constant folding encountered reduce on collection with non-positive multiplicities".into()
+                )));
             }
 
             if limit_remaining < *diff as usize {
@@ -655,9 +614,9 @@ impl FoldConstants {
                 .collect::<Result<Vec<_>, _>>()?;
             let mut output_rows = func.eval(&datums, &temp_storage)?.fuse();
             for (output_row, diff2) in (&mut output_rows).take(limit - new_rows.len()) {
-                row_buf
-                    .packer()
-                    .extend(input_row.clone().into_iter().chain(output_row.into_iter()));
+                let mut packer = row_buf.packer();
+                packer.extend_by_row(input_row);
+                packer.extend_by_row(&output_row);
                 new_rows.push((row_buf.clone(), diff2 * *diff))
             }
             // If we still have records to enumerate, but dropped out of the iteration,

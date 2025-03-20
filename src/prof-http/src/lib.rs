@@ -10,6 +10,7 @@
 //! Profiling HTTP endpoints.
 
 use std::env;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use askama::Template;
@@ -18,8 +19,8 @@ use axum::routing::{self, Router};
 use cfg_if::cfg_if;
 use http::StatusCode;
 use mz_build_info::BuildInfo;
-use mz_prof::{ProfStartTime, StackProfile};
-use once_cell::sync::Lazy;
+use mz_prof::StackProfileExt;
+use pprof_util::{ProfStartTime, StackProfile};
 
 cfg_if! {
     if #[cfg(any(not(feature = "jemalloc"), miri))] {
@@ -29,7 +30,7 @@ cfg_if! {
     }
 }
 
-static EXECUTABLE: Lazy<String> = Lazy::new(|| {
+static EXECUTABLE: LazyLock<String> = LazyLock::new(|| {
     {
         env::current_exe()
             .ok()
@@ -41,9 +42,10 @@ static EXECUTABLE: Lazy<String> = Lazy::new(|| {
 });
 
 mz_http_util::make_handle_static!(
-    include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/http/static"),
-    "src/http/static",
-    "src/http/static-dev"
+    dir_1: ::include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/http/static"),
+    dir_2: ::include_dir::include_dir!("$OUT_DIR/src/http/static"),
+    prod_base_path: "src/http/static",
+    dev_base_path: "src/http/static-dev",
 );
 
 /// Creates a router that serves the profiling endpoints.
@@ -85,7 +87,7 @@ pub struct FlamegraphTemplate<'a> {
 }
 
 #[allow(dropping_copy_types)]
-async fn time_prof<'a>(
+async fn time_prof(
     merge_threads: bool,
     build_info: &BuildInfo,
     // the time in seconds to run the profiler for
@@ -98,7 +100,7 @@ async fn time_prof<'a>(
         if #[cfg(any(not(feature = "jemalloc"), miri))] {
             ctl_lock = ();
         } else {
-            ctl_lock = if let Some(ctl) = mz_prof::jemalloc::PROF_CTL.as_ref() {
+            ctl_lock = if let Some(ctl) = jemalloc_pprof::PROF_CTL.as_ref() {
                 let mut borrow = ctl.lock().await;
                 borrow.deactivate().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 Some(borrow)
@@ -241,15 +243,18 @@ mod enabled {
 
     use axum::extract::{Form, Query};
     use axum::response::IntoResponse;
-    use axum::TypedHeader;
+    use axum_extra::TypedHeader;
     use bytesize::ByteSize;
     use headers::ContentType;
     use http::header::{HeaderMap, CONTENT_DISPOSITION};
     use http::{HeaderValue, StatusCode};
+    use jemalloc_pprof::{JemallocProfCtl, PROF_CTL};
+    use mappings::MAPPINGS;
     use mz_build_info::BuildInfo;
     use mz_ore::cast::CastFrom;
-    use mz_prof::ever_symbolized;
-    use mz_prof::jemalloc::{parse_jeheap, JemallocProfCtl, JemallocStats, PROF_CTL};
+    use mz_prof::jemalloc::{JemallocProfCtlExt, JemallocStats};
+    use mz_prof::{ever_symbolized, StackProfileExt};
+    use pprof_util::parse_jeheap;
     use serde::Deserialize;
     use tokio::sync::Mutex;
 
@@ -344,7 +349,7 @@ mod enabled {
                     .dump()
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 let r = BufReader::new(f);
-                let stacks = parse_jeheap(r)
+                let stacks = parse_jeheap(r, MAPPINGS.as_deref())
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 let stats = borrow
                     .stats()
@@ -372,7 +377,7 @@ mod enabled {
                     .dump()
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 let r = BufReader::new(f);
-                let stacks = parse_jeheap(r)
+                let stacks = parse_jeheap(r, MAPPINGS.as_deref())
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 let stats = borrow
                     .stats()
@@ -452,7 +457,7 @@ mod enabled {
             .dump()
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
         let dump_reader = BufReader::new(dump_file);
-        let profile = parse_jeheap(dump_reader)
+        let profile = parse_jeheap(dump_reader, MAPPINGS.as_deref())
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
         let pprof = profile.to_pprof(("inuse_space", "bytes"), ("space", "bytes"), None);
         Ok(pprof)

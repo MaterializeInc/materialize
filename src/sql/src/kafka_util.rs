@@ -16,7 +16,7 @@ use mz_kafka_util::client::DEFAULT_TOPIC_METADATA_REFRESH_INTERVAL;
 use mz_ore::task;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    KafkaSinkConfigOption, KafkaSinkConfigOptionName, KafkaSourceConfigOption,
+    Expr, KafkaSinkConfigOption, KafkaSinkConfigOptionName, KafkaSourceConfigOption,
     KafkaSourceConfigOptionName,
 };
 use mz_storage_types::sinks::KafkaSinkCompressionType;
@@ -25,6 +25,7 @@ use rdkafka::{Offset, TopicPartitionList};
 use tokio::time::Duration;
 
 use crate::ast::Value;
+use crate::catalog::SessionCatalog;
 use crate::names::Aug;
 use crate::normalize::generate_extracted_config;
 use crate::plan::with_options::{ImpliedValue, TryFromValue};
@@ -48,16 +49,21 @@ generate_extracted_config!(
     (
         CompressionType,
         KafkaSinkCompressionType,
-        Default(KafkaSinkCompressionType::None)
+        Default(KafkaSinkCompressionType::Lz4)
     ),
+    (PartitionBy, Expr<Aug>),
     (ProgressGroupIdPrefix, String),
     (TransactionalIdPrefix, String),
     (LegacyIds, bool),
     (Topic, String),
     (TopicConfig, BTreeMap<String, String>),
+    (
+        TopicMetadataRefreshInterval,
+        Duration,
+        Default(DEFAULT_TOPIC_METADATA_REFRESH_INTERVAL)
+    ),
     (TopicPartitionCount, i32),
-    (TopicReplicationFactor, i32),
-    (ProgressTopicReplicationFactor, i32)
+    (TopicReplicationFactor, i32)
 );
 
 impl TryFromValue<Value> for KafkaSinkCompressionType {
@@ -75,6 +81,16 @@ impl TryFromValue<Value> for KafkaSinkCompressionType {
             },
             _ => sql_bail!("compression type must be a string"),
         }
+    }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
+        Some(Value::String(match self {
+            KafkaSinkCompressionType::None => "none".to_string(),
+            KafkaSinkCompressionType::Gzip => "gzip".to_string(),
+            KafkaSinkCompressionType::Snappy => "snappy".to_string(),
+            KafkaSinkCompressionType::Lz4 => "lz4".to_string(),
+            KafkaSinkCompressionType::Zstd => "zstd".to_string(),
+        }))
     }
 
     fn name() -> String {

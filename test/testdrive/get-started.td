@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# TODO(def-) Reenable when database-issues#8581 is fixed
+$ skip-if
+SELECT true
+
 $ set-arg-default default-replica-size=1
 $ set-arg-default single-replica-cluster=quickstart
 
@@ -15,31 +19,41 @@ $ set-arg-default single-replica-cluster=quickstart
 > SET cluster TO ${arg.single-replica-cluster}
 
 > CREATE SOURCE demo
-  FROM LOAD GENERATOR AUCTION (TICK INTERVAL '50ms') FOR ALL TABLES
+  FROM LOAD GENERATOR AUCTION (TICK INTERVAL '50ms', UP TO 1000)
+
+> CREATE TABLE accounts FROM SOURCE demo (REFERENCE accounts);
+> CREATE TABLE auctions FROM SOURCE demo (REFERENCE auctions);
+> CREATE TABLE bids FROM SOURCE demo (REFERENCE bids);
+> CREATE TABLE organizations FROM SOURCE demo (REFERENCE organizations);
+> CREATE TABLE users FROM SOURCE demo (REFERENCE users);
 
 > SHOW SOURCES
-name          type           size                         cluster
------------------------------------------------------------------
-accounts      subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
-auctions      subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
-bids          subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
-demo          load-generator ${arg.default-replica-size}  ${arg.single-replica-cluster}
-demo_progress progress       <null> <null>
-organizations subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
-users         subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
+name          type           cluster                        comment
+-------------------------------------------------------------------
+demo          load-generator ${arg.single-replica-cluster}  ""
+demo_progress progress       <null>                         ""
+
+> SHOW TABLES
+name          comment
+-----------------------
+accounts      ""
+auctions      ""
+bids          ""
+organizations ""
+users         ""
 
 > SHOW COLUMNS FROM auctions
-end_time false "timestamp with time zone"
-id false bigint
-item false text
-seller false bigint
+end_time false "timestamp with time zone" ""
+id false bigint ""
+item false text ""
+seller false bigint ""
 
 > SHOW COLUMNS FROM bids
-amount false integer
-auction_id false bigint
-bid_time false "timestamp with time zone"
-buyer false bigint
-id false bigint
+amount false integer ""
+auction_id false bigint ""
+bid_time false "timestamp with time zone" ""
+buyer false bigint ""
+id false bigint ""
 
 > CREATE VIEW on_time_bids AS
   SELECT

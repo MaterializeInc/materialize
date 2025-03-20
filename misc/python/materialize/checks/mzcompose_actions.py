@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 import json
-import time
 from textwrap import dedent
 from typing import TYPE_CHECKING, Any
 
@@ -16,7 +15,7 @@ from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.services.clusterd import Clusterd
-from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.materialized import DeploymentStatus, Materialized
 from materialize.mzcompose.services.ssh_bastion_host import (
     setup_default_ssh_test_connection,
 )
@@ -39,9 +38,14 @@ class StartMz(MzcomposeAction):
         environment_extra: list[str] = [],
         system_parameter_defaults: dict[str, str] | None = None,
         additional_system_parameter_defaults: dict[str, str] = {},
+        system_parameter_version: MzVersion | None = None,
         mz_service: str | None = None,
         platform: str | None = None,
         healthcheck: list[str] | None = None,
+        deploy_generation: int | None = None,
+        restart: str | None = None,
+        force_migrations: str | None = None,
+        publish: bool | None = None,
     ) -> None:
         if healthcheck is None:
             healthcheck = ["CMD", "curl", "-f", "localhost:6878/api/readyz"]
@@ -49,9 +53,15 @@ class StartMz(MzcomposeAction):
         self.environment_extra = environment_extra
         self.system_parameter_defaults = system_parameter_defaults
         self.additional_system_parameter_defaults = additional_system_parameter_defaults
+        self.system_parameter_version = system_parameter_version or tag
         self.healthcheck = healthcheck
         self.mz_service = mz_service
         self.platform = platform
+        self.deploy_generation = deploy_generation
+        self.restart = restart
+        self.force_migrations = force_migrations
+        self.publish = publish
+        self.scenario = scenario
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
@@ -62,26 +72,32 @@ class StartMz(MzcomposeAction):
         mz = Materialized(
             name=self.mz_service,
             image=image,
-            external_cockroach=True,
-            external_minio=True,
+            external_metadata_store=True,
+            external_blob_store=True,
+            blob_store_is_azure=self.scenario.azurite,
             environment_extra=self.environment_extra,
             system_parameter_defaults=self.system_parameter_defaults,
             additional_system_parameter_defaults=self.additional_system_parameter_defaults,
+            system_parameter_version=self.system_parameter_version,
             sanity_restart=False,
             platform=self.platform,
             healthcheck=self.healthcheck,
+            deploy_generation=self.deploy_generation,
+            restart=self.restart,
+            force_migrations=self.force_migrations,
+            publish=self.publish,
+            metadata_store="cockroach",
         )
 
-        with c.override(mz):
+        # Don't fail since we are careful to explicitly kill and collect logs
+        # of the services thus started
+        with c.override(mz, fail_on_new_service=False):
             c.up("materialized" if self.mz_service is None else self.mz_service)
 
-            # If we start up Materialize with MZ_DEPLOY_GENERATION, then it
+            # If we start up Materialize with a deploy-generation , then it
             # stays in a stuck state when the preflight-check is completed. So
             # we can't connect to it yet to run any commands.
-            if any(
-                env.startswith("MZ_DEPLOY_GENERATION=")
-                for env in self.environment_extra
-            ):
+            if self.deploy_generation:
                 return
 
             # This should live in ssh.py and alter_connection.py, but accessing the
@@ -134,46 +150,16 @@ class ConfigureMz(MzcomposeAction):
 
         # Since we already test with RBAC enabled, we have to give materialize
         # user the relevant attributes so the existing tests keep working.
-        if (
-            MzVersion.parse_mz("v0.45.0")
-            <= e.current_mz_version
-            < MzVersion.parse_mz("v0.59.0-dev")
-        ):
-            system_settings.add(
-                "ALTER ROLE materialize CREATEROLE CREATEDB CREATECLUSTER;"
-            )
-        elif e.current_mz_version >= MzVersion.parse_mz("v0.59.0"):
-            system_settings.add("GRANT ALL PRIVILEGES ON SYSTEM TO materialize;")
+        system_settings.add("GRANT ALL PRIVILEGES ON SYSTEM TO materialize;")
 
-        if e.current_mz_version >= MzVersion.parse_mz("v0.47.0"):
-            system_settings.add("ALTER SYSTEM SET enable_rbac_checks TO true;")
+        # do not enable this by default for all checks
+        system_settings.add("ALTER SYSTEM SET enable_rbac_checks TO false;")
 
-        if e.current_mz_version >= MzVersion.parse_mz(
-            "v0.51.0-dev"
-        ) and e.current_mz_version < MzVersion.parse_mz("v0.76.0-dev"):
-            system_settings.add("ALTER SYSTEM SET enable_ld_rbac_checks TO true;")
-
-        if e.current_mz_version >= MzVersion.parse_mz("v0.52.0-dev"):
-            # Since we already test with RBAC enabled, we have to give materialize
-            # user the relevant privileges so the existing tests keep working.
-            system_settings.add("GRANT CREATE ON DATABASE materialize TO materialize;")
-            system_settings.add(
-                "GRANT CREATE ON SCHEMA materialize.public TO materialize;"
-            )
-            if self.scenario.base_version() >= MzVersion.parse_mz("v0.82.0-dev"):
-                cluster_name = "quickstart"
-            else:
-                cluster_name = "default"
-            system_settings.add(
-                f"GRANT CREATE ON CLUSTER {cluster_name} TO materialize;"
-            )
-
-        if (
-            MzVersion.parse_mz("v0.58.0-dev")
-            <= e.current_mz_version
-            <= MzVersion.parse_mz("v0.63.99")
-        ):
-            system_settings.add("ALTER SYSTEM SET enable_managed_clusters = on;")
+        # Since we already test with RBAC enabled, we have to give materialize
+        # user the relevant privileges so the existing tests keep working.
+        system_settings.add("GRANT CREATE ON DATABASE materialize TO materialize;")
+        system_settings.add("GRANT CREATE ON SCHEMA materialize.public TO materialize;")
+        system_settings.add("GRANT CREATE ON CLUSTER quickstart TO materialize;")
 
         system_settings = system_settings - e.system_settings
 
@@ -183,10 +169,7 @@ class ConfigureMz(MzcomposeAction):
                 + "\n".join(system_settings)
             )
 
-        kafka_broker = "BROKER '${testdrive.kafka-addr}'"
-        print(e.current_mz_version)
-        if e.current_mz_version >= MzVersion.parse_mz("v0.78.0-dev"):
-            kafka_broker += ", SECURITY PROTOCOL PLAINTEXT"
+        kafka_broker = "BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT"
         input += dedent(
             f"""
             > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA {kafka_broker}
@@ -212,11 +195,22 @@ class KillMz(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        with c.override(Materialized(name=self.mz_service)):
+        # Don't fail since we are careful to explicitly kill and collect logs
+        # of the services thus started
+        with c.override(Materialized(name=self.mz_service), fail_on_new_service=False):
             c.kill(self.mz_service, wait=True)
 
             if self.capture_logs:
                 c.capture_logs(self.mz_service)
+
+
+class Stop(MzcomposeAction):
+    def __init__(self, service: str = "materialized") -> None:
+        self.service = service
+
+    def execute(self, e: Executor) -> None:
+        c = e.mzcompose_composition()
+        c.stop(self.service, wait=True)
 
 
 class Down(MzcomposeAction):
@@ -232,33 +226,18 @@ class UseClusterdCompute(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        storage_addresses = (
-            """STORAGECTL ADDRESSES ['clusterd_compute_1:2100'],
-                STORAGE ADDRESSES ['clusterd_compute_1:2103']"""
-            if self.base_version >= MzVersion(0, 44, 0)
-            else "STORAGECTL ADDRESS 'clusterd_compute_1:2100'"
-        )
-
-        if self.base_version >= MzVersion(0, 55, 0):
-            param = "enable_unmanaged_cluster_replicas"
-            if self.base_version >= MzVersion.parse_mz("v0.90.0-dev"):
-                param = "enable_unorchestrated_cluster_replicas"
-            c.sql(
-                f"ALTER SYSTEM SET {param} = on;",
-                port=6877,
-                user="mz_system",
-            )
-        if self.base_version >= MzVersion.parse_mz("v0.82.0-dev"):
-            cluster_name = "quickstart"
-        else:
-            cluster_name = "default"
-
         c.sql(
-            f"""
-            ALTER CLUSTER {cluster_name} SET (MANAGED = false);
-            DROP CLUSTER REPLICA {cluster_name}.r1;
-            CREATE CLUSTER REPLICA {cluster_name}.r1
-                {storage_addresses},
+            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = on;",
+            port=6877,
+            user="mz_system",
+        )
+        c.sql(
+            """
+            ALTER CLUSTER quickstart SET (MANAGED = false);
+            DROP CLUSTER REPLICA quickstart.r1;
+            CREATE CLUSTER REPLICA quickstart.r1
+                STORAGECTL ADDRESSES ['clusterd_compute_1:2100'],
+                STORAGE ADDRESSES ['clusterd_compute_1:2103'],
                 COMPUTECTL ADDRESSES ['clusterd_compute_1:2101'],
                 COMPUTE ADDRESSES ['clusterd_compute_1:2102'],
                 WORKERS 1;
@@ -315,8 +294,8 @@ class RestartCockroach(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        c.kill("cockroach")
-        c.up("cockroach")
+        c.kill(c.metadata_store())
+        c.up(c.metadata_store())
 
 
 class RestartSourcePostgres(MzcomposeAction):
@@ -342,16 +321,11 @@ class DropCreateDefaultReplica(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        if self.base_version >= MzVersion.parse_mz("v0.82.0-dev"):
-            cluster_name = "quickstart"
-        else:
-            cluster_name = "default"
-
         c.sql(
-            f"""
-            ALTER CLUSTER {cluster_name} SET (MANAGED = false);
-            DROP CLUSTER REPLICA {cluster_name}.r1;
-            CREATE CLUSTER REPLICA {cluster_name}.r1 SIZE '1';
+            """
+            ALTER CLUSTER quickstart SET (MANAGED = false);
+            DROP CLUSTER REPLICA quickstart.r1;
+            CREATE CLUSTER REPLICA quickstart.r1 SIZE '1';
             """,
             port=6877,
             user="mz_system",
@@ -365,22 +339,9 @@ class WaitReadyMz(MzcomposeAction):
         self.mz_service = mz_service
 
     def execute(self, e: Executor) -> None:
-        c = e.mzcompose_composition()
-
-        while True:
-            result = json.loads(
-                c.exec(
-                    self.mz_service,
-                    "curl",
-                    "localhost:6878/api/leader/status",
-                    capture=True,
-                ).stdout
-            )
-            if result["status"] == "ReadyToPromote":
-                return
-            assert result["status"] == "Initializing", f"Unexpected status {result}"
-            print("Not ready yet, waiting 1 s")
-            time.sleep(1)
+        e.mzcompose_composition().await_mz_deployment_status(
+            DeploymentStatus.READY_TO_PROMOTE, self.mz_service
+        )
 
 
 class PromoteMz(MzcomposeAction):
@@ -396,6 +357,7 @@ class PromoteMz(MzcomposeAction):
             c.exec(
                 self.mz_service,
                 "curl",
+                "-s",
                 "-X",
                 "POST",
                 "http://127.0.0.1:6878/api/leader/promote",
@@ -403,6 +365,9 @@ class PromoteMz(MzcomposeAction):
             ).stdout
         )
         assert result["result"] == "Success", f"Unexpected result {result}"
+
+        # Wait until new Materialize is ready to handle queries
+        c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, self.mz_service)
 
         mz_version = MzVersion.parse_mz(c.query_mz_version(service=self.mz_service))
         e.current_mz_version = mz_version

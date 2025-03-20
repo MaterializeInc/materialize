@@ -24,6 +24,17 @@ use std::path::PathBuf;
 #[cfg(bazel)]
 extern crate runfiles;
 
+/// Returns if we're currently building with Bazel.
+pub const fn is_bazel_build() -> bool {
+    cfg_if! {
+        if #[cfg(bazel)] {
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// Returns the path to `protoc`.
 ///
 /// Looks for `protoc` in the following places:
@@ -38,7 +49,7 @@ pub fn protoc() -> PathBuf {
     cfg_if! {
         if #[cfg(bazel)] {
             let r = runfiles::Runfiles::create().unwrap();
-            r.rlocation("protobuf/protoc")
+            r.rlocation("protobuf/protoc").expect("set by Bazel")
         } else if #[cfg(feature = "protobuf-src")] {
             protobuf_src::protoc()
         } else {
@@ -59,7 +70,7 @@ pub fn protoc_include() -> PathBuf {
     cfg_if! {
         if #[cfg(bazel)] {
             let r = runfiles::Runfiles::create().unwrap();
-            r.rlocation("protobuf/src")
+            r.rlocation("protobuf/src").expect("set by Bazel")
         } else if #[cfg(feature = "protobuf-src")] {
             protobuf_src::include()
         } else {

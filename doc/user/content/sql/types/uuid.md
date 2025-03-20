@@ -51,7 +51,7 @@ You can [cast](../../functions/cast) `uuid` to [`text`](../text) by assignment a
 
 ## Examples
 
-```sql
+```mzsql
 SELECT UUID 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' AS uuid
 ```
 ```nofmt

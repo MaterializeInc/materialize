@@ -20,7 +20,7 @@ statement ok
 CREATE DEFAULT INDEX ON v1
 
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 SELECT * FROM t1, (SELECT DISTINCT f1 % 2 AS F FROM t1) T WHERE t1.f1 % 2 = t.f;
 ----
 Explained Query:
@@ -36,7 +36,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 SELECT * FROM v1, (SELECT DISTINCT (v1.t1).f1 as f1 FROM v1) Y WHERE (v1.t1).f1 = y.f1;
 ----
 Explained Query (fast path):
@@ -57,7 +57,7 @@ EOF
 # eliminate the `<expr> IS NOT NULL` predicates that are added when pushing the
 # join condition through the CrossJoin.
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE
   c0(f1 INT, f2 INT, f INT) AS (
     SELECT * FROM c0
@@ -67,8 +67,6 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM c0;
 ----
 Explained Query:
-  Return // { arity: 3 }
-    Get l0 // { arity: 3 }
   With Mutually Recursive
     cte l0 =
       Distinct project=[#0..=#2] // { arity: 3 }
@@ -76,6 +74,8 @@ Explained Query:
           Get l0 // { arity: 3 }
           Map ((#0 % 2)) // { arity: 3 }
             ReadStorage materialize.public.t2 // { arity: 2 }
+  Return // { arity: 3 }
+    Get l0 // { arity: 3 }
 
 Source materialize.public.t2
 
@@ -86,9 +86,9 @@ EOF
 # Same query, but selecting from t1 instead of t2. The added `- IS NOT NULL`
 # filters prevent redundant join elimination at first. To be able to eliminate
 # the join we need to factor out the filter on top of t1 behind a common
-# binding (fixed by #18173).
+# binding (fixed by database-issues#5342).
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE
   c0(f1 INT, f2 INT, f INT) AS (
     SELECT * FROM c0
@@ -98,8 +98,6 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM c0;
 ----
 Explained Query:
-  Return // { arity: 3 }
-    Get l0 // { arity: 3 }
   With Mutually Recursive
     cte l0 =
       Distinct project=[#0..=#2] // { arity: 3 }
@@ -108,6 +106,8 @@ Explained Query:
           Filter (#0) IS NOT NULL // { arity: 3 }
             Map ((#0 % 2)) // { arity: 3 }
               ReadStorage materialize.public.t1 // { arity: 2 }
+  Return // { arity: 3 }
+    Get l0 // { arity: 3 }
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
@@ -119,7 +119,7 @@ EOF
 # Another case that does not work at the moment because of the naive ProvInfo
 # initialization for WMR bindings.
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 WITH
   t0 AS (
     SELECT DISTINCT f1 % 2 AS f, 42 as c FROM t2
@@ -140,22 +140,17 @@ SELECT * FROM (
 );
 ----
 Explained Query:
-  Return // { arity: 1 }
-    Union // { arity: 1 }
-      Project (#2) // { arity: 1 }
-        Get l1 // { arity: 3 }
-      Project (#1) // { arity: 1 }
-        Map (42) // { arity: 2 }
-          Get l0 // { arity: 1 }
   With Mutually Recursive
+    cte l0 =
+      Distinct project=[(#0 % 2)] // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          ReadStorage materialize.public.t2 // { arity: 2 }
     cte l1 =
       Distinct project=[#0..=#2] // { arity: 3 }
         Union // { arity: 3 }
-          Distinct project=[#0..=#2] // { arity: 3 }
-            Union // { arity: 3 }
-              Get l1 // { arity: 3 }
-              Project (#0, #0, #0) // { arity: 3 }
-                Get l0 // { arity: 1 }
+          Get l1 // { arity: 3 }
+          Project (#0, #0, #0) // { arity: 3 }
+            Get l0 // { arity: 1 }
           Join on=(#2 = (#0 % 2)) type=differential // { arity: 3 }
             implementation
               %1:l0[#0]UK » %0:t2[(#0 % 2)]K
@@ -163,10 +158,13 @@ Explained Query:
               ReadStorage materialize.public.t2 // { arity: 2 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Get l0 // { arity: 1 }
-    cte l0 =
-      Distinct project=[(#0 % 2)] // { arity: 1 }
-        Project (#0) // { arity: 1 }
-          ReadStorage materialize.public.t2 // { arity: 2 }
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Project (#2) // { arity: 1 }
+        Get l1 // { arity: 3 }
+      Project (#1) // { arity: 1 }
+        Map (42) // { arity: 2 }
+          Get l0 // { arity: 1 }
 
 Source materialize.public.t2
 

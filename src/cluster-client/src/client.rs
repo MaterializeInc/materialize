@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-#![allow(missing_docs)]
-
 //! Types for commands to clusters.
 
 use std::num::NonZeroI64;
@@ -32,8 +30,17 @@ include!(concat!(env!("OUT_DIR"), "/mz_cluster_client.client.rs"));
 /// another in-memory and local to the current incarnation of environmentd)
 #[derive(PartialEq, Eq, Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct ClusterStartupEpoch {
+    /// The environment incarnation.
     envd: NonZeroI64,
+    /// The replica incarnation.
     replica: u64,
+}
+
+impl ClusterStartupEpoch {
+    /// Increases the replica incarnation counter.
+    pub fn bump_replica(&mut self) {
+        self.replica += 1;
+    }
 }
 
 impl RustType<ProtoClusterStartupEpoch> for ClusterStartupEpoch {
@@ -69,6 +76,7 @@ impl Arbitrary for ClusterStartupEpoch {
 }
 
 impl ClusterStartupEpoch {
+    /// Construct a new cluster startup epoch, from the environment epoch and replica incarnation.
     pub fn new(envd: NonZeroI64, replica: u64) -> Self {
         Self { envd, replica }
     }
@@ -93,10 +101,12 @@ impl ClusterStartupEpoch {
         }
     }
 
+    /// The environment epoch.
     pub fn envd(&self) -> NonZeroI64 {
         self.envd
     }
 
+    /// The replica incarnation.
     pub fn replica(&self) -> u64 {
         self.replica
     }
@@ -144,6 +154,12 @@ pub struct TimelyConfig {
     /// The higher the proportionality value, the more eagerly arrangement batches are merged. A
     /// value of `0` (or `1`) disables eager merging.
     pub arrangement_exert_proportionality: u32,
+    /// Whether to use the zero copy allocator.
+    pub enable_zero_copy: bool,
+    /// Whether to use lgalloc to back the zero copy allocator.
+    pub enable_zero_copy_lgalloc: bool,
+    /// Optional limit on the number of empty buffers retained by the zero copy allocator.
+    pub zero_copy_limit: Option<usize>,
 }
 
 impl RustType<ProtoTimelyConfig> for TimelyConfig {
@@ -153,6 +169,9 @@ impl RustType<ProtoTimelyConfig> for TimelyConfig {
             addresses: self.addresses.into_proto(),
             process: self.process.into_proto(),
             arrangement_exert_proportionality: self.arrangement_exert_proportionality,
+            enable_zero_copy: self.enable_zero_copy,
+            enable_zero_copy_lgalloc: self.enable_zero_copy_lgalloc,
+            zero_copy_limit: self.zero_copy_limit.into_proto(),
         }
     }
 
@@ -162,11 +181,15 @@ impl RustType<ProtoTimelyConfig> for TimelyConfig {
             workers: proto.workers.into_rust()?,
             addresses: proto.addresses.into_rust()?,
             arrangement_exert_proportionality: proto.arrangement_exert_proportionality,
+            enable_zero_copy: proto.enable_zero_copy,
+            enable_zero_copy_lgalloc: proto.enable_zero_copy_lgalloc,
+            zero_copy_limit: proto.zero_copy_limit.into_rust()?,
         })
     }
 }
 
 impl TimelyConfig {
+    /// Split the timely configuration into `parts` pieces, each with a different `process` number.
     pub fn split_command(&self, parts: usize) -> Vec<Self> {
         (0..parts)
             .map(|part| TimelyConfig {
@@ -205,6 +228,7 @@ pub struct ClusterReplicaLocation {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::ProptestConfig;
     use proptest::proptest;
@@ -218,7 +242,7 @@ mod tests {
         #[cfg_attr(miri, ignore)] // slow
         fn timely_config_protobuf_roundtrip(expect in any::<TimelyConfig>() ) {
             let actual = protobuf_roundtrip::<_, ProtoTimelyConfig>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
 
@@ -226,7 +250,7 @@ mod tests {
         #[cfg_attr(miri, ignore)] // slow
         fn cluster_startup_epoch_protobuf_roundtrip(expect in any::<ClusterStartupEpoch>() ) {
             let actual = protobuf_roundtrip::<_, ProtoClusterStartupEpoch>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }

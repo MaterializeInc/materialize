@@ -30,8 +30,9 @@ class UpsertInsert(Check):
                 $ kafka-ingest format=avro key-format=avro topic=upsert-insert key-schema=${keyschema} schema=${schema} repeat=10000
                 {"key1": "A${kafka-ingest.iteration}"} {"f1": "A${kafka-ingest.iteration}"}
 
-                > CREATE SOURCE upsert_insert
+                > CREATE SOURCE upsert_insert_src
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-insert-${testdrive.seed}')
+                > CREATE TABLE upsert_insert FROM SOURCE upsert_insert_src (REFERENCE "testdrive-upsert-insert-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
@@ -80,8 +81,9 @@ class UpsertUpdate(Check):
                 $ kafka-ingest format=avro key-format=avro topic=upsert-update key-schema=${keyschema} schema=${schema} repeat=10000
                 {"key1": "${kafka-ingest.iteration}"} {"f1": "A${kafka-ingest.iteration}"}
 
-                > CREATE SOURCE upsert_update
+                > CREATE SOURCE upsert_update_src
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-update-${testdrive.seed}')
+                > CREATE TABLE upsert_update FROM SOURCE upsert_update_src (REFERENCE "testdrive-upsert-update-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
@@ -127,8 +129,9 @@ class UpsertDelete(Check):
                 $ kafka-ingest format=avro key-format=avro topic=upsert-delete key-schema=${keyschema} schema=${schema} repeat=30000
                 {"key1": "${kafka-ingest.iteration}"} {"f1": "${kafka-ingest.iteration}"}
 
-                > CREATE SOURCE upsert_delete
+                > CREATE SOURCE upsert_delete_src
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-delete-${testdrive.seed}')
+                > CREATE TABLE upsert_delete FROM SOURCE upsert_delete_src (REFERENCE "testdrive-upsert-delete-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
@@ -158,6 +161,62 @@ class UpsertDelete(Check):
                 """
                 > SELECT * FROM upsert_delete_view;
                 10000 10000 19999
+           """
+            )
+        )
+
+
+class UpsertLegacy(Check):
+    """
+    An upsert source test that uses the legacy syntax to create the source
+    on all versions to ensure the source is properly migrated with the
+    ActivateSourceVersioningMigration scenario
+    """
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(
+            schemas()
+            + dedent(
+                """
+                $ kafka-create-topic topic=upsert-legacy-syntax
+
+                $ kafka-ingest format=avro key-format=avro topic=upsert-legacy-syntax key-schema=${keyschema} schema=${schema} repeat=10000
+                {"key1": "A${kafka-ingest.iteration}"} {"f1": "A${kafka-ingest.iteration}"}
+
+                > CREATE SOURCE upsert_insert_legacy
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-legacy-syntax-${testdrive.seed}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE UPSERT
+
+                > CREATE MATERIALIZED VIEW upsert_insert_legacy_view AS SELECT COUNT(DISTINCT key1 || ' ' || f1) FROM upsert_insert_legacy;
+                """
+            )
+        )
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(schemas() + dedent(s))
+            for s in [
+                """
+                $ kafka-ingest format=avro key-format=avro topic=upsert-legacy-syntax key-schema=${keyschema} schema=${schema} repeat=10000
+                {"key1": "A${kafka-ingest.iteration}"} {"f1": "A${kafka-ingest.iteration}"}
+                """,
+                """
+                $ kafka-ingest format=avro key-format=avro topic=upsert-legacy-syntax key-schema=${keyschema} schema=${schema} repeat=10000
+                {"key1": "A${kafka-ingest.iteration}"} {"f1": "A${kafka-ingest.iteration}"}
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                > SELECT COUNT(*), COUNT(DISTINCT key1), COUNT(DISTINCT f1) FROM upsert_insert_legacy
+                10000 10000 10000
+
+                > SELECT * FROM upsert_insert_legacy_view;
+                10000
            """
             )
         )

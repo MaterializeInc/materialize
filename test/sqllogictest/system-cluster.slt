@@ -16,67 +16,66 @@ statement ok
 SET CLUSTER TO mz_catalog_server
 
 query T multiline
-EXPLAIN SHOW DATABASES
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SHOW DATABASES
 ----
 Explained Query (fast path):
-  Project (#0)
-    ReadIndex on=mz_catalog.mz_databases mz_show_databases_ind=[*** full scan ***]
+  ReadIndex on=mz_internal.mz_show_databases mz_show_databases_ind=[*** full scan ***]
 
 Used Indexes:
-  - mz_catalog.mz_show_databases_ind (*** full scan ***)
+  - mz_internal.mz_show_databases_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 
 EOF
 
 query T multiline
-EXPLAIN SHOW SCHEMAS
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SHOW SCHEMAS
 ----
 Explained Query (fast path):
-  Project (#3)
+  Project (#1, #2)
     Filter ((#0) IS NULL OR (#0 = "u1"))
-      ReadIndex on=mz_catalog.mz_schemas mz_show_schemas_ind=[*** full scan ***]
+      ReadIndex on=mz_internal.mz_show_schemas mz_show_schemas_ind=[*** full scan ***]
 
 Used Indexes:
-  - mz_catalog.mz_show_schemas_ind (*** full scan ***)
+  - mz_internal.mz_show_schemas_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 
 EOF
 
 query T multiline
-EXPLAIN SHOW CONNECTIONS
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SHOW CONNECTIONS
 ----
 Explained Query (fast path):
-  Project (#3, #4)
-    ReadIndex on=mz_catalog.mz_connections mz_show_connections_ind=[lookup value=("u3")]
+  Project (#1..=#3)
+    ReadIndex on=mz_internal.mz_show_connections mz_show_connections_ind=[lookup value=("u3")]
 
 Used Indexes:
-  - mz_catalog.mz_show_connections_ind (lookup)
+  - mz_internal.mz_show_connections_ind (lookup)
 
 Target cluster: mz_catalog_server
 
 EOF
 
 query T multiline
-EXPLAIN SHOW TABLES
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SHOW TABLES
 ----
 Explained Query (fast path):
-  Project (#3)
-    ReadIndex on=mz_catalog.mz_tables mz_show_tables_ind=[lookup value=("u3")]
+  Project (#1, #2)
+    ReadIndex on=mz_internal.mz_show_tables mz_show_tables_ind=[lookup value=("u3")]
 
 Used Indexes:
-  - mz_catalog.mz_show_tables_ind (lookup)
+  - mz_internal.mz_show_tables_ind (lookup)
 
 Target cluster: mz_catalog_server
 
 EOF
 
 query T multiline
-EXPLAIN SHOW SOURCES
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SHOW SOURCES
 ----
 Explained Query (fast path):
-  Project (#1..=#4)
+  Project (#2..=#4, #6)
     ReadIndex on=mz_internal.mz_show_sources mz_show_sources_ind=[lookup value=("u3")]
 
 Used Indexes:
@@ -87,24 +86,24 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SHOW VIEWS
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SHOW VIEWS
 ----
 Explained Query (fast path):
-  Project (#3)
-    ReadIndex on=mz_catalog.mz_views mz_show_views_ind=[lookup value=("u3")]
+  Project (#1, #2)
+    ReadIndex on=mz_internal.mz_show_views mz_show_views_ind=[lookup value=("u3")]
 
 Used Indexes:
-  - mz_catalog.mz_show_views_ind (lookup)
+  - mz_internal.mz_show_views_ind (lookup)
 
 Target cluster: mz_catalog_server
 
 EOF
 
 query T multiline
-EXPLAIN SHOW MATERIALIZED VIEWS
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SHOW MATERIALIZED VIEWS
 ----
 Explained Query (fast path):
-  Project (#1, #2)
+  Project (#2, #3, #5)
     ReadIndex on=mz_internal.mz_show_materialized_views mz_show_materialized_views_ind=[lookup value=("u3")]
 
 Used Indexes:
@@ -115,11 +114,11 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SHOW MATERIALIZED VIEWS IN CLUSTER quickstart
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SHOW MATERIALIZED VIEWS IN CLUSTER quickstart
 ----
 Explained Query (fast path):
-  Project (#1, #2)
-    Filter (#3 = "u1")
+  Project (#2, #3, #5)
+    Filter (#4 = "u1")
       ReadIndex on=mz_internal.mz_show_materialized_views mz_show_materialized_views_ind=[lookup value=("u3")]
 
 Used Indexes:
@@ -130,11 +129,11 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SHOW INDEXES
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SHOW INDEXES
 ----
 Explained Query (fast path):
-  Project (#1..=#4)
-    Filter NOT(like["s%"](#5))
+  Project (#2..=#5, #8)
+    Filter NOT(like["s%"](#6))
       ReadIndex on=mz_internal.mz_show_indexes mz_show_indexes_ind=[lookup value=("u3")]
 
 Used Indexes:
@@ -145,11 +144,11 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SHOW INDEXES IN CLUSTER quickstart
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SHOW INDEXES IN CLUSTER quickstart
 ----
 Explained Query (fast path):
-  Project (#1..=#4)
-    Filter (#6 = "u1")
+  Project (#2..=#5, #8)
+    Filter (#7 = "u1")
       ReadIndex on=mz_internal.mz_show_indexes mz_show_indexes_ind=[*** full scan ***]
 
 Used Indexes:
@@ -160,10 +159,10 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SHOW SINKS
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SHOW SINKS
 ----
 Explained Query (fast path):
-  Project (#1..=#4)
+  Project (#2..=#4, #6)
     ReadIndex on=mz_internal.mz_show_sinks mz_show_sinks_ind=[lookup value=("u3")]
 
 Used Indexes:
@@ -174,28 +173,28 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SHOW TYPES
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SHOW TYPES
 ----
 Explained Query (fast path):
-  Project (#3)
-    ReadIndex on=mz_catalog.mz_types mz_show_types_ind=[lookup value=("u3")]
+  Project (#1, #2)
+    ReadIndex on=mz_internal.mz_show_types mz_show_types_ind=[lookup value=("u3")]
 
 Used Indexes:
-  - mz_catalog.mz_show_types_ind (lookup)
+  - mz_internal.mz_show_types_ind (lookup)
 
 Target cluster: mz_catalog_server
 
 EOF
 
 query T multiline
-EXPLAIN SHOW OBJECTS
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SHOW OBJECTS
 ----
 Explained Query (fast path):
-  Project (#3, #4)
-    ReadIndex on=mz_catalog.mz_objects mz_show_all_objects_ind=[lookup value=("u3")]
+  Project (#1..=#3)
+    ReadIndex on=mz_internal.mz_show_all_objects mz_show_all_objects_ind=[lookup value=("u3")]
 
 Used Indexes:
-  - mz_catalog.mz_show_all_objects_ind (lookup)
+  - mz_internal.mz_show_all_objects_ind (lookup)
 
 Target cluster: mz_catalog_server
 
@@ -205,14 +204,14 @@ statement ok
 CREATE TABLE t (a INT)
 
 query T multiline
-EXPLAIN SHOW COLUMNS IN t
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SHOW COLUMNS IN t
 ----
 Explained Query (fast path):
-  Project (#1, #3, #4)
-    ReadIndex on=mz_catalog.mz_columns mz_show_columns_ind=[lookup value=("u1")]
+  Project (#1..=#3, #5)
+    ReadIndex on=mz_internal.mz_show_columns mz_show_columns_ind=[lookup value=("u1")]
 
 Used Indexes:
-  - mz_catalog.mz_show_columns_ind (lookup)
+  - mz_internal.mz_show_columns_ind (lookup)
 
 Target cluster: mz_catalog_server
 
@@ -242,10 +241,11 @@ EOF
 # EOF
 
 query T multiline
-EXPLAIN SHOW CLUSTER REPLICAS
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SHOW CLUSTER REPLICAS
 ----
 Explained Query (fast path):
-  ReadIndex on=mz_internal.mz_show_cluster_replicas mz_show_cluster_replicas_ind=[*** full scan ***]
+  Project (#0, #1, #3..=#5)
+    ReadIndex on=mz_internal.mz_show_cluster_replicas mz_show_cluster_replicas_ind=[*** full scan ***]
 
 Used Indexes:
   - mz_internal.mz_show_cluster_replicas_ind (*** full scan ***)
@@ -255,10 +255,10 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SHOW CLUSTER REPLICAS WHERE cluster IN ('compute_qck', 'ingest_qck');
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SHOW CLUSTER REPLICAS WHERE cluster IN ('compute_qck', 'ingest_qck');
 ----
 Explained Query (fast path):
-  Project (#0..=#3)
+  Project (#0, #1, #3..=#5)
     ReadIndex on=mz_internal.mz_show_cluster_replicas mz_show_cluster_replicas_ind=[lookup values=[("ingest_qck"); ("compute_qck")]]
 
 Used Indexes:
@@ -269,21 +269,21 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SHOW SECRETS
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SHOW SECRETS
 ----
 Explained Query (fast path):
-  Project (#3)
-    ReadIndex on=mz_catalog.mz_secrets mz_show_secrets_ind=[lookup value=("u3")]
+  Project (#1, #2)
+    ReadIndex on=mz_internal.mz_show_secrets mz_show_secrets_ind=[lookup value=("u3")]
 
 Used Indexes:
-  - mz_catalog.mz_show_secrets_ind (lookup)
+  - mz_internal.mz_show_secrets_ind (lookup)
 
 Target cluster: mz_catalog_server
 
 EOF
 
 query T multiline
-EXPLAIN SELECT id FROM mz_catalog.mz_indexes
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT id FROM mz_catalog.mz_indexes
 ----
 Explained Query (fast path):
   Project (#0)
@@ -297,7 +297,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SELECT id FROM mz_catalog.mz_roles
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT id FROM mz_catalog.mz_roles
 ----
 Explained Query (fast path):
   Project (#0)
@@ -311,7 +311,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SELECT id FROM mz_catalog.mz_sources
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT id FROM mz_catalog.mz_sources
 ----
 Explained Query (fast path):
   Project (#0)
@@ -325,7 +325,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SELECT id FROM mz_catalog.mz_sinks
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT id FROM mz_catalog.mz_sinks
 ----
 Explained Query (fast path):
   Project (#0)
@@ -339,7 +339,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SELECT id FROM mz_catalog.mz_materialized_views
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT id FROM mz_catalog.mz_materialized_views
 ----
 Explained Query (fast path):
   Project (#0)
@@ -353,7 +353,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SELECT object_id FROM mz_internal.mz_object_dependencies
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT object_id FROM mz_internal.mz_object_dependencies
 ----
 Explained Query (fast path):
   Project (#0)
@@ -367,7 +367,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SELECT dependency_id FROM mz_internal.mz_compute_dependencies
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT dependency_id FROM mz_internal.mz_compute_dependencies
 ----
 Explained Query (fast path):
   Project (#0)
@@ -381,7 +381,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SELECT dropped_at FROM mz_internal.mz_cluster_replica_history
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT dropped_at FROM mz_internal.mz_cluster_replica_history
 ----
 Explained Query (fast path):
   Project (#0)
@@ -397,7 +397,7 @@ EOF
 # Following are used in the UI
 
 query T multiline
-EXPLAIN SELECT r.id,
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT r.id,
   r.name as replica_name,
   r.cluster_id,
   r.size,
@@ -410,9 +410,9 @@ ORDER BY r.id;
 ----
 Explained Query:
   Finish order_by=[#0 asc nulls_last] output=[#0..=#5]
-    Project (#0..=#3, #5, #27)
-      Map (((uint8_to_double(#25) / uint8_to_double(#19)) * 100))
-        Join on=(#0 = #13 = #22 AND #2 = #4 AND #14 = #15) type=delta
+    Project (#0..=#3, #5, #29)
+      Map (((uint8_to_double(#27) / uint8_to_double(#21)) * 100))
+        Join on=(#0 = #15 = #24 AND #2 = #4 AND #16 = #17) type=delta
           ArrangeBy keys=[[#0], [#2]]
             Project (#0..=#3)
               ReadIndex on=mz_cluster_replicas mz_cluster_replicas_ind=[*** full scan ***]
@@ -438,13 +438,24 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SELECT s.id, s.oid, s.name, s.type, s.size, st.status, st.error
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT s.id, s.oid, s.name, s.type, s.size, st.status, st.error
 FROM mz_sources s
 LEFT OUTER JOIN mz_internal.mz_source_statuses st
 ON st.id = s.id
 WHERE s.id LIKE 'u%';
 ----
 Explained Query:
+  With
+    cte l0 =
+      ArrangeBy keys=[[#0]]
+        ReadIndex on=mz_sources mz_sources_ind=[differential join]
+    cte l1 =
+      Project (#0, #1, #3, #4, #6, #19, #20)
+        Filter like["u%"](#0)
+          Join on=(#0 = #15) type=differential
+            Get l0
+            ArrangeBy keys=[[#0]]
+              ReadIndex on=mz_source_statuses mz_source_statuses_ind=[differential join]
   Return
     Union
       Map (null, null)
@@ -462,17 +473,6 @@ Explained Query:
             Filter like["u%"](#0)
               ReadIndex on=mz_sources mz_sources_ind=[*** full scan ***]
       Get l1
-  With
-    cte l1 =
-      Project (#0, #1, #3, #4, #6, #19, #20)
-        Filter like["u%"](#0)
-          Join on=(#0 = #15) type=differential
-            Get l0
-            ArrangeBy keys=[[#0]]
-              ReadIndex on=mz_source_statuses mz_source_statuses_ind=[differential join]
-    cte l0 =
-      ArrangeBy keys=[[#0]]
-        ReadIndex on=mz_sources mz_sources_ind=[differential join]
 
 Used Indexes:
   - mz_catalog.mz_sources_ind (*** full scan ***, differential join)
@@ -483,7 +483,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SELECT MAX(extract(epoch from h.occurred_at) * 1000) as last_occurred, h.error, COUNT(h.occurred_at)
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT MAX(extract(epoch from h.occurred_at) * 1000) as last_occurred, h.error, COUNT(h.occurred_at)
 FROM mz_internal.mz_source_status_history h
 WHERE source_id = 'u6'
 AND error IS NOT NULL
@@ -494,12 +494,22 @@ LIMIT 10;
 ----
 Explained Query:
   Finish order_by=[#0 desc nulls_first] limit=10 output=[#0..=#2]
-    Project (#1, #0, #2)
-      Reduce group_by=[#1] aggregates=[max((extract_epoch_tstz(#0) * 1000)), count(*)]
+    With
+      cte l0 =
         Project (#0, #3)
-          Filter (#6 <= 100) AND (#6 >= 0) AND (#3) IS NOT NULL
+          Filter (#7 <= 100) AND (#7 >= 0) AND (#3) IS NOT NULL
             Map (timestamp_tz_to_mz_timestamp(#0))
               ReadIndex on=mz_internal.mz_source_status_history mz_source_status_history_ind=[lookup value=("u6")]
+    Return
+      Project (#1, #0, #3)
+        Join on=(#0 = #2) type=differential
+          ArrangeBy keys=[[#0]]
+            Reduce group_by=[#1] aggregates=[max((extract_epoch_tstz(#0) * 1000))]
+              Get l0
+          ArrangeBy keys=[[#0]]
+            Reduce group_by=[#0] aggregates=[count(*)]
+              Project (#1)
+                Get l0
 
 Used Indexes:
   - mz_internal.mz_source_status_history_ind (lookup)

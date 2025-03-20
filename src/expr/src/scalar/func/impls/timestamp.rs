@@ -24,6 +24,7 @@ use mz_repr::{strconv, ColumnType, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use crate::scalar::func::format::DateTimeFormat;
 use crate::scalar::func::{EagerUnaryFunc, TimestampLike};
 use crate::EvalError;
 
@@ -312,8 +313,8 @@ where
         | DateTimeUnits::DayOfYear
         | DateTimeUnits::IsoDayOfWeek
         | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported {
-            feature: format!("'{}' timestamp units", units),
-            issue_no: None,
+            feature: format!("'{}' timestamp units", units).into(),
+            discussion_no: None,
         }),
     }
 }
@@ -393,8 +394,8 @@ where
         | DateTimeUnits::TimezoneHour
         | DateTimeUnits::TimezoneMinute
         | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported {
-            feature: format!("'{}' timestamp units", units),
-            issue_no: None,
+            feature: format!("'{}' timestamp units", units).into(),
+            discussion_no: None,
         }),
     }
 }
@@ -542,8 +543,8 @@ pub fn date_trunc_inner<T: TimestampLike>(units: DateTimeUnits, ts: &T) -> Resul
         | DateTimeUnits::DayOfYear
         | DateTimeUnits::IsoDayOfWeek
         | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported {
-            feature: format!("'{}' timestamp units", units),
-            issue_no: None,
+            feature: format!("'{}' timestamp units", units).into(),
+            discussion_no: None,
         }),
     }
 }
@@ -719,5 +720,55 @@ impl<'a> EagerUnaryFunc<'a> for TimezoneTimestampTz {
 impl fmt::Display for TimezoneTimestampTz {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "timezone_{}_tstz", self.0)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, MzReflect)]
+pub struct ToCharTimestamp {
+    pub format_string: String,
+    pub format: DateTimeFormat,
+}
+
+impl<'a> EagerUnaryFunc<'a> for ToCharTimestamp {
+    type Input = CheckedTimestamp<NaiveDateTime>;
+    type Output = String;
+
+    fn call(&self, input: CheckedTimestamp<NaiveDateTime>) -> String {
+        self.format.render(&*input)
+    }
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::String.nullable(input.nullable)
+    }
+}
+
+impl fmt::Display for ToCharTimestamp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "tocharts[{}]", self.format_string)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, MzReflect)]
+pub struct ToCharTimestampTz {
+    pub format_string: String,
+    pub format: DateTimeFormat,
+}
+
+impl<'a> EagerUnaryFunc<'a> for ToCharTimestampTz {
+    type Input = CheckedTimestamp<DateTime<Utc>>;
+    type Output = String;
+
+    fn call(&self, input: CheckedTimestamp<DateTime<Utc>>) -> String {
+        self.format.render(&*input)
+    }
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::String.nullable(input.nullable)
+    }
+}
+
+impl fmt::Display for ToCharTimestampTz {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "tochartstz[{}]", self.format_string)
     }
 }

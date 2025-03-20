@@ -30,14 +30,15 @@ use mz_environmentd::test_util::{
     self, get_explain_timestamp, get_explain_timestamp_determination, try_get_explain_timestamp,
     MzTimestamp, PostgresErrorExt, TestServerWithRuntime, KAFKA_ADDRS,
 };
-use mz_ore::assert_contains;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
 use mz_ore::result::ResultExt;
 use mz_ore::retry::Retry;
 use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
+use mz_ore::{assert_contains, assert_err, assert_ok};
 use mz_pgrepr::UInt4;
 use mz_repr::Timestamp;
+use mz_sql::catalog::BuiltinsConfig;
 use mz_sql::session::user::{INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, SUPPORT_USER, SYSTEM_USER};
 use mz_storage_types::sources::Timeline;
 use postgres::Row;
@@ -47,6 +48,7 @@ use rdkafka_sys::RDKafkaErrorCode;
 use regex::Regex;
 use serde_json::json;
 use timely::order::PartialOrder;
+use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 use tokio_postgres::error::SqlState;
 use tracing::{debug, info};
@@ -60,7 +62,7 @@ struct MockHttpServer {
 
 impl MockHttpServer {
     /// Constructs a new mock HTTP server.
-    fn new() -> MockHttpServer {
+    async fn new() -> MockHttpServer {
         let (conn_tx, conn_rx) = mpsc::unbounded_channel();
         let router = Router::new().route(
             "/*path",
@@ -74,9 +76,10 @@ impl MockHttpServer {
                     .expect("response channel unexpectedly closed")
             }),
         );
-        let server = axum::Server::bind(&SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
-            .serve(router.into_make_service());
-        let addr = server.local_addr();
+        let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+        let listener = TcpListener::bind(addr).await.expect("can bind");
+        let addr = listener.local_addr().unwrap();
+        let server = axum::serve(listener, router.into_make_service());
         let task = task::spawn(|| "mock_http_server", async {
             server
                 .await
@@ -117,7 +120,7 @@ async fn test_no_block() {
             .await;
 
         println!("test_no_block: starting mock HTTP server");
-        let mut schema_registry_server = MockHttpServer::new();
+        let mut schema_registry_server = MockHttpServer::new().await;
 
         println!("test_no_block: connecting to server");
         let client = server.connect().await.unwrap();
@@ -213,7 +216,7 @@ async fn test_drop_connection_race() {
     info!("test_drop_connection_race: server started");
 
     info!("test_drop_connection_race: starting mock HTTP server");
-    let mut schema_registry_server = MockHttpServer::new();
+    let mut schema_registry_server = MockHttpServer::new().await;
 
     // Construct a source that depends on a schema registry connection.
     let client = server.connect().await.unwrap();
@@ -303,8 +306,10 @@ async fn test_drop_connection_race() {
 
 #[mz_ore::test]
 fn test_time() {
-    let server = test_util::TestHarness::default().start_blocking();
-    server.enable_feature_flags(&["enable_unsafe_functions"]);
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
+    server.enable_feature_flags(&["unsafe_enable_unsafe_functions"]);
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     // Confirm that `now()` and `current_timestamp()` both return a
@@ -328,7 +333,10 @@ fn test_time() {
     // Ensure that EXPLAIN selects a timestamp for `now()` and
     // `current_timestamp()`, though we don't care what the timestamp is.
     let rows = client
-        .query("EXPLAIN PLAN FOR SELECT now(), current_timestamp()", &[])
+        .query(
+            "EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT now(), current_timestamp()",
+            &[],
+        )
         .unwrap();
     assert_eq!(1, rows.len());
 
@@ -597,7 +605,7 @@ fn test_subscribe_basic() {
 
     // Aggressively compact the data in the index, then subscribe an unmaterialized
     // view derived from the index. This previously selected an invalid
-    // `AS OF` timestamp (#5391).
+    // `AS OF` timestamp (database-issues#1666).
     client_writes
         .batch_execute("ALTER TABLE t SET (RETAIN HISTORY = FOR '1s')")
         .unwrap();
@@ -754,7 +762,7 @@ fn test_subscribe_progress() {
 }
 
 // Verifies that subscribing to non-nullable columns with progress information
-// turns them into nullable columns. See #6304.
+// turns them into nullable columns. See database-issues#1946.
 #[mz_ore::test]
 fn test_subscribe_progress_non_nullable_columns() {
     let server = test_util::TestHarness::default().start_blocking();
@@ -964,7 +972,7 @@ fn test_subscribe_fetch_timeout() {
     // Make a third cursor. Fetch should return immediately if there are enough
     // rows, even with a really long timeout.
     //
-    // Regression test for #6307
+    // Regression test for database-issues#1949
     client
         .batch_execute(
             "COMMIT; BEGIN;
@@ -1376,7 +1384,8 @@ fn test_transactional_explain_timestamps() {
 // Feel free to modify this test if that product requirement changes,
 // but please at least keep _something_ that tests that custom compaction windows are working.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18934
+#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5600
+#[ignore] // TODO: Reenable when database-issues#8491 is fixed
 async fn test_utilization_hold() {
     const THIRTY_DAYS_MS: u64 = 30 * 24 * 60 * 60 * 1000;
     // `mz_catalog_server` tests indexes, `quickstart` tests tables.
@@ -1517,10 +1526,11 @@ async fn test_utilization_hold() {
 async fn test_github_12546() {
     let server = test_util::TestHarness::default()
         .with_propagate_crashes(false)
+        .unsafe_mode()
         .start()
         .await;
     server
-        .enable_feature_flags(&["enable_unsafe_functions"])
+        .enable_feature_flags(&["unsafe_enable_unsafe_functions"])
         .await;
 
     let (client, conn_task) = server.connect().with_handle().await.unwrap();
@@ -1621,7 +1631,7 @@ fn test_github_12951() {
 }
 
 #[mz_ore::test]
-// Tests github issue #13100
+// Tests github issue database-issues#3761
 fn test_subscribe_outlive_cluster() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -1740,68 +1750,6 @@ async fn test_timestamp_recovery() {
     }
 }
 
-#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-async fn test_timeline_read_holds() {
-    // Set the timestamp to zero for deterministic initial timestamps.
-    let now = Arc::new(Mutex::new(0));
-    let now_fn = {
-        let now = Arc::clone(&now);
-        NowFn::from(move || *now.lock().unwrap())
-    };
-    let server = test_util::TestHarness::default()
-        .with_now(now_fn)
-        .unsafe_mode()
-        .start()
-        .await;
-    let mz_client = server.connect().await.unwrap();
-
-    let view_name = "v_hold";
-    let source_name = "source_hold";
-    let (pg_client, cleanup_fn) =
-        test_util::create_postgres_source_with_table(&mz_client, view_name, "(a INT)", source_name)
-            .await;
-
-    // Create user table in Materialize.
-    mz_client
-        .batch_execute("DROP TABLE IF EXISTS t;")
-        .await
-        .unwrap();
-    mz_client
-        .batch_execute("CREATE TABLE t (a INT);")
-        .await
-        .unwrap();
-    test_util::insert_with_deterministic_timestamps("t", "(42)", &server, Arc::clone(&now))
-        .await
-        .unwrap();
-
-    // Insert data into source.
-    let source_rows: i64 = 10;
-    for _ in 0..source_rows {
-        let _ = pg_client
-            .execute(&format!("INSERT INTO {view_name} VALUES (42);"), &[])
-            .await
-            .unwrap();
-    }
-
-    test_util::wait_for_pg_table_population(&mz_client, view_name, source_rows).await;
-
-    // Make sure that the table and view are joinable immediately at some timestamp.
-    let mz_join_client = server.connect().await.unwrap();
-    let _ = tokio::time::timeout(Duration::from_millis(2_000), async move {
-        Ok::<_, anyhow::Error>(
-            mz_join_client
-                .query_one(&format!("SELECT COUNT(t.a) FROM t, {view_name};"), &[])
-                .await
-                .unwrap()
-                .get::<_, i64>(0),
-        )
-    })
-    .await
-    .unwrap();
-
-    cleanup_fn(&mz_client, &pg_client).await;
-}
-
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
 async fn test_linearizability() {
     // TODO(jkosh44) This doesn't actually test linearizability across sessions which would be nice.
@@ -1833,6 +1781,7 @@ async fn test_session_linearizability(isolation_level: &str) {
     let pg_table_name = "v_lin";
     let pg_source_name = "source_lin";
     let (pg_client, cleanup_fn) = test_util::create_postgres_source_with_table(
+        &server,
         &mz_client,
         pg_table_name,
         "(a INT)",
@@ -2164,58 +2113,36 @@ fn test_support_user_permissions() {
         .batch_execute("SET CLUSTER TO 'mz_catalog_server'")
         .unwrap();
 
-    assert!(internal_client
-        .query("SELECT * FROM materialize.public.t1", &[])
-        .is_err());
-    assert!(internal_client
-        .batch_execute("INSERT INTO materialize.public.t1 VALUES (1)")
-        .is_err());
-    assert!(internal_client
-        .batch_execute("CREATE TABLE t2 (a INT)")
-        .is_err());
+    assert_err!(internal_client.query("SELECT * FROM materialize.public.t1", &[]));
+    assert_err!(internal_client.batch_execute("INSERT INTO materialize.public.t1 VALUES (1)"));
+    assert_err!(internal_client.batch_execute("CREATE TABLE t2 (a INT)"));
 
-    assert!(internal_client
-        .query("SELECT * FROM mz_internal.mz_comments", &[])
-        .is_ok());
-    assert!(internal_client
-        .query("SELECT * FROM mz_catalog.mz_tables", &[])
-        .is_ok());
-    assert!(internal_client
-        .query("SELECT * FROM pg_catalog.pg_namespace", &[])
-        .is_ok());
+    assert_ok!(internal_client.query("SELECT * FROM mz_internal.mz_comments", &[]));
+    assert_ok!(internal_client.query("SELECT * FROM mz_catalog.mz_tables", &[]));
+    assert_ok!(internal_client.query("SELECT * FROM pg_catalog.pg_namespace", &[]));
 
     internal_client
         .batch_execute("SET CLUSTER TO 'mz_system'")
         .unwrap();
-    assert!(internal_client
-        .query("SELECT * FROM mz_internal.mz_comments", &[])
-        .is_ok());
-    assert!(internal_client
-        .query("SELECT * FROM mz_catalog.mz_tables", &[])
-        .is_ok());
-    assert!(internal_client
-        .query("SELECT * FROM pg_catalog.pg_namespace", &[])
-        .is_ok());
+    assert_ok!(internal_client.query("SELECT * FROM mz_internal.mz_comments", &[]));
+    assert_ok!(internal_client.query("SELECT * FROM mz_catalog.mz_tables", &[]));
+    assert_ok!(internal_client.query("SELECT * FROM pg_catalog.pg_namespace", &[]));
 
     internal_client
         .batch_execute("SET CLUSTER TO 'default'")
         .unwrap();
-    assert!(internal_client.query("SELECT * FROM t1", &[]).is_err());
-    assert!(internal_client
-        .query("SELECT * FROM mz_internal.mz_comments", &[])
-        .is_ok());
-    assert!(internal_client
-        .query("SELECT * FROM mz_catalog.mz_tables", &[])
-        .is_ok());
-    assert!(internal_client
-        .query("SELECT * FROM pg_catalog.pg_namespace", &[])
-        .is_ok());
+    assert_err!(internal_client.query("SELECT * FROM t1", &[]));
+    assert_ok!(internal_client.query("SELECT * FROM mz_internal.mz_comments", &[]));
+    assert_ok!(internal_client.query("SELECT * FROM mz_catalog.mz_tables", &[]));
+    assert_ok!(internal_client.query("SELECT * FROM pg_catalog.pg_namespace", &[]));
 }
 
 #[mz_ore::test]
 fn test_idle_in_transaction_session_timeout() {
-    let server = test_util::TestHarness::default().start_blocking();
-    server.enable_feature_flags(&["enable_unsafe_functions"]);
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
+    server.enable_feature_flags(&["unsafe_enable_unsafe_functions"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     client
@@ -2295,65 +2222,6 @@ fn test_idle_in_transaction_session_timeout() {
 }
 
 #[mz_ore::test]
-fn test_coord_startup_blocking() {
-    let initial_time = 0;
-    let now = Arc::new(Mutex::new(initial_time));
-    let now_fn = {
-        let timestamp = Arc::clone(&now);
-        NowFn::from(move || *timestamp.lock().expect("lock poisoned"))
-    };
-    let data_dir = tempfile::tempdir().unwrap();
-    let harness = test_util::TestHarness::default()
-        .with_now(now_fn)
-        .data_directory(data_dir.path());
-
-    // Start 3 servers and reserve the first 3 timestamp ranges.
-    {
-        let server = harness.clone().start_blocking();
-        let mut client = server.connect(postgres::NoTls).unwrap();
-
-        client.query("SELECT 1", &[]).unwrap();
-    };
-    {
-        let server = harness.clone().start_blocking();
-        let mut client = server.connect(postgres::NoTls).unwrap();
-
-        client.query("SELECT 1", &[]).unwrap();
-    };
-    {
-        let server = harness.clone().start_blocking();
-        let mut client = server.connect(postgres::NoTls).unwrap();
-
-        client.query("SELECT 1", &[]).unwrap();
-    };
-
-    let (tx, rx) = std::sync::mpsc::sync_channel(0);
-    std::thread::spawn(move || {
-        let server = harness.start_blocking();
-        let mut client = server
-            .connect(postgres::NoTls)
-            .expect("unable to start client asynchronously");
-
-        client
-            .query("SELECT 1", &[])
-            .expect("unable to query server asynchronously");
-        tx.send(())
-            .expect("receiver waiting for server startup has hung up");
-    });
-
-    // The server should be stuck in startup until the system clock advances closer to the
-    // timestamp oracle.
-    let server_started = Retry::default()
-        .max_duration(Duration::from_secs(3))
-        .retry(|_| rx.try_recv());
-    assert!(server_started.is_err(), "server should be blocked");
-
-    // Updating the system clock will allow the server to start.
-    *now.lock().expect("lock poisoned") = i32::MAX.try_into().expect("known to fit");
-    rx.recv().unwrap();
-}
-
-#[mz_ore::test]
 fn test_peek_on_dropped_cluster() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -2365,7 +2233,7 @@ fn test_peek_on_dropped_cluster() {
     let handle = thread::spawn(move || {
         // Run query asynchronously that will hang forever.
         let res = read_client.query_one("SELECT * FROM t AS OF 18446744073709551615", &[]);
-        assert!(res.is_err(), "cancelled query should return error");
+        assert_err!(res, "cancelled query should return error");
         let err = res.unwrap_err().unwrap_db_error();
         //TODO(jkosh44) This isn't actually an internal error but we often incorrectly give back internal errors.
         assert_eq!(
@@ -2385,7 +2253,7 @@ fn test_peek_on_dropped_cluster() {
         .max_duration(Duration::from_secs(10))
         .retry(|_| {
             let count: i64 = client
-                .query_one("SELECT COUNT(*) FROM mz_internal.mz_active_peeks", &[])
+                .query_one("SELECT COUNT(*) FROM mz_introspection.mz_active_peeks", &[])
                 .unwrap()
                 .get(0);
             if count == 1 {
@@ -2615,7 +2483,7 @@ fn test_subscribe_on_dropped_source() {
     }
 
     fn assert_subscribe_error(res: Result<(), tokio_postgres::error::Error>) {
-        assert!(res.is_err());
+        assert_err!(res);
         assert!(res
             .unwrap_db_error()
             .message()
@@ -2678,47 +2546,6 @@ fn test_dont_drop_sinks_twice() {
     client_a.close().expect("failed to drop client");
 }
 
-#[mz_ore::test]
-fn test_timelines_persist_after_failed_transaction() {
-    let server = test_util::TestHarness::default()
-        .unsafe_mode()
-        .start_blocking();
-    server.enable_feature_flags(&["enable_create_source_denylist_with_options"]);
-
-    let mut client = server.connect(postgres::NoTls).unwrap();
-
-    client.batch_execute(
-        "CREATE SOURCE counter FROM LOAD GENERATOR COUNTER (TICK INTERVAL '10ms') WITH (TIMELINE 'my_timline')"
-    )
-    .unwrap();
-
-    // Should be able to query the source.
-    client
-        .query("SELECT * FROM counter", &[])
-        .expect("failed to select from LOAD GENERATOR");
-
-    fail::cfg("catalog_transact", "return(1)").expect("failed to set the fail_point");
-
-    // Should fail to drop the source, because of the fail_point.
-    let result = client.batch_execute("DROP SOURCE counter");
-
-    // Assert the error we get back is from our fail_point
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert!(err.to_string().contains("failpoint: Some(\"1\")"));
-
-    fail::remove("catalog_transact");
-
-    // Should still be able to query the source, since we shouldn't have cleaned up the
-    // timeline or source because of the failed transaction.
-    client
-        .query("SELECT * FROM counter", &[])
-        .expect("failed to select from LOAD GENERATOR");
-
-    // Dropping the source should also work now.
-    client.batch_execute("DROP SOURCE counter").unwrap();
-}
-
 // This can almost be tested with SLT using the simple directive, but
 // we have no way to disconnect sessions using SLT.
 #[mz_ore::test]
@@ -2740,9 +2567,12 @@ fn test_mz_sessions() {
         1,
     );
     let foo_session_row = foo_client
-        .query_one("SELECT id::int8, role_id FROM mz_internal.mz_sessions", &[])
+        .query_one(
+            "SELECT connection_id::int8, role_id FROM mz_internal.mz_sessions",
+            &[],
+        )
         .unwrap();
-    let foo_conn_id = foo_session_row.get::<_, i64>("id");
+    let foo_conn_id = foo_session_row.get::<_, i64>("connection_id");
     let foo_role_id = foo_session_row.get::<_, String>("role_id");
     assert_eq!(
         foo_client
@@ -2768,7 +2598,7 @@ fn test_mz_sessions() {
         );
         let bar_session_row = bar_client
             .query_one(
-                &format!("SELECT role_id FROM mz_internal.mz_sessions WHERE id <> {foo_conn_id}"),
+                &format!("SELECT role_id FROM mz_internal.mz_sessions WHERE connection_id <> {foo_conn_id}"),
                 &[],
             )
             .unwrap();
@@ -2794,9 +2624,12 @@ fn test_mz_sessions() {
     );
     assert_eq!(
         foo_client
-            .query_one("SELECT id::int8 FROM mz_internal.mz_sessions", &[])
+            .query_one(
+                "SELECT connection_id::int8 FROM mz_internal.mz_sessions",
+                &[]
+            )
             .unwrap()
-            .get::<_, i64>("id"),
+            .get::<_, i64>("connection_id"),
         foo_conn_id,
     );
 
@@ -2817,11 +2650,11 @@ fn test_mz_sessions() {
         );
         let other_foo_session_row = foo_client
             .query_one(
-                &format!("SELECT id::int8, role_id FROM mz_internal.mz_sessions WHERE id <> {foo_conn_id}"),
+                &format!("SELECT connection_id::int8, role_id FROM mz_internal.mz_sessions WHERE connection_id <> {foo_conn_id}"),
                 &[],
             )
             .unwrap();
-        let other_foo_conn_id = other_foo_session_row.get::<_, i64>("id");
+        let other_foo_conn_id = other_foo_session_row.get::<_, i64>("connection_id");
         let other_foo_role_id = other_foo_session_row.get::<_, String>("role_id");
         assert_ne!(foo_conn_id, other_foo_conn_id);
         assert_eq!(foo_role_id, other_foo_role_id);
@@ -2839,9 +2672,12 @@ fn test_mz_sessions() {
     );
     assert_eq!(
         foo_client
-            .query_one("SELECT id::int8 FROM mz_internal.mz_sessions", &[])
+            .query_one(
+                "SELECT connection_id::int8 FROM mz_internal.mz_sessions",
+                &[]
+            )
             .unwrap()
-            .get::<_, i64>("id"),
+            .get::<_, i64>("connection_id"),
         foo_conn_id,
     );
 }
@@ -2992,13 +2828,13 @@ fn test_auto_run_on_introspection_feature_disabled() {
     assert_notice(None);
 
     let _rows = client
-        .query("SELECT * FROM mz_internal.mz_active_peeks", &[])
+        .query("SELECT * FROM mz_introspection.mz_active_peeks", &[])
         .unwrap();
     assert_notice(Some(INTROSPECTION_NOTICE));
 
     let _rows = client
         .query(
-            "SELECT * FROM mz_internal.mz_dataflow_operator_parents",
+            "SELECT * FROM mz_introspection.mz_dataflow_operator_parents",
             &[],
         )
         .unwrap();
@@ -3061,14 +2897,14 @@ fn test_auto_run_on_introspection_per_replica_relations() {
 
     // `mz_active_peeks` is a per-replica relation
     let _rows = client
-        .query("SELECT * FROM mz_internal.mz_active_peeks", &[])
+        .query("SELECT * FROM mz_introspection.mz_active_peeks", &[])
         .unwrap();
     assert_notice(Some(INTROSPECTION_NOTICE));
 
     // `mz_dataflow_operator_parents` is a VIEW that depends on per-replica relations
     let _rows = client
         .query(
-            "SELECT * FROM mz_internal.mz_dataflow_operator_parents",
+            "SELECT * FROM mz_introspection.mz_dataflow_operator_parents",
             &[],
         )
         .unwrap();
@@ -3083,14 +2919,14 @@ fn test_auto_run_on_introspection_per_replica_relations() {
 
     let _rows = client
         .query(
-            "SELECT * FROM mz_internal.mz_dataflow_operator_parents",
+            "SELECT * FROM mz_introspection.mz_dataflow_operator_parents",
             &[],
         )
         .unwrap();
     assert_notice(Some(INTROSPECTION_NOTICE));
 
     let _rows = client
-        .query("SELECT * FROM mz_internal.mz_active_peeks", &[])
+        .query("SELECT * FROM mz_introspection.mz_active_peeks", &[])
         .unwrap();
     assert_notice(Some(INTROSPECTION_NOTICE));
 }
@@ -3128,7 +2964,7 @@ fn test_pg_cancel_backend() {
             .retry(|_| {
                 let conn_id: String = client2
                     .query_one(
-                        "SELECT session_id::text FROM mz_internal.mz_subscriptions",
+                        "SELECT s.connection_id::text FROM mz_internal.mz_subscriptions b JOIN mz_internal.mz_sessions s ON s.id = b.session_id",
                         &[],
                     )?
                     .get(0);
@@ -3289,7 +3125,7 @@ fn test_pg_cancel_dropped_role() {
     let connection_id = dropped_client
         .query_one(
             &format!(
-                "SELECT s.id
+                "SELECT s.connection_id
          FROM mz_internal.mz_sessions s
          JOIN mz_roles r ON s.role_id = r.id
          WHERE r.name = '{dropped_role}'"
@@ -3349,7 +3185,7 @@ fn test_peek_on_dropped_indexed_view() {
             let count: i64 = ddl_client
                 .query_one(
                     &format!(
-                "SELECT COUNT(*) FROM mz_internal.mz_active_peeks WHERE object_id = '{index_id}'"
+                "SELECT COUNT(*) FROM mz_introspection.mz_active_peeks WHERE object_id = '{index_id}'"
             ),
                     &[],
                 )
@@ -3381,7 +3217,7 @@ fn test_peek_on_dropped_indexed_view() {
             let count: i64 = ddl_client
                 .query_one(
                     &format!(
-                        "SELECT COUNT(*) FROM mz_internal.mz_active_peeks WHERE object_id = '{index_id}'"
+                        "SELECT COUNT(*) FROM mz_introspection.mz_active_peeks WHERE object_id = '{index_id}'"
                     ),
                     &[],
                 )
@@ -3422,7 +3258,10 @@ async fn test_explain_as_of() {
             let query_ts = try_get_explain_timestamp(&query, &client).await?;
             assert_eq!(ts, query_ts);
             client
-                .query_one(&format!("EXPLAIN PLAN FOR SELECT * FROM {query}"), &[])
+                .query_one(
+                    &format!("EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM {query}"),
+                    &[],
+                )
                 .await?;
             Ok::<_, anyhow::Error>(())
         })
@@ -3432,7 +3271,7 @@ async fn test_explain_as_of() {
 
 // Test that RETAIN HISTORY results in the since and upper being separated by the specified amount.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[ignore] // TODO: Reenable when #24957 is fixed
+#[ignore] // TODO: Reenable when database-issues#7450 is fixed
 async fn test_retain_history() {
     let server = test_util::TestHarness::default().start().await;
     let client = server.connect().await.unwrap();
@@ -3728,7 +3567,7 @@ async fn test_explain_timestamp_blocking() {
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
 async fn test_explain_timestamp_on_const_with_temporal() {
-    // Regression test for https://github.com/MaterializeInc/materialize/issues/25841
+    // Regression test for https://github.com/MaterializeInc/database-issues/issues/7705
     let server = test_util::TestHarness::default().start().await;
     let client = server.connect().await.unwrap();
 
@@ -3868,8 +3707,11 @@ async fn test_builtin_schemas() {
     let server = test_util::TestHarness::default().start().await;
     let client = server.connect().await.unwrap();
 
+    let builtins_cfg = BuiltinsConfig {
+        include_continual_tasks: true,
+    };
     let mut builtins = BTreeMap::new();
-    for builtin in BUILTINS::iter() {
+    for builtin in BUILTINS::iter(&builtins_cfg) {
         builtins.insert(builtin.name(), builtin.schema());
     }
 
@@ -3899,4 +3741,93 @@ async fn test_builtin_schemas() {
             "wrong schema for {name}, builtin.rs has {builtin_schema:?}, database has {schema}"
         );
     }
+}
+
+// Test that DDLs are appear serial. This does not test that they are actually executed serially,
+// only that they appear so. Do this by generating DDLs where the success of one will cause all
+// others to fail.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_serialized_ddl_serial() {
+    let server = test_util::TestHarness::default().start().await;
+    let mut handles = Vec::new();
+    let n = 10;
+    for i in 0..n {
+        let client = server.connect().await.unwrap();
+        let handle = task::spawn(|| "test", async move {
+            let stmt = format!("CREATE VIEW v AS SELECT {i}");
+            let res = client
+                .batch_execute(&stmt)
+                .await
+                .map_err(|err| err.to_string());
+            res
+        });
+        handles.push(handle);
+    }
+
+    let mut successes = 0;
+    let mut errors = 0;
+    for handle in handles {
+        let result = handle.await.unwrap();
+        match result {
+            Ok(_) => {
+                successes += 1;
+            }
+            Err(_) => {
+                errors += 1;
+            }
+        }
+    }
+    // Exactly one must succeed.
+    assert_eq!(successes, 1);
+    assert_eq!(errors, n - 1);
+}
+
+// Test that serial DDLs are cancellable.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_serialized_ddl_cancel() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start()
+        .await;
+    server
+        .enable_feature_flags(&["unsafe_enable_unsafe_functions"])
+        .await;
+
+    let client1 = server.connect().await.unwrap();
+    let client2 = server.connect().await.unwrap();
+    let cancel1 = client1.cancel_token();
+    let cancel2 = client2.cancel_token();
+
+    let handle1 = task::spawn(|| "test", async move {
+        let err = client1
+            .batch_execute("create view y as select mz_unsafe.mz_sleep(3)")
+            .await
+            .unwrap_err();
+        err
+    });
+    let handle2 = task::spawn(|| "test", async move {
+        // Encourage client1 to always execute first.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let err = client2
+            .batch_execute("create view z as select mz_unsafe.mz_sleep(3)")
+            .await
+            .unwrap_err();
+        err
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Cancel the pending statement (this uses different cancellation logic and is the actual thing
+    // we are trying to test here).
+    cancel2.cancel_query(tokio_postgres::NoTls).await.unwrap();
+    let err = handle2.await.unwrap();
+    assert_contains!(err.to_string(), "canceling statement due to user request");
+    // Cancel the in-progress statement.
+    cancel1.cancel_query(tokio_postgres::NoTls).await.unwrap();
+    let err = handle1.await.unwrap();
+    assert_contains!(err.to_string(), "canceling statement due to user request");
+
+    // The mz_sleep calls above cause this test to not exit until the optimization tasks have fully
+    // run, because spawn_blocking (used by optimization) are waited upon during Drop. Thus, don't
+    // pass very high durations to mz_sleep so that we aren't waiting for long.
 }

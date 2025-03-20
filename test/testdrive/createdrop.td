@@ -28,6 +28,8 @@ $ kafka-create-topic topic=data
 > CREATE SOURCE s
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+
+> CREATE TABLE s_tbl FROM SOURCE s (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
 
 $ kafka-ingest format=avro topic=data schema=${schema}
@@ -42,14 +44,14 @@ $ kafka-ingest format=avro topic=data schema=${schema}
 
 > CREATE INDEX i ON v(a)
 
-> CREATE INDEX j on s("X");
+> CREATE INDEX j on s_tbl("X");
 
 # Test that creating objects of the same name does not work
 
 ! CREATE MATERIALIZED VIEW i AS SELECT 1.5 AS c
 contains:index "materialize.public.i" already exists
 
-! CREATE INDEX i ON s("Y")
+! CREATE INDEX i ON s_tbl("Y")
 contains:index "materialize.public.i" already exists
 
 ! CREATE INDEX j on v2(x)
@@ -88,13 +90,11 @@ $ set dummy={
 ! CREATE SOURCE v2
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${dummy}'
 contains:materialized view "materialize.public.v2" already exists
 
 ! CREATE SOURCE i
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${dummy}'
 contains:index "materialize.public.i" already exists
 
 ! CREATE INDEX s ON v2(x)
@@ -156,6 +156,8 @@ exact:s is a source not a view
 > CREATE SOURCE i
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+
+> CREATE TABLE i_tbl FROM SOURCE i (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE INDEX v ON s(b)

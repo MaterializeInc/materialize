@@ -6,38 +6,45 @@ menu:
     parent: commands
 ---
 
-`SHOW SECRETS` lists the names of the secrets securely stored in Materialize's secret management system. There is no way to show the contents of an existing secret, though you can override it using the [`ALTER SECRET`](../alter-secret) statement.
+`SHOW SECRETS` lists the names of the secrets securely stored in Materialize's
+secret management system. There is no way to show the contents of an existing
+secret, though you can override it using the [`ALTER SECRET`](../alter-secret)
+statement.
 
 ## Syntax
 
-{{< diagram "show-secrets.svg" >}}
+```mzsql
+SHOW SECRETS [ FROM <schema_name> ] [ LIKE <pattern>  | WHERE <condition(s)> ]
+```
 
-Field                | Use
----------------------|-----
-_schema&lowbar;name_ | The schema to show secrets from. If omitted, secrets from the first schema in the search path are shown. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+Option                        | Description
+------------------------------|------------
+**FROM** <schema_name>        | If specified, only show secrets from the specified schema.  Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+**LIKE** \<pattern\>          | If specified, only show secrets whose name matches the pattern.
+**WHERE** <condition(s)>      | If specified, only show secrets that meet the condition(s).
 
 ## Examples
 
-```sql
+```mzsql
 SHOW SECRETS;
 ```
 
 ```nofmt
          name
 -----------------------
- upstash_kafka_ca_cert
- upstash_sasl_password
- upstash_sasl_username
+ kafka_ca_cert
+ kafka_sasl_password
+ kafka_sasl_username
 ```
 
-```sql
+```mzsql
 SHOW SECRETS FROM public LIKE '%cert%';
 ```
 
 ```nofmt
          name
 -----------------------
- upstash_kafka_ca_cert
+ kafka_ca_cert
 ```
 
 ## Related pages

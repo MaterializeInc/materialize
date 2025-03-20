@@ -11,14 +11,15 @@
 #![warn(missing_docs)]
 
 use mz_build_info::{build_info, BuildInfo};
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 /// Build information about the LSP server.
 pub const BUILD_INFO: BuildInfo = build_info!();
 /// Variable holding the version of LSP server.
-pub static PKG_VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.semver_version().to_string());
+pub static PKG_VERSION: LazyLock<String> =
+    LazyLock::new(|| BUILD_INFO.semver_version().to_string());
 /// Variable holding the name of LSP server package.
-pub static PKG_NAME: Lazy<String> = Lazy::new(|| env!("CARGO_PKG_NAME").to_string());
+pub static PKG_NAME: LazyLock<String> = LazyLock::new(|| env!("CARGO_PKG_NAME").to_string());
 
 /// Contains the structure and implementation of the Language Server Protocol.
 pub mod backend;

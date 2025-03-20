@@ -40,23 +40,23 @@ Int64(-100)
 build-datum
 -10.45
 ----
-Float64(OrderedFloat(-10.45))
+Float64(-10.45)
 
 build-datum
 34.56
 ----
-Float64(OrderedFloat(34.56))
+Float64(34.56)
 
 build-datum
 -2.234
 float64
 ----
-Float64(OrderedFloat(-2.234))
+Float64(-2.234)
 
 build-datum
 1.1 float32
 ----
-Float32(OrderedFloat(1.1))
+Float32(1.1)
 
 build-datum
 "hello" string

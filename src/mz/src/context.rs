@@ -279,12 +279,12 @@ impl RegionContext {
     /// Returns the cloud provider from the profile context.
     pub async fn get_cloud_provider(&self) -> Result<CloudProvider, Error> {
         let client = &self.context.cloud_client;
-        let cloud_providers = client.list_cloud_providers().await?;
+        let cloud_providers = client.list_cloud_regions().await?;
 
         let provider = cloud_providers
             .into_iter()
             .find(|x| x.id == self.region_name)
-            .ok_or(Error::CloudProviderMissing)?;
+            .ok_or(Error::CloudRegionMissing)?;
 
         Ok(provider)
     }

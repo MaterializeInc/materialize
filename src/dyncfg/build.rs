@@ -7,12 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::env;
-
 fn main() {
-    env::set_var("PROTOC", mz_build_tools::protoc());
-
     prost_build::Config::new()
+        .protoc_executable(mz_build_tools::protoc())
         .btree_map(["."])
         .type_attribute(
             ".",

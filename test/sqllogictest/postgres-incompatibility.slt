@@ -58,7 +58,7 @@ SELECT 17 / - COALESCE ( - + 60, - + AVG ( DISTINCT 54 ) * COUNT ( * ), + 0 ) * 
 -1256.75  0
 
 # these return null in postgres
-# https://github.com/MaterializeInc/materialize/issues/2418
+# https://github.com/MaterializeInc/database-issues/issues/845
 
 query error division by zero
 SELECT ALL 56 * 97 - SUM ( - 51 ) + NULLIF ( + - 36, + + CAST ( NULL AS INTEGER ) ) * + - 91 / - 0 * - 45 * - 10 * - CAST ( NULL AS INTEGER ) * - - 85

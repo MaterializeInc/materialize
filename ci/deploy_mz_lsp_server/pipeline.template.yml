@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# Deploys are fast, do them quickly
+priority: 30
+
 steps:
   - command: bin/ci-builder run stable bin/pyactivate -m ci.deploy_mz_lsp_server.version
     timeout_in_minutes: 30
@@ -20,7 +23,7 @@ steps:
     command: bin/ci-builder run stable bin/pyactivate -m ci.deploy_mz_lsp_server.linux
     timeout_in_minutes: 30
     agents:
-      queue: builder-linux-x86_64
+      queue: linux-x86_64-small
     concurrency: 1
     concurrency_group: deploy-mz-lsp-server/linux/x86_64
     retry:
@@ -31,7 +34,7 @@ steps:
     command: bin/ci-builder run stable bin/pyactivate -m ci.deploy_mz_lsp_server.linux
     timeout_in_minutes: 30
     agents:
-      queue: builder-linux-aarch64
+      queue: linux-aarch64-small
     concurrency: 1
     concurrency_group: deploy-mz-lsp-server/linux/aarch64
     retry:

@@ -9,7 +9,6 @@
 
 //! An abstraction presenting as a durable time-varying collection (aka shard)
 
-#![doc = include_str!("../README.md")]
 #![warn(missing_docs, missing_debug_implementations)]
 // #[track_caller] is currently a no-op on async functions, but that hopefully won't be the case
 // forever. So we already annotate those functions now and ignore the compiler warning until
@@ -24,8 +23,9 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_build_info::{build_info, BuildInfo};
 use mz_dyncfg::ConfigSet;
-use mz_ore::instrument;
+use mz_ore::{instrument, soft_assert_or_log};
 use mz_persist::location::{Blob, Consensus, ExternalError};
+use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec, Codec64, Opaque};
 use timely::progress::Timestamp;
 
@@ -43,6 +43,7 @@ use crate::internal::state_versions::StateVersions;
 use crate::metrics::Metrics;
 use crate::read::{LeasedReaderId, ReadHandle, READER_LEASE_DURATION};
 use crate::rpc::PubSubSender;
+use crate::schema::CaESchema;
 use crate::write::{WriteHandle, WriterId};
 
 pub mod async_runtime;
@@ -75,32 +76,9 @@ pub mod operators {
     pub mod shard_source;
 
     // TODO(cfg): Move this next to the use.
-    pub(crate) const PERSIST_SINK_MINIMUM_BATCH_UPDATES: Config<usize> = Config::new(
-        "persist_sink_minimum_batch_updates",
-        0,
-        "\
-    In the compute persist sink, workers with less than the minimum number of \
-    updates will flush their records to single downstream worker to be batched \
-    up there... in the hopes of grouping our updates into fewer, larger \
-    batches.",
-    );
-
-    // TODO(cfg): Move this next to the use.
-    pub(crate) const STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES: Config<usize> = Config::new(
-        "storage_persist_sink_minimum_batch_updates",
-        // Reasonable default based on our experience in production.
-        1024,
-        "\
-    In the storage persist sink, workers with less than the minimum number of \
-    updates will flush their records to single downstream worker to be batched \
-    up there... in the hopes of grouping our updates into fewer, larger \
-    batches.",
-    );
-
-    // TODO(cfg): Move this next to the use.
     pub(crate) const STORAGE_SOURCE_DECODE_FUEL: Config<usize> = Config::new(
         "storage_source_decode_fuel",
-        1_000_000,
+        100_000,
         "\
         The maximum amount of work to do in the persist_source mfp_and_decode \
         operator before yielding.",
@@ -109,6 +87,7 @@ pub mod operators {
 pub mod project;
 pub mod read;
 pub mod rpc;
+pub mod schema;
 pub mod stats;
 pub mod usage;
 pub mod write;
@@ -122,6 +101,7 @@ mod internal {
     pub mod gc;
     pub mod machine;
     pub mod maintenance;
+    pub mod merge;
     pub mod metrics;
     pub mod paths;
     pub mod restore;
@@ -251,7 +231,7 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Codec64 + Send + Sync,
     {
         let state_versions = StateVersions::new(
@@ -303,7 +283,7 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Ord + Codec64 + Send + Sync,
     {
         Ok((
@@ -345,10 +325,10 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Codec64 + Send + Sync,
     {
-        let mut machine = self.make_machine(shard_id, diagnostics.clone()).await?;
+        let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
 
         let reader_id = LeasedReaderId::new();
@@ -364,6 +344,7 @@ impl PersistClient {
             .await;
         maintenance.start_performing(&machine, &gc);
         let schemas = Schemas {
+            id: None,
             key: key_schema,
             val: val_schema,
         };
@@ -390,48 +371,35 @@ impl PersistClient {
         shard_id: ShardId,
         key_schema: Arc<K::Schema>,
         val_schema: Arc<V::Schema>,
+        is_transient: bool,
         diagnostics: Diagnostics,
-    ) -> BatchFetcher<K, V, T, D>
+    ) -> Result<BatchFetcher<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Codec64 + Send + Sync,
     {
-        let state_versions = StateVersions::new(
-            self.cfg.clone(),
-            Arc::clone(&self.consensus),
-            Arc::clone(&self.blob),
-            Arc::clone(&self.metrics),
-        );
-        let shard_metrics = self
-            .metrics
-            .shards
-            .shard(&shard_id, &diagnostics.shard_name);
-
-        // This call ensures that the types match what was used when creating
-        // the shard or puts in place the types that we expect for future
-        // read/write handle creations. It's not technically needed for creating
-        // the `BatchFetcher` but acts as a safety net against accidental
-        // mis-use.
-        let _ = state_versions
-            .maybe_init_shard::<K, V, T, D>(&shard_metrics)
-            .await;
-        let schemas = Schemas {
+        let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
+        let read_schemas = Schemas {
+            id: None,
             key: key_schema,
             val: val_schema,
         };
+        let schema_cache = machine.applier.schema_cache();
         let fetcher = BatchFetcher {
             cfg: BatchFetcherConfig::new(&self.cfg),
             blob: Arc::clone(&self.blob),
             metrics: Arc::clone(&self.metrics),
-            shard_metrics,
+            shard_metrics: Arc::clone(&machine.applier.shard_metrics),
             shard_id,
-            schemas,
+            read_schemas,
+            schema_cache,
+            is_transient,
             _phantom: PhantomData,
         };
 
-        fetcher
+        Ok(fetcher)
     }
 
     /// A convenience [CriticalReaderId] for Materialize controllers.
@@ -488,11 +456,11 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Codec64 + Send + Sync,
         O: Opaque + Codec64,
     {
-        let mut machine = self.make_machine(shard_id, diagnostics.clone()).await?;
+        let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
 
         let (state, maintenance) = machine
@@ -529,13 +497,33 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Ord + Codec64 + Send + Sync,
     {
         let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
+
+        // TODO: Because schemas are ordered, as part of the persist schema
+        // changes work, we probably want to build some way to allow persist
+        // users to control the order. For example, maybe a
+        // `PersistClient::compare_and_append_schema(current_schema_id,
+        // next_schema)`. Presumably this would then be passed in to open_writer
+        // instead of us implicitly registering it here.
+        // NB: The overwhelming common case is that this schema is already
+        // registered. In this case, the cmd breaks early and nothing is
+        // written to (or read from) CRDB.
+        let (schema_id, maintenance) = machine.register_schema(&*key_schema, &*val_schema).await;
+        maintenance.start_performing(&machine, &gc);
+        soft_assert_or_log!(
+            schema_id.is_some(),
+            "unable to register schemas {:?} {:?}",
+            key_schema,
+            val_schema,
+        );
+
         let writer_id = WriterId::new();
         let schemas = Schemas {
+            id: schema_id,
             key: key_schema,
             val: val_schema,
         };
@@ -552,6 +540,78 @@ impl PersistClient {
         Ok(writer)
     }
 
+    /// Returns the requested schema, if known at the current state.
+    pub async fn get_schema<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+        schema_id: SchemaId,
+        diagnostics: Diagnostics,
+    ) -> Result<Option<(K::Schema, V::Schema)>, InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64 + Sync,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
+        let machine = self
+            .make_machine::<K, V, T, D>(shard_id, diagnostics)
+            .await?;
+        Ok(machine.get_schema(schema_id))
+    }
+
+    /// Returns the latest schema registered at the current state.
+    pub async fn latest_schema<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+        diagnostics: Diagnostics,
+    ) -> Result<Option<(SchemaId, K::Schema, V::Schema)>, InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64 + Sync,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
+        let machine = self
+            .make_machine::<K, V, T, D>(shard_id, diagnostics)
+            .await?;
+        Ok(machine.latest_schema())
+    }
+
+    /// Registers a new latest schema for the given shard.
+    ///
+    /// This new schema must be [backward_compatible] with all previous schemas
+    /// for this shard. If it's not, [CaESchema::Incompatible] is returned.
+    ///
+    /// [backward_compatible]: mz_persist_types::schema::backward_compatible
+    ///
+    /// To prevent races, the caller must declare what it believes to be the
+    /// latest schema id. If this doesn't match reality,
+    /// [CaESchema::ExpectedMismatch] is returned.
+    pub async fn compare_and_evolve_schema<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+        expected: SchemaId,
+        key_schema: &K::Schema,
+        val_schema: &V::Schema,
+        diagnostics: Diagnostics,
+    ) -> Result<CaESchema<K, V>, InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64 + Sync,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
+        let machine = self
+            .make_machine::<K, V, T, D>(shard_id, diagnostics)
+            .await?;
+        let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
+        let (res, maintenance) = machine
+            .compare_and_evolve_schema(expected, key_schema, val_schema)
+            .await;
+        maintenance.start_performing(&machine, &gc);
+        Ok(res)
+    }
+
     /// Check if the given shard is in a finalized state; ie. it can no longer be
     /// read, any data that was written to it is no longer accessible, and we've
     /// discarded references to that data from state.
@@ -563,7 +623,7 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Codec64 + Send + Sync,
     {
         let machine = self
@@ -591,10 +651,10 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Codec64 + Send + Sync,
     {
-        let mut machine = self
+        let machine = self
             .make_machine::<K, V, T, D>(shard_id, diagnostics)
             .await?;
 
@@ -645,7 +705,7 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Ord + Codec64 + Send + Sync,
         K::Schema: Default,
         V::Schema: Default,
@@ -681,6 +741,7 @@ mod tests {
     use differential_dataflow::lattice::Lattice;
     use futures_task::noop_waker;
     use mz_dyncfg::ConfigUpdates;
+    use mz_ore::assert_ok;
     use mz_persist::indexed::encoding::BlobTraceBatchPart;
     use mz_persist::workload::DataGenerator;
     use mz_persist_types::codec_impls::{StringSchema, VecU8Schema};
@@ -691,6 +752,7 @@ mod tests {
 
     use crate::batch::BLOB_TARGET_SIZE;
     use crate::cache::PersistClientCache;
+    use crate::cfg::BATCH_BUILDER_MAX_OUTSTANDING_PARTS;
     use crate::error::{CodecConcreteType, CodecMismatch, UpperMismatch};
     use crate::internal::paths::BlobKey;
     use crate::read::ListenEvent;
@@ -702,7 +764,9 @@ mod tests {
         // amount of coverage of that in tests. Similarly, for max_outstanding.
         let mut cache = PersistClientCache::new_no_metrics();
         cache.cfg.set_config(&BLOB_TARGET_SIZE, 10);
-        cache.cfg.dynamic.set_batch_builder_max_outstanding_parts(1);
+        cache
+            .cfg
+            .set_config(&BATCH_BUILDER_MAX_OUTSTANDING_PARTS, 1);
         dyncfgs.apply(cache.cfg());
 
         // Enable compaction in tests to ensure we get coverage.
@@ -746,6 +810,7 @@ mod tests {
         blob: &dyn Blob,
         key: &BlobKey,
         metrics: &Metrics,
+        read_schemas: &Schemas<K, V>,
     ) -> (
         BlobTraceBatchPart<T>,
         Vec<((Result<K, String>, Result<V, String>), T, D)>,
@@ -761,13 +826,23 @@ mod tests {
             .await
             .expect("failed to fetch part")
             .expect("missing part");
-        let part =
+        let mut part =
             BlobTraceBatchPart::decode(&value, &metrics.columnar).expect("failed to decode part");
+        // Ensure codec data is present even if it was not generated at write time.
+        let _ = part
+            .updates
+            .get_or_make_codec::<K, V>(&read_schemas.key, &read_schemas.val);
         let mut updates = Vec::new();
-        for chunk in part.updates.iter() {
-            for ((k, v), t, d) in chunk.iter() {
-                updates.push(((K::decode(k), V::decode(v)), T::decode(t), D::decode(d)));
-            }
+        // TODO(bkirwi): switch to structured data in tests
+        for ((k, v), t, d) in part.updates.records().expect("codec data").iter() {
+            updates.push((
+                (
+                    K::decode(k, &read_schemas.key),
+                    V::decode(v, &read_schemas.val),
+                ),
+                T::decode(t),
+                D::decode(d),
+            ));
         }
         (part, updates)
     }
@@ -1022,14 +1097,16 @@ mod tests {
             let shard_id1 = "s11111111-1111-1111-1111-111111111111"
                 .parse::<ShardId>()
                 .expect("invalid shard id");
-            let fetcher1 = client
+            let mut fetcher1 = client
                 .create_batch_fetcher::<String, String, u64, i64>(
                     shard_id1,
                     Default::default(),
                     Default::default(),
+                    false,
                     Diagnostics::for_tests(),
                 )
-                .await;
+                .await
+                .unwrap();
             for batch in snap {
                 let res = fetcher1.fetch_leased_part(&batch).await;
                 assert_eq!(
@@ -1586,7 +1663,7 @@ mod tests {
 
             let client1 = client.clone();
             let handle = mz_ore::task::spawn(|| format!("writer-{}", idx), async move {
-                let (mut write, _) = client1.expect_open::<Vec<u8>, Vec<u8>, u64, i64>(id).await;
+                let (write, _) = client1.expect_open::<Vec<u8>, Vec<u8>, u64, i64>(id).await;
                 let mut current_upper = 0;
                 for batch in data.batches() {
                     let new_upper = match batch.get(batch.len() - 1) {
@@ -1665,7 +1742,7 @@ mod tests {
         );
     }
 
-    // Regression test for #12131. Snapshot with as_of >= upper would
+    // Regression test for database-issues#3523. Snapshot with as_of >= upper would
     // immediately return the data currently available instead of waiting for
     // upper to advance past as_of.
     #[mz_persist_proc::test(tokio::test)]
@@ -1768,29 +1845,6 @@ mod tests {
         }
     }
 
-    /// Regression test for 16743, where the nightly tests found that calling
-    /// maybe_heartbeat_writer or maybe_heartbeat_reader on a "tombstone" shard
-    /// would panic.
-    #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn regression_16743_heartbeat_tombstone(dyncfgs: ConfigUpdates) {
-        const EMPTY: &[(((), ()), u64, i64)] = &[];
-        let (mut write, mut read) = new_test_client(&dyncfgs)
-            .await
-            .expect_open::<(), (), u64, i64>(ShardId::new())
-            .await;
-        // Create a tombstone by advancing both the upper and since to [].
-        let () = read.downgrade_since(&Antichain::new()).await;
-        let () = write
-            .compare_and_append(EMPTY, Antichain::from_elem(0), Antichain::new())
-            .await
-            .expect("usage should be valid")
-            .expect("upper should match");
-        // Verify that heartbeating doesn't panic.
-        read.last_heartbeat = 0;
-        read.maybe_heartbeat_reader().await;
-    }
-
     /// Verify that shard finalization works with empty shards, shards that have
     /// an empty write up to the empty upper Antichain.
     #[mz_persist_proc::test(tokio::test)]
@@ -1836,7 +1890,7 @@ mod tests {
             .finalize_shard::<(), (), u64, i64>(shard_id, Diagnostics::for_tests())
             .await;
 
-        assert!(finalize.is_ok(), "finalization must succeed");
+        assert_ok!(finalize, "finalization must succeed");
 
         let is_finalized = persist_client
             .is_finalized::<(), (), u64, i64>(shard_id, Diagnostics::for_tests())
@@ -1899,7 +1953,7 @@ mod tests {
             .finalize_shard::<(), (), u64, i64>(shard_id, Diagnostics::for_tests())
             .await;
 
-        assert!(finalize.is_ok(), "finalization must succeed");
+        assert_ok!(finalize, "finalization must succeed");
 
         let is_finalized = persist_client
             .is_finalized::<(), (), u64, i64>(shard_id, Diagnostics::for_tests())
@@ -1915,7 +1969,7 @@ mod tests {
         #[cfg_attr(miri, ignore)] // too slow
         fn shard_id_protobuf_roundtrip(expect in any::<ShardId>() ) {
             let actual = protobuf_roundtrip::<_, String>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }

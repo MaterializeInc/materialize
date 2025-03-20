@@ -223,7 +223,7 @@ impl Coordinator {
     }
 
     #[mz_ore::instrument(level = "debug")]
-    pub(crate) async fn drain_statement_log(&mut self) {
+    pub(crate) fn drain_statement_log(&mut self) {
         let session_updates = std::mem::take(&mut self.statement_logging.pending_session_events)
             .into_iter()
             .map(|update| (update, 1))
@@ -254,11 +254,10 @@ impl Coordinator {
             (StatementLifecycleHistory, statement_lifecycle_updates),
             (SqlText, sql_text_updates),
         ] {
-            if !updates.is_empty() {
+            if !updates.is_empty() && !self.controller.read_only() {
                 self.controller
                     .storage
-                    .append_introspection_updates(type_, updates)
-                    .await;
+                    .append_introspection_updates(type_, updates);
             }
         }
     }
@@ -433,6 +432,8 @@ impl Coordinator {
             began_at,
             cluster_id,
             cluster_name,
+            database_name,
+            search_path,
             application_name,
             transaction_isolation,
             execution_timestamp,
@@ -453,6 +454,10 @@ impl Coordinator {
             },
             Datum::String(&*application_name),
             cluster_name.as_ref().map(String::as_str).into(),
+            Datum::String(database_name),
+        ]);
+        packer.push_list(search_path.iter().map(|s| Datum::String(s)));
+        packer.extend([
             Datum::String(&*transaction_isolation),
             (*execution_timestamp).into(),
             Datum::UInt64(*transaction_id),
@@ -462,7 +467,7 @@ impl Coordinator {
             },
         ]);
         packer
-            .push_array(
+            .try_push_array(
                 &[ArrayDimension {
                     lower_bound: 1,
                     length: params.len(),
@@ -488,6 +493,8 @@ impl Coordinator {
             // finished_status
             Datum::Null,
             // error_message
+            Datum::Null,
+            // result_size
             Datum::Null,
             // rows_returned
             Datum::Null,
@@ -554,23 +561,25 @@ impl Coordinator {
         let mut row = Row::default();
         let mut packer = row.packer();
         Self::pack_statement_execution_inner(began_record, &mut packer);
-        let (status, error_message, rows_returned, execution_strategy) = match &ended_record.reason
-        {
-            StatementEndedExecutionReason::Success {
-                rows_returned,
-                execution_strategy,
-            } => (
-                "success",
-                None,
-                rows_returned.map(|rr| i64::try_from(rr).expect("must fit")),
-                execution_strategy.map(|es| es.name()),
-            ),
-            StatementEndedExecutionReason::Canceled => ("canceled", None, None, None),
-            StatementEndedExecutionReason::Errored { error } => {
-                ("error", Some(error.as_str()), None, None)
-            }
-            StatementEndedExecutionReason::Aborted => ("aborted", None, None, None),
-        };
+        let (status, error_message, result_size, rows_returned, execution_strategy) =
+            match &ended_record.reason {
+                StatementEndedExecutionReason::Success {
+                    result_size,
+                    rows_returned,
+                    execution_strategy,
+                } => (
+                    "success",
+                    None,
+                    result_size.map(|rs| i64::try_from(rs).expect("must fit")),
+                    rows_returned.map(|rr| i64::try_from(rr).expect("must fit")),
+                    execution_strategy.map(|es| es.name()),
+                ),
+                StatementEndedExecutionReason::Canceled => ("canceled", None, None, None, None),
+                StatementEndedExecutionReason::Errored { error } => {
+                    ("error", Some(error.as_str()), None, None, None)
+                }
+                StatementEndedExecutionReason::Aborted => ("aborted", None, None, None, None),
+            };
         packer.extend([
             Datum::TimestampTz(
                 to_datetime(ended_record.ended_at)
@@ -579,6 +588,7 @@ impl Coordinator {
             ),
             status.into(),
             error_message.into(),
+            result_size.into(),
             rows_returned.into(),
             execution_strategy.into(),
         ]);
@@ -588,10 +598,10 @@ impl Coordinator {
     pub fn pack_statement_ended_execution_updates(
         began_record: &StatementBeganExecutionRecord,
         ended_record: &StatementEndedExecutionRecord,
-    ) -> Vec<(Row, Diff)> {
+    ) -> [(Row, Diff); 2] {
         let retraction = Self::pack_statement_began_execution_update(began_record);
         let new = Self::pack_full_statement_execution_update(began_record, ended_record);
-        vec![(retraction, -1), (new, 1)]
+        [(retraction, -1), (new, 1)]
     }
 
     /// Mutate a statement execution record via the given function `f`.
@@ -652,10 +662,14 @@ impl Coordinator {
     pub fn begin_statement_execution(
         &mut self,
         session: &mut Session,
-        params: Params,
+        params: &Params,
         logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
     ) -> Option<StatementLoggingId> {
-        if session.user().is_internal() {
+        let enable_internal_statement_logging = self
+            .catalog()
+            .system_config()
+            .enable_internal_statement_logging();
+        if session.user().is_internal() && !enable_internal_statement_logging {
             return None;
         }
         let sample_rate = self.statement_execution_sample_rate(session);
@@ -670,6 +684,14 @@ impl Coordinator {
         } else {
             distribution.sample(&mut thread_rng())
         };
+
+        // Track how many statements we're recording.
+        let sampled_label = sample.then_some("true").unwrap_or("false");
+        self.metrics
+            .statement_logging_records
+            .with_label_values(&[sampled_label])
+            .inc_by(1);
+
         if let Some((sql, accounted)) = match session.qcell_rw(logging) {
             PreparedStatementLoggingInfo::AlreadyLogged { .. } => None,
             PreparedStatementLoggingInfo::StillToLog { sql, accounted, .. } => {
@@ -726,12 +748,24 @@ impl Coordinator {
                 .inner()
                 .expect("Every statement runs in an explicit or implicit transaction")
                 .id,
-            mz_version: self.catalog().state().config().build_info.human_version(),
+            mz_version: self
+                .catalog()
+                .state()
+                .config()
+                .build_info
+                .human_version(None),
             // These are not known yet; we'll fill them in later.
             cluster_id: None,
             cluster_name: None,
             execution_timestamp: None,
             transient_index_id: None,
+            database_name: session.vars().database().into(),
+            search_path: session
+                .vars()
+                .search_path()
+                .iter()
+                .map(|s| s.as_str().to_string())
+                .collect(),
         };
         let mseh_update = Self::pack_statement_began_execution_update(&record);
         self.statement_logging

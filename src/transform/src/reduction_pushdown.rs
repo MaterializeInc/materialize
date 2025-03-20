@@ -53,6 +53,7 @@ use std::iter::FromIterator;
 use mz_expr::visit::Visit;
 use mz_expr::{AggregateExpr, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
+use crate::analysis::equivalences::EquivalenceClasses;
 use crate::TransformCtx;
 
 /// Pushes Reduce operators toward sources.
@@ -60,12 +61,16 @@ use crate::TransformCtx;
 pub struct ReductionPushdown;
 
 impl crate::Transform for ReductionPushdown {
+    fn name(&self) -> &'static str {
+        "ReductionPushdown"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "reduction_pushdown")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
@@ -179,8 +184,14 @@ fn try_push_reduce_through_join(
     // `<component>` is either `Join {<subset of inputs>}` or
     // `<element of inputs>`.
 
-    let old_join_mapper =
-        JoinInputMapper::new_from_input_types(&inputs.iter().map(|i| i.typ()).collect::<Vec<_>>());
+    // 0) Make sure that `equivalences` is a proper equivalence relation. Later, in 3a)/i), we'll
+    //    rely on expressions appearing in at most one equivalence class.
+    let mut eq_classes = EquivalenceClasses::default();
+    eq_classes.classes = equivalences.clone();
+    eq_classes.minimize(None);
+    let equivalences = eq_classes.classes;
+
+    let old_join_mapper = JoinInputMapper::new(inputs.as_slice());
     // 1) Partition the join constraints into constraints containing a group
     //    key and constraints that don't.
     let (new_join_equivalences, component_equivalences): (Vec<_>, Vec<_>) = equivalences
@@ -252,6 +263,8 @@ fn try_push_reduce_through_join(
     // (2) every expression in the equivalences of the new join.
     for key in group_key {
         // i) Find the equivalence class that the key is in.
+        //    This relies on the expression appearing in at most one equivalence class. This
+        //    invariant is ensured in step 0).
         if let Some(cls) = new_join_equivalences
             .iter()
             .find(|cls| cls.iter().any(|expr| expr == key))
@@ -300,14 +313,14 @@ fn try_push_reduce_through_join(
         {
             if !agg.distinct {
                 // TODO: support non-distinct aggs.
-                // For more details, see https://github.com/MaterializeInc/materialize/issues/9604
+                // For more details, see https://github.com/MaterializeInc/database-issues/issues/2924
                 return None;
             }
             new_projection.push((component, new_reduces[component].arity()));
             new_reduces[component].add_aggregate(agg.clone());
         } else {
             // TODO: support multi- and zero- component aggs
-            // For more details, see https://github.com/MaterializeInc/materialize/issues/9604
+            // For more details, see https://github.com/MaterializeInc/database-issues/issues/2924
             return None;
         }
     }
@@ -430,7 +443,11 @@ impl ReduceBuilder {
                     predicates.push(
                         class[0]
                             .clone()
-                            .call_binary(expr.clone(), mz_expr::BinaryFunc::Eq),
+                            .call_binary(expr.clone(), mz_expr::BinaryFunc::Eq)
+                            .or(class[0]
+                                .clone()
+                                .call_is_null()
+                                .and(expr.clone().call_is_null())),
                     );
                 }
             }

@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use futures::StreamExt;
 use mz_repr::GlobalId;
 use mz_storage_types::sources::SourceTimestamp;
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};

@@ -23,9 +23,11 @@ use mz_expr::{
     MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
-use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log};
+use mz_ore::{assert_none, soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log};
 use mz_repr::explain::{DeltaJoinIndexUsageType, IndexUsageType, UsedIndexes};
 use mz_repr::GlobalId;
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 
 use crate::monotonic::MonotonicFlag;
 use crate::notice::RawOptimizerNotice;
@@ -44,43 +46,52 @@ use crate::{IndexOracle, Optimizer, TransformCtx, TransformError};
 pub fn optimize_dataflow(
     dataflow: &mut DataflowDesc,
     transform_ctx: &mut TransformCtx,
+    fast_path_optimizer: bool,
 ) -> Result<(), TransformError> {
     // Inline views that are used in only one other view.
     inline_views(dataflow)?;
 
-    // Logical optimization pass after view inlining
-    optimize_dataflow_relations(
-        dataflow,
-        #[allow(deprecated)]
-        &Optimizer::logical_optimizer(transform_ctx),
-        transform_ctx,
-    )?;
+    if fast_path_optimizer {
+        optimize_dataflow_relations(
+            dataflow,
+            &Optimizer::fast_path_optimizer(transform_ctx),
+            transform_ctx,
+        )?;
+    } else {
+        // Logical optimization pass after view inlining
+        optimize_dataflow_relations(
+            dataflow,
+            #[allow(deprecated)]
+            &Optimizer::logical_optimizer(transform_ctx),
+            transform_ctx,
+        )?;
 
-    optimize_dataflow_filters(dataflow)?;
-    // TODO: when the linear operator contract ensures that propagated
-    // predicates are always applied, projections and filters can be removed
-    // from where they come from. Once projections and filters can be removed,
-    // TODO: it would be useful for demand to be optimized after filters
-    // that way demand only includes the columns that are still necessary after
-    // the filters are applied.
-    optimize_dataflow_demand(dataflow)?;
+        optimize_dataflow_filters(dataflow)?;
+        // TODO: when the linear operator contract ensures that propagated
+        // predicates are always applied, projections and filters can be removed
+        // from where they come from. Once projections and filters can be removed,
+        // TODO: it would be useful for demand to be optimized after filters
+        // that way demand only includes the columns that are still necessary after
+        // the filters are applied.
+        optimize_dataflow_demand(dataflow)?;
 
-    // A smaller logical optimization pass after projections and filters are
-    // pushed down across views.
-    optimize_dataflow_relations(
-        dataflow,
-        &Optimizer::logical_cleanup_pass(transform_ctx, false),
-        transform_ctx,
-    )?;
+        // A smaller logical optimization pass after projections and filters are
+        // pushed down across views.
+        optimize_dataflow_relations(
+            dataflow,
+            &Optimizer::logical_cleanup_pass(transform_ctx, false),
+            transform_ctx,
+        )?;
 
-    // Physical optimization pass
-    optimize_dataflow_relations(
-        dataflow,
-        &Optimizer::physical_optimizer(transform_ctx),
-        transform_ctx,
-    )?;
+        // Physical optimization pass
+        optimize_dataflow_relations(
+            dataflow,
+            &Optimizer::physical_optimizer(transform_ctx),
+            transform_ctx,
+        )?;
 
-    optimize_dataflow_monotonic(dataflow)?;
+        optimize_dataflow_monotonic(dataflow, transform_ctx)?;
+    }
 
     prune_and_annotate_dataflow_index_imports(
         dataflow,
@@ -210,9 +221,6 @@ fn optimize_dataflow_relations(
     ctx: &mut TransformCtx,
 ) -> Result<(), TransformError> {
     // Re-optimize each dataflow
-    // TODO(mcsherry): we should determine indexes from the optimized representation
-    // just before we plan to install the dataflow. This would also allow us to not
-    // add indexes imperatively to `DataflowDesc`.
     for object in dataflow.objects_to_build.iter_mut() {
         // Re-run all optimizations on the composite views.
         ctx.set_global_id(object.id);
@@ -350,7 +358,7 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), Transfor
     )?;
 
     // Push predicate information into the SourceDesc.
-    for (source_id, (source, _monotonic)) in dataflow.source_imports.iter_mut() {
+    for (source_id, (source, _monotonic, _upper)) in dataflow.source_imports.iter_mut() {
         if let Some(list) = predicates.remove(&Id::Global(*source_id)) {
             if !list.is_empty() {
                 // Canonicalize the order of predicates, for stable plans.
@@ -397,15 +405,19 @@ where
     Ok(())
 }
 
-/// Propagates information about monotonic inputs through operators.
+/// Propagates information about monotonic inputs through operators,
+/// using [`mz_repr::optimize::OptimizerFeatures`] from `ctx` for [`crate::analysis::Analysis`].
 #[mz_ore::instrument(
     target = "optimizer",
     level = "debug",
     fields(path.segment ="monotonic")
 )]
-pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
+pub fn optimize_dataflow_monotonic(
+    dataflow: &mut DataflowDesc,
+    ctx: &mut TransformCtx,
+) -> Result<(), TransformError> {
     let mut monotonic_ids = BTreeSet::new();
-    for (source_id, (_source, is_monotonic)) in dataflow.source_imports.iter() {
+    for (source_id, (_source, is_monotonic, _upper)) in dataflow.source_imports.iter() {
         if *is_monotonic {
             monotonic_ids.insert(source_id.clone());
         }
@@ -427,11 +439,7 @@ pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), Tr
     let monotonic_flag = MonotonicFlag::default();
 
     for build_desc in dataflow.objects_to_build.iter_mut() {
-        monotonic_flag.apply(
-            build_desc.plan.as_inner_mut(),
-            &monotonic_ids,
-            &mut BTreeSet::new(),
-        )?;
+        monotonic_flag.transform(build_desc.plan.as_inner_mut(), ctx, &monotonic_ids)?;
     }
 
     mz_repr::explain::trace_plan(dataflow);
@@ -447,7 +455,7 @@ pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), Tr
 /// The input `dataflow` should import all indexes belonging to all views/sources/tables it
 /// references.
 ///
-/// The input plans should be normalized with `NormalizeLets`! Otherwise we might find dangling
+/// The input plans should be normalized with `NormalizeLets`! Otherwise, we might find dangling
 /// `ArrangeBy`s at the top of unused Let bindings.
 #[mz_ore::instrument(
     target = "optimizer",
@@ -763,7 +771,7 @@ id: {}, key: {:?}",
 /// - Some indexes might be less skewed than others. (Although, picking a unique key tries to
 ///   capture this already.)
 /// - Some indexes might have an error, while others don't.
-///   <https://github.com/MaterializeInc/materialize/issues/15557>
+///   <https://github.com/MaterializeInc/database-issues/issues/4455>
 /// - Some indexes might have more extra data in their keys (because of being on more complicated
 ///   expressions than just column references), which won't be used in a full scan.
 fn choose_index(
@@ -890,7 +898,7 @@ impl<'a> CollectIndexRequests<'a> {
                         }
                         JoinImplementation::DeltaQuery(..) => {
                             // For Delta joins, the first input is special, see
-                            // https://github.com/MaterializeInc/materialize/issues/6789
+                            // https://github.com/MaterializeInc/database-issues/issues/2115
                             this.collect_index_reqs_inner(
                                 &mut inputs[0],
                                 &IndexUsageContext::from_usage_type(IndexUsageType::DeltaJoin(DeltaJoinIndexUsageType::Unknown)),
@@ -1019,7 +1027,7 @@ impl<'a> CollectIndexRequests<'a> {
                         // top of the Let, or when the 2 uses each have an `ArrangeBy`. In both cases,
                         // we'll add only 1 full scan, which would be wrong in the latter case. However,
                         // the latter case can't currently happen until we do
-                        // https://github.com/MaterializeInc/materialize/issues/21145
+                        // https://github.com/MaterializeInc/database-issues/issues/6363
                         // Also note that currently we are deduplicating index usage types when
                         // printing index usages in EXPLAIN.
                         if let Some((idx_id, key)) = pick_index_for_full_scan(global_id) {
@@ -1052,7 +1060,7 @@ impl<'a> CollectIndexRequests<'a> {
                 MirRelationExpr::Let { id, value, body } => {
                     let shadowed_context = this.context_across_lets.insert(id.clone(), Vec::new());
                     // No shadowing in MIR
-                    assert!(shadowed_context.is_none());
+                    assert_none!(shadowed_context);
                     // We go backwards: Recurse on the body and then the value.
                     this.collect_index_reqs_inner(body, contexts)?;
                     // The above call filled in the entry for `id` in `context_across_lets` (if it
@@ -1073,7 +1081,7 @@ impl<'a> CollectIndexRequests<'a> {
                 } => {
                     for id in ids.iter() {
                         let shadowed_context = this.context_across_lets.insert(id.clone(), Vec::new());
-                        assert!(shadowed_context.is_none()); // No shadowing in MIR
+                        assert_none!(shadowed_context); // No shadowing in MIR
                     }
                     // We go backwards: Recurse on the body first.
                     this.collect_index_reqs_inner(body, contexts)?;
@@ -1217,7 +1225,7 @@ impl IndexUsageContext {
 
 /// Extra information about the dataflow. This is not going to be shipped, but has to be processed
 /// in other ways, e.g., showing notices to the user, or saving meta-information to the catalog.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct DataflowMetainfo<Notice = RawOptimizerNotice> {
     /// Notices that the optimizer wants to show to users.
     /// For pushing a new element, use [`Self::push_optimizer_notice_dedup`].

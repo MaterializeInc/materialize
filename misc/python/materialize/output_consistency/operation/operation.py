@@ -43,6 +43,7 @@ class DbOperationOrFunction:
         return_type_spec: ReturnTypeSpec,
         args_validators: set[OperationArgsValidator] | None = None,
         is_aggregation: bool = False,
+        is_table_function: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         comment: str | None = None,
         is_enabled: bool = True,
@@ -63,6 +64,7 @@ class DbOperationOrFunction:
         self.return_type_spec = return_type_spec
         self.args_validators: set[OperationArgsValidator] = args_validators
         self.is_aggregation = is_aggregation
+        self.is_table_function = is_table_function
         self.relevance = relevance
         self.comment = comment
         self.is_enabled = is_enabled
@@ -95,17 +97,17 @@ class DbOperationOrFunction:
     def operation_type_name(self) -> str:
         raise NotImplementedError
 
-    def to_description(self) -> str:
-        desc = f"{self.operation_type_name()}"
-        desc = f"{desc} '{self.to_pattern(self.min_param_count)}'"
+    def to_description(self, param_count: int) -> str:
+        assert self.min_param_count <= param_count <= self.max_param_count
+        return f"{self.operation_type_name()} '{self._to_pattern_with_named_params(param_count)}'"
 
-        if self.min_param_count != self.max_param_count:
-            desc = f"{desc}-'{self.to_pattern(self.max_param_count)}'"
+    def _to_pattern_with_named_params(self, param_count: int) -> str:
+        pattern = self.to_pattern(param_count)
 
-        if self.comment is not None:
-            desc = f"{desc} (comment: {self.comment})"
+        for i in range(param_count):
+            pattern = pattern.replace("$", self.params[i].__class__.__name__, 1)
 
-        return desc
+        return pattern
 
     def is_tagged(self, tag: str) -> bool:
         if self.tags is None:
@@ -132,6 +134,9 @@ class DbOperationOrFunction:
                 return True
 
         return False
+
+    def count_variants(self) -> int:
+        return self.max_param_count - self.min_param_count + 1
 
 
 class DbOperation(DbOperationOrFunction):
@@ -195,6 +200,7 @@ class DbFunction(DbOperationOrFunction):
         return_type_spec: ReturnTypeSpec,
         args_validators: set[OperationArgsValidator] | None = None,
         is_aggregation: bool = False,
+        is_table_function: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         comment: str | None = None,
         is_enabled: bool = True,
@@ -211,6 +217,7 @@ class DbFunction(DbOperationOrFunction):
             return_type_spec=return_type_spec,
             args_validators=args_validators,
             is_aggregation=is_aggregation,
+            is_table_function=is_table_function,
             relevance=relevance,
             comment=comment,
             is_enabled=is_enabled,
@@ -259,9 +266,11 @@ class DbFunctionWithCustomPattern(DbFunction):
         return_type_spec: ReturnTypeSpec,
         args_validators: set[OperationArgsValidator] | None = None,
         is_aggregation: bool = False,
+        is_table_function: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         comment: str | None = None,
         is_enabled: bool = True,
+        tags: set[str] | None = None,
     ):
         super().__init__(
             function_name,
@@ -269,11 +278,15 @@ class DbFunctionWithCustomPattern(DbFunction):
             return_type_spec,
             args_validators=args_validators,
             is_aggregation=is_aggregation,
+            is_table_function=is_table_function,
             relevance=relevance,
             comment=comment,
             is_enabled=is_enabled,
+            tags=tags,
         )
         self.pattern_per_param_count = pattern_per_param_count
+        self.min_param_count = min(pattern_per_param_count.keys())
+        self.max_param_count = max(pattern_per_param_count.keys())
 
     def to_pattern(self, args_count: int) -> str:
         self.validate_args_count_in_range(args_count)
@@ -284,6 +297,9 @@ class DbFunctionWithCustomPattern(DbFunction):
             )
 
         return self.pattern_per_param_count[args_count]
+
+    def count_variants(self) -> int:
+        return len(self.pattern_per_param_count)
 
 
 def match_function_by_name(

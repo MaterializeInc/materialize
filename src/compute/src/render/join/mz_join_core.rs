@@ -44,9 +44,9 @@ use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 use differential_dataflow::difference::Multiply;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
-use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::Data;
+use differential_dataflow::IntoOwned;
 use mz_repr::Diff;
 use timely::container::{CapacityContainerBuilder, PushInto, SizableContainer};
 use timely::dataflow::channels::pact::Pipeline;
@@ -56,7 +56,6 @@ use timely::dataflow::operators::generic::OutputHandleCore;
 use timely::dataflow::operators::{Capability, Operator};
 use timely::dataflow::{Scope, StreamCore};
 use timely::progress::timestamp::Timestamp;
-use timely::scheduling::Activator;
 use timely::PartialOrder;
 use tracing::trace;
 
@@ -85,7 +84,7 @@ where
     I: IntoIterator,
     I::Item: Data,
     YFn: Fn(Instant, usize) -> bool + 'static,
-    C: SizableContainer + PushInto<(I::Item, G::Timestamp, Diff)>,
+    C: SizableContainer + PushInto<(I::Item, G::Timestamp, Diff)> + Data,
 {
     let mut trace1 = arranged1.trace.clone();
     let mut trace2 = arranged2.trace.clone();
@@ -99,8 +98,7 @@ where
             let operator_id = info.global_id;
 
             // Acquire an activator to reschedule the operator when it has unfinished work.
-            let activations = arranged1.stream.scope().activations();
-            let activator = Activator::new(&info.address[..], activations);
+            let activator = arranged1.stream.scope().activator_for(info.address);
 
             // Our initial invariants are that for each trace, physical compaction is less or equal the trace's upper bound.
             // These invariants ensure that we can reference observed batch frontiers from `_start_upper` onward, as long as
@@ -215,10 +213,6 @@ where
             let mut trace1_option = Some(trace1);
             let mut trace2_option = Some(trace2);
 
-            // Swappable buffers for input extraction.
-            let mut input1_buffer = Vec::new();
-            let mut input2_buffer = Vec::new();
-
             move |input1, input2, output| {
                 // If the dataflow is shutting down, discard all existing and future work.
                 if shutdown_token.in_shutdown() {
@@ -258,8 +252,7 @@ where
                         .as_mut()
                         .expect("we only drop a trace in response to the other input emptying");
                     let capability = capability.retain();
-                    data.swap(&mut input1_buffer);
-                    for batch1 in input1_buffer.drain(..) {
+                    for batch1 in data.drain(..) {
                         // Ignore any pre-loaded data.
                         if PartialOrder::less_equal(&acknowledged1, batch1.lower()) {
                             trace!(
@@ -315,8 +308,7 @@ where
                         .as_mut()
                         .expect("we only drop a trace in response to the other input emptying");
                     let capability = capability.retain();
-                    data.swap(&mut input2_buffer);
-                    for batch2 in input2_buffer.drain(..) {
+                    for batch2 in data.drain(..) {
                         // Ignore any pre-loaded data.
                         if PartialOrder::less_equal(&acknowledged2, batch2.lower()) {
                             trace!(
@@ -586,7 +578,7 @@ where
         I: IntoIterator<Item = D>,
         L: FnMut(C1::Key<'_>, C1::Val<'_>, C2::Val<'_>) -> I,
         YFn: Fn(usize) -> bool,
-        C: SizableContainer + PushInto<(D, T, Diff)>,
+        C: SizableContainer + PushInto<(D, T, Diff)> + Data,
     {
         let meet = self.capability.time();
 

@@ -45,10 +45,15 @@ from materialize.mz_version import MzVersion
 
 class Scenario:
     def __init__(
-        self, checks: list[type[Check]], executor: Executor, seed: str | None = None
+        self,
+        checks: list[type[Check]],
+        executor: Executor,
+        azurite: bool,
+        seed: str | None = None,
     ) -> None:
         self._checks = checks
         self.executor = executor
+        self.azurite = azurite
         self.rng = None if seed is None else Random(seed)
         self._base_version = MzVersion.parse_cargo()
 
@@ -71,7 +76,7 @@ class Scenario:
         return self._checks
 
     def actions(self) -> list[Action]:
-        assert False
+        raise NotImplementedError
 
     def base_version(self) -> MzVersion:
         return self._base_version
@@ -84,10 +89,7 @@ class Scenario:
 
         for index, action in enumerate(actions):
             # Implicitly call configure to raise version-dependent limits
-            if isinstance(action, StartMz) and not any(
-                env.startswith("MZ_DEPLOY_GENERATION=")
-                for env in action.environment_extra
-            ):
+            if isinstance(action, StartMz) and not action.deploy_generation:
                 actions.insert(
                     index + 1, ConfigureMz(self, mz_service=action.mz_service)
                 )
@@ -272,10 +274,11 @@ class SystemVarChange(Scenario):
         self,
         checks: list[type[Check]],
         executor: Executor,
+        azurite: bool,
         seed: str | None,
         change_entries: list[SystemVarChangeEntry],
     ):
-        super().__init__(checks, executor, seed)
+        super().__init__(checks, executor, azurite, seed)
         self.change_entries = change_entries
 
     def actions(self) -> list[Action]:
@@ -321,35 +324,3 @@ class SystemVarChange(Scenario):
             ],
             Validate(self),
         ]
-
-
-class TogglePersistRoundtripSpine(SystemVarChange):
-    def __init__(self, checks: list[type[Check]], executor: Executor, seed: str | None):
-        super().__init__(
-            checks,
-            executor,
-            seed,
-            [
-                SystemVarChangeEntry(
-                    name="persist_roundtrip_spine",
-                    value_for_manipulate_phase_1="FALSE",
-                    value_for_manipulate_phase_2="TRUE",
-                )
-            ],
-        )
-
-
-class TogglePersistBatchColumnarFormat(SystemVarChange):
-    def __init__(self, checks: list[type[Check]], executor: Executor, seed: str | None):
-        super().__init__(
-            checks,
-            executor,
-            seed,
-            [
-                SystemVarChangeEntry(
-                    name="persist_batch_columnar_format",
-                    value_for_manipulate_phase_1="row",
-                    value_for_manipulate_phase_2="both",
-                )
-            ],
-        )

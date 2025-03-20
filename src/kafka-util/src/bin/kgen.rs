@@ -478,14 +478,14 @@ impl<'a> ValueGenerator<'a> {
     }
 }
 
-#[derive(clap::ArgEnum, PartialEq, Debug, Clone)]
+#[derive(clap::ValueEnum, PartialEq, Debug, Clone)]
 pub enum KeyFormat {
     Avro,
     Random,
     Sequential,
 }
 
-#[derive(clap::ArgEnum, PartialEq, Debug, Clone)]
+#[derive(clap::ValueEnum, PartialEq, Debug, Clone)]
 pub enum ValueFormat {
     Bytes,
     Avro,
@@ -529,23 +529,23 @@ struct Args {
         short = 'k',
         long = "keys",
         ignore_case = true,
-        arg_enum,
+        value_enum,
         default_value = "sequential"
     )]
     key_format: KeyFormat,
     /// Minimum key value to generate, if using random-formatted keys.
-    #[clap(long, required_if_eq("key-format", "random"))]
+    #[clap(long, required_if_eq("key_format", "random"))]
     key_min: Option<u64>,
     /// Maximum key value to generate, if using random-formatted keys.
-    #[clap(long, required_if_eq("key-format", "random"))]
+    #[clap(long, required_if_eq("key_format", "random"))]
     key_max: Option<u64>,
     /// Schema describing Avro key data to randomly generate, if using
     /// Avro-formatted keys.
-    #[clap(long, required_if_eq("key-format", "avro"))]
+    #[clap(long, required_if_eq("key_format", "avro"))]
     avro_key_schema: Option<Schema>,
     /// JSON object describing the distribution parameters for each field of
     /// the Avro key object, if using Avro-formatted keys.
-    #[clap(long, required_if_eq("key-format", "avro"))]
+    #[clap(long, required_if_eq("key_format", "avro"))]
     avro_key_distribution: Option<serde_json::Value>,
 
     // == Value arguments. ==
@@ -554,7 +554,7 @@ struct Args {
         short = 'v',
         long = "values",
         ignore_case = true,
-        arg_enum,
+        value_enum,
         default_value = "bytes"
     )]
     value_format: ValueFormat,
@@ -562,23 +562,23 @@ struct Args {
     #[clap(
         short = 'm',
         long = "min-message-size",
-        required_if_eq("value-format", "bytes")
+        required_if_eq("value_format", "bytes")
     )]
     min_value_size: Option<usize>,
     /// Maximum value size to generate, if using bytes-formatted values.
     #[clap(
         short = 'M',
         long = "max-message-size",
-        required_if_eq("value-format", "bytes")
+        required_if_eq("value_format", "bytes")
     )]
     max_value_size: Option<usize>,
     /// Schema describing Avro value data to randomly generate, if using
     /// Avro-formatted values.
-    #[clap(long = "avro-schema", required_if_eq("value-format", "avro"))]
+    #[clap(long = "avro-schema", required_if_eq("value_format", "avro"))]
     avro_value_schema: Option<Schema>,
     /// JSON object describing the distribution parameters for each field of
     /// the Avro value object, if using Avro-formatted keys.
-    #[clap(long = "avro-distribution", required_if_eq("value-format", "avro"))]
+    #[clap(long = "avro-distribution", required_if_eq("value_format", "avro"))]
     avro_value_distribution: Option<serde_json::Value>,
 
     // == Output control. ==

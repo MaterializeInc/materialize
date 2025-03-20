@@ -1,0 +1,402 @@
+operators:
+  - operator: Constant
+    plan_types: "optimized,raw"
+    description: |
+      Always produces the same collection of rows.
+    uses_memory: False
+    memory_details: ""
+    expansive: False
+
+    example: |
+      ```mzsql
+      Constant
+      - ((1, 2) x 2)
+      - (3, 4)
+      ```
+
+  - operator: Constant
+    plan_types: "LIR"
+    description: |
+      Always produces the same collection of rows.
+    uses_memory: False
+    memory_details: ""
+    expansive: False
+
+    example: |
+      ```mzsql
+      Constant 2 rows
+      ```
+
+  - operator: Get
+    plan_types: "optimized,raw"
+    description: |
+      Produces rows from either an existing relation (source/view/materialized view/table) or from a previous
+      CTE in the same plan.
+    uses_memory: False
+    memory_details: ""
+    expansive: False
+
+    example: "`Get materialize.public.ordered`"
+
+  - operator: Get::~
+    plan_types: "LIR"
+    description: |
+      Produces rows from either an existing relation (source/view/materialized view/table) or from a previous
+      CTE in the same plan.
+      There may be a `MapFilterProject` included in the lookup.
+
+      There are three types of `Get`.
+
+      1. `Get::PassArrangements`, which means the plan will use an
+         existing [arrangement](/get-started/arrangements/#arrangements).
+
+      2. `Get::Arrangement`, which means that the results will be
+         _looked up_ in an existing arrangement.
+
+      3. `Get::Collection`, which means that the results are
+         unarranged, and will be processed as they arrive.
+
+    uses_memory: False
+    memory_details: ""
+    expansive: False
+    example: "`Get::PassArrangements materialize.public.ordered`"
+
+  - operator: Project
+    plan_types: "optimized,raw"
+    description: |
+      Produces a subset of the [columns](#explain-plan-columns) in the input
+      rows. See also [column numbering](#explain-plan-columns).
+    uses_memory: False
+    memory_details: ""
+    expansive: False
+    expansive_details: |
+      Each row has _less_ data (i.e., shorter rows, but same number of rows).
+    example: "`Project (#2, #3)`"
+
+  - operator: Map
+    plan_types: "optimized,raw"
+    description: |
+      Appends the results of some scalar expressions to each row in the input.
+    uses_memory: False
+    memory_details: ""
+    expansive: True
+    expansive_details: |
+      Each row has more data (i.e., longer rows but same number of rows).
+    example: "`Map (((#1 * 10000000dec) / #2) * 1000dec)`"
+
+  - operator: MapFilterProject
+    plan_types: "LIR"
+    description: |
+      The number after the operator is the input operator's `lir_id`.
+
+      Computes new columns, filters columns, and projects away columns. Works row-by-row.
+    uses_memory: False
+    memory_details: ""
+    expansive: True
+    expansive_details: |
+      Each row may have more data, from the `Map`.
+      Each row may also have less data, from the `Project`.
+      There may be fewer rows, from the `Filter`.
+
+    example: "`MapFilterProject 5`"
+
+  - operator: FlatMap
+    plan_types: "optimized"
+    description: |
+      Appends the result of some (one-to-many) [table function](/sql/functions/#table-functions) to each row in the input.
+    uses_memory: False
+    memory_details: ""
+    expansive: True
+    expansive_details: |
+      Depends on the [table function](/sql/functions/#table-functions) used.
+    example: "`FlatMap jsonb_foreach(#3)`"
+
+  - operator: FlatMap
+    plan_types: "LIR"
+    description: |
+      The number after the operator is the input operator's `lir_id`.
+
+      Appends the result of some (one-to-many) [table function](/sql/functions/#table-functions) to each row in the input.
+    uses_memory: False
+    memory_details: ""
+    expansive: True
+    expansive_details: |
+      Depends on the [table function](/sql/functions/#table-functions) used.
+    example: "`FlatMap 3 (jsonb_foreach)`"
+
+  - operator: CallTable
+    plan_types: "raw"
+    description: |
+      Appends the result of some (one-to-many) [table function](/sql/functions/#table-functions) to each row in the input.
+    uses_memory: False
+    memory_details: ""
+    expansive: True
+    expansive_details: |
+      Depends on the [table function](/sql/functions/#table-functions) used.
+    example: "`CallTable generate_series(1, 7, 1)`"
+
+  - operator: Filter
+    plan_types: "optimized,raw"
+    description: |
+      Removes rows of the input for which some scalar predicates return `false`.
+    uses_memory: False
+    memory_details: ""
+    expansive: False
+    example: "`Filter (#20 < #21)`"
+    expansive_details: |
+      May reduce the number of rows.
+
+  - operator: ~Join
+    plan_types: "raw"
+    description: |
+      Performs one of `INNER` / `LEFT` / `RIGHT` / `FULL OUTER` / `CROSS` join on the two inputs, using the given predicate.
+    uses_memory: True
+    memory_details: |
+      Uses memory proportional to the input sizes, unless [the inputs have appropriate indexes](/transform-data/optimization/#join). Certain joins with more than 2 inputs use additional memory, see details in the optimized plan.
+    expansive: True
+    expansive_details: |
+      For `CrossJoin`s, Cartesian product of the inputs (|N| x |M|). Note that, in many cases, a join that shows up as a cross join in the RAW PLAN will actually be turned into an inner join in the OPTIMIZED PLAN, by making use of an equality WHERE condition.
+      For other join types, depends on the join order and facts about the joined collections.
+    example: "`InnerJoin (#0 = #2)`"
+
+  - operator: Join
+    plan_types: "optimized"
+    description: |
+      Returns combinations of rows from each input whenever some equality predicates are `true`.
+    uses_memory: True
+    memory_details: |
+      The `Join` operator itself uses memory only for `type=differential` with more than 2 inputs.
+      However, `Join` operators need [arrangements](/get-started/arrangements/#arrangements) on their inputs (shown by the `ArrangeBy` operator).
+      These arrangements use memory proportional to the input sizes. If an input has an [appropriate index](/transform-data/optimization/#join), then the arrangement of the index will be reused.
+    expansive: True
+    expansive_details: |
+      Depends on the join order and facts about the joined collections.
+    example: "`Join on=(#1 = #2) type=delta`"
+
+  - operator: Join::~
+    plan_types: "LIR"
+    description: |
+      The input operators are listed in the order performed by the join.
+
+      Returns combinations of rows from each input whenever some equality predicates are `true`.
+
+      There are two types of `Join`: `Join::Differential` (also called linear join) and `Join::Delta`, with [documented differences](/transform-data/optimization/#join).
+    uses_memory: True
+    memory_details: |
+      Uses memory for 3-way or more differential joins.
+    expansive: True
+    expansive_details: |
+      Depends on the join order and facts about the joined collections.
+    example: "`Join::Differential 6 » 7`"
+
+
+  - operator: CrossJoin
+    plan_types: "optimized"
+    description: |
+      An alias for a `Join` with an empty predicate (emits all combinations). Note that not all cross joins are marked
+      as `CrossJoin`: In a join with more than 2 inputs, it can happen that there is a cross join between some of the inputs.
+      You can recognize this case by `ArrangeBy` operators having empty keys, i.e., `ArrangeBy keys=[[]]`.
+    uses_memory: True
+    memory_details: |
+      Uses memory for 3-way or more differential joins.
+    expansive: True
+    expansive_details: |
+      Cartesian product of the inputs (|N| x |M|).
+    example: "`CrossJoin type=differential`"
+
+  - operator: Reduce
+    plan_types: "optimized"
+    description: |
+      Groups the input rows by some scalar expressions, reduces each group using some aggregate functions, and produces rows containing the group key and aggregate outputs.
+    uses_memory: True
+    memory_details: |
+      `SUM`, `COUNT`, and most other aggregations use a moderate amount of memory (proportional either to twice the output size or to input size + output size).
+      `MIN` and `MAX` aggregates can use significantly more memory. This can be improved by including group size hints in the query, see
+      [`mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
+    expansive: False
+    example: "`Reduce group_by=[#0] aggregates=[max((#0 * #1))]`"
+
+  - operator: Reduce::~
+    plan_types: "LIR"
+    description: |
+      The number after the operator is the input operator's `lir_id`.
+
+      Groups the input rows by some scalar expressions, reduces each group using some aggregate functions, and produces rows containing the group key and aggregate outputs.
+
+      There are five types of `Reduce`, ordered by increasing complexity:
+
+      1. `Reduce::Distinct` corresponds to the SQL `DISTINCT` operator.
+
+      2. `Reduce::Accumulable` (e.g., `SUM`, `COUNT`) corresponds to several easy to implement aggregations that can be executed simultaneously and efficiently.
+
+      3. `Reduce::Hierarchical` (e.g., `MIN`, `MAX`) corresponds to an aggregation requiring a tower of arrangements. These can be either monotonic (more efficient) or bucketed. These may benefit from a hint; [see `mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
+
+      4. `Reduce::Collation` corresponds to an arbitrary mix of reductions of different types, which will be performed separately and then joined together.
+
+      5. `Reduce::Basic` (e.g., window functions, `list_agg`) corresponds to a single non-incremental aggregation.
+
+    uses_memory: True
+    memory_details: |
+      `Distinct` and `Accumulable` aggregates use a moderate amount of memory (proportional to twice the output size).
+      `MIN` and `MAX` aggregates can use significantly more memory. This can be improved by including group size hints in the query, see
+      [`mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
+      `Basic` aggregates use memory proportional to the input + output size.
+      `Collation` aggregates use memory that is the sum of their constituents, plus some memory for the join at the end.
+    expansive: False
+    example: "`Reduce::Accumulable 8`"
+
+  - operator: Reduce
+    plan_types: "raw"
+    description: |
+      Groups the input rows by some scalar expressions, reduces each group using
+      some aggregate functions, and produces rows containing the group key and
+      aggregate outputs.  In the case where the group key is empty and the input
+      is empty, returns a single row with the aggregate functions applied to the
+      empty input collection.
+    uses_memory: True
+    memory_details: |
+      `SUM`, `COUNT`, and most other aggregations use a moderate amount of memory (proportional either to twice the output size or to input size + output size).
+      `MIN` and `MAX` aggregates can use significantly more memory. This can be improved by including group size hints in the query, see
+      [`mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
+    expansive: False
+    example: "`Reduce group_by=[#0] aggregates=[max((#0 * #1))]`"
+
+  - operator: Distinct
+    plan_types: "optimized"
+    description: |
+      Alias for a `Reduce` with an empty aggregate list.
+    uses_memory: True
+    memory_details: |
+      Uses memory proportional to twice the output size.
+    expansive: False
+    example: "`Distinct`"
+
+  - operator: Distinct
+    plan_types: "raw"
+    description: |
+      Removes duplicate copies of input rows.
+    uses_memory: True
+    memory_details: |
+      Uses memory proportional to twice the output size.
+    expansive: False
+    example: "`Distinct`"
+
+  - operator: TopK
+    plan_types: "optimized,raw"
+    description: |
+      Groups the input rows by some scalar expressions, sorts each group using the group key, removes the top `offset` rows in each group, and returns the next `limit` rows.
+    uses_memory: True
+    memory_details: |
+      Can use significant amount as the operator can significantly overestimate
+      the group sizes. Consult
+      [`mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
+    expansive: False
+    example: "`TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5`"
+
+  - operator: TopK::~
+    plan_types: "LIR"
+    description: |
+      The number after the operator is the input operator's `lir_id`.
+
+      Groups the input rows, sorts them according to some ordering, and returns at most `K` rows at some offset from the top of the list, where `K` is some (possibly computed) limit.
+
+      There are three types of `TopK`. Two are special cased for monotonic inputs (i.e., inputs which never retract data).
+
+      1. `TopK::MonotonicTop1`.
+      2. `TopK::MonotonicTopK`, which may give an expression indicating the limit.
+      3. `TopK::Basic`, a generic `TopK` plan.
+    uses_memory: True
+    memory_details: |
+      `MonotonicTop1` or `MonotonicTopK` uses a moderate amount of memory. Other TopKs use significantly more memory as the operator can significantly overestimate
+      the group sizes. Consult
+      [`mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
+    expansive: False
+    example: "`TopK::Basic 10`"
+
+
+  - operator: Negate
+    plan_types: "optimized,raw"
+    description: |
+      Negates the row counts of the input. This is usually used in combination with union to remove rows from the other union input.
+    uses_memory: False
+    memory_details: ""
+    expansive: False
+    example: "`Negate`"
+
+  - operator: Negate
+    plan_types: "LIR"
+    description: |
+      Negates the row counts of the input. This is usually used in combination with union to remove rows from the other union input.
+    uses_memory: False
+    memory_details: ""
+    expansive: False
+    example: "`Negate 17`"
+
+  - operator: Threshold
+    plan_types: "optimized,raw"
+    description: |
+      Removes any rows with negative counts.
+    uses_memory: True
+    memory_details: |
+      Uses memory proportional to the input and output size, twice.
+    expansive: False
+    example: "`Threshold`"
+
+  - operator: Threshold
+    plan_types: "LIR"
+    description: |
+      Removes any rows with negative counts.
+    uses_memory: True
+    memory_details: |
+      Uses memory proportional to the input and output size, twice.
+    expansive: False
+    example: "`Threshold 47`"
+
+  - operator: Union
+    plan_types: "optimized,raw"
+    description: |
+      Sums the counts of each row of all inputs. (Corresponds to `UNION ALL` rather than `UNION`/`UNION DISTINCT`.)
+    uses_memory: True
+    memory_details: |
+      Moderate use of memory. Some union operators force consolidation, which results in a memory spike, largely at hydration time.
+    expansive: False
+    example: "`Union`"
+
+  - operator: Union
+    plan_types: "LIR"
+    description: |
+      Combines its inputs into a unified output, emitting one row for each row on any input. (Corresponds to `UNION ALL` rather than `UNION`/`UNION DISTINCT`.)
+    uses_memory: True
+    memory_details: |
+      If the union "consolidates output", it will make moderate use of memory, particularly at hydration time. If the union is not marked with "consolidates output", it will not consume memory.
+    expansive: False
+    example: "`Union 7 10 11 14 (consolidates output)`"
+
+  - operator: ArrangeBy
+    plan_types: "optimized"
+    description: |
+      Indicates a point that will become an [arrangement](/get-started/arrangements/#arrangements) in the dataflow engine (each `keys` element will be a different arrangement). Note that if an appropriate index already exists on the input or the output of the previous operator is already arranged with a key that is also requested here, then this operator will just pass on that existing arrangement instead of creating a new one.
+    uses_memory: True
+    memory_details: |
+      Depends. If arrangements need to be created, they use memory proportional to the input size.
+    expansive: False
+    example: "`ArrangeBy keys=[[#0]]`"
+
+  - operator: Arrange
+    plan_types: "LIR"
+    description: |
+      Indicates a point that will become an [arrangement](/get-started/arrangements/#arrangements) in the dataflow engine, i.e., it will consume memory to cache results.
+    uses_memory: True
+    memory_details: |
+      Uses memory proportional to the input size. Note that in the LIR / physical plan, `Arrange`/`ArrangeBy` almost always means that an arrangement will actually be created. (This is in contrast to the "optimized" plan, where an `ArrangeBy` being present in the plan often does not mean that an arrangement will actually be created.)
+    expansive: False
+    example: "`Arrange 12`"
+
+  - operator: With ... Return ...
+    plan_types: "optimized,raw"
+    description: |
+      Introduces CTEs, i.e., makes it possible for sub-plans to be consumed multiple times by downstream operators.
+    uses_memory: False
+    memory_details: ""
+    expansive: False
+    example: "[See above](#reading-decorrelated-and-optimized-plans)"

@@ -10,37 +10,55 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.66"
-arrow = { version = "51.0.0", default-features = false }
+anyhow = "1.0.95"
+arrow = { version = "53.3.0", default-features = false }
+async-compression = { version = "0.4.11", features = ["bzip2", "gzip", "tokio", "xz", "zstd"] }
 async-stream = "0.3.3"
 aws-types = "1.1.1"
-bytesize = "1.1.0"
-differential-dataflow = "0.12.0"
-futures = "0.3.25"
-http = "0.2.8"
+aws-smithy-types = "1.1.8"
+bytes = "1.10.1"
+bytesize = "1.3.0"
+csv-async = { version = "1.3.0", features = ["tokio"] }
+derivative = "2.2.0"
+differential-dataflow = "0.13.7"
+futures = "0.3.31"
+glob = "0.3.2"
+http = "1.2.0"
+itertools = "0.12.1"
 mz-aws-util = { path = "../aws-util" }
 mz-arrow-util = { path = "../arrow-util" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
-mz-ore = { path = "../ore", features = ["async", "tracing_"] }
+mz-ore = { path = "../ore", features = ["async", "tracing"] }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-pgcopy = { path = "../pgcopy" }
+mz-pgrepr = { path = "../pgrepr" }
+mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
-parquet = { version = "51.0.0", default-features = false, features = ["arrow", "snap"] }
+parquet = { version = "53.3.0", default-features = false, features = ["arrow", "async", "snap"] }
 prometheus = { version = "0.13.3", default-features = false }
-proptest = { version = "1.0.0", default-features = false, features = ["std"] }
+proptest = { version = "1.6.0", default-features = false, features = ["std"] }
+prost = "0.13.5"
+reqwest = { version = "0.11.13", features = ["stream"] }
 sentry = { version = "0.29.1" }
-serde = { version = "1.0.152", features = ["derive"] }
-timely = { version = "0.12.0", default-features = false, features = ["bincode"] }
-thiserror = "1.0.37"
-tokio = { version = "1.24.2", features = ["fs", "rt", "sync", "test-util", "time"] }
+serde = { version = "1.0.219", features = ["derive"] }
+smallvec = { version = "1.14.0", features = ["union"] }
+timely = "0.19.0"
+thiserror = "2.0.12"
+tokio = { version = "1.44.1", features = ["fs", "rt", "sync", "test-util", "time"] }
+tokio-stream = "0.1.17"
+tokio-util = { version = "0.7.13", features = ["io"] }
 tracing = "0.1.37"
-uuid = { version = "1.7.0", features = ["v4"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+url = "2.3.1"
+uuid = { version = "1.16.0", features = ["v4"] }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
+
+[features]
+default = ["workspace-hack"]

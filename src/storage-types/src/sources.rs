@@ -17,31 +17,30 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use arrow::array::{Array, BinaryArray, BinaryBuilder, StructArray};
+use arrow::array::{Array, ArrayRef, BinaryArray, BinaryBuilder, NullArray, StructArray};
 use arrow::datatypes::{Field, Fields};
-use bytes::BufMut;
+use bytes::{BufMut, Bytes};
+use columnation::Columnation;
 use itertools::EitherOrBoth::Both;
 use itertools::Itertools;
-use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
-use mz_persist_types::columnar::{
-    ColumnFormat, ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
+use kafka::KafkaSourceExportDetails;
+use load_generator::{LoadGeneratorOutput, LoadGeneratorSourceExportDetails};
+use mz_ore::assert_none;
+use mz_persist_types::arrow::ArrayOrd;
+use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema};
+use mz_persist_types::stats::{
+    ColumnNullStats, ColumnStatKinds, ColumnarStats, ColumnarStatsBuilder, PrimitiveStats,
+    StructStats,
 };
-use mz_persist_types::dyn_col::DynColumnMut;
-use mz_persist_types::dyn_struct::{
-    DynStruct, DynStructCfg, DynStructMut, ValidityMut, ValidityRef,
-};
-use mz_persist_types::stats::StatsFn;
 use mz_persist_types::Codec;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{
-    ColumnType, Datum, DatumDecoderT, DatumEncoderT, GlobalId, ProtoRow, RelationDesc, Row,
-    RowColumnarDecoder, RowColumnarEncoder, RowDecoder, RowEncoder,
+    arb_row_for_relation, CatalogItemId, Datum, GlobalId, ProtoRelationDesc, ProtoRow,
+    RelationDesc, Row, RowColumnarDecoder, RowColumnarEncoder,
 };
 use mz_sql_parser::ast::{Ident, IdentError, UnresolvedItemName};
-use proptest::collection::vec;
 use proptest::prelude::any;
-use proptest::strategy::{BoxedStrategy, Strategy};
-use proptest::string::string_regex;
+use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
@@ -65,51 +64,20 @@ pub mod kafka;
 pub mod load_generator;
 pub mod mysql;
 pub mod postgres;
+pub mod sql_server;
 
 pub use crate::sources::envelope::SourceEnvelope;
 pub use crate::sources::kafka::KafkaSourceConnection;
 pub use crate::sources::load_generator::LoadGeneratorSourceConnection;
-pub use crate::sources::mysql::MySqlSourceConnection;
-pub use crate::sources::postgres::PostgresSourceConnection;
+pub use crate::sources::mysql::{MySqlSourceConnection, MySqlSourceExportDetails};
+pub use crate::sources::postgres::{PostgresSourceConnection, PostgresSourceExportDetails};
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.sources.rs"));
-
-/// A fraternal twin of [`UnresolvedItemName`] that can implement [`Arbitrary`].
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct ExportReference(pub Vec<Ident>);
-
-impl proptest::prelude::Arbitrary for ExportReference {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        // Generate a set of valid `Ident` strings.
-        let string_strategy = string_regex("[a-zA-Z_][a-zA-Z0-9_$]{3,10}").unwrap();
-
-        // We only ever expect between 1 and 3 elements of the reference. We
-        // could theoretically expect more, but we can never expect 0.
-        vec(string_strategy, 1..=3)
-            .prop_map(|inner| {
-                ExportReference(inner.into_iter().map(|i| Ident::new(i).unwrap()).collect())
-            })
-            .boxed()
-    }
-}
-
-impl From<UnresolvedItemName> for ExportReference {
-    fn from(value: UnresolvedItemName) -> Self {
-        ExportReference(value.0)
-    }
-}
 
 /// A description of a source ingestion
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
 pub struct IngestionDescription<S: 'static = (), C: ConnectionAccess = InlinedConnection> {
     /// The source description.
-    ///
-    /// # Warning
-    /// Any time this field changes, you _must_ recalculate the [`SourceExport`]
-    /// values in [`Self::source_exports`].
     pub desc: SourceDesc<C>,
     /// Additional storage controller metadata needed to ingest this source
     pub ingestion_metadata: S,
@@ -117,24 +85,19 @@ pub struct IngestionDescription<S: 'static = (), C: ConnectionAccess = InlinedCo
     ///
     /// # Notes
     /// - For multi-output sources:
-    ///     - Add subsources by adding a new [`SourceExport`].
-    ///     - Remove subsources by removing the [`SourceExport`].
+    ///     - Add exports by adding a new [`SourceExport`].
+    ///     - Remove exports by removing the [`SourceExport`].
     ///
     ///   Re-rendering/executing the source after making these modifications
     ///   adds and drops the subsource, respectively.
-    /// - Any time the [`Self::desc`] field changes, you must recalculate the
-    ///   [`SourceExport`] values.
     /// - This field includes the primary source's ID, which might need to be
-    ///   filtered out to understand which exports are ingestion export
-    ///   subsources.
+    ///   filtered out to understand which exports are explicit ingestion exports.
     /// - This field does _not_ include the remap collection, which is tracked
     ///   in its own field.
-    /// - This field should not be populated by the storage controller in
-    ///   response to collections being created.
     #[proptest(
-        strategy = "proptest::collection::btree_map(any::<GlobalId>(), any::<SourceExport<Option<ExportReference>, S>>(), 0..4)"
+        strategy = "proptest::collection::btree_map(any::<GlobalId>(), any::<SourceExport<S>>(), 0..4)"
     )]
-    pub source_exports: BTreeMap<GlobalId, SourceExport<Option<ExportReference>, S>>,
+    pub source_exports: BTreeMap<GlobalId, SourceExport<S>>,
     /// The ID of the instance in which to install the source.
     pub instance_id: StorageInstanceId,
     /// The ID of this ingestion's remap/progress collection.
@@ -158,8 +121,11 @@ impl IngestionDescription {
 }
 
 impl<S> IngestionDescription<S> {
-    /// Return an iterator over the `GlobalId`s of `self`'s subsources.
-    pub fn subsource_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+    /// Return an iterator over the `GlobalId`s of `self`'s collections.
+    /// This will contain ids for the remap collection, subsources,
+    /// tables for this source, and the primary collection ID, even if
+    /// no data will be exported to the primary collection.
+    pub fn collection_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
         // Expand self so that any new fields added generate a compiler error to
         // increase the likelihood of developers seeing this function.
         let IngestionDescription {
@@ -174,45 +140,6 @@ impl<S> IngestionDescription<S> {
             .keys()
             .copied()
             .chain(std::iter::once(*remap_collection_id))
-    }
-}
-
-impl<S: Clone> IngestionDescription<S> {
-    pub fn source_exports_with_output_indices(&self) -> BTreeMap<GlobalId, SourceExport<usize, S>> {
-        let subsource_resolver = self.desc.connection.get_subsource_resolver();
-
-        let mut source_exports = BTreeMap::new();
-
-        for (
-            id,
-            SourceExport {
-                ingestion_output,
-                storage_metadata,
-            },
-        ) in self.source_exports.iter()
-        {
-            let ingestion_output = match ingestion_output {
-                Some(ingestion_output) => {
-                    subsource_resolver
-                        .resolve_idx(&ingestion_output.0)
-                        .expect("must have all subsource references")
-                        // output indices are the native details idx + 1 to
-                        // account for the `None` value representing 0.
-                        + 1
-                }
-                None => 0,
-            };
-
-            source_exports.insert(
-                *id,
-                SourceExport {
-                    ingestion_output,
-                    storage_metadata: storage_metadata.clone(),
-                },
-            );
-        }
-
-        source_exports
     }
 }
 
@@ -250,20 +177,23 @@ impl<S: Debug + Eq + PartialEq + AlterCompatible> AlterCompatible for IngestionD
                             (
                                 _,
                                 SourceExport {
-                                    ingestion_output: l_reference,
                                     storage_metadata: l_metadata,
+                                    details: l_details,
+                                    data_config: l_data_config,
                                 },
                             ),
                             (
                                 _,
                                 SourceExport {
-                                    ingestion_output: r_reference,
                                     storage_metadata: r_metadata,
+                                    details: r_details,
+                                    data_config: r_data_config,
                                 },
                             ),
                         ) => {
-                            l_reference == r_reference
-                                && l_metadata.alter_compatible(id, r_metadata).is_ok()
+                            l_metadata.alter_compatible(id, r_metadata).is_ok()
+                                && l_details.alter_compatible(id, r_details).is_ok()
+                                && l_data_config.alter_compatible(id, r_data_config).is_ok()
                         }
                         _ => true,
                     }),
@@ -314,11 +244,13 @@ impl<R: ConnectionResolver> IntoInlineConnection<IngestionDescription, R>
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
-pub struct SourceExport<O: proptest::prelude::Arbitrary, S = ()> {
-    /// Which output from the ingestion this source refers to.
-    pub ingestion_output: O,
+pub struct SourceExport<S = (), C: ConnectionAccess = InlinedConnection> {
     /// The collection metadata needed to write the exported data
     pub storage_metadata: S,
+    /// Details necessary for the source to export data to this export's collection.
+    pub details: SourceExportDetails,
+    /// Config necessary to handle (e.g. decode and envelope) the data for this export.
+    pub data_config: SourceExportDataConfig<C>,
 }
 
 impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMetadata> {
@@ -368,59 +300,39 @@ impl ProtoMapEntry<GlobalId, CollectionMetadata> for ProtoSourceImport {
     }
 }
 
-impl ProtoMapEntry<GlobalId, SourceExport<Option<ExportReference>, CollectionMetadata>>
-    for ProtoSourceExport
-{
+impl ProtoMapEntry<GlobalId, SourceExport<CollectionMetadata>> for ProtoSourceExport {
     fn from_rust<'a>(
-        (id, source_export): (
-            &'a GlobalId,
-            &'a SourceExport<Option<ExportReference>, CollectionMetadata>,
-        ),
+        (id, source_export): (&'a GlobalId, &'a SourceExport<CollectionMetadata>),
     ) -> Self {
         ProtoSourceExport {
             id: Some(id.into_proto()),
-            ingestion_output: source_export
-                .ingestion_output
-                .iter()
-                .map(|e| &e.0)
-                .flatten()
-                .map(|i| i.clone().into_string())
-                .collect(),
             storage_metadata: Some(source_export.storage_metadata.into_proto()),
+            details: Some(source_export.details.into_proto()),
+            data_config: Some(source_export.data_config.into_proto()),
         }
     }
 
-    fn into_rust(
-        self,
-    ) -> Result<
-        (
-            GlobalId,
-            SourceExport<Option<ExportReference>, CollectionMetadata>,
-        ),
-        TryFromProtoError,
-    > {
+    fn into_rust(self) -> Result<(GlobalId, SourceExport<CollectionMetadata>), TryFromProtoError> {
         Ok((
             self.id.into_rust_if_some("ProtoSourceExport::id")?,
             SourceExport {
-                ingestion_output: if self.ingestion_output.is_empty() {
-                    None
-                } else {
-                    Some(ExportReference(
-                        self.ingestion_output
-                            .into_iter()
-                            .map(|i| Ident::new(i).expect("proto encoding must roundtrip"))
-                            .collect(),
-                    ))
-                },
                 storage_metadata: self
                     .storage_metadata
                     .into_rust_if_some("ProtoSourceExport::storage_metadata")?,
+                details: self
+                    .details
+                    .into_rust_if_some("ProtoSourceExport::details")?,
+                data_config: self
+                    .data_config
+                    .into_rust_if_some("ProtoSourceExport::data_config")?,
             },
         ))
     }
 }
 
-pub trait SourceTimestamp: timely::progress::Timestamp + Refines<()> + std::fmt::Display {
+pub trait SourceTimestamp:
+    Timestamp + Columnation + Refines<()> + std::fmt::Display + Sync
+{
     fn encode_row(&self) -> Row;
     fn decode_row(row: &Row) -> Self;
 }
@@ -486,6 +398,10 @@ impl mz_persist_types::Codec64 for MzOffset {
             offset: mz_persist_types::Codec64::decode(buf),
         }
     }
+}
+
+impl columnation::Columnation for MzOffset {
+    type InnerRegion = columnation::CopyRegion<MzOffset>;
 }
 
 impl RustType<ProtoMzOffset> for MzOffset {
@@ -706,19 +622,17 @@ pub trait SourceConnection: Debug + Clone + PartialEq + AlterCompatible {
     fn name(&self) -> &'static str;
 
     /// The name of the resource in the external system (e.g kafka topic) if any
-    fn upstream_name(&self) -> Option<&str>;
+    fn external_reference(&self) -> Option<&str>;
 
-    /// The schema of this connection's key rows.
-    // This is mostly setting the stage for the subsequent PRs that will attempt to compute and
-    // typecheck subsequent stages of the pipeline using the types of the earlier stages of the
-    // pipeline.
-    fn key_desc(&self) -> RelationDesc;
+    /// Defines the key schema to use by default for this source connection type.
+    /// This will be used for the primary export of the source and as the default
+    /// pre-encoding key schema for the source.
+    fn default_key_desc(&self) -> RelationDesc;
 
-    /// The schema of this connection's value rows.
-    // This is mostly setting the stage for the subsequent PRs that will attempt to compute and
-    // typecheck subsequent stages of the pipeline using the types of the earlier stages of the
-    // pipeline.
-    fn value_desc(&self) -> RelationDesc;
+    /// Defines the value schema to use by default for this source connection type.
+    /// This will be used for the primary export of the source and as the default
+    /// pre-encoding value schema for the source.
+    fn default_value_desc(&self) -> RelationDesc;
 
     /// The schema of this connection's timestamp type. This will also be the schema of the
     /// progress relation.
@@ -726,14 +640,15 @@ pub trait SourceConnection: Debug + Clone + PartialEq + AlterCompatible {
 
     /// The id of the connection object (i.e the one obtained from running `CREATE CONNECTION`) in
     /// the catalog, if any.
-    fn connection_id(&self) -> Option<GlobalId>;
+    fn connection_id(&self) -> Option<CatalogItemId>;
 
-    /// Returns metadata columns that this connection *instance* will produce once rendered. The
-    /// columns are returned in the order specified by the user.
-    fn metadata_columns(&self) -> Vec<(&str, ColumnType)>;
+    /// If this source connection can output to a primary collection, contains the source-specific
+    /// details of that export, else is set to `SourceExportDetails::None` to indicate that
+    /// this source should not export to the primary collection.
+    fn primary_export_details(&self) -> SourceExportDetails;
 
-    /// Returns a [`SubsourceResolver`] for this source connection's subsources.
-    fn get_subsource_resolver(&self) -> SubsourceResolver;
+    /// Whether the source type supports read only mode.
+    fn supports_read_only(&self) -> bool;
 }
 
 #[derive(Arbitrary, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -767,13 +682,116 @@ impl RustType<ProtoCompression> for Compression {
     }
 }
 
+/// Defines the configuration for how to handle data that is exported for a given
+/// Source Export.
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
+pub struct SourceExportDataConfig<C: ConnectionAccess = InlinedConnection> {
+    pub encoding: Option<encoding::SourceDataEncoding<C>>,
+    pub envelope: SourceEnvelope,
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<SourceExportDataConfig, R>
+    for SourceExportDataConfig<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> SourceExportDataConfig {
+        let SourceExportDataConfig { encoding, envelope } = self;
+
+        SourceExportDataConfig {
+            encoding: encoding.map(|e| e.into_inline_connection(r)),
+            envelope,
+        }
+    }
+}
+
+impl RustType<ProtoSourceExportDataConfig> for SourceExportDataConfig {
+    fn into_proto(&self) -> ProtoSourceExportDataConfig {
+        ProtoSourceExportDataConfig {
+            encoding: self.encoding.into_proto(),
+            envelope: Some(self.envelope.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoSourceExportDataConfig) -> Result<Self, TryFromProtoError> {
+        Ok(SourceExportDataConfig {
+            encoding: proto.encoding.into_rust()?,
+            envelope: proto
+                .envelope
+                .into_rust_if_some("ProtoSourceExportDataConfig::envelope")?,
+        })
+    }
+}
+
+impl<C: ConnectionAccess> AlterCompatible for SourceExportDataConfig<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        if self == other {
+            return Ok(());
+        }
+        let Self { encoding, envelope } = &self;
+
+        let compatibility_checks = [
+            (
+                match (encoding, &other.encoding) {
+                    (Some(s), Some(o)) => s.alter_compatible(id, o).is_ok(),
+                    (s, o) => s == o,
+                },
+                "encoding",
+            ),
+            (envelope == &other.envelope, "envelope"),
+        ];
+
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "SourceDesc incompatible {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(AlterError { id });
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<C: ConnectionAccess> SourceExportDataConfig<C> {
+    /// Returns `true` if this connection yields data that is
+    /// append-only/monotonic. Append-monly means the source
+    /// never produces retractions.
+    // TODO(guswynn): consider enforcing this more completely at the
+    // parsing/typechecking level, by not using an `envelope`
+    // for sources like pg
+    pub fn monotonic(&self, connection: &GenericSourceConnection<C>) -> bool {
+        match &self.envelope {
+            // Upsert and CdcV2 may produce retractions.
+            SourceEnvelope::Upsert(_) | SourceEnvelope::CdcV2 => false,
+            SourceEnvelope::None(_) => {
+                match connection {
+                    // Postgres can produce retractions (deletes)
+                    GenericSourceConnection::Postgres(_) => false,
+                    // MySQL can produce retractions (deletes)
+                    GenericSourceConnection::MySql(_) => false,
+                    // Loadgen
+                    GenericSourceConnection::LoadGenerator(g) => g.load_generator.is_monotonic(),
+                    // Kafka exports with `None` envelope are append-only
+                    GenericSourceConnection::Kafka(_) => true,
+                }
+            }
+        }
+    }
+}
+
 /// An external source of updates for a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
 pub struct SourceDesc<C: ConnectionAccess = InlinedConnection> {
     pub connection: GenericSourceConnection<C>,
-    pub encoding: Option<encoding::SourceDataEncoding<C>>,
-    pub envelope: SourceEnvelope,
     pub timestamp_interval: Duration,
+    /// The data encoding and format of data to export to the
+    /// primary collection for this source.
+    /// TODO(database-issues#8620): This will be removed once sources no longer export
+    /// to primary collections and only export to explicit SourceExports (tables).
+    pub primary_export: SourceExportDataConfig<C>,
+    pub primary_export_details: SourceExportDetails,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<SourceDesc, R>
@@ -782,15 +800,15 @@ impl<R: ConnectionResolver> IntoInlineConnection<SourceDesc, R>
     fn into_inline_connection(self, r: R) -> SourceDesc {
         let SourceDesc {
             connection,
-            encoding,
-            envelope,
+            primary_export,
+            primary_export_details,
             timestamp_interval,
         } = self;
 
         SourceDesc {
             connection: connection.into_inline_connection(&r),
-            encoding: encoding.map(|e| e.into_inline_connection(r)),
-            envelope,
+            primary_export: primary_export.into_inline_connection(r),
+            primary_export_details,
             timestamp_interval,
         }
     }
@@ -800,8 +818,8 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
     fn into_proto(&self) -> ProtoSourceDesc {
         ProtoSourceDesc {
             connection: Some(self.connection.into_proto()),
-            encoding: self.encoding.into_proto(),
-            envelope: Some(self.envelope.into_proto()),
+            primary_export: Some(self.primary_export.into_proto()),
+            primary_export_details: Some(self.primary_export_details.into_proto()),
             timestamp_interval: Some(self.timestamp_interval.into_proto()),
         }
     }
@@ -811,58 +829,16 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
             connection: proto
                 .connection
                 .into_rust_if_some("ProtoSourceDesc::connection")?,
-            encoding: proto.encoding.into_rust()?,
-            envelope: proto
-                .envelope
-                .into_rust_if_some("ProtoSourceDesc::envelope")?,
+            primary_export: proto
+                .primary_export
+                .into_rust_if_some("ProtoSourceDesc::primary_export")?,
+            primary_export_details: proto
+                .primary_export_details
+                .into_rust_if_some("ProtoSourceDesc::primary_export_details")?,
             timestamp_interval: proto
                 .timestamp_interval
                 .into_rust_if_some("ProtoSourceDesc::timestamp_interval")?,
         })
-    }
-}
-
-impl<C: ConnectionAccess> SourceDesc<C> {
-    /// Returns `true` if this connection yields data that is
-    /// append-only/monotonic. Append-monly means the source
-    /// never produces retractions.
-    // TODO(guswynn): consider enforcing this more completely at the
-    // parsing/typechecking level, by not using an `envelope`
-    // for sources like pg
-    pub fn monotonic(&self) -> bool {
-        match self {
-            // Postgres can produce retractions (deletes)
-            SourceDesc {
-                connection: GenericSourceConnection::Postgres(_),
-                ..
-            } => false,
-            // MySQL can produce retractions (deletes)
-            SourceDesc {
-                connection: GenericSourceConnection::MySql(_),
-                ..
-            } => false,
-            // Upsert and CdcV2 may produce retractions.
-            SourceDesc {
-                envelope: SourceEnvelope::Upsert(_) | SourceEnvelope::CdcV2,
-                connection:
-                    GenericSourceConnection::Kafka(_) | GenericSourceConnection::LoadGenerator(_),
-                ..
-            } => false,
-            // Loadgen can produce retractions (deletes)
-            SourceDesc {
-                connection: GenericSourceConnection::LoadGenerator(g),
-                ..
-            } => g.load_generator.is_monotonic(),
-            // Other sources with the `None` envelope are append-only.
-            SourceDesc {
-                envelope: SourceEnvelope::None(_),
-                ..
-            } => true,
-        }
-    }
-
-    pub fn envelope(&self) -> &SourceEnvelope {
-        &self.envelope
     }
 }
 
@@ -876,8 +852,8 @@ impl<C: ConnectionAccess> AlterCompatible for SourceDesc<C> {
         }
         let Self {
             connection,
-            encoding,
-            envelope,
+            primary_export,
+            primary_export_details,
             timestamp_interval,
         } = &self;
 
@@ -886,14 +862,11 @@ impl<C: ConnectionAccess> AlterCompatible for SourceDesc<C> {
                 connection.alter_compatible(id, &other.connection).is_ok(),
                 "connection",
             ),
+            (primary_export == &other.primary_export, "primary_export"),
             (
-                match (encoding, &other.encoding) {
-                    (Some(s), Some(o)) => s.alter_compatible(id, o).is_ok(),
-                    (s, o) => s == o,
-                },
-                "encoding",
+                primary_export_details == &other.primary_export_details,
+                "primary_export_details",
             ),
-            (envelope == &other.envelope, "envelope"),
             (
                 timestamp_interval == &other.timestamp_interval,
                 "timestamp_interval",
@@ -913,6 +886,19 @@ impl<C: ConnectionAccess> AlterCompatible for SourceDesc<C> {
         }
 
         Ok(())
+    }
+}
+
+impl SourceDesc<InlinedConnection> {
+    /// Returns the SourceExport details for the primary export.
+    /// TODO(database-issues#8620): This will be removed once sources no longer export
+    /// to primary collections and only export to explicit SourceExports (tables).
+    pub fn primary_source_export(&self) -> SourceExport<(), InlinedConnection> {
+        SourceExport {
+            storage_metadata: (),
+            details: self.primary_export_details.clone(),
+            data_config: self.primary_export.clone(),
+        }
     }
 }
 
@@ -979,30 +965,30 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
         }
     }
 
-    fn upstream_name(&self) -> Option<&str> {
+    fn external_reference(&self) -> Option<&str> {
         match self {
-            Self::Kafka(conn) => conn.upstream_name(),
-            Self::Postgres(conn) => conn.upstream_name(),
-            Self::MySql(conn) => conn.upstream_name(),
-            Self::LoadGenerator(conn) => conn.upstream_name(),
+            Self::Kafka(conn) => conn.external_reference(),
+            Self::Postgres(conn) => conn.external_reference(),
+            Self::MySql(conn) => conn.external_reference(),
+            Self::LoadGenerator(conn) => conn.external_reference(),
         }
     }
 
-    fn key_desc(&self) -> RelationDesc {
+    fn default_key_desc(&self) -> RelationDesc {
         match self {
-            Self::Kafka(conn) => conn.key_desc(),
-            Self::Postgres(conn) => conn.key_desc(),
-            Self::MySql(conn) => conn.key_desc(),
-            Self::LoadGenerator(conn) => conn.key_desc(),
+            Self::Kafka(conn) => conn.default_key_desc(),
+            Self::Postgres(conn) => conn.default_key_desc(),
+            Self::MySql(conn) => conn.default_key_desc(),
+            Self::LoadGenerator(conn) => conn.default_key_desc(),
         }
     }
 
-    fn value_desc(&self) -> RelationDesc {
+    fn default_value_desc(&self) -> RelationDesc {
         match self {
-            Self::Kafka(conn) => conn.value_desc(),
-            Self::Postgres(conn) => conn.value_desc(),
-            Self::MySql(conn) => conn.value_desc(),
-            Self::LoadGenerator(conn) => conn.value_desc(),
+            Self::Kafka(conn) => conn.default_value_desc(),
+            Self::Postgres(conn) => conn.default_value_desc(),
+            Self::MySql(conn) => conn.default_value_desc(),
+            Self::LoadGenerator(conn) => conn.default_value_desc(),
         }
     }
 
@@ -1015,7 +1001,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
         }
     }
 
-    fn connection_id(&self) -> Option<GlobalId> {
+    fn connection_id(&self) -> Option<CatalogItemId> {
         match self {
             Self::Kafka(conn) => conn.connection_id(),
             Self::Postgres(conn) => conn.connection_id(),
@@ -1024,21 +1010,21 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
         }
     }
 
-    fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
+    fn primary_export_details(&self) -> SourceExportDetails {
         match self {
-            Self::Kafka(conn) => conn.metadata_columns(),
-            Self::Postgres(conn) => conn.metadata_columns(),
-            Self::MySql(conn) => conn.metadata_columns(),
-            Self::LoadGenerator(conn) => conn.metadata_columns(),
+            Self::Kafka(conn) => conn.primary_export_details(),
+            Self::Postgres(conn) => conn.primary_export_details(),
+            Self::MySql(conn) => conn.primary_export_details(),
+            Self::LoadGenerator(conn) => conn.primary_export_details(),
         }
     }
 
-    fn get_subsource_resolver(&self) -> SubsourceResolver {
+    fn supports_read_only(&self) -> bool {
         match self {
-            Self::Kafka(conn) => conn.get_subsource_resolver(),
-            Self::Postgres(conn) => conn.get_subsource_resolver(),
-            Self::MySql(conn) => conn.get_subsource_resolver(),
-            Self::LoadGenerator(conn) => conn.get_subsource_resolver(),
+            GenericSourceConnection::Kafka(conn) => conn.supports_read_only(),
+            GenericSourceConnection::Postgres(conn) => conn.supports_read_only(),
+            GenericSourceConnection::MySql(conn) => conn.supports_read_only(),
+            GenericSourceConnection::LoadGenerator(conn) => conn.supports_read_only(),
         }
     }
 }
@@ -1097,6 +1083,164 @@ impl RustType<ProtoSourceConnection> for GenericSourceConnection<InlinedConnecti
             Kind::Postgres(postgres) => GenericSourceConnection::Postgres(postgres.into_rust()?),
             Kind::Mysql(mysql) => GenericSourceConnection::MySql(mysql.into_rust()?),
             Kind::Loadgen(loadgen) => GenericSourceConnection::LoadGenerator(loadgen.into_rust()?),
+        })
+    }
+}
+
+/// Details necessary for each source export to allow the source implementations
+/// to export data to the export's collection.
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum SourceExportDetails {
+    /// Used when the primary collection of a source isn't an export to
+    /// output to.
+    None,
+    Kafka(KafkaSourceExportDetails),
+    Postgres(PostgresSourceExportDetails),
+    MySql(MySqlSourceExportDetails),
+    LoadGenerator(LoadGeneratorSourceExportDetails),
+}
+
+impl crate::AlterCompatible for SourceExportDetails {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        if self == other {
+            return Ok(());
+        }
+        let r = match (self, other) {
+            (Self::None, Self::None) => Ok(()),
+            (Self::Kafka(s), Self::Kafka(o)) => s.alter_compatible(id, o),
+            (Self::Postgres(s), Self::Postgres(o)) => s.alter_compatible(id, o),
+            (Self::MySql(s), Self::MySql(o)) => s.alter_compatible(id, o),
+            (Self::LoadGenerator(s), Self::LoadGenerator(o)) => s.alter_compatible(id, o),
+            _ => Err(AlterError { id }),
+        };
+
+        if r.is_err() {
+            tracing::warn!(
+                "SourceExportDetails incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                self,
+                other
+            );
+        }
+
+        r
+    }
+}
+
+impl RustType<ProtoSourceExportDetails> for SourceExportDetails {
+    fn into_proto(&self) -> ProtoSourceExportDetails {
+        use proto_source_export_details::Kind;
+        ProtoSourceExportDetails {
+            kind: match self {
+                SourceExportDetails::None => None,
+                SourceExportDetails::Kafka(details) => Some(Kind::Kafka(details.into_proto())),
+                SourceExportDetails::Postgres(details) => {
+                    Some(Kind::Postgres(details.into_proto()))
+                }
+                SourceExportDetails::MySql(details) => Some(Kind::Mysql(details.into_proto())),
+                SourceExportDetails::LoadGenerator(details) => {
+                    Some(Kind::Loadgen(details.into_proto()))
+                }
+            },
+        }
+    }
+
+    fn from_proto(proto: ProtoSourceExportDetails) -> Result<Self, TryFromProtoError> {
+        use proto_source_export_details::Kind;
+        Ok(match proto.kind {
+            None => SourceExportDetails::None,
+            Some(Kind::Kafka(details)) => SourceExportDetails::Kafka(details.into_rust()?),
+            Some(Kind::Postgres(details)) => SourceExportDetails::Postgres(details.into_rust()?),
+            Some(Kind::Mysql(details)) => SourceExportDetails::MySql(details.into_rust()?),
+            Some(Kind::Loadgen(details)) => {
+                SourceExportDetails::LoadGenerator(details.into_rust()?)
+            }
+        })
+    }
+}
+
+/// Details necessary to store in the `Details` option of a source export
+/// statement (`CREATE SUBSOURCE` and `CREATE TABLE .. FROM SOURCE` statements),
+/// to generate the appropriate `SourceExportDetails` struct during planning.
+/// NOTE that this is serialized as proto to the catalog, so any changes here
+/// must be backwards compatible or will require a migration.
+pub enum SourceExportStatementDetails {
+    Postgres {
+        table: mz_postgres_util::desc::PostgresTableDesc,
+    },
+    MySql {
+        table: mz_mysql_util::MySqlTableDesc,
+        initial_gtid_set: String,
+    },
+    LoadGenerator {
+        output: LoadGeneratorOutput,
+    },
+    Kafka {},
+}
+
+impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetails {
+    fn into_proto(&self) -> ProtoSourceExportStatementDetails {
+        match self {
+            SourceExportStatementDetails::Postgres { table } => ProtoSourceExportStatementDetails {
+                kind: Some(proto_source_export_statement_details::Kind::Postgres(
+                    postgres::ProtoPostgresSourceExportStatementDetails {
+                        table: Some(table.into_proto()),
+                    },
+                )),
+            },
+            SourceExportStatementDetails::MySql {
+                table,
+                initial_gtid_set,
+            } => ProtoSourceExportStatementDetails {
+                kind: Some(proto_source_export_statement_details::Kind::Mysql(
+                    mysql::ProtoMySqlSourceExportStatementDetails {
+                        table: Some(table.into_proto()),
+                        initial_gtid_set: initial_gtid_set.clone(),
+                    },
+                )),
+            },
+            SourceExportStatementDetails::LoadGenerator { output } => {
+                ProtoSourceExportStatementDetails {
+                    kind: Some(proto_source_export_statement_details::Kind::Loadgen(
+                        load_generator::ProtoLoadGeneratorSourceExportStatementDetails {
+                            output: output.into_proto().into(),
+                        },
+                    )),
+                }
+            }
+            SourceExportStatementDetails::Kafka {} => ProtoSourceExportStatementDetails {
+                kind: Some(proto_source_export_statement_details::Kind::Kafka(
+                    kafka::ProtoKafkaSourceExportStatementDetails {},
+                )),
+            },
+        }
+    }
+
+    fn from_proto(proto: ProtoSourceExportStatementDetails) -> Result<Self, TryFromProtoError> {
+        use proto_source_export_statement_details::Kind;
+        Ok(match proto.kind {
+            Some(Kind::Postgres(details)) => SourceExportStatementDetails::Postgres {
+                table: details
+                    .table
+                    .into_rust_if_some("ProtoPostgresSourceExportStatementDetails::table")?,
+            },
+            Some(Kind::Mysql(details)) => SourceExportStatementDetails::MySql {
+                table: details
+                    .table
+                    .into_rust_if_some("ProtoMySqlSourceExportStatementDetails::table")?,
+
+                initial_gtid_set: details.initial_gtid_set,
+            },
+            Some(Kind::Loadgen(details)) => SourceExportStatementDetails::LoadGenerator {
+                output: details
+                    .output
+                    .into_rust_if_some("ProtoLoadGeneratorSourceExportStatementDetails::output")?,
+            },
+            Some(Kind::Kafka(_details)) => SourceExportStatementDetails::Kafka {},
+            None => {
+                return Err(TryFromProtoError::missing_field(
+                    "ProtoSourceExportStatementDetails::kind",
+                ))
+            }
         })
     }
 }
@@ -1162,15 +1306,17 @@ impl Codec for SourceData {
             .expect("no required fields means no initialization errors");
     }
 
-    fn decode(buf: &[u8]) -> Result<Self, String> {
-        let proto = ProtoSourceData::decode(buf).map_err(|err| err.to_string())?;
-        proto.into_rust().map_err(|err| err.to_string())
+    fn decode(buf: &[u8], schema: &RelationDesc) -> Result<Self, String> {
+        let mut val = SourceData::default();
+        <Self as Codec>::decode_from(&mut val, buf, &mut None, schema)?;
+        Ok(val)
     }
 
     fn decode_from<'a>(
         &mut self,
         buf: &'a [u8],
         storage: &mut Option<ProtoRow>,
+        schema: &RelationDesc,
     ) -> Result<(), String> {
         // Optimize for common case of `Ok` by leaving a (cleared) `ProtoRow` in
         // the `Ok` variant of `ProtoSourceData`. prost's `Message::merge` impl
@@ -1184,7 +1330,7 @@ impl Codec for SourceData {
         match (proto.kind, &mut self.0) {
             // Again, optimize for the common case...
             (Some(proto_source_data::Kind::Ok(proto)), Ok(row)) => {
-                let ret = row.decode_from_proto(&proto);
+                let ret = row.decode_from_proto(&proto, schema);
                 storage.replace(proto);
                 ret
             }
@@ -1197,179 +1343,55 @@ impl Codec for SourceData {
             }
         }
     }
-}
 
-/// An implementation of [PartEncoder] for [SourceData].
-///
-/// This mostly delegates the encoding logic to [RowEncoder], but flatmaps in
-/// an Err column.
-#[derive(Debug)]
-pub struct SourceDataEncoder {
-    len: usize,
-    ok_cfg: DynStructCfg,
-    ok_validity: ValidityMut,
-    ok: RowEncoder,
-    err: Box<<Option<Vec<u8>> as Data>::Mut>,
-}
-
-impl PartEncoder<SourceData> for SourceDataEncoder {
-    fn encode(&mut self, val: &SourceData) {
-        self.len += 1;
-        match val.as_ref() {
-            Ok(row) => {
-                self.ok_validity.push(true);
-                self.ok.inc_len();
-                for (encoder, datum) in self.ok.col_encoders().iter_mut().zip(row.iter()) {
-                    encoder.encode(datum);
-                }
-                ColumnPush::<Option<Vec<u8>>>::push(self.err.as_mut(), None);
-            }
-            Err(err) => {
-                self.ok_validity.push(false);
-                self.ok.inc_len();
-                for encoder in self.ok.col_encoders() {
-                    encoder.encode_default();
-                }
-                let err = err.into_proto().encode_to_vec();
-                ColumnPush::<Option<Vec<u8>>>::push(self.err.as_mut(), Some(err.as_slice()));
-            }
+    fn validate(val: &Self, desc: &Self::Schema) -> Result<(), String> {
+        match &val.0 {
+            Ok(row) => Row::validate(row, desc),
+            Err(_) => Ok(()),
         }
     }
 
-    fn finish(self) -> (usize, Vec<DynColumnMut>) {
-        // Collect all of the columns from the inner RowEncoder to a single 'ok' column.
-        let (ok_len_1, ok_validity) = self.ok_validity.into_parts();
-        let (ok_len_2, ok_cols) = self.ok.finish();
-        let ok_col = DynStructMut::from_parts(self.ok_cfg, ok_len_1, ok_validity, ok_cols);
+    fn encode_schema(schema: &Self::Schema) -> Bytes {
+        schema.into_proto().encode_to_vec().into()
+    }
 
-        assert_eq!(ok_len_1, ok_len_2, "mismatched length for 'ok' column");
-
-        let ok_col = DynColumnMut::new::<Option<DynStruct>>(Box::new(ok_col));
-        let err_col = DynColumnMut::new::<Option<Vec<u8>>>(self.err);
-
-        let cols = vec![ok_col, err_col];
-
-        (self.len, cols)
+    fn decode_schema(buf: &Bytes) -> Self::Schema {
+        let proto = ProtoRelationDesc::decode(buf.as_ref()).expect("valid schema");
+        proto.into_rust().expect("valid schema")
     }
 }
 
-/// An implementation of [PartDecoder] for [SourceData].
-///
-/// This mostly delegates the encoding logic to [RowDecoder], but flatmaps in
-/// an Err column.
-#[derive(Debug)]
-pub struct SourceDataDecoder {
-    ok_validity: ValidityRef,
-    ok: RowDecoder,
-    err: Arc<<Option<Vec<u8>> as Data>::Col>,
+/// Given a [`RelationDesc`] returns an arbitrary [`SourceData`].
+pub fn arb_source_data_for_relation_desc(desc: &RelationDesc) -> impl Strategy<Value = SourceData> {
+    let row_strat = arb_row_for_relation(desc).no_shrink();
+
+    proptest::strategy::Union::new_weighted(vec![
+        (50, row_strat.prop_map(|row| SourceData(Ok(row))).boxed()),
+        (
+            1,
+            any::<DataflowError>()
+                .prop_map(|err| SourceData(Err(err)))
+                .no_shrink()
+                .boxed(),
+        ),
+    ])
 }
 
-impl PartDecoder<SourceData> for SourceDataDecoder {
-    fn decode(&self, idx: usize, val: &mut SourceData) {
-        let err = ColumnGet::<Option<Vec<u8>>>::get(self.err.as_ref(), idx);
-        match (self.ok_validity.get(idx), err) {
-            (true, None) => {
-                let mut packer = match val.0.as_mut() {
-                    Ok(x) => x.packer(),
-                    Err(_) => {
-                        val.0 = Ok(Row::default());
-                        val.0.as_mut().unwrap().packer()
-                    }
-                };
-                for decoder in self.ok.col_decoders() {
-                    decoder.decode(idx, &mut packer);
-                }
-            }
-            (false, Some(err)) => {
-                let err = ProtoDataflowError::decode(err)
-                    .expect("proto should be valid")
-                    .into_rust()
-                    .expect("error should be valid");
-                val.0 = Err(err);
-            }
-            (true, Some(_)) | (false, None) => {
-                panic!("SourceData should have exactly one of ok or err")
-            }
-        };
-    }
-}
-
-impl Schema<SourceData> for RelationDesc {
-    type Encoder = SourceDataEncoder;
-    type Decoder = SourceDataDecoder;
-
-    fn columns(&self) -> DynStructCfg {
-        let ok_schema = Schema::<Row>::columns(self);
-        let cols = vec![
-            (
-                "ok".to_owned(),
-                DataType {
-                    optional: true,
-                    format: ColumnFormat::Struct(ok_schema),
-                },
-                StatsFn::Default,
-            ),
-            (
-                "err".to_owned(),
-                DataType {
-                    optional: true,
-                    format: ColumnFormat::Bytes,
-                },
-                StatsFn::Default,
-            ),
-        ];
-        DynStructCfg::from(cols)
-    }
-
-    fn decoder(
-        &self,
-        mut cols: mz_persist_types::dyn_struct::ColumnsRef,
-    ) -> Result<Self::Decoder, String> {
-        let ok = cols.col::<Option<DynStruct>>("ok")?;
-        let err = cols.col::<Option<Vec<u8>>>("err")?;
-        let () = cols.finish()?;
-        let (ok_validity, ok) = RelationDesc::decoder(self, ok.as_opt_ref())?;
-        Ok(SourceDataDecoder {
-            ok_validity,
-            ok,
-            err,
-        })
-    }
-
-    fn encoder(
-        &self,
-        mut cols: mz_persist_types::dyn_struct::ColumnsMut,
-    ) -> Result<Self::Encoder, String> {
-        let ok = cols.col::<Option<DynStruct>>("ok")?;
-        let err = cols.col::<Option<Vec<u8>>>("err")?;
-        let (len, ()) = cols.finish()?;
-        let ok_cfg = ok.cfg().clone();
-        let (ok_validity, ok) = RelationDesc::encoder(self, ok.as_opt_mut())?;
-        Ok(SourceDataEncoder {
-            len,
-            ok_cfg,
-            ok_validity,
-            ok,
-            err,
-        })
-    }
-}
-
-/// Describes how subsource references should be organized in a multi-level
+/// Describes how external references should be organized in a multi-level
 /// hierarchy.
 ///
 /// For both PostgreSQL and MySQL sources, these levels of reference are
 /// intrinsic to the items which we're referencing. If there are other naming
 /// schemas for other types of sources we discover, we might need to revisit
 /// this.
-pub trait SubsourceCatalogReference {
+pub trait ExternalCatalogReference {
     /// The "second" level of namespacing for the reference.
     fn schema_name(&self) -> &str;
     /// The lowest level of namespacing for the reference.
     fn item_name(&self) -> &str;
 }
 
-impl SubsourceCatalogReference for mz_mysql_util::MySqlTableDesc {
+impl ExternalCatalogReference for &mz_mysql_util::MySqlTableDesc {
     fn schema_name(&self) -> &str {
         &self.schema_name
     }
@@ -1379,7 +1401,7 @@ impl SubsourceCatalogReference for mz_mysql_util::MySqlTableDesc {
     }
 }
 
-impl SubsourceCatalogReference for mz_postgres_util::desc::PostgresTableDesc {
+impl ExternalCatalogReference for mz_postgres_util::desc::PostgresTableDesc {
     fn schema_name(&self) -> &str {
         &self.namespace
     }
@@ -1391,7 +1413,7 @@ impl SubsourceCatalogReference for mz_postgres_util::desc::PostgresTableDesc {
 
 // This implementation provides a means of converting arbitrary objects into a
 // `SubsourceCatalogReference`, e.g. load generator view names.
-impl<'a> SubsourceCatalogReference for (&'a str, &'a str) {
+impl<'a> ExternalCatalogReference for (&'a str, &'a str) {
     fn schema_name(&self) -> &str {
         self.0
     }
@@ -1401,7 +1423,7 @@ impl<'a> SubsourceCatalogReference for (&'a str, &'a str) {
     }
 }
 
-/// Stores and resolves references to a `&[T: SubsourceCatalogTable]`.
+/// Stores and resolves references to a `&[T: ExternalCatalogReference]`.
 ///
 /// This is meant to provide an API to quickly look up a source's subsources.
 ///
@@ -1409,16 +1431,16 @@ impl<'a> SubsourceCatalogReference for (&'a str, &'a str) {
 /// implementation, which is empty and will not be able to resolve any
 /// references.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SubsourceResolver {
+pub struct SourceReferenceResolver {
     inner: BTreeMap<Ident, BTreeMap<Ident, BTreeMap<Ident, usize>>>,
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
-pub enum SubsourceResolutionError {
+pub enum ExternalReferenceResolutionError {
     #[error("reference to {name} not found in source")]
     DoesNotExist { name: String },
     #[error(
-        "reference to {name} is ambiguous, consider specifying an additional \
+        "reference {name} is ambiguous, consider specifying an additional \
     layer of qualification"
     )]
     Ambiguous { name: String },
@@ -1426,16 +1448,16 @@ pub enum SubsourceResolutionError {
     Ident(#[from] IdentError),
 }
 
-impl<'a> SubsourceResolver {
-    /// Constructs a new `SubsourceResolver` from a slice of `T:
+impl<'a> SourceReferenceResolver {
+    /// Constructs a new `SourceReferenceResolver` from a slice of `T:
     /// SubsourceCatalogReference`.
     ///
     /// # Errors
     /// - If any `&str` provided cannot be taken to an [`Ident`].
-    pub fn new<T: SubsourceCatalogReference>(
+    pub fn new<T: ExternalCatalogReference>(
         database: &str,
         referenceable_items: &'a [T],
-    ) -> Result<SubsourceResolver, SubsourceResolutionError> {
+    ) -> Result<SourceReferenceResolver, ExternalReferenceResolutionError> {
         // An index from table name -> schema name -> database name -> index in
         // `referenceable_items`.
         let mut inner = BTreeMap::new();
@@ -1455,15 +1477,15 @@ impl<'a> SubsourceResolver {
                 .or_insert(reference_idx);
         }
 
-        Ok(SubsourceResolver { inner })
+        Ok(SourceReferenceResolver { inner })
     }
 
     /// Returns the canonical reference and index from which it originated in
     /// the `referenceable_items` provided to [`Self::new`].
     ///
     /// # Args
-    /// - `name` is `&[Ident]` to let users provide the inner element of either
-    ///   [`UnresolvedItemName`] or [`ExportReference`].
+    /// - `name` is `&[Ident]` to let users provide the inner element of
+    ///   [`UnresolvedItemName`].
     /// - `canonicalize_to_width` limits the number of elements in the returned
     ///   [`UnresolvedItemName`];this is useful if the source type requires
     ///   contriving database and schema names that a subsource should not
@@ -1478,7 +1500,7 @@ impl<'a> SubsourceResolver {
         &self,
         name: &[Ident],
         canonicalize_to_width: usize,
-    ) -> Result<(UnresolvedItemName, usize), SubsourceResolutionError> {
+    ) -> Result<(UnresolvedItemName, usize), ExternalReferenceResolutionError> {
         let (db, schema, idx) = self.resolve_inner(name)?;
 
         let item = name.last().expect("must have provided at least 1 element");
@@ -1497,12 +1519,12 @@ impl<'a> SubsourceResolver {
     /// provided to [`Self::new`].
     ///
     /// # Args
-    /// `name` is `&[Ident]` to let users provide the inner element of either
-    /// [`UnresolvedItemName`] or [`ExportReference`].
+    /// `name` is `&[Ident]` to let users provide the inner element of
+    /// [`UnresolvedItemName`].
     ///
     /// # Errors
     /// - If `name` does not resolve to an item in `self.inner`.
-    pub fn resolve_idx(&self, name: &[Ident]) -> Result<usize, SubsourceResolutionError> {
+    pub fn resolve_idx(&self, name: &[Ident]) -> Result<usize, ExternalReferenceResolutionError> {
         let (_db, _schema, idx) = self.resolve_inner(name)?;
         Ok(idx)
     }
@@ -1511,27 +1533,27 @@ impl<'a> SubsourceResolver {
     /// provided to [`Self::new`].
     ///
     /// # Args
-    /// `name` is `&[Ident]` to let users provide the inner element of either
-    /// [`UnresolvedItemName`] or [`ExportReference`].
+    /// `name` is `&[Ident]` to let users provide the inner element of
+    /// [`UnresolvedItemName`].
     ///
     /// # Return
     /// Returns a tuple whose elements are:
     /// 1. The "database"- or top-level namespace of the reference.
     /// 2. The "schema"- or second-level namespace of the reference.
     /// 3. The index to find the item in `referenceable_items` argument provided
-    ///    to `SubsourceResolver::new`.
+    ///    to `SourceReferenceResolver::new`.
     ///
     /// # Errors
     /// - If `name` does not resolve to an item in `self.inner`.
     fn resolve_inner<'name: 'a>(
         &'a self,
         name: &'name [Ident],
-    ) -> Result<(&'a Ident, &'a Ident, usize), SubsourceResolutionError> {
+    ) -> Result<(&'a Ident, &'a Ident, usize), ExternalReferenceResolutionError> {
         let get_provided_name = || UnresolvedItemName(name.to_vec()).to_string();
 
         // Names must be composed of 1..=3 elements.
         if !(1..=3).contains(&name.len()) {
-            Err(SubsourceResolutionError::DoesNotExist {
+            Err(ExternalReferenceResolutionError::DoesNotExist {
                 name: get_provided_name(),
             })?;
         }
@@ -1548,55 +1570,83 @@ impl<'a> SubsourceResolver {
             .flatten()
             .expect("must have provided the item name");
 
-        assert!(names.next().is_none(), "expected a 3-element iterator");
+        assert_none!(names.next(), "expected a 3-element iterator");
 
         let schemas =
             self.inner
                 .get(item)
-                .ok_or_else(|| SubsourceResolutionError::DoesNotExist {
+                .ok_or_else(|| ExternalReferenceResolutionError::DoesNotExist {
                     name: get_provided_name(),
                 })?;
 
-        let schema =
-            match schema {
-                Some(schema) => schema,
-                None => schemas.keys().exactly_one().map_err(|_e| {
-                    SubsourceResolutionError::Ambiguous {
-                        name: get_provided_name(),
-                    }
-                })?,
-            };
+        let schema = match schema {
+            Some(schema) => schema,
+            None => schemas.keys().exactly_one().map_err(|_e| {
+                ExternalReferenceResolutionError::Ambiguous {
+                    name: get_provided_name(),
+                }
+            })?,
+        };
 
         let databases =
             schemas
                 .get(schema)
-                .ok_or_else(|| SubsourceResolutionError::DoesNotExist {
+                .ok_or_else(|| ExternalReferenceResolutionError::DoesNotExist {
                     name: get_provided_name(),
                 })?;
 
         let database = match database {
             Some(database) => database,
             None => databases.keys().exactly_one().map_err(|_e| {
-                SubsourceResolutionError::Ambiguous {
+                ExternalReferenceResolutionError::Ambiguous {
                     name: get_provided_name(),
                 }
             })?,
         };
 
-        let reference_idx =
-            databases
-                .get(database)
-                .ok_or_else(|| SubsourceResolutionError::DoesNotExist {
-                    name: get_provided_name(),
-                })?;
+        let reference_idx = databases.get(database).ok_or_else(|| {
+            ExternalReferenceResolutionError::DoesNotExist {
+                name: get_provided_name(),
+            }
+        })?;
 
         Ok((database, schema, *reference_idx))
     }
 }
 
+/// A decoder for [`Row`]s within [`SourceData`].
+///
+/// This type exists as a wrapper around [`RowColumnarDecoder`] to handle the
+/// case where the [`RelationDesc`] we're encoding with has no columns. See
+/// [`SourceDataRowColumnarEncoder`] for more details.
+#[derive(Debug)]
+pub enum SourceDataRowColumnarDecoder {
+    Row(RowColumnarDecoder),
+    EmptyRow,
+}
+
+impl SourceDataRowColumnarDecoder {
+    pub fn decode(&self, idx: usize, row: &mut Row) {
+        match self {
+            SourceDataRowColumnarDecoder::Row(decoder) => decoder.decode(idx, row),
+            SourceDataRowColumnarDecoder::EmptyRow => {
+                // Create a packer just to clear the Row.
+                row.packer();
+            }
+        }
+    }
+
+    pub fn goodbytes(&self) -> usize {
+        match self {
+            SourceDataRowColumnarDecoder::Row(decoder) => decoder.goodbytes(),
+            SourceDataRowColumnarDecoder::EmptyRow => 0,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct SourceDataColumnarDecoder {
-    row_decoder: RowColumnarDecoder,
+    row_decoder: SourceDataRowColumnarDecoder,
     err_decoder: BinaryArray,
 }
 
@@ -1612,16 +1662,25 @@ impl SourceDataColumnarDecoder {
             anyhow::bail!("SourceData should only have two fields, found {arrays:?}");
         }
 
-        let rows = arrays[0]
-            .as_any()
-            .downcast_ref::<StructArray>()
-            .ok_or_else(|| anyhow::anyhow!("expected StructArray, found {:?}", arrays[0]))?;
         let errs = arrays[1]
             .as_any()
             .downcast_ref::<BinaryArray>()
             .ok_or_else(|| anyhow::anyhow!("expected BinaryArray, found {:?}", arrays[1]))?;
 
-        let row_decoder = RowColumnarDecoder::new(rows.clone(), desc)?;
+        let row_decoder = match arrays[0].data_type() {
+            arrow::datatypes::DataType::Struct(_) => {
+                let rows = arrays[0]
+                    .as_any()
+                    .downcast_ref::<StructArray>()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("expected StructArray, found {:?}", arrays[0])
+                    })?;
+                let decoder = RowColumnarDecoder::new(rows.clone(), desc)?;
+                SourceDataRowColumnarDecoder::Row(decoder)
+            }
+            arrow::datatypes::DataType::Null => SourceDataRowColumnarDecoder::EmptyRow,
+            other => anyhow::bail!("expected Struct or Null Array, found {other:?}"),
+        };
 
         Ok(SourceDataColumnarDecoder {
             row_decoder,
@@ -1632,8 +1691,11 @@ impl SourceDataColumnarDecoder {
 
 impl ColumnDecoder<SourceData> for SourceDataColumnarDecoder {
     fn decode(&self, idx: usize, val: &mut SourceData) {
-        let row_null = self.row_decoder.is_null(idx);
         let err_null = self.err_decoder.is_null(idx);
+        let row_null = match &self.row_decoder {
+            SourceDataRowColumnarDecoder::Row(decoder) => decoder.is_null(idx),
+            SourceDataRowColumnarDecoder::EmptyRow => !err_null,
+        };
 
         match (row_null, err_null) {
             (true, false) => {
@@ -1660,25 +1722,125 @@ impl ColumnDecoder<SourceData> for SourceDataColumnarDecoder {
     }
 
     fn is_null(&self, idx: usize) -> bool {
-        let row_null = self.row_decoder.is_null(idx);
         let err_null = self.err_decoder.is_null(idx);
+        let row_null = match &self.row_decoder {
+            SourceDataRowColumnarDecoder::Row(decoder) => decoder.is_null(idx),
+            SourceDataRowColumnarDecoder::EmptyRow => !err_null,
+        };
+        assert!(!err_null || !row_null, "SourceData should never be null!");
 
-        let is_null = row_null && err_null;
-        debug_assert!(!is_null);
+        false
+    }
 
-        is_null
+    fn goodbytes(&self) -> usize {
+        self.row_decoder.goodbytes() + ArrayOrd::Binary(self.err_decoder.clone()).goodbytes()
+    }
+
+    fn stats(&self) -> StructStats {
+        let len = self.err_decoder.len();
+        let err_stats = ColumnarStats {
+            nulls: Some(ColumnNullStats {
+                count: self.err_decoder.null_count(),
+            }),
+            values: PrimitiveStats::<Vec<u8>>::from_column(&self.err_decoder).into(),
+        };
+        // The top level struct is non-nullable and every entry is either an
+        // `Ok(Row)` or an `Err(String)`. As a result, we can compute the number
+        // of `Ok` entries by subtracting the number of `Err` entries from the
+        // total count.
+        let row_null_count = len - self.err_decoder.null_count();
+        let row_stats = match &self.row_decoder {
+            SourceDataRowColumnarDecoder::Row(encoder) => {
+                // Sanity check that the number of row nulls/nones we calculated
+                // using the error column matches what the row column thinks it
+                // has.
+                assert_eq!(encoder.null_count(), row_null_count);
+                encoder.stats()
+            }
+            SourceDataRowColumnarDecoder::EmptyRow => StructStats {
+                len,
+                cols: BTreeMap::default(),
+            },
+        };
+        let row_stats = ColumnarStats {
+            nulls: Some(ColumnNullStats {
+                count: row_null_count,
+            }),
+            values: ColumnStatKinds::Struct(row_stats),
+        };
+
+        let stats = [
+            (
+                SourceDataColumnarEncoder::OK_COLUMN_NAME.to_string(),
+                row_stats,
+            ),
+            (
+                SourceDataColumnarEncoder::ERR_COLUMN_NAME.to_string(),
+                err_stats,
+            ),
+        ];
+        StructStats {
+            len,
+            cols: stats.into_iter().map(|(name, s)| (name, s)).collect(),
+        }
+    }
+}
+
+/// An encoder for [`Row`]s within [`SourceData`].
+///
+/// This type exists as a wrapper around [`RowColumnarEncoder`] to support
+/// encoding empty [`Row`]s. A [`RowColumnarEncoder`] finishes as a
+/// [`StructArray`] which is required to have at least one column, and thus
+/// cannot support empty [`Row`]s.
+#[derive(Debug)]
+pub enum SourceDataRowColumnarEncoder {
+    Row(RowColumnarEncoder),
+    EmptyRow,
+}
+
+impl SourceDataRowColumnarEncoder {
+    pub(crate) fn goodbytes(&self) -> usize {
+        match self {
+            SourceDataRowColumnarEncoder::Row(e) => e.goodbytes(),
+            SourceDataRowColumnarEncoder::EmptyRow => 0,
+        }
+    }
+
+    pub fn append(&mut self, row: &Row) {
+        match self {
+            SourceDataRowColumnarEncoder::Row(encoder) => encoder.append(row),
+            SourceDataRowColumnarEncoder::EmptyRow => {
+                assert_eq!(row.iter().count(), 0)
+            }
+        }
+    }
+
+    pub fn append_null(&mut self) {
+        match self {
+            SourceDataRowColumnarEncoder::Row(encoder) => encoder.append_null(),
+            SourceDataRowColumnarEncoder::EmptyRow => (),
+        }
     }
 }
 
 #[derive(Debug)]
 pub struct SourceDataColumnarEncoder {
-    row_encoder: RowColumnarEncoder,
+    row_encoder: SourceDataRowColumnarEncoder,
     err_encoder: BinaryBuilder,
 }
 
 impl SourceDataColumnarEncoder {
+    const OK_COLUMN_NAME: &'static str = "ok";
+    const ERR_COLUMN_NAME: &'static str = "err";
+
     pub fn new(desc: &RelationDesc) -> Self {
-        let row_encoder = RowColumnarEncoder::new(desc);
+        let row_encoder = match RowColumnarEncoder::new(desc) {
+            Some(encoder) => SourceDataRowColumnarEncoder::Row(encoder),
+            None => {
+                assert!(desc.typ().columns().is_empty());
+                SourceDataRowColumnarEncoder::EmptyRow
+            }
+        };
         let err_encoder = BinaryBuilder::new();
 
         SourceDataColumnarEncoder {
@@ -1690,6 +1852,10 @@ impl SourceDataColumnarEncoder {
 
 impl ColumnEncoder<SourceData> for SourceDataColumnarEncoder {
     type FinishedColumn = StructArray;
+
+    fn goodbytes(&self) -> usize {
+        self.row_encoder.goodbytes() + self.err_encoder.values_slice().len()
+    }
 
     #[inline]
     fn append(&mut self, val: &SourceData) {
@@ -1708,8 +1874,7 @@ impl ColumnEncoder<SourceData> for SourceDataColumnarEncoder {
 
     #[inline]
     fn append_null(&mut self) {
-        self.row_encoder.append_null();
-        self.err_encoder.append_null();
+        panic!("appending a null into SourceDataColumnarEncoder is not supported");
     }
 
     fn finish(self) -> Self::FinishedColumn {
@@ -1718,21 +1883,29 @@ impl ColumnEncoder<SourceData> for SourceDataColumnarEncoder {
             mut err_encoder,
         } = self;
 
-        let row_column = row_encoder.finish();
         let err_column = BinaryBuilder::finish(&mut err_encoder);
+        let row_column: ArrayRef = match row_encoder {
+            SourceDataRowColumnarEncoder::Row(encoder) => {
+                let column = encoder.finish();
+                Arc::new(column)
+            }
+            SourceDataRowColumnarEncoder::EmptyRow => Arc::new(NullArray::new(err_column.len())),
+        };
+
+        assert_eq!(row_column.len(), err_column.len());
 
         let fields = vec![
-            Field::new("ok", row_column.data_type().clone(), true),
-            Field::new("err", err_column.data_type().clone(), true),
+            Field::new(Self::OK_COLUMN_NAME, row_column.data_type().clone(), true),
+            Field::new(Self::ERR_COLUMN_NAME, err_column.data_type().clone(), true),
         ];
-        let arrays: Vec<Arc<dyn Array>> = vec![Arc::new(row_column), Arc::new(err_column)];
-
+        let arrays: Vec<Arc<dyn Array>> = vec![row_column, Arc::new(err_column)];
         StructArray::new(Fields::from(fields), arrays, None)
     }
 }
 
-impl Schema2<SourceData> for RelationDesc {
+impl Schema<SourceData> for RelationDesc {
     type ArrowColumn = StructArray;
+    type Statistics = StructStats;
 
     type Decoder = SourceDataColumnarDecoder;
     type Encoder = SourceDataColumnarEncoder;
@@ -1748,11 +1921,24 @@ impl Schema2<SourceData> for RelationDesc {
 
 #[cfg(test)]
 mod tests {
-    use mz_repr::{arb_datum_for_scalar, ScalarType};
+    use arrow::array::{make_comparator, ArrayData};
+    use bytes::Bytes;
+    use mz_expr::EvalError;
+    use mz_ore::assert_err;
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_persist::indexed::columnar::arrow::{realloc_any, realloc_array};
+    use mz_persist::metrics::ColumnarMetrics;
+    use mz_persist_types::parquet::EncodingConfig;
+    use mz_persist_types::schema::{backward_compatible, Migration};
+    use mz_persist_types::stats::{PartStats, PartStatsMetrics};
+    use mz_repr::{
+        arb_relation_desc_diff, arb_relation_desc_projection, ColumnIndex, DatumVec,
+        PropRelationDescDiff, ProtoRelationDesc, RelationDescBuilder, RowArena, ScalarType,
+    };
     use proptest::prelude::*;
-    use proptest::strategy::ValueTree;
+    use proptest::strategy::{Union, ValueTree};
 
-    use crate::errors::EnvelopeError;
+    use crate::stats::RelationPartStats;
 
     use super::*;
 
@@ -1762,58 +1948,374 @@ mod tests {
         assert_eq!(Ok(Timeline::External("JOE".to_string())), "E.JOE".parse());
         assert_eq!(Ok(Timeline::User("MIKE".to_string())), "U.MIKE".parse());
 
-        assert!("Materialize".parse::<Timeline>().is_err());
-        assert!("Ejoe".parse::<Timeline>().is_err());
-        assert!("Umike".parse::<Timeline>().is_err());
-        assert!("Dance".parse::<Timeline>().is_err());
-        assert!("".parse::<Timeline>().is_err());
+        assert_err!("Materialize".parse::<Timeline>());
+        assert_err!("Ejoe".parse::<Timeline>());
+        assert_err!("Umike".parse::<Timeline>());
+        assert_err!("Dance".parse::<Timeline>());
+        assert_err!("".parse::<Timeline>());
     }
 
     #[track_caller]
-    fn scalar_type_parquet_roundtrip<'a>(
-        scalar_type: ScalarType,
-        datums: impl IntoIterator<Item = Datum<'a>>,
+    fn roundtrip_source_data(
+        desc: &RelationDesc,
+        datas: Vec<SourceData>,
+        read_desc: &RelationDesc,
+        config: &EncodingConfig,
     ) {
-        use mz_persist_types::parquet::validate_roundtrip;
-
-        let mut rows = Vec::new();
-        for datum in datums {
-            rows.push(SourceData(Ok(Row::pack_slice(&[datum]))));
+        let metrics = ColumnarMetrics::disconnected();
+        let mut encoder = <RelationDesc as Schema<SourceData>>::encoder(desc).unwrap();
+        for data in &datas {
+            encoder.append(data);
         }
-        rows.push(SourceData(Err(EnvelopeError::Flat("foo".into()).into())));
+        let col = encoder.finish();
 
-        // Non-nullable version of the column.
-        let schema = RelationDesc::empty().with_column("col", scalar_type.clone().nullable(false));
-        assert_eq!(validate_roundtrip(&schema, &rows), Ok(()));
+        // The top-level StructArray for SourceData should always be non-nullable.
+        assert!(!col.is_nullable());
 
-        // Nullable version of the column.
-        let schema = RelationDesc::empty().with_column("col", scalar_type.nullable(true));
-        rows.push(SourceData(Ok(Row::pack_slice(&[Datum::Null]))));
-        assert_eq!(validate_roundtrip(&schema, &rows), Ok(()));
+        // Reallocate our arrays with lgalloc.
+        let col = realloc_array(&col, &metrics);
+
+        // Roundtrip through ProtoArray format.
+        {
+            let proto = col.to_data().into_proto();
+            let bytes = proto.encode_to_vec();
+            let proto = mz_persist_types::arrow::ProtoArrayData::decode(&bytes[..]).unwrap();
+            let array_data: ArrayData = proto.into_rust().unwrap();
+
+            let col_rnd = StructArray::from(array_data.clone());
+            assert_eq!(col, col_rnd);
+
+            let col_dyn = arrow::array::make_array(array_data);
+            let col_dyn = col_dyn.as_any().downcast_ref::<StructArray>().unwrap();
+            assert_eq!(&col, col_dyn);
+        }
+
+        // Encode to Parquet.
+        let mut buf = Vec::new();
+        let fields = Fields::from(vec![Field::new("k", col.data_type().clone(), false)]);
+        let arrays: Vec<Arc<dyn Array>> = vec![Arc::new(col.clone())];
+        mz_persist_types::parquet::encode_arrays(&mut buf, fields, arrays, config).unwrap();
+
+        // Decode from Parquet.
+        let buf = Bytes::from(buf);
+        let mut reader = mz_persist_types::parquet::decode_arrays(buf).unwrap();
+        let maybe_batch = reader.next();
+
+        // If we didn't encode any data then our record_batch will be empty.
+        let Some(record_batch) = maybe_batch else {
+            assert!(datas.is_empty());
+            return;
+        };
+        let record_batch = record_batch.unwrap();
+
+        assert_eq!(record_batch.columns().len(), 1);
+        let rnd_col = &record_batch.columns()[0];
+        let rnd_col = realloc_any(Arc::clone(rnd_col), &metrics);
+        let rnd_col = rnd_col
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap()
+            .clone();
+
+        // Try generating stats for the data, just to make sure we don't panic.
+        let stats = <RelationDesc as Schema<SourceData>>::decoder_any(desc, &rnd_col)
+            .expect("valid decoder")
+            .stats();
+
+        // Read back all of our data and assert it roundtrips.
+        let mut rnd_data = SourceData(Ok(Row::default()));
+        let decoder = <RelationDesc as Schema<SourceData>>::decoder(desc, rnd_col.clone()).unwrap();
+        for (idx, og_data) in datas.iter().enumerate() {
+            decoder.decode(idx, &mut rnd_data);
+            assert_eq!(og_data, &rnd_data);
+        }
+
+        // Read back all of our data a second time with a projection applied, and make sure the
+        // stats are valid.
+        let stats_metrics = PartStatsMetrics::new(&MetricsRegistry::new());
+        let stats = RelationPartStats {
+            name: "test",
+            metrics: &stats_metrics,
+            stats: &PartStats { key: stats },
+            desc: read_desc,
+        };
+        let mut datum_vec = DatumVec::new();
+        let arena = RowArena::default();
+        let decoder = <RelationDesc as Schema<SourceData>>::decoder(read_desc, rnd_col).unwrap();
+
+        for (idx, og_data) in datas.iter().enumerate() {
+            decoder.decode(idx, &mut rnd_data);
+            match (&og_data.0, &rnd_data.0) {
+                (Ok(og_row), Ok(rnd_row)) => {
+                    // Filter down to just the Datums in the projection schema.
+                    {
+                        let datums = datum_vec.borrow_with(og_row);
+                        let projected_datums =
+                            datums.iter().enumerate().filter_map(|(idx, datum)| {
+                                read_desc
+                                    .contains_index(&ColumnIndex::from_raw(idx))
+                                    .then_some(datum)
+                            });
+                        let og_projected_row = Row::pack(projected_datums);
+                        assert_eq!(&og_projected_row, rnd_row);
+                    }
+
+                    // Validate the stats for all of our projected columns.
+                    {
+                        let proj_datums = datum_vec.borrow_with(rnd_row);
+                        for (pos, (idx, _, _)) in read_desc.iter_all().enumerate() {
+                            let spec = stats.col_stats(idx, &arena);
+                            assert!(spec.may_contain(proj_datums[pos]));
+                        }
+                    }
+                }
+                (Err(_), Err(_)) => assert_eq!(og_data, &rnd_data),
+                (_, _) => panic!("decoded to a different type? {og_data:?} {rnd_data:?}"),
+            }
+        }
+
+        // Verify that the RelationDesc itself roundtrips through
+        // {encode,decode}_schema.
+        let encoded_schema = SourceData::encode_schema(desc);
+        let roundtrip_desc = SourceData::decode_schema(&encoded_schema);
+        assert_eq!(desc, &roundtrip_desc);
+
+        // Verify that the RelationDesc is backward compatible with itself (this
+        // mostly checks for `unimplemented!` type panics).
+        let migration =
+            mz_persist_types::schema::backward_compatible(col.data_type(), col.data_type());
+        let migration = migration.expect("should be backward compatible with self");
+        // Also verify that the Fn doesn't do anything wonky.
+        let migrated = migration.migrate(Arc::new(col.clone()));
+        assert_eq!(col.data_type(), migrated.data_type());
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // too slow
-    fn all_scalar_types_parquet_roundtrip() {
-        proptest!(|(scalar_type in any::<ScalarType>())| {
-            // The proptest! macro interferes with rustfmt.
-            let datums = scalar_type.interesting_datums();
-            scalar_type_parquet_roundtrip(scalar_type, datums);
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    fn all_source_data_roundtrips() {
+        let mut weights = vec![(500, Just(0..8)), (50, Just(8..32))];
+        if std::env::var("PROPTEST_LARGE_DATA").is_ok() {
+            weights.extend([
+                (10, Just(32..128)),
+                (5, Just(128..512)),
+                (3, Just(512..2048)),
+                (1, Just(2048..8192)),
+            ]);
+        }
+        let num_rows = Union::new_weighted(weights);
+
+        // TODO(parkmycar): There are so many clones going on here, and maybe we can avoid them?
+        let strat = (any::<RelationDesc>(), num_rows)
+            .prop_flat_map(|(desc, num_rows)| {
+                arb_relation_desc_projection(desc.clone())
+                    .prop_map(move |read_desc| (desc.clone(), read_desc, num_rows.clone()))
+            })
+            .prop_flat_map(|(desc, read_desc, num_rows)| {
+                proptest::collection::vec(arb_source_data_for_relation_desc(&desc), num_rows)
+                    .prop_map(move |datas| (desc.clone(), datas, read_desc.clone()))
+            });
+
+        proptest!(|((config, (desc, source_datas, read_desc)) in (any::<EncodingConfig>(), strat))| {
+            roundtrip_source_data(&desc, source_datas, &read_desc, &config);
         });
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // too slow
-    fn all_datums_parquet_roundtrip() {
-        let datums = any::<ScalarType>().prop_flat_map(|ty| {
-            prop::collection::vec(arb_datum_for_scalar(&ty), 0..8)
-                .prop_map(move |datums| (ty.clone(), datums))
+    fn roundtrip_error_nulls() {
+        let desc = RelationDescBuilder::default()
+            .with_column(
+                "ts",
+                ScalarType::TimestampTz { precision: None }.nullable(false),
+            )
+            .finish();
+        let source_datas = vec![SourceData(Err(DataflowError::EvalError(
+            EvalError::DateOutOfRange.into(),
+        )))];
+        let config = EncodingConfig::default();
+        roundtrip_source_data(&desc, source_datas, &desc, &config);
+    }
+
+    fn is_sorted(array: &dyn Array) -> bool {
+        let sort_options = arrow::compute::SortOptions::default();
+        let Ok(cmp) = make_comparator(array, array, sort_options) else {
+            // TODO: arrow v51.0.0 doesn't support comparing structs. When
+            // we migrate to v52+, the `build_compare` function is
+            // deprecated and replaced by `make_comparator`, which does
+            // support structs. At which point, this will work (and we
+            // should switch this early return to an expect, if possible).
+            return false;
+        };
+        (0..array.len())
+            .tuple_windows()
+            .all(|(i, j)| cmp(i, j).is_le())
+    }
+
+    fn get_data_type(schema: &impl Schema<SourceData>) -> arrow::datatypes::DataType {
+        use mz_persist_types::columnar::ColumnEncoder;
+        let array = Schema::encoder(schema).expect("valid schema").finish();
+        Array::data_type(&array).clone()
+    }
+
+    #[track_caller]
+    fn backward_compatible_testcase(
+        old: &RelationDesc,
+        new: &RelationDesc,
+        migration: Migration,
+        datas: &[SourceData],
+    ) {
+        let mut encoder = Schema::<SourceData>::encoder(old).expect("valid schema");
+        for data in datas {
+            encoder.append(data);
+        }
+        let old = encoder.finish();
+        let new = Schema::<SourceData>::encoder(new)
+            .expect("valid schema")
+            .finish();
+        let old: Arc<dyn Array> = Arc::new(old);
+        let new: Arc<dyn Array> = Arc::new(new);
+        let migrated = migration.migrate(Arc::clone(&old));
+        assert_eq!(migrated.data_type(), new.data_type());
+
+        // Check the sortedness preservation, if we can.
+        if migration.preserves_order() && is_sorted(&old) {
+            assert!(is_sorted(&new))
+        }
+    }
+
+    #[mz_ore::test]
+    fn backward_compatible_empty_add_column() {
+        let old = RelationDesc::empty();
+        let new = RelationDesc::from_names_and_types([("a", ScalarType::Bool.nullable(true))]);
+
+        let old_data_type = get_data_type(&old);
+        let new_data_type = get_data_type(&new);
+
+        let migration = backward_compatible(&old_data_type, &new_data_type);
+        assert!(migration.is_some());
+    }
+
+    #[mz_ore::test]
+    fn backward_compatible_project_away_all() {
+        let old = RelationDesc::from_names_and_types([("a", ScalarType::Bool.nullable(true))]);
+        let new = RelationDesc::empty();
+
+        let old_data_type = get_data_type(&old);
+        let new_data_type = get_data_type(&new);
+
+        let migration = backward_compatible(&old_data_type, &new_data_type);
+        assert!(migration.is_some());
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn backward_compatible_migrate() {
+        let strat = (any::<RelationDesc>(), any::<RelationDesc>()).prop_flat_map(|(old, new)| {
+            proptest::collection::vec(arb_source_data_for_relation_desc(&old), 2)
+                .prop_map(move |datas| (old.clone(), new.clone(), datas))
         });
 
-        proptest!(|((ty, datums) in datums)| {
-            // The proptest! macro interferes with rustfmt.
-            let datums = datums.iter().map(Datum::from);
-            scalar_type_parquet_roundtrip(ty, datums);
+        proptest!(|((old, new, datas) in strat)| {
+            let old_data_type = get_data_type(&old);
+            let new_data_type = get_data_type(&new);
+
+            if let Some(migration) = backward_compatible(&old_data_type, &new_data_type) {
+                backward_compatible_testcase(&old, &new, migration, &datas);
+            };
+        });
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn backward_compatible_migrate_from_common() {
+        use mz_repr::ColumnType;
+        fn test_case(old: RelationDesc, diffs: Vec<PropRelationDescDiff>, datas: Vec<SourceData>) {
+            // TODO(parkmycar): As we iterate on schema migrations more things should become compatible.
+            let should_be_compatible = diffs.iter().all(|diff| match diff {
+                // We only support adding nullable columns.
+                PropRelationDescDiff::AddColumn {
+                    typ: ColumnType { nullable, .. },
+                    ..
+                } => *nullable,
+                PropRelationDescDiff::DropColumn { .. } => true,
+                _ => false,
+            });
+
+            let mut new = old.clone();
+            for diff in diffs.into_iter() {
+                diff.apply(&mut new)
+            }
+
+            let old_data_type = get_data_type(&old);
+            let new_data_type = get_data_type(&new);
+
+            if let Some(migration) = backward_compatible(&old_data_type, &new_data_type) {
+                backward_compatible_testcase(&old, &new, migration, &datas);
+            } else if should_be_compatible {
+                panic!("new DataType was not compatible when it should have been!");
+            }
+        }
+
+        let strat = any::<RelationDesc>()
+            .prop_flat_map(|desc| {
+                proptest::collection::vec(arb_source_data_for_relation_desc(&desc), 2)
+                    .no_shrink()
+                    .prop_map(move |datas| (desc.clone(), datas))
+            })
+            .prop_flat_map(|(desc, datas)| {
+                arb_relation_desc_diff(&desc)
+                    .prop_map(move |diffs| (desc.clone(), diffs, datas.clone()))
+            });
+
+        proptest!(|((old, diffs, datas) in strat)| {
+            test_case(old, diffs, datas);
+        });
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    fn empty_relation_desc_roundtrips() {
+        let empty = RelationDesc::empty();
+        let rows = proptest::collection::vec(arb_source_data_for_relation_desc(&empty), 0..8)
+            .prop_map(move |datas| (empty.clone(), datas));
+
+        // Note: This case should be covered by the `all_source_data_roundtrips` test above, but
+        // it's a special case that we explicitly want to exercise.
+        proptest!(|((config, (desc, source_datas)) in (any::<EncodingConfig>(), rows))| {
+            roundtrip_source_data(&desc, source_datas, &desc, &config);
+        });
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    fn arrow_datatype_consistent() {
+        fn test_case(desc: RelationDesc, datas: Vec<SourceData>) {
+            let half = datas.len() / 2;
+
+            let mut encoder_a = <RelationDesc as Schema<SourceData>>::encoder(&desc).unwrap();
+            for data in &datas[..half] {
+                encoder_a.append(data);
+            }
+            let col_a = encoder_a.finish();
+
+            let mut encoder_b = <RelationDesc as Schema<SourceData>>::encoder(&desc).unwrap();
+            for data in &datas[half..] {
+                encoder_b.append(data);
+            }
+            let col_b = encoder_b.finish();
+
+            // The DataType of the resulting column should not change based on what data was
+            // encoded.
+            assert_eq!(col_a.data_type(), col_b.data_type());
+        }
+
+        let num_rows = 12;
+        let strat = any::<RelationDesc>().prop_flat_map(|desc| {
+            proptest::collection::vec(arb_source_data_for_relation_desc(&desc), num_rows)
+                .prop_map(move |datas| (desc.clone(), datas))
+        });
+
+        proptest!(|((desc, data) in strat)| {
+            test_case(desc, data);
         });
     }
 
@@ -1825,16 +2327,29 @@ mod tests {
         let encoded = include_str!("snapshots/source-datas.txt");
 
         // Decode the pre-generated source datas
-        let mut decoded: Vec<SourceData> = encoded
+        let mut decoded: Vec<(RelationDesc, SourceData)> = encoded
             .lines()
-            .map(|s| base64::decode_config(s, base64_config).expect("valid base64"))
-            .map(|b| SourceData::decode(&b).expect("valid proto"))
+            .map(|s| {
+                let (desc, data) = s.split_once(',').expect("comma separated data");
+                let desc = base64::decode_config(desc, base64_config).expect("valid base64");
+                let data = base64::decode_config(data, base64_config).expect("valid base64");
+                (desc, data)
+            })
+            .map(|(desc, data)| {
+                let desc = ProtoRelationDesc::decode(&desc[..]).expect("valid proto");
+                let desc = desc.into_rust().expect("valid proto");
+                let data = SourceData::decode(&data, &desc).expect("valid proto");
+                (desc, data)
+            })
             .collect();
 
         // If there are fewer than the minimum examples, generate some new ones arbitrarily
+        let mut runner = proptest::test_runner::TestRunner::deterministic();
+        let strategy = RelationDesc::arbitrary().prop_flat_map(|desc| {
+            arb_source_data_for_relation_desc(&desc).prop_map(move |data| (desc.clone(), data))
+        });
         while decoded.len() < min_protos {
-            let mut runner = proptest::test_runner::TestRunner::deterministic();
-            let arbitrary_data: SourceData = SourceData::arbitrary()
+            let arbitrary_data = strategy
                 .new_tree(&mut runner)
                 .expect("source data")
                 .current();
@@ -1844,9 +2359,14 @@ mod tests {
         // Reencode and compare the strings
         let mut reencoded = String::new();
         let mut buf = vec![];
-        for s in decoded {
+        for (desc, data) in decoded {
             buf.clear();
-            s.encode(&mut buf);
+            desc.into_proto().encode(&mut buf).expect("success");
+            base64::encode_config_buf(buf.as_slice(), base64_config, &mut reencoded);
+            reencoded.push(',');
+
+            buf.clear();
+            data.encode(&mut buf);
             base64::encode_config_buf(buf.as_slice(), base64_config, &mut reencoded);
             reencoded.push('\n');
         }

@@ -79,7 +79,7 @@
 
 use mz_adapter::telemetry::{EventDetails, SegmentClientExt};
 use mz_ore::retry::Retry;
-use mz_ore::task;
+use mz_ore::{assert_none, task};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_sql::catalog::EnvironmentId;
 use serde_json::json;
@@ -168,7 +168,7 @@ async fn report_loop(
                 )).await?;
 
                 let row = rows.next().expect("expected at least one row").to_owned();
-                assert!(rows.next().is_none(), "introspection query had more than one row?");
+                assert_none!(rows.next(), "introspection query had more than one row?");
 
                 let jsonb = Jsonb::from_row(row);
                 Ok::<_, anyhow::Error>(jsonb.as_ref().to_serde_json())

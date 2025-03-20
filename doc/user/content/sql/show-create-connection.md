@@ -10,22 +10,22 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-create-connection.svg" >}}
+```sql
+SHOW CREATE CONNECTION <connection_name>
+```
 
-Field | Use
-------|-----
-_connection&lowbar;name_ | The connection you want to get the `CREATE` statement for. For available connections, see [`SHOW CONNECTIONS`](../show-connections).
+For available connection names, see [`SHOW CONNECTIONS`](/sql/show-connections).
 
 ## Examples
 
-```sql
+```mzsql
 SHOW CREATE CONNECTION kafka_connection;
 ```
 
 ```nofmt
     name          |    create_sql
 ------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
- kafka_connection | CREATE CONNECTION "materialize"."public"."kafka_connection" TO KAFKA (BROKER 'unique-jellyfish-0000-kafka.upstash.io:9092', SASL MECHANISMS = 'PLAIN', SASL USERNAME = SECRET sasl_username, SASL PASSWORD = SECRET sasl_password)
+ kafka_connection | CREATE CONNECTION "materialize"."public"."kafka_connection" TO KAFKA (BROKER 'unique-jellyfish-0000.us-east-1.aws.confluent.cloud:9092', SASL MECHANISMS = 'PLAIN', SASL USERNAME = SECRET sasl_username, SASL PASSWORD = SECRET sasl_password)
 ```
 
 ## Privileges

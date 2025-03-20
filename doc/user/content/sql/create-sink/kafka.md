@@ -2,6 +2,12 @@
 title: "CREATE SINK: Kafka"
 description: "Connecting Materialize to a Kafka or Redpanda broker sink"
 pagerank: 40
+menu:
+  main:
+    parent: 'create-sink'
+    identifier: csink_kafka
+    name: Kafka
+    weight: 20
 aliases:
     - /sql/create-sink/
 
@@ -54,6 +60,8 @@ _item&lowbar;name_ | The name of the source, table or materialized view you want
 **CONNECTION** _connection_name_ | The name of the connection to use in the sink. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection) documentation page.
 **KEY (** _key&lowbar;column_ **)** | An optional list of columns to use as the Kafka message key. If unspecified, the Kafka key is left unset.
 **HEADERS** | An optional column containing headers to add to each Kafka message emitted by the sink. See [Headers](#headers) for details.
+**FORMAT** | Specifies the format to use for both keys and values: `AVRO USING csr_connection`, `JSON`, `TEXT`, or `BYTES`. See [Formats](#formats) for details.
+**KEY FORMAT .. VALUE FORMAT** | {{< warn-if-unreleased-inline "v0.108" >}} Specifies the key format and value formats separately. See [Formats](#formats) for details.
 **NOT ENFORCED** | Whether to disable validation of key uniqueness when using the upsert envelope. See [Upsert key selection](#upsert-key-selection) for details.
 **ENVELOPE DEBEZIUM** | The generated schemas have a [Debezium-style diff envelope](#debezium-envelope) to capture changes in the input view or source.
 **ENVELOPE UPSERT** | The sink emits data with [upsert semantics](#upsert-envelope).
@@ -63,13 +71,13 @@ _item&lowbar;name_ | The name of the source, table or materialized view you want
 Field                               | Value  | Description
 ------------------------------------|--------|------------
 `TOPIC`                             | `text`              | The name of the Kafka topic to write to.
-`COMPRESSION TYPE`                  | `text`              | The type of compression to apply to messages before they are sent to Kafka: `none`, `gzip`, `snappy`, `lz4`, or `zstd`.<br>Default: `none`.
+`COMPRESSION TYPE`                  | `text`              | The type of compression to apply to messages before they are sent to Kafka: `none`, `gzip`, `snappy`, `lz4`, or `zstd`.<br>Default: {{< if-unreleased "v0.112" >}}`none`{{< /if-unreleased >}}{{< if-released "v0.112" >}}`lz4`{{< /if-released >}}
 `TRANSACTIONAL ID PREFIX`           | `text`              | The prefix of the transactional ID to use when producing to the Kafka topic.<br>Default: `materialize-{REGION ID}-{CONNECTION ID}-{SINK ID}`.
+`PARTITION BY`                      | expression          | A SQL expression returning a hash that can be used for partition assignment. See [Partitioning](#partitioning) for details.
 `PROGRESS GROUP ID PREFIX`          | `text`              | The prefix of the consumer group ID to use when reading from the progress topic.<br>Default: `materialize-{REGION ID}-{CONNECTION ID}-{SINK ID}`.
-`TOPIC REPLICATION FACTOR`          | `int`               | {{< warn-if-unreleased-inline "v0.104" >}} The replication factor to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
-`TOPIC PARTITION COUNT`             | `int`               | {{< warn-if-unreleased-inline "v0.104" >}} The partition count to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
-`PROGRESS TOPIC REPLICATION FACTOR` | `int`               | {{< warn-if-unreleased-inline "v0.104" >}} The partition count to use when creating the Kafka [progress topic](#exactly-once-processing) (if the Kafka topic does not already exist).<br>Default: Broker's default.
-`TOPIC CONFIG`                      | `map[text => text]` | {{< warn-if-unreleased-inline "v0.104" >}} Any topic-level configs to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>See the [Kafka documentation](https://kafka.apache.org/documentation/#topicconfigs) for available configs.<br>Default: empty.
+`TOPIC REPLICATION FACTOR`          | `int`               | The replication factor to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
+`TOPIC PARTITION COUNT`             | `int`               | The partition count to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
+`TOPIC CONFIG`                      | `map[text => text]` | Any topic-level configs to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>See the [Kafka documentation](https://kafka.apache.org/documentation/#topicconfigs) for available configs.<br>Default: empty.
 
 
 ### CSR `CONNECTION` options
@@ -80,8 +88,8 @@ Field                | Value  | Description
 `AVRO VALUE FULLNAME`       | `text` | Default: `envelope`. Sets the Avro fullname on the generated value schema. When `KEY` is specified, `AVRO KEY FULLNAME` must additionally be specified.
 `NULL DEFAULTS`             | `bool` | Default: `false`. Whether to automatically default nullable fields to `null` in the generated schemas.
 `DOC ON`                    | `text` | Add a documentation comment to the generated Avro schemas. See [`DOC ON` option syntax](#doc-on-option-syntax) below.
-`KEY COMPATIBILITY LEVEL`   | `text` | {{< warn-if-unreleased-inline "v0.105" >}} If specified, set the [Compatibility Level](https://docs.confluent.io/platform/7.6/schema-registry/fundamentals/schema-evolution.html#schema-evolution-and-compatibility) for the generated key schema to one of: `BACKWARD`, `BACKWARD_TRANSITIVE`, `FORWARD`, `FORWARD_TRANSITIVE`, `FULL`, `FULL_TRANSITIVE`, `NONE`.
-`VALUE COMPATIBILITY LEVEL` | `text` | {{< warn-if-unreleased-inline "v0.105" >}} If specified, set the [Compatibility Level](https://docs.confluent.io/platform/7.6/schema-registry/fundamentals/schema-evolution.html#schema-evolution-and-compatibility) for the generated value schema to one of: `BACKWARD`, `BACKWARD_TRANSITIVE`, `FORWARD`, `FORWARD_TRANSITIVE`, `FULL`, `FULL_TRANSITIVE`, `NONE`.
+`KEY COMPATIBILITY LEVEL`   | `text` | If specified, set the [Compatibility Level](https://docs.confluent.io/platform/7.6/schema-registry/fundamentals/schema-evolution.html#schema-evolution-and-compatibility) for the generated key schema to one of: `BACKWARD`, `BACKWARD_TRANSITIVE`, `FORWARD`, `FORWARD_TRANSITIVE`, `FULL`, `FULL_TRANSITIVE`, `NONE`.
+`VALUE COMPATIBILITY LEVEL` | `text` | If specified, set the [Compatibility Level](https://docs.confluent.io/platform/7.6/schema-registry/fundamentals/schema-evolution.html#schema-evolution-and-compatibility) for the generated value schema to one of: `BACKWARD`, `BACKWARD_TRANSITIVE`, `FORWARD`, `FORWARD_TRANSITIVE`, `FULL`, `FULL_TRANSITIVE`, `NONE`.
 
 #### `DOC ON` option syntax
 
@@ -125,19 +133,25 @@ Header keys starting with `materialize-` are reserved for Materialize's internal
 use. Materialize will ignore any headers in the map whose key starts with
 `materialize-`.
 
-**Known limitation:** Materialize does not permit adding multiple headers with
-the same key.
-
-**Known limitation:** Materialize cannot omit the headers column from the
-message value.
+**Known limitations:**
+  * Materialize does not permit adding multiple headers with
+    the same key.
+  * Materialize cannot omit the headers column from the message value.
+  * Materialize only supports using the `HEADERS` option with the [upsert
+    envelope](#upsert-envelope).
 
 ## Formats
 
 The `FORMAT` option controls the encoding of the message key and value that
 Materialize writes to Kafka.
 
-**Known limitation:** Materialize does not permit specifying the key
-format independently from the value format.
+To use a different format for keys and values, use `KEY FORMAT .. VALUE FORMAT ..`
+to choose independent formats for each.
+
+Note that the `TEXT` and `BYTES` format options only support single-column
+encoding and cannot be used for keys or values with multiple columns.
+
+Additionally, the `BYTES` format only works with scalar data types.
 
 ### Avro
 
@@ -288,7 +302,7 @@ SQL type                     | Conversion
 [`numeric`]                  | Values are converted to a JSON string containing the decimal representation of the number.
 [`record`]                   | Records are converted to JSON objects. The names and ordering of the fields in the object match the names and ordering of the fields in the record.
 [`smallint`]                 | values are converted to JSON numbers.
-[`timestamp`][`timestamp with time zone`] | Values are converted to JSON strings containing the number of milliseconds since the Unix epoch.
+[`timestamp`][`timestamp`]<br>[`timestamptz`][`timestamp`] | Values are converted to JSON strings containing the fractional number of milliseconds since the Unix epoch. The fractional component has microsecond precision (i.e., three digits of precision). Example: `"1720032185.312"`
 [`uint2`]                    | Values are converted to JSON numbers.
 [`uint4`]                    | Values are converted to JSON numbers.
 [`uint8`]                    | Values are converted to JSON numbers.
@@ -371,7 +385,8 @@ If the connection's [progress topic](#exactly-once-processing) does not exist,
 Materialize will attempt to create it with a single partition, the broker's
 default replication factor, compaction enabled, and both size- and time-based
 retention disabled. The replication factor can be overridden using the
-`PROGRESS TOPIC REPLICATION FACTOR` option in the [connection options](#connection-options).
+`PROGRESS TOPIC REPLICATION FACTOR` option when creating a connection
+[`CREATE CONNECTION`](/sql/create-connection).
 
 To customize topic-level configuration, including compaction settings and other
 values, use the `TOPIC CONFIG` option in the [connection options](#connection-options)
@@ -390,7 +405,7 @@ running `CREATE SINK`, observe the following guidance:
 | Progress topic | Replication factor  | Your choice, based on your durability requirements.
 | Progress topic | Compaction          | We recommend enabling compaction to avoid accumulating unbounded state. Disabling compaction may cause performance issues, but will not cause correctness issues.
 | Progress topic | Retention           | **Must be disabled.** Enabling retention can cause Materialize to violate its [exactly-once guarantees](#exactly-once-processing).
-
+| Progress topic | Tiered storage      | We recommend disabling tiered storage to allow for more aggressive data compaction. Fully compacted data requires minimal storage, typically only tens of bytes per sink, making it cost-effective to maintain directly on local disk.
 {{< warning >}}
 {{% kafka-sink-drop %}}
 {{</ warning >}}
@@ -422,6 +437,62 @@ message delivery, you should ensure that:
   processing is complete.
 
 For more details, see [the Kafka documentation](https://kafka.apache.org/documentation/).
+
+### Partitioning
+
+{{< private-preview />}}
+
+By default, Materialize assigns a partition to each message using the following
+strategy:
+
+  1. Encode the message's key in the specified format.
+  2. If the format uses a Confluent Schema Registry, strip out the
+     schema ID from the encoded bytes.
+  3. Hash the remaining encoded bytes using [SeaHash].
+  4. Divide the hash value by the topic's partition count and assign the
+     remainder as the message's partition.
+
+If a message has no key, all messages are sent to partition 0.
+
+To configure a custom partitioning strategy, you can use the `PARTITION BY`
+option. This option allows you to specify a SQL expression that computes a hash
+for each message, which determines what partition to assign to the message:
+
+```sql
+-- General syntax.
+CREATE SINK ... INTO KAFKA CONNECTION <name> (PARTITION BY = <expression>) ...;
+
+-- Example.
+CREATE SINK ... INTO KAFKA CONNECTION <name> (
+    PARTITION BY = kafka_murmur2(name || address)
+) ...;
+```
+
+The expression:
+  * Must have a type that can be assignment cast to [`uint8`].
+  * Can refer to any column in the sink's underlying relation when using the
+    [upsert envelope](#upsert-envelope).
+  * Can refer to any column in the sink's key when using the
+    [Debezium envelope](#debezium-envelope).
+
+Materialize uses the computed hash value to assign a partition to each message
+as follows:
+
+  1. If the hash is `NULL` or computing the hash produces an error, assign
+     partition 0.
+  2. Otherwise, divide the hash value by the topic's partition count and assign
+     the remainder as the message's partition (i.e., `partition_id = hash %
+     partition_count`).
+
+Materialize provides several [hash functions](/sql/functions/#hash-functions)
+which are commonly used in Kafka partition assignment:
+
+  * `crc32`
+  * `kafka_murmur2`
+  * `seahash`
+
+For a full example of using the `PARTITION BY` option, see [Custom
+partioning](#custom-partitioning).
 
 ## Required permissions
 
@@ -482,7 +553,7 @@ There are three ways to resolve this error:
 * Create a materialized view that deduplicates the input relation by the
   desired upsert key:
 
-  ```sql
+  ```mzsql
   -- For each row with the same key `k`, the `ORDER BY` clause ensures we
   -- keep the row with the largest value of `v`.
   CREATE MATERIALIZED VIEW deduped AS
@@ -507,13 +578,13 @@ There are three ways to resolve this error:
 * Use the `NOT ENFORCED` clause to disable Materialize's validation of the key's
   uniqueness:
 
-  ```sql
+  ```mzsql
   CREATE SINK s
   FROM original_input
   INTO KAFKA CONNECTION kafka_connection (TOPIC 't')
   -- We have outside knowledge that `k` is a unique key of `original_input`, but
   -- Materialize cannot prove this, so we disable its key uniqueness check.
-  KEY k NOT ENFORCED
+  KEY (k) NOT ENFORCED
   FORMAT JSON ENVELOPE UPSERT;
   ```
 
@@ -545,12 +616,12 @@ statements. For more details on creating connections, check the
 {{< tabs tabID="1" >}}
 {{< tab "SSL">}}
 
-```sql
+```mzsql
 CREATE SECRET kafka_ssl_key AS '<BROKER_SSL_KEY>';
 CREATE SECRET kafka_ssl_crt AS '<BROKER_SSL_CRT>';
 
 CREATE CONNECTION kafka_connection TO KAFKA (
-    BROKER 'rp-f00000bar.data.vectorized.cloud:30365',
+    BROKER 'unique-jellyfish-0000.us-east-1.aws.confluent.cloud:9093',
     SSL KEY = SECRET kafka_ssl_key,
     SSL CERTIFICATE = SECRET kafka_ssl_crt
 );
@@ -559,11 +630,11 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 {{< /tab >}}
 {{< tab "SASL">}}
 
-```sql
+```mzsql
 CREATE SECRET kafka_password AS '<BROKER_PASSWORD>';
 
 CREATE CONNECTION kafka_connection TO KAFKA (
-    BROKER 'unique-jellyfish-0000-kafka.upstash.io:9092',
+    BROKER 'unique-jellyfish-0000.us-east-1.aws.confluent.cloud:9092',
     SASL MECHANISMS = 'SCRAM-SHA-256',
     SASL USERNAME = 'foo',
     SASL PASSWORD = SECRET kafka_password
@@ -578,13 +649,13 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 {{< tabs tabID="1" >}}
 {{< tab "SSL">}}
 
-```sql
+```mzsql
 CREATE SECRET csr_ssl_crt AS '<CSR_SSL_CRT>';
 CREATE SECRET csr_ssl_key AS '<CSR_SSL_KEY>';
 CREATE SECRET csr_password AS '<CSR_PASSWORD>';
 
 CREATE CONNECTION csr_ssl TO CONFLUENT SCHEMA REGISTRY (
-    URL 'https://rp-f00000bar.data.vectorized.cloud:30993',
+    URL 'unique-jellyfish-0000.us-east-1.aws.confluent.cloud:9093',
     SSL KEY = SECRET csr_ssl_key,
     SSL CERTIFICATE = SECRET csr_ssl_crt,
     USERNAME = 'foo',
@@ -595,7 +666,7 @@ CREATE CONNECTION csr_ssl TO CONFLUENT SCHEMA REGISTRY (
 {{< /tab >}}
 {{< tab "Basic HTTP Authentication">}}
 
-```sql
+```mzsql
 CREATE SECRET IF NOT EXISTS csr_username AS '<CSR_USERNAME>';
 CREATE SECRET IF NOT EXISTS csr_password AS '<CSR_PASSWORD>';
 
@@ -616,7 +687,7 @@ CREATE CONNECTION csr_basic_http
 {{< tabs >}}
 {{< tab "Avro">}}
 
-```sql
+```mzsql
 CREATE SINK avro_sink
   FROM <source, table or mview>
   INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_avro_topic')
@@ -628,7 +699,7 @@ CREATE SINK avro_sink
 {{< /tab >}}
 {{< tab "JSON">}}
 
-```sql
+```mzsql
 CREATE SINK json_sink
   FROM <source, table or mview>
   INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_json_topic')
@@ -645,7 +716,7 @@ CREATE SINK json_sink
 {{< tabs >}}
 {{< tab "Avro">}}
 
-```sql
+```mzsql
 CREATE SINK avro_sink
   FROM <source, table or mview>
   INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_avro_topic')
@@ -658,7 +729,7 @@ CREATE SINK avro_sink
 
 #### Topic configuration
 
-```sql
+```mzsql
 CREATE SINK custom_topic_sink
   IN CLUSTER my_io_cluster
   FROM <source, table or mview>
@@ -666,7 +737,6 @@ CREATE SINK custom_topic_sink
     TOPIC 'test_avro_topic',
     TOPIC PARTITION COUNT 4,
     TOPIC REPLICATION FACTOR 2,
-    PROGRESS TOPIC REPLICATION FACTOR 2,
     TOPIC CONFIG MAP['cleanup.policy' => 'compact']
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
@@ -675,7 +745,7 @@ CREATE SINK custom_topic_sink
 
 #### Schema compatibility levels
 
-```sql
+```mzsql
 CREATE SINK compatibility_level_sink
   IN CLUSTER my_io_cluster
   FROM <source, table or mview>
@@ -694,7 +764,7 @@ CREATE SINK compatibility_level_sink
 Consider the following sink, `docs_sink`, built on top of a relation `t` with
 several [SQL comments](/sql/comment-on) attached.
 
-```sql
+```mzsql
 CREATE TABLE t (key int NOT NULL, value text NOT NULL);
 COMMENT ON TABLE t IS 'SQL comment on t';
 COMMENT ON COLUMN t.value IS 'SQL comment on t.value';
@@ -756,6 +826,32 @@ to the Confluent Schema Registry:
 See [Avro schema documentation](#avro-schema-documentation) for details
 about the rules by which Materialize attaches `doc` fields to records.
 
+#### Custom partitioning
+
+Suppose your Materialize deployment stores data about customers and their
+orders. You want to emit the order data to Kafka with upsert semantics so that
+only the latest state of each order is retained. However, you want the data to
+be partitioned by only customer ID (i.e., not order ID), so that all orders for
+a given customer go to the same partition.
+
+Create a sink using the `PARTITION BY` option to accomplish this:
+
+```sql
+CREATE SINK customer_orders
+  FROM ...
+  INTO KAFKA CONNECTION kafka_connection (
+    TOPIC 'customer-orders',
+    -- The partition hash includes only the customer ID, so the partition
+    -- will be assigned only based on the customer ID.
+    PARTITION BY = seahash(customer_id::text)
+  )
+  -- The key includes both the customer ID and order ID, so Kafka's compaction
+  -- will keep only the latest message for each order ID.
+  KEY (customer_id, order_id)
+  FORMAT JSON
+  ENVELOPE UPSERT;
+```
+
 ## Related pages
 
 - [`SHOW SINKS`](/sql/show-sinks)
@@ -785,3 +881,4 @@ about the rules by which Materialize attaches `doc` fields to records.
 [`timestamp with time zone`]: ../../types/timestamp
 [arrays]: ../../types/array
 [`kafka-topics.sh`]: https://docs.confluent.io/kafka/operations-tools/kafka-tools.html#kafka-topics-sh
+[SeaHash]: https://docs.rs/seahash/latest/seahash/

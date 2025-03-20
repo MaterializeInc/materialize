@@ -13,7 +13,7 @@ use mz_ore::stats::{histogram_milliseconds_buckets, histogram_seconds_buckets};
 use mz_sql::ast::{AstInfo, Statement, StatementKind, SubscribeOutput};
 use mz_sql::session::user::User;
 use mz_sql_parser::ast::statement_kind_label_value;
-use prometheus::{HistogramVec, IntCounter, IntCounterVec, IntGaugeVec};
+use prometheus::{Histogram, HistogramVec, IntCounter, IntCounterVec, IntGaugeVec};
 
 #[derive(Debug, Clone)]
 pub struct Metrics {
@@ -30,8 +30,10 @@ pub struct Metrics {
     pub canceled_peeks: IntCounterVec,
     pub linearize_message_seconds: HistogramVec,
     pub time_to_first_row_seconds: HistogramVec,
+    pub statement_logging_records: IntCounterVec,
     pub statement_logging_unsampled_bytes: IntCounterVec,
     pub statement_logging_actual_bytes: IntCounterVec,
+    pub message_batch: HistogramVec,
     pub message_handling: HistogramVec,
     pub optimization_notices: IntCounterVec,
     pub append_table_duration_seconds: HistogramVec,
@@ -39,6 +41,8 @@ pub struct Metrics {
     pub webhook_get_appender: IntCounter,
     pub check_scheduling_policies_seconds: HistogramVec,
     pub handle_scheduling_decisions_seconds: HistogramVec,
+    pub row_set_finishing_seconds: HistogramVec,
+    pub session_startup_table_writes_seconds: HistogramVec,
 }
 
 impl Metrics {
@@ -111,6 +115,11 @@ impl Metrics {
                 var_labels: ["instance_id", "isolation_level", "strategy"],
                 buckets: histogram_seconds_buckets(0.000_128, 32.0)
             }),
+            statement_logging_records: registry.register(metric! {
+                name: "mz_statement_logging_record_count",
+                help: "The total number of SQL statements tagged with whether or not they were recorded.",
+                var_labels: ["sample"],
+            }),
             statement_logging_unsampled_bytes: registry.register(metric!(
                 name: "mz_statement_logging_unsampled_bytes",
                 help: "The total amount of SQL text that would have been logged if statement logging were unsampled.",
@@ -119,11 +128,16 @@ impl Metrics {
                 name: "mz_statement_logging_actual_bytes",
                 help: "The total amount of SQL text that was logged by statement logging.",
             )),
+            message_batch: registry.register(metric!(
+                name: "mz_coordinator_message_batch_size",
+                help: "Message batch size handled by the coordinator.",
+                buckets: vec![0., 1., 2., 3., 4., 6., 8., 12., 16., 24., 32., 48., 64.],
+            )),
             message_handling: registry.register(metric!(
                 name: "mz_slow_message_handling",
                 help: "Latency for ALL coordinator messages. 'slow' is in the name for legacy reasons, but is not accurate.",
                 var_labels: ["message_kind"],
-                buckets: histogram_seconds_buckets(0.128, 32.0),
+                buckets: histogram_seconds_buckets(0.000_128, 32.0),
             )),
             optimization_notices: registry.register(metric!(
                 name: "mz_optimization_notices",
@@ -156,7 +170,47 @@ impl Metrics {
                 var_labels: ["altered_a_cluster"],
                 buckets: histogram_seconds_buckets(0.000_128, 8.0),
             )),
+            row_set_finishing_seconds: registry.register(metric!(
+                name: "mz_row_set_finishing_seconds",
+                help: "The time it takes to run RowSetFinishing::finish.",
+                buckets: histogram_seconds_buckets(0.000_128, 16.0),
+            )),
+            session_startup_table_writes_seconds: registry.register(metric!(
+                name: "mz_session_startup_table_writes_seconds",
+                help: "If we had to wait for builtin table writes before processing a query, how long did we wait for.",
+                buckets: histogram_seconds_buckets(0.000_008, 4.0),
+            )),
         }
+    }
+
+    pub(crate) fn row_set_finishing_seconds(&self) -> Histogram {
+        self.row_set_finishing_seconds.with_label_values(&[])
+    }
+
+    pub(crate) fn session_metrics(&self) -> SessionMetrics {
+        SessionMetrics {
+            row_set_finishing_seconds: self.row_set_finishing_seconds(),
+            session_startup_table_writes_seconds: self
+                .session_startup_table_writes_seconds
+                .with_label_values(&[]),
+        }
+    }
+}
+
+/// Metrics associated with a [`crate::session::Session`].
+#[derive(Debug, Clone)]
+pub struct SessionMetrics {
+    row_set_finishing_seconds: Histogram,
+    session_startup_table_writes_seconds: Histogram,
+}
+
+impl SessionMetrics {
+    pub(crate) fn row_set_finishing_seconds(&self) -> &Histogram {
+        &self.row_set_finishing_seconds
+    }
+
+    pub(crate) fn session_startup_table_writes_seconds(&self) -> &Histogram {
+        &self.session_startup_table_writes_seconds
     }
 }
 

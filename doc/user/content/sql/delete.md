@@ -30,7 +30,7 @@ _alias_ | Only permit references to _table_name_ as _alias_.
 
 ## Examples
 
-```sql
+```mzsql
 CREATE TABLE delete_me (a int, b text);
 INSERT INTO delete_me
     VALUES
@@ -46,7 +46,7 @@ SELECT * FROM delete_me ORDER BY a;
  2 | goodbye
  3 | ok
 ```
-```sql
+```mzsql
 CREATE TABLE delete_using (b text);
 INSERT INTO delete_using VALUES ('goodbye'), ('ciao');
 DELETE FROM delete_me
@@ -59,7 +59,7 @@ SELECT * FROM delete_me;
 ---+----
  3 | ok
 ```
-```sql
+```mzsql
 DELETE FROM delete_me;
 SELECT * FROM delete_me;
 ```

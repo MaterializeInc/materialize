@@ -12,7 +12,13 @@ from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition
 from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
-from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
+from materialize.zippy.framework import (
+    Action,
+    ActionFactory,
+    Capabilities,
+    Capability,
+    State,
+)
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.replica_capabilities import source_capable_clusters
 from materialize.zippy.sink_capabilities import SinkExists
@@ -74,7 +80,7 @@ class CreateSink(Action):
         self.sink = sink
         super().__init__(capabilities)
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         # The sink-derived source has upsert semantics, so produce a "normal" ViewExists output
         # from the 'before' and the 'after'
 
@@ -87,18 +93,18 @@ class CreateSink(Action):
             > CREATE MATERIALIZED VIEW {self.sink.dest_view.name}
               WITH (REFRESH {refresh}) AS
               SELECT SUM(count_all)::int AS count_all, SUM(count_distinct)::int AS count_distinct, SUM(min_value)::int AS min_value, SUM(max_value)::int AS max_value FROM (
-                SELECT (after).count_all, (after).count_distinct, (after).min_value, (after).max_value FROM {self.sink.name}_source
+                SELECT (after).count_all, (after).count_distinct, (after).min_value, (after).max_value FROM {self.sink.name}_source_tbl
                 UNION ALL
-                SELECT -(before).count_all, -(before).count_distinct, -(before).min_value, -(before).max_value FROM {self.sink.name}_source
+                SELECT -(before).count_all, -(before).count_distinct, -(before).min_value, -(before).max_value FROM {self.sink.name}_source_tbl
               );
             """
             if self.sink.dest_view.expensive_aggregates
             else f"""
             > CREATE MATERIALIZED VIEW {self.sink.dest_view.name} AS
               SELECT SUM(count_all)::int AS count_all FROM (
-                SELECT (after).count_all FROM {self.sink.name}_source
+                SELECT (after).count_all FROM {self.sink.name}_source_tbl
                 UNION ALL
-                SELECT -(before).count_all FROM {self.sink.name}_source
+                SELECT -(before).count_all FROM {self.sink.name}_source_tbl
               );
             """
         )
@@ -123,11 +129,14 @@ class CreateSink(Action):
                 > CREATE SOURCE {self.sink.name}_source
                   IN CLUSTER {self.sink.cluster_name_in}
                   FROM KAFKA CONNECTION {self.sink.name}_kafka_conn (TOPIC 'sink-{self.sink.name}')
+
+                > CREATE TABLE {self.sink.name}_source_tbl FROM SOURCE {self.sink.name}_source (REFERENCE "sink-{self.sink.name}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.sink.name}_csr_conn
                   ENVELOPE NONE
             """
             )
-            + dest_view_sql
+            + dest_view_sql,
+            mz_service=state.mz_service,
         )
 
     def provides(self) -> list[Capability]:

@@ -226,33 +226,30 @@ where
                     Delimiter::Bracket => {
                         if type_name.starts_with("Vec<") && type_name.ends_with('>') {
                             // This is a Vec<type_name>.
-                            Ok(Some(format!(
-                                "[{}]",
-                                separated(
-                                    ",",
-                                    parse_as_vec(
-                                        &mut inner_iter,
-                                        &type_name[4..(type_name.len() - 1)],
-                                        rti,
-                                        ctx
-                                    )?
-                                    .iter()
-                                )
-                            )))
+                            let vec = parse_as_vec(
+                                &mut inner_iter,
+                                &type_name[4..(type_name.len() - 1)],
+                                rti,
+                                ctx,
+                            )?;
+                            Ok(Some(format!("[{}]", separated(",", vec.iter()))))
+                        } else if type_name.starts_with("[") && type_name.ends_with(']') {
+                            // This is a [type_name].
+                            let vec = parse_as_vec(
+                                &mut inner_iter,
+                                &type_name[1..(type_name.len() - 1)],
+                                rti,
+                                ctx,
+                            )?;
+                            Ok(Some(format!("[{}]", separated(",", vec.iter()))))
                         } else if type_name.starts_with('(') && type_name.ends_with(')') {
-                            Ok(Some(format!(
-                                "[{}]",
-                                separated(
-                                    ",",
-                                    parse_as_tuple(
-                                        &mut inner_iter,
-                                        &type_name[1..(type_name.len() - 1)],
-                                        rti,
-                                        ctx
-                                    )?
-                                    .iter()
-                                )
-                            )))
+                            let vec = parse_as_tuple(
+                                &mut inner_iter,
+                                &type_name[1..(type_name.len() - 1)],
+                                rti,
+                                ctx,
+                            )?;
+                            Ok(Some(format!("[{}]", separated(",", vec.iter()))))
                         } else {
                             Err(format!(
                                 "Object specified with brackets {:?} has unsupported type `{}`",

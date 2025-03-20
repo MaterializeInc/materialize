@@ -37,11 +37,17 @@ pub async fn run_compile_descriptors(
         None => mz_build_tools::protoc(),
         Some(protoc) => PathBuf::from(protoc),
     };
+    let protoc_include = match env::var_os("PROTOC_INCLUDE") {
+        None => mz_build_tools::protoc_include(),
+        Some(include) => PathBuf::from(include),
+    };
     let output_path = state.temp_path.join(&output);
     let status = Command::new(protoc)
         .arg("--include_imports")
         .arg("-I")
         .arg(&state.temp_path)
+        .arg("-I")
+        .arg(&protoc_include)
         .arg("--descriptor_set_out")
         .arg(state.temp_path.join(&output).clone())
         .args(&inputs)
