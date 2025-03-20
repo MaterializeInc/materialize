@@ -29,12 +29,10 @@ modules](https://github.com/MaterializeInc/terraform-aws-materialize) to:
 
 {{< /warning >}}
 
-When operating in AWS, we recommend:
+{{% self-managed/aws-recommended-instances %}}
 
-- Using the `r8g`, `r7g`, and `r6g` families when running without local disk.
-
-- Using the `r7gd` and `r6gd` families of instances (and `r8gd` once available)
-  when running with local disk (Recommended for production.  See [Operational guidelines](/installation/operational-guidelines/) for more information.)
+See [Operational guidelines](/installation/operational-guidelines/) for more
+information.
 
 ## Prerequisites
 
@@ -81,12 +79,17 @@ for evaluation purposes only. The modules deploy a sample infrastructure on AWS
 - Materialize Operator
 - Materialize instances (during subsequent runs after the Operator is running)
 
-- *Starting in v0.3.0 of Materialize on AWS Terraform*, AWS Load Balancer
+- **Starting in v0.3.0 of Materialize on AWS Terraform**, AWS Load Balancer
   Controller and AWS Network Load Balancers (NLBs) for each
   Materialize instance. If your deployment is set up using an earlier version of
   the Materialize AWS Terraform module, and you wish to upgrade to v0.3.0
   Terraform modules, see the [Upgrade
   Notes](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/README.md#upgrade-notes).
+
+- **Starting in v0.3.1 of Materialize on AWS Terraform**, OpenEBS and NVMe
+  instance storage to [enable
+  spill-to-disk](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#enabling-disk-support)
+  to support workloads that are larger than can fit into memory.
 
 {{< tip >}}
 
@@ -177,7 +180,7 @@ node instance type, etc.), see the
    Upon successful completion, various fields and their values are output:
 
    ```bash
-   Apply complete! Resources: 85 added, 0 changed, 0 destroyed.
+   Apply complete! Resources: 87 added, 0 changed, 0 destroyed.
 
    Outputs:
 
@@ -273,10 +276,7 @@ node instance type, etc.), see the
    for the Materialize instance configuration options.
 
    {{< tip >}}
-   If upgrading from a deployment that was set up using an earlier version of
-   the Terraform modules, see the [Upgrade
-   Notes](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/README.md#upgrade-notes)
-   for the new version.
+   {{% self-managed/aws-terraform-upgrade-notes %}}
    {{</ tip >}}
 
 1. Run `terraform plan` with both `.tfvars` files and review the changes to be
@@ -307,7 +307,7 @@ node instance type, etc.), see the
    <a name="aws-terrafrom-output"></a>
 
    ```bash
-   Apply complete! Resources: 4 added, 0 changed, 0 destroyed.
+   Apply complete! Resources: 14 added, 0 changed, 0 destroyed.
 
    Outputs:
 
@@ -414,7 +414,6 @@ node instance type, etc.), see the
 
       {{< /tip >}}
 
-
 ## Next steps
 
 {{% self-managed/next-steps %}}
@@ -425,10 +424,14 @@ node instance type, etc.), see the
 
   {{< tip >}}
 
-  To delete your S3 bucket, you may need to empty the S3 bucket
-  first. If the `terraform destroy` command is unable to delete the S3 bucket
-  and does not progress beyond "Still destroying...", empty the S3 bucket first
-  and rerun the `terraform destroy` command.
+  - To delete your S3 bucket, you may need to empty the S3 bucket first. If the
+    `terraform destroy` command is unable to delete the S3 bucket and does not
+    progress beyond "Still destroying...", empty the S3 bucket first and rerun
+    the `terraform destroy` command.
+
+  - Upon successful destroy, you may receive some informational messages with
+    regards to CustomResourceDefinition(CRD). You may safely ignore these
+    messages as your whole deployment has been destroyed, including the CRDs.
 
   {{</ tip >}}
 
