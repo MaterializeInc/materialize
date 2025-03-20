@@ -269,6 +269,10 @@ pub trait TimestampProvider {
         // To be filled by strong session serializable logic, should it be engaged.
         let mut session_oracle_read_ts = None;
 
+        let since = self.least_valid_read(&read_holds);
+        let upper = self.least_valid_write(id_bundle);
+        let largest_not_in_advance_of_upper = Coordinator::largest_not_in_advance_of_upper(&upper);
+
         // We start by establishing the hard constraints that must be applied to timestamp determination.
         // These constraints are derived from the input arguments, and properties of the collections involved.
         // TODO: Many of the constraints are expressed obliquely, and could be made more direct.
@@ -355,6 +359,27 @@ pub trait TimestampProvider {
                         ));
                         session_oracle_read_ts = Some(session_ts);
                     }
+
+                    // When advancing the read timestamp under Strong Session Serializable, there is a
+                    // trade-off to make between freshness and latency. We can choose a timestamp close the
+                    // `upper`, but then later queries might block if the `upper` is too far into the
+                    // future. We can chose a timestamp close to the current time, but then we may not be
+                    // getting results that are as fresh as possible. As a heuristic, we choose the minimum
+                    // of now and the upper, where we use the global timestamp oracle read timestamp as a
+                    // proxy for now. If upper > now, then we choose now and prevent blocking future
+                    // queries. If upper < now, then we choose the upper and prevent blocking the current
+                    // query.
+                    if when.can_advance_to_upper() && when.can_advance_to_timeline_ts() {
+                        println!("performing strong session serializable selection");
+                        let mut advance_to = largest_not_in_advance_of_upper;
+                        if let Some(oracle_read_ts) = oracle_read_ts {
+                            advance_to = std::cmp::min(advance_to, oracle_read_ts);
+                        }
+                        constraints.lower.push((
+                            Antichain::from_elem(advance_to),
+                            Reason::IsolationLevel(*isolation_level),
+                        ));
+                    }
                 }
             }
 
@@ -396,10 +421,6 @@ pub trait TimestampProvider {
         // the compacted arrangements we have at hand. It remains unresolved
         // what to do if it cannot be satisfied (perhaps the query should use
         // a larger timestamp and block, perhaps the user should intervene).
-
-        let since = self.least_valid_read(&read_holds);
-        let upper = self.least_valid_write(id_bundle);
-        let largest_not_in_advance_of_upper = Coordinator::largest_not_in_advance_of_upper(&upper);
 
         {
             // TODO: We currently split out getting the oracle timestamp because
@@ -467,9 +488,13 @@ pub trait TimestampProvider {
             candidate.join_assign(&real_time_recency_ts);
         }
 
+        println!("--- classical selection ---");
+        println!("isolation_level: {:?}", isolation_level);
         if isolation_level == &IsolationLevel::StrongSessionSerializable {
             if let Some(timeline) = &timeline {
+                println!("timeline: {:?}", timeline);
                 if let Some(oracle) = session.get_timestamp_oracle(timeline) {
+                    println!("oracle: {:?}", oracle);
                     let session_ts = oracle.read_ts();
                     candidate.join_assign(&session_ts);
                     session_oracle_read_ts = Some(session_ts);
@@ -486,6 +511,7 @@ pub trait TimestampProvider {
             // queries. If upper < now, then we choose the upper and prevent blocking the current
             // query.
             if when.can_advance_to_upper() && when.can_advance_to_timeline_ts() {
+                println!("performing strong session serializable selection");
                 let mut advance_to = largest_not_in_advance_of_upper;
                 if let Some(oracle_read_ts) = oracle_read_ts {
                     advance_to = std::cmp::min(advance_to, oracle_read_ts);
@@ -493,6 +519,8 @@ pub trait TimestampProvider {
                 candidate.join_assign(&advance_to);
             }
         }
+
+        println!("--- end classical selection ---");
 
         // Determine a candidate based on constraints and preferences.
         let constraint_candidate = {

@@ -407,6 +407,9 @@ impl<T: TimestampManipulation> Session<T> {
         if let Some(isolation_level) = isolation_level {
             self.vars
                 .set_local_transaction_isolation(isolation_level.into());
+            if isolation_level == TransactionIsolationLevel::StrongSessionSerializable {
+                self.ensure_local_timestamp_oracle();
+            }
         }
 
         Ok(())
