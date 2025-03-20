@@ -18,6 +18,7 @@ use itertools::Itertools;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastLossy;
+use mz_ore::soft_assert_eq_or_log;
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::{GlobalId, RowArena, ScalarType, Timestamp, TimestampManipulation};
 use mz_sql::plan::QueryWhen;
@@ -530,11 +531,14 @@ pub trait TimestampProvider {
         };
 
         if Some(timestamp) != constraint_candidate {
-            println!(
-                "timestamp: {:?}, constraint_candidate: {:?}",
-                timestamp, constraint_candidate
-            );
+            println!("timestamp constrains: {:?}", constraints);
         }
+
+        soft_assert_eq_or_log!(
+            Some(timestamp),
+            constraint_candidate,
+            "timestamp determination mismatch"
+        );
 
         let timestamp_context = TimestampContext::from_timeline_context(
             timestamp,
@@ -985,6 +989,9 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline + TimestampManipulatio
 /// Types and logic in support of a constraint-based approach to timestamp determination.
 mod constraints {
 
+    use core::fmt;
+    use std::fmt::Debug;
+
     use differential_dataflow::lattice::Lattice;
     use timely::progress::{Antichain, Timestamp};
 
@@ -1010,6 +1017,20 @@ mod constraints {
         pub lower: Vec<(Antichain<mz_repr::Timestamp>, Reason)>,
         /// Timestamps and reasons that impose an inclusive upper bound.
         pub upper: Vec<(Antichain<mz_repr::Timestamp>, Reason)>,
+    }
+
+    impl Debug for Constraints {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            writeln!(f, "lower:")?;
+            for (ts, reason) in &self.lower {
+                writeln!(f, "  {:?} ({:?})", ts, reason)?;
+            }
+            writeln!(f, "upper:")?;
+            for (ts, reason) in &self.upper {
+                writeln!(f, "  {:?} ({:?})", ts, reason)?;
+            }
+            Ok(())
+        }
     }
 
     impl Constraints {
@@ -1067,6 +1088,28 @@ mod constraints {
         RealTimeRecency,
         /// The query expressed its own constraint on the timestamp.
         QueryAsOf,
+    }
+
+    impl Debug for Reason {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            match self {
+                Reason::ComputeInput(ids) => {
+                    write!(f, "ComputeInput({:?})", ids)
+                }
+                Reason::StorageInput(ids) => {
+                    write!(f, "StorageInput({:?})", ids)
+                }
+                Reason::IsolationLevel(level) => {
+                    write!(f, "IsolationLevel({:?})", level)
+                }
+                Reason::RealTimeRecency => {
+                    write!(f, "RealTimeRecency")
+                }
+                Reason::QueryAsOf => {
+                    write!(f, "QueryAsOf")
+                }
+            }
+        }
     }
 
     /// Given an interval [read, write) of timestamp options,
