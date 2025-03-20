@@ -566,7 +566,7 @@ walk(a TEXT, b TEXT) AS (
     SELECT potato.a, potato.b
     FROM potato
     INNER JOIN walk
-    ON potato.a = walk.b 
+    ON potato.a = walk.b
 )
 select * from walk;
 ----
