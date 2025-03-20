@@ -3445,6 +3445,28 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             // TODO: PostgreSQL supports additional five and six argument forms of this function which
             // allow controlling where to start the replacement and how many replacements to make.
         },
+        "regexp_matches" => Table {
+            params!(String, String) => Operation::variadic(move |_ecx, exprs| {
+                let column_names = vec!["regexp_matches".into()];
+                Ok(TableFuncPlan {
+                    expr: HirRelationExpr::CallTable {
+                        func: TableFunc::RegexpMatches,
+                        exprs: vec![exprs[0].clone(), exprs[1].clone()],
+                    },
+                    column_names,
+                })
+            }) => ReturnType::set_of(ScalarType::Array(Box::new(ScalarType::String)).into()), 2763;
+            params!(String, String, String) => Operation::variadic(move |_ecx, exprs| {
+                let column_names = vec!["regexp_matches".into()];
+                Ok(TableFuncPlan {
+                    expr: HirRelationExpr::CallTable {
+                        func: TableFunc::RegexpMatches,
+                        exprs: vec![exprs[0].clone(), exprs[1].clone(), exprs[2].clone()],
+                    },
+                    column_names,
+                })
+            }) => ReturnType::set_of(ScalarType::Array(Box::new(ScalarType::String)).into()), 2764;
+        },
         "reverse" => Scalar {
             params!(String) => UnaryFunc::Reverse(func::Reverse) => String, 3062;
         }
@@ -3824,7 +3846,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(String, String) => Operation::binary(move |_ecx, regex, haystack| {
                 let regex = match regex.into_literal_string() {
                     None => sql_bail!("regexp_extract requires a string literal as its first argument"),
-                    Some(regex) => mz_expr::AnalyzedRegex::new(&regex).map_err(|e| sql_err!("analyzing regex: {}", e))?,
+                    Some(regex) => mz_expr::AnalyzedRegex::new(&regex, mz_expr::AnalyzedRegexOpts::default()).map_err(|e| sql_err!("analyzing regex: {}", e))?,
                 };
                 let column_names = regex
                     .capture_groups_iter()

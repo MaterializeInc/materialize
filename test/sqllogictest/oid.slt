@@ -472,6 +472,8 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 2726  stddev_pop
 2727  stddev_pop
 2728  stddev_pop
+2763  regexp_matches
+2764  regexp_matches
 2765  regexp_split_to_table
 2766  regexp_split_to_table
 2767  regexp_split_to_array

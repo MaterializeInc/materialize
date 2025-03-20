@@ -756,5 +756,82 @@ SELECT s, regexp_replace(s, regex, replacement, 'ig') FROM e;
 query error invalid regular expression flag: x
 SELECT regexp_replace(s, regex, replacement, 'igx') FROM e;
 
+# regexp_matches
+
+query T
+SELECT regexp_matches('foobarbaz', '(b..)')
+----
+{bar}
+
+query T
+SELECT regexp_matches('foobarbaz', '(b..)', 'g')
+----
+{bar}
+{baz}
+
+query T
+SELECT regexp_matches('foobarbequebazilbarfbonkbilbobagginsbarbellbeachball', '(b[^b]+)(b[^b]+)(b[^b]+)');
+----
+{bar,beque,bazil}
+
+query T
+SELECT regexp_matches('foobarbequebazilbarfbonkbilbobagginsbarbellbeachball', '(b[^b]+)(b[^b]+)(b[^b]+)', 'g');
+----
+{barf,bonk,bil}
+{bo,baggins,bar}
+{bar,beque,bazil}
+{bell,beach,ball}
+
+query error invalid regular expression flag: x
+SELECT regexp_matches('foobarbaz', '(b..)', 'igx');
+
+query T
+SELECT regexp_matches('orangeoculus', '(b[^b]+)(b[^b]+)(b[^b]+)', 'g');
+----
+
+query T
+SELECT regexp_matches('fooBarBequebazilbarfBonkbilbobagginsbarbellbeachball', '(b[^b]+)(b[^b]+)(b[^b]+)', 'ig');
+----
+{barf,Bonk,bil}
+{bo,baggins,bar}
+{Bar,Beque,bazil}
+{bell,beach,ball}
+
+statement OK
+CREATE TABLE foo(bar text, pattern text);
+
+statement OK
+insert into foo values ('fooBarBequebazilbarfBonkbilbobagginsbarbellbeachball', '(b[^b]+)(b[^b]+)(b[^b]+)'), ('bellbeachball', '(b[^b]+)(b[^b]+)(b[^b]+)');
+
+query T
+SELECT regexp_matches(bar, pattern, 'ig') FROM foo;
+----
+{barf,Bonk,bil}
+{bo,baggins,bar}
+{Bar,Beque,bazil}
+{bell,beach,ball}
+{bell,beach,ball}
+
+query T
+SELECT regexp_matches('abc', '', 'ig');
+----
+{}
+{}
+{}
+{}
+
+
+statement ok
+CREATE TABLE foo2(bar int2);
+
+statement ok
+insert into foo2 values (1), (2), (3), (4), (5), (6), (7), (8), (9), (10);
+
+simple
+SELECT regexp_matches(bar, '(b[^b]+)(b[^b]+)(b[^b]+)', 'ig') FROM foo2;
+----
+db error: ERROR: function regexp_matches(smallint, unknown, unknown) does not exist
+HINT: No function matches the given name and argument types. You might need to add explicit type casts.
+
 statement ok
 DROP CLUSTER multiprocess;

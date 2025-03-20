@@ -399,6 +399,15 @@
 
       See the [rust regex docs](https://docs.rs/regex/latest/regex/struct.Regex.html#method.replace) for more details about replacement.
 
+  - signature: "regexp_matches(haystack: str, needle: str [, flags: str]]) -> str[]"
+    description: |
+      Matches the regular expression `needle` against haystack, returning a
+      string array that contains the value of each capture group specified in
+      `needle`, in order. If `flags` is set to the string `i` matches
+      case-insensitively. If `flags` is set to the string `g` all matches are
+      returned, otherwise only the first match is returned. Without the `g`
+      flag, the behavior is the same as `regexp_match`.
+
   - signature: 'regexp_split_to_array(text: str, pattern: str [, flags: str]]) -> str[]'
     description: |
       Splits `text` by the regular expression `pattern` into an array.
