@@ -7,7 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Transform that pushes down the information that a collection will be subjected to a `Distinct` on specific columns.
+//! Transform that allows expressions to arbitarily vary the magnitude of the multiplicity of each row.
+//!
+//! This is most commonly from a `Distinct` operation, which flattens all positive multiplicities to one.
+//! When a `Distinct` will certainly be applied, its input expressions are allowed to change the magnitudes
+//! of their record multiplicities, for example removing other `Distinct` operations that are redundant.
 
 use mz_expr::MirRelationExpr;
 
@@ -15,7 +19,7 @@ use crate::analysis::{DerivedView, NonNegative};
 
 use crate::{TransformCtx, TransformError};
 
-/// Pushes down the information that a collection will be subjected to a `Distinct` on specific columns.
+/// Pushes down the information that a collection will be subjected to a `Distinct`.
 ///
 /// This intends to recognize idiomatic stacks of `UNION` from SQL, which look like `Distinct` over `Union`, potentially
 /// over other `Distinct` expressions. It is only able to see patterns of `DISTINCT UNION DISTINCT, ..` and other operators
@@ -34,7 +38,7 @@ impl crate::Transform for WillDistinct {
     #[mz_ore::instrument(
         target = "optimizer"
         level = "trace",
-        fields(path.segment = "will_distinct")
+        fields(path.segment = "distinct_by")
     )]
     fn actually_perform_transform(
         &self,
@@ -59,7 +63,7 @@ impl WillDistinct {
     fn apply(&self, expr: &mut MirRelationExpr, derived: DerivedView) {
         // Maintain a todo list of triples of 1. expression, 2. child analysis results, and 3. a "will distinct" bit.
         // The "will distinct" bit says that a subsequent operator will make the specific multiplicities of each record
-        // irrelevant, and the expression only needs to present the correct *multiset* of record, with any non-negative
+        // irrelevant, and the expression only needs to present the correct *multiset* of records, with any positive
         // cardinality allowed.
         let mut todo = vec![(expr, derived, false)];
         while let Some((expr, derived, distinct_by)) = todo.pop() {
@@ -110,22 +114,59 @@ impl WillDistinct {
                     );
                 }
             } else {
-                match (expr, distinct_by) {
-                    (
-                        MirRelationExpr::Reduce {
-                            input, aggregates, ..
-                        },
-                        _,
-                    ) => {
+                match expr {
+                    MirRelationExpr::Reduce {
+                        input, aggregates, ..
+                    } => {
                         if aggregates.is_empty() {
                             todo.push((input, derived.last_child(), true));
                         } else {
                             todo.push((input, derived.last_child(), false))
                         }
                     }
+                    MirRelationExpr::TopK { input, limit, .. } => {
+                        if limit.as_ref().and_then(|e| e.as_literal_int64()) == Some(1) {
+                            todo.push((input, derived.last_child(), true));
+                        } else {
+                            todo.push((input, derived.last_child(), false));
+                        }
+                    }
+                    MirRelationExpr::Map { input, .. } => {
+                        todo.push((input, derived.last_child(), distinct_by));
+                    }
+                    MirRelationExpr::Filter { input, .. } => {
+                        todo.push((input, derived.last_child(), distinct_by));
+                    }
+                    MirRelationExpr::FlatMap { input, .. } => {
+                        todo.push((input, derived.last_child(), distinct_by));
+                    }
+                    MirRelationExpr::Threshold { input, .. } => {
+                        todo.push((input, derived.last_child(), distinct_by));
+                    }
+                    MirRelationExpr::Negate { input, .. } => {
+                        todo.push((input, derived.last_child(), distinct_by));
+                    }
+                    MirRelationExpr::Project { input, .. } => {
+                        // Project needs a non-negative input to ensure output polarity does not change.
+                        // Two inputs that collapse to be one output, if their input polarities are different,
+                        // could end with either output polarity (or zero).
+                        if *derived.last_child().value::<NonNegative>().unwrap() {
+                            todo.push((input, derived.last_child(), distinct_by));
+                        } else {
+                            todo.push((input, derived.last_child(), false));
+                        }
+                    }
+                    MirRelationExpr::Join { inputs, .. } => {
+                        let children_rev = inputs.iter_mut().rev();
+                        todo.extend(
+                            children_rev
+                                .zip(derived.children_rev())
+                                .map(|(x, y)| (x, y, distinct_by)),
+                        );
+                    }
                     // If all inputs to the union are non-negative, any distinct enforced above the expression can be
                     // communicated on to each input.
-                    (MirRelationExpr::Union { base, inputs }, will_distinct) => {
+                    MirRelationExpr::Union { base, inputs } => {
                         if derived
                             .children_rev()
                             .all(|v| *v.value::<NonNegative>().unwrap())
@@ -134,7 +175,7 @@ impl WillDistinct {
                             todo.extend(
                                 children_rev
                                     .zip(derived.children_rev())
-                                    .map(|(x, y)| (x, y, will_distinct)),
+                                    .map(|(x, y)| (x, y, distinct_by)),
                             );
                         } else {
                             let children_rev = inputs.iter_mut().rev().chain(Some(&mut **base));
@@ -145,7 +186,7 @@ impl WillDistinct {
                             );
                         }
                     }
-                    (x, _) => {
+                    x => {
                         todo.extend(
                             x.children_mut()
                                 .rev()
