@@ -3838,7 +3838,7 @@ impl RustType<ProtoTableFunc> for TableFunc {
                     .relation
                     .into_rust_if_some("ProtoTabletizedScalar::relation")?,
             },
-            Kind::RegexpMatches(x) => TableFunc::RegexpMatches,
+            Kind::RegexpMatches(_) => TableFunc::RegexpMatches,
         })
     }
 }
