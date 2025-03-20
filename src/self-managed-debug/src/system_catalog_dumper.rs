@@ -241,6 +241,8 @@ pub struct Relation {
     pub category: RelationCategory,
 }
 
+/// This list is used to determine which relations to dump.
+/// The relations are grouped and delimited by their category (i.e. Basic object information)
 static RELATIONS: &[Relation] = &[
     // Basic object information
     Relation {
@@ -1024,6 +1026,11 @@ fn format_file_path(date_time: DateTime<Utc>, cluster_replica: Option<&ClusterRe
     }
 }
 
+/// Create a postgres connection string.
+/// The following defaults are used if the arguments are not provided:
+/// - host_address: "localhost"
+/// - host_port: 6877
+/// - target_port: 6877
 pub fn create_postgres_connection_string(
     host_address: Option<&str>,
     host_port: Option<i32>,
