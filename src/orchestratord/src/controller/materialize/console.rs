@@ -11,9 +11,9 @@ use k8s_openapi::{
     api::{
         apps::v1::{Deployment, DeploymentSpec},
         core::v1::{
-            Capabilities, Container, ContainerPort, EnvVar, HTTPGetAction, PodSpec,
-            PodTemplateSpec, Probe, SeccompProfile, SecretVolumeSource, SecurityContext, Service,
-            ServicePort, ServiceSpec, Volume, VolumeMount,
+            Capabilities, Container, ContainerPort, EnvVar, HTTPGetAction, PodSecurityContext,
+            PodSpec, PodTemplateSpec, Probe, SeccompProfile, SecretVolumeSource, SecurityContext,
+            Service, ServicePort, ServiceSpec, Volume, VolumeMount,
         },
         networking::v1::{
             IPBlock, NetworkPolicy, NetworkPolicyIngressRule, NetworkPolicyPeer, NetworkPolicyPort,
@@ -318,6 +318,10 @@ ssl_certificate_key /nginx/tls/tls.key;",
                 scheduler_name: config.scheduler_name.clone(),
                 service_account_name: Some(mz.service_account_name()),
                 volumes,
+                security_context: Some(PodSecurityContext {
+                    fs_group: Some(101),
+                    ..Default::default()
+                }),
                 ..Default::default()
             }),
         },
