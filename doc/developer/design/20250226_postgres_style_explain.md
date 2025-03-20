@@ -12,7 +12,8 @@ Changing `EXPLAIN` is tricky, though: we rely heavily on `EXPLAIN`'s
 completionist output to test our optimizer and debug queries. We must
 be careful to keep these tests while enabling the new behavior.
 
-[https://github.com/MaterializeInc/materialize/pull/31185
+[#31185](https://github.com/MaterializeInc/materialize/pull/31185) laid
+the groundwork for updating what `AS TEXT` means. So: what should it mean?
 
 ## Success Criteria
 
