@@ -1,8 +1,6 @@
 ---
 title: "Install on Azure"
 description: "Install Materialize on Azure Kubernetes Service (AKS) using Terraform"
-aliases:
-  - /self-hosted/install-on-gcp/
 disable_list: true
 menu:
   main:
@@ -124,11 +122,15 @@ with the following components:
 - Materialize instances (during subsequent runs after the Operator is running)
 
 {{< tip >}}
-The tutorial uses the module found in the `examples/simple/`
-directory, which requires minimal user input. For more configuration options,
-you can run the modules at the [root of the
+
+The tutorial uses the `main.tf` found in the `examples/simple/` directory, which
+requires minimal user input. For more configuration options, you can run the
+`main.tf` file at the [root of the
 repository](https://github.com/MaterializeInc/terraform-azurerm-materialize/)
-instead.
+instead. When running with the root `main.tf`, you must declare the required
+providers. See [Providers
+Configuration](/installation/install-on-azure/appendix-azure-provider-configuration/)
+for details.
 
 For details on the  `examples/simple/` infrastructure configuration (such as the
 node instance type, etc.), see the
@@ -147,11 +149,14 @@ node instance type, etc.), see the
    ```
 
    {{< tip >}}
-   The tutorial uses the module found in the `examples/simple/` directory, which
-   requires minimal user input. For more configuration options, you can run the
-   modules at the [root of the
+   The tutorial uses the `main.tf` found in the `examples/simple/` directory,
+   which requires minimal user input. For more configuration options, you can
+   run the `main.tf` file at the [root of the
    repository](https://github.com/MaterializeInc/terraform-azurerm-materialize/)
-   instead.
+   instead. When running with the root `main.tf`, you must declare the required
+   providers. See [Providers
+   Configuration](/installation/install-on-azure/appendix-azure-provider-configuration/)
+   for details.
 
    For details on the  `examples/simple/` infrastructure configuration (such as
    the node instance type, etc.), see the [examples/simple/main.tf](https://github.com/MaterializeInc/terraform-azurerm-materialize/blob/main/examples/simple/main.tf).
@@ -180,13 +185,13 @@ node instance type, etc.), see the
 1. Create a `terraform.tfvars` file (you can copy from the
    `terraform.tfvars.example` file) and specify:
 
-   - The prefix for the resources. Prefix has a maximum of 10 characters and
+   - The prefix for the resources. Prefix has a maximum of 12 characters and
      contains only alphanumeric characters and hyphens; e.g., `mydemo`.
 
    -  The location for the AKS cluster.
 
    ```bash
-   prefix="enter-prefix"  //  maximum 10 characters, containing only alphanumeric characters and hyphens; e.g. mydemo
+   prefix="enter-prefix"  //  maximum 12 characters, containing only alphanumeric characters and hyphens; e.g. mydemo
    location="eastus2"
    ```
 
