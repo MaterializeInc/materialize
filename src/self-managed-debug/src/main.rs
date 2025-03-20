@@ -255,7 +255,7 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
     };
 
     if let Some(dumper) = catalog_dumper {
-        handles.extend(dumper.dump_all_relations());
+        dumper.dump_all_relations().await;
     }
 
     join_all(handles).await;
