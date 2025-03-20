@@ -256,6 +256,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: testdrive
               args: [--replicas=4]
+        skip: "Reenable when database-issues#9095 is fixed"
 
       - id: testdrive-size-1
         label: ":racing_car: testdrive with SIZE 1"
@@ -1218,6 +1219,7 @@ steps:
             composition: terraform
             run: azure-temporary
       branches: "main v*.* lts-v* *azure* *tf* *terraform* *helm* *self-managed*"
+      skip: "Keeps failing because of internal errors at Azure"
 
   - group: "Output consistency"
     key: output-consistency
