@@ -157,14 +157,16 @@ impl WillDistinct {
                             todo.push((input, derived.last_child(), false));
                         }
                     }
-                    MirRelationExpr::Join { inputs, .. } => {
-                        let children_rev = inputs.iter_mut().rev();
-                        todo.extend(
-                            children_rev
-                                .zip(derived.children_rev())
-                                .map(|(x, y)| (x, y, distinct_by)),
-                        );
-                    }
+                    // Although it would be nice to push distinct elision through joins, this works against
+                    // Semijoin elision that needs to see distinct-ed inputs.
+                    // MirRelationExpr::Join { inputs, .. } => {
+                    //     let children_rev = inputs.iter_mut().rev();
+                    //     todo.extend(
+                    //         children_rev
+                    //             .zip(derived.children_rev())
+                    //             .map(|(x, y)| (x, y, distinct_by)),
+                    //     );
+                    // }
                     // If all inputs to the union are non-negative, any distinct enforced above the expression can be
                     // communicated on to each input.
                     MirRelationExpr::Union { base, inputs } => {
