@@ -313,9 +313,16 @@ pub trait TimestampProvider {
             // At the moment, only `QueryWhen::FreshestTableWrite` indicates that we should.
             // TODO: Should this just depend on the isolation level?
             if let Some(timestamp) = &oracle_read_ts {
+                println!("oracle_read_ts: {:?}", timestamp);
+                println!("isolation_level: {:?}", isolation_level);
+                println!(
+                    "must_advance_to_timeline_ts: {:?}",
+                    when.must_advance_to_timeline_ts()
+                );
                 if isolation_level != &IsolationLevel::StrongSessionSerializable
                     || when.must_advance_to_timeline_ts()
                 {
+                    println!("pushing oracle_read_ts");
                     constraints.lower.push((
                         Antichain::from_elem(*timestamp),
                         Reason::IsolationLevel(*isolation_level),
@@ -351,6 +358,7 @@ pub trait TimestampProvider {
                 }
             }
 
+            println!("constraints before we run the solver: {:?}", constraints);
             constraints.minimize();
             constraints
         };
@@ -1043,18 +1051,18 @@ mod constraints {
         pub fn minimize(&mut self) {
             // Establish the upper bound of lower constraints.
             let lower_frontier = self.lower_bound();
-            // Retain constraints that do not intersect `lower_frontier`.
+            // Retain constraints that intersect `lower_frontier`.
             self.lower.retain(|(anti, _)| {
                 anti.iter()
-                    .all(|time| !lower_frontier.elements().contains(time))
+                    .any(|time| lower_frontier.elements().contains(time))
             });
 
             // Establish the lower bound of upper constraints.
             let upper_frontier = self.upper_bound();
-            // Retain constraints that do not intersect `upper_frontier`.
+            // Retain constraints that intersect `upper_frontier`.
             self.upper.retain(|(anti, _)| {
                 anti.iter()
-                    .all(|time| !upper_frontier.elements().contains(time))
+                    .any(|time| upper_frontier.elements().contains(time))
             });
         }
 
