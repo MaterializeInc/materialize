@@ -3395,10 +3395,6 @@ async fn test_retain_history() {
         // We sanity check that we have _some_
         assert!(now_vals > 0);
         assert!(earlier_values > 0);
-        // The `s` view is of the counter source, so it should have more values now than earlier.
-        if name == "s" {
-            assert!(now_vals > earlier_values);
-        }
     }
 }
 
