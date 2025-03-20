@@ -1449,7 +1449,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                             {
                               "Column": [
                                 0,
-                                null
+                                "a"
                               ]
                             }
                           ]
@@ -1722,7 +1722,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                             {
                               "Column": [
                                 0,
-                                null
+                                "a"
                               ]
                             }
                           ],
@@ -4082,7 +4082,7 @@ FROM
                                         {
                                           "Column": [
                                             0,
-                                            null
+                                            "a"
                                           ]
                                         }
                                       ]
@@ -4305,7 +4305,7 @@ FROM
                                         {
                                           "Column": [
                                             0,
-                                            null
+                                            "a"
                                           ]
                                         }
                                       ],
@@ -5351,7 +5351,7 @@ WHERE a = c and d = e and b = f
                             {
                               "Column": [
                                 0,
-                                null
+                                "a"
                               ]
                             }
                           ]
@@ -5407,7 +5407,7 @@ WHERE a = c and d = e and b = f
                             {
                               "Column": [
                                 0,
-                                null
+                                "c"
                               ]
                             }
                           ],
@@ -5415,7 +5415,7 @@ WHERE a = c and d = e and b = f
                             {
                               "Column": [
                                 1,
-                                null
+                                "d"
                               ]
                             }
                           ]
@@ -5463,7 +5463,7 @@ WHERE a = c and d = e and b = f
                             {
                               "Column": [
                                 0,
-                                null
+                                "e"
                               ]
                             }
                           ]
@@ -5524,7 +5524,7 @@ WHERE a = c and d = e and b = f
                             {
                               "Column": [
                                 0,
-                                null
+                                "c"
                               ]
                             }
                           ],
@@ -5552,7 +5552,7 @@ WHERE a = c and d = e and b = f
                             {
                               "Column": [
                                 0,
-                                null
+                                "e"
                               ]
                             }
                           ],
@@ -5582,7 +5582,7 @@ WHERE a = c and d = e and b = f
                             {
                               "Column": [
                                 0,
-                                null
+                                "a"
                               ]
                             }
                           ],
@@ -5610,7 +5610,7 @@ WHERE a = c and d = e and b = f
                             {
                               "Column": [
                                 0,
-                                null
+                                "e"
                               ]
                             }
                           ],
@@ -5640,7 +5640,7 @@ WHERE a = c and d = e and b = f
                             {
                               "Column": [
                                 1,
-                                null
+                                "d"
                               ]
                             }
                           ],
@@ -5668,7 +5668,7 @@ WHERE a = c and d = e and b = f
                             {
                               "Column": [
                                 0,
-                                null
+                                "a"
                               ]
                             }
                           ],
@@ -5839,7 +5839,7 @@ WHERE b = c and d = e
                             {
                               "Column": [
                                 1,
-                                null
+                                "b"
                               ]
                             }
                           ]
@@ -5895,7 +5895,7 @@ WHERE b = c and d = e
                             {
                               "Column": [
                                 0,
-                                null
+                                "c"
                               ]
                             }
                           ],
@@ -5903,7 +5903,7 @@ WHERE b = c and d = e
                             {
                               "Column": [
                                 1,
-                                null
+                                "d"
                               ]
                             }
                           ]
@@ -5951,7 +5951,7 @@ WHERE b = c and d = e
                             {
                               "Column": [
                                 0,
-                                null
+                                "e"
                               ]
                             }
                           ]
@@ -5998,7 +5998,7 @@ WHERE b = c and d = e
                             {
                               "Column": [
                                 0,
-                                null
+                                "c"
                               ]
                             }
                           ],
@@ -6026,7 +6026,7 @@ WHERE b = c and d = e
                             {
                               "Column": [
                                 0,
-                                null
+                                "e"
                               ]
                             }
                           ],
@@ -6056,7 +6056,7 @@ WHERE b = c and d = e
                             {
                               "Column": [
                                 1,
-                                null
+                                "b"
                               ]
                             }
                           ],
@@ -6084,7 +6084,7 @@ WHERE b = c and d = e
                             {
                               "Column": [
                                 0,
-                                null
+                                "e"
                               ]
                             }
                           ],
@@ -6114,7 +6114,7 @@ WHERE b = c and d = e
                             {
                               "Column": [
                                 1,
-                                null
+                                "d"
                               ]
                             }
                           ],
@@ -6142,7 +6142,7 @@ WHERE b = c and d = e
                             {
                               "Column": [
                                 1,
-                                null
+                                "b"
                               ]
                             }
                           ],

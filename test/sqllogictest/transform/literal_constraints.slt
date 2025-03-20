@@ -171,12 +171,12 @@ Explained Query:
           linear_stage[0]
             closure
               project=()
-            lookup={ relation=0, key=[#0, #1] }
+            lookup={ relation=0, key=[#0{a}, #1{b}] }
             stream={ key=[#0, #1], thinning=() }
           source={ relation=1, key=[#0, #1] }
           Get::PassArrangements materialize.public.t1
             raw=false
-            arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
+            arrangements[0]={ key=[#0{a}, #1{b}], permutation=id, thinning=() }
             types=[integer?, text?]
           ArrangeBy
             raw=true
@@ -759,17 +759,17 @@ WHERE
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#0]] // { arity: 3 }
+      ArrangeBy keys=[[#0{a}]] // { arity: 3 }
         ReadIndex on=t2 idx_t2_a=[delta join lookup] // { arity: 3 }
   Return // { arity: 3 }
     Project (#0, #1, #5) // { arity: 3 }
       Filter (#0) IS NOT NULL // { arity: 9 }
         Join on=(#0 = #3 = #6) type=delta // { arity: 9 }
           implementation
-            %0:t1 » %1:l0[#0]KA » %2:l0[#0]KA
-            %1:l0 » %0:t1[#0]KAe » %2:l0[#0]KA
-            %2:l0 » %0:t1[#0]KAe » %1:l0[#0]KA
-          ArrangeBy keys=[[#0]] // { arity: 3 }
+            %0:t1 » %1:l0[#0{a}]KA » %2:l0[#0{a}]KA
+            %1:l0 » %0:t1[#0{a}]KAe » %2:l0[#0{a}]KA
+            %2:l0 » %0:t1[#0{a}]KAe » %1:l0[#0{a}]KA
+          ArrangeBy keys=[[#0{a}]] // { arity: 3 }
             ReadIndex on=materialize.public.t1 idx_t1_b=[lookup values=[("l2"); ("l3")]] // { arity: 3 }
           Get l0 // { arity: 3 }
           Get l0 // { arity: 3 }
@@ -805,10 +805,10 @@ Explained Query:
     Filter (#0) IS NOT NULL // { arity: 6 }
       Join on=(#0 = #3) type=differential // { arity: 6 }
         implementation
-          %0:t1[#0]KAe » %1:t2[#0]KAe
+          %0:t1[#0]KAe » %1:t2[#0{a}]KAe
         ArrangeBy keys=[[#0]] // { arity: 3 }
           ReadIndex on=materialize.public.t1 idx_t1_b=[lookup value=("l2")] // { arity: 3 }
-        ArrangeBy keys=[[#0]] // { arity: 3 }
+        ArrangeBy keys=[[#0{a}]] // { arity: 3 }
           ReadIndex on=t2 idx_t2_a=[differential join] // { arity: 3 }
 
 Used Indexes:

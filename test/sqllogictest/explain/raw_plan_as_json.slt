@@ -75,7 +75,7 @@ SELECT a + 1, b, 4 FROM mv WHERE a > 0
                         "level": 0,
                         "column": 0
                       },
-                      null
+                      "mv.a"
                     ]
                   },
                   "expr2": {
@@ -108,7 +108,7 @@ SELECT a + 1, b, 4 FROM mv WHERE a > 0
                     "level": 0,
                     "column": 0
                   },
-                  null
+                  "mv.a"
                 ]
               },
               "expr2": {
@@ -374,7 +374,7 @@ SELECT abs(min(a) - max(a)) FROM t
                       "level": 0,
                       "column": 0
                     },
-                    null
+                    "t.a"
                   ]
                 },
                 "distinct": false
@@ -387,7 +387,7 @@ SELECT abs(min(a) - max(a)) FROM t
                       "level": 0,
                       "column": 0
                     },
-                    null
+                    "t.a"
                   ]
                 },
                 "distinct": false
@@ -411,7 +411,7 @@ SELECT abs(min(a) - max(a)) FROM t
                         "level": 0,
                         "column": 0
                       },
-                      null
+                      "?column?"
                     ]
                   },
                   "expr2": {
@@ -420,7 +420,7 @@ SELECT abs(min(a) - max(a)) FROM t
                         "level": 0,
                         "column": 1
                       },
-                      null
+                      "?column?"
                     ]
                   },
                   "name": null
@@ -481,7 +481,7 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                         "level": 0,
                         "column": 1
                       },
-                      null
+                      "t.b"
                     ]
                   }
                 ]
@@ -499,7 +499,7 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                       "level": 0,
                       "column": 0
                     },
-                    null
+                    "t.a"
                   ]
                 },
                 "distinct": false
@@ -512,7 +512,7 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                       "level": 0,
                       "column": 0
                     },
-                    null
+                    "t.a"
                   ]
                 },
                 "distinct": false
@@ -536,7 +536,7 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                         "level": 0,
                         "column": 1
                       },
-                      null
+                      "?column?"
                     ]
                   },
                   "expr2": {
@@ -545,7 +545,7 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                         "level": 0,
                         "column": 2
                       },
-                      null
+                      "?column?"
                     ]
                   },
                   "name": null
@@ -607,7 +607,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                     "level": 1,
                     "column": 1
                   },
-                  null
+                  "t.b"
                 ]
               },
               "expr2": {
@@ -616,7 +616,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                     "level": 0,
                     "column": 1
                   },
-                  null
+                  "mv.b"
                 ]
               },
               "name": null
@@ -663,7 +663,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                         "level": 1,
                         "column": 0
                       },
-                      null
+                      "t.a"
                     ]
                   },
                   "expr2": {
@@ -672,7 +672,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                         "level": 0,
                         "column": 0
                       },
-                      null
+                      "mv.a"
                     ]
                   },
                   "name": null
@@ -804,7 +804,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                 "level": 0,
                                 "column": 1
                               },
-                              null
+                              "mv.b"
                             ]
                           },
                           "expr2": {
@@ -813,7 +813,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                 "level": 1,
                                 "column": 1
                               },
-                              null
+                              "t.b"
                             ]
                           },
                           "name": null
@@ -890,7 +890,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                     "level": 0,
                                     "column": 1
                                   },
-                                  null
+                                  "v.b"
                                 ]
                               },
                               "expr2": {
@@ -899,7 +899,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                     "level": 1,
                                     "column": 1
                                   },
-                                  null
+                                  "t.b"
                                 ]
                               },
                               "name": null
@@ -1216,7 +1216,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                           "level": 0,
                           "column": 1
                         },
-                        null
+                        "t1.b"
                       ]
                     },
                     "expr2": {
@@ -1225,7 +1225,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                           "level": 0,
                           "column": 3
                         },
-                        null
+                        "t2.b"
                       ]
                     },
                     "name": null
@@ -1240,7 +1240,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                           "level": 0,
                           "column": 3
                         },
-                        null
+                        "t2.b"
                       ]
                     },
                     "expr2": {
@@ -1249,7 +1249,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                           "level": 0,
                           "column": 5
                         },
-                        null
+                        "t3.b"
                       ]
                     },
                     "name": null
@@ -1345,7 +1345,7 @@ WITH A AS (SELECT 1 AS a), B as (SELECT a as b FROM A WHERE a > 0) SELECT * FROM
                         "level": 0,
                         "column": 0
                       },
-                      null
+                      "a.a"
                     ]
                   },
                   "expr2": {

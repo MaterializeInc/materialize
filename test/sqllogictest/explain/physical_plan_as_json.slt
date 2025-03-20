@@ -203,7 +203,7 @@ SELECT * FROM t
                     {
                       "Column": [
                         0,
-                        null
+                        "a"
                       ]
                     }
                   ],
@@ -303,7 +303,7 @@ SELECT a + b, 1 FROM t
                     {
                       "Column": [
                         0,
-                        null
+                        "a"
                       ]
                     }
                   ],
@@ -333,7 +333,7 @@ SELECT a + b, 1 FROM t
                   {
                     "Column": [
                       0,
-                      null
+                      "a"
                     ]
                   }
                 ],
@@ -518,7 +518,7 @@ SELECT * FROM ov
                                 {
                                   "Column": [
                                     0,
-                                    null
+                                    "a"
                                   ]
                                 }
                               ],
@@ -555,7 +555,7 @@ SELECT * FROM ov
                     {
                       "Column": [
                         0,
-                        null
+                        "a"
                       ]
                     }
                   ],
@@ -654,7 +654,7 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                                         {
                                           "Column": [
                                             0,
-                                            null
+                                            "a"
                                           ]
                                         }
                                       ],
@@ -684,7 +684,7 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                                       {
                                         "Column": [
                                           0,
-                                          null
+                                          "a"
                                         ]
                                       }
                                     ],
@@ -852,7 +852,7 @@ SELECT * FROM ov
                                 {
                                   "Column": [
                                     0,
-                                    null
+                                    "a"
                                   ]
                                 }
                               ],
@@ -889,7 +889,7 @@ SELECT * FROM ov
                     {
                       "Column": [
                         0,
-                        null
+                        "a"
                       ]
                     }
                   ],
@@ -994,7 +994,7 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                               {
                                                 "Column": [
                                                   0,
-                                                  null
+                                                  "a"
                                                 ]
                                               }
                                             ],
@@ -1024,7 +1024,7 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                             {
                                               "Column": [
                                                 0,
-                                                null
+                                                "a"
                                               ]
                                             }
                                           ],
@@ -1389,7 +1389,7 @@ SELECT x * 5 FROM cte WHERE x = 5
                                                       {
                                                         "Column": [
                                                           0,
-                                                          null
+                                                          "a"
                                                         ]
                                                       }
                                                     ],
@@ -1508,7 +1508,7 @@ SELECT x * 5 FROM cte WHERE x = 5
                                                 {
                                                   "Column": [
                                                     0,
-                                                    null
+                                                    "a"
                                                   ]
                                                 }
                                               ],
@@ -1750,7 +1750,7 @@ SELECT generate_series(a, b) from t
                           {
                             "Column": [
                               0,
-                              null
+                              "a"
                             ]
                           }
                         ],
@@ -1821,7 +1821,7 @@ SELECT generate_series(a, b) from t
               {
                 "Column": [
                   0,
-                  null
+                  "a"
                 ]
               }
             ]
@@ -1864,7 +1864,7 @@ SELECT DISTINCT a, b FROM t
                           {
                             "Column": [
                               0,
-                              null
+                              "a"
                             ]
                           }
                         ],
@@ -1918,7 +1918,7 @@ SELECT DISTINCT a, b FROM t
               {
                 "Column": [
                   0,
-                  null
+                  "a"
                 ]
               }
             ],
@@ -1975,7 +1975,7 @@ GROUP BY a
                           {
                             "Column": [
                               0,
-                              null
+                              "a"
                             ]
                           }
                         ],
@@ -2088,7 +2088,7 @@ GROUP BY a
               {
                 "Column": [
                   0,
-                  null
+                  "a"
                 ]
               }
             ],
@@ -2149,7 +2149,7 @@ FROM t
                                 {
                                   "Column": [
                                     0,
-                                    null
+                                    "a"
                                   ]
                                 }
                               ],
@@ -2179,7 +2179,7 @@ FROM t
                               {
                                 "Column": [
                                   0,
-                                  null
+                                  "a"
                                 ]
                               }
                             ],
@@ -2510,7 +2510,7 @@ SELECT * FROM hierarchical_group_by
                           {
                             "Column": [
                               0,
-                              null
+                              "a"
                             ]
                           }
                         ],
@@ -2580,7 +2580,7 @@ SELECT * FROM hierarchical_group_by
               {
                 "Column": [
                   0,
-                  null
+                  "a"
                 ]
               }
             ],
@@ -2638,7 +2638,7 @@ MATERIALIZED VIEW hierarchical_global_mv
                                 {
                                   "Column": [
                                     0,
-                                    null
+                                    "a"
                                   ]
                                 }
                               ],
@@ -2668,7 +2668,7 @@ MATERIALIZED VIEW hierarchical_global_mv
                               {
                                 "Column": [
                                   0,
-                                  null
+                                  "a"
                                 ]
                               }
                             ],
@@ -2969,7 +2969,7 @@ SELECT * FROM hierarchical_global
                                 {
                                   "Column": [
                                     0,
-                                    null
+                                    "a"
                                   ]
                                 }
                               ],
@@ -2999,7 +2999,7 @@ SELECT * FROM hierarchical_global
                               {
                                 "Column": [
                                   0,
-                                  null
+                                  "a"
                                 ]
                               }
                             ],
@@ -3297,7 +3297,7 @@ GROUP BY a
                                   {
                                     "Column": [
                                       0,
-                                      null
+                                      "a"
                                     ]
                                   }
                                 ],
@@ -3526,7 +3526,7 @@ GROUP BY a
                       {
                         "Column": [
                           0,
-                          null
+                          "a"
                         ]
                       }
                     ],
@@ -3563,7 +3563,7 @@ GROUP BY a
                                   {
                                     "Column": [
                                       0,
-                                      null
+                                      "a"
                                     ]
                                   }
                                 ],
@@ -3792,7 +3792,7 @@ GROUP BY a
                       {
                         "Column": [
                           0,
-                          null
+                          "a"
                         ]
                       }
                     ],
@@ -3906,7 +3906,7 @@ FROM t
                           {
                             "Column": [
                               0,
-                              null
+                              "a"
                             ]
                           }
                         ],
@@ -3936,7 +3936,7 @@ FROM t
                         {
                           "Column": [
                             0,
-                            null
+                            "a"
                           ]
                         }
                       ],
@@ -4633,7 +4633,7 @@ MATERIALIZED VIEW collated_group_by_mv
                                   {
                                     "Column": [
                                       0,
-                                      null
+                                      "a"
                                     ]
                                   }
                                 ],
@@ -4711,7 +4711,7 @@ MATERIALIZED VIEW collated_group_by_mv
                       {
                         "Column": [
                           0,
-                          null
+                          "a"
                         ]
                       }
                     ],
@@ -4749,7 +4749,7 @@ MATERIALIZED VIEW collated_group_by_mv
                                   {
                                     "Column": [
                                       0,
-                                      null
+                                      "a"
                                     ]
                                   }
                                 ],
@@ -4862,7 +4862,7 @@ MATERIALIZED VIEW collated_group_by_mv
                       {
                         "Column": [
                           0,
-                          null
+                          "a"
                         ]
                       }
                     ],
@@ -4900,7 +4900,7 @@ MATERIALIZED VIEW collated_group_by_mv
                                   {
                                     "Column": [
                                       0,
-                                      null
+                                      "a"
                                     ]
                                   }
                                 ],
@@ -5129,7 +5129,7 @@ MATERIALIZED VIEW collated_group_by_mv
                       {
                         "Column": [
                           0,
-                          null
+                          "a"
                         ]
                       }
                     ],
@@ -5166,7 +5166,7 @@ MATERIALIZED VIEW collated_group_by_mv
                                   {
                                     "Column": [
                                       0,
-                                      null
+                                      "a"
                                     ]
                                   }
                                 ],
@@ -5395,7 +5395,7 @@ MATERIALIZED VIEW collated_group_by_mv
                       {
                         "Column": [
                           0,
-                          null
+                          "a"
                         ]
                       }
                     ],
@@ -6094,7 +6094,7 @@ SELECT * FROM collated_group_by
                                   {
                                     "Column": [
                                       0,
-                                      null
+                                      "a"
                                     ]
                                   }
                                 ],
@@ -6164,7 +6164,7 @@ SELECT * FROM collated_group_by
                       {
                         "Column": [
                           0,
-                          null
+                          "a"
                         ]
                       }
                     ],
@@ -6202,7 +6202,7 @@ SELECT * FROM collated_group_by
                                   {
                                     "Column": [
                                       0,
-                                      null
+                                      "a"
                                     ]
                                   }
                                 ],
@@ -6315,7 +6315,7 @@ SELECT * FROM collated_group_by
                       {
                         "Column": [
                           0,
-                          null
+                          "a"
                         ]
                       }
                     ],
@@ -6353,7 +6353,7 @@ SELECT * FROM collated_group_by
                                   {
                                     "Column": [
                                       0,
-                                      null
+                                      "a"
                                     ]
                                   }
                                 ],
@@ -6582,7 +6582,7 @@ SELECT * FROM collated_group_by
                       {
                         "Column": [
                           0,
-                          null
+                          "a"
                         ]
                       }
                     ],
@@ -6619,7 +6619,7 @@ SELECT * FROM collated_group_by
                                   {
                                     "Column": [
                                       0,
-                                      null
+                                      "a"
                                     ]
                                   }
                                 ],
@@ -6848,7 +6848,7 @@ SELECT * FROM collated_group_by
                       {
                         "Column": [
                           0,
-                          null
+                          "a"
                         ]
                       }
                     ],
@@ -7543,7 +7543,7 @@ MATERIALIZED VIEW collated_global_mv
                           {
                             "Column": [
                               0,
-                              null
+                              "a"
                             ]
                           }
                         ],
@@ -7573,7 +7573,7 @@ MATERIALIZED VIEW collated_global_mv
                         {
                           "Column": [
                             0,
-                            null
+                            "a"
                           ]
                         }
                       ],
@@ -8915,7 +8915,7 @@ SELECT * FROM collated_global
                           {
                             "Column": [
                               0,
-                              null
+                              "a"
                             ]
                           }
                         ],
@@ -8945,7 +8945,7 @@ SELECT * FROM collated_global
                         {
                           "Column": [
                             0,
-                            null
+                            "a"
                           ]
                         }
                       ],
@@ -10281,7 +10281,7 @@ WHERE a = c AND d = e AND b + d > 42
                             {
                               "Column": [
                                 0,
-                                null
+                                "a"
                               ]
                             }
                           ],
@@ -10481,7 +10481,7 @@ WHERE a = c AND d = e AND b + d > 42
                       {
                         "Column": [
                           0,
-                          null
+                          "a"
                         ]
                       }
                     ],
@@ -10699,7 +10699,7 @@ WHERE a = c AND d = e AND b + d > 42
                           {
                             "Column": [
                               0,
-                              null
+                              "a"
                             ]
                           }
                         ],
@@ -10914,7 +10914,7 @@ WHERE a = c AND d = e AND b + d > 42
                           {
                             "Column": [
                               0,
-                              null
+                              "a"
                             ]
                           }
                         ],
@@ -11171,7 +11171,7 @@ WHERE a = c AND d = e AND f = a
                             {
                               "Column": [
                                 0,
-                                null
+                                "a"
                               ]
                             }
                           ],
@@ -11216,7 +11216,7 @@ WHERE a = c AND d = e AND f = a
                             {
                               "Column": [
                                 0,
-                                null
+                                "c"
                               ]
                             }
                           ],
@@ -11233,7 +11233,7 @@ WHERE a = c AND d = e AND f = a
                             {
                               "Column": [
                                 1,
-                                null
+                                "d"
                               ]
                             }
                           ],
@@ -11278,7 +11278,7 @@ WHERE a = c AND d = e AND f = a
                             {
                               "Column": [
                                 0,
-                                null
+                                "e"
                               ]
                             }
                           ],
@@ -11316,7 +11316,7 @@ WHERE a = c AND d = e AND f = a
                       {
                         "Column": [
                           0,
-                          null
+                          "a"
                         ]
                       }
                     ],
@@ -11376,7 +11376,7 @@ WHERE a = c AND d = e AND f = a
                           {
                             "Column": [
                               0,
-                              null
+                              "c"
                             ]
                           }
                         ],
@@ -11438,7 +11438,7 @@ WHERE a = c AND d = e AND f = a
                           {
                             "Column": [
                               0,
-                              null
+                              "e"
                             ]
                           }
                         ],
@@ -11499,7 +11499,7 @@ WHERE a = c AND d = e AND f = a
                       {
                         "Column": [
                           0,
-                          null
+                          "c"
                         ]
                       }
                     ],
@@ -11559,7 +11559,7 @@ WHERE a = c AND d = e AND f = a
                           {
                             "Column": [
                               0,
-                              null
+                              "a"
                             ]
                           }
                         ],
@@ -11623,7 +11623,7 @@ WHERE a = c AND d = e AND f = a
                           {
                             "Column": [
                               0,
-                              null
+                              "e"
                             ]
                           }
                         ],
@@ -11684,7 +11684,7 @@ WHERE a = c AND d = e AND f = a
                       {
                         "Column": [
                           0,
-                          null
+                          "e"
                         ]
                       }
                     ],
@@ -11720,7 +11720,7 @@ WHERE a = c AND d = e AND f = a
                           {
                             "Column": [
                               0,
-                              null
+                              "a"
                             ]
                           }
                         ],
@@ -11784,7 +11784,7 @@ WHERE a = c AND d = e AND f = a
                           {
                             "Column": [
                               1,
-                              null
+                              "d"
                             ]
                           }
                         ],
@@ -11908,7 +11908,7 @@ WHERE a = c and a = e
                             {
                               "Column": [
                                 0,
-                                null
+                                "a"
                               ]
                             }
                           ],
@@ -11953,7 +11953,7 @@ WHERE a = c and a = e
                             {
                               "Column": [
                                 0,
-                                null
+                                "c"
                               ]
                             }
                           ],
@@ -11998,7 +11998,7 @@ WHERE a = c and a = e
                             {
                               "Column": [
                                 0,
-                                null
+                                "e"
                               ]
                             }
                           ],
@@ -12036,7 +12036,7 @@ WHERE a = c and a = e
                       {
                         "Column": [
                           0,
-                          null
+                          "a"
                         ]
                       }
                     ],
@@ -12096,7 +12096,7 @@ WHERE a = c and a = e
                           {
                             "Column": [
                               0,
-                              null
+                              "c"
                             ]
                           }
                         ],
@@ -12134,7 +12134,7 @@ WHERE a = c and a = e
                           {
                             "Column": [
                               0,
-                              null
+                              "e"
                             ]
                           }
                         ],
@@ -12181,7 +12181,7 @@ WHERE a = c and a = e
                       {
                         "Column": [
                           0,
-                          null
+                          "c"
                         ]
                       }
                     ],
@@ -12217,7 +12217,7 @@ WHERE a = c and a = e
                           {
                             "Column": [
                               0,
-                              null
+                              "a"
                             ]
                           }
                         ],
@@ -12281,7 +12281,7 @@ WHERE a = c and a = e
                           {
                             "Column": [
                               0,
-                              null
+                              "e"
                             ]
                           }
                         ],
@@ -12328,7 +12328,7 @@ WHERE a = c and a = e
                       {
                         "Column": [
                           0,
-                          null
+                          "e"
                         ]
                       }
                     ],
@@ -12364,7 +12364,7 @@ WHERE a = c and a = e
                           {
                             "Column": [
                               0,
-                              null
+                              "a"
                             ]
                           }
                         ],
@@ -12428,7 +12428,7 @@ WHERE a = c and a = e
                           {
                             "Column": [
                               0,
-                              null
+                              "c"
                             ]
                           }
                         ],

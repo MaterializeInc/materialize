@@ -32,10 +32,10 @@ WITH t AS (SELECT * FROM y WHERE a < 3)
 Project (#0)
   With
     cte [l0 as t] =
-      Filter (#0 < 3)
+      Filter (#0{y.a} < 3)
         Get materialize.public.y
   Return
-    InnerJoin (#0 = #1)
+    InnerJoin (#0{t.a} = #1{a.a})
       Get l0
       Get l0
 
@@ -51,10 +51,10 @@ WITH t AS (SELECT * FROM y WHERE a < 3)
 ----
 With
   cte [l0 as t] =
-    Filter (#0 < 3)
+    Filter (#0{y.a} < 3)
       Get materialize.public.y
 Return
-  Filter (select(Get l0) < #0)
+  Filter (select(Get l0) < #0{y.a})
     Get materialize.public.y
 
 Target cluster: quickstart
@@ -543,7 +543,7 @@ Project (#1)
             cte [l4 as d] =
               Get l3
           Return
-            Reduce aggregates=[max(#0)]
+            Reduce aggregates=[max(#0{d.d})]
               Get l4
       Return
         Filter (select(Get l5) > 1)
@@ -554,14 +554,14 @@ Project (#1)
         cte [l3 as e] =
           Get l1
         cte [l7 as subquery-7] =
-          Reduce aggregates=[max(#0)]
+          Reduce aggregates=[max(#0{x.x})]
             Get l2
         cte [l6 as subquery-6] =
           With
             cte [l4 as f] =
               Get l3
           Return
-            Reduce aggregates=[min(#0)]
+            Reduce aggregates=[min(#0{f.f})]
               Get l4
       Return
         Filter (select(Get l6) < select(Get l7))

@@ -180,10 +180,10 @@ Explained Query:
   Project (#0..=#2, #5, #6) // { arity: 5 }
     Join on=(#0 = #4) type=differential // { arity: 7 }
       implementation
-        %0:foo[#0]KAe » %1:bar[#0]KAe
+        %0:foo[#0]KAe » %1:bar[#0{a}]KAe
       ArrangeBy keys=[[#0]] // { arity: 4 }
         ReadIndex on=materialize.public.foo foo_idx3=[lookup value=("this")] // { arity: 4 }
-      ArrangeBy keys=[[#0]] // { arity: 3 }
+      ArrangeBy keys=[[#0{a}]] // { arity: 3 }
         ReadIndex on=bar bar_idx=[differential join] // { arity: 3 }
 
 Used Indexes:

@@ -35,7 +35,7 @@ use mz_repr::strconv::{ParseError, ParseHexError};
 use mz_repr::{arb_datum, ColumnType, Datum, Row, RowArena, ScalarType};
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::scalar::func::format::DateTimeFormat;
 use crate::scalar::func::{
@@ -53,7 +53,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_expr.scalar.rs"));
 
 /// Behaves like `T`, but has trivial `Hash`, `Eq`, `MzReflect`, and `Ord`
 /// implementations.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct Opaque<T>(pub T);
 
 impl<T> Deref for Opaque<T> {
@@ -61,6 +61,24 @@ impl<T> Deref for Opaque<T> {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for Opaque<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self.0)
+    }
+}
+
+impl<T: Serialize> Serialize for Opaque<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Opaque<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Opaque(T::deserialize(deserializer)?))
     }
 }
 
@@ -81,8 +99,8 @@ impl<T> PartialEq for Opaque<T> {
 }
 
 impl<T> PartialOrd for Opaque<T> {
-    fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
-        Some(Ordering::Equal)
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 

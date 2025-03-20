@@ -2077,7 +2077,7 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR INDEX i;
 ----
 materialize.public.i:
-  ArrangeBy keys=[[#0]]
+  ArrangeBy keys=[[#0{a}]]
     ReadStorage materialize.public.t
 
 Source materialize.public.t

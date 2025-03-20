@@ -24,10 +24,9 @@ use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_sql_parser::ast::Ident;
 
 use crate::explain::{ExplainMultiPlan, ExplainSinglePlan};
-use crate::scalar::Opaque;
 use crate::{
     AccessStrategy, AggregateExpr, EvalError, Id, JoinImplementation, JoinInputCharacteristics,
-    LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing,
+    LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, Opaque, RowSetFinishing,
 };
 
 impl<'a, T: 'a> DisplayText for ExplainSinglePlan<'a, T>
@@ -1175,15 +1174,28 @@ where
     }
 }
 
-// A stored name.
+// A column reference with a stored name.
+// We defer to the inferred name, if available.
 impl<'a, M> fmt::Display for HumanizedExpr<'a, (&usize, &Arc<str>), M>
 where
     M: HumanizerMode,
 {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Write the stored name.
-        write!(f, "#{}{{{}}}", self.expr.0, self.expr.1)
+        match self.cols {
+            // We have a name inferred for the column indexed by `self.expr`. Write `ident`.
+            Some(cols) if cols.len() > *self.expr.0 && !cols[*self.expr.0].is_empty() => {
+                // Note: using unchecked here is okay since we're directly
+                // converting to a string afterwards.
+                let ident = Ident::new_unchecked(cols[*self.expr.0].clone()); // TODO: try to avoid the `.clone()` here.
+                M::humanize_ident(*self.expr.0, ident, f)
+            }
+            // We don't have name inferred for this column.
+            _ => {
+                // Write the stored name.
+                write!(f, "#{}{{{}}}", self.expr.0, self.expr.1)
+            }
+        }
     }
 }
 

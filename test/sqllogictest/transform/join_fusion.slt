@@ -120,12 +120,12 @@ Explained Query:
     Filter (#5 != #11) AND (#14 >= #10) // { arity: 15 }
       Join on=(#0 = #8 AND date_to_timestamp(#11) = (#5 - 9 months)) type=delta // { arity: 15 }
         implementation
-          %0:lineitem » %1:orders[#0]KA » %2:customer[×]
-          %1:orders » %0:lineitem[#0]KA » %2:customer[×]
-          %2:customer » %0:lineitem[×] » %1:orders[#0]KA
-        ArrangeBy keys=[[], [#0]] // { arity: 8 }
+          %0:lineitem » %1:orders[#0{o_orderkey}]KA » %2:customer[×]
+          %1:orders » %0:lineitem[#0{l_orderkey}]KA » %2:customer[×]
+          %2:customer » %0:lineitem[×] » %1:orders[#0{o_orderkey}]KA
+        ArrangeBy keys=[[], [#0{l_orderkey}]] // { arity: 8 }
           ReadIndex on=lineitem fk_lineitem_orderkey=[*** full scan ***, delta join lookup] // { arity: 8 }
-        ArrangeBy keys=[[#0]] // { arity: 4 }
+        ArrangeBy keys=[[#0{o_orderkey}]] // { arity: 4 }
           ReadIndex on=orders pk_orders_orderkey=[delta join lookup] // { arity: 4 }
         ArrangeBy keys=[[]] // { arity: 3 }
           ReadIndex on=customer pk_customer_custkey=[*** full scan ***] // { arity: 3 }
@@ -159,12 +159,12 @@ Explained Query:
             implementation
               %0:lineitem » %1:orders[#1]Keiif » %2[#0]K
               %1:orders » %0:lineitem[#0]Kef » %2[#0]K
-              %2 » %1:orders[#0]KAeiif » %0:lineitem[#0]Kef
+              %2 » %1:orders[#0{o_orderkey}]KAeiif » %0:lineitem[#0]Kef
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Project (#4) // { arity: 1 }
                 Filter (#6 = 1997-01-25) // { arity: 8 }
                   ReadIndex on=lineitem fk_lineitem_orderkey=[*** full scan ***] // { arity: 8 }
-            ArrangeBy keys=[[#0], [#1]] // { arity: 2 }
+            ArrangeBy keys=[[#0{o_orderkey}], [#1]] // { arity: 2 }
               Project (#0, #2) // { arity: 2 }
                 Filter (#0 <= 195) AND (#0 >= 38) AND (1997-08-25 00:00:00 = date_to_timestamp(#3)) // { arity: 4 }
                   ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 4 }

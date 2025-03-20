@@ -413,18 +413,18 @@ Explained Query:
     Project (#0..=#3, #5, #29)
       Map (((uint8_to_double(#27) / uint8_to_double(#21)) * 100))
         Join on=(#0 = #15 = #24 AND #2 = #4 AND #16 = #17) type=delta
-          ArrangeBy keys=[[#0], [#2]]
+          ArrangeBy keys=[[#0{id}], [#2]]
             Project (#0..=#3)
               ReadIndex on=mz_cluster_replicas mz_cluster_replicas_ind=[*** full scan ***]
-          ArrangeBy keys=[[#0]]
+          ArrangeBy keys=[[#0{id}]]
             ReadIndex on=mz_clusters mz_clusters_ind=[delta join lookup]
-          ArrangeBy keys=[[#0], [#1]]
+          ArrangeBy keys=[[#0{id}], [#1]]
             Project (#0, #3)
               Filter (#3) IS NOT NULL
                 ReadIndex on=mz_cluster_replicas mz_cluster_replicas_ind=[*** full scan ***]
-          ArrangeBy keys=[[#0]]
+          ArrangeBy keys=[[#0{size}]]
             ReadIndex on=mz_cluster_replica_sizes mz_cluster_replica_sizes_ind=[delta join lookup]
-          ArrangeBy keys=[[#0]]
+          ArrangeBy keys=[[#0{replica_id}]]
             ReadIndex on=mz_cluster_replica_metrics mz_cluster_replica_metrics_ind=[delta join lookup]
 
 Used Indexes:
@@ -454,7 +454,7 @@ Explained Query:
         Filter like["u%"](#0)
           Join on=(#0 = #15) type=differential
             Get l0
-            ArrangeBy keys=[[#0]]
+            ArrangeBy keys=[[#0{id}]]
               ReadIndex on=mz_source_statuses mz_source_statuses_ind=[differential join]
   Return
     Union
