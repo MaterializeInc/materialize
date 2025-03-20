@@ -23,6 +23,7 @@ class Clusterd(Service):
         environment_id: str | None = None,
         environment_extra: list[str] = [],
         memory: str | None = None,
+        cpu: str | None = None,
         options: list[str] = [],
         restart: str = "no",
         stop_grace_period: str = "120s",
@@ -52,8 +53,13 @@ class Clusterd(Service):
         # Depending on the Docker Compose version, this may either work or be
         # ignored with a warning. Unfortunately no portable way of setting the
         # memory limit is known.
-        if memory:
-            config["deploy"] = {"resources": {"limits": {"memory": memory}}}
+        if memory or cpu:
+            limits = {}
+            if memory:
+                limits["memory"] = memory
+            if cpu:
+                limits["cpus"] = cpu
+            config["deploy"] = {"resources": {"limits": limits}}
 
         config.update(
             {
