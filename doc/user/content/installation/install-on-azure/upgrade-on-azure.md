@@ -4,8 +4,8 @@ description: "Procedure to upgrade your Materialize operator and instances runni
 menu:
   main:
     parent: "install-on-azure"
-    identifier: "upgrade-on-azure
-    "
+    identifier: "upgrade-on-azure"
+    weight: 10
 ---
 
 To upgrade your Materialize instances, upgrade the Materialize operator first
