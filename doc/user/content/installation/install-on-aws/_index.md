@@ -81,6 +81,13 @@ for evaluation purposes only. The modules deploy a sample infrastructure on AWS
 - Materialize Operator
 - Materialize instances (during subsequent runs after the Operator is running)
 
+- *Starting in v0.3.0 of Materialize on AWS Terraform*, AWS Load Balancer
+  Controller and AWS Network Load Balancers (NLBs) for each
+  Materialize instance. If your deployment is set up using an earlier version of
+  the Materialize AWS Terraform module, and you wish to upgrade to v0.3.0
+  Terraform modules, see the [Upgrade
+  Notes](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/README.md#upgrade-notes).
+
 {{< tip >}}
 
 The tutorial uses the `main.tf` found in the `examples/simple/` directory, which
@@ -170,15 +177,17 @@ node instance type, etc.), see the
    Upon successful completion, various fields and their values are output:
 
    ```bash
-   Apply complete! Resources: 77 added, 0 changed, 0 destroyed.
+   Apply complete! Resources: 85 added, 0 changed, 0 destroyed.
 
    Outputs:
 
+   cluster_certificate_authority_data = <sensitive>
    database_endpoint = "my-demo-dev-db.abcdefg8dsto.us-east-1.rds.amazonaws.com:5432"
    eks_cluster_endpoint = "https://0123456789A00BCD000E11BE12345A01.gr7.us-east-1.eks.amazonaws.com"
    eks_cluster_name = "my-demo-dev-eks"
    materialize_s3_role_arn = "arn:aws:iam::000111222333:role/my-demo-dev-mz-role"
    metadata_backend_url = <sensitive>
+   nlb_details = []
    oidc_provider_arn = "arn:aws:iam::000111222333:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/7D14BCA3A7AA896A836782D96A24F958"
    persist_backend_url = "s3://my-demo-dev-storage-f2def2a9/dev:serviceaccount:materialize-environment:12345678-1234-1234-1234-12345678912"
    s3_bucket_name = "my-demo-dev-storage-f2def2a9"
@@ -236,7 +245,8 @@ node instance type, etc.), see the
 
 1. Once the Materialize operator is deployed and running, you can deploy the
    Materialize instances. To deploy Materialize instances, create  a
-   `mz_instances.tfvars` file with the Materialize instance configuration.
+   `mz_instances.tfvars` file with the [Materialize instance
+   configuration](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#input_materialize_instances).
 
    For example, the following specifies the configuration for a `demo` instance.
 
@@ -256,6 +266,19 @@ node instance type, etc.), see the
    EOF
    ```
 
+   Starting in v0.3.0, the Materialize on AWS Terraform module also deploys (by
+   default, internal) Network Load Balancers (NLBs) for each Materialize
+   instance. See [`materialize_instances`](
+   https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#input_materialize_instances)
+   for the Materialize instance configuration options.
+
+   {{< tip >}}
+   If upgrading from a deployment that was set up using an earlier version of
+   the Terraform modules, see the [Upgrade
+   Notes](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/README.md#upgrade-notes)
+   for the new version.
+   {{</ tip >}}
+
 1. Run `terraform plan` with both `.tfvars` files and review the changes to be
    made.
 
@@ -267,7 +290,7 @@ node instance type, etc.), see the
    following:
 
    ```
-   Plan: 4 to add, 0 to change, 0 to destroy.
+   Plan: 14 to add, 0 to change, 0 to destroy.
    ```
 
 1. If you are satisfied with the changes, apply.
@@ -281,6 +304,8 @@ node instance type, etc.), see the
    Upon successful completion, you should see output with a summary similar to
    the following:
 
+   <a name="aws-terrafrom-output"></a>
+
    ```bash
    Apply complete! Resources: 4 added, 0 changed, 0 destroyed.
 
@@ -291,11 +316,20 @@ node instance type, etc.), see the
    eks_cluster_name = "my-demo-dev-eks"
    materialize_s3_role_arn = "arn:aws:iam::000111222333:role/my-demo-dev-mz-role"
    metadata_backend_url = <sensitive>
+   nlb_details = [
+     {
+       "arn" = "arn:aws:elasticloadbalancing:us-east-1:400121260767:loadbalancer/net/demo/aeae3d936afebcfe"
+       "dns_name" = "demo-aeae3d936afebcfe.elb.us-east-1.amazonaws.com"
+     },
+   ]
    oidc_provider_arn = "arn:aws:iam::000111222333:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/7D14BCA3A7AA896A836782D96A24F958"
    persist_backend_url = "s3://my-demo-dev-storage-f2def2a9/dev:serviceaccount:materialize-environment:12345678-1234-1234-1234-12345678912"
    s3_bucket_name = "my-demo-dev-storage-f2def2a9"
    vpc_id = "vpc-0abc000bed1d111bd"
    ```
+
+   The Network Load Balancer (NLB) details `nlb_details` are available when
+   running the Terraform module v0.3.0+.
 
 1. Verify the installation and check the status:
 
@@ -346,13 +380,40 @@ node instance type, etc.), see the
 
 1. Open the Materialize Console in your browser:
 
+   {{< tabs >}}
+
+   {{< tab  "Via Network Load Balancer" >}}
+
+   Starting in v0.3.0, for each Materialize instance, Materialize on AWS
+   Terraform module also deploys AWS Network Load Balancers (by default,
+   internal) with the following listeners, including a listener on port 8080 for
+   the Materialize Console:
+
+   | Port | Description |
+   | ---- | ------------|
+   | 6875 | For SQL connections to the database |
+   | 6876 | For HTTP(S) connections to the database |
+   | **8080** | **For HTTP(S) connections to Materialize Console** |
+
+   The Network Load Balancer (NLB) details are found in the `nlb_details`  in
+   the [Terraform output](#aws-terrafrom-output).
+
+
+   {{</ tab >}}
+
+   {{< tab "Via port forwarding" >}}
+
    {{% self-managed/port-forwarding-handling %}}
+
+   {{</ tab>}}
+   {{</ tabs >}}
 
       {{< tip >}}
 
       {{% self-managed/troubleshoot-console-mz_catalog_server_blurb %}}
 
       {{< /tip >}}
+
 
 ## Next steps
 

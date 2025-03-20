@@ -77,6 +77,11 @@ documentation](https://helm.sh/docs/intro/install/).
 1. Optional. You may need to update your fork of the Terraform modules to
    upgrade.
 
+   To upgrade from a deployment set up using an earlier version of the Terraform
+   modules, see the [Upgrade
+   Notes](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/README.md#upgrade-notes)
+   for your version.
+
 1. Configure `kubectl` to connect to your EKS cluster, replacing:
 
    - `<your-eks-cluster-name>` with the name of your EKS cluster. Your cluster
