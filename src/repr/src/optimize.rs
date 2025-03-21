@@ -124,6 +124,8 @@ optimizer_feature_flags!({
     enable_projection_pushdown_after_relation_cse: bool,
     // See the feature flag of the same name.
     enable_let_prefix_extraction: bool,
+    // See the feature flag of the same name.
+    enable_less_reduce_in_eqprop: bool,
 });
 
 /// A trait used to implement layered config construction.
