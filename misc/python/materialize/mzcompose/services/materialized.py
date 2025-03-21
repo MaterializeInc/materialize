@@ -64,6 +64,7 @@ class Materialized(Service):
         volumes_extra: list[str] = [],
         depends_on: list[str] = [],
         memory: str | None = None,
+        cpu: str | None = None,
         options: list[str] = [],
         persist_blob_url: str | None = None,
         default_size: int | str = Size.DEFAULT_SIZE,
@@ -272,8 +273,13 @@ class Materialized(Service):
         # Depending on the Docker Compose version, this may either work or be
         # ignored with a warning. Unfortunately no portable way of setting the
         # memory limit is known.
-        if memory:
-            config["deploy"] = {"resources": {"limits": {"memory": memory}}}
+        if memory or cpu:
+            limits = {}
+            if memory:
+                limits["memory"] = memory
+            if cpu:
+                limits["cpus"] = cpu
+            config["deploy"] = {"resources": {"limits": limits}}
 
         if sanity_restart:
             # Workaround for https://github.com/docker/compose/issues/11133
