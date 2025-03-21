@@ -5173,6 +5173,8 @@ dependencies = [
  "timely",
  "tokio",
  "tracing",
+ "tracing-subscriber",
+ "turmoil",
  "workspace-hack",
 ]
 
