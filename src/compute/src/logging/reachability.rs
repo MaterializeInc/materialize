@@ -14,10 +14,14 @@ use std::convert::TryInto;
 use std::rc::Rc;
 use std::time::Duration;
 
+use columnar::Columnar;
+use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Row, Timestamp};
-use mz_timely_util::containers::{columnar_exchange, Col2ValBatcher, Column, ColumnBuilder};
+use mz_timely_util::containers::{
+    columnar_exchange, Col2ValBatcher, Column, ColumnBuilder, ConvertingContainerBuilder,
+};
 use mz_timely_util::replay::MzReplay;
 use timely::dataflow::channels::pact::ExchangeCore;
 use timely::dataflow::Scope;
@@ -51,7 +55,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         let interval_ms = std::cmp::max(1, config.interval.as_millis());
         type UpdatesKey = (bool, usize, usize, usize, Timestamp);
 
-        type CB = ColumnBuilder<((UpdatesKey, ()), Timestamp, Diff)>;
+        type CB = ConvertingContainerBuilder<ConsolidatingContainerBuilder<Vec<((UpdatesKey, ()), Timestamp, Diff)>>, ColumnBuilder<((UpdatesKey, ()), Timestamp, Diff)>>;
         let (updates, token) = event_queue.links.mz_replay::<_, CB, _>(
             scope,
             "reachability logs",
@@ -67,7 +71,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
                     let time_ms = ((time.as_millis() / interval_ms) + 1) * interval_ms;
                     let time_ms: Timestamp = time_ms.try_into().expect("must fit");
                     for (source, port, update_type, ts, diff) in massaged.into_iter() {
-                        let datum = (update_type, operator_id, source, port, ts);
+                        let datum = (update_type, operator_id, source, port, Timestamp::into_owned(ts));
                         session.give(((datum, ()), time_ms, diff));
                     }
                 }

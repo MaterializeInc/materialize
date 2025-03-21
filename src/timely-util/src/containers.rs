@@ -91,7 +91,7 @@ mod container {
 
     impl<C: Columnar> Column<C> {
         /// Borrows the container as a reference.
-        fn borrow(&self) -> <C::Container as columnar::Container<C>>::Borrowed<'_> {
+        pub fn borrow(&self) -> <C::Container as columnar::Container<C>>::Borrowed<'_> {
             match self {
                 Column::Typed(t) => t.borrow(),
                 Column::Bytes(b) => {
@@ -471,6 +471,105 @@ mod provided_builder {
         #[inline(always)]
         fn finish(&mut self) -> Option<&mut Self::Container> {
             None
+        }
+    }
+}
+
+pub use converting_cb::ConvertingContainerBuilder;
+
+mod converting_cb {
+    use std::collections::VecDeque;
+
+    use timely::container::{ContainerBuilder, PushInto};
+    use timely::Container;
+
+    /// A container builder that stages in a first container builder, and absorbs its output
+    /// in a second container builder.
+    pub struct ConvertingContainerBuilder<From, To: ContainerBuilder> {
+        from: From,
+        to: To,
+        output: VecDeque<To::Container>,
+        empty: Option<To::Container>,
+    }
+
+    impl<From: Default, To: ContainerBuilder + Default> Default
+        for ConvertingContainerBuilder<From, To>
+    {
+        #[inline(always)]
+        fn default() -> Self {
+            Self {
+                from: Default::default(),
+                to: Default::default(),
+                output: VecDeque::default(),
+                empty: None,
+            }
+        }
+    }
+
+    impl<From, To> ConvertingContainerBuilder<From, To>
+    where
+        From: ContainerBuilder,
+        To: ContainerBuilder + for<'a> PushInto<<From::Container as Container>::ItemRef<'a>>,
+    {
+        fn drain_container(&mut self, f: impl FnOnce(&mut From) -> Option<&mut From::Container>) {
+            if let Some(container) = f(&mut self.from) {
+                for item in container.iter() {
+                    self.to.push_into(item);
+                    if let Some(container) = self.to.extract() {
+                        self.output.push_back(std::mem::take(container));
+                        if let Some(empty) = self.empty.take() {
+                            *container = empty;
+                        }
+                    }
+                }
+            }
+        }
+
+        #[inline]
+        fn pop(&mut self) -> Option<&mut To::Container> {
+            if let Some(container) = self.output.pop_front() {
+                self.empty = Some(container);
+                self.empty.as_mut()
+            } else {
+                None
+            }
+        }
+    }
+
+    impl<From, To, T> PushInto<T> for ConvertingContainerBuilder<From, To>
+    where
+        From: ContainerBuilder + PushInto<T>,
+        To: ContainerBuilder + for<'a> PushInto<<From::Container as Container>::ItemRef<'a>>,
+    {
+        #[inline(always)]
+        fn push_into(&mut self, item: T) {
+            self.from.push_into(item);
+        }
+    }
+
+    impl<From, To> ContainerBuilder for ConvertingContainerBuilder<From, To>
+    where
+        From: ContainerBuilder,
+        To: ContainerBuilder + for<'a> PushInto<<From::Container as Container>::ItemRef<'a>>,
+    {
+        type Container = To::Container;
+
+        #[inline]
+        fn extract(&mut self) -> Option<&mut Self::Container> {
+            self.drain_container(|from| from.extract());
+            self.pop()
+        }
+
+        #[inline]
+        fn finish(&mut self) -> Option<&mut Self::Container> {
+            self.drain_container(|from| from.finish());
+            if let Some(container) = self.to.finish() {
+                self.output.push_back(std::mem::take(container));
+                if let Some(empty) = self.empty.take() {
+                    *container = empty;
+                }
+            }
+            self.pop()
         }
     }
 }
