@@ -140,31 +140,28 @@ SELECT * FROM (
 );
 ----
 Explained Query:
-  With Mutually Recursive
+  With
     cte l0 =
       Distinct project=[(#0{f1} % 2)] // { arity: 1 }
         Project (#0{f1}) // { arity: 1 }
           ReadStorage materialize.public.t2 // { arity: 2 }
-    cte l1 =
-      Distinct project=[#0{f1}..=#2] // { arity: 3 }
-        Union // { arity: 3 }
-          Get l1 // { arity: 3 }
-          Project (#0, #0, #0) // { arity: 3 }
-            Get l0 // { arity: 1 }
-          Join on=(#2 = (#0{f1} % 2)) type=differential // { arity: 3 }
-            implementation
-              %1:l0[#0]UK » %0:t2[(#0 % 2)]K
-            ArrangeBy keys=[[(#0{f1} % 2)]] // { arity: 2 }
-              ReadStorage materialize.public.t2 // { arity: 2 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Get l0 // { arity: 1 }
   Return // { arity: 1 }
-    Union // { arity: 1 }
-      Project (#2) // { arity: 1 }
-        Get l1 // { arity: 3 }
-      Project (#1) // { arity: 1 }
-        Map (42) // { arity: 2 }
-          Get l0 // { arity: 1 }
+    With Mutually Recursive
+      cte l1 =
+        Distinct project=[#0{f1}..=#2] // { arity: 3 }
+          Union // { arity: 3 }
+            Get l1 // { arity: 3 }
+            Project (#0, #0, #0) // { arity: 3 }
+              Get l0 // { arity: 1 }
+            Map ((#0{f1} % 2)) // { arity: 3 }
+              ReadStorage materialize.public.t2 // { arity: 2 }
+    Return // { arity: 1 }
+      Union // { arity: 1 }
+        Project (#2) // { arity: 1 }
+          Get l1 // { arity: 3 }
+        Project (#1) // { arity: 1 }
+          Map (42) // { arity: 2 }
+            Get l0 // { arity: 1 }
 
 Source materialize.public.t2
 

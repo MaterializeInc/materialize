@@ -542,3 +542,91 @@ where (~ (select "replication_factor" from mz_catalog.mz_clusters limit 1 offset
          end
       )
 limit 117;
+
+## Ensure that we hoist WMR-invariant Let bindings, to avoid a `raw` modifier on arrangements
+## that can be accessed through keys (and which do not otherwise require linear work).
+
+statement ok
+create table potato (a TEXT, b TEXT);
+
+statement ok
+create index on potato(a);
+
+## The only thing that needs to stay true about what follows is that `potato` is used only
+## as indexed access, and has `raw = false` to avoid decanting its contents.
+query T multiline
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE
+walk(a TEXT, b TEXT) AS (
+    SELECT a, b
+    FROM potato
+    WHERE a = 'russet'
+
+    UNION
+
+    SELECT potato.a, potato.b
+    FROM potato
+    INNER JOIN walk
+    ON potato.a = walk.b
+)
+select * from walk;
+----
+Explained Query:
+  With
+    cte l0 =
+      Get::PassArrangements materialize.public.potato
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+        types=[text?, text?]
+  Return
+    With Mutually Recursive
+      cte l1 =
+        ArrangeBy
+          input_key=[#0, #1]
+          raw=true
+          Reduce::Distinct
+            val_plan
+              project=()
+            key_plan=id
+            Union
+              Join::Linear
+                linear_stage[0]
+                  lookup={ relation=0, key=[#0] }
+                  stream={ key=[#0], thinning=() }
+                source={ relation=1, key=[#0] }
+                Get::PassArrangements l0
+                  raw=false
+                  arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+                  types=[text?, text?]
+                ArrangeBy
+                  raw=true
+                  arrangements[0]={ key=[#0], permutation=id, thinning=() }
+                  types=[text]
+                  Constant
+                    - ("russet")
+              Join::Linear
+                linear_stage[0]
+                  lookup={ relation=1, key=[#0] }
+                  stream={ key=[#0], thinning=(#1) }
+                source={ relation=0, key=[#0] }
+                Get::PassArrangements l0
+                  raw=false
+                  arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+                  types=[text?, text?]
+                ArrangeBy
+                  raw=true
+                  arrangements[0]={ key=[#0], permutation=id, thinning=() }
+                  types=[text]
+                  Get::Collection l1
+                    project=(#1)
+                    filter=((#1) IS NOT NULL)
+                    raw=true
+    Return
+      Get::PassArrangements l1
+        raw=true
+
+Used Indexes:
+  - materialize.public.potato_a_idx (differential join, lookup)
+
+Target cluster: quickstart
+
+EOF

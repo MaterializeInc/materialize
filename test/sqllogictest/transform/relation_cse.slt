@@ -1578,7 +1578,7 @@ UNION ALL
 SELECT * FROM c2 WHERE f1 > 7
 ----
 Explained Query:
-  With Mutually Recursive
+  With
     cte l0 =
       Union // { arity: 2 }
         ReadIndex on=t1 i1=[*** full scan ***] // { arity: 2 }
@@ -1586,28 +1586,30 @@ Explained Query:
     cte l1 =
       Filter (#1{f2} > 7) // { arity: 2 }
         Get l0 // { arity: 2 }
-    cte l2 =
-      Union // { arity: 2 }
-        Get l1 // { arity: 2 }
-        Get l2 // { arity: 2 }
-        Get l2 // { arity: 2 }
-        Get l3 // { arity: 2 }
-        Get l3 // { arity: 2 }
-    cte l3 =
-      Union // { arity: 2 }
-        Get l1 // { arity: 2 }
-        Get l2 // { arity: 2 }
-        Get l2 // { arity: 2 }
-        Get l3 // { arity: 2 }
-        Get l3 // { arity: 2 }
   Return // { arity: 2 }
-    Union // { arity: 2 }
-      Filter (#0{f1} > 7) // { arity: 2 }
-        Get l0 // { arity: 2 }
-      Filter (#0{f1} > 7) // { arity: 2 }
-        Get l2 // { arity: 2 }
-      Filter (#0{f1} > 7) // { arity: 2 }
-        Get l3 // { arity: 2 }
+    With Mutually Recursive
+      cte l2 =
+        Union // { arity: 2 }
+          Get l1 // { arity: 2 }
+          Get l2 // { arity: 2 }
+          Get l2 // { arity: 2 }
+          Get l3 // { arity: 2 }
+          Get l3 // { arity: 2 }
+      cte l3 =
+        Union // { arity: 2 }
+          Get l1 // { arity: 2 }
+          Get l2 // { arity: 2 }
+          Get l2 // { arity: 2 }
+          Get l3 // { arity: 2 }
+          Get l3 // { arity: 2 }
+    Return // { arity: 2 }
+      Union // { arity: 2 }
+        Filter (#0{f1} > 7) // { arity: 2 }
+          Get l0 // { arity: 2 }
+        Filter (#0{f1} > 7) // { arity: 2 }
+          Get l2 // { arity: 2 }
+        Filter (#0{f1} > 7) // { arity: 2 }
+          Get l3 // { arity: 2 }
 
 Used Indexes:
   - materialize.public.i1 (*** full scan ***)

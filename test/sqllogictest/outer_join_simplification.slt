@@ -692,7 +692,7 @@ with mutually recursive
 select * from c0
 ----
 Explained Query:
-  With Mutually Recursive
+  With
     cte l0 =
       Project (#0{a}..=#2{u}, #4{v})
         Join on=(#0{a} = #3{a}) type=differential
@@ -702,20 +702,22 @@ Explained Query:
           ArrangeBy keys=[[#0{a}]]
             Filter (#0{a}) IS NOT NULL
               ReadStorage materialize.public.bar
-    cte l1 =
-      Distinct project=[#0{a}..=#4{v}]
-        Union
-          Map (null, null)
-            Union
-              Negate
-                Project (#0{a}..=#2{u})
-                  Get l0
-              ReadStorage materialize.public.foo_raw
-          Project (#0{a}..=#2{u}, #0{a}, #3{v})
-            Get l0
-          Get l1
   Return
-    Get l1
+    With Mutually Recursive
+      cte l1 =
+        Distinct project=[#0{a}..=#4{v}]
+          Union
+            Map (null, null)
+              Union
+                Negate
+                  Project (#0{a}..=#2{u})
+                    Get l0
+                ReadStorage materialize.public.foo_raw
+            Project (#0{a}..=#2{u}, #0{a}, #3{v})
+              Get l0
+            Get l1
+    Return
+      Get l1
 
 Source materialize.public.foo_raw
 Source materialize.public.bar
@@ -837,7 +839,7 @@ with mutually recursive
 select * from c0;
 ----
 Explained Query:
-  With Mutually Recursive
+  With
     cte l0 =
       Project (#0{a}) // { arity: 1 }
         Filter (#0{a}) IS NOT NULL // { arity: 2 }
@@ -845,53 +847,55 @@ Explained Query:
     cte l1 =
       Project (#0{c}) // { arity: 1 }
         ReadStorage materialize.public.quux // { arity: 2 }
-    cte l2 =
-      Distinct project=[#0{a}..=#2{u}] // { arity: 3 }
-        Union // { arity: 3 }
-          Project (#0..=#2) // { arity: 3 }
-            Join on=(#0 = #3{a} AND #1 = #4{b} AND #7{c} = case when (#6) IS NULL then null else #5{c} end) type=delta // { arity: 8 }
-              ArrangeBy keys=[[#0{a}], [#1{b}]] // { arity: 3 }
-                Get l2 // { arity: 3 }
-              ArrangeBy keys=[[#0{a}]] // { arity: 1 }
-                Union // { arity: 1 }
-                  Get l0 // { arity: 1 }
-                  Threshold // { arity: 1 }
-                    Union // { arity: 1 }
-                      Negate // { arity: 1 }
-                        Get l0 // { arity: 1 }
-                      Distinct project=[#0] // { arity: 1 }
-                        Project (#0{a}) // { arity: 1 }
-                          Get l2 // { arity: 3 }
-              ArrangeBy keys=[[#0{b}], [case when (#2) IS NULL then null else #1{c} end]] // { arity: 3 }
-                Union // { arity: 3 }
-                  Project (#0{b}, #1{c}, #3) // { arity: 3 }
-                    Map (true) // { arity: 4 }
-                      ReadStorage materialize.public.baz // { arity: 3 }
-                  Map (null, null) // { arity: 3 }
+  Return // { arity: 3 }
+    With Mutually Recursive
+      cte l2 =
+        Distinct project=[#0{a}..=#2{u}] // { arity: 3 }
+          Union // { arity: 3 }
+            Project (#0..=#2) // { arity: 3 }
+              Join on=(#0 = #3{a} AND #1 = #4{b} AND #7{c} = case when (#6) IS NULL then null else #5{c} end) type=delta // { arity: 8 }
+                ArrangeBy keys=[[#0{a}], [#1{b}]] // { arity: 3 }
+                  Get l2 // { arity: 3 }
+                ArrangeBy keys=[[#0{a}]] // { arity: 1 }
+                  Union // { arity: 1 }
+                    Get l0 // { arity: 1 }
                     Threshold // { arity: 1 }
                       Union // { arity: 1 }
                         Negate // { arity: 1 }
-                          Project (#0{b}) // { arity: 1 }
-                            ReadStorage materialize.public.baz // { arity: 3 }
+                          Get l0 // { arity: 1 }
                         Distinct project=[#0] // { arity: 1 }
-                          Project (#1{b}) // { arity: 1 }
+                          Project (#0{a}) // { arity: 1 }
                             Get l2 // { arity: 3 }
-              ArrangeBy keys=[[#0{c}]] // { arity: 1 }
-                Union // { arity: 1 }
-                  Get l1 // { arity: 1 }
-                  Threshold // { arity: 1 }
-                    Union // { arity: 1 }
-                      Negate // { arity: 1 }
-                        Get l1 // { arity: 1 }
-                      Distinct project=[#0{c}] // { arity: 1 }
+                ArrangeBy keys=[[#0{b}], [case when (#2) IS NULL then null else #1{c} end]] // { arity: 3 }
+                  Union // { arity: 3 }
+                    Project (#0{b}, #1{c}, #3) // { arity: 3 }
+                      Map (true) // { arity: 4 }
+                        ReadStorage materialize.public.baz // { arity: 3 }
+                    Map (null, null) // { arity: 3 }
+                      Threshold // { arity: 1 }
                         Union // { arity: 1 }
-                          Project (#1{c}) // { arity: 1 }
-                            ReadStorage materialize.public.baz // { arity: 3 }
-                          Constant // { arity: 1 }
-                            - (null)
-          ReadStorage materialize.public.foo // { arity: 3 }
-  Return // { arity: 3 }
-    Get l2 // { arity: 3 }
+                          Negate // { arity: 1 }
+                            Project (#0{b}) // { arity: 1 }
+                              ReadStorage materialize.public.baz // { arity: 3 }
+                          Distinct project=[#0] // { arity: 1 }
+                            Project (#1{b}) // { arity: 1 }
+                              Get l2 // { arity: 3 }
+                ArrangeBy keys=[[#0{c}]] // { arity: 1 }
+                  Union // { arity: 1 }
+                    Get l1 // { arity: 1 }
+                    Threshold // { arity: 1 }
+                      Union // { arity: 1 }
+                        Negate // { arity: 1 }
+                          Get l1 // { arity: 1 }
+                        Distinct project=[#0{c}] // { arity: 1 }
+                          Union // { arity: 1 }
+                            Project (#1{c}) // { arity: 1 }
+                              ReadStorage materialize.public.baz // { arity: 3 }
+                            Constant // { arity: 1 }
+                              - (null)
+            ReadStorage materialize.public.foo // { arity: 3 }
+    Return // { arity: 3 }
+      Get l2 // { arity: 3 }
 
 Source materialize.public.foo
 Source materialize.public.bar
