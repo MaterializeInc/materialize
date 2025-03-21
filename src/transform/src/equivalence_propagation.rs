@@ -241,8 +241,10 @@ impl EquivalencePropagation {
                     let input_arity = input_types.len() - scalars.len();
                     for (index, expr) in scalars.iter_mut().enumerate() {
                         let reducer = input_equivalences.reducer();
-                        reducer.reduce_expr(expr);
-                        expr.reduce(&input_types[..(input_arity + index)]);
+                        let changed = reducer.reduce_expr(expr);
+                        if changed {
+                            expr.reduce(&input_types[..(input_arity + index)]);
+                        }
                         // Introduce the fact relating the mapped expression and corresponding column.
                         // This allows subsequent expressions to be optimized with this information.
                         input_equivalences.classes.push(vec![
@@ -278,8 +280,10 @@ impl EquivalencePropagation {
                         .expect("RelationType required");
                     let reducer = input_equivalences.reducer();
                     for expr in exprs.iter_mut() {
-                        reducer.reduce_expr(expr);
-                        expr.reduce(input_types.as_ref().unwrap());
+                        let changed = reducer.reduce_expr(expr);
+                        if changed {
+                            expr.reduce(input_types.as_ref().unwrap());
+                        }
                     }
                     let input_arity = *derived
                         .last_child()
@@ -309,8 +313,10 @@ impl EquivalencePropagation {
                         .expect("RelationType required");
                     let reducer = input_equivalences.reducer();
                     for expr in predicates.iter_mut() {
-                        reducer.reduce_expr(expr);
-                        expr.reduce(input_types.as_ref().unwrap());
+                        let changed = reducer.reduce_expr(expr);
+                        if changed {
+                            expr.reduce(input_types.as_ref().unwrap());
+                        }
                     }
                     // Incorporate `predicates` into `outer_equivalences`.
                     let mut class = predicates.clone();
@@ -403,9 +409,11 @@ impl EquivalencePropagation {
                             // Semijoin elimination currently fails if you do more advanced simplification than
                             // literal substitution.
                             let old = expr.clone();
-                            reducer.reduce_expr(expr);
+                            let changed = reducer.reduce_expr(expr);
                             let acceptable_sub = literal_domination(&old, expr);
-                            expr.reduce(input_types.as_ref().unwrap());
+                            if changed {
+                                expr.reduce(input_types.as_ref().unwrap());
+                            }
                             if !acceptable_sub && !literal_domination(&old, expr) {
                                 expr.clone_from(&old);
                             }
@@ -472,16 +480,20 @@ impl EquivalencePropagation {
                         // Semijoin elimination currently fails if you do more advanced simplification than
                         // literal substitution.
                         let old_key = key.clone();
-                        reducer.reduce_expr(key);
+                        let changed = reducer.reduce_expr(key);
                         let acceptable_sub = literal_domination(&old_key, key);
-                        key.reduce(input_type.as_ref().unwrap());
+                        if changed {
+                            key.reduce(input_type.as_ref().unwrap());
+                        }
                         if !acceptable_sub && !literal_domination(&old_key, key) {
                             key.clone_from(&old_key);
                         }
                     }
                     for aggr in aggregates.iter_mut() {
-                        reducer.reduce_expr(&mut aggr.expr);
-                        aggr.expr.reduce(input_type.as_ref().unwrap());
+                        let changed = reducer.reduce_expr(&mut aggr.expr);
+                        if changed {
+                            aggr.expr.reduce(input_type.as_ref().unwrap());
+                        }
                         // A count expression over a non-null expression can discard the expression.
                         if aggr.func == mz_expr::AggregateFunc::Count && !aggr.distinct {
                             let mut probe = aggr.expr.clone().call_is_null();
@@ -540,9 +552,11 @@ impl EquivalencePropagation {
                     let reducer = input_equivalences.reducer();
                     if let Some(expr) = limit {
                         let old_expr = expr.clone();
-                        reducer.reduce_expr(expr);
+                        let changed = reducer.reduce_expr(expr);
                         let acceptable_sub = literal_domination(&old_expr, expr);
-                        expr.reduce(input_types.as_ref().unwrap());
+                        if changed {
+                            expr.reduce(input_types.as_ref().unwrap());
+                        }
                         if !acceptable_sub && !literal_domination(&old_expr, expr) {
                             expr.clone_from(&old_expr);
                         }
