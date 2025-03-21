@@ -185,9 +185,12 @@ pub(crate) async fn create_sockets(
 
     // Binding to a TCP address of the form `hostname:port` unnecessarily involves a DNS query. We
     // should get the port from here, but otherwise just bind to `0.0.0.0`.
-    let port_re = Regex::new(r":(\d{1,5})$").unwrap();
+    let port_re = Regex::new(r"(?<proto>\w+:)?(?<host>.*):(?<port>\d{1,5})$").unwrap();
     let listen_address = match port_re.captures(my_address) {
-        Some(cap) => format!("0.0.0.0:{}", &cap[1]),
+        Some(cap) => match cap.name("proto") {
+            Some(proto) => format!("{}0.0.0.0:{}", proto.as_str(), &cap["port"]),
+            None => format!("0.0.0.0:{}", &cap["port"]),
+        },
         None => my_address.to_string(),
     };
 
@@ -385,4 +388,196 @@ async fn accept_higher(
     }
 
     Ok(sockets.into_iter().map(|s| s.unwrap()).collect())
+}
+
+#[cfg(test)]
+mod turmoil_tests {
+    use rand::rngs::SmallRng;
+    use rand::{Rng, SeedableRng};
+    use tokio::sync::{mpsc, watch};
+    use tokio::time::timeout;
+
+    use super::*;
+
+    /// Turmoil test for [`create_sockets`].
+    ///
+    /// This test works by spawning a number of processes, and making them start to connect to each
+    /// other using [`create_sockets`]. At the same time, chaos is introduced by randomly
+    /// restarting a number of the processes. The test then enters a stable phase and expects that
+    /// all processes now manage to successfully connect to one another.
+    #[test] // allow(test-attribute)
+    #[cfg_attr(miri, ignore)] // too slow
+    fn test_create_sockets() {
+        const NUM_PROCESSES: usize = 10;
+        const NUM_CRASHES: usize = 3;
+
+        configure_tracing_for_turmoil();
+
+        let seed = std::env::var("SEED")
+            .ok()
+            .and_then(|x| x.parse().ok())
+            .unwrap_or_else(rand::random);
+
+        info!("initializing rng with seed {seed}");
+        let mut rng = SmallRng::seed_from_u64(seed);
+
+        let mut sim = turmoil::Builder::new()
+            .enable_random_order()
+            .build_with_rng(Box::new(rng.clone()));
+
+        let processes: Vec<_> = (0..NUM_PROCESSES).map(|i| format!("process-{i}")).collect();
+        let addresses: Vec<_> = processes
+            .iter()
+            .map(|n| format!("turmoil:{n}:7777"))
+            .collect();
+
+        // Channel for processes to report successful connection.
+        let (ready_tx, mut ready_rx) = mpsc::unbounded_channel();
+
+        // A watch for informing processes about the beginning of the stable phase.
+        // This is used to delay the processes' final connectivity checks until after we know that
+        // processes won't randomly crash anymore.
+        let (stable_tx, stable_rx) = watch::channel(false);
+
+        for (index, name) in processes.iter().enumerate() {
+            let addresses = addresses.clone();
+            let ready_tx = ready_tx.clone();
+            let stable_rx = stable_rx.clone();
+            sim.host(&name[..], move || {
+                let addresses = addresses.clone();
+                let ready_tx = ready_tx.clone();
+                let mut stable_rx = stable_rx.clone();
+                async move {
+                    'protocol: loop {
+                        let mut sockets = match create_sockets(index, &addresses).await {
+                            Ok(sockets) => sockets,
+                            Err(error) if error.is_fatal() => Err(error)?,
+                            Err(error) => {
+                                info!("creating sockets failed: {error}; retrying protocol");
+                                continue 'protocol;
+                            }
+                        };
+
+                        // We have a connection to each peer, but some of them might be broken, in
+                        // which case we should restart the `create_sockets` protocol. In the real
+                        // world we would notice the broken connections eventually after writing to
+                        // them enough, but in the test we want something more deterministic, so we
+                        // let processes ping each other instead.
+                        //
+                        // We need to wait until we've entered the stable phase. Otherwise it would
+                        // be possible for all processes to connect and send their ping before one
+                        // of them gets killed and gets stuck trying to perform the protocol when
+                        // everyone else has already finished the test.
+                        let _ = stable_rx.wait_for(|stable| *stable).await;
+
+                        info!("sockets created; checking connections");
+                        for sock in sockets.iter_mut().filter_map(|s| s.as_mut()) {
+                            if let Err(error) = sock.write_u8(111).await {
+                                info!("error pinging socket: {error}; retrying protocol");
+                                continue 'protocol;
+                            }
+                        }
+                        for sock in sockets.iter_mut().filter_map(|s| s.as_mut()) {
+                            info!("waiting for ping from {sock:?}");
+                            match timeout(Duration::from_secs(1), sock.read_u8()).await {
+                                Ok(Ok(ping)) => assert_eq!(ping, 111),
+                                Ok(Err(error)) => {
+                                    info!("error waiting for ping: {error}; retrying protocol");
+                                    continue 'protocol;
+                                }
+                                Err(_) => {
+                                    info!("timed out waiting for ping; retrying protocol");
+                                    continue 'protocol;
+                                }
+                            }
+                        }
+
+                        let _ = ready_tx.send(index);
+
+                        std::mem::forget(sockets);
+                        return Ok(());
+                    }
+                }
+            });
+        }
+
+        // Let random processes crash at random times.
+        for _ in 0..NUM_CRASHES {
+            let steps = rng.gen_range(1..100);
+            for _ in 0..steps {
+                sim.step().unwrap();
+            }
+
+            let i = rng.gen_range(0..NUM_PROCESSES);
+            info!("bouncing process {i}");
+            sim.bounce(format!("process-{i}"));
+        }
+
+        stable_tx.send(true).unwrap();
+
+        // Processes should now be able to connect.
+        let mut num_ready = 0;
+        loop {
+            while let Ok(index) = ready_rx.try_recv() {
+                info!("process {index} is ready");
+                num_ready += 1;
+            }
+            if num_ready == NUM_PROCESSES {
+                break;
+            }
+
+            sim.step().unwrap();
+            if sim.elapsed() > Duration::from_secs(60) {
+                panic!("simulation not finished after 60s");
+            }
+        }
+    }
+
+    /// Fuzz test [`create_sockets`] using turmoil.
+    #[test] // allow(test-attribute)
+    #[ignore = "runs forever"]
+    fn fuzz_create_sockets() {
+        loop {
+            test_create_sockets();
+        }
+    }
+
+    /// Configure tracing for turmoil tests.
+    ///
+    /// Log events are written to stdout and include the logical time of the simulation.
+    fn configure_tracing_for_turmoil() {
+        use std::sync::Once;
+        use tracing::level_filters::LevelFilter;
+        use tracing_subscriber::fmt::time::FormatTime;
+
+        #[derive(Clone)]
+        struct SimElapsedTime;
+
+        impl FormatTime for SimElapsedTime {
+            fn format_time(
+                &self,
+                w: &mut tracing_subscriber::fmt::format::Writer<'_>,
+            ) -> std::fmt::Result {
+                tracing_subscriber::fmt::time().format_time(w)?;
+                if let Some(sim_elapsed) = turmoil::sim_elapsed() {
+                    write!(w, " [{:?}]", sim_elapsed)?;
+                }
+                Ok(())
+            }
+        }
+
+        static INIT_TRACING: Once = Once::new();
+        INIT_TRACING.call_once(|| {
+            let env_filter = tracing_subscriber::EnvFilter::builder()
+                .with_default_directive(LevelFilter::INFO.into())
+                .from_env_lossy();
+            let subscriber = tracing_subscriber::fmt()
+                .with_test_writer()
+                .with_env_filter(env_filter)
+                .with_timer(SimElapsedTime)
+                .finish();
+
+            tracing::subscriber::set_global_default(subscriber).unwrap();
+        });
+    }
 }
