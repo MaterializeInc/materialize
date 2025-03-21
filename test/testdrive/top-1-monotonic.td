@@ -387,8 +387,6 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=5
 "Dataflow: group_by_in_top_1" "ArrangeBy[[Column(0)]]"
 "Dataflow: group_by_in_top_1" "ArrangeBy[[Column(0)]]"
 "Dataflow: group_by_in_top_1" "Arranged DistinctBy"
-"Dataflow: group_by_in_top_1" "Arranged DistinctBy"
-"Dataflow: group_by_in_top_1" DistinctBy
 "Dataflow: group_by_in_top_1" DistinctBy
 "Dataflow: group_by_in_top_1" DistinctByErrorCheck
 "Dataflow: group_by_in_top_1" DistinctByErrorCheck
