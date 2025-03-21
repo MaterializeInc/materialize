@@ -679,6 +679,8 @@ async fn upgrade_check(
             .storage_metadata()
             .get_collection_shard::<Timestamp>(gid)
             .context("getting shard_id")?;
+        println!("checking Persist schema info for {gid}: {shard_id}");
+
         let diagnostics = Diagnostics {
             shard_name: gid.to_string(),
             handle_purpose: "catalog upgrade check".to_string(),
