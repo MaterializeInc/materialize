@@ -26,6 +26,7 @@ from materialize import buildkite
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.frontegg import FronteggMock
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -1543,6 +1544,105 @@ class PostgresSources(Generator):
             print(f"{i}")
 
 
+class PostgresTables(Generator):
+    COUNT = 5000
+
+    @classmethod
+    def body(cls) -> None:
+        clusters = [f"single_worker_cluster_{i}" for i in range(1, 5)]
+        print("$ set-sql-timeout duration=600s")
+        print("> SET statement_timeout='600s'")
+        print("> SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';")
+        print("$ postgres-execute connection=mz_system")
+        print(
+            f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10 * ADDITIONAL_POSTGRES};"
+        )
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_tables = {cls.COUNT * 10 * ADDITIONAL_POSTGRES};")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10 * ADDITIONAL_POSTGRES};")
+        for i in range(1, ADDITIONAL_POSTGRES + 1):
+            print(
+                f"$ postgres-execute connection=postgres://postgres:postgres@postgres_{i}"
+            )
+            print("ALTER USER postgres WITH replication;")
+            print("DROP SCHEMA IF EXISTS public CASCADE;")
+            print(f"DROP PUBLICATION IF EXISTS mz_source_{i};")
+            print("CREATE SCHEMA public;")
+            for j in cls.all():
+                print(f"CREATE TABLE t{i}_{j} (c int);")
+                print(f"ALTER TABLE t{i}_{j} REPLICA IDENTITY FULL;")
+                print(f"INSERT INTO t{i}_{j} VALUES ({i * cls.COUNT + j});")
+            print(f"CREATE PUBLICATION mz_source_{i} FOR ALL TABLES;")
+        print("> CREATE SECRET IF NOT EXISTS pgpass AS 'postgres'")
+        for i in range(1, ADDITIONAL_POSTGRES + 1):
+            print(
+                f"""> CREATE CONNECTION pg_{i} TO POSTGRES (
+                    HOST postgres_{i},
+                    DATABASE postgres,
+                    USER postgres,
+                    PASSWORD SECRET pgpass
+                )"""
+            )
+            print(
+                f"""> CREATE SOURCE p_{i}
+                IN CLUSTER {clusters[i % len(clusters)]}
+                FROM POSTGRES CONNECTION pg_{i} (PUBLICATION 'mz_source_{i}')
+                FOR ALL TABLES
+                """
+            )
+            # for j in cls.all():
+            #     print(
+            #         f"""> CREATE TABLE t{j}
+            #       FROM SOURCE p (REFERENCE t{j})
+            #       """
+            #     )
+        for i in range(1, ADDITIONAL_POSTGRES + 1):
+            for j in cls.all():
+                cls.store_explain_and_run(f"SELECT * FROM t{i}_{j}")
+                print(f"{i * cls.COUNT + j}")
+
+
+class PostgresTablesOldSyntax(Generator):
+    @classmethod
+    def body(cls) -> None:
+        print("> SET statement_timeout='300s'")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_tables = {cls.COUNT * 10};")
+        print("$ postgres-execute connection=postgres://postgres:postgres@postgres")
+        print("ALTER USER postgres WITH replication;")
+        print("DROP SCHEMA IF EXISTS public CASCADE;")
+        print("DROP PUBLICATION IF EXISTS mz_source;")
+        print("CREATE SCHEMA public;")
+        for i in cls.all():
+            print(f"CREATE TABLE t{i} (c int);")
+            print(f"ALTER TABLE t{i} REPLICA IDENTITY FULL;")
+            print(f"INSERT INTO t{i} VALUES ({i});")
+        print("CREATE PUBLICATION mz_source FOR ALL TABLES;")
+        print("> CREATE SECRET IF NOT EXISTS pgpass AS 'postgres'")
+        print(
+            """> CREATE CONNECTION pg TO POSTGRES (
+                HOST postgres,
+                DATABASE postgres,
+                USER postgres,
+                PASSWORD SECRET pgpass
+            )"""
+        )
+        print(
+            """> CREATE SOURCE p
+          IN CLUSTER single_replica_cluster
+          FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR SCHEMAS (public)
+          """
+        )
+        for i in cls.all():
+            cls.store_explain_and_run(f"SELECT * FROM t{i}")
+            print(f"{i}")
+
+
 class MySqlSources(Generator):
     COUNT = 300  # high memory consumption, slower with source tables
 
@@ -1608,7 +1708,7 @@ class WebhookSources(Generator):
         print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
         for i in cls.all():
             print(
-                f"> CREATE SOURCE w{i} IN CLUSTER single_replica_cluster FROM WEBHOOK BODY FORMAT TEXT;"
+                f"> CREATE SOURCE w{i} IN CLUSTER single_replica_cluster_1 FROM WEBHOOK BODY FORMAT TEXT;"
             )
 
         for i in cls.all():
@@ -1651,11 +1751,16 @@ def app_password(email: str) -> str:
 MAX_CLUSTERS = 8
 MAX_REPLICAS = 4
 MAX_NODES = 4
+ADDITIONAL_POSTGRES = 20
 
 SERVICES = [
     Zookeeper(),
     Kafka(),
-    Postgres(max_wal_senders=Generator.COUNT, max_replication_slots=Generator.COUNT),
+    Postgres(
+        max_wal_senders=Generator.COUNT,
+        max_replication_slots=Generator.COUNT,
+        volumes=["sourcedata_512Mb:/var/lib/postgresql/data"],
+    ),
     MySql(),
     SchemaRegistry(),
     # We create all sources, sinks and dataflows by default with SIZE '1'
@@ -1699,8 +1804,10 @@ SERVICES = [
             "secrets:/secrets",
         ],
     ),
+    Cockroach(in_memory=True),
     Materialized(
-        memory="8G",
+        memory="16G",
+        cpu=2,
         default_size=1,
         options=[
             # Enable TLS on the public port to verify that balancerd is connecting to the balancerd port.
@@ -1717,34 +1824,50 @@ SERVICES = [
             "secrets:/secrets",
         ],
         sanity_restart=False,
+        external_metadata_store=True,
+        metadata_store="cockroach",
+        soft_assertions=False,
     ),
     Mz(app_password=""),
+] + [
+    Postgres(
+        name=f"postgres_{i}",
+        # ports=[f"{5432+i}"],
+        max_wal_senders=Generator.COUNT,
+        max_replication_slots=Generator.COUNT,
+        # volumes=["sourcedata_512Mb:/var/lib/postgresql/data"],
+    )
+    for i in range(1, ADDITIONAL_POSTGRES + 1)
 ]
 
 for cluster_id in range(1, MAX_CLUSTERS + 1):
     for replica_id in range(1, MAX_REPLICAS + 1):
         for node_id in range(1, MAX_NODES + 1):
             SERVICES.append(
-                Clusterd(name=f"clusterd_{cluster_id}_{replica_id}_{node_id}")
+                Clusterd(name=f"clusterd_{cluster_id}_{replica_id}_{node_id}", cpu=2)
             )
 
 
-service_names = [
-    "zookeeper",
-    "kafka",
-    "schema-registry",
-    "postgres",
-    "mysql",
-    "materialized",
-    "balancerd",
-    "frontegg-mock",
-    "clusterd_1_1_1",
-    "clusterd_1_2_1",
-    "clusterd_2_1_1",
-    "clusterd_2_2_1",
-    "clusterd_3_1_1",
-    "clusterd_3_2_1",
-]
+service_names = (
+    [
+        "zookeeper",
+        "kafka",
+        "schema-registry",
+        "postgres",
+        "mysql",
+        "materialized",
+        "balancerd",
+        "frontegg-mock",
+        "clusterd_1_1_1",
+        "clusterd_1_2_1",
+        "clusterd_2_1_1",
+        "clusterd_2_2_1",
+        "clusterd_3_1_1",
+        "clusterd_3_2_1",
+    ]
+    + [f"postgres_{i}" for i in range(1, ADDITIONAL_POSTGRES + 1)]
+    + [f"clusterd_{i+3}_1_1" for i in range(1, 5)]
+)
 
 
 def setup(c: Composition, workers: int) -> None:
@@ -1786,7 +1909,23 @@ def setup(c: Composition, workers: int) -> None:
             )
         );
         GRANT ALL PRIVILEGES ON CLUSTER single_replica_cluster TO materialize;
-    """,
+    """
+        + "\n".join(
+            f"""
+        DROP CLUSTER IF EXISTS single_worker_cluster_{i} CASCADE;
+        CREATE CLUSTER single_worker_cluster_{i} REPLICAS (
+            replica1 (
+                STORAGECTL ADDRESSES ['clusterd_{i+3}_1_1:2100'],
+                STORAGE ADDRESSES ['clusterd_{i+3}_1_1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd_{i+3}_1_1:2101'],
+                COMPUTE ADDRESSES ['clusterd_{i+3}_1_1:2102'],
+                WORKERS 1
+            )
+        );
+        GRANT ALL PRIVILEGES ON CLUSTER single_worker_cluster_{i} TO materialize;
+        """
+            for i in range(1, 5)
+        ),
         port=6877,
         user="mz_system",
     )
