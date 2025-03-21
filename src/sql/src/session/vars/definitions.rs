@@ -2203,6 +2203,12 @@ feature_flags!(
         default: true,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_less_reduce_in_eqprop,
+        desc: "Run MSE::reduce in EquivalencePropagation only if reduce_expr changed something.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
@@ -2221,6 +2227,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_join_prioritize_arranged: vars.enable_join_prioritize_arranged(),
             enable_projection_pushdown_after_relation_cse: vars
                 .enable_projection_pushdown_after_relation_cse(),
+            enable_less_reduce_in_eqprop: vars.enable_less_reduce_in_eqprop(),
         }
     }
 }
