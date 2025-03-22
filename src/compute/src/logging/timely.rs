@@ -20,7 +20,8 @@ use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Timestamp};
 use mz_timely_util::containers::{
-    columnar_exchange, Col2ValBatcher, ColumnBuilder, ProvidedBuilder,
+    columnar_exchange, Col2ValBatcher, Column, ColumnBuilder, ConvertingContainerBuilder,
+    ProvidedBuilder,
 };
 use mz_timely_util::replay::MzReplay;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
@@ -149,7 +150,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         // We pre-arrange the logging streams to force a consolidation and reduce the amount of
         // updates that reach `Row` encoding.
 
-        let operates = consolidate_and_pack::<_, KeyValBatcher<_, _, _, _>, ColumnBuilder<_>, _, _>(
+        let operates = consolidate_and_pack::<_, Col2ValBatcher<_, _, _, _>, ColumnBuilder<_>, _, _>(
             &operates,
             TimelyLog::Operates,
             move |((id, name), time, diff), packer, session| {
@@ -180,7 +181,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             },
         );
 
-        let addresses = consolidate_and_pack::<_, KeyValBatcher<_, _, _, _>, ColumnBuilder<_>, _, _>(
+        let addresses = consolidate_and_pack::<_, Col2ValBatcher<_, _, _, _>, ColumnBuilder<_>, _, _>(
             &addresses,
             TimelyLog::Addresses,
             move |((id, address), time, diff), packer, session| {
@@ -367,8 +368,19 @@ struct MessageCount {
 
 type Pusher<D> =
     Counter<Timestamp, Vec<(D, Timestamp, Diff)>, Tee<Timestamp, Vec<(D, Timestamp, Diff)>>>;
+type ColumnPusher<D> =
+    Counter<Timestamp, Column<(D, Timestamp, Diff)>, Tee<Timestamp, Column<(D, Timestamp, Diff)>>>;
 type OutputSession<'a, D> =
     Session<'a, Timestamp, ConsolidatingContainerBuilder<Vec<(D, Timestamp, Diff)>>, Pusher<D>>;
+type ColumnOutputSession<'a, D> = Session<
+    'a,
+    Timestamp,
+    ConvertingContainerBuilder<
+        ConsolidatingContainerBuilder<Vec<(D, Timestamp, Diff)>>,
+        ColumnBuilder<(D, Timestamp, Diff)>,
+    >,
+    ColumnPusher<D>,
+>;
 
 /// Bundled output buffers used by the demux operator.
 //
@@ -376,9 +388,9 @@ type OutputSession<'a, D> =
 // having to manually implement `Columnation`. If `Columnation` could be `#[derive]`ed, that
 // wouldn't be an issue.
 struct DemuxOutput<'a> {
-    operates: OutputSession<'a, (usize, String)>,
+    operates: ColumnOutputSession<'a, (usize, String)>,
     channels: OutputSession<'a, (ChannelDatum, ())>,
-    addresses: OutputSession<'a, (usize, Vec<usize>)>,
+    addresses: ColumnOutputSession<'a, (usize, Vec<usize>)>,
     parks: OutputSession<'a, (ParkDatum, ())>,
     batches_sent: OutputSession<'a, (MessageDatum, ())>,
     batches_received: OutputSession<'a, (MessageDatum, ())>,
@@ -519,7 +531,8 @@ impl DemuxHandler<'_, '_> {
 
         // Retract schedules information for the operator
         if let Some(schedules) = self.state.schedules_data.remove(&event.id) {
-            for (bucket, (count, elapsed_ns)) in IntoIterator::into_iter(schedules)
+            for (bucket, (count, elapsed_ns)) in schedules
+                .into_iter()
                 .enumerate()
                 .filter(|(_, (count, _))| *count != 0)
             {
