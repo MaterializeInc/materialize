@@ -2466,7 +2466,8 @@ where
                 }) => match connection {
                     GenericSourceConnection::Kafka(_)
                     | GenericSourceConnection::Postgres(_)
-                    | GenericSourceConnection::MySql(_) => {
+                    | GenericSourceConnection::MySql(_)
+                    | GenericSourceConnection::SqlServer(_) => {
                         (connection.clone(), *remap_collection_id)
                     }
 

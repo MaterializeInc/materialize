@@ -1102,10 +1102,8 @@ fn humanize_sql_for_show_create(
                     });
                 }
                 CreateSourceConnection::SqlServer { .. } => {
-                    return Err(PlanError::Unsupported {
-                        feature: "SQL SERVER".to_string(),
-                        discussion_no: None,
-                    });
+                    // TODO(sql_server1): There will be values to humanize when the implementaion
+                    // is more complete.
                 }
                 CreateSourceConnection::MySql { options, .. } => {
                     options.retain_mut(|o| {

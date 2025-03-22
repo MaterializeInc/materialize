@@ -1086,6 +1086,7 @@ impl CatalogState {
                     ConnectionDetails::AwsPrivatelink(..) => "aws-privatelink",
                     ConnectionDetails::Ssh { .. } => "ssh-tunnel",
                     ConnectionDetails::MySql { .. } => "mysql",
+                    ConnectionDetails::SqlServer(_) => "sql-server",
                 }),
                 Datum::String(&owner_id.to_string()),
                 privileges,
@@ -1128,7 +1129,8 @@ impl CatalogState {
             }
             ConnectionDetails::Csr(_)
             | ConnectionDetails::Postgres(_)
-            | ConnectionDetails::MySql(_) => (),
+            | ConnectionDetails::MySql(_)
+            | ConnectionDetails::SqlServer(_) => (),
         };
         updates
     }

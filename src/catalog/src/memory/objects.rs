@@ -1190,7 +1190,9 @@ impl Source {
                     // These multi-output sources do not use their primary
                     // source's data shard, so we don't include it in accounting
                     // for users.
-                    GenericSourceConnection::Postgres(_) | GenericSourceConnection::MySql(_) => 0,
+                    GenericSourceConnection::Postgres(_)
+                    | GenericSourceConnection::MySql(_)
+                    | GenericSourceConnection::SqlServer(_) => 0,
                     GenericSourceConnection::LoadGenerator(lg) => {
                         // TODO: make this a method on the load generator.
                         if lg.load_generator.views().is_empty() {
