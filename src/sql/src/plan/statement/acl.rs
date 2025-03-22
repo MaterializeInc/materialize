@@ -119,7 +119,7 @@ fn plan_alter_cluster_owner(
         })),
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_ast_string(),
+                name: name.to_ast_string_simple(),
                 object_type: ObjectType::Cluster,
             });
             Ok(Plan::AlterNoop(AlterNoopPlan {
@@ -143,7 +143,7 @@ fn plan_alter_database_owner(
         })),
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_ast_string(),
+                name: name.to_ast_string_simple(),
                 object_type: ObjectType::Database,
             });
 
@@ -178,7 +178,7 @@ fn plan_alter_schema_owner(
         }
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_ast_string(),
+                name: name.to_ast_string_simple(),
                 object_type: ObjectType::Schema,
             });
 
@@ -231,7 +231,7 @@ fn plan_alter_item_owner(
         }
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_ast_string(),
+                name: name.to_ast_string_simple(),
                 object_type,
             });
 
@@ -254,7 +254,7 @@ fn plan_alter_network_policy_owner(
         })),
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_ast_string(),
+                name: name.to_ast_string_simple(),
                 object_type: ObjectType::NetworkPolicy,
             });
 

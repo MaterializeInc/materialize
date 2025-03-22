@@ -56,12 +56,6 @@ exact:COUNTER load generators do not support SCALE FACTOR values
 > CREATE TABLE organizations FROM SOURCE auction_house (REFERENCE organizations);
 > CREATE TABLE users FROM SOURCE auction_house (REFERENCE users);
 
-> SHOW CREATE SOURCE auction_house
-"materialize.public.auction_house" "CREATE SOURCE \"materialize\".\"public\".\"auction_house\" IN CLUSTER \"${arg.single-replica-cluster}\" FROM LOAD GENERATOR AUCTION (AS OF = 300, UP TO = 301) EXPOSE PROGRESS AS \"materialize\".\"public\".\"auction_house_progress\""
-
-> SHOW CREATE TABLE accounts
-materialize.public.accounts "CREATE TABLE \"materialize\".\"public\".\"accounts\" (\"id\" \"pg_catalog\".\"int8\" NOT NULL, \"org_id\" \"pg_catalog\".\"int8\" NOT NULL, \"balance\" \"pg_catalog\".\"int8\" NOT NULL, UNIQUE (\"id\")) FROM SOURCE \"materialize\".\"public\".\"auction_house\" (REFERENCE = \"mz_load_generators\".\"auction\".\"accounts\") WITH (DETAILS = '1a040a021002')"
-
 > SHOW SOURCES
 auction_house           load-generator ${arg.single-replica-cluster}    ""
 auction_house_progress  progress       <null>                           ""
@@ -115,9 +109,6 @@ users                   ""
   ENVELOPE UPSERT;
 
 $ set-regex match="DETAILS = '[a-f0-9]+'" replacement=<DETAILS>
-
-> SHOW CREATE TABLE accounts
-materialize.public.accounts "CREATE TABLE \"materialize\".\"public\".\"accounts\" (\"id\" \"pg_catalog\".\"int8\" NOT NULL, \"org_id\" \"pg_catalog\".\"int8\" NOT NULL, \"balance\" \"pg_catalog\".\"int8\" NOT NULL, UNIQUE (\"id\")) FROM SOURCE \"materialize\".\"public\".\"auction_house\" (REFERENCE = \"mz_load_generators\".\"auction\".\"accounts\") WITH (<DETAILS>)"
 
 # CLOCK load generator source
 

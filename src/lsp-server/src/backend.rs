@@ -20,8 +20,10 @@ use ::serde::Deserialize;
 use mz_ore::collections::HashMap;
 use mz_sql_lexer::keywords::Keyword;
 use mz_sql_lexer::lexer::{self, Token};
+use mz_sql_parser::ast::display::FormatMode;
 use mz_sql_parser::ast::{statement_kind_label_value, Raw, Statement};
 use mz_sql_parser::parser::parse_statements;
+use mz_sql_pretty::PrettyConfig;
 use regex::Regex;
 use ropey::Rope;
 use serde::Serialize;
@@ -36,7 +38,7 @@ use crate::{PKG_NAME, PKG_VERSION};
 /// Default formatting width to use in the [LanguageServer::formatting] implementation.
 pub const DEFAULT_FORMATTING_WIDTH: usize = 100;
 
-/// This is a re-implemention of [mz_sql_parser::parser::StatementParseResult]
+/// This is a re-implementation of [mz_sql_parser::parser::StatementParseResult]
 /// but replacing the sql code with a rope.
 #[derive(Debug)]
 pub struct ParseResult {
@@ -483,7 +485,15 @@ impl LanguageServer for Backend {
             let pretty = parse_result
                 .asts
                 .iter()
-                .map(|ast| mz_sql_pretty::to_pretty(ast, *width))
+                .map(|ast| {
+                    mz_sql_pretty::to_pretty(
+                        ast,
+                        PrettyConfig {
+                            width: *width,
+                            format_mode: FormatMode::Simple,
+                        },
+                    )
+                })
                 .collect::<Vec<String>>()
                 .join("\n");
             let rope = &parse_result.rope;

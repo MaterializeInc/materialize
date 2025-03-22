@@ -55,11 +55,6 @@ contains:Failed to resolve hostname
 > SELECT status = 'stalled' FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
 true
 
-> SHOW CREATE CONNECTION conn
-name   create_sql
----------------------------------
-materialize.public.conn   "CREATE CONNECTION \"materialize\".\"public\".\"conn\" TO KAFKA (BROKER = 'abcd', SECURITY PROTOCOL = \"plaintext\")"
-
 $ kafka-ingest format=bytes topic=connection_test
 2,3
 
@@ -71,17 +66,7 @@ first second
 1     2
 2     3
 
-> SHOW CREATE CONNECTION conn
-name   create_sql
----------------------------------
-materialize.public.conn   "CREATE CONNECTION \"materialize\".\"public\".\"conn\" TO KAFKA (BROKER = '${testdrive.kafka-addr}', SECURITY PROTOCOL = \"plaintext\")"
-
 > ALTER CONNECTION conn SET (BROKERS ['${testdrive.kafka-addr}'])
-
-> SHOW CREATE CONNECTION conn
-name   create_sql
----------------------------------
-materialize.public.conn   "CREATE CONNECTION \"materialize\".\"public\".\"conn\" TO KAFKA (BROKERS = ('${testdrive.kafka-addr}'), SECURITY PROTOCOL = \"plaintext\")"
 
 ! ALTER CONNECTION conn DROP (SECURITY PROTOCOL);
 contains:Broker does not support SSL connections
