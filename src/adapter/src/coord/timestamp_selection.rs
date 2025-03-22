@@ -18,6 +18,7 @@ use itertools::Itertools;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastLossy;
+use mz_ore::soft_assert_eq_or_log;
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::{GlobalId, RowArena, ScalarType, Timestamp, TimestampManipulation};
 use mz_sql::plan::QueryWhen;
@@ -258,6 +259,157 @@ pub trait TimestampProvider {
         ),
         AdapterError,
     > {
+        use constraints::{Constraints, Preference, Reason};
+
+        // First, we acquire read holds that will ensure the queried collections
+        // stay queryable at the chosen timestamp.
+        let read_holds = self.acquire_read_holds(id_bundle);
+        let timeline = Self::get_timeline(timeline_context);
+
+        // To be filled by strong session serializable logic, should it be engaged.
+        let mut session_oracle_read_ts = None;
+
+        let since = self.least_valid_read(&read_holds);
+        let upper = self.least_valid_write(id_bundle);
+        let largest_not_in_advance_of_upper = Coordinator::largest_not_in_advance_of_upper(&upper);
+
+        // We start by establishing the hard constraints that must be applied to timestamp determination.
+        // These constraints are derived from the input arguments, and properties of the collections involved.
+        // TODO: Many of the constraints are expressed obliquely, and could be made more direct.
+        let constraints = {
+            // Constraints we will populate through a sequence of opinions.
+            let mut constraints = Constraints::default();
+
+            // First, we have validity constraints from the `id_bundle` argument which indicates
+            // which collections we are reading from.
+            // TODO: Refine the detail about which identifiers are binding and which are not.
+            let since = self.least_valid_read(&read_holds);
+            let storage = id_bundle.storage_ids.iter().cloned().collect();
+            constraints
+                .lower
+                .push((since.clone(), Reason::StorageInput(storage)));
+            let compute = id_bundle
+                .compute_ids
+                .iter()
+                .flat_map(|(key, ids)| ids.iter().map(|id| (*key, *id)))
+                .collect();
+            constraints
+                .lower
+                .push((since.clone(), Reason::ComputeInput(compute)));
+
+            // The query's `when` may indicates a specific timestamp we must advance to, or a specific value we must use.
+            if let Some(timestamp) = when.advance_to_timestamp() {
+                let catalog_state = self.catalog_state();
+                let ts = Coordinator::evaluate_when(catalog_state, timestamp, session)?;
+                constraints
+                    .lower
+                    .push((Antichain::from_elem(ts), Reason::QueryAsOf));
+                // If the query is at a specific timestamp, we must introduce an upper bound as well.
+                if let QueryWhen::AtTimestamp(_) = when {
+                    constraints
+                        .upper
+                        .push((Antichain::from_elem(ts), Reason::QueryAsOf));
+                }
+            }
+
+            // The specification of an `oracle_read_ts` may indicates that we must advance to it,
+            // except in one isolation mode, or if `when` does not indicate that we should.
+            // At the moment, only `QueryWhen::FreshestTableWrite` indicates that we should.
+            // TODO: Should this just depend on the isolation level?
+            if let Some(timestamp) = &oracle_read_ts {
+                println!("oracle_read_ts: {:?}", timestamp);
+                println!("isolation_level: {:?}", isolation_level);
+                println!(
+                    "must_advance_to_timeline_ts: {:?}",
+                    when.must_advance_to_timeline_ts()
+                );
+                if isolation_level != &IsolationLevel::StrongSessionSerializable
+                    || when.must_advance_to_timeline_ts()
+                {
+                    println!("pushing oracle_read_ts");
+                    constraints.lower.push((
+                        Antichain::from_elem(*timestamp),
+                        Reason::IsolationLevel(*isolation_level),
+                    ));
+                }
+            }
+
+            // If a real time recency timestamp is supplied, we must advance to it.
+            if let Some(real_time_recency_ts) = real_time_recency_ts {
+                assert!(
+                    session.vars().real_time_recency()
+                        && isolation_level == &IsolationLevel::StrictSerializable,
+                    "real time recency timestamp should only be supplied when real time recency \
+                                is enabled and the isolation level is strict serializable"
+                );
+                constraints.lower.push((
+                    Antichain::from_elem(real_time_recency_ts),
+                    Reason::RealTimeRecency,
+                ));
+            }
+
+            // If we are operating in Strong Session Serializable, we use an alternate timestamp lower bound.
+            if isolation_level == &IsolationLevel::StrongSessionSerializable {
+                if let Some(timeline) = &timeline {
+                    if let Some(oracle) = session.get_timestamp_oracle(timeline) {
+                        let session_ts = oracle.read_ts();
+                        constraints.lower.push((
+                            Antichain::from_elem(session_ts),
+                            Reason::IsolationLevel(*isolation_level),
+                        ));
+                        session_oracle_read_ts = Some(session_ts);
+                    }
+
+                    // When advancing the read timestamp under Strong Session Serializable, there is a
+                    // trade-off to make between freshness and latency. We can choose a timestamp close the
+                    // `upper`, but then later queries might block if the `upper` is too far into the
+                    // future. We can chose a timestamp close to the current time, but then we may not be
+                    // getting results that are as fresh as possible. As a heuristic, we choose the minimum
+                    // of now and the upper, where we use the global timestamp oracle read timestamp as a
+                    // proxy for now. If upper > now, then we choose now and prevent blocking future
+                    // queries. If upper < now, then we choose the upper and prevent blocking the current
+                    // query.
+                    if when.can_advance_to_upper() && when.can_advance_to_timeline_ts() {
+                        println!("performing strong session serializable selection");
+                        let mut advance_to = largest_not_in_advance_of_upper;
+                        if let Some(oracle_read_ts) = oracle_read_ts {
+                            advance_to = std::cmp::min(advance_to, oracle_read_ts);
+                        }
+                        constraints.lower.push((
+                            Antichain::from_elem(advance_to),
+                            Reason::IsolationLevel(*isolation_level),
+                        ));
+                    }
+                }
+            }
+
+            println!("constraints before we run the solver: {:?}", constraints);
+            constraints.minimize();
+            constraints
+        };
+
+        // Next we establish the preferences that we would like to apply to timestamp determination.
+        // Generally, we want to choose the freshest timestamp possible, although there are exceptions
+        // when we either want a maximally *stale* timestamp, or we want to protect other queries from
+        // a recklessly advanced timestamp.
+        let preferences = {
+            // Counter-intuitively, the only `when` that allows `can_advance_to_upper` is `Immediately`,
+            // and not `FreshestTableWrite`. This is because `FreshestTableWrite` instead imposes a lower
+            // bound through the `oracle_read_ts`, and then requires the stalest valid timestamp.
+
+            if when.can_advance_to_upper()
+                && (isolation_level == &IsolationLevel::Serializable || timeline.is_none())
+            {
+                Preference::FreshestAvailable
+            } else {
+                Preference::StalestValid
+            }
+
+            // TODO: `StrongSessionSerializable` has a different set of preferences that starts to tease
+            // out the trade-off between freshness and responsiveness. I think we don't yet know enough
+            // to properly frame these preferences, though they are clearly aimed at the right concerns.
+        };
+
         // Each involved trace has a validity interval `[since, upper)`.
         // The contents of a trace are only guaranteed to be correct when
         // accumulated at a time greater or equal to `since`, and they
@@ -269,16 +421,6 @@ pub trait TimestampProvider {
         // the compacted arrangements we have at hand. It remains unresolved
         // what to do if it cannot be satisfied (perhaps the query should use
         // a larger timestamp and block, perhaps the user should intervene).
-
-        // First, we acquire read holds that will ensure the queried collections
-        // stay queryable at the chosen timestamp.
-        let read_holds = self.acquire_read_holds(id_bundle);
-
-        let since = self.least_valid_read(&read_holds);
-        let upper = self.least_valid_write(id_bundle);
-        let largest_not_in_advance_of_upper = Coordinator::largest_not_in_advance_of_upper(&upper);
-
-        let timeline = Self::get_timeline(timeline_context);
 
         {
             // TODO: We currently split out getting the oracle timestamp because
@@ -346,10 +488,13 @@ pub trait TimestampProvider {
             candidate.join_assign(&real_time_recency_ts);
         }
 
-        let mut session_oracle_read_ts = None;
+        println!("--- classical selection ---");
+        println!("isolation_level: {:?}", isolation_level);
         if isolation_level == &IsolationLevel::StrongSessionSerializable {
             if let Some(timeline) = &timeline {
+                println!("timeline: {:?}", timeline);
                 if let Some(oracle) = session.get_timestamp_oracle(timeline) {
+                    println!("oracle: {:?}", oracle);
                     let session_ts = oracle.read_ts();
                     candidate.join_assign(&session_ts);
                     session_oracle_read_ts = Some(session_ts);
@@ -366,6 +511,7 @@ pub trait TimestampProvider {
             // queries. If upper < now, then we choose the upper and prevent blocking the current
             // query.
             if when.can_advance_to_upper() && when.can_advance_to_timeline_ts() {
+                println!("performing strong session serializable selection");
                 let mut advance_to = largest_not_in_advance_of_upper;
                 if let Some(oracle_read_ts) = oracle_read_ts {
                     advance_to = std::cmp::min(advance_to, oracle_read_ts);
@@ -373,6 +519,27 @@ pub trait TimestampProvider {
                 candidate.join_assign(&advance_to);
             }
         }
+
+        println!("--- end classical selection ---");
+
+        // Determine a candidate based on constraints and preferences.
+        let constraint_candidate = {
+            let mut candidate = Timestamp::minimum();
+            candidate.advance_by(constraints.lower_bound().borrow());
+            // If we have a preference to be the freshest available, advance to the minimum
+            // of the upper bound constraints and the `largest_not_in_advance_of_upper`.
+            if let Preference::FreshestAvailable = preferences {
+                let mut upper_bound = constraints.upper_bound();
+                upper_bound.insert(largest_not_in_advance_of_upper);
+                candidate.advance_by(upper_bound.borrow());
+            }
+            // If the candidate strictly exceeds the upper bound, we didn't have a viable timestamp.
+            if constraints.upper_bound().less_than(&candidate) {
+                None
+            } else {
+                Some(candidate)
+            }
+        };
 
         // If the timestamp is greater or equal to some element in `since` we are
         // assured that the answer will be correct.
@@ -398,6 +565,16 @@ pub trait TimestampProvider {
                 candidate
             ));
         };
+
+        if Some(timestamp) != constraint_candidate {
+            println!("timestamp constrains: {:?}", constraints);
+        }
+
+        soft_assert_eq_or_log!(
+            Some(timestamp),
+            constraint_candidate,
+            "timestamp determination mismatch"
+        );
 
         let timestamp_context = TimestampContext::from_timeline_context(
             timestamp,
@@ -521,7 +698,6 @@ impl Coordinator {
 
     /// Determines the timestamp for a query, acquires read holds that ensure the
     /// query remains executable at that time, and returns those.
-    ///
     /// The caller is responsible for eventually dropping those read holds.
     #[mz_ore::instrument(level = "debug")]
     pub(crate) fn determine_timestamp(
@@ -591,10 +767,10 @@ impl Coordinator {
         Ok((det, read_holds))
     }
 
-    /// The largest element not in advance of any object in the collection.
+    /// The largest timestamp not greater or equal to an element of `upper`.
     ///
-    /// Times that are not greater to this frontier are complete for all collections
-    /// identified as arguments.
+    /// If no such timestamp exists, for example because `upper` contains only the
+    /// minimal timestamp, the return value is `Timestamp::minimum()`.
     pub(crate) fn largest_not_in_advance_of_upper(
         upper: &Antichain<mz_repr::Timestamp>,
     ) -> mz_repr::Timestamp {
@@ -843,5 +1019,156 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline + TimestampManipulatio
             )?;
         }
         Ok(())
+    }
+}
+
+/// Types and logic in support of a constraint-based approach to timestamp determination.
+mod constraints {
+
+    use core::fmt;
+    use std::fmt::Debug;
+
+    use differential_dataflow::lattice::Lattice;
+    use timely::progress::{Antichain, Timestamp};
+
+    use mz_compute_types::ComputeInstanceId;
+    use mz_repr::GlobalId;
+    use mz_sql::session::vars::IsolationLevel;
+
+    /// Constraints expressed on the timestamp of a query.
+    ///
+    /// The constraints are expressed on the minimum and maximum values,
+    /// resulting in a (possibly empty) interval of valid timestamps.
+    ///
+    /// The constraints may be redundant, in the interest of providing
+    /// more complete explanations, but they may also be minimized at
+    /// any point without altering their behavior by removing redundant
+    /// constraints.
+    ///
+    /// When combined with a `Preference` one can determine an
+    /// ideal timestamp to use.
+    #[derive(Default)]
+    pub struct Constraints {
+        /// Timestamps and reasons that impose an inclusive lower bound.
+        pub lower: Vec<(Antichain<mz_repr::Timestamp>, Reason)>,
+        /// Timestamps and reasons that impose an inclusive upper bound.
+        pub upper: Vec<(Antichain<mz_repr::Timestamp>, Reason)>,
+    }
+
+    impl Debug for Constraints {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            writeln!(f, "lower:")?;
+            for (ts, reason) in &self.lower {
+                writeln!(f, "  {:?} ({:?})", ts, reason)?;
+            }
+            writeln!(f, "upper:")?;
+            for (ts, reason) in &self.upper {
+                writeln!(f, "  {:?} ({:?})", ts, reason)?;
+            }
+            Ok(())
+        }
+    }
+
+    impl Constraints {
+        /// Remove constraints that are dominated by other constraints.
+        ///
+        /// This removes redundant constraints, without removing constraints
+        /// that are "tight" in the sense that the interval will not improve
+        /// without their removal. For example, two constraints at the same
+        /// time will both be retained, in the interest of full information.
+        pub fn minimize(&mut self) {
+            // Establish the upper bound of lower constraints.
+            let lower_frontier = self.lower_bound();
+            // Retain constraints that intersect `lower_frontier`.
+            self.lower.retain(|(anti, _)| {
+                anti.iter()
+                    .any(|time| lower_frontier.elements().contains(time))
+            });
+
+            // Establish the lower bound of upper constraints.
+            let upper_frontier = self.upper_bound();
+            // Retain constraints that intersect `upper_frontier`.
+            self.upper.retain(|(anti, _)| {
+                anti.iter()
+                    .any(|time| upper_frontier.elements().contains(time))
+            });
+        }
+
+        /// An antichain equal to the least upper bound of lower bounds.
+        pub fn lower_bound(&self) -> Antichain<mz_repr::Timestamp> {
+            let mut lower = Antichain::from_elem(mz_repr::Timestamp::minimum());
+            for (anti, _) in self.lower.iter() {
+                lower = lower.join(anti);
+            }
+            lower
+        }
+        /// An antichain equal to the greatest lower bound of upper bounds.
+        pub fn upper_bound(&self) -> Antichain<mz_repr::Timestamp> {
+            self.upper
+                .iter()
+                .flat_map(|(anti, _)| anti.iter())
+                .cloned()
+                .collect()
+        }
+    }
+
+    /// An explanation of reasons for a timestamp constraint.
+    pub enum Reason {
+        /// A compute input at a compute instance.
+        ComputeInput(Vec<(ComputeInstanceId, GlobalId)>),
+        /// A storage input.
+        StorageInput(Vec<GlobalId>),
+        /// A specified isolation level and the timestamp it requires.
+        IsolationLevel(IsolationLevel),
+        /// Real-time recency may constrains the timestamp from below.
+        RealTimeRecency,
+        /// The query expressed its own constraint on the timestamp.
+        QueryAsOf,
+    }
+
+    impl Debug for Reason {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            match self {
+                Reason::ComputeInput(ids) => {
+                    write!(f, "ComputeInput({:?})", ids)
+                }
+                Reason::StorageInput(ids) => {
+                    write!(f, "StorageInput({:?})", ids)
+                }
+                Reason::IsolationLevel(level) => {
+                    write!(f, "IsolationLevel({:?})", level)
+                }
+                Reason::RealTimeRecency => {
+                    write!(f, "RealTimeRecency")
+                }
+                Reason::QueryAsOf => {
+                    write!(f, "QueryAsOf")
+                }
+            }
+        }
+    }
+
+    /// Given an interval [read, write) of timestamp options,
+    /// this expresses a preference for either end of the spectrum.
+    pub enum Preference {
+        /// Prefer the greatest timestamp immediately available.
+        ///
+        /// This considers the immediate inputs to a query and
+        /// selects the greatest timestamp not greater or equal
+        /// to any of their write frontiers.
+        ///
+        /// The preference only relates to immediate query inputs,
+        /// but it could be extended to transitive inputs as well.
+        /// For example, one could imagine prefering the freshest
+        /// data known to be ingested into Materialize, under the
+        /// premise that those answers should soon become available,
+        /// and may be more fresh than the immediate inputs.
+        FreshestAvailable,
+        /// Prefer the least valid timeastamp.
+        ///
+        /// This is useful when one has no expressed freshness
+        /// constraints, and wants to minimally impact others.
+        /// For example, `AS OF AT LEAST <time>`.
+        StalestValid,
     }
 }
