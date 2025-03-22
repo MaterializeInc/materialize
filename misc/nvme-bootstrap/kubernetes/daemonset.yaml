@@ -1,0 +1,72 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nvme-disk-setup
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      app: nvme-disk-setup
+  template:
+    metadata:
+      labels:
+        app: nvme-disk-setup
+    spec:
+      serviceAccountName: nvme-setup-sa
+      initContainers:
+      - name: setup-nvme
+        # TODO: Change this once we have an official image
+        image: bobbyiliev/nvme-bootstrap:latest
+        securityContext:
+          privileged: true
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: CLOUD_PROVIDER
+          value: "aws"
+        volumeMounts:
+        - name: host-dev
+          mountPath: /dev
+        - name: host-sys
+          mountPath: /sys
+        - name: host-proc
+          mountPath: /proc
+        command:
+        - "/bin/bash"
+        - "-c"
+        - |
+          # Run the disk configuration script with explicit cloud provider
+          /usr/local/bin/configure-disks.sh --cloud-provider aws
+
+          # Remove taint once configuration is complete
+          /usr/local/bin/manage-taints.sh remove
+      containers:
+      - name: pause
+        image: k8s.gcr.io/pause:3.7
+      volumes:
+      - name: host-dev
+        hostPath:
+          path: /dev
+      - name: host-sys
+        hostPath:
+          path: /sys
+      - name: host-proc
+        hostPath:
+          path: /proc
+      tolerations:
+      - key: disk-unconfigured
+        operator: Exists
+        effect: NoSchedule
+      nodeSelector:
+        materialize.cloud/disk-config-required: "true"
