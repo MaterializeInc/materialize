@@ -474,3 +474,89 @@ mod provided_builder {
         }
     }
 }
+
+mod differential {
+    use crate::containers::{Column, ColumnBuilder};
+    use columnar::Columnar;
+    use differential_dataflow::difference::Abelian;
+    use differential_dataflow::operators::enter::EnterTime;
+    use differential_dataflow::operators::Negate;
+    use timely::dataflow::channels::pact::Pipeline;
+    use timely::dataflow::operators::{Enter, Operator};
+    use timely::dataflow::scopes::Child;
+    use timely::dataflow::{Scope, StreamCore};
+    use timely::progress::timestamp::Refines;
+    use timely::{Container, Data};
+
+    impl<G, D, R, TInner> EnterTime<Column<(D, G::Timestamp, R)>, G, TInner>
+        for StreamCore<G, Column<(D, G::Timestamp, R)>>
+    where
+        G: Scope,
+        G::Timestamp: Columnar,
+        <G::Timestamp as Columnar>::Container: Data + Clone,
+        D: Columnar,
+        D::Container: Data + Clone,
+        R: Columnar,
+        R::Container: Data + Clone,
+        TInner: Columnar + Refines<G::Timestamp>,
+        TInner::Container: Data + Clone,
+    {
+        type Container = Column<(D, TInner, R)>;
+
+        fn enter_time<'a>(
+            &self,
+            child: &Child<'a, G, TInner>,
+        ) -> StreamCore<Child<'a, G, TInner>, Column<(D, TInner, R)>> {
+            self.enter(child).unary::<ColumnBuilder<_>, _, _, _>(
+                Pipeline,
+                "EnterTimeColumn",
+                |_capability, _info| {
+                    move |input, output| {
+                        while let Some((time, data)) = input.next() {
+                            let mut session = output.session_with_builder(&time);
+                            for (data, time, diff) in data.iter() {
+                                // TODO: This isn't optimal if `into_owned` needs to allocate. We could
+                                //   specialize over concrete timestamp types to avoid this, and work
+                                //   through columns at a time.
+                                let time_owned = Columnar::into_owned(time);
+                                session.give((data, &TInner::to_inner(time_owned), diff));
+                            }
+                        }
+                    }
+                },
+            )
+        }
+    }
+
+    impl<G, D, R> Negate<Column<(D, G::Timestamp, R)>, G>
+        for StreamCore<G, Column<(D, G::Timestamp, R)>>
+    where
+        G: Scope,
+        G::Timestamp: Columnar,
+        <G::Timestamp as Columnar>::Container: Data + Clone,
+        D: Columnar,
+        D::Container: Data + Clone,
+        R: Columnar + Abelian,
+        R::Container: Data + Clone,
+    {
+        fn negate(&self) -> Self {
+            self.unary::<ColumnBuilder<_>, _, _, _>(
+                Pipeline,
+                "NegateColumn",
+                |_capability, _info| {
+                    move |input, output| {
+                        let mut diff_owned = R::zero();
+                        while let Some((time, data)) = input.next() {
+                            let mut session = output.session_with_builder(&time);
+                            for (data, time, diff) in data.iter() {
+                                R::copy_from(&mut diff_owned, diff);
+                                diff_owned.negate();
+                                session.give((data, time, &diff_owned));
+                            }
+                        }
+                    }
+                },
+            )
+        }
+    }
+}
