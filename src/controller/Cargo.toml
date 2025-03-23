@@ -10,8 +10,8 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.95"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+anyhow = "1.0.97"
+chrono = { version = "0.4.40", default-features = false, features = ["std"] }
 futures = "0.3.31"
 mz-build-info = { path = "../build-info" }
 mz-cluster-client = { path = "../cluster-client" }
@@ -31,7 +31,7 @@ mz-storage-types = { path = "../storage-types" }
 mz-txn-wal = { path = "../txn-wal" }
 regex = "1.10.6"
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.125"
+serde_json = "1.0.140"
 timely = "0.19.0"
 tokio = "1.44.1"
 tracing = "0.1.37"

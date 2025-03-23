@@ -10,8 +10,8 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.95"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+anyhow = "1.0.97"
+chrono = { version = "0.4.40", default-features = false, features = ["std"] }
 mz-kafka-util = { path = "../../src/kafka-util" }
 mz-ore = { path = "../../src/ore", features = ["async"] }
 rand = "0.8.5"
