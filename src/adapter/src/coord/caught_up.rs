@@ -244,7 +244,8 @@ impl Coordinator {
         let storage_frontiers = self
             .controller
             .storage
-            .active_ingestion_collections(cluster.id)
+            .active_ingestions(cluster.id)
+            .copied()
             .filter(|id| !id.is_transient() && !exclude_collections.contains(id))
             .map(|id| {
                 let (_read_frontier, write_frontier) =
