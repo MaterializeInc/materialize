@@ -492,32 +492,11 @@ where
         self.storage_collections.active_collection_metadatas()
     }
 
-    fn active_ingestion_collections(
+    fn active_ingestions(
         &self,
         instance_id: StorageInstanceId,
-    ) -> Box<dyn Iterator<Item = GlobalId> + '_> {
-        let active_ingestions = self.instances[&instance_id].active_ingestions();
-
-        let active_collections = active_ingestions.flat_map(|ingestion_id| {
-            let ingestion_state = self
-                .collections
-                .get(ingestion_id)
-                .expect("instance contains unknown ingestion");
-
-            let ingestion_description = match &ingestion_state.data_source {
-                DataSource::Ingestion(ingestion_description) => ingestion_description.clone(),
-                _ => panic!(
-                    "unexpected data source for ingestion: {:?}",
-                    ingestion_state.data_source
-                ),
-            };
-
-            let collection_ids: Vec<_> = ingestion_description.collection_ids().collect();
-
-            collection_ids
-        });
-
-        Box::new(active_collections)
+    ) -> Box<dyn Iterator<Item = &GlobalId> + '_> {
+        Box::new(self.instances[&instance_id].active_ingestions())
     }
 
     fn check_exists(&self, id: GlobalId) -> Result<(), StorageError<Self::Timestamp>> {
