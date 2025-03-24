@@ -1236,7 +1236,13 @@ largest not in advance of upper:<TIMESTAMP>
 
 source materialize.public.t1 (u1, storage):
                   read frontier:[<TIMESTAMP>]
-                 write frontier:[<TIMESTAMP>]\n";
+                 write frontier:[<TIMESTAMP>]
+
+binding constraints:
+lower:
+  (StorageInput([User(1)])): [<TIMESTAMP>]
+  (ComputeInput([])): [<TIMESTAMP>]
+  (IsolationLevel(StrictSerializable)): [<TIMESTAMP>]\n";
 
     let row = client
         .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
