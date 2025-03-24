@@ -13,12 +13,14 @@ use std::fmt;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use constraints::Constraints;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastLossy;
 use mz_ore::soft_assert_eq_or_log;
+use mz_persist_client::write;
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::{GlobalId, RowArena, ScalarType, Timestamp, TimestampManipulation};
 use mz_sql::plan::QueryWhen;
@@ -317,16 +319,9 @@ pub trait TimestampProvider {
             // At the moment, only `QueryWhen::FreshestTableWrite` indicates that we should.
             // TODO: Should this just depend on the isolation level?
             if let Some(timestamp) = &oracle_read_ts {
-                println!("oracle_read_ts: {:?}", timestamp);
-                println!("isolation_level: {:?}", isolation_level);
-                println!(
-                    "must_advance_to_timeline_ts: {:?}",
-                    when.must_advance_to_timeline_ts()
-                );
                 if isolation_level != &IsolationLevel::StrongSessionSerializable
                     || when.must_advance_to_timeline_ts()
                 {
-                    println!("pushing oracle_read_ts");
                     constraints.lower.push((
                         Antichain::from_elem(*timestamp),
                         Reason::IsolationLevel(*isolation_level),
@@ -370,7 +365,6 @@ pub trait TimestampProvider {
                     // queries. If upper < now, then we choose the upper and prevent blocking the current
                     // query.
                     if when.can_advance_to_upper() && when.can_advance_to_timeline_ts() {
-                        println!("performing strong session serializable selection");
                         let mut advance_to = largest_not_in_advance_of_upper;
                         if let Some(oracle_read_ts) = oracle_read_ts {
                             advance_to = std::cmp::min(advance_to, oracle_read_ts);
@@ -383,7 +377,6 @@ pub trait TimestampProvider {
                 }
             }
 
-            println!("constraints before we run the solver: {:?}", constraints);
             constraints.minimize();
             constraints
         };
@@ -488,13 +481,9 @@ pub trait TimestampProvider {
             candidate.join_assign(&real_time_recency_ts);
         }
 
-        println!("--- classical selection ---");
-        println!("isolation_level: {:?}", isolation_level);
         if isolation_level == &IsolationLevel::StrongSessionSerializable {
             if let Some(timeline) = &timeline {
-                println!("timeline: {:?}", timeline);
                 if let Some(oracle) = session.get_timestamp_oracle(timeline) {
-                    println!("oracle: {:?}", oracle);
                     let session_ts = oracle.read_ts();
                     candidate.join_assign(&session_ts);
                     session_oracle_read_ts = Some(session_ts);
@@ -511,7 +500,6 @@ pub trait TimestampProvider {
             // queries. If upper < now, then we choose the upper and prevent blocking the current
             // query.
             if when.can_advance_to_upper() && when.can_advance_to_timeline_ts() {
-                println!("performing strong session serializable selection");
                 let mut advance_to = largest_not_in_advance_of_upper;
                 if let Some(oracle_read_ts) = oracle_read_ts {
                     advance_to = std::cmp::min(advance_to, oracle_read_ts);
@@ -519,8 +507,6 @@ pub trait TimestampProvider {
                 candidate.join_assign(&advance_to);
             }
         }
-
-        println!("--- end classical selection ---");
 
         // Determine a candidate based on constraints and preferences.
         let constraint_candidate = {
@@ -567,7 +553,7 @@ pub trait TimestampProvider {
         };
 
         if Some(timestamp) != constraint_candidate {
-            println!("timestamp constrains: {:?}", constraints);
+            tracing::info!("timestamp constrains: {:?}", constraints);
         }
 
         soft_assert_eq_or_log!(
@@ -591,6 +577,7 @@ pub trait TimestampProvider {
             oracle_read_ts,
             session_oracle_read_ts,
             real_time_recency_ts,
+            constraints,
         };
 
         Ok((determination, read_holds))
@@ -848,6 +835,8 @@ pub struct TimestampDetermination<T> {
     pub session_oracle_read_ts: Option<T>,
     /// The value of the real time recency timestamp, if used.
     pub real_time_recency_ts: Option<T>,
+    /// The constraints used by the constraint based solver.
+    pub constraints: Constraints,
 }
 
 impl<T: TimestampManipulation> TimestampDetermination<T> {
@@ -996,6 +985,10 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline + TimestampManipulatio
             self.session_wall_time.format("%Y-%m-%d %H:%M:%S%.3f"),
         )?;
 
+        writeln!(f, "")?;
+        writeln!(f, "constraints (experimental):")?;
+        writeln!(f, "{}", self.determination.constraints.display(timeline))?;
+
         for source in &self.sources {
             writeln!(f, "")?;
             writeln!(f, "source {}:", source.name)?;
@@ -1029,11 +1022,15 @@ mod constraints {
     use std::fmt::Debug;
 
     use differential_dataflow::lattice::Lattice;
+    use mz_storage_types::sources::Timeline;
+    use serde::{Deserialize, Serialize};
     use timely::progress::{Antichain, Timestamp};
 
     use mz_compute_types::ComputeInstanceId;
     use mz_repr::GlobalId;
     use mz_sql::session::vars::IsolationLevel;
+
+    use super::DisplayableInTimeline;
 
     /// Constraints expressed on the timestamp of a query.
     ///
@@ -1047,7 +1044,7 @@ mod constraints {
     ///
     /// When combined with a `Preference` one can determine an
     /// ideal timestamp to use.
-    #[derive(Default)]
+    #[derive(Default, Serialize, Deserialize, Clone)]
     pub struct Constraints {
         /// Timestamps and reasons that impose an inclusive lower bound.
         pub lower: Vec<(Antichain<mz_repr::Timestamp>, Reason)>,
@@ -1055,16 +1052,29 @@ mod constraints {
         pub upper: Vec<(Antichain<mz_repr::Timestamp>, Reason)>,
     }
 
+    impl DisplayableInTimeline for Constraints {
+        fn fmt(&self, timeline: Option<&Timeline>, f: &mut fmt::Formatter) -> fmt::Result {
+            if !self.lower.is_empty() {
+                writeln!(f, "lower:")?;
+                for (ts, reason) in &self.lower {
+                    let ts = ts.iter().map(|t| t.display(timeline)).collect::<Vec<_>>();
+                    writeln!(f, "  {:?}: ({:?})", ts, reason)?;
+                }
+            }
+            if !self.upper.is_empty() {
+                writeln!(f, "upper:")?;
+                for (ts, reason) in &self.upper {
+                    let ts = ts.iter().map(|t| t.display(timeline)).collect::<Vec<_>>();
+                    writeln!(f, "  {:?}: ({:?})", ts, reason)?;
+                }
+            }
+            Ok(())
+        }
+    }
+
     impl Debug for Constraints {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            writeln!(f, "lower:")?;
-            for (ts, reason) in &self.lower {
-                writeln!(f, "  {:?} ({:?})", ts, reason)?;
-            }
-            writeln!(f, "upper:")?;
-            for (ts, reason) in &self.upper {
-                writeln!(f, "  {:?} ({:?})", ts, reason)?;
-            }
+            self.display(None).fmt(f)?;
             Ok(())
         }
     }
@@ -1113,6 +1123,7 @@ mod constraints {
     }
 
     /// An explanation of reasons for a timestamp constraint.
+    #[derive(Serialize, Deserialize, Clone)]
     pub enum Reason {
         /// A compute input at a compute instance.
         ComputeInput(Vec<(ComputeInstanceId, GlobalId)>),
