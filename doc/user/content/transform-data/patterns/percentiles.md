@@ -69,39 +69,54 @@ HDR histograms are related to how [floating point numbers are represented](https
 
 The following snippets reduce the precision of numbers to limit the amount of required buckets. Numbers are decomposed into their floating point representation
 
-	n = sign * mantissa * 2**exponent
+	n = mantissa * 2**exponent
 
 and the precision of the mantissa is then reduced to compute the respective bucket.
 
-The basic ideas of using histograms to compute percentiles remain the same; but determining the bucket becomes more involved because it’s now composed of the triple (sign, mantissa, exponent).
+The basic ideas of using histograms to compute percentiles remain the same; but determining the bucket becomes more involved because it’s now composed of the tuple (mantissa, exponent).
 
 ```mzsql
 -- precision for the representation of the mantissa in bits
 \set precision 4
 
 CREATE VIEW hdr_histogram AS
+WITH
+  input_parts AS (
+    SELECT
+      CASE WHEN value = 0 THEN NULL
+           ELSE trunc(log(2, abs(value)))::int
+      END AS exponent,
+      CASE WHEN value = 0 THEN NULL
+           ELSE value / pow(2.0, trunc(log(2, abs(value)))::int)
+      END AS mantissa
+    FROM input
+  ),
+  buckets AS (
+    SELECT
+      trunc(mantissa * pow(2.0, :precision)) / pow(2.0, :precision)
+        * pow(2.0, exponent)
+        AS bucket
+    FROM input_parts
+  )
 SELECT
-  CASE WHEN value<0 THEN -1 ELSE 1 END AS sign,
-  trunc(log(2.0, abs(value)))::int AS exponent,
-  trunc(pow(2.0, :precision) * (value / pow(2.0, trunc(log(2.0, abs(value)))::int) - 1.0))::int AS mantissa,
+  COALESCE(bucket, 0) AS bucket,
   count(*) AS frequency
-FROM input
-GROUP BY sign, exponent, mantissa;
+FROM buckets
+GROUP BY bucket;
 ```
 
-The `hdr_distribution` view below reconstructs the `bucket` (with reduced precision), and determines the cumulative count and cumulative distribution.
+The `hdr_distribution` view below determines the cumulative count and cumulative distribution.
 
 ```mzsql
 CREATE VIEW hdr_distribution AS
 SELECT
-  h.sign*(1.0+h.mantissa/pow(2.0, :precision))*pow(2.0,h.exponent) AS bucket,
+  h.bucket,
   h.frequency,
   sum(g.frequency) AS cumulative_frequency,
   sum(g.frequency) / (SELECT sum(frequency) FROM hdr_histogram) AS cumulative_distribution
 FROM hdr_histogram g, hdr_histogram h
-WHERE (g.sign,g.exponent,g.mantissa) <= (h.sign,h.exponent,h.mantissa)
-GROUP BY h.sign, h.exponent, h.mantissa, h.frequency
-ORDER BY cumulative_distribution;
+WHERE g.bucket <= h.bucket
+GROUP BY h.bucket, h.frequency;
 ```
 
 This view can then be used to query _approximate_ percentiles. More precisely, the query returns the lower bound for the percentile (the next larger bucket represents the upper bound).
