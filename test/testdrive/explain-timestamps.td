@@ -22,7 +22,7 @@ $ set-regex match=(s\d+|\d{13}|u\d+|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d\.\d\d\d\)|tr
 # Serializable also doesn't look at every object in the same time domain
 > SET TRANSACTION_ISOLATION = 'SERIALIZABLE';
 > EXPLAIN TIMESTAMP FOR SELECT * FROM t1
-"                query timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.t1 (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n\nbinding constraints:\nlower:\n  (StorageInput([User<>])): [<> <>]\n  (ComputeInput([])): [<> <>]\n"
+"                query timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.t1 (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n\nbinding constraints:\nlower:\n  (StorageInput([User<>])): [<> <>]\n"
 
 
 # Real time recency shouldn't break anything
