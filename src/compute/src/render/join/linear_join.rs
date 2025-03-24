@@ -274,6 +274,7 @@ where
                             // TODO(mcsherry): re-use `row` allocation.
                             closure
                                 .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                                .map(|row| row.cloned())
                                 .map_err(DataflowError::from)
                                 .transpose()
                         }
@@ -318,6 +319,7 @@ where
                         // TODO(mcsherry): re-use `row` allocation.
                         closure
                             .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                            .map(|row| row.cloned())
                             .map_err(DataflowError::from)
                             .transpose()
                     }
@@ -509,6 +511,7 @@ where
 
                         closure
                             .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                            .map(|row| row.cloned())
                             .map_err(DataflowError::from)
                             .transpose()
                     },
@@ -541,6 +544,7 @@ where
                     closure
                         .apply(&mut datums_local, &temp_storage, &mut row_builder)
                         .expect("Closure claimed to never error")
+                        .cloned()
                 },
             );
 

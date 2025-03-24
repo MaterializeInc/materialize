@@ -1678,7 +1678,7 @@ pub mod plan {
             datums: &mut Vec<Datum<'a>>,
             arena: &'a RowArena,
             row_buf: &'row mut Row,
-        ) -> Result<Option<Row>, EvalError> {
+        ) -> Result<Option<&'row Row>, EvalError> {
             let passed_predicates = self.evaluate_inner(datums, arena)?;
             if !passed_predicates {
                 Ok(None)
@@ -1686,7 +1686,7 @@ pub mod plan {
                 row_buf
                     .packer()
                     .extend(self.mfp.projection.iter().map(|c| datums[*c]));
-                Ok(Some(row_buf.clone()))
+                Ok(Some(row_buf))
             }
         }
 

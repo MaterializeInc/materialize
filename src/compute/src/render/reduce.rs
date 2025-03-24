@@ -136,7 +136,9 @@ where
                                     diff.clone(),
                                 ))
                             }
-                            Ok(key) => key.expect("Row expected as no predicate was used"),
+                            Ok(key) => key
+                                .expect("Row expected as no predicate was used")
+                                .clone(),
                         };
                         // Evaluate the value expressions.
                         // The prior evaluation may have left additional columns we should delete.
