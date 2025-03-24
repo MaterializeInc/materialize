@@ -10,17 +10,17 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.95"
+anyhow = "1.0.97"
 bincode = { version = "1.3.3" }
 derivative = "2.2.0"
 itertools = { version = "0.12.1" }
 mz-ore = { path = "../ore", features = ["async", "metrics", "test"] }
 mz-rocksdb-types = { path = "../rocksdb-types" }
 num_cpus = "1.16.0"
-prometheus = { version = "0.13.3", default-features = false }
+prometheus = { version = "0.13.4", default-features = false }
 tokio = { version = "1.44.1", features = ["macros", "sync", "rt"] }
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = { version = "1.0.125" }
+serde_json = { version = "1.0.140" }
 thiserror = "2.0.12"
 tracing = "0.1.37"
 # These features use compression code that are licensed with:
@@ -37,8 +37,8 @@ mz-build-tools = { path = "../build-tools", default-features = false }
 default = ["mz-build-tools/default", "workspace-hack"]
 
 [dev-dependencies]
-tempfile = "3.19.0"
-prometheus = { version = "0.13.3", default-features = false }
+tempfile = "3.19.1"
+prometheus = { version = "0.13.4", default-features = false }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

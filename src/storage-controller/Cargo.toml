@@ -10,10 +10,10 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.95"
-async-trait = "0.1.83"
+anyhow = "1.0.97"
+async-trait = "0.1.88"
 bytes = "1.10.1"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+chrono = { version = "0.4.40", default-features = false, features = ["std"] }
 derivative = "2.2.0"
 differential-dataflow = "0.13.7"
 futures = "0.3.31"
@@ -37,7 +37,7 @@ mz-txn-wal = { path = "../txn-wal" }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = { version = "1.0.125" }
+serde_json = { version = "1.0.140" }
 timely = "0.19.0"
 tokio = { version = "1.44.1", features = ["fs", "rt", "sync", "test-util", "time"] }
 tokio-postgres = { version = "0.7.8", features = ["serde"] }

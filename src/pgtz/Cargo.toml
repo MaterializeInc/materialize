@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-chrono = { version = "0.4.39", default-features = false, features = ["serde", "std"] }
+chrono = { version = "0.4.40", default-features = false, features = ["serde", "std"] }
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
 mz-lowertest = { path = "../lowertest", default-features = false }
 mz-ore = { path = "../ore", features = ["test"], default-features = false }
@@ -24,12 +24,12 @@ uncased = "0.9.7"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [build-dependencies]
-anyhow = "1.0.95"
+anyhow = "1.0.97"
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
 mz-build-tools = { path = "../build-tools", default-features = false }
 mz-ore-build = { path = "../ore-build", default-features = false }
 phf_codegen = "0.11.3"
-prost-build = "0.13.4"
+prost-build = "0.13.5"
 uncased = "0.9.7"
 
 [package.metadata.cargo-udeps.ignore]

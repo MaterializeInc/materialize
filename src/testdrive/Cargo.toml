@@ -10,16 +10,16 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.95"
-async-compression = { version = "0.4.11", features = ["bzip2", "gzip", "tokio", "xz", "zstd"] }
-async-trait = "0.1.83"
-aws-credential-types = { version = "1.2.1", features = ["hardcoded-credentials"] }
+anyhow = "1.0.97"
+async-compression = { version = "0.4.21", features = ["bzip2", "gzip", "tokio", "xz", "zstd"] }
+async-trait = "0.1.88"
+aws-credential-types = { version = "1.2.2", features = ["hardcoded-credentials"] }
 aws-sdk-sts = { version = "1.7.0", default-features = false, features = ["rt-tokio"] }
 aws-types = "1.1.1"
 arrow = { version = "53.3.0", default-features = false }
 byteorder = "1.5"
 bytes = "1.10.1"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+chrono = { version = "0.4.40", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive"] }
 flate2 = "1.1.0"
 futures = "0.3.31"
@@ -30,7 +30,7 @@ humantime = "2.2.0"
 itertools = "0.12.1"
 junit-report = "0.8.3"
 maplit = "1.0.2"
-md-5 = "0.10.5"
+md-5 = "0.10.6"
 mysql_async = { version = "0.35.1", default-features = false, features = ["minimal"] }
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
@@ -62,11 +62,11 @@ rand = "0.8.5"
 rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = "1.10.6"
 reqwest = { version = "0.11.13", features = ["native-tls-vendored"] }
-semver = "1.0.16"
+semver = "1.0.26"
 serde = "1.0.219"
-serde_json = { version = "1.0.125", features = ["raw_value"] }
+serde_json = { version = "1.0.140", features = ["raw_value"] }
 similar = "2.7.0"
-tempfile = "3.19.0"
+tempfile = "3.19.1"
 termcolor = "1.4.1"
 tiberius = { version = "0.12", default-features = false }
 time = "0.3.17"
@@ -75,7 +75,7 @@ tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 tokio = { version = "1.44.1", features = ["process"] }
 tokio-postgres = { version = "0.7.8", features = ["with-chrono-0_4", "with-serde_json-1"] }
 tokio-stream = "0.1.17"
-tokio-util = { version = "0.7.13", features = ["compat"] }
+tokio-util = { version = "0.7.14", features = ["compat"] }
 tonic = "0.12.1"
 url = "2.3.1"
 uuid = "1.16.0"
@@ -84,7 +84,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.13.4"
+prost-build = "0.13.5"
 tonic-build = "0.12.3"
 
 [features]
