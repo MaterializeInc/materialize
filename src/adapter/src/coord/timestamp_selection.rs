@@ -285,18 +285,26 @@ pub trait TimestampProvider {
             // which collections we are reading from.
             // TODO: Refine the detail about which identifiers are binding and which are not.
             let since = self.least_valid_read(&read_holds);
-            let storage = id_bundle.storage_ids.iter().cloned().collect();
-            constraints
-                .lower
-                .push((since.clone(), Reason::StorageInput(storage)));
+            let storage = id_bundle
+                .storage_ids
+                .iter()
+                .cloned()
+                .collect::<Vec<GlobalId>>();
+            if !storage.is_empty() {
+                constraints
+                    .lower
+                    .push((since.clone(), Reason::StorageInput(storage)));
+            }
             let compute = id_bundle
                 .compute_ids
                 .iter()
                 .flat_map(|(key, ids)| ids.iter().map(|id| (*key, *id)))
-                .collect();
-            constraints
-                .lower
-                .push((since.clone(), Reason::ComputeInput(compute)));
+                .collect::<Vec<(ComputeInstanceId, GlobalId)>>();
+            if !compute.is_empty() {
+                constraints
+                    .lower
+                    .push((since.clone(), Reason::ComputeInput(compute)));
+            }
 
             // The query's `when` may indicates a specific timestamp we must advance to, or a specific value we must use.
             if let Some(timestamp) = when.advance_to_timestamp() {
@@ -306,7 +314,7 @@ pub trait TimestampProvider {
                     .lower
                     .push((Antichain::from_elem(ts), Reason::QueryAsOf));
                 // If the query is at a specific timestamp, we must introduce an upper bound as well.
-                if let QueryWhen::AtTimestamp(_) = when {
+                if when.should_constrain_upper() {
                     constraints
                         .upper
                         .push((Antichain::from_elem(ts), Reason::QueryAsOf));
@@ -1083,9 +1091,12 @@ mod constraints {
         /// Remove constraints that are dominated by other constraints.
         ///
         /// This removes redundant constraints, without removing constraints
-        /// that are "tight" in the sense that the interval will not improve
-        /// without their removal. For example, two constraints at the same
+        /// that are "tight" in the sense that the interval would be
+        /// meaningfully different without them.
+        /// For example, two constraints at the same
         /// time will both be retained, in the interest of full information.
+        /// But a lower bound constraint at time `t` will be removed if there is a
+        /// constraint at time `t + 1` (or any larger time).
         pub fn minimize(&mut self) {
             // Establish the upper bound of lower constraints.
             let lower_frontier = self.lower_bound();
@@ -1126,6 +1137,8 @@ mod constraints {
     #[derive(Serialize, Deserialize, Clone)]
     pub enum Reason {
         /// A compute input at a compute instance.
+        /// This is something like an index or view
+        /// that is mantained by compute.
         ComputeInput(Vec<(ComputeInstanceId, GlobalId)>),
         /// A storage input.
         StorageInput(Vec<GlobalId>),
