@@ -23,6 +23,7 @@ use anyhow::{anyhow, Error};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
+use futures_util::StreamExt;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::{HashMap, HashSet};
@@ -36,7 +37,6 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::Sender;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
-use tokio_stream::StreamExt;
 use tonic::metadata::{AsciiMetadataKey, AsciiMetadataValue, MetadataMap};
 use tonic::transport::Endpoint;
 use tonic::{Extensions, Request, Response, Status, Streaming};
@@ -345,20 +345,30 @@ impl GrpcPubSubClient {
                 .grpc_connection
                 .broadcast_recv_lagged_count
                 .clone();
+
+            // shard subscriptions are tracked by connection on the server, so if our
+            // gRPC stream is ever swapped out, we must inform the server which shards
+            // our client intended to be subscribed to.
+            let subscribe_messages = tokio_stream::iter(sender.subscriptions()).map(|id| {
+                create_request(proto_pub_sub_message::Message::Subscribe(ProtoSubscribe {
+                    shard_id: id.into_proto(),
+                }))
+            });
+            let broadcast_messages = async_stream::stream! {
+                while let Some(message) = broadcast.next().await {
+                    debug!("sending pubsub message: {:?}", message);
+                    match message {
+                        Ok(message) => yield message,
+                        Err(BroadcastStreamRecvError::Lagged(i)) => {
+                            broadcast_errors.inc_by(i);
+                        }
+                    }
+                }
+            };
             let pubsub_request = Request::from_parts(
                 metadata.clone(),
                 Extensions::default(),
-                async_stream::stream! {
-                    while let Some(message) = broadcast.next().await {
-                        debug!("sending pubsub message: {:?}", message);
-                        match message {
-                            Ok(message) => yield message,
-                            Err(BroadcastStreamRecvError::Lagged(i)) => {
-                                broadcast_errors.inc_by(i);
-                            }
-                        }
-                    }
-                },
+                subscribe_messages.chain(broadcast_messages),
             );
 
             let responses = match client.pub_sub(pubsub_request).await {
@@ -368,11 +378,6 @@ impl GrpcPubSubClient {
                     continue;
                 }
             };
-
-            // shard subscriptions are tracked by connection on the server, so if our
-            // gRPC stream is ever swapped out, we must inform the server which shards
-            // our client intended to be subscribed to.
-            sender.reconnect();
 
             let stream_completed = GrpcPubSubClient::consume_grpc_stream(
                 responses,
@@ -499,19 +504,22 @@ impl Debug for GrpcPubSubSender {
     }
 }
 
+fn create_request(message: proto_pub_sub_message::Message) -> ProtoPubSubMessage {
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .expect("failed to get millis since epoch");
+
+    ProtoPubSubMessage {
+        timestamp: Some(now.into_proto()),
+        message: Some(message),
+    }
+}
+
 impl GrpcPubSubSender {
     fn send(&self, message: proto_pub_sub_message::Message, metrics: &PubSubClientCallMetrics) {
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .expect("failed to get millis since epoch");
-
-        let message = ProtoPubSubMessage {
-            timestamp: Some(now.into_proto()),
-            message: Some(message),
-        };
         let size = message.encoded_len();
 
-        match self.requests.send(message) {
+        match self.requests.send(create_request(message)) {
             Ok(_) => {
                 metrics.succeeded.inc();
                 metrics.bytes_sent.inc_by(u64::cast_from(size));
@@ -571,17 +579,19 @@ impl SubscriptionTrackingSender {
         }
     }
 
-    fn reconnect(&self) {
+    fn subscriptions(&self) -> Vec<ShardId> {
         let mut subscribes = self.subscribes.lock().expect("lock");
+        let mut out = Vec::with_capacity(subscribes.len());
         subscribes.retain(|shard_id, token| {
             if token.upgrade().is_none() {
                 false
             } else {
                 debug!("reconnecting to: {}", shard_id);
-                self.delegate.subscribe(shard_id);
+                out.push(*shard_id);
                 true
             }
-        })
+        });
+        out
     }
 }
 
@@ -859,25 +869,17 @@ impl PubSubState {
                     continue;
                 }
                 debug!(
-                    "server forwarding req to {} conns {} {} {}",
+                    "server forwarding req to conn {}: {} {} {}",
                     subscribed_conn_id,
                     &shard_id,
                     data.seqno,
                     data.data.len()
                 );
-                let req = ProtoPubSubMessage {
-                    timestamp: Some(
-                        SystemTime::now()
-                            .duration_since(SystemTime::UNIX_EPOCH)
-                            .expect("failed to get millis since epoch")
-                            .into_proto(),
-                    ),
-                    message: Some(proto_pub_sub_message::Message::PushDiff(ProtoPushDiff {
-                        seqno: data.seqno.into_proto(),
-                        shard_id: shard_id.to_string(),
-                        diff: Bytes::clone(&data.data),
-                    })),
-                };
+                let req = create_request(proto_pub_sub_message::Message::PushDiff(ProtoPushDiff {
+                    seqno: data.seqno.into_proto(),
+                    shard_id: shard_id.to_string(),
+                    diff: Bytes::clone(&data.data),
+                }));
                 data_size = req.encoded_len();
                 match tx.try_send(Ok(req)) {
                     Ok(_) => {
