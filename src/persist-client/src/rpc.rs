@@ -283,6 +283,7 @@ impl GrpcPubSubClient {
 
         let mut is_first_connection_attempt = true;
         loop {
+            let sender = Arc::clone(&sender);
             metrics.pubsub_client.grpc_connection.connected.set(0);
 
             if !PUBSUB_CLIENT_ENABLED.get(&config.persist_cfg) {
@@ -349,27 +350,33 @@ impl GrpcPubSubClient {
             // shard subscriptions are tracked by connection on the server, so if our
             // gRPC stream is ever swapped out, we must inform the server which shards
             // our client intended to be subscribed to.
-            let subscribe_messages = tokio_stream::iter(sender.subscriptions()).map(|id| {
-                create_request(proto_pub_sub_message::Message::Subscribe(ProtoSubscribe {
-                    shard_id: id.into_proto(),
-                }))
-            });
             let broadcast_messages = async_stream::stream! {
-                while let Some(message) = broadcast.next().await {
-                    debug!("sending pubsub message: {:?}", message);
-                    match message {
-                        Ok(message) => yield message,
-                        Err(BroadcastStreamRecvError::Lagged(i)) => {
-                            broadcast_errors.inc_by(i);
+                'reconnect: loop {
+                    // If we have active subscriptions, resend them.
+                    for id in sender.subscriptions() {
+                        debug!("re-subscribing to shard: {id}");
+                        yield create_request(proto_pub_sub_message::Message::Subscribe(ProtoSubscribe {
+                            shard_id: id.into_proto(),
+                        }));
+                    }
+
+                    // Forward on messages from the broadcast channel, reconnecting if necessary.
+                    while let Some(message) = broadcast.next().await {
+                        debug!("sending pubsub message: {:?}", message);
+                        match message {
+                            Ok(message) => yield message,
+                            Err(BroadcastStreamRecvError::Lagged(i)) => {
+                                broadcast_errors.inc_by(i);
+                                continue 'reconnect;
+                            }
                         }
                     }
+                    debug!("exhausted pubsub broadcast stream; shutting down");
+                    break;
                 }
             };
-            let pubsub_request = Request::from_parts(
-                metadata.clone(),
-                Extensions::default(),
-                subscribe_messages.chain(broadcast_messages),
-            );
+            let pubsub_request =
+                Request::from_parts(metadata.clone(), Extensions::default(), broadcast_messages);
 
             let responses = match client.pub_sub(pubsub_request).await {
                 Ok(response) => response.into_inner(),
