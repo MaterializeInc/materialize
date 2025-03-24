@@ -26,17 +26,18 @@ aws-credential-types = { version = "1.2.2", default-features = false, features =
 aws-runtime = { version = "1.4.2", default-features = false, features = ["event-stream", "http-02x"] }
 aws-sdk-sts = { version = "1.21.0", default-features = false, features = ["rt-tokio"] }
 aws-sigv4 = { version = "1.2.3", features = ["http0-compat", "sign-eventstream"] }
-aws-smithy-async = { version = "1.2.4", default-features = false, features = ["rt-tokio"] }
+aws-smithy-async = { version = "1.2.5", default-features = false, features = ["rt-tokio"] }
 aws-smithy-http = { version = "0.60.10", default-features = false, features = ["event-stream"] }
 aws-smithy-runtime = { version = "1.7.1", default-features = false, features = ["client", "connector-hyper-0-14-x"] }
-aws-smithy-runtime-api = { version = "1.7.3", features = ["client", "http-02x", "http-auth", "test-util"] }
-aws-smithy-types = { version = "1.2.13", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "http-body-1-x", "rt-tokio", "test-util"] }
+aws-smithy-runtime-api = { version = "1.7.4", features = ["client", "http-02x", "http-auth", "test-util"] }
+aws-smithy-types = { version = "1.3.0", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "http-body-1-x", "rt-tokio", "test-util"] }
 axum = { version = "0.7.5", features = ["ws"] }
 axum-core = { version = "0.4.5", default-features = false, features = ["tracing"] }
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
+bstr = { version = "1.10.0" }
 byteorder = { version = "1.5.0" }
 bytes = { version = "1.10.1", features = ["serde"] }
-chrono = { version = "0.4.40", default-features = false, features = ["clock", "serde", "wasmbind"] }
+chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "wasmbind"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
 clap_builder = { version = "4.5.23", default-features = false, features = ["color", "env", "std", "string", "suggestions", "usage", "wrap_help"] }
 concurrent-queue = { version = "2.5.0" }
@@ -78,7 +79,7 @@ libc = { version = "0.2.171", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.22", features = ["static"] }
 log = { version = "0.4.26", default-features = false, features = ["std"] }
 lru = { version = "0.12.3" }
-memchr = { version = "2.7.4", features = ["use_std"] }
+memchr = { version = "2.7.4" }
 mime_guess = { version = "2.0.5" }
 minimal-lexical = { version = "0.2.1", default-features = false, features = ["std"] }
 mysql_async = { version = "0.35.1", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
@@ -161,18 +162,19 @@ aws-credential-types = { version = "1.2.2", default-features = false, features =
 aws-runtime = { version = "1.4.2", default-features = false, features = ["event-stream", "http-02x"] }
 aws-sdk-sts = { version = "1.21.0", default-features = false, features = ["rt-tokio"] }
 aws-sigv4 = { version = "1.2.3", features = ["http0-compat", "sign-eventstream"] }
-aws-smithy-async = { version = "1.2.4", default-features = false, features = ["rt-tokio"] }
+aws-smithy-async = { version = "1.2.5", default-features = false, features = ["rt-tokio"] }
 aws-smithy-http = { version = "0.60.10", default-features = false, features = ["event-stream"] }
 aws-smithy-runtime = { version = "1.7.1", default-features = false, features = ["client", "connector-hyper-0-14-x"] }
-aws-smithy-runtime-api = { version = "1.7.3", features = ["client", "http-02x", "http-auth", "test-util"] }
-aws-smithy-types = { version = "1.2.13", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "http-body-1-x", "rt-tokio", "test-util"] }
+aws-smithy-runtime-api = { version = "1.7.4", features = ["client", "http-02x", "http-auth", "test-util"] }
+aws-smithy-types = { version = "1.3.0", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "http-body-1-x", "rt-tokio", "test-util"] }
 axum = { version = "0.7.5", features = ["ws"] }
 axum-core = { version = "0.4.5", default-features = false, features = ["tracing"] }
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
+bstr = { version = "1.10.0" }
 byteorder = { version = "1.5.0" }
 bytes = { version = "1.10.1", features = ["serde"] }
 cc = { version = "1.2.17", default-features = false, features = ["parallel"] }
-chrono = { version = "0.4.40", default-features = false, features = ["clock", "serde", "wasmbind"] }
+chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "wasmbind"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
 clap_builder = { version = "4.5.23", default-features = false, features = ["color", "env", "std", "string", "suggestions", "usage", "wrap_help"] }
 concurrent-queue = { version = "2.5.0" }
@@ -214,7 +216,7 @@ libc = { version = "0.2.171", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.22", features = ["static"] }
 log = { version = "0.4.26", default-features = false, features = ["std"] }
 lru = { version = "0.12.3" }
-memchr = { version = "2.7.4", features = ["use_std"] }
+memchr = { version = "2.7.4" }
 mime_guess = { version = "2.0.5" }
 minimal-lexical = { version = "0.2.1", default-features = false, features = ["std"] }
 mysql_async = { version = "0.35.1", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
@@ -293,6 +295,7 @@ zstd-sys = { version = "2.0.13", features = ["std"] }
 camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-features = false, features = ["runtime"] }
 linux-raw-sys = { version = "0.4.14", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
+miniz_oxide = { version = "0.8.5", default-features = false, features = ["with-alloc"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.14", features = ["std"] }
@@ -302,6 +305,7 @@ rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "proce
 camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-features = false, features = ["runtime"] }
 linux-raw-sys = { version = "0.4.14", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
+miniz_oxide = { version = "0.8.5", default-features = false, features = ["with-alloc"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.14", features = ["std"] }
@@ -310,6 +314,7 @@ rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "proce
 [target.x86_64-apple-darwin.dependencies]
 camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-features = false, features = ["runtime"] }
+miniz_oxide = { version = "0.8.5", default-features = false, features = ["with-alloc"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.14", features = ["std"] }
@@ -319,6 +324,7 @@ security-framework = { version = "2.10.0", features = ["alpn"] }
 [target.x86_64-apple-darwin.build-dependencies]
 camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-features = false, features = ["runtime"] }
+miniz_oxide = { version = "0.8.5", default-features = false, features = ["with-alloc"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.14", features = ["std"] }

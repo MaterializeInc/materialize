@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Builds xz from the lzma-sys crate."""
+"""Builds xz from the liblzma-sys crate."""
 
 cc_library(
     name = "xz",
