@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.95"
+anyhow = "1.0.97"
 mz-ore = { path = "../ore", features = ["async", "metrics", "test"] }
 mz-proto = { path = "../proto" }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
@@ -22,7 +22,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.13.4"
+prost-build = "0.13.5"
 tonic-build = "0.12.3"
 
 [features]
