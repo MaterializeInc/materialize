@@ -12124,7 +12124,6 @@ dependencies = [
  "num-traits",
  "openssl",
  "openssl-sys",
- "ordered-float 5.0.0",
  "parking_lot",
  "parquet",
  "pathdiff",
