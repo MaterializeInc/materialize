@@ -502,8 +502,8 @@ crates_repository(
             gen_build_script = False,
             deps = ["@bzip2"],
         )],
-        "lzma-sys": [crate.annotation(
-            additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.lzma-sys.bazel",
+        "liblzma-sys": [crate.annotation(
+            additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.liblzma-sys.bazel",
             gen_build_script = False,
             # Note: This is a target we add from the additive build file above.
             deps = [":xz"],
@@ -561,7 +561,7 @@ crates_repository(
         # builds, since otherwise backtraces can take 20s+ to symbolize. With optimizations
         # enabled, symbolizing a backtrace takes less than 1s.
         "addr2line": [crate.annotation(rustc_flags = ["-Copt-level=3"])],
-        "adler": [crate.annotation(rustc_flags = ["-Copt-level=3"])],
+        "adler2": [crate.annotation(rustc_flags = ["-Copt-level=3"])],
         "backtrace": [crate.annotation(rustc_flags = ["-Copt-level=3"])],
         "gimli": [crate.annotation(rustc_flags = ["-Copt-level=3"])],
         "miniz_oxide": [crate.annotation(rustc_flags = ["-Copt-level=3"])],
