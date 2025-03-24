@@ -555,7 +555,7 @@ create index on potato(a);
 ## The only thing that needs to stay true about what follows is that `potato` is used only
 ## as indexed access, and has `raw = false` to avoid decanting its contents.
 query T multiline
-EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE
+EXPLAIN PHYSICAL PLAN AS TEXT FOR WITH MUTUALLY RECURSIVE
 walk(a TEXT, b TEXT) AS (
     SELECT a, b
     FROM potato
@@ -571,13 +571,10 @@ walk(a TEXT, b TEXT) AS (
 select * from walk;
 ----
 Explained Query:
-  With
-    cte l0 =
-      Get::PassArrangements materialize.public.potato
-        raw=false
-        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-        types=[text?, text?]
   Return
+    Return
+      Get::PassArrangements l1
+        raw=true
     With Mutually Recursive
       cte l1 =
         ArrangeBy
@@ -620,9 +617,12 @@ Explained Query:
                     project=(#1)
                     filter=((#1) IS NOT NULL)
                     raw=true
-    Return
-      Get::PassArrangements l1
-        raw=true
+  With
+    cte l0 =
+      Get::PassArrangements materialize.public.potato
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+        types=[text?, text?]
 
 Used Indexes:
   - materialize.public.potato_a_idx (differential join, lookup)
