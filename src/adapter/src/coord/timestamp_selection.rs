@@ -20,7 +20,6 @@ use mz_compute_types::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastLossy;
 use mz_ore::soft_assert_eq_or_log;
-use mz_persist_client::write;
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::{GlobalId, RowArena, ScalarType, Timestamp, TimestampManipulation};
 use mz_sql::plan::QueryWhen;
@@ -1010,7 +1009,7 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline + TimestampManipulatio
 
         writeln!(f, "")?;
         writeln!(f, "binding constraints:")?;
-        writeln!(f, "{}", self.determination.constraints.display(timeline))?;
+        write!(f, "{}", self.determination.constraints.display(timeline))?;
 
         Ok(())
     }
