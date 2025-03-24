@@ -79,7 +79,7 @@ def main():
 
         tag = f"self-managed-{helm_chart_version}"
         print(f"Pushing tag {tag} to remote")
-        spawn.runv(["git", "tag", tag])
+        spawn.runv(["git", "tag", "-f", tag])
         spawn.runv(["git", "push", args.remote, tag])
     finally:
         # The caller may have started in a detached HEAD state.
