@@ -4777,6 +4777,7 @@ dependencies = [
  "mz-storage-types",
  "serde",
  "timely",
+ "tracing",
  "workspace-hack",
 ]
 

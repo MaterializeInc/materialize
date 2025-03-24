@@ -13,6 +13,8 @@ use std::time::Duration;
 
 use mz_dyncfg::{Config, ConfigSet};
 
+use crate::timestamp_oracle::ConstraintBasedTimestampSelection;
+
 pub const ALLOW_USER_SESSIONS: Config<bool> = Config::new(
     "allow_user_sessions",
     true,
@@ -116,6 +118,12 @@ pub const ENABLE_MULTI_REPLICA_SOURCES: Config<bool> = Config::new(
     "Enable multi-replica sources.",
 );
 
+pub const CONSTRAINT_BASED_TIMESTAMP_SELECTION: Config<&'static str> = Config::new(
+    "constraint_based_timestamp_selection",
+    ConstraintBasedTimestampSelection::const_default().as_str(),
+    "Whether to use the constraint-based timestamp selection, one of: enabled, disabled, verify",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -134,4 +142,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_CONTINUAL_TASK_BUILTINS)
         .add(&ENABLE_EXPRESSION_CACHE)
         .add(&ENABLE_MULTI_REPLICA_SOURCES)
+        .add(&CONSTRAINT_BASED_TIMESTAMP_SELECTION)
 }

@@ -16,6 +16,8 @@ use chrono::{DateTime, Utc};
 use constraints::Constraints;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
+use mz_adapter_types::dyncfgs::CONSTRAINT_BASED_TIMESTAMP_SELECTION;
+use mz_adapter_types::timestamp_oracle::ConstraintBasedTimestampSelection;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastLossy;
@@ -34,7 +36,7 @@ use crate::catalog::CatalogState;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
 use crate::coord::timeline::TimelineContext;
-use crate::coord::Coordinator;
+use crate::coord::{self, Coordinator};
 use crate::optimize::dataflows::{prep_scalar_expr, ExprPrepStyle};
 use crate::session::Session;
 use crate::AdapterError;
@@ -183,6 +185,15 @@ impl TimestampProvider for Coordinator {
     }
 }
 
+/// A timestamp determination, which includes the timestamp, constraints, and session oracle read
+/// timestamp.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RawTimestampSelection<T> {
+    pub timestamp: T,
+    pub constraints: Option<Constraints>,
+    pub session_oracle_read_ts: Option<T>,
+}
+
 #[async_trait(?Send)]
 pub trait TimestampProvider {
     fn compute_read_frontier(
@@ -236,44 +247,182 @@ pub trait TimestampProvider {
                 ))
     }
 
-    /// Determines the timestamp for a query.
-    ///
-    /// Timestamp determination may fail due to the restricted validity of
-    /// traces. Each has a `since` and `upper` frontier, and are only valid
-    /// after `since` and sure to be available not after `upper`.
-    ///
-    /// The timeline that `id_bundle` belongs to is also returned, if one exists.
-    fn determine_timestamp_for(
+    /// Determines the timestamp for a query using the classical logic (as opposed to constraint-based).
+    fn determine_timestamp_classical(
         &self,
         session: &Session,
+        read_holds: &ReadHolds<Timestamp>,
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
-        compute_instance: ComputeInstanceId,
-        timeline_context: &TimelineContext,
         oracle_read_ts: Option<Timestamp>,
-        real_time_recency_ts: Option<mz_repr::Timestamp>,
+        compute_instance: ComputeInstanceId,
+        real_time_recency_ts: Option<Timestamp>,
         isolation_level: &IsolationLevel,
-    ) -> Result<
-        (
-            TimestampDetermination<mz_repr::Timestamp>,
-            ReadHolds<mz_repr::Timestamp>,
-        ),
-        AdapterError,
-    > {
+        timeline: &Option<Timeline>,
+        largest_not_in_advance_of_upper: Timestamp,
+        since: &Antichain<Timestamp>,
+    ) -> Result<RawTimestampSelection<Timestamp>, AdapterError> {
+        let mut session_oracle_read_ts = None;
+        // Each involved trace has a validity interval `[since, upper)`.
+        // The contents of a trace are only guaranteed to be correct when
+        // accumulated at a time greater or equal to `since`, and they
+        // are only guaranteed to be currently present for times not
+        // greater or equal to `upper`.
+        //
+        // The plan is to first determine a timestamp, based on the requested
+        // timestamp policy, and then determine if it can be satisfied using
+        // the compacted arrangements we have at hand. It remains unresolved
+        // what to do if it cannot be satisfied (perhaps the query should use
+        // a larger timestamp and block, perhaps the user should intervene).
+
+        {
+            // TODO: We currently split out getting the oracle timestamp because
+            // it's a potentially expensive call, but a call that can be done in an
+            // async task. TimestampProvider is not Send (nor Sync), so we cannot do
+            // the call to `determine_timestamp_for` (including the oracle call) on
+            // an async task. If/when TimestampProvider can become Send, we can fold
+            // the call to the TimestampOracle back into this function.
+            //
+            // We assert here that the logic that determines the oracle timestamp
+            // matches our expectations.
+
+            if timeline.is_some() && Self::needs_linearized_read_ts(isolation_level, when) {
+                assert!(
+                    oracle_read_ts.is_some(),
+                    "should get a timestamp from the oracle for linearized timeline {:?} but didn't",
+                    timeline);
+            }
+        }
+
+        // Initialize candidate to the minimum correct time.
+        let mut candidate = Timestamp::minimum();
+
+        if let Some(timestamp) = when.advance_to_timestamp() {
+            let catalog_state = self.catalog_state();
+            let ts = Coordinator::evaluate_when(catalog_state, timestamp, session)?;
+            candidate.join_assign(&ts);
+        }
+
+        if when.advance_to_since() {
+            candidate.advance_by(since.borrow());
+        }
+
+        // If we've acquired a read timestamp from the timestamp oracle, use it
+        // as the new lower bound for the candidate.
+        // In Strong Session Serializable, we ignore the oracle timestamp for now, unless we need
+        // to use it.
+        if let Some(timestamp) = &oracle_read_ts {
+            if isolation_level != &IsolationLevel::StrongSessionSerializable
+                || when.must_advance_to_timeline_ts()
+            {
+                candidate.join_assign(timestamp);
+            }
+        }
+
+        // We advance to the upper in the following scenarios:
+        // - The isolation level is Serializable and the `when` allows us to advance to upper (ex:
+        //   queries with no AS OF). We avoid using the upper in Strict Serializable to prevent
+        //   reading source data that is being written to in the future.
+        // - The isolation level is Strict Serializable but there is no timelines and the `when`
+        //   allows us to advance to upper.
+        if when.can_advance_to_upper()
+            && (isolation_level == &IsolationLevel::Serializable || timeline.is_none())
+        {
+            candidate.join_assign(&largest_not_in_advance_of_upper);
+        }
+
+        if let Some(real_time_recency_ts) = real_time_recency_ts {
+            if !(session.vars().real_time_recency()
+                && isolation_level == &IsolationLevel::StrictSerializable)
+            {
+                // Erring on the side of caution, lets bail out here.
+                // This should never happen in practice, as the real time recency timestamp should
+                // only be supplied when real time recency is enabled.
+                coord_bail!(
+                    "real time recency timestamp should only be supplied when real time recency \
+                            is enabled and the isolation level is strict serializable"
+                );
+            }
+            candidate.join_assign(&real_time_recency_ts);
+        }
+
+        if isolation_level == &IsolationLevel::StrongSessionSerializable {
+            if let Some(timeline) = &timeline {
+                if let Some(oracle) = session.get_timestamp_oracle(timeline) {
+                    let session_ts = oracle.read_ts();
+                    candidate.join_assign(&session_ts);
+                    session_oracle_read_ts = Some(session_ts);
+                }
+            }
+
+            // When advancing the read timestamp under Strong Session Serializable, there is a
+            // trade-off to make between freshness and latency. We can choose a timestamp close the
+            // `upper`, but then later queries might block if the `upper` is too far into the
+            // future. We can chose a timestamp close to the current time, but then we may not be
+            // getting results that are as fresh as possible. As a heuristic, we choose the minimum
+            // of now and the upper, where we use the global timestamp oracle read timestamp as a
+            // proxy for now. If upper > now, then we choose now and prevent blocking future
+            // queries. If upper < now, then we choose the upper and prevent blocking the current
+            // query.
+            if when.can_advance_to_upper() && when.can_advance_to_timeline_ts() {
+                let mut advance_to = largest_not_in_advance_of_upper;
+                if let Some(oracle_read_ts) = oracle_read_ts {
+                    advance_to = std::cmp::min(advance_to, oracle_read_ts);
+                }
+                candidate.join_assign(&advance_to);
+            }
+        }
+
+        // If the timestamp is greater or equal to some element in `since` we are
+        // assured that the answer will be correct.
+        //
+        // It's ok for this timestamp to be larger than the current timestamp of
+        // the timestamp oracle. For Strict Serializable queries, the Coord will
+        // linearize the query by holding back the result until the timestamp
+        // oracle catches up.
+        let timestamp = if since.less_equal(&candidate) {
+            event!(
+                Level::DEBUG,
+                conn_id = format!("{}", session.conn_id()),
+                since = format!("{since:?}"),
+                largest_not_in_advance_of_upper = format!("{largest_not_in_advance_of_upper}"),
+                timestamp = format!("{candidate}")
+            );
+            candidate
+        } else {
+            coord_bail!(generate_timestamp_not_valid_error_msg(
+                id_bundle,
+                compute_instance,
+                &read_holds,
+                candidate
+            ));
+        };
+        Ok(RawTimestampSelection {
+            timestamp,
+            constraints: None,
+            session_oracle_read_ts,
+        })
+    }
+
+    /// Uses constraints and preferences to determine a timestamp for a query.
+    /// Returns the determined timestamp, the constraints that were applied, and
+    /// session_oracle_read_ts.
+    fn determine_timestamp_via_constraints(
+        &self,
+        session: &Session,
+        read_holds: &ReadHolds<Timestamp>,
+        id_bundle: &CollectionIdBundle,
+        when: &QueryWhen,
+        oracle_read_ts: Option<Timestamp>,
+        compute_instance: ComputeInstanceId,
+        real_time_recency_ts: Option<Timestamp>,
+        isolation_level: &IsolationLevel,
+        timeline: &Option<Timeline>,
+        largest_not_in_advance_of_upper: Timestamp,
+    ) -> Result<RawTimestampSelection<Timestamp>, AdapterError> {
         use constraints::{Constraints, Preference, Reason};
 
-        // First, we acquire read holds that will ensure the queried collections
-        // stay queryable at the chosen timestamp.
-        let read_holds = self.acquire_read_holds(id_bundle);
-        let timeline = Self::get_timeline(timeline_context);
-
-        // To be filled by strong session serializable logic, should it be engaged.
         let mut session_oracle_read_ts = None;
-
-        let since = self.least_valid_read(&read_holds);
-        let upper = self.least_valid_write(id_bundle);
-        let largest_not_in_advance_of_upper = Coordinator::largest_not_in_advance_of_upper(&upper);
-
         // We start by establishing the hard constraints that must be applied to timestamp determination.
         // These constraints are derived from the input arguments, and properties of the collections involved.
         // TODO: Many of the constraints are expressed obliquely, and could be made more direct.
@@ -284,6 +433,8 @@ pub trait TimestampProvider {
             // First, we have validity constraints from the `id_bundle` argument which indicates
             // which collections we are reading from.
             // TODO: Refine the detail about which identifiers are binding and which are not.
+            // TODO(dov): It's not entirely clear to me that there ever would be a non
+            // binding constraint introduced by the `id_bundle`. We should revisit this.
             let since = self.least_valid_read(&read_holds);
             let storage = id_bundle
                 .storage_ids
@@ -324,15 +475,18 @@ pub trait TimestampProvider {
             // The specification of an `oracle_read_ts` may indicates that we must advance to it,
             // except in one isolation mode, or if `when` does not indicate that we should.
             // At the moment, only `QueryWhen::FreshestTableWrite` indicates that we should.
-            // TODO: Should this just depend on the isolation level?
-            if let Some(timestamp) = &oracle_read_ts {
-                if isolation_level != &IsolationLevel::StrongSessionSerializable
-                    || when.must_advance_to_timeline_ts()
-                {
+            if isolation_level != &IsolationLevel::StrongSessionSerializable
+                || when.must_advance_to_timeline_ts()
+            {
+                // When specification of an `oracle_read_ts` is required, we must advance to it.
+                // If it's not present, lets bail out.
+                if let Some(timestamp) = &oracle_read_ts {
                     constraints.lower.push((
                         Antichain::from_elem(*timestamp),
                         Reason::IsolationLevel(*isolation_level),
                     ));
+                } else {
+                    coord_bail!("oracle_read_ts should be supplied when we must advance to it");
                 }
             }
 
@@ -410,111 +564,6 @@ pub trait TimestampProvider {
             // to properly frame these preferences, though they are clearly aimed at the right concerns.
         };
 
-        // Each involved trace has a validity interval `[since, upper)`.
-        // The contents of a trace are only guaranteed to be correct when
-        // accumulated at a time greater or equal to `since`, and they
-        // are only guaranteed to be currently present for times not
-        // greater or equal to `upper`.
-        //
-        // The plan is to first determine a timestamp, based on the requested
-        // timestamp policy, and then determine if it can be satisfied using
-        // the compacted arrangements we have at hand. It remains unresolved
-        // what to do if it cannot be satisfied (perhaps the query should use
-        // a larger timestamp and block, perhaps the user should intervene).
-
-        {
-            // TODO: We currently split out getting the oracle timestamp because
-            // it's a potentially expensive call, but a call that can be done in an
-            // async task. TimestampProvider is not Send (nor Sync), so we cannot do
-            // the call to `determine_timestamp_for` (including the oracle call) on
-            // an async task. If/when TimestampProvider can become Send, we can fold
-            // the call to the TimestampOracle back into this function.
-            //
-            // We assert here that the logic that determines the oracle timestamp
-            // matches our expectations.
-
-            if timeline.is_some() && Self::needs_linearized_read_ts(isolation_level, when) {
-                assert!(
-                    oracle_read_ts.is_some(),
-                    "should get a timestamp from the oracle for linearized timeline {:?} but didn't",
-                    timeline);
-            }
-        }
-
-        // Initialize candidate to the minimum correct time.
-        let mut candidate = Timestamp::minimum();
-
-        if let Some(timestamp) = when.advance_to_timestamp() {
-            let catalog_state = self.catalog_state();
-            let ts = Coordinator::evaluate_when(catalog_state, timestamp, session)?;
-            candidate.join_assign(&ts);
-        }
-
-        if when.advance_to_since() {
-            candidate.advance_by(since.borrow());
-        }
-
-        // If we've acquired a read timestamp from the timestamp oracle, use it
-        // as the new lower bound for the candidate.
-        // In Strong Session Serializable, we ignore the oracle timestamp for now, unless we need
-        // to use it.
-        if let Some(timestamp) = &oracle_read_ts {
-            if isolation_level != &IsolationLevel::StrongSessionSerializable
-                || when.must_advance_to_timeline_ts()
-            {
-                candidate.join_assign(timestamp);
-            }
-        }
-
-        // We advance to the upper in the following scenarios:
-        // - The isolation level is Serializable and the `when` allows us to advance to upper (ex:
-        //   queries with no AS OF). We avoid using the upper in Strict Serializable to prevent
-        //   reading source data that is being written to in the future.
-        // - The isolation level is Strict Serializable but there is no timelines and the `when`
-        //   allows us to advance to upper.
-        if when.can_advance_to_upper()
-            && (isolation_level == &IsolationLevel::Serializable || timeline.is_none())
-        {
-            candidate.join_assign(&largest_not_in_advance_of_upper);
-        }
-
-        if let Some(real_time_recency_ts) = real_time_recency_ts {
-            assert!(
-                session.vars().real_time_recency()
-                    && isolation_level == &IsolationLevel::StrictSerializable,
-                "real time recency timestamp should only be supplied when real time recency \
-                            is enabled and the isolation level is strict serializable"
-            );
-            candidate.join_assign(&real_time_recency_ts);
-        }
-
-        if isolation_level == &IsolationLevel::StrongSessionSerializable {
-            if let Some(timeline) = &timeline {
-                if let Some(oracle) = session.get_timestamp_oracle(timeline) {
-                    let session_ts = oracle.read_ts();
-                    candidate.join_assign(&session_ts);
-                    session_oracle_read_ts = Some(session_ts);
-                }
-            }
-
-            // When advancing the read timestamp under Strong Session Serializable, there is a
-            // trade-off to make between freshness and latency. We can choose a timestamp close the
-            // `upper`, but then later queries might block if the `upper` is too far into the
-            // future. We can chose a timestamp close to the current time, but then we may not be
-            // getting results that are as fresh as possible. As a heuristic, we choose the minimum
-            // of now and the upper, where we use the global timestamp oracle read timestamp as a
-            // proxy for now. If upper > now, then we choose now and prevent blocking future
-            // queries. If upper < now, then we choose the upper and prevent blocking the current
-            // query.
-            if when.can_advance_to_upper() && when.can_advance_to_timeline_ts() {
-                let mut advance_to = largest_not_in_advance_of_upper;
-                if let Some(oracle_read_ts) = oracle_read_ts {
-                    advance_to = std::cmp::min(advance_to, oracle_read_ts);
-                }
-                candidate.join_assign(&advance_to);
-            }
-        }
-
         // Determine a candidate based on constraints and preferences.
         let constraint_candidate = {
             let mut candidate = Timestamp::minimum();
@@ -528,49 +577,133 @@ pub trait TimestampProvider {
             }
             // If the candidate strictly exceeds the upper bound, we didn't have a viable timestamp.
             if constraints.upper_bound().less_than(&candidate) {
-                None
+                coord_bail!(generate_timestamp_not_valid_error_msg(
+                    id_bundle,
+                    compute_instance,
+                    &read_holds,
+                    candidate
+                ));
             } else {
-                Some(candidate)
+                candidate
             }
         };
 
-        // If the timestamp is greater or equal to some element in `since` we are
-        // assured that the answer will be correct.
-        //
-        // It's ok for this timestamp to be larger than the current timestamp of
-        // the timestamp oracle. For Strict Serializable queries, the Coord will
-        // linearize the query by holding back the result until the timestamp
-        // oracle catches up.
-        let timestamp = if since.less_equal(&candidate) {
-            event!(
-                Level::DEBUG,
-                conn_id = format!("{}", session.conn_id()),
-                since = format!("{since:?}"),
-                largest_not_in_advance_of_upper = format!("{largest_not_in_advance_of_upper}"),
-                timestamp = format!("{candidate}")
-            );
-            candidate
-        } else {
-            coord_bail!(generate_timestamp_not_valid_error_msg(
-                id_bundle,
-                compute_instance,
-                &read_holds,
-                candidate
-            ));
-        };
+        Ok(RawTimestampSelection {
+            timestamp: constraint_candidate,
+            constraints: Some(constraints),
+            session_oracle_read_ts,
+        })
+    }
 
-        if Some(timestamp) != constraint_candidate {
-            tracing::info!("timestamp constrains: {:?}", constraints);
-        }
-
-        soft_assert_eq_or_log!(
-            Some(timestamp),
-            constraint_candidate,
-            "timestamp determination mismatch"
+    /// Determines the timestamp for a query.
+    ///
+    /// Timestamp determination may fail due to the restricted validity of
+    /// traces. Each has a `since` and `upper` frontier, and are only valid
+    /// after `since` and sure to be available not after `upper`.
+    ///
+    /// The timeline that `id_bundle` belongs to is also returned, if one exists.
+    fn determine_timestamp_for(
+        &self,
+        session: &Session,
+        id_bundle: &CollectionIdBundle,
+        when: &QueryWhen,
+        compute_instance: ComputeInstanceId,
+        timeline_context: &TimelineContext,
+        oracle_read_ts: Option<Timestamp>,
+        real_time_recency_ts: Option<mz_repr::Timestamp>,
+        isolation_level: &IsolationLevel,
+    ) -> Result<
+        (
+            TimestampDetermination<mz_repr::Timestamp>,
+            ReadHolds<mz_repr::Timestamp>,
+        ),
+        AdapterError,
+    > {
+        let constraint_based = ConstraintBasedTimestampSelection::from_str(
+            &CONSTRAINT_BASED_TIMESTAMP_SELECTION
+                .get(self.catalog_state().system_config().dyncfgs()),
         );
 
+        // First, we acquire read holds that will ensure the queried collections
+        // stay queryable at the chosen timestamp.
+        let read_holds = self.acquire_read_holds(id_bundle);
+        let timeline = Self::get_timeline(timeline_context);
+
+        let since = self.least_valid_read(&read_holds);
+        let upper = self.least_valid_write(id_bundle);
+        let largest_not_in_advance_of_upper = Coordinator::largest_not_in_advance_of_upper(&upper);
+
+        let raw_determination = match constraint_based {
+            ConstraintBasedTimestampSelection::Disabled => self.determine_timestamp_classical(
+                session,
+                &read_holds,
+                id_bundle,
+                when,
+                oracle_read_ts,
+                compute_instance,
+                real_time_recency_ts,
+                isolation_level,
+                &timeline,
+                largest_not_in_advance_of_upper,
+                &since,
+            )?,
+            ConstraintBasedTimestampSelection::Enabled => self
+                .determine_timestamp_via_constraints(
+                    session,
+                    &read_holds,
+                    id_bundle,
+                    when,
+                    oracle_read_ts,
+                    compute_instance,
+                    real_time_recency_ts,
+                    isolation_level,
+                    &timeline,
+                    largest_not_in_advance_of_upper,
+                )?,
+            ConstraintBasedTimestampSelection::Verify => {
+                let classical_determination = self.determine_timestamp_classical(
+                    session,
+                    &read_holds,
+                    id_bundle,
+                    when,
+                    oracle_read_ts,
+                    compute_instance,
+                    real_time_recency_ts,
+                    isolation_level,
+                    &timeline,
+                    largest_not_in_advance_of_upper,
+                    &since,
+                )?;
+
+                let constraint_determination = self.determine_timestamp_via_constraints(
+                    session,
+                    &read_holds,
+                    id_bundle,
+                    when,
+                    oracle_read_ts,
+                    compute_instance,
+                    real_time_recency_ts,
+                    isolation_level,
+                    &timeline,
+                    largest_not_in_advance_of_upper,
+                )?;
+                soft_assert_eq_or_log!(
+                    classical_determination.timestamp,
+                    constraint_determination.timestamp,
+                    "timestamp determination mismatch"
+                );
+                if classical_determination.timestamp != constraint_determination.timestamp {
+                    tracing::info!(
+                        "timestamp constrains: {:?}",
+                        constraint_determination.constraints
+                    );
+                }
+                classical_determination
+            }
+        };
+
         let timestamp_context = TimestampContext::from_timeline_context(
-            timestamp,
+            raw_determination.timestamp,
             oracle_read_ts,
             timeline,
             timeline_context,
@@ -582,9 +715,9 @@ pub trait TimestampProvider {
             upper,
             largest_not_in_advance_of_upper,
             oracle_read_ts,
-            session_oracle_read_ts,
+            session_oracle_read_ts: raw_determination.session_oracle_read_ts,
             real_time_recency_ts,
-            constraints,
+            constraints: raw_determination.constraints,
         };
 
         Ok((determination, read_holds))
@@ -843,7 +976,8 @@ pub struct TimestampDetermination<T> {
     /// The value of the real time recency timestamp, if used.
     pub real_time_recency_ts: Option<T>,
     /// The constraints used by the constraint based solver.
-    pub constraints: Constraints,
+    /// See the [`constraints`] module for more information.
+    pub constraints: Option<Constraints>,
 }
 
 impl<T: TimestampManipulation> TimestampDetermination<T> {
@@ -1015,9 +1149,19 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline + TimestampManipulatio
             )?;
         }
 
-        writeln!(f, "")?;
-        writeln!(f, "binding constraints:")?;
-        write!(f, "{}", self.determination.constraints.display(timeline))?;
+        if self.determination.constraints.is_some() {
+            writeln!(f, "")?;
+            writeln!(f, "binding constraints:")?;
+            write!(
+                f,
+                "{}",
+                self.determination
+                    .constraints
+                    .as_ref()
+                    .unwrap()
+                    .display(timeline)
+            )?;
+        }
 
         Ok(())
     }

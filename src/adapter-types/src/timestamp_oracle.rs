@@ -9,6 +9,9 @@
 
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+use tracing;
+
 /// Default value for `DynamicConfig::pg_connection_pool_max_size`.
 pub const DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_SIZE: usize = 50;
 
@@ -26,3 +29,43 @@ pub const DEFAULT_PG_TIMESTAMP_ORACLE_CONNECT_TIMEOUT: Duration = Duration::from
 
 /// Default value for `DynamicConfig::pg_connection_pool_tcp_user_timeout`.
 pub const DEFAULT_PG_TIMESTAMP_ORACLE_TCP_USER_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Whether to use the constraint-based timestamp selection.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ConstraintBasedTimestampSelection {
+    Enabled,
+    Disabled,
+    Verify,
+}
+
+impl std::default::Default for ConstraintBasedTimestampSelection {
+    fn default() -> Self {
+        Self::Verify
+    }
+}
+
+impl ConstraintBasedTimestampSelection {
+    pub const fn const_default() -> Self {
+        Self::Verify
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "enabled" => Self::Enabled,
+            "disabled" => Self::Disabled,
+            "verify" => Self::Verify,
+            _ => {
+                tracing::error!("invalid value for ConstraintBasedTimestampSelection: {}", s);
+                ConstraintBasedTimestampSelection::default()
+            }
+        }
+    }
+
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Enabled => "enabled",
+            Self::Disabled => "disabled",
+            Self::Verify => "verify",
+        }
+    }
+}
