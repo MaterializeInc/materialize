@@ -985,10 +985,6 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline + TimestampManipulatio
             self.session_wall_time.format("%Y-%m-%d %H:%M:%S%.3f"),
         )?;
 
-        writeln!(f, "")?;
-        writeln!(f, "constraints (experimental):")?;
-        writeln!(f, "{}", self.determination.constraints.display(timeline))?;
-
         for source in &self.sources {
             writeln!(f, "")?;
             writeln!(f, "source {}:", source.name)?;
@@ -1011,6 +1007,11 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline + TimestampManipulatio
                     .collect::<Vec<_>>()
             )?;
         }
+
+        writeln!(f, "")?;
+        writeln!(f, "binding constraints:")?;
+        writeln!(f, "{}", self.determination.constraints.display(timeline))?;
+
         Ok(())
     }
 }
@@ -1058,14 +1059,14 @@ mod constraints {
                 writeln!(f, "lower:")?;
                 for (ts, reason) in &self.lower {
                     let ts = ts.iter().map(|t| t.display(timeline)).collect::<Vec<_>>();
-                    writeln!(f, "  {:?}: ({:?})", ts, reason)?;
+                    writeln!(f, "  ({:?}): {:?}", reason, ts)?;
                 }
             }
             if !self.upper.is_empty() {
                 writeln!(f, "upper:")?;
                 for (ts, reason) in &self.upper {
                     let ts = ts.iter().map(|t| t.display(timeline)).collect::<Vec<_>>();
-                    writeln!(f, "  {:?}: ({:?})", ts, reason)?;
+                    writeln!(f, "  ({:?}): {:?}", reason, ts)?;
                 }
             }
             Ok(())
