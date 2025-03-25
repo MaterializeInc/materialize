@@ -9,9 +9,6 @@
 
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
-use tracing;
-
 /// Default value for `DynamicConfig::pg_connection_pool_max_size`.
 pub const DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_SIZE: usize = 50;
 

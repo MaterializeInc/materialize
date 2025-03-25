@@ -292,7 +292,7 @@ fn test_timestamp_selection() {
                             None, /* real_time_recency_ts */
                             &IsolationLevel::from(isolation),
                             //TODO: remove this eventually
-                            &mz_adapter_types::timestamp_oracle::ConstraintBasedTimestampSelection::Verify
+                            &mz_adapter_types::timestamp_selection::ConstraintBasedTimestampSelection::Verify
                         )
                         .unwrap();
 
