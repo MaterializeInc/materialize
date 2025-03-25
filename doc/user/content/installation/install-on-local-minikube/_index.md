@@ -154,7 +154,7 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
       If you run into an error during deployment, refer to the
       [Troubleshooting](/installation/troubleshooting) guide.
 
-1. Install PostgreSQL and minIO.
+1. Install PostgreSQL and MinIO.
 
     1. Use the `sample-postgres.yaml` file to install PostgreSQL as the
        metadata database:
@@ -163,7 +163,7 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
         kubectl apply -f sample-postgres.yaml
         ```
 
-    1. Use the `sample-minio.yaml` file to install minIO as the blob storage:
+    1. Use the `sample-minio.yaml` file to install MinIO as the blob storage:
 
         ```shell
         kubectl apply -f sample-minio.yaml
