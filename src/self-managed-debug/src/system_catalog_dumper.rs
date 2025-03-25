@@ -14,23 +14,32 @@
 // limitations under the License.
 
 //! Dumps catalog information to files.
+//! We run queries in serial rather than parallel because all queries in the pgwire
+//! connection are run in serial anyways. Running the queries in serial also makes
+//! cleaning up / aborting queries much easier.
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use chrono::{DateTime, Utc};
 use futures::TryStreamExt;
 use mz_tls_util::make_tls;
+use std::fmt;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
-use tokio_postgres::{Client as PgClient, Config as PgConfig};
+use tokio::sync::Mutex;
+use tokio_postgres::{
+    Client as PgClient, Config as PgConfig, Connection, NoTls, Socket, Transaction,
+};
 use tokio_util::io::StreamReader;
 
 use k8s_openapi::api::core::v1::Service;
 use kube::{Api, Client};
+use mz_ore::collections::HashMap;
 use mz_ore::retry::{self, RetryResult};
 use mz_ore::task::{self, JoinHandle};
+use postgres_openssl::{MakeTlsConnector, TlsStream};
 use tracing::{error, info};
 
 use crate::utils::format_base_path;
@@ -235,7 +244,9 @@ pub struct Relation {
     pub category: RelationCategory,
 }
 
-const RELATIONS: &[Relation] = &[
+/// This list is used to determine which relations to dump.
+/// The relations are grouped and delimited by their category (i.e. Basic object information)
+static RELATIONS: &[Relation] = &[
     // Basic object information
     Relation {
         name: "mz_audit_events",
@@ -436,14 +447,6 @@ const RELATIONS: &[Relation] = &[
         category: RelationCategory::Introspection,
     },
     Relation {
-        name: "mz_dataflow_operator_reachability_per_worker",
-        category: RelationCategory::Introspection,
-    },
-    Relation {
-        name: "mz_dataflow_operator_reachability",
-        category: RelationCategory::Introspection,
-    },
-    Relation {
         name: "mz_dataflow_operator_parents_per_worker",
         category: RelationCategory::Introspection,
     },
@@ -615,34 +618,202 @@ const RELATIONS: &[Relation] = &[
     },
 ];
 
-const TIMEOUT: Duration = Duration::from_secs(60);
+static PG_CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
+/// Timeout for a query.
+// TODO (debug_tool3): Make this configurable.
+static PG_QUERY_TIMEOUT: Duration = Duration::from_secs(20);
 
-#[derive(Debug, Clone)]
+/// The maximum number of errors we tolerate for a cluster replica.
+/// If a cluster replica has more than this many errors, we skip it.
+static MAX_CLUSTER_REPLICA_ERROR_COUNT: usize = 3;
+
+static SET_SEARCH_PATH_QUERY: &str = "SET search_path = mz_internal, mz_catalog, mz_introspection";
+static SELECT_CLUSTER_REPLICAS_QUERY: &str = "SELECT c.name as cluster_name, cr.name as replica_name FROM mz_clusters AS c JOIN mz_cluster_replicas AS cr ON c.id = cr.cluster_id;";
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ClusterReplica {
-    // TODO (debug_tool1): Use this when scraping introspection relations
-    pub _cluster_name: String,
-    pub _replica_name: String,
+    pub cluster_name: String,
+    pub replica_name: String,
+}
+
+impl Default for ClusterReplica {
+    fn default() -> Self {
+        Self {
+            cluster_name: "mz_catalog_server".to_string(),
+            replica_name: "r1".to_string(),
+        }
+    }
+}
+
+impl fmt::Display for ClusterReplica {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}.{}", self.cluster_name, self.replica_name)
+    }
 }
 
 pub struct SystemCatalogDumper<'n> {
     context: &'n Context,
-    pg_client: Arc<PgClient>,
-    // TODO (debug_tool1): Use this when scraping introspection relations
-    _cluster_replicas: Vec<ClusterReplica>,
+    pg_client: Arc<Mutex<PgClient>>,
+    pg_tls: MakeTlsConnector,
+    cluster_replicas: Vec<ClusterReplica>,
     _pg_conn_handle: JoinHandle<Result<(), tokio_postgres::Error>>,
+}
+
+pub async fn create_postgres_connection(
+    connection_string: &str,
+) -> Result<
+    (
+        PgClient,
+        Connection<Socket, TlsStream<Socket>>,
+        MakeTlsConnector,
+    ),
+    anyhow::Error,
+> {
+    let mut pg_config = PgConfig::from_str(connection_string)?;
+    pg_config.connect_timeout(PG_CONNECTION_TIMEOUT);
+    let tls = make_tls(&pg_config)?;
+    let (pg_client, pg_conn) = retry::Retry::default()
+        .max_duration(PG_CONNECTION_TIMEOUT)
+        .retry_async_canceling(|_| {
+            let pg_config = pg_config.clone();
+            let tls = tls.clone();
+            async move { pg_config.connect(tls).await.map_err(|e| anyhow::anyhow!(e)) }
+        })
+        .await?;
+
+    Ok((pg_client, pg_conn, tls))
+}
+
+pub async fn copy_relation_to_csv(
+    transaction: &Transaction<'_>,
+    file_path_name: PathBuf,
+    column_names: &mut Vec<String>,
+    relation_name: &str,
+) -> Result<(), anyhow::Error> {
+    let mut file = tokio::fs::File::create(&file_path_name).await?;
+    // TODO (SangJunBak): Use `WITH (HEADER TRUE)` once database-issues#2846 is implemented.
+    file.write_all((column_names.join(",") + "\n").as_bytes())
+        .await?;
+
+    // Stream data rows to CSV
+    let copy_query = format!(
+        "COPY (SELECT * FROM {}) TO STDOUT WITH (FORMAT CSV)",
+        relation_name
+    );
+
+    let copy_stream = transaction
+        .copy_out(&copy_query)
+        .await
+        .context(format!("Failed to COPY TO for {}", relation_name))?
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
+    let copy_stream = std::pin::pin!(copy_stream);
+    let mut reader = StreamReader::new(copy_stream);
+    tokio::io::copy(&mut reader, &mut file).await?;
+    // Ensure the file is flushed to disk.
+    file.sync_all().await?;
+
+    info!("Copied {} to {}", relation_name, file_path_name.display());
+    Ok::<(), anyhow::Error>(())
+}
+
+pub async fn query_relation(
+    transaction: &Transaction<'_>,
+    start_time: DateTime<Utc>,
+    relation: &Relation,
+    cluster_replica: Option<&ClusterReplica>,
+) -> Result<(), anyhow::Error> {
+    let relation_name = relation.name;
+    let relation_category = &relation.category;
+
+    // Some queries (i.e. mz_introspection relations) require the cluster and replica to be set.
+    if let Some(cluster_replica) = &cluster_replica {
+        transaction
+            .execute(
+                &format!("SET LOCAL CLUSTER = '{}'", cluster_replica.cluster_name),
+                &[],
+            )
+            .await
+            .context(format!(
+                "Failed to set cluster to {}",
+                cluster_replica.cluster_name
+            ))?;
+        transaction
+            .execute(
+                &format!(
+                    "SET LOCAL CLUSTER_REPLICA = '{}'",
+                    cluster_replica.replica_name
+                ),
+                &[],
+            )
+            .await
+            .context(format!(
+                "Failed to set cluster replica to {}",
+                cluster_replica.replica_name
+            ))?;
+    }
+
+    // We query the column names to write the header row of the CSV file.
+    let mut column_names = transaction
+        .query(&format!("SHOW COLUMNS FROM {}", &relation_name), &[])
+        .await
+        .context(format!("Failed to get column names for {}", relation_name))?
+        .into_iter()
+        .map(|row| match row.try_get::<_, String>("name") {
+            Ok(name) => Some(name),
+            Err(_) => None,
+        })
+        .filter_map(|row| row)
+        .collect::<Vec<_>>();
+
+    match relation_category {
+        RelationCategory::Basic => {
+            let file_path = format_file_path(start_time, None);
+            let file_path_name = file_path.join(relation_name).with_extension("csv");
+            tokio::fs::create_dir_all(&file_path).await?;
+
+            copy_relation_to_csv(
+                transaction,
+                file_path_name,
+                &mut column_names,
+                relation_name,
+            )
+            .await?;
+        }
+        RelationCategory::Introspection => {
+            let file_path = format_file_path(start_time, cluster_replica);
+            tokio::fs::create_dir_all(&file_path).await?;
+
+            let file_path_name = file_path.join(relation_name).with_extension("csv");
+
+            copy_relation_to_csv(
+                transaction,
+                file_path_name,
+                &mut column_names,
+                relation_name,
+            )
+            .await?;
+        }
+        _ => {
+            let file_path = format_file_path(start_time, None);
+            let file_path_name = file_path.join(relation_name).with_extension("csv");
+            tokio::fs::create_dir_all(&file_path).await?;
+
+            copy_relation_to_csv(
+                transaction,
+                file_path_name,
+                &mut column_names,
+                relation_name,
+            )
+            .await?;
+            // TODO (debug_tool1): Dump the `FETCH ALL SUBSCRIBE` output too
+        }
+    }
+    Ok::<(), anyhow::Error>(())
 }
 
 impl<'n> SystemCatalogDumper<'n> {
     pub async fn new(context: &'n Context, connection_string: &str) -> Result<Self, anyhow::Error> {
-        let (pg_client, pg_conn) = retry::Retry::default()
-            .max_duration(TIMEOUT)
-            .retry_async_canceling(|_| async move {
-                let pg_config = &mut PgConfig::from_str(connection_string)?;
-                pg_config.connect_timeout(TIMEOUT);
-                let tls = make_tls(pg_config)?;
-                pg_config.connect(tls).await.map_err(|e| anyhow::anyhow!(e))
-            })
-            .await?;
+        let (pg_client, pg_conn, pg_tls) = create_postgres_connection(connection_string).await?;
 
         info!("Connected to PostgreSQL server at {}...", connection_string);
 
@@ -650,22 +821,29 @@ impl<'n> SystemCatalogDumper<'n> {
 
         // Set search path to system catalog tables
         pg_client
-            .execute(
-                "SET search_path = mz_internal, mz_catalog, mz_introspection",
-                &[],
-            )
-            .await?;
-
-        let cluster_replicas = match pg_client
-            .query("SELECT c.name as cluster_name, cr.name as replica_name FROM mz_clusters AS c JOIN mz_cluster_replicas AS cr ON c.id = cr.cluster_id;", &[])
+            .execute(SET_SEARCH_PATH_QUERY, &[])
             .await
-            {
-                Ok(rows) => rows.into_iter()
-                            .map(|row| ClusterReplica {
-                                _cluster_name: row.get::<_, String>("cluster_name"),
-                                _replica_name: row.get::<_, String>("replica_name"),
-                            })
-                            .collect::<Vec<_>>(),
+            .context("Failed to set search path")?;
+
+        // We need to get all cluster replicas to dump introspection relations.
+        let cluster_replicas = match pg_client.query(SELECT_CLUSTER_REPLICAS_QUERY, &[]).await {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|row| {
+                    let cluster_name = row.try_get::<_, String>("cluster_name");
+                    let replica_name = row.try_get::<_, String>("replica_name");
+
+                    if let (Ok(cluster_name), Ok(replica_name)) = (cluster_name, replica_name) {
+                        Some(ClusterReplica {
+                            cluster_name,
+                            replica_name,
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .filter_map(|row| row)
+                .collect::<Vec<_>>(),
             Err(e) => {
                 error!("Failed to get replica names: {}", e);
                 vec![]
@@ -674,110 +852,195 @@ impl<'n> SystemCatalogDumper<'n> {
 
         Ok(Self {
             context,
-            pg_client: Arc::new(pg_client),
-            _cluster_replicas: cluster_replicas,
+            pg_client: Arc::new(Mutex::new(pg_client)),
+            pg_tls,
+            cluster_replicas,
             _pg_conn_handle: handle,
         })
     }
 
-    pub fn dump_relation(&self, relation: &Relation) -> JoinHandle<()> {
-        let start_time = self.context.start_time.clone();
-        let pg_client = Arc::clone(&self.pg_client);
+    pub async fn dump_relation(
+        &self,
+        relation: &Relation,
+        cluster_replica: Option<&ClusterReplica>,
+    ) -> Result<(), anyhow::Error> {
+        info!(
+            "Copying relation {}{}",
+            relation.name,
+            cluster_replica.map_or_else(|| "".to_string(), |replica| format!(" in {}", replica))
+        );
+
+        let start_time = self.context.start_time;
+        let pg_client = &self.pg_client;
+
         let relation_name = relation.name.to_string();
-        let relation_category = relation.category.clone();
 
-        task::spawn(|| "dump-relation", async move {
-            if let Err(err) = retry::Retry::default()
-                .max_duration(Duration::from_secs(60))
-                .retry_async_canceling(|retry_state| {
-                    if retry_state.i > 0 && retry_state.next_backoff.is_some() {
-                        info!(
-                            "Retrying {} in {:?}",
-                            relation_name,
-                            retry_state.next_backoff.unwrap()
-                        );
-                    }
+        let mut pg_client_lock = pg_client.lock().await;
+        // TODO (debug_tool3): Use a transaction for the entire dump instead of per query.
+        let transaction = pg_client_lock.transaction().await?;
 
-                    let start_time = start_time.clone();
-                    let pg_client = Arc::clone(&pg_client);
-                    let relation_name = relation_name.clone();
-                    let relation_category = relation_category.clone();
+        let cancel_token = transaction.cancel_token();
 
-                    async move {
-                        match relation_category {
-                            RelationCategory::Introspection => {
-                                // TODO (debug_tool1): Create different outputs depending on the relation category
-                                return Ok::<(), anyhow::Error>(());
-                            }
-                            _ => {}
+        if let Err(err) = retry::Retry::default()
+            .max_duration(PG_QUERY_TIMEOUT)
+            .initial_backoff(Duration::from_secs(2))
+            .retry_async_canceling(|_| {
+                let start_time = start_time.clone();
+                let relation_name = relation.name;
+                let cluster_replica = cluster_replica.clone();
+                let transaction = &transaction;
+
+                async move {
+                    match query_relation(transaction, start_time, &relation, cluster_replica).await
+                    {
+                        Ok(()) => Ok(()),
+                        Err(err) => {
+                            error!(
+                                "{}: {}. Retrying...",
+                                format_catalog_dump_error_message(relation_name, cluster_replica),
+                                err
+                            );
+                            Err(err)
                         }
-                        // TODO: Change None based on relation category
-                        let file_path = format_file_path(start_time, None);
-                        let file_name =
-                            file_path.join(relation_name.as_str()).with_extension("csv");
-                        tokio::fs::create_dir_all(&file_path).await?;
-
-                        let mut file = tokio::fs::File::create(&file_name).await?;
-
-                        // We query the column names to write the header row of the CSV file.
-                        // TODO (SangJunBak): Use `WITH (HEADER TRUE)` once database-issues#2846 is implemented.
-                        let column_names = pg_client
-                            .query(&format!("SHOW COLUMNS FROM {}", relation_name), &[])
-                            .await?
-                            .into_iter()
-                            .map(|row| row.get::<_, String>("name"))
-                            .collect::<Vec<_>>();
-
-                        file.write_all((column_names.join(",") + "\n").as_bytes())
-                            .await?;
-
-                        // Stream data rows to CSV
-                        let copy_stream = pg_client
-                            .copy_out(&format!(
-                                "COPY (SELECT * FROM {}) TO STDOUT WITH (FORMAT CSV)",
-                                relation_name
-                            ))
-                            .await?
-                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
-
-                        let copy_stream = std::pin::pin!(copy_stream);
-                        let mut reader = StreamReader::new(copy_stream);
-                        tokio::io::copy(&mut reader, &mut file).await?;
-
-                        info!("Copied {} to {}", relation_name, file_name.display());
-                        Ok::<(), anyhow::Error>(())
                     }
-                })
-                .await
-            {
-                error!("Failed to dump relation {}: {}", relation_name, err);
+                }
+            })
+            .await
+        {
+            if let Err(_) = async {
+                let tls = self.pg_tls.clone();
+
+                cancel_token.cancel_query(tls).await?;
+                Ok::<(), anyhow::Error>(())
             }
-        })
+            .await
+            {
+                error!(
+                    "Failed to cancel query for {}{}",
+                    relation_name,
+                    cluster_replica
+                        .map_or_else(|| "".to_string(), |replica| format!(" for {}", replica))
+                );
+            }
+
+            return Err(err);
+        }
+
+        Ok(())
     }
 
-    pub fn dump_all_relations(&self) -> Vec<JoinHandle<()>> {
-        RELATIONS
+    pub async fn dump_all_relations(&self) {
+        let cluster_replicas = &self.cluster_replicas;
+
+        // Create a map to count errors by cluster replica..
+        let mut cluster_replica_error_counts: HashMap<ClusterReplica, usize> = HashMap::new();
+        for replica in cluster_replicas {
+            cluster_replica_error_counts
+                .entry(replica.clone())
+                .insert_entry(0);
+        }
+
+        let non_introspection_iter = RELATIONS
             .iter()
-            .map(|relation| self.dump_relation(relation))
-            .collect()
+            .filter(|relation| {
+                matches!(
+                    relation.category,
+                    RelationCategory::Basic | RelationCategory::Retained
+                )
+            })
+            .map(|relation| (relation, None::<&ClusterReplica>));
+
+        let introspection_iter = RELATIONS
+            .iter()
+            .filter(|relation| matches!(relation.category, RelationCategory::Introspection))
+            .collect::<Vec<_>>();
+
+        let introspection_iter = cluster_replicas.iter().flat_map(|replica| {
+            introspection_iter
+                .iter()
+                .map(move |relation| (*relation, Some(replica)))
+        });
+
+        // Combine and iterate over all relation/replica pairs
+        for (relation, replica) in non_introspection_iter.chain(introspection_iter) {
+            let replica_key = if let Some(replica) = replica {
+                replica
+            } else {
+                // If the replica is null, we assume it's  mz_catalog_server.
+                &ClusterReplica::default()
+            };
+
+            // If the cluster replica has more than `MAX_CLUSTER_REPLICA_ERROR_COUNT` errors,
+            // we can skip it since we can assume it's not responsive and don't want to hold up
+            // following queries.
+            if cluster_replica_error_counts.get(&replica_key).unwrap_or(&0)
+                >= &MAX_CLUSTER_REPLICA_ERROR_COUNT
+            {
+                info!(
+                    "Skipping {}{}",
+                    relation.name,
+                    replica.map_or_else(|| "".to_string(), |replica| format!(" for {}", replica))
+                );
+                continue;
+            }
+
+            if let Err(err) = self.dump_relation(relation, replica).await {
+                let docs_link = if replica.is_none()
+                    || replica.map_or(false, |r| r.cluster_name == "mz_catalog_server")
+                {
+                    "https://materialize.com/docs/self-managed/v25.1/installation/troubleshooting/#troubleshooting-console-unresponsiveness"
+                } else {
+                    "https://materialize.com/docs/sql/alter-cluster/#resizing-1"
+                };
+
+                error!(
+                    "{}: {}.\nConsider increasing the size of the cluster {}",
+                    format_catalog_dump_error_message(relation.name, replica),
+                    err,
+                    docs_link
+                );
+
+                cluster_replica_error_counts
+                    .entry(replica_key.clone())
+                    .and_modify(|count| *count += 1)
+                    .or_insert(1);
+            }
+        }
     }
 }
 
-fn format_file_path(date_time: DateTime<Utc>, replica_name: Option<&str>) -> PathBuf {
+fn format_catalog_dump_error_message(
+    relation_name: &str,
+    cluster_replica: Option<&ClusterReplica>,
+) -> String {
+    format!(
+        "Failed to dump relation {}{}",
+        relation_name,
+        cluster_replica.map_or_else(|| "".to_string(), |replica| format!(" for {}", replica))
+    )
+}
+
+fn format_file_path(date_time: DateTime<Utc>, cluster_replica: Option<&ClusterReplica>) -> PathBuf {
     let path = format_base_path(date_time).join("system-catalog");
-    if let Some(replica_name) = replica_name {
-        path.join(replica_name)
+    if let Some(cluster_replica) = cluster_replica {
+        path.join(cluster_replica.cluster_name.as_str())
+            .join(cluster_replica.replica_name.as_str())
     } else {
         path
     }
 }
 
+/// Create a postgres connection string.
+/// The following defaults are used if the arguments are not provided:
+/// - host_address: "localhost"
+/// - host_port: 6877
+/// - target_port: 6877
 pub fn create_postgres_connection_string(
     host_address: Option<&str>,
     host_port: Option<i32>,
     target_port: Option<i32>,
 ) -> String {
-    let host_address = host_address.unwrap_or("127.0.0.1");
+    let host_address = host_address.unwrap_or("localhost");
     let host_port = host_port.unwrap_or(6877);
     let user = match target_port {
         // We assume that if the target port is 6877, we are connecting to the
