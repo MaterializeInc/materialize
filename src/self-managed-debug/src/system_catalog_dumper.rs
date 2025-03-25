@@ -29,9 +29,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
-use tokio_postgres::{
-    Client as PgClient, Config as PgConfig, Connection, NoTls, Socket, Transaction,
-};
+use tokio_postgres::{Client as PgClient, Config as PgConfig, Connection, Socket, Transaction};
 use tokio_util::io::StreamReader;
 
 use k8s_openapi::api::core::v1::Service;
@@ -687,7 +685,7 @@ pub async fn create_postgres_connection(
 pub async fn copy_relation_to_csv(
     transaction: &Transaction<'_>,
     file_path_name: PathBuf,
-    column_names: &mut Vec<String>,
+    column_names: &Vec<String>,
     relation_name: &str,
 ) -> Result<(), anyhow::Error> {
     let mut file = tokio::fs::File::create(&file_path_name).await?;
@@ -753,7 +751,7 @@ pub async fn query_relation(
     }
 
     // We query the column names to write the header row of the CSV file.
-    let mut column_names = transaction
+    let column_names = transaction
         .query(&format!("SHOW COLUMNS FROM {}", &relation_name), &[])
         .await
         .context(format!("Failed to get column names for {}", relation_name))?
@@ -771,13 +769,7 @@ pub async fn query_relation(
             let file_path_name = file_path.join(relation_name).with_extension("csv");
             tokio::fs::create_dir_all(&file_path).await?;
 
-            copy_relation_to_csv(
-                transaction,
-                file_path_name,
-                &mut column_names,
-                relation_name,
-            )
-            .await?;
+            copy_relation_to_csv(transaction, file_path_name, &column_names, relation_name).await?;
         }
         RelationCategory::Introspection => {
             let file_path = format_file_path(start_time, cluster_replica);
@@ -785,26 +777,14 @@ pub async fn query_relation(
 
             let file_path_name = file_path.join(relation_name).with_extension("csv");
 
-            copy_relation_to_csv(
-                transaction,
-                file_path_name,
-                &mut column_names,
-                relation_name,
-            )
-            .await?;
+            copy_relation_to_csv(transaction, file_path_name, &column_names, relation_name).await?;
         }
         _ => {
             let file_path = format_file_path(start_time, None);
             let file_path_name = file_path.join(relation_name).with_extension("csv");
             tokio::fs::create_dir_all(&file_path).await?;
 
-            copy_relation_to_csv(
-                transaction,
-                file_path_name,
-                &mut column_names,
-                relation_name,
-            )
-            .await?;
+            copy_relation_to_csv(transaction, file_path_name, &column_names, relation_name).await?;
             // TODO (debug_tool1): Dump the `FETCH ALL SUBSCRIBE` output too
         }
     }
@@ -891,8 +871,7 @@ impl<'n> SystemCatalogDumper<'n> {
                 let transaction = &transaction;
 
                 async move {
-                    match query_relation(transaction, start_time, &relation, cluster_replica).await
-                    {
+                    match query_relation(transaction, start_time, relation, cluster_replica).await {
                         Ok(()) => Ok(()),
                         Err(err) => {
                             error!(
@@ -973,7 +952,7 @@ impl<'n> SystemCatalogDumper<'n> {
             // If the cluster replica has more than `MAX_CLUSTER_REPLICA_ERROR_COUNT` errors,
             // we can skip it since we can assume it's not responsive and don't want to hold up
             // following queries.
-            if cluster_replica_error_counts.get(&replica_key).unwrap_or(&0)
+            if cluster_replica_error_counts.get(replica_key).unwrap_or(&0)
                 >= &MAX_CLUSTER_REPLICA_ERROR_COUNT
             {
                 info!(
