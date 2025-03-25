@@ -14,6 +14,9 @@
 // limitations under the License.
 
 //! Dumps catalog information to files.
+//! We run queries in serial rather than parallel because all queries in the pgwire
+//! connection are run in serial anyways. Running the queries in serial also makes
+//! cleaning up / aborting queries much easier.
 
 use anyhow::{Context as _, Result};
 use chrono::{DateTime, Utc};
@@ -616,8 +619,8 @@ static RELATIONS: &[Relation] = &[
 ];
 
 static PG_CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
-/// Timeout for a query. We use 6 minutes since it's a good
-/// sign that the operation won't work.
+/// Timeout for a query.
+// TODO (debug_tool3): Make this configurable.
 static PG_QUERY_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// The maximum number of errors we tolerate for a cluster replica.
@@ -688,7 +691,7 @@ pub async fn copy_relation_to_csv(
     relation_name: &str,
 ) -> Result<(), anyhow::Error> {
     let mut file = tokio::fs::File::create(&file_path_name).await?;
-
+    // TODO (SangJunBak): Use `WITH (HEADER TRUE)` once database-issues#2846 is implemented.
     file.write_all((column_names.join(",") + "\n").as_bytes())
         .await?;
 
@@ -706,6 +709,8 @@ pub async fn copy_relation_to_csv(
     let copy_stream = std::pin::pin!(copy_stream);
     let mut reader = StreamReader::new(copy_stream);
     tokio::io::copy(&mut reader, &mut file).await?;
+    // Ensure the file is flushed to disk.
+    file.sync_all().await?;
 
     info!("Copied {} to {}", relation_name, file_path_name.display());
     Ok::<(), anyhow::Error>(())
@@ -748,7 +753,6 @@ pub async fn query_relation(
     }
 
     // We query the column names to write the header row of the CSV file.
-    // TODO (SangJunBak): Use `WITH (HEADER TRUE)` once database-issues#2846 is implemented.
     let mut column_names = transaction
         .query(&format!("SHOW COLUMNS FROM {}", &relation_name), &[])
         .await
