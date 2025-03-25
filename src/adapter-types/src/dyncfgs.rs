@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use mz_dyncfg::{Config, ConfigSet};
 
-use crate::timestamp_oracle::ConstraintBasedTimestampSelection;
+use crate::timestamp_selection::ConstraintBasedTimestampSelection;
 
 pub const ALLOW_USER_SESSIONS: Config<bool> = Config::new(
     "allow_user_sessions",

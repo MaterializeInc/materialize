@@ -1828,10 +1828,10 @@ impl QueryWhen {
             QueryWhen::Immediately | QueryWhen::FreshestTableWrite => None,
         }
     }
-    /// Returns whether the candidate's upper bound should be constrained.
+    /// Returns whether the candidate's upper bound is constrained.
     /// This is only true for `AtTimestamp` since it is the only variant that
     /// specifies a timestamp.
-    pub fn should_constrain_upper(&self) -> bool {
+    pub fn constrains_upper(&self) -> bool {
         match self {
             QueryWhen::AtTimestamp(_) => true,
             QueryWhen::AtLeastTimestamp(_)

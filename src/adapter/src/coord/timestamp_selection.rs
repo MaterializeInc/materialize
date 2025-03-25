@@ -17,7 +17,7 @@ use constraints::Constraints;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_adapter_types::dyncfgs::CONSTRAINT_BASED_TIMESTAMP_SELECTION;
-use mz_adapter_types::timestamp_oracle::ConstraintBasedTimestampSelection;
+use mz_adapter_types::timestamp_selection::ConstraintBasedTimestampSelection;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastLossy;
@@ -188,7 +188,7 @@ impl TimestampProvider for Coordinator {
 /// A timestamp determination, which includes the timestamp, constraints, and session oracle read
 /// timestamp.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RawTimestampSelection<T> {
+pub struct RawTimestampDetermination<T> {
     pub timestamp: T,
     pub constraints: Option<Constraints>,
     pub session_oracle_read_ts: Option<T>,
@@ -261,7 +261,7 @@ pub trait TimestampProvider {
         timeline: &Option<Timeline>,
         largest_not_in_advance_of_upper: Timestamp,
         since: &Antichain<Timestamp>,
-    ) -> Result<RawTimestampSelection<Timestamp>, AdapterError> {
+    ) -> Result<RawTimestampDetermination<Timestamp>, AdapterError> {
         let mut session_oracle_read_ts = None;
         // Each involved trace has a validity interval `[since, upper)`.
         // The contents of a trace are only guaranteed to be correct when
@@ -397,7 +397,7 @@ pub trait TimestampProvider {
                 candidate
             ));
         };
-        Ok(RawTimestampSelection {
+        Ok(RawTimestampDetermination {
             timestamp,
             constraints: None,
             session_oracle_read_ts,
@@ -419,7 +419,7 @@ pub trait TimestampProvider {
         isolation_level: &IsolationLevel,
         timeline: &Option<Timeline>,
         largest_not_in_advance_of_upper: Timestamp,
-    ) -> Result<RawTimestampSelection<Timestamp>, AdapterError> {
+    ) -> Result<RawTimestampDetermination<Timestamp>, AdapterError> {
         use constraints::{Constraints, Preference, Reason};
 
         let mut session_oracle_read_ts = None;
@@ -465,7 +465,7 @@ pub trait TimestampProvider {
                     .lower
                     .push((Antichain::from_elem(ts), Reason::QueryAsOf));
                 // If the query is at a specific timestamp, we must introduce an upper bound as well.
-                if when.should_constrain_upper() {
+                if when.constrains_upper() {
                     constraints
                         .upper
                         .push((Antichain::from_elem(ts), Reason::QueryAsOf));
@@ -587,7 +587,7 @@ pub trait TimestampProvider {
             }
         };
 
-        Ok(RawTimestampSelection {
+        Ok(RawTimestampDetermination {
             timestamp: constraint_candidate,
             constraints: Some(constraints),
             session_oracle_read_ts,
@@ -693,7 +693,7 @@ pub trait TimestampProvider {
                         constraint_determination.constraints
                     );
                 }
-                RawTimestampSelection {
+                RawTimestampDetermination {
                     timestamp: classical_determination.timestamp,
                     constraints: constraint_determination.constraints,
                     session_oracle_read_ts: classical_determination.session_oracle_read_ts,
