@@ -26,11 +26,10 @@ pub const ENABLE_0DT_DEPLOYMENT_SOURCES: Config<bool> = Config::new(
     "Whether to enable zero-downtime deployments for sources that support it (experimental).",
 );
 
-/// The interval at which to refresh wallclock lag introspection.
-pub const WALLCLOCK_LAG_REFRESH_INTERVAL: Config<Duration> = Config::new(
-    "wallclock_lag_refresh_interval",
+pub const WALLCLOCK_LAG_HISTORY_REFRESH_INTERVAL: Config<Duration> = Config::new(
+    "wallclock_lag_history_refresh_interval",
     Duration::from_secs(60),
-    "The interval at which to refresh wallclock lag introspection.",
+    "The interval at which to refresh `WallclockLagHistory` introspection.",
 );
 
 pub const ENABLE_TIMELY_ZERO_COPY: Config<bool> = Config::new(
@@ -56,7 +55,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL)
         .add(&ENABLE_0DT_DEPLOYMENT_SOURCES)
-        .add(&WALLCLOCK_LAG_REFRESH_INTERVAL)
+        .add(&WALLCLOCK_LAG_HISTORY_REFRESH_INTERVAL)
         .add(&ENABLE_TIMELY_ZERO_COPY)
         .add(&ENABLE_TIMELY_ZERO_COPY_LGALLOC)
         .add(&TIMELY_ZERO_COPY_LIMIT)
