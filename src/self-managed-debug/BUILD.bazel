@@ -36,6 +36,7 @@ rust_binary(
         "//src/build-info:mz_build_info",
         "//src/cloud-resources:mz_cloud_resources",
         "//src/ore:mz_ore",
+        "//src/tls-util:mz_tls_util",
     ] + all_crate_deps(normal = True),
 )
 

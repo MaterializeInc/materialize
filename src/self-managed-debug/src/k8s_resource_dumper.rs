@@ -18,7 +18,7 @@
 use std::fmt::Debug;
 use std::fs::{create_dir_all, File};
 use std::io::Write;
-use std::path::{PathBuf, MAIN_SEPARATOR};
+use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use k8s_openapi::api::admissionregistration::v1::{
@@ -42,6 +42,7 @@ use mz_ore::task::JoinHandle;
 use serde::{de::DeserializeOwned, Serialize};
 use tracing::{error, info};
 
+use crate::utils::format_base_path;
 use crate::Context;
 
 pub struct K8sResourceDumper<'n, K> {
@@ -84,7 +85,7 @@ where
             if let Some(namespace) = &self.namespace {
                 err_msg = format!("{} for namespace {}", err_msg, namespace);
             }
-            info!("{}", err_msg);
+            error!("{}", err_msg);
             return Ok(());
         }
         let file_path = format_resource_path(
@@ -366,13 +367,8 @@ fn format_resource_path(
     resource_type: &str,
     namespace: Option<&String>,
 ) -> PathBuf {
-    let mut path = PathBuf::from(format!(
-        "mz-debug{}{}{}{}",
-        MAIN_SEPARATOR,
-        date_time.format("%Y-%m-%dT%H:%MZ"),
-        MAIN_SEPARATOR,
-        resource_type,
-    ));
+    let mut path = format_base_path(date_time).join(resource_type);
+
     if let Some(namespace) = namespace {
         path = path.join(namespace);
     }
