@@ -693,7 +693,11 @@ pub trait TimestampProvider {
                         constraint_determination.constraints
                     );
                 }
-                classical_determination
+                RawTimestampSelection {
+                    timestamp: classical_determination.timestamp,
+                    constraints: constraint_determination.constraints,
+                    session_oracle_read_ts: classical_determination.session_oracle_read_ts,
+                }
             }
         };
 
