@@ -1190,6 +1190,22 @@ steps:
             run: aws-temporary
       branches: "main v*.* lts-v* *aws* *tf* *terraform* *helm* *self-managed*"
 
+    - id: terraform-aws-upgrade
+      label: "Terraform + Helm Chart Upgrade on AWS"
+      artifact_paths: [test/terraform/aws-upgrade/terraform.tfstate, "mz-debug/**/*"]
+      depends_on: build-aarch64
+      timeout_in_minutes: 120
+      concurrency: 1
+      concurrency_group: 'terraform-upgrade-aws'
+      agents:
+        queue: linux-aarch64-small
+      plugins:
+        - ./ci/plugins/scratch-aws-access: ~
+        - ./ci/plugins/mzcompose:
+            composition: terraform
+            run: aws-upgrade
+      branches: "main v*.* lts-v* *aws* *tf* *terraform* *helm* *self-managed*"
+
     - id: terraform-gcp
       label: "Terraform + Helm Chart E2E on GCP"
       artifact_paths: [test/terraform/gcp-temporary/terraform.tfstate, "mz-debug/**/*"]
