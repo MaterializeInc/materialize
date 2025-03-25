@@ -1241,7 +1241,6 @@ source materialize.public.t1 (u1, storage):
 binding constraints:
 lower:
   (StorageInput([User(1)])): [<TIMESTAMP>]
-  (ComputeInput([])): [<TIMESTAMP>]
   (IsolationLevel(StrictSerializable)): [<TIMESTAMP>]\n";
 
     let row = client
