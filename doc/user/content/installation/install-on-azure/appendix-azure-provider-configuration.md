@@ -10,8 +10,8 @@ menu:
 ---
 
 To use [Materialize on Azure Terraform
-module](https://github.com/MaterializeInc/terraform-azurerm-materialize), you
-need to declare the following providers: [^1]
+module](https://github.com/MaterializeInc/terraform-azurerm-materialize)
+v0.2.0+, you need to declare the following providers: [^1]
 
 ```hcl
 provider "azurerm" {
