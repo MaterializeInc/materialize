@@ -36,7 +36,7 @@ use crate::catalog::CatalogState;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
 use crate::coord::timeline::TimelineContext;
-use crate::coord::{self, Coordinator};
+use crate::coord::Coordinator;
 use crate::optimize::dataflows::{prep_scalar_expr, ExprPrepStyle};
 use crate::session::Session;
 use crate::AdapterError;
@@ -393,7 +393,7 @@ pub trait TimestampProvider {
             coord_bail!(generate_timestamp_not_valid_error_msg(
                 id_bundle,
                 compute_instance,
-                &read_holds,
+                read_holds,
                 candidate
             ));
         };
@@ -435,7 +435,7 @@ pub trait TimestampProvider {
             // TODO: Refine the detail about which identifiers are binding and which are not.
             // TODO(dov): It's not entirely clear to me that there ever would be a non
             // binding constraint introduced by the `id_bundle`. We should revisit this.
-            let since = self.least_valid_read(&read_holds);
+            let since = self.least_valid_read(read_holds);
             let storage = id_bundle
                 .storage_ids
                 .iter()
@@ -579,7 +579,7 @@ pub trait TimestampProvider {
                 coord_bail!(generate_timestamp_not_valid_error_msg(
                     id_bundle,
                     compute_instance,
-                    &read_holds,
+                    read_holds,
                     candidate
                 ));
             } else {
@@ -1168,7 +1168,7 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline + TimestampManipulatio
                 self.determination
                     .constraints
                     .as_ref()
-                    .unwrap()
+                    .expect("constraints should be present")
                     .display(timeline)
             )?;
         }
