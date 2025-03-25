@@ -40,6 +40,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::system_catalog_dumper::create_postgres_connection_string;
 
+mod docker_resource_dumper;
 mod k8s_resource_dumper;
 mod system_catalog_dumper;
 mod utils;
@@ -75,6 +76,9 @@ pub struct Args {
     /// By default, this will be "localhost".
     #[clap(long)]
     sql_local_address: Option<String>,
+    // TODO (debug_tool1): Separate emulator from k8s
+    #[clap(long)]
+    docker_container_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -218,6 +222,10 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
         k8s_resource_dumper::dump_namespaced_resources(&context, &client, namespace).await;
     }
     k8s_resource_dumper::dump_cluster_resources(&context, &client).await;
+
+    if let Some(_) = context.args.docker_container_id {
+        docker_resource_dumper::dump_all_docker_resources(&context).await;
+    }
 
     let _port_forward_handle;
     let mut host_port: Option<i32> = None;
