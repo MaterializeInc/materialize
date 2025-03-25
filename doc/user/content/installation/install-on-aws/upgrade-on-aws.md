@@ -5,6 +5,7 @@ menu:
   main:
     parent: "install-on-aws"
     identifier: "upgrade-on-aws"
+    weight: 10
 ---
 
 To upgrade your Materialize instances, upgrade the Materialize operator first
@@ -75,6 +76,8 @@ documentation](https://helm.sh/docs/intro/install/).
 
 1. Optional. You may need to update your fork of the Terraform modules to
    upgrade.
+
+   {{% self-managed/aws-terraform-upgrade-notes %}}
 
 1. Configure `kubectl` to connect to your EKS cluster, replacing:
 
