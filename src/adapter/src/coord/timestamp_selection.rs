@@ -612,6 +612,7 @@ pub trait TimestampProvider {
         oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<mz_repr::Timestamp>,
         isolation_level: &IsolationLevel,
+        constraint_based: &ConstraintBasedTimestampSelection,
     ) -> Result<
         (
             TimestampDetermination<mz_repr::Timestamp>,
@@ -619,11 +620,6 @@ pub trait TimestampProvider {
         ),
         AdapterError,
     > {
-        let constraint_based = ConstraintBasedTimestampSelection::from_str(
-            &CONSTRAINT_BASED_TIMESTAMP_SELECTION
-                .get(self.catalog_state().system_config().dyncfgs()),
-        );
-
         // First, we acquire read holds that will ensure the queried collections
         // stay queryable at the chosen timestamp.
         let read_holds = self.acquire_read_holds(id_bundle);
@@ -843,6 +839,11 @@ impl Coordinator {
         ),
         AdapterError,
     > {
+        let constraint_based = ConstraintBasedTimestampSelection::from_str(
+            &CONSTRAINT_BASED_TIMESTAMP_SELECTION
+                .get(self.catalog_state().system_config().dyncfgs()),
+        );
+
         let isolation_level = session.vars().transaction_isolation();
         let (det, read_holds) = self.determine_timestamp_for(
             session,
@@ -853,6 +854,7 @@ impl Coordinator {
             oracle_read_ts,
             real_time_recency_ts,
             isolation_level,
+            &constraint_based,
         )?;
         self.metrics
             .determine_timestamp
@@ -863,6 +865,7 @@ impl Coordinator {
                 },
                 isolation_level.as_str(),
                 &compute_instance.to_string(),
+                constraint_based.as_str(),
             ])
             .inc();
         if !det.respond_immediately()
@@ -879,12 +882,16 @@ impl Coordinator {
                     oracle_read_ts,
                     real_time_recency_ts,
                     &IsolationLevel::Serializable,
+                    &constraint_based,
                 )?;
 
                 if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
                     self.metrics
                         .timestamp_difference_for_strict_serializable_ms
-                        .with_label_values(&[&compute_instance.to_string()])
+                        .with_label_values(&[
+                            &compute_instance.to_string(),
+                            constraint_based.as_str(),
+                        ])
                         .observe(f64::cast_lossy(u64::from(
                             strict.saturating_sub(*serializable),
                         )));
