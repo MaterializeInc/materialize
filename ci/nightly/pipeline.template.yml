@@ -1219,7 +1219,6 @@ steps:
             composition: terraform
             run: azure-temporary
       branches: "main v*.* lts-v* *azure* *tf* *terraform* *helm* *self-managed*"
-      skip: "Keeps failing because of internal errors at Azure"
 
   - group: "Output consistency"
     key: output-consistency

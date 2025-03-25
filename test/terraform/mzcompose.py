@@ -1189,7 +1189,11 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
             spawn.runv(["terraform", "init"], cwd=path, env=venv_env)
             spawn.runv(["terraform", "validate"], cwd=path, env=venv_env)
             spawn.runv(["terraform", "plan"], cwd=path, env=venv_env)
-            spawn.runv(["terraform", "apply", "-auto-approve"], cwd=path, env=venv_env)
+            try:
+                spawn.runv(["terraform", "apply", "-auto-approve"], cwd=path, env=venv_env)
+            except:
+                print("terraform apply failed, retrying")
+                spawn.runv(["terraform", "apply", "-auto-approve"], cwd=path, env=venv_env)
 
         aks_cluster = json.loads(
             spawn.capture(
