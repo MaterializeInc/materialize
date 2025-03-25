@@ -475,18 +475,17 @@ pub trait TimestampProvider {
             // The specification of an `oracle_read_ts` may indicates that we must advance to it,
             // except in one isolation mode, or if `when` does not indicate that we should.
             // At the moment, only `QueryWhen::FreshestTableWrite` indicates that we should.
-            if isolation_level != &IsolationLevel::StrongSessionSerializable
-                || when.must_advance_to_timeline_ts()
-            {
-                // When specification of an `oracle_read_ts` is required, we must advance to it.
-                // If it's not present, lets bail out.
-                if let Some(timestamp) = &oracle_read_ts {
+            // TODO: Should this just depend on the isolation level?
+            if let Some(timestamp) = &oracle_read_ts {
+                if isolation_level != &IsolationLevel::StrongSessionSerializable
+                    || when.must_advance_to_timeline_ts()
+                {
+                    // When specification of an `oracle_read_ts` is required, we must advance to it.
+                    // If it's not present, lets bail out.
                     constraints.lower.push((
                         Antichain::from_elem(*timestamp),
                         Reason::IsolationLevel(*isolation_level),
                     ));
-                } else {
-                    coord_bail!("oracle_read_ts should be supplied when we must advance to it");
                 }
             }
 
