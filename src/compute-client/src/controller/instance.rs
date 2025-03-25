@@ -26,7 +26,10 @@ use mz_compute_types::sinks::{
 };
 use mz_compute_types::sources::SourceInstanceDesc;
 use mz_compute_types::ComputeInstanceId;
-use mz_controller_types::dyncfgs::WALLCLOCK_LAG_HISTORY_REFRESH_INTERVAL;
+use mz_controller_types::dyncfgs::{
+    ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION, WALLCLOCK_LAG_HISTOGRAM_REFRESH_INTERVAL,
+    WALLCLOCK_LAG_HISTORY_REFRESH_INTERVAL,
+};
 use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
@@ -35,9 +38,10 @@ use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_repr::adt::interval::Interval;
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{Datum, Diff, GlobalId, Row};
-use mz_storage_client::controller::IntrospectionType;
+use mz_repr::{Datum, DatumMap, Diff, GlobalId, Row};
+use mz_storage_client::controller::{IntrospectionType, WallclockLagHistogramPeriod};
 use mz_storage_types::read_holds::{self, ReadHold};
 use mz_storage_types::read_policy::ReadPolicy;
 use serde::Serialize;
@@ -291,6 +295,8 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     wallclock_lag: WallclockLagFn<T>,
     /// The last time `WallclockLagHistory` introspection was refreshed.
     wallclock_lag_history_last_refresh: Instant,
+    /// The last time `WallclockLagHistogram` introspection was refreshed.
+    wallclock_lag_histogram_last_refresh: Instant,
 
     /// Sender for updates to collection read holds.
     ///
@@ -555,17 +561,20 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         let refresh_history = !self.read_only
             && self.wallclock_lag_history_last_refresh.elapsed()
                 >= WALLCLOCK_LAG_HISTORY_REFRESH_INTERVAL.get(&self.dyncfg);
+        let refresh_histogram = !self.read_only
+            && self.wallclock_lag_histogram_last_refresh.elapsed()
+                >= WALLCLOCK_LAG_HISTOGRAM_REFRESH_INTERVAL.get(&self.dyncfg);
 
-        let mut history_updates = Vec::new();
-
-        let now = mz_ore::now::to_datetime((self.now)());
-        let now_tz = now.try_into().expect("must fit");
+        let now_ms = (self.now)();
+        let now_dt = mz_ore::now::to_datetime(now_ms);
+        let now_ts: CheckedTimestamp<_> = now_dt.try_into().expect("must fit");
 
         let frontier_lag = |frontier: &Antichain<_>| match frontier.as_option() {
             Some(ts) => (self.wallclock_lag)(ts),
             None => Duration::ZERO,
         };
 
+        let mut history_updates = Vec::new();
         for (replica_id, replica) in &mut self.replicas {
             for (collection_id, collection) in &mut replica.collections {
                 let lag = frontier_lag(&collection.write_frontier);
@@ -580,7 +589,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
                             Datum::String(&collection_id.to_string()),
                             Datum::String(&replica_id.to_string()),
                             Datum::Interval(Interval::new(0, 0, max_lag_us)),
-                            Datum::TimestampTz(now_tz),
+                            Datum::TimestampTz(now_ts),
                         ]);
                         history_updates.push((row, 1));
                     }
@@ -591,13 +600,49 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
                 };
             }
         }
-
         if !history_updates.is_empty() {
             self.deliver_introspection_updates(
                 IntrospectionType::WallclockLagHistory,
                 history_updates,
             );
             self.wallclock_lag_history_last_refresh = Instant::now();
+        }
+
+        let histogram_period = WallclockLagHistogramPeriod::from_epoch_millis(now_ms, &self.dyncfg);
+
+        let mut histogram_updates = Vec::new();
+        for (collection_id, collection) in &mut self.collections {
+            if !ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION.get(&self.dyncfg) {
+                continue;
+            }
+
+            if let Some(stash) = &mut collection.wallclock_lag_histogram_stash {
+                let lag = collection.shared.lock_write_frontier(|f| frontier_lag(f));
+                let bucket = lag.as_secs().next_power_of_two();
+
+                let key = (histogram_period, bucket);
+                *stash.entry(key).or_default() += 1;
+
+                if refresh_histogram {
+                    for ((period, lag), count) in std::mem::take(stash) {
+                        let row = Row::pack_slice(&[
+                            Datum::TimestampTz(period.start),
+                            Datum::TimestampTz(period.end),
+                            Datum::String(&collection_id.to_string()),
+                            Datum::UInt64(lag),
+                            Datum::Map(DatumMap::empty()),
+                        ]);
+                        histogram_updates.push((row, count));
+                    }
+                }
+            }
+        }
+        if !histogram_updates.is_empty() {
+            self.deliver_introspection_updates(
+                IntrospectionType::WallclockLagHistogram,
+                histogram_updates,
+            );
+            self.wallclock_lag_histogram_last_refresh = Instant::now();
         }
     }
 
@@ -819,6 +864,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             now: _,
             wallclock_lag: _,
             wallclock_lag_history_last_refresh,
+            wallclock_lag_histogram_last_refresh,
             read_hold_tx: _,
             replica_tx: _,
             replica_rx: _,
@@ -854,6 +900,8 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             .map(|(id, epoch)| (id.to_string(), epoch))
             .collect();
         let wallclock_lag_history_last_refresh = format!("{wallclock_lag_history_last_refresh:?}");
+        let wallclock_lag_histogram_last_refresh =
+            format!("{wallclock_lag_histogram_last_refresh:?}");
 
         let map = serde_json::Map::from_iter([
             field("initialized", initialized)?,
@@ -868,6 +916,10 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             field(
                 "wallclock_lag_history_last_refresh",
                 wallclock_lag_history_last_refresh,
+            )?,
+            field(
+                "wallclock_lag_histogram_last_refresh",
+                wallclock_lag_histogram_last_refresh,
             )?,
         ]);
         Ok(serde_json::Value::Object(map))
@@ -934,6 +986,7 @@ where
             now,
             wallclock_lag,
             wallclock_lag_history_last_refresh: Instant::now(),
+            wallclock_lag_histogram_last_refresh: Instant::now(),
             read_hold_tx,
             replica_tx,
             replica_rx,
@@ -2155,6 +2208,12 @@ struct CollectionState<T: ComputeControllerTimestamp> {
 
     /// Introspection state associated with this collection.
     introspection: CollectionIntrospection<T>,
+
+    /// Frontier wallclock lag measurements stashed until the next `WallclockLagHistogram`
+    /// introspection update.
+    ///
+    /// If this is `None`, wallclock lag is not tracked for this collection.
+    wallclock_lag_histogram_stash: Option<BTreeMap<(WallclockLagHistogramPeriod, u64), i64>>,
 }
 
 impl<T: ComputeControllerTimestamp> CollectionState<T> {
@@ -2189,6 +2248,14 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
             c.update_iter(updates);
         });
 
+        // In an effort to keep the produced wallclock lag introspection data small and
+        // predictable, we disable wallclock lag tracking for transient collections, i.e. slow-path
+        // select indexes and subscribes.
+        let wallclock_lag_histogram_stash = match collection_id.is_transient() {
+            true => None,
+            false => Some(Default::default()),
+        };
+
         Self {
             log_collection: false,
             dropped: false,
@@ -2200,6 +2267,7 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
             storage_dependencies,
             compute_dependencies,
             introspection,
+            wallclock_lag_histogram_stash,
         }
     }
 

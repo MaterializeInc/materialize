@@ -29,7 +29,8 @@ use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::metrics::{ControllerMetrics, WallclockLagMetrics};
 use mz_cluster_client::{ReplicaId, WallclockLagFn};
 use mz_controller_types::dyncfgs::{
-    ENABLE_0DT_DEPLOYMENT_SOURCES, WALLCLOCK_LAG_HISTORY_REFRESH_INTERVAL,
+    ENABLE_0DT_DEPLOYMENT_SOURCES, ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION,
+    WALLCLOCK_LAG_HISTOGRAM_REFRESH_INTERVAL, WALLCLOCK_LAG_HISTORY_REFRESH_INTERVAL,
 };
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -48,7 +49,9 @@ use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationVersion, Row, TimestampManipulation};
+use mz_repr::{
+    Datum, DatumMap, Diff, GlobalId, RelationDesc, RelationVersion, Row, TimestampManipulation,
+};
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand, RunOneshotIngestion,
     RunSinkCommand, Status, StatusUpdate, StorageCommand, StorageResponse, TableData,
@@ -56,7 +59,7 @@ use mz_storage_client::client::{
 use mz_storage_client::controller::{
     BoxFuture, CollectionDescription, DataSource, ExportDescription, ExportState,
     IntrospectionType, MonotonicAppender, PersistEpoch, Response, StorageController,
-    StorageMetadata, StorageTxn, StorageWriteOp,
+    StorageMetadata, StorageTxn, StorageWriteOp, WallclockLagHistogramPeriod,
 };
 use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC,
@@ -224,6 +227,8 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     wallclock_lag: WallclockLagFn<T>,
     /// The last time `WallclockLagHistory` introspection was refreshed.
     wallclock_lag_history_last_refresh: Instant,
+    /// The last time `WallclockLagHistogram` introspection was refreshed.
+    wallclock_lag_histogram_last_refresh: Instant,
 
     /// Handle to a [StorageCollections].
     storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
@@ -1125,13 +1130,8 @@ where
             }
 
             let wallclock_lag_metrics = self.metrics.wallclock_lag_metrics(id, maybe_instance_id);
-            let collection_state = CollectionState {
-                data_source,
-                collection_metadata: metadata,
-                extra_state,
-                wallclock_lag_max: Default::default(),
-                wallclock_lag_metrics,
-            };
+            let collection_state =
+                CollectionState::new(data_source, metadata, extra_state, wallclock_lag_metrics);
 
             self.collections.insert(id, collection_state);
         }
@@ -1457,13 +1457,12 @@ where
         };
         // TODO(alter_table): Support schema evolution on sources.
         let wallclock_lag_metrics = self.metrics.wallclock_lag_metrics(new_collection, None);
-        let collection_state = CollectionState::<T> {
-            data_source: collection_desc.data_source.clone(),
-            collection_metadata: collection_meta,
-            extra_state: CollectionStateExtra::None,
-            wallclock_lag_max: Default::default(),
+        let collection_state = CollectionState::new(
+            collection_desc.data_source.clone(),
+            collection_meta,
+            CollectionStateExtra::None,
             wallclock_lag_metrics,
-        };
+        );
 
         // Great! We have successfully evolved the schema of our Table, now we need to update our
         // in-memory data structures.
@@ -2678,6 +2677,7 @@ where
             recorded_replica_frontiers: BTreeMap::new(),
             wallclock_lag,
             wallclock_lag_history_last_refresh: Instant::now(),
+            wallclock_lag_histogram_last_refresh: Instant::now(),
             storage_collections,
             migrated_storage_collections: BTreeSet::new(),
             maintenance_ticker,
@@ -3461,17 +3461,24 @@ where
         let refresh_history = !self.read_only
             && self.wallclock_lag_history_last_refresh.elapsed()
                 >= WALLCLOCK_LAG_HISTORY_REFRESH_INTERVAL.get(self.config.config_set());
+        let refresh_histogram = !self.read_only
+            && self.wallclock_lag_histogram_last_refresh.elapsed()
+                >= WALLCLOCK_LAG_HISTOGRAM_REFRESH_INTERVAL.get(self.config.config_set());
 
-        let mut history_updates = Vec::new();
+        let now_ms = (self.now)();
+        let now_dt = mz_ore::now::to_datetime(now_ms);
+        let now_ts: CheckedTimestamp<_> = now_dt.try_into().expect("must fit");
 
-        let now = mz_ore::now::to_datetime((self.now)());
-        let now_tz = now.try_into().expect("must fit");
+        let histogram_period =
+            WallclockLagHistogramPeriod::from_epoch_millis(now_ms, self.config.config_set());
 
         let frontier_lag = |frontier: &Antichain<_>| match frontier.as_option() {
             Some(ts) => (self.wallclock_lag)(ts),
             None => Duration::ZERO,
         };
 
+        let mut history_updates = Vec::new();
+        let mut histogram_updates = Vec::new();
         for frontiers in self.storage_collections.active_collection_frontiers() {
             let id = frontiers.id;
             let Some(collection) = self.collections.get_mut(&id) else {
@@ -3488,12 +3495,35 @@ where
                     Datum::String(&id.to_string()),
                     Datum::Null,
                     Datum::Interval(Interval::new(0, 0, max_lag_us)),
-                    Datum::TimestampTz(now_tz),
+                    Datum::TimestampTz(now_ts),
                 ]);
                 history_updates.push((row, 1));
             }
 
             collection.wallclock_lag_metrics.observe(lag);
+
+            if !ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION.get(self.config.config_set()) {
+                continue;
+            }
+
+            if let Some(stash) = &mut collection.wallclock_lag_histogram_stash {
+                let bucket = lag.as_secs().next_power_of_two();
+                let key = (histogram_period, bucket);
+                *stash.entry(key).or_default() += 1;
+
+                if refresh_histogram {
+                    for ((period, lag), count) in std::mem::take(stash) {
+                        let row = Row::pack_slice(&[
+                            Datum::TimestampTz(period.start),
+                            Datum::TimestampTz(period.end),
+                            Datum::String(&id.to_string()),
+                            Datum::UInt64(lag),
+                            Datum::Map(DatumMap::empty()),
+                        ]);
+                        histogram_updates.push((row, count));
+                    }
+                }
+            }
         }
 
         if !history_updates.is_empty() {
@@ -3502,6 +3532,13 @@ where
                 history_updates,
             );
             self.wallclock_lag_history_last_refresh = Instant::now();
+        }
+        if !histogram_updates.is_empty() {
+            self.append_introspection_updates(
+                IntrospectionType::WallclockLagHistogram,
+                histogram_updates,
+            );
+            self.wallclock_lag_histogram_last_refresh = Instant::now();
         }
     }
 
@@ -3627,8 +3664,39 @@ struct CollectionState<T: TimelyTimestamp> {
 
     /// Maximum frontier wallclock lag since the last `WallclockLagHistory` introspection update.
     wallclock_lag_max: Duration,
+    /// Frontier wallclock lag measurements stashed until the next `WallclockLagHistogram`
+    /// introspection update.
+    ///
+    /// If this is `None`, wallclock lag is not tracked for this collection.
+    wallclock_lag_histogram_stash: Option<BTreeMap<(WallclockLagHistogramPeriod, u64), i64>>,
     /// Frontier wallclock lag metrics tracked for this collection.
     wallclock_lag_metrics: WallclockLagMetrics,
+}
+
+impl<T: TimelyTimestamp> CollectionState<T> {
+    fn new(
+        data_source: DataSource<T>,
+        collection_metadata: CollectionMetadata,
+        extra_state: CollectionStateExtra<T>,
+        wallclock_lag_metrics: WallclockLagMetrics,
+    ) -> Self {
+        // Only collect wallclock lag histogram data for collections written by storage, to avoid
+        // duplicate measurements. Collections written by other components (e.g. compute) have
+        // their wallclock lags recorded by these components.
+        let wallclock_lag_histogram_stash = match &data_source {
+            DataSource::Other => None,
+            _ => Some(Default::default()),
+        };
+
+        Self {
+            data_source,
+            collection_metadata,
+            extra_state,
+            wallclock_lag_max: Default::default(),
+            wallclock_lag_histogram_stash,
+            wallclock_lag_metrics,
+        }
+    }
 }
 
 /// Additional state that the controller maintains for select collection types.

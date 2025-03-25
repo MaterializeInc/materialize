@@ -1081,7 +1081,7 @@ where
                     let op = StorageWriteOp::Append { updates };
                     storage.update_introspection_collection(type_, op);
                 }
-                WallclockLagHistory => {
+                WallclockLagHistory | WallclockLagHistogram => {
                     storage.append_introspection_updates(type_, updates);
                 }
                 _ => panic!("unexpected introspection type: {type_:?}"),

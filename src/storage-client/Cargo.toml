@@ -20,6 +20,8 @@ itertools = { version = "0.12.1" }
 maplit = "1.0.2"
 mz-ccsr = { path = "../ccsr" }
 mz-cluster-client = { path = "../cluster-client" }
+mz-controller-types = { path = "../controller-types" }
+mz-dyncfg = { path = "../dyncfg" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-ore = { path = "../ore", features = ["async", "process", "tracing"] }
