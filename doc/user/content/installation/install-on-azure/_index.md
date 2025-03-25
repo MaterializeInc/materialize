@@ -123,18 +123,8 @@ with the following components:
 
 {{< tip >}}
 
-The tutorial uses the `main.tf` found in the `examples/simple/` directory, which
-requires minimal user input. For more configuration options, you can run the
-`main.tf` file at the [root of the
-repository](https://github.com/MaterializeInc/terraform-azurerm-materialize/)
-instead. When running with the root `main.tf`, you must declare the required
-providers. See [Providers
-Configuration](/installation/install-on-azure/appendix-azure-provider-configuration/)
-for details.
+{{% self-managed/azure-terraform-configs %}}
 
-For details on the  `examples/simple/` infrastructure configuration (such as the
-node instance type, etc.), see the
-[examples/simple/main.tf](https://github.com/MaterializeInc/terraform-azurerm-materialize/blob/main/examples/simple/main.tf).
 {{< /tip >}}
 
 1. Open a Terminal window.
@@ -149,17 +139,9 @@ node instance type, etc.), see the
    ```
 
    {{< tip >}}
-   The tutorial uses the `main.tf` found in the `examples/simple/` directory,
-   which requires minimal user input. For more configuration options, you can
-   run the `main.tf` file at the [root of the
-   repository](https://github.com/MaterializeInc/terraform-azurerm-materialize/)
-   instead. When running with the root `main.tf`, you must declare the required
-   providers. See [Providers
-   Configuration](/installation/install-on-azure/appendix-azure-provider-configuration/)
-   for details.
 
-   For details on the  `examples/simple/` infrastructure configuration (such as
-   the node instance type, etc.), see the [examples/simple/main.tf](https://github.com/MaterializeInc/terraform-azurerm-materialize/blob/main/examples/simple/main.tf).
+   {{% self-managed/azure-terraform-configs %}}
+
    {{< /tip >}}
 
 
