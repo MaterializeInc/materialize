@@ -3537,6 +3537,7 @@ impl From<&IntrospectionType> for CollectionManagerKind {
             | IntrospectionType::ReplicaStatusHistory
             | IntrospectionType::ReplicaMetricsHistory
             | IntrospectionType::WallclockLagHistory
+            | IntrospectionType::WallclockLagHistogram
             | IntrospectionType::PreparedStatementHistory
             | IntrospectionType::StatementExecutionHistory
             | IntrospectionType::SessionHistory

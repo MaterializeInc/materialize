@@ -180,3 +180,19 @@ pub static WALLCLOCK_LAG_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(||
         )
         .finish()
 });
+
+pub static WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
+    RelationDesc::builder()
+        .with_column(
+            "period_start",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column(
+            "period_end",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column("lag_seconds", ScalarType::UInt64.nullable(false))
+        .with_column("labels", ScalarType::Jsonb.nullable(false))
+        .finish()
+});

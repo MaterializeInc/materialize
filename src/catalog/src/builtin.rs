@@ -50,6 +50,7 @@ use mz_sql::session::user::{
     MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER_NAME, SYSTEM_USER_NAME,
 };
 use mz_storage_client::controller::IntrospectionType;
+use mz_storage_client::healthcheck::WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RAW_DESC;
 use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_PREPARED_STATEMENT_HISTORY_DESC,
     MZ_SESSION_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC,
@@ -3690,6 +3691,30 @@ WHERE occurred_at + '5 minutes' > mz_now()
 ORDER BY object_id, occurred_at DESC",
     access: vec![PUBLIC_SELECT],
 });
+
+pub static MZ_WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RAW: LazyLock<BuiltinSource> =
+    LazyLock::new(|| BuiltinSource {
+        name: "mz_wallclock_global_lag_histogram_raw",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::SOURCE_MZ_WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RAW_OID,
+        desc: WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RAW_DESC.clone(),
+        data_source: IntrospectionType::WallclockLagHistogram,
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+    });
+
+pub static MZ_WALLCLOCK_GLOBAL_LAG_HISTOGRAM: LazyLock<BuiltinView> =
+    LazyLock::new(|| BuiltinView {
+        name: "mz_wallclock_global_lag_histogram",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_WALLCLOCK_GLOBAL_LAG_HISTOGRAM_OID,
+        column_defs: None,
+        sql: "
+SELECT *, count(*) AS count
+FROM mz_internal.mz_wallclock_global_lag_histogram_raw
+GROUP BY period_start, period_end, object_id, lag_seconds, labels",
+        access: vec![PUBLIC_SELECT],
+    });
 
 pub static MZ_MATERIALIZED_VIEW_REFRESHES: LazyLock<BuiltinSource> =
     LazyLock::new(|| BuiltinSource {
@@ -9700,6 +9725,8 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_WALLCLOCK_GLOBAL_LAG_HISTORY),
         Builtin::View(&MZ_WALLCLOCK_GLOBAL_LAG_RECENT_HISTORY),
         Builtin::View(&MZ_WALLCLOCK_GLOBAL_LAG),
+        Builtin::Source(&MZ_WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RAW),
+        Builtin::View(&MZ_WALLCLOCK_GLOBAL_LAG_HISTOGRAM),
         Builtin::Source(&MZ_MATERIALIZED_VIEW_REFRESHES),
         Builtin::Source(&MZ_COMPUTE_DEPENDENCIES),
         Builtin::Source(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER),

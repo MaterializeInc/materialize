@@ -1164,3 +1164,5 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17052  mz_compute_hydration_times_ind
 17053  mz_mappable_objects
 17054  mz_wallclock_global_lag
+17055  mz_wallclock_global_lag_histogram_raw
+17056  mz_wallclock_global_lag_histogram
