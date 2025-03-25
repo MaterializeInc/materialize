@@ -62,7 +62,7 @@ prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 regex = "1.10.6"
 ryu = "1.0.20"
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = { version = "1.0.140", features = ["arbitrary_precision", "preserve_order"] }
+serde_json = { version = "1.0.127", features = ["arbitrary_precision", "preserve_order"] }
 smallvec = { version = "1.14.0", features = ["serde", "union"] }
 static_assertions = "1.1"
 strsim = "0.11.1"
