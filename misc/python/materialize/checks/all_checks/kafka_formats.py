@@ -219,8 +219,11 @@ class KafkaFormats(Check):
 
                 $ set-regex match=testdrive-format-bytes-\d+ replacement=<TOPIC>
 
-                > SHOW CREATE SOURCE format_bytes1_src;
+                >[version>=14000] SHOW CREATE SOURCE format_bytes1_src;
                 materialize.public.format_bytes1_src "CREATE SOURCE materialize.public.format_bytes1_src\nIN CLUSTER kafka_formats\nFROM KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = '<TOPIC>')\nEXPOSE PROGRESS AS materialize.public.format_bytes1_src_progress;"
+
+                >[version<14000] SHOW CREATE SOURCE format_bytes1_src;
+                materialize.public.format_bytes1_src "CREATE SOURCE \"materialize\".\"public\".\"format_bytes1_src\" IN CLUSTER \"kafka_formats\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = '<TOPIC>') EXPOSE PROGRESS AS \"materialize\".\"public\".\"format_bytes1_src_progress\""
                 """
             )
         )

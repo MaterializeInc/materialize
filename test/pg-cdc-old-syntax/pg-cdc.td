@@ -800,7 +800,10 @@ enum_table              subsource cdc_cluster  ""
 var0
 var1
 
-> SHOW CREATE SOURCE enum_table
+>[version>=14000] SHOW CREATE SOURCE enum_table
+materialize.public.enum_table "CREATE SUBSOURCE materialize.public.enum_table (a pg_catalog.text) OF SOURCE materialize.public.enum_source WITH (EXTERNAL REFERENCE = postgres.public.enum_table, TEXT COLUMNS = (a));"
+
+>[version<14000] SHOW CREATE SOURCE enum_table
 materialize.public.enum_table "CREATE SUBSOURCE \"materialize\".\"public\".\"enum_table\" (\"a\" \"pg_catalog\".\"text\") OF SOURCE \"materialize\".\"public\".\"enum_source\" WITH (EXTERNAL REFERENCE = \"postgres\".\"public\".\"enum_table\", TEXT COLUMNS = (\"a\"))"
 
 # Test that TEXT COLUMN types can change

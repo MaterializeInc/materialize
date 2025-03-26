@@ -48,8 +48,11 @@ class RenameView(Check):
         return Testdrive(
             dedent(
                 r"""
-                > SHOW CREATE VIEW rename_view_viewB3;
+                >[version>=14000] SHOW CREATE VIEW rename_view_viewB3;
                 materialize.public.rename_view_viewb3 "CREATE VIEW\n    materialize.public.rename_view_viewb3\n    AS SELECT f2 FROM materialize.public.rename_view_viewa3 WHERE f2 > 0;"
+
+                >[version<14000] SHOW CREATE VIEW rename_view_viewB3;
+                materialize.public.rename_view_viewb3 "CREATE VIEW \"materialize\".\"public\".\"rename_view_viewb3\" AS SELECT \"f2\" FROM \"materialize\".\"public\".\"rename_view_viewa3\" WHERE \"f2\" > 0"
 
                 > SELECT * FROM rename_view_viewA3;
                 1

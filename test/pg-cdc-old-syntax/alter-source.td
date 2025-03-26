@@ -129,11 +129,17 @@ table_e               subsource
 table_f               subsource
 table_g               subsource
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+>[version>=14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 postgres.public.table_f.f2
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_f);
-f2
+>[version<14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+"\"postgres\".\"public\".\"table_f\".\"f2\""
+
+>[version>=14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_f);
+"f2"
+
+>[version<14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_f);
+"\"f2\""
 
 #
 # State checking
@@ -338,7 +344,10 @@ contains: invalid TEXT COLUMNS option value: unexpected multiple references to p
 1 var0
 2 var1
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+>[version>=14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+postgres.public.table_f.f2
+
+>[version<14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 "\"postgres\".\"public\".\"table_f\".\"f2\""
 
 # Drop a table that's in the publication, which shuffles the tables' output
@@ -355,11 +364,17 @@ INSERT INTO table_f VALUES (3, 'var1');
 
 > ALTER SOURCE mz_source ADD SUBSOURCE table_i WITH (TEXT COLUMNS [table_i.f2]);
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+>[version>=14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+"postgres.public.table_f.f2, postgres.public.table_i.f2"
+
+>[version<14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 "\"postgres\".\"public\".\"table_f\".\"f2\", \"postgres\".\"public\".\"table_i\".\"f2\""
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_i);
+>[version>=14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_i);
 f2
+
+>[version<14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_i);
+"\"f2\""
 
 > SELECT * FROM table_f
 1 var0
@@ -391,7 +406,10 @@ detail:the following tables are referenced but not added: public.table_f
 
 > ALTER SOURCE mz_source_wo_init_text_cols ADD SUBSOURCE table_f AS t_f WITH (TEXT COLUMNS [table_f.f2]);
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source_wo_init_text_cols);
+>[version>=14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source_wo_init_text_cols);
+postgres.public.table_f.f2
+
+>[version<14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source_wo_init_text_cols);
 "\"postgres\".\"public\".\"table_f\".\"f2\""
 
 # add a table after having created the source
