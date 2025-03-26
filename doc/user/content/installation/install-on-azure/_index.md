@@ -6,6 +6,7 @@ menu:
   main:
     parent: "installation"
     identifier: "install-on-azure"
+    weight: 30
 ---
 
 {{% self-managed/materialize-components-sentence %}}

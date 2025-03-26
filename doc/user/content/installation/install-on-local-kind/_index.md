@@ -7,6 +7,7 @@ menu:
   main:
     parent: "installation"
     identifier: "install-on-local-kind"
+    weight: 10
 disable_list: true
 ---
 

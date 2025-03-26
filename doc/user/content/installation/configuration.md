@@ -6,7 +6,7 @@ aliases:
 menu:
   main:
     parent: "installation"
-
+    weight: 70
 ---
 
 ## Configure the Materialize operator

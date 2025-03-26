@@ -8,6 +8,7 @@ menu:
   main:
     parent: "installation"
     identifier: "install-on-aws"
+    weight: 20
 ---
 
 {{% self-managed/materialize-components-sentence %}}

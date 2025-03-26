@@ -8,6 +8,7 @@ menu:
   main:
     parent: "installation"
     identifier: "install-on-gcp"
+    weight: 40
 ---
 
 {{% self-managed/materialize-components-sentence %}}

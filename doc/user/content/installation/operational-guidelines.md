@@ -6,6 +6,7 @@ aliases:
 menu:
   main:
     parent: "installation"
+    weight: 80
 ---
 
 ## Recommended instance types

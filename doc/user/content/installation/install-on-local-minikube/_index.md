@@ -7,6 +7,7 @@ menu:
   main:
     parent: "installation"
     identifier: "install-on-local-minikube"
+    weight: 15
 disable_list: true
 ---
 
