@@ -20,20 +20,19 @@ Dynamic Range (HDR) histograms**:
 
 - [Histograms](#using-histograms-to-compute-percentiles) have a lower memory
   footprint that is linear to the number of _unique_ values and can compute
-  precise percentiles. However, calculating distributions using histograms
-  involves a self-join, which can cause memory usage to grow quadratically.  As
-  such, percentile calculations using histograms are better suited for domains
-  with _low_ cardinality.
+  precise percentiles. However, for domains with _high_ cardinality, calculating
+  precise percentiles may be computationally expensive in processing time.
 
 - [HDR histograms](#using-hdr-histograms-to-compute-approximate-percentiles)
   further reduce the memory footprint but computes approximate percentiles. HDR
   histograms are recommended if there is a long tail of large values that you
-  want to track, which is often the case for latency measurements.
+  want to track, such as with latency measurements.
 
 ## Using histograms to compute percentiles
 
-Histograms track the count/frequency for each unique value/bucket instead of
-tracking all values, and can be used to compute exact percentiles. However, for
+Histograms track the frequency for each unique value/bucket instead of
+tracking all values, and can be used to compute exact percentiles. To compute
+exact percentiles, However, for
 domains with high cardinality, because of the cross join to calcuate
 distributions, the memory usage can become significant. As such, using
 histograms to compute percentiles are better suited for domains with _low_
@@ -42,17 +41,18 @@ cardinality.
 To use histograms to compute percentiles:
 
 - First, create a histogram view that tracks the unique values and their
-  associated count/frequency.
+  associated frequency.
 
 - Then, using a cross join on the histogram view, create a distribution view
   that calculates the distribution of the values. The distribution is calculated
-  by dividing the cumulative frequency (the count of all values up to and
-  including that bucket) by the total counts for all bucket values.
+  by dividing the cumulative frequency (the frequency of all values up to and
+  including that bucket) by the total frequency of all bucket values.
 
   {{< note >}}
 
-  Because of the cross join (which grows quadratic in the number of unique
-  values), the required memory may grow large for domain with high cardinality.
+  For domain with high cardinality, because of the cross join (which grows
+  quadratic in the number of unique values), calculating precise percentiles may
+  be computationally expensive(i.e., time-consuming).
 
   {{</ note >}}
 
@@ -72,7 +72,7 @@ To use histograms to compute percentiles:
    ```
 
 1. Create a `histogram` view to track unique values from the
-   `input` table and their frequency/counts:
+   `input` table and their frequency:
 
    ```mzsql
    CREATE VIEW histogram AS
@@ -83,11 +83,11 @@ To use histograms to compute percentiles:
    GROUP BY value;
    ```
 
-1. Create a view `distribution` to calculate the cumulative frequency/count and
-   the cumulative distribution. The view definition uses a cross join on the
+1. Create a view `distribution` to calculate the cumulative frequency and the
+   cumulative distribution. The view definition uses a cross join on the
    `histogram` view. The distribution is calculated by dividing the cumulative
-   frequency (the count of all values up to and including that bucket) by the
-   total counts for all bucket values.
+   frequency (the frequency of all values up to and including that bucket) by
+   the total frequency of all bucket values.
 
    ```mzsql
    CREATE VIEW distribution AS
@@ -104,9 +104,9 @@ To use histograms to compute percentiles:
 
    {{< note >}}
 
-   This view uses a self-join that scales quadratically with the number of
-   unique bucket values. If the data has high cardinality, memory usage may grow
-   significantly.
+   Because of the cross join (which grows quadratic in the number of unique
+   values), calculating precise percentiles can be computationally
+   expensive(i.e, time-consuming) for domains with high cardinality.
 
    {{</ note >}}
 
@@ -122,14 +122,6 @@ To use histograms to compute percentiles:
    LIMIT 1;
    ```
 
-1. To keep the `distribution` view up to date as new data comes into `input`,
-   you can create an index on the view. To optimize for percentile queries,
-   index on the `cumulative_distribution` column to support [point lookup on
-   the index](/concepts/indexes/#point-lookups):
-
-   ```mzsql
-   CREATE INDEX distribution_idx ON distribution (cumulative_distribution);
-   ```
 
 ## Using HDR histograms to compute approximate percentiles
 
@@ -144,9 +136,8 @@ their relative error becomes less relevant (e.g. 10000 ms and 10001 ms are
 almost the same and can reside in the same bucket).
 
 In the example below, to reduce the number of buckets, the values are first
-decomposed into their floating point representation (i.e., `mantissa *
-2^exponent`), and then with the precision of the mantissa lowered,
-reconstructed for the respective bucket value.
+decomposed into `signed_mantissa * 2^exponent`, and then with the precision of
+the mantissa lowered, reconstructed for the respective bucket value.
 
 - With higher precisions, fewer items are kept in the same bucket and thus, more
   memory is required, but the approximate percentile becomes more precise.
@@ -165,7 +156,8 @@ represented by the tuple (mantissa, exponent).
 
 The following example assumes you have not previously created and populated the
 `input` table from the [Using histograms to compute percentiles
-example](#example). If you have created and populated the table, skip to step 3.
+example](#example). If you have created and populated the table, skip the
+corresponding steps.
 
 {{</ tip >}}
 
@@ -183,9 +175,10 @@ example](#example). If you have created and populated the table, skip to step 3.
    ```
 
 1. Create a `hdr_histogram` view. To reduce the number of buckets, the values
-   are first decomposed into their floating point representation (i.e.,
-   `mantissa * 2^exponent`), and with the precision of the mantissa is reduced
-   to 4, reconstructed.
+   are rounded down to the nearest multiple of 1/16. Specifically, the values
+   are first decomposed into `signed_mantissa * 2^exponent`. Then by reducing
+   the precision of the mantissa to 1/16 (4 bits), the value is reconstructed to
+   an approximated value.
 
    {{< tabs >}}
 
@@ -201,12 +194,13 @@ WITH
       END AS exponent,
       CASE WHEN value = 0 THEN NULL
           ELSE value / pow(2.0, trunc(log(2, abs(value)))::int)
-      END AS mantissa
+      END AS mantissa   -- signed
     FROM input
   ),
   buckets AS (
+    -- reduce precision by 4 bits to round down the value to the nearest multiple of 1/16
     SELECT
-      trunc(mantissa * pow(2.0, 4)) / pow(2.0, 4) -- precision is reduced to 4
+      trunc(mantissa * pow(2.0, 4)) / pow(2.0, 4)
         * pow(2.0, exponent)
         AS bucket
     FROM input_parts
@@ -235,10 +229,11 @@ WITH
       END AS exponent,
       CASE WHEN value = 0 THEN NULL
           ELSE value / pow(2.0, trunc(log(2, abs(value)))::int)
-      END AS mantissa
+      END AS mantissa  -- signed
     FROM input
   ),
   buckets AS (
+    -- reduce precision by 4 bits to round down the value to the nearest multiple of 1/16
     SELECT
       trunc(mantissa * pow(2.0, :precision)) / pow(2.0, :precision)
         * pow(2.0, exponent)
@@ -254,11 +249,11 @@ GROUP BY bucket;
    {{</ tab >}}
    {{</ tabs >}}
 
-1. Create a view `hdr_distribution` to calculate the cumulative frequency/count
+1. Create a view `hdr_distribution` to calculate the cumulative frequency
    and the cumulative distribution. The view definition uses a cross join on the
    `hdr_histogram` view. The distribution is calculated by dividing the
-   cumulative frequency (the count of all values up to and including that
-   bucket) by the total counts for all bucket values.
+   cumulative frequency (the frequency of all values up to and including that
+   bucket) by the total frequency for all bucket values.
 
    ```mzsql
    CREATE VIEW hdr_distribution AS
@@ -286,15 +281,6 @@ GROUP BY bucket;
    WHERE cumulative_distribution >= 0.9
    ORDER BY cumulative_distribution
    LIMIT 1;
-   ```
-
-1. To keep the `hdr_distribution` view up to date as new data comes into
-   `input`, you can create an index on the view. To optimize for percentile
-   queries, index on the `cumulative_distribution` column to support [point
-   lookup on the index](/concepts/indexes/#point-lookups):
-
-   ```mzsql
-   CREATE INDEX hdr_distribution_idx ON hdr_distribution (cumulative_distribution);
    ```
 
 ### HDR Histograms and approximate values
