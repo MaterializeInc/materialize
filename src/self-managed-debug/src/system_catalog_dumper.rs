@@ -20,8 +20,8 @@
 
 use anyhow::{Context as _, Result};
 use chrono::{DateTime, Utc};
+use csv_async::AsyncSerializer;
 use futures::TryStreamExt;
-use mz_ore::future::{timeout, TimeoutError};
 use mz_tls_util::make_tls;
 use std::fmt;
 use std::path::PathBuf;
@@ -30,7 +30,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
-use tokio_postgres::{Client as PgClient, Config as PgConfig, Connection, Socket, Transaction};
+use tokio_postgres::{
+    Client as PgClient, Config as PgConfig, Connection, SimpleQueryMessage, Socket, Transaction,
+};
 use tokio_util::io::StreamReader;
 
 use k8s_openapi::api::core::v1::Service;
@@ -630,11 +632,6 @@ static PG_CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
 // TODO (debug_tool3): Make this configurable.
 static PG_QUERY_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// The amount of time we wait to collect data from the subscribe
-/// query before cancelling the query. This is to prevent the query
-/// from running indefinitely.
-static SUBSCRIBE_SCRAPE_TIMEOUT: Duration = Duration::from_secs(3);
-
 /// The maximum number of errors we tolerate for a cluster replica.
 /// If a cluster replica has more than this many errors, we skip it.
 static MAX_CLUSTER_REPLICA_ERROR_COUNT: usize = 3;
@@ -721,39 +718,45 @@ pub async fn copy_relation_to_csv(
     file_path_name: PathBuf,
     column_names: &Vec<String>,
     relation: &Relation,
-    tls: MakeTlsConnector,
 ) -> Result<(), anyhow::Error> {
     let mut file = tokio::fs::File::create(&file_path_name).await?;
-    // TODO (SangJunBak): Use `WITH (HEADER TRUE)` once database-issues#2846 is implemented.
-    file.write_all((column_names.join(",") + "\n").as_bytes())
-        .await?;
 
     match relation.category {
         RelationCategory::Retained => {
-            let copy_query = format!(
-                "COPY (SUBSCRIBE TO (SELECT * FROM {})) TO STDOUT WITH (FORMAT CSV);",
-                relation.name
-            );
+            let mut writer = AsyncSerializer::from_writer(file);
+            writer.serialize(column_names).await?;
 
-            let copy_fut = write_copy_stream(transaction, &copy_query, &mut file, relation.name);
-            // We use a timeout to cut the SUBSCRIBE query short since it's expected to run indefinitely.
-            // Alternatively, we could use a `DECLARE...FETCH ALL` for the same effect, but then we'd have
-            // to format the result as CSV ourselves, leading to more code. Another alternative is to
-            // specify an UPTO, but it gets finicky to get the UPTO frontier right since we can't rely on
-            // wallclock time.
-            let res = timeout(SUBSCRIBE_SCRAPE_TIMEOUT, copy_fut).await;
+            transaction
+                .execute(
+                    &format!("DECLARE c CURSOR FOR SUBSCRIBE TO {}", relation.name),
+                    &[],
+                )
+                .await
+                .context("Failed to declare cursor")?;
 
-            match res {
-                Ok(()) => Ok(()),
-                Err(TimeoutError::DeadlineElapsed) => {
-                    transaction.cancel_token().cancel_query(tls).await?;
-                    Ok(())
+            // We need to use simple_query, otherwise tokio-postgres will run an introspection SELECT query to figure out the types since it'll
+            // try to prepare the query. This causes an error since SUBSCRIBEs and SELECT queries are not allowed to be executed in the same transaction.
+            // Thus we use simple_query to avoid the introspection query.
+            let rows = transaction
+                // We use a timeout of '1' to receive the snapshot of the current state. A timeout of '0' will return no results.
+                // We also don't care if we get more than just the snapshot.
+                .simple_query("FETCH ALL FROM c WITH (TIMEOUT '1')")
+                .await
+                .context("Failed to fetch all from cursor")?;
+
+            for row in rows {
+                if let SimpleQueryMessage::Row(row) = row {
+                    let values: Vec<&str> = (0..row.len())
+                        .map(|i| row.get(i).unwrap_or("")) // Convert each field to String
+                        .collect();
+                    writer.serialize(&values).await?;
                 }
-                Err(e) => Err(e),
             }
-            .map_err(|e| anyhow::anyhow!(e))?;
         }
         _ => {
+            // TODO (SangJunBak): Use `WITH (HEADER TRUE)` once database-issues#2846 is implemented.
+            file.write_all((column_names.join(",") + "\n").as_bytes())
+                .await?;
             let copy_query = format!(
                 "COPY (SELECT * FROM {}) TO STDOUT WITH (FORMAT CSV)",
                 relation.name
@@ -800,7 +803,6 @@ pub async fn query_relation(
     relation: &Relation,
     column_names: &Vec<String>,
     cluster_replica: Option<&ClusterReplica>,
-    tls: MakeTlsConnector,
 ) -> Result<(), anyhow::Error> {
     let relation_name = relation.name;
     let relation_category = &relation.category;
@@ -838,7 +840,7 @@ pub async fn query_relation(
             let file_path_name = file_path.join(relation_name).with_extension("csv");
             tokio::fs::create_dir_all(&file_path).await?;
 
-            copy_relation_to_csv(transaction, file_path_name, column_names, relation, tls).await?;
+            copy_relation_to_csv(transaction, file_path_name, column_names, relation).await?;
         }
         RelationCategory::Introspection => {
             let file_path = format_file_path(start_time, cluster_replica);
@@ -846,7 +848,7 @@ pub async fn query_relation(
 
             let file_path_name = file_path.join(relation_name).with_extension("csv");
 
-            copy_relation_to_csv(transaction, file_path_name, column_names, relation, tls).await?;
+            copy_relation_to_csv(transaction, file_path_name, column_names, relation).await?;
         }
         RelationCategory::Retained => {
             // Copy the current state and retained subscribe state
@@ -856,7 +858,7 @@ pub async fn query_relation(
                 .with_extension("csv");
             tokio::fs::create_dir_all(&file_path).await?;
 
-            copy_relation_to_csv(transaction, file_path_name, column_names, relation, tls).await?;
+            copy_relation_to_csv(transaction, file_path_name, column_names, relation).await?;
         }
     }
     Ok::<(), anyhow::Error>(())
@@ -954,7 +956,6 @@ impl<'n> SystemCatalogDumper<'n> {
                         relation,
                         &column_names,
                         cluster_replica,
-                        self.pg_tls.clone(),
                     )
                     .await
                     {
