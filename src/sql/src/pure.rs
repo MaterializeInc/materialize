@@ -1193,13 +1193,14 @@ async fn purify_create_source(
             // Filter to the references that need to be created as 'subsources', which
             // doesn't include the default output for single-output sources.
             // TODO(database-issues#8620): Remove once subsources are removed
-            let subsource_references = retrieved_source_references
-                .all_references()
-                .iter()
-                .filter(|r| {
-                    r.load_generator_output().expect("is loadgen") != &LoadGeneratorOutput::Default
-                })
-                .collect::<Vec<_>>();
+            let multi_output_sources =
+                retrieved_source_references
+                    .all_references()
+                    .iter()
+                    .any(|r| {
+                        r.load_generator_output().expect("is loadgen")
+                            != &LoadGeneratorOutput::Default
+                    });
 
             match external_references {
                 Some(requested)
@@ -1207,6 +1208,17 @@ async fn purify_create_source(
                 {
                     Err(PlanError::UseTablesForSources(requested.to_string()))?
                 }
+                Some(requested) if !multi_output_sources => match requested {
+                    ExternalReferences::SubsetTables(_) => {
+                        Err(LoadGeneratorSourcePurificationError::ForTables)?
+                    }
+                    ExternalReferences::SubsetSchemas(_) => {
+                        Err(LoadGeneratorSourcePurificationError::ForSchemas)?
+                    }
+                    ExternalReferences::All => {
+                        Err(LoadGeneratorSourcePurificationError::ForAllTables)?
+                    }
+                },
                 Some(requested) => {
                     let requested_exports = retrieved_source_references
                         .requested_source_exports(Some(requested), source_name)?;
@@ -1232,8 +1244,8 @@ async fn purify_create_source(
                     }
                 }
                 None => {
-                    if matches!(reference_policy, SourceReferencePolicy::Required)
-                        && !subsource_references.is_empty()
+                    if multi_output_sources
+                        && matches!(reference_policy, SourceReferencePolicy::Required)
                     {
                         Err(LoadGeneratorSourcePurificationError::MultiOutputRequiresForAllTables)?
                     }
