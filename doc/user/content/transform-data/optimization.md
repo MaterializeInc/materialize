@@ -452,10 +452,10 @@ The column `hint` provides the estimated value to be provided to the `AGGREGATE 
 Check out the blog post [Delta Joins and Late Materialization](https://materialize.com/blog/delta-joins/) to go deeper on join optimization in Materialize.
 
 [query hints]: /sql/select/#query-hints
-[arrangements]: /get-started/arrangements/#arrangements
+[arrangements]: /architecture/arrangements/#arrangements
 [`MIN`]: /sql/functions/#min
 [`MAX`]: /sql/functions/#max
 [Top K]: /transform-data/patterns/top-k
 [`mz_introspection.mz_expected_group_size_advice`]: /sql/system-catalog/mz_introspection/#mz_expected_group_size_advice
-[dataflows]: /get-started/arrangements/#dataflows
+[dataflows]: /architecture/arrangements/#dataflows
 [`SELECT` syntax]: /sql/select/#syntax
