@@ -1237,6 +1237,7 @@ impl PersistPeek {
                 let mut datum_local = datum_vec.borrow_with(&row);
                 let eval_result = mfp_plan
                     .evaluate_into(&mut datum_local, &arena, &mut row_builder)
+                    .map(|row| row.cloned())
                     .map_err(|e| e.to_string())?;
                 if let Some(row) = eval_result {
                     total_size = total_size
@@ -1449,6 +1450,7 @@ impl IndexPeek {
                 if let Some(result) = peek
                     .map_filter_project
                     .evaluate_into(&mut borrow, &arena, &mut row_builder)
+                    .map(|row| row.cloned())
                     .map_err_to_string_with_causes()?
                 {
                     let mut copies = 0;

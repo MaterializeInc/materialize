@@ -58,7 +58,8 @@ use timely::dataflow::operators::capture::capture::Capture;
 use timely::dataflow::operators::capture::{Event, EventPusher};
 use timely::dataflow::operators::core::Map as _;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
-use timely::dataflow::operators::{Broadcast, CapabilitySet, Concat, Inspect, Leave};
+use timely::dataflow::operators::Concatenate;
+use timely::dataflow::operators::{Broadcast, CapabilitySet, Inspect, Leave};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use timely::order::TotalOrder;
@@ -324,34 +325,8 @@ where
         source_statistics.clone(),
     );
 
-    let name = format!("SourceGenericStats({})", source_id);
-    let mut builder = OperatorBuilderRc::new(name, scope.clone());
-
-    let (mut health_output, derived_health) = builder.new_output::<CapacityContainerBuilder<_>>();
-
     let mut export_collections = BTreeMap::new();
-    let mut export_handles = vec![];
-    // Loop invariant: The operator contains `export_handles.len()` inputs and
-    // `export_handles.len() + 1` outputs.
-    for (id, export) in exports {
-        // This output is not connected to any of the existing inputs.
-        let connection = vec![Antichain::new(); export_handles.len()];
-        let (export_output, new_export) =
-            builder.new_output_connection::<CapacityContainerBuilder<_>>(connection);
 
-        // The input is not connected to any of the existing outputs.
-        let outputs_count = export_handles.len() + 1;
-        let mut connection = vec![Antichain::new(); outputs_count];
-        // Standard frontier implication for the corresponding output of this input.
-        connection.push(Antichain::from_elem(Default::default()));
-        let export_input = builder.new_input_connection(&export.inner, Pipeline, connection);
-        export_handles.push((id, export_input, export_output));
-        let new_export: StackedCollection<G, Result<SourceMessage, DataflowError>> =
-            new_export.as_collection();
-        export_collections.insert(id, new_export);
-    }
-
-    let bytes_read_counter = config.metrics.source_defs.bytes_read.clone();
     let source_metrics = config.metrics.get_source_metrics(config.id, worker_id);
 
     // Compute the overall resume upper to report for the ingestion
@@ -365,19 +340,37 @@ where
         .resume_upper
         .set(mz_persist_client::metrics::encode_ts_metric(&resume_upper));
 
-    builder.build(move |mut caps| {
-        let mut health_cap = Some(caps.remove(0));
-        move |frontiers| {
-            let mut statuses_by_idx = BTreeMap::new();
-            let mut health_output = health_output.activate();
+    let mut health_streams = vec![];
 
-            if frontiers.iter().all(|f| f.is_empty()) {
-                health_cap = None;
-                return;
-            }
-            let health_cap = health_cap.as_mut().unwrap();
+    for (id, export) in exports {
+        let name = format!("SourceGenericStats({})", id);
+        let mut builder = OperatorBuilderRc::new(name, scope.clone());
 
-            for (id, input, output) in export_handles.iter_mut() {
+        let (mut health_output, derived_health) =
+            builder.new_output::<CapacityContainerBuilder<_>>();
+        health_streams.push(derived_health);
+
+        let (mut output, new_export) = builder.new_output::<CapacityContainerBuilder<_>>();
+
+        let mut input = builder.new_input(&export.inner, Pipeline);
+        export_collections.insert(id, new_export.as_collection());
+
+        let bytes_read_counter = config.metrics.source_defs.bytes_read.clone();
+        let source_statistics = source_statistics.clone();
+
+        builder.build(move |mut caps| {
+            let mut health_cap = Some(caps.remove(0));
+
+            move |frontiers| {
+                let mut last_status = None;
+                let mut health_output = health_output.activate();
+
+                if frontiers[0].is_empty() {
+                    health_cap = None;
+                    return;
+                }
+                let health_cap = health_cap.as_mut().unwrap();
+
                 while let Some((cap, data)) = input.next() {
                     for (message, _, _) in data.iter() {
                         let status = match message {
@@ -394,15 +387,14 @@ where
                             ),
                         };
 
-                        let statuses: &mut Vec<_> = statuses_by_idx.entry(*id).or_default();
-
                         let status = HealthStatusMessage {
-                            id: Some(*id),
+                            id: Some(id),
                             namespace: C::STATUS_NAMESPACE.clone(),
                             update: status,
                         };
-                        if statuses.last() != Some(&status) {
-                            statuses.push(status);
+                        if last_status.as_ref() != Some(&status) {
+                            last_status = Some(status.clone());
+                            health_output.session(&health_cap).give(status);
                         }
 
                         match message {
@@ -418,18 +410,10 @@ where
                     }
                     let mut output = output.activate();
                     output.session(&cap).give_container(data);
-
-                    for statuses in statuses_by_idx.values_mut() {
-                        if statuses.is_empty() {
-                            continue;
-                        }
-                        health_output.session(&health_cap).give_container(statuses);
-                        statuses.clear()
-                    }
                 }
             }
-        }
-    });
+        });
+    }
 
     let probe_stream = match probes {
         Some(stream) => stream,
@@ -447,7 +431,7 @@ where
     (
         export_collections,
         progress,
-        health.concat(&derived_health),
+        health.concatenate(health_streams),
         tokens,
     )
 }

@@ -23,7 +23,7 @@ use mz_repr::strconv;
 use mz_rocksdb_types::config::{CompactionStyle, CompressionType};
 use mz_sql_parser::ast::{Ident, TransactionIsolationLevel};
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uncased::UncasedStr;
 
 use super::errors::VarParseError;
@@ -860,7 +860,7 @@ impl Value for TimeZone {
 }
 
 /// List of valid isolation levels.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum IsolationLevel {
     ReadUncommitted,
     ReadCommitted,

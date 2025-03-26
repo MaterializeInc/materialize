@@ -1785,6 +1785,12 @@ macro_rules! feature_flags {
 }
 
 feature_flags!(
+    {
+        name: enable_let_prefix_extraction,
+        desc: "Enables hoisting of loop-invariant CTE bindindgs",
+        default: true,
+        enable_for_item_parsing: false,
+    },
     // Gates for other feature flags
     {
         name: allow_real_time_recency,
@@ -2198,14 +2204,14 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
-        name: extract_common_mfp_expressions,
-        desc: "Extract expressions from MFPs in order to reveal them to sources",
+        name: enable_projection_pushdown_after_relation_cse,
+        desc: "Run ProjectionPushdown one more time after the last RelationCSE.",
         default: true,
         enable_for_item_parsing: false,
     },
     {
-        name: enable_projection_pushdown_after_relation_cse,
-        desc: "Run ProjectionPushdown one more time after the last RelationCSE.",
+        name: enable_less_reduce_in_eqprop,
+        desc: "Run MSE::reduce in EquivalencePropagation only if reduce_expr changed something.",
         default: true,
         enable_for_item_parsing: false,
     },
@@ -2225,9 +2231,10 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             reoptimize_imported_views: false,
             enable_join_prioritize_arranged: vars.enable_join_prioritize_arranged(),
-            extract_common_mfp_expressions: vars.extract_common_mfp_expressions(),
             enable_projection_pushdown_after_relation_cse: vars
                 .enable_projection_pushdown_after_relation_cse(),
+            enable_let_prefix_extraction: vars.enable_let_prefix_extraction(),
+            enable_less_reduce_in_eqprop: vars.enable_less_reduce_in_eqprop(),
         }
     }
 }

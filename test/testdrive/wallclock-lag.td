@@ -96,3 +96,16 @@ snk          true  true
 src          true  true
 src_progress true  true
 tbl          true  true
+
+> SELECT o.name, l.lag >= '0s', l.lag < '10s'
+  FROM mz_internal.mz_wallclock_global_lag l
+  JOIN mz_objects o ON o.id = l.object_id
+  WHERE l.object_id LIKE 'u%'
+idx          true  true
+idx_const    true  true
+mv           true  true
+mv_const     true  true
+snk          true  true
+src          true  true
+src_progress true  true
+tbl          true  true

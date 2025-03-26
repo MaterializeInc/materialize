@@ -351,16 +351,11 @@ pub trait StorageController: Debug {
     /// capabilties.
     fn active_collection_metadatas(&self) -> Vec<(GlobalId, CollectionMetadata)>;
 
-    /// Returns the IDs of all collections that are associated with active
-    /// ingestions, for the given storage instance.
-    ///
-    /// Associated collections are, for example, the remap collection and
-    /// subsources. Active ingestions are those ingestions that have been
-    /// scheduled to run on the given instance.
-    fn active_ingestion_collections(
+    /// Returns the IDs of all active ingestions for the given storage instance.
+    fn active_ingestions(
         &self,
         instance_id: StorageInstanceId,
-    ) -> Box<dyn Iterator<Item = GlobalId> + '_>;
+    ) -> Box<dyn Iterator<Item = &GlobalId> + '_>;
 
     /// Checks whether a collection exists under the given `GlobalId`. Returns
     /// an error if the collection does not exist.

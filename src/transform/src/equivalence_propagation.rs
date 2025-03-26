@@ -72,6 +72,7 @@ impl crate::Transform for EquivalencePropagation {
             derived,
             EquivalenceClasses::default(),
             &mut get_equivalences,
+            ctx,
         );
 
         // Trace the plan as the result of `equivalence_propagation` before potentially applying
@@ -116,6 +117,7 @@ impl EquivalencePropagation {
         derived: DerivedView,
         mut outer_equivalences: EquivalenceClasses,
         get_equivalences: &mut BTreeMap<Id, EquivalenceClasses>,
+        ctx: &mut TransformCtx,
     ) {
         // TODO: The top-down traversal can be coded as a worklist, with arguments tupled and enqueued.
         // This has the potential to do a lot more cloning (of `outer_equivalences`), and some care is needed
@@ -194,22 +196,40 @@ impl EquivalencePropagation {
                 let body = children_rev.next().unwrap();
                 let value = children_rev.next().unwrap();
 
-                self.apply(body.0, body.1, outer_equivalences.clone(), get_equivalences);
+                self.apply(
+                    body.0,
+                    body.1,
+                    outer_equivalences.clone(),
+                    get_equivalences,
+                    ctx,
+                );
 
                 // We expect to find `id` in `get_equivalences`, as otherwise the binding is
                 // not referenced and can be removed.
                 if let Some(equivalences) = get_equivalences.get(&Id::Local(id)) {
-                    self.apply(value.0, value.1, equivalences.clone(), get_equivalences);
+                    self.apply(
+                        value.0,
+                        value.1,
+                        equivalences.clone(),
+                        get_equivalences,
+                        ctx,
+                    );
                 }
             }
             MirRelationExpr::LetRec { .. } => {
                 let mut child_iter = expr.children_mut().rev().zip(derived.children_rev());
                 // Continue in `body` with the outer equivalences.
                 let (body, view) = child_iter.next().unwrap();
-                self.apply(body, view, outer_equivalences, get_equivalences);
+                self.apply(body, view, outer_equivalences, get_equivalences, ctx);
                 // Continue recursively, but without the outer equivalences supplied to `body`.
                 for (child, view) in child_iter {
-                    self.apply(child, view, EquivalenceClasses::default(), get_equivalences);
+                    self.apply(
+                        child,
+                        view,
+                        EquivalenceClasses::default(),
+                        get_equivalences,
+                        ctx,
+                    );
                 }
             }
             MirRelationExpr::Project { input, outputs } => {
@@ -220,6 +240,7 @@ impl EquivalencePropagation {
                     derived.last_child(),
                     outer_equivalences,
                     get_equivalences,
+                    ctx,
                 );
             }
             MirRelationExpr::Map { input, scalars } => {
@@ -241,8 +262,10 @@ impl EquivalencePropagation {
                     let input_arity = input_types.len() - scalars.len();
                     for (index, expr) in scalars.iter_mut().enumerate() {
                         let reducer = input_equivalences.reducer();
-                        reducer.reduce_expr(expr);
-                        expr.reduce(&input_types[..(input_arity + index)]);
+                        let changed = reducer.reduce_expr(expr);
+                        if changed || !ctx.features.enable_less_reduce_in_eqprop {
+                            expr.reduce(&input_types[..(input_arity + index)]);
+                        }
                         // Introduce the fact relating the mapped expression and corresponding column.
                         // This allows subsequent expressions to be optimized with this information.
                         input_equivalences.classes.push(vec![
@@ -261,6 +284,7 @@ impl EquivalencePropagation {
                         derived.last_child(),
                         outer_equivalences,
                         get_equivalences,
+                        ctx,
                     );
                 }
             }
@@ -278,8 +302,10 @@ impl EquivalencePropagation {
                         .expect("RelationType required");
                     let reducer = input_equivalences.reducer();
                     for expr in exprs.iter_mut() {
-                        reducer.reduce_expr(expr);
-                        expr.reduce(input_types.as_ref().unwrap());
+                        let changed = reducer.reduce_expr(expr);
+                        if changed || !ctx.features.enable_less_reduce_in_eqprop {
+                            expr.reduce(input_types.as_ref().unwrap());
+                        }
                     }
                     let input_arity = *derived
                         .last_child()
@@ -291,6 +317,7 @@ impl EquivalencePropagation {
                         derived.last_child(),
                         outer_equivalences,
                         get_equivalences,
+                        ctx,
                     );
                 }
             }
@@ -309,8 +336,10 @@ impl EquivalencePropagation {
                         .expect("RelationType required");
                     let reducer = input_equivalences.reducer();
                     for expr in predicates.iter_mut() {
-                        reducer.reduce_expr(expr);
-                        expr.reduce(input_types.as_ref().unwrap());
+                        let changed = reducer.reduce_expr(expr);
+                        if changed || !ctx.features.enable_less_reduce_in_eqprop {
+                            expr.reduce(input_types.as_ref().unwrap());
+                        }
                     }
                     // Incorporate `predicates` into `outer_equivalences`.
                     let mut class = predicates.clone();
@@ -325,6 +354,7 @@ impl EquivalencePropagation {
                         derived.last_child(),
                         outer_equivalences,
                         get_equivalences,
+                        ctx,
                     );
                 }
             }
@@ -403,9 +433,11 @@ impl EquivalencePropagation {
                             // Semijoin elimination currently fails if you do more advanced simplification than
                             // literal substitution.
                             let old = expr.clone();
-                            reducer.reduce_expr(expr);
+                            let changed = reducer.reduce_expr(expr);
                             let acceptable_sub = literal_domination(&old, expr);
-                            expr.reduce(input_types.as_ref().unwrap());
+                            if changed || !ctx.features.enable_less_reduce_in_eqprop {
+                                expr.reduce(input_types.as_ref().unwrap());
+                            }
                             if !acceptable_sub && !literal_domination(&old, expr) {
                                 expr.clone_from(&old);
                             }
@@ -440,7 +472,7 @@ impl EquivalencePropagation {
                         }
                     }
                     push_equivalences.project(columns..(columns + child_arity));
-                    self.apply(expr, child, push_equivalences, get_equivalences);
+                    self.apply(expr, child, push_equivalences, get_equivalences, ctx);
 
                     columns += child_arity;
                 }
@@ -472,16 +504,20 @@ impl EquivalencePropagation {
                         // Semijoin elimination currently fails if you do more advanced simplification than
                         // literal substitution.
                         let old_key = key.clone();
-                        reducer.reduce_expr(key);
+                        let changed = reducer.reduce_expr(key);
                         let acceptable_sub = literal_domination(&old_key, key);
-                        key.reduce(input_type.as_ref().unwrap());
+                        if changed || !ctx.features.enable_less_reduce_in_eqprop {
+                            key.reduce(input_type.as_ref().unwrap());
+                        }
                         if !acceptable_sub && !literal_domination(&old_key, key) {
                             key.clone_from(&old_key);
                         }
                     }
                     for aggr in aggregates.iter_mut() {
-                        reducer.reduce_expr(&mut aggr.expr);
-                        aggr.expr.reduce(input_type.as_ref().unwrap());
+                        let changed = reducer.reduce_expr(&mut aggr.expr);
+                        if changed || !ctx.features.enable_less_reduce_in_eqprop {
+                            aggr.expr.reduce(input_type.as_ref().unwrap());
+                        }
                         // A count expression over a non-null expression can discard the expression.
                         if aggr.func == mz_expr::AggregateFunc::Count && !aggr.distinct {
                             let mut probe = aggr.expr.clone().call_is_null();
@@ -517,6 +553,7 @@ impl EquivalencePropagation {
                     derived.last_child(),
                     outer_equivalences,
                     get_equivalences,
+                    ctx,
                 );
             }
             MirRelationExpr::TopK {
@@ -540,9 +577,11 @@ impl EquivalencePropagation {
                     let reducer = input_equivalences.reducer();
                     if let Some(expr) = limit {
                         let old_expr = expr.clone();
-                        reducer.reduce_expr(expr);
+                        let changed = reducer.reduce_expr(expr);
                         let acceptable_sub = literal_domination(&old_expr, expr);
-                        expr.reduce(input_types.as_ref().unwrap());
+                        if changed || !ctx.features.enable_less_reduce_in_eqprop {
+                            expr.reduce(input_types.as_ref().unwrap());
+                        }
                         if !acceptable_sub && !literal_domination(&old_expr, expr) {
                             expr.clone_from(&old_expr);
                         }
@@ -557,6 +596,7 @@ impl EquivalencePropagation {
                     derived.last_child(),
                     outer_equivalences,
                     get_equivalences,
+                    ctx,
                 );
             }
             MirRelationExpr::Negate { input } => {
@@ -565,6 +605,7 @@ impl EquivalencePropagation {
                     derived.last_child(),
                     outer_equivalences,
                     get_equivalences,
+                    ctx,
                 );
             }
             MirRelationExpr::Threshold { input } => {
@@ -573,11 +614,18 @@ impl EquivalencePropagation {
                     derived.last_child(),
                     outer_equivalences,
                     get_equivalences,
+                    ctx,
                 );
             }
             MirRelationExpr::Union { .. } => {
                 for (child, derived) in expr.children_mut().rev().zip(derived.children_rev()) {
-                    self.apply(child, derived, outer_equivalences.clone(), get_equivalences);
+                    self.apply(
+                        child,
+                        derived,
+                        outer_equivalences.clone(),
+                        get_equivalences,
+                        ctx,
+                    );
                 }
             }
             MirRelationExpr::ArrangeBy { input, .. } => {
@@ -587,6 +635,7 @@ impl EquivalencePropagation {
                     derived.last_child(),
                     outer_equivalences,
                     get_equivalences,
+                    ctx,
                 );
             }
         }

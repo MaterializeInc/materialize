@@ -291,6 +291,8 @@ fn test_timestamp_selection() {
                             oracle_read_ts,
                             None, /* real_time_recency_ts */
                             &IsolationLevel::from(isolation),
+                            //TODO: remove this eventually
+                            &mz_adapter_types::timestamp_selection::ConstraintBasedTimestampSelection::Verify
                         )
                         .unwrap();
 

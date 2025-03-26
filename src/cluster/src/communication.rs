@@ -189,60 +189,26 @@ async fn create_sockets(
         }
     };
 
-    struct ConnectionEstablished {
-        peer_index: u64,
-        stream: Stream,
-    }
-
     let mut futs = FuturesUnordered::new();
     for i in 0..my_index {
         let address = addresses[usize::cast_from(i)].clone();
         futs.push(
-            async move {
-                start_connection(address, my_index, my_epoch)
-                    .await
-                    .map(move |stream| ConnectionEstablished {
-                        peer_index: i,
-                        stream,
-                    })
-            }
-            .boxed(),
+            start_connection(address, my_index, my_epoch)
+                .map(move |res| (res.map(move |stream| (stream, i)))),
         );
     }
 
-    futs.push({
-        let f = async {
-            await_connection(&listener, my_index, my_epoch)
-                .await
-                .map(|(stream, peer_index)| ConnectionEstablished { peer_index, stream })
-        }
-        .boxed();
-        f
-    });
+    let mut listener_fut = std::pin::pin!(await_connection(&listener, my_index, my_epoch));
 
     while results.iter().filter(|maybe| maybe.is_some()).count() != n_peers {
-        let ConnectionEstablished { peer_index, stream } = futs
-            .next()
-            .await
-            .expect("we should always at least have a listener task")?;
-
-        let from_listener = match my_index.cmp(&peer_index) {
-            Ordering::Less => true,
-            Ordering::Equal => panic!("someone claimed to be us"),
-            Ordering::Greater => false,
-        };
-
-        if from_listener {
-            futs.push({
-                let f = async {
-                    await_connection(&listener, my_index, my_epoch)
-                        .await
-                        .map(|(stream, peer_index)| ConnectionEstablished { peer_index, stream })
-                }
-                .boxed();
-                f
-            });
-        }
+        let (stream, peer_index) = tokio::select! {
+            Some(res) = futs.next() => res,
+            res = listener_fut.as_mut() => {
+                listener_fut.set(await_connection(&listener, my_index, my_epoch));
+                res
+            }
+        }?;
+        assert_ne!(my_index, peer_index, "someone claimed to be us");
 
         let old = std::mem::replace(&mut results[usize::cast_from(peer_index)], Some(stream));
         if old.is_some() {

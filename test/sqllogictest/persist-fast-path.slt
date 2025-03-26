@@ -34,7 +34,7 @@ CREATE TABLE numbers (
 # projecting is fine.
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * from numbers limit 10;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * from numbers limit 10;
 ----
 Explained Query (fast path):
   Finish limit=10 output=[#0]
@@ -45,12 +45,12 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT value + 1000 from numbers LIMIT 10;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT value + 1000 from numbers LIMIT 10;
 ----
 Explained Query (fast path):
   Finish limit=10 output=[#0]
     Project (#1)
-      Map ((#0 + 1000))
+      Map ((#0{value} + 1000))
         PeekPersist materialize.public.numbers
 
 Target cluster: quickstart
@@ -58,7 +58,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * from numbers LIMIT 10 OFFSET 10;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * from numbers LIMIT 10 OFFSET 10;
 ----
 Explained Query (fast path):
   Finish limit=10 offset=10 output=[#0]
@@ -138,7 +138,7 @@ SELECT * FROM erroring LIMIT 10;
 # that might require a full scan.
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * from numbers LIMIT 1000;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * from numbers LIMIT 1000;
 ----
 Explained Query:
   Finish limit=1000 output=[#0]
@@ -151,10 +151,10 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * from numbers ORDER BY value LIMIT 10;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * from numbers ORDER BY value LIMIT 10;
 ----
 Explained Query:
-  Finish order_by=[#0 asc nulls_last] limit=10 output=[#0]
+  Finish order_by=[#0{value} asc nulls_last] limit=10 output=[#0]
     ReadStorage materialize.public.numbers
 
 Source materialize.public.numbers
@@ -164,15 +164,15 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * from numbers WHERE value > mz_now() LIMIT 10;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * from numbers WHERE value > mz_now() LIMIT 10;
 ----
 Explained Query:
   Finish limit=10 output=[#0]
-    Filter (integer_to_mz_timestamp(#0) > mz_now())
+    Filter (integer_to_mz_timestamp(#0{value}) > mz_now())
       ReadStorage materialize.public.numbers
 
 Source materialize.public.numbers
-  filter=((integer_to_mz_timestamp(#0) > mz_now()))
+  filter=((integer_to_mz_timestamp(#0{value}) > mz_now()))
 
 Target cluster: quickstart
 
@@ -208,7 +208,7 @@ statement ok
 CREATE DEFAULT INDEX ON numbers;
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * from numbers LIMIT 10;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * from numbers LIMIT 10;
 ----
 Explained Query (fast path):
   Finish limit=10 output=[#0]

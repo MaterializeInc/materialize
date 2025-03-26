@@ -15,6 +15,14 @@ terraform {
       source  = "hashicorp/google"
       version = ">= 6.0"
     }
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "~> 2.0"
+    }
+    helm = {
+      source  = "hashicorp/helm"
+      version = "~> 2.0"
+    }
   }
 }
 
@@ -23,8 +31,24 @@ provider "google" {
   region  = var.region
 }
 
+data "google_client_config" "default" {}
+
+provider "kubernetes" {
+  host                   = "https://${module.materialize.gke_cluster.endpoint}"
+  token                  = data.google_client_config.default.access_token
+  cluster_ca_certificate = base64decode(module.materialize.gke_cluster.ca_certificate)
+}
+
+provider "helm" {
+  kubernetes {
+    host                   = "https://${module.materialize.gke_cluster.endpoint}"
+    token                  = data.google_client_config.default.access_token
+    cluster_ca_certificate = base64decode(module.materialize.gke_cluster.ca_certificate)
+  }
+}
+
 module "materialize" {
-  source = "github.com/MaterializeInc/terraform-google-materialize?ref=v0.1.7"
+  source = "github.com/MaterializeInc/terraform-google-materialize?ref=v0.2.0"
 
   project_id = var.project_id
   region     = var.region
@@ -52,6 +76,12 @@ module "materialize" {
             analytics = 1
         }
       }
+  }
+
+  providers = {
+    google     = google
+    kubernetes = kubernetes
+    helm       = helm
   }
 }
 

@@ -6316,13 +6316,10 @@ fn error_if_null<'a>(
     temp_storage: &'a RowArena,
     exprs: &'a [MirScalarExpr],
 ) -> Result<Datum<'a>, EvalError> {
-    let datums = exprs
-        .iter()
-        .map(|e| e.eval(datums, temp_storage))
-        .collect::<Result<Vec<_>, _>>()?;
-    match datums[0] {
+    let first = exprs[0].eval(datums, temp_storage)?;
+    match first {
         Datum::Null => {
-            let err_msg = match datums[1] {
+            let err_msg = match exprs[1].eval(datums, temp_storage)? {
                 Datum::Null => {
                     return Err(EvalError::Internal(
                         "unexpected NULL in error side of error_if_null".into(),
@@ -6332,7 +6329,7 @@ fn error_if_null<'a>(
             };
             Err(EvalError::IfNullError(err_msg.into()))
         }
-        _ => Ok(datums[0]),
+        _ => Ok(first),
     }
 }
 

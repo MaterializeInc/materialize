@@ -477,7 +477,9 @@ where
                     // orders and/or fill in default values for missing columns.
                     for row in rows {
                         let mut datums = datum_vec.borrow_with(&row);
-                        let result = mfp.evaluate_into(&mut *datums, &row_arena, &mut row_buf);
+                        let result = mfp
+                            .evaluate_into(&mut *datums, &row_arena, &mut row_buf)
+                            .map(|row| row.cloned());
 
                         match result {
                             Ok(Some(row)) => row_handle.give(&capability, Ok(row)),

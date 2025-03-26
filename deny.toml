@@ -26,6 +26,7 @@ skip = [
     { name = "regex-syntax", version = "0.6.28" },
     # held back by thrift 0.17.0 depended on by parquet 51.0.0
     { name = "ordered-float", version = "2.10.1" },
+    { name = "ordered-float", version = "4.6.0" },
     # held back by 'ciborium' which is depended on by 'criterion'
     { name = "half", version = "1.6.0" },
     { name = "windows-sys", version = "0.42.0" },
@@ -215,7 +216,6 @@ wrappers = [
     "bstr",
     "dynfmt",
     "findshlibs",
-    "insta",
     "jsonpath-rust",
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",

@@ -20,16 +20,16 @@ statement ok
 INSERT INTO t2 values (null, null)
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT row(a,b) as record from t1 union select row(a,b) as record from t2
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT row(a,b) as record from t1 union select row(a,b) as record from t2
 ----
 Explained Query:
   Distinct project=[#0] // { arity: 1 }
     Union // { arity: 1 }
       Project (#2) // { arity: 1 }
-        Map (row(#0, #1)) // { arity: 3 }
+        Map (row(#0{a}, #1{b})) // { arity: 3 }
           ReadStorage materialize.public.t1 // { arity: 2 }
       Project (#2) // { arity: 1 }
-        Map (row(#0, #1)) // { arity: 3 }
+        Map (row(#0{a}, #1{b})) // { arity: 3 }
           ReadStorage materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t1

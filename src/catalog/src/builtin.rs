@@ -3678,6 +3678,19 @@ WHERE occurred_at + '1 day' > mz_now()",
         access: vec![PUBLIC_SELECT],
     });
 
+pub static MZ_WALLCLOCK_GLOBAL_LAG: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_wallclock_global_lag",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_WALLCLOCK_GLOBAL_LAG_OID,
+    column_defs: None,
+    sql: "
+SELECT DISTINCT ON (object_id) object_id, lag
+FROM mz_internal.mz_wallclock_global_lag_recent_history
+WHERE occurred_at + '5 minutes' > mz_now()
+ORDER BY object_id, occurred_at DESC",
+    access: vec![PUBLIC_SELECT],
+});
+
 pub static MZ_MATERIALIZED_VIEW_REFRESHES: LazyLock<BuiltinSource> =
     LazyLock::new(|| BuiltinSource {
         name: "mz_materialized_view_refreshes",
@@ -9686,6 +9699,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Source(&MZ_WALLCLOCK_LAG_HISTORY),
         Builtin::View(&MZ_WALLCLOCK_GLOBAL_LAG_HISTORY),
         Builtin::View(&MZ_WALLCLOCK_GLOBAL_LAG_RECENT_HISTORY),
+        Builtin::View(&MZ_WALLCLOCK_GLOBAL_LAG),
         Builtin::Source(&MZ_MATERIALIZED_VIEW_REFRESHES),
         Builtin::Source(&MZ_COMPUTE_DEPENDENCIES),
         Builtin::Source(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER),

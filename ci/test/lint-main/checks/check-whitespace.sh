@@ -9,7 +9,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# check-new-line.sh — check that files end with an empty line.
+# check-whitespace.sh — check that files end with an empty line and there are no trailing whitespaces
 
 set -euo pipefail
 

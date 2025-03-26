@@ -72,7 +72,7 @@ mode cockroach
 
 # Test target cluster selection for mz_system tables without transactions.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(no fast path) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(no fast path, humanized expressions) AS VERBOSE TEXT FOR
 SELECT * FROM mz_views;
 ----
 Explained Query:
@@ -93,7 +93,7 @@ statement ok
 SELECT * FROM t;
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(no fast path) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(no fast path, humanized expressions) AS VERBOSE TEXT FOR
 SELECT * FROM mz_views;
 ----
 Explained Query:
@@ -136,10 +136,10 @@ EOF
 
 # Test catalog queries (index found based on cluster auto-routing).
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM mz_internal.mz_source_status_history
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM mz_internal.mz_source_status_history
 ----
 Explained Query (fast path):
-  Project (#1, #0, #2..=#5)
+  Project (#1{occurred_at}, #0{source_id}, #2{status}..=#5{replica_id})
     ReadIndex on=mz_internal.mz_source_status_history mz_source_status_history_ind=[*** full scan ***]
 
 Used Indexes:
@@ -867,15 +867,15 @@ EOF
 
 # Test a delta join WITH(join implementations).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(join implementations, humanized expressions) AS VERBOSE TEXT FOR
 SELECT a, b, c, d, e, f
 FROM t, u, v
 WHERE b = c and d = e
 ----
 Explained Query:
-  Project (#0, #1, #1, #3, #3, #5)
-    Filter (#1{t.b}) IS NOT NULL AND (#3{u.d}) IS NOT NULL
-      Join on=(#1{t.b} = #2{u.c} AND #3{u.d} = #4{v.e}) type=delta
+  Project (#0{a}, #1{b}, #1{b}, #3{d}, #3{d}, #5{f})
+    Filter (#1{b}) IS NOT NULL AND (#3{d}) IS NOT NULL
+      Join on=(#1{b} = #2{c} AND #3{d} = #4{e}) type=delta
         implementation
           %0:t » %1:u[#0{c}]KA » %2:v[#0{e}]KA
           %1:u » %0:t[#1{b}]KA » %2:v[#0{e}]KA
@@ -899,15 +899,15 @@ EOF
 
 # Test a delta join where the first input has both a full scan and a lookup.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(join implementations, humanized expressions) AS VERBOSE TEXT FOR
 SELECT a, b, c, d, e, f
 FROM t, u, v
 WHERE a = c and b = e
 ----
 Explained Query:
-  Project (#0, #1, #0, #3, #1, #5)
-    Filter (#0{t.a}) IS NOT NULL AND (#1{t.b}) IS NOT NULL
-      Join on=(#0{t.a} = #2{u.c} AND #1{t.b} = #4{v.e}) type=delta
+  Project (#0{a}, #1{b}, #0{a}, #3{d}, #1{b}, #5{f})
+    Filter (#0{a}) IS NOT NULL AND (#1{b}) IS NOT NULL
+      Join on=(#0{a} = #2{c} AND #1{b} = #4{e}) type=delta
         implementation
           %0:t » %1:u[#0{c}]KA » %2:v[#0{e}]KA
           %1:u » %0:t[#0{a}]KA » %2:v[#0{e}]KA
@@ -958,15 +958,15 @@ CREATE INDEX t_a_b_idx ON T(a,b)
 
 # Test an IndexedFilter join WITH(join implementations).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(join implementations, humanized expressions) AS VERBOSE TEXT FOR
 SELECT a, max(b)
 FROM t
 WHERE (a = 0 AND b = 1) OR (a = 3 AND b = 4) OR (a = 7 AND b = 8)
 GROUP BY a
 ----
 Explained Query:
-  Reduce group_by=[#0] aggregates=[max(#1{t.b})]
-    Project (#0, #1)
+  Reduce group_by=[#0{a}] aggregates=[max(#1{b})]
+    Project (#0{a}, #1{b})
       ReadIndex on=materialize.public.t t_a_b_idx=[lookup values=[(0, 1); (3, 4); (7, 8)]]
 
 Used Indexes:
@@ -978,13 +978,13 @@ EOF
 
 # Test an IndexedFilter join on fast path WITH(join implementations).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(join implementations, humanized expressions) AS VERBOSE TEXT FOR
 SELECT *
 FROM t
 WHERE (a = 0 AND b = 1) OR (a = 3 AND b = 4) OR (a = 7 AND b = 8)
 ----
 Explained Query (fast path):
-  Project (#0, #1)
+  Project (#0{a}, #1{b})
     ReadIndex on=materialize.public.t t_a_b_idx=[lookup values=[(0, 1); (3, 4); (7, 8)]]
 
 Used Indexes:
@@ -1000,7 +1000,7 @@ statement ok
 CREATE TABLE r(f0 INT, f1 INT, f2 INT, f3 INT, f4 INT, f5 INT, f6 INT, f7 INT, f8 INT, f9 INT, f10 INT, f11 INT, f12 INT, f13 INT, f14 INT, f15 INT, f16 INT);
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT *
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT *
 FROM r AS r0, r AS r1
 WHERE
   r0.f0=r1.f0 AND
@@ -1019,17 +1019,17 @@ WHERE
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#0{r0.f0}, #2{r0.f2}..=#4{r0.f4}, #6{r0.f6}, #8{r0.f8}, #9{r0.f9}, #11{r0.f11}..=#13{r0.f13}, #15{r0.f15}, #16{r0.f16}]]
-        Filter (#0{r0.f0}) IS NOT NULL AND (#2{r0.f2}) IS NOT NULL AND (#3{r0.f3}) IS NOT NULL AND (#4{r0.f4}) IS NOT NULL AND (#6{r0.f6}) IS NOT NULL AND (#8{r0.f8}) IS NOT NULL AND (#9{r0.f9}) IS NOT NULL AND (#11{r0.f11}) IS NOT NULL AND (#12{r0.f12}) IS NOT NULL AND (#13{r0.f13}) IS NOT NULL AND (#15{r0.f15}) IS NOT NULL AND (#16{r0.f16}) IS NOT NULL
+      ArrangeBy keys=[[#0{f0}, #2{f2}..=#4{f4}, #6{f6}, #8{f8}, #9{f9}, #11{f11}..=#13{f13}, #15{f15}, #16{f16}]]
+        Filter (#0{f0}) IS NOT NULL AND (#2{f2}) IS NOT NULL AND (#3{f3}) IS NOT NULL AND (#4{f4}) IS NOT NULL AND (#6{f6}) IS NOT NULL AND (#8{f8}) IS NOT NULL AND (#9{f9}) IS NOT NULL AND (#11{f11}) IS NOT NULL AND (#12{f12}) IS NOT NULL AND (#13{f13}) IS NOT NULL AND (#15{f15}) IS NOT NULL AND (#16{f16}) IS NOT NULL
           ReadStorage materialize.public.r
   Return
-    Project (#0..=#16, #0, #18, #2..=#4, #22, #6, #24, #8, #9, #27, #11..=#13, #31, #15, #16)
-      Join on=(#0{r0.f0} = #17{r1.f0} AND #2{r0.f2} = #19{r1.f2} AND #3{r0.f3} = #20{r1.f3} AND #4{r0.f4} = #21{r1.f4} AND #6{r0.f6} = #23{r1.f6} AND #8{r0.f8} = #25{r1.f8} AND #9{r0.f9} = #26{r1.f9} AND #11{r0.f11} = #28{r1.f11} AND #12{r0.f12} = #29{r1.f12} AND #13{r0.f13} = #30{r1.f13} AND #15{r0.f15} = #32{r1.f15} AND #16{r0.f16} = #33{r1.f16}) type=differential
+    Project (#0{f0}..=#16{f16}, #0{f0}, #18{f1}, #2{f2}..=#4{f4}, #22{f5}, #6{f6}, #24{f7}, #8{f8}, #9{f9}, #27{f10}, #11{f11}..=#13{f13}, #31{f14}, #15{f15}, #16{f16})
+      Join on=(#0{f0} = #17{f0} AND #2{f2} = #19{f2} AND #3{f3} = #20{f3} AND #4{f4} = #21{f4} AND #6{f6} = #23{f6} AND #8{f8} = #25{f8} AND #9{f9} = #26{f9} AND #11{f11} = #28{f11} AND #12{f12} = #29{f12} AND #13{f13} = #30{f13} AND #15{f15} = #32{f15} AND #16{f16} = #33{f16}) type=differential
         Get l0
         Get l0
 
 Source materialize.public.r
-  filter=((#0{r0.f0}) IS NOT NULL AND (#2{r0.f2}) IS NOT NULL AND (#3{r0.f3}) IS NOT NULL AND (#4{r0.f4}) IS NOT NULL AND (#6{r0.f6}) IS NOT NULL AND (#8{r0.f8}) IS NOT NULL AND (#9{r0.f9}) IS NOT NULL AND (#11{r0.f11}) IS NOT NULL AND (#12{r0.f12}) IS NOT NULL AND (#13{r0.f13}) IS NOT NULL AND (#15{r0.f15}) IS NOT NULL AND (#16{r0.f16}) IS NOT NULL)
+  filter=((#0{f0}) IS NOT NULL AND (#2{f2}) IS NOT NULL AND (#3{f3}) IS NOT NULL AND (#4{f4}) IS NOT NULL AND (#6{f6}) IS NOT NULL AND (#8{f8}) IS NOT NULL AND (#9{f9}) IS NOT NULL AND (#11{f11}) IS NOT NULL AND (#12{f12}) IS NOT NULL AND (#13{f13}) IS NOT NULL AND (#15{f15}) IS NOT NULL AND (#16{f16}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -1071,7 +1071,7 @@ CREATE DEFAULT INDEX ON t;
 # EXPLAIN output is time-dependent, so we don't want show the output here, just
 # assert that the query doesn't fail.
 statement ok
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM t WHERE a < mz_now();
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM t WHERE a < mz_now();
 
 # Regression test for materialize#19177
 # ---
@@ -1089,11 +1089,11 @@ statement ok
 CREATE TABLE t2(x text);
 
 statement ok
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM t1, t2 WHERE t1.x || mz_internal.mz_session_id()  = t2.x || mz_internal.mz_session_id();
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM t1, t2 WHERE t1.x || mz_internal.mz_session_id()  = t2.x || mz_internal.mz_session_id();
 
 # Regression test for the join visitation part of materialize#19177
 statement ok
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM t1, t2 WHERE t1.x || mz_now()  = t2.x || mz_now();
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM t1, t2 WHERE t1.x || mz_now()  = t2.x || mz_now();
 
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
@@ -1575,7 +1575,7 @@ statement ok
 SET CLUSTER = no_replicas;
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT * FROM t4;
 ----
 Explained Query:
@@ -1602,25 +1602,25 @@ CREATE TABLE t6(
 
 # WITH(EQUIVALENCES)
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(EQUIVALENCES) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(EQUIVALENCES, humanized expressions) AS VERBOSE TEXT FOR
 SELECT *
 FROM t5, t6
 WHERE x = a AND b IN (8,9);
 ----
 Explained Query:
-  Project (#0..=#2, #0, #4) // { equivs: "[[#0, #3], [false, (#0) IS NULL, (#1) IS NULL], [true, ((#4{t6.b} = 8) OR (#4{t6.b} = 9))]]" }
-    Join on=(#0{t5.x} = #3{t6.a}) type=differential // { equivs: "[[#0{t5.x}, #3{t6.a}], [false, (#0) IS NULL, (#1) IS NULL], [true, ((#4{t6.b} = 8) OR (#4{t6.b} = 9))]]" }
-      ArrangeBy keys=[[#0{t5.x}]] // { equivs: "[[false, (#0) IS NULL, (#1) IS NULL]]" }
-        Filter (#0{t5.x}) IS NOT NULL // { equivs: "[[false, (#0) IS NULL, (#1) IS NULL]]" }
-          ReadStorage materialize.public.t5 // { equivs: "[[false, (#1) IS NULL]]" }
-      ArrangeBy keys=[[#0{t6.a}]] // { equivs: "[[false, (#0) IS NULL], [true, ((#1{t6.b} = 8) OR (#1{t6.b} = 9))]]" }
-        Filter ((#1{t6.b} = 8) OR (#1{t6.b} = 9)) // { equivs: "[[false, (#0) IS NULL], [true, ((#1{t6.b} = 8) OR (#1{t6.b} = 9))]]" }
-          ReadStorage materialize.public.t6 // { equivs: "[[false, (#0) IS NULL]]" }
+  Project (#0{x}..=#2{z}, #0{x}, #4{b}) // { equivs: "[[#0{x}, #3{x}], [false, (#0{x}) IS NULL, (#1{y}) IS NULL], [true, ((#4{b} = 8) OR (#4{b} = 9))]]" }
+    Join on=(#0{x} = #3{a}) type=differential // { equivs: "[[#0{x}, #3{a}], [false, (#0{x}) IS NULL, (#1{y}) IS NULL], [true, ((#4{b} = 8) OR (#4{b} = 9))]]" }
+      ArrangeBy keys=[[#0{x}]] // { equivs: "[[false, (#0{x}) IS NULL, (#1{y}) IS NULL]]" }
+        Filter (#0{x}) IS NOT NULL // { equivs: "[[false, (#0{x}) IS NULL, (#1{y}) IS NULL]]" }
+          ReadStorage materialize.public.t5 // { equivs: "[[false, (#1{y}) IS NULL]]" }
+      ArrangeBy keys=[[#0{a}]] // { equivs: "[[false, (#0{a}) IS NULL], [true, ((#1{b} = 8) OR (#1{b} = 9))]]" }
+        Filter ((#1{b} = 8) OR (#1{b} = 9)) // { equivs: "[[false, (#0{a}) IS NULL], [true, ((#1{b} = 8) OR (#1{b} = 9))]]" }
+          ReadStorage materialize.public.t6 // { equivs: "[[false, (#0{a}) IS NULL]]" }
 
 Source materialize.public.t5
-  filter=((#0{t5.x}) IS NOT NULL)
+  filter=((#0{x}) IS NOT NULL)
 Source materialize.public.t6
-  filter=(((#1{t6.b} = 8) OR (#1{t6.b} = 9)))
+  filter=(((#1{b} = 8) OR (#1{b} = 9)))
 
 Target cluster: no_replicas
 
@@ -1654,7 +1654,7 @@ EOF
 # `count(*)` is planned as `count(true)`. We take care in EXPLAIN to show `count(true)` as `count(*)` to avoid confusing
 # users.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT count(*)
 FROM t5;
 ----
@@ -1682,13 +1682,13 @@ Target cluster: no_replicas
 EOF
 
 query error DISTINCT \* not supported as function args
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT count(distinct *)
 FROM t5;
 
 # `count(true)` is currently also printed as `count(*)` in EXPLAIN, which I'd say is fine.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT count(true)
 FROM t5;
 ----
@@ -1717,7 +1717,7 @@ EOF
 
 # But `count(DISTINCT true)` means an entirely different thing, so EXPLAIN shouldn't conflate it with `count(*)`.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT count(DISTINCT true)
 FROM t5;
 ----

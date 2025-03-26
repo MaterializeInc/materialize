@@ -4655,9 +4655,11 @@ pub fn unplan_create_cluster(
                 enable_letrec_fixpoint_analysis,
                 enable_reduce_reduction: _,
                 enable_join_prioritize_arranged,
-                extract_common_mfp_expressions: _,
                 enable_projection_pushdown_after_relation_cse,
+                enable_let_prefix_extraction: _,
+                enable_less_reduce_in_eqprop: _,
             } = optimizer_feature_overrides;
+            // The ones from above that don't occur below are not wired up to cluster features.
             let features_extracted = ClusterFeatureExtracted {
                 // Seen is ignored when unplanning.
                 seen: Default::default(),

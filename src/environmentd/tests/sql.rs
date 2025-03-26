@@ -1236,7 +1236,12 @@ largest not in advance of upper:<TIMESTAMP>
 
 source materialize.public.t1 (u1, storage):
                   read frontier:[<TIMESTAMP>]
-                 write frontier:[<TIMESTAMP>]\n";
+                 write frontier:[<TIMESTAMP>]
+
+binding constraints:
+lower:
+  (StorageInput([User(1)])): [<TIMESTAMP>]
+  (IsolationLevel(StrictSerializable)): [<TIMESTAMP>]\n";
 
     let row = client
         .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
@@ -3350,12 +3355,12 @@ async fn test_retain_history() {
                 let upper = source.write_frontier.into_element();
                 let since = source.read_frontier.into_element();
                 if upper.saturating_sub(since) < Timestamp::from(2000u64) {
-                    anyhow::bail!("{upper} - {since} should be atleast 2s apart")
+                    anyhow::bail!("{upper} - {since} should be at least 2s apart")
                 }
                 client
                     .query(
                         &format!(
-                            "SELECT 1 FROM {name} LIMIT 1 AS OF {}-2000",
+                            "SELECT 1 FROM {name} LIMIT 1 AS OF {}-1000",
                             ts.determination.timestamp_context.timestamp_or_default()
                         ),
                         &[],
@@ -3366,34 +3371,39 @@ async fn test_retain_history() {
             .await
             .unwrap();
 
-        // With an index the AS OF query should fail because we haven't taught the planner about retain
-        // history yet.
-        client
-            .batch_execute(&format!("CREATE DEFAULT INDEX ON {name}"))
+        // We should be able to query the views now and in the past.
+        let ts = get_explain_timestamp(name, &client).await;
+        let now_vals = client
+            .query(&format!("SELECT * FROM {name} AS OF {ts}"), &[])
             .await
-            .unwrap();
+            .expect("this query should succeed")
+            .into_iter()
+            .count();
 
-        let ts = get_explain_timestamp(name, &client).await;
+        let earlier_values = client
+            .query(&format!("SELECT * FROM {name} AS OF {ts}-1000"), &[])
+            .await
+            .expect("this query should succeed")
+            .into_iter()
+            .count();
+
+        // Out of bounds AS OF should fail.
         assert_contains!(
             client
-                .query(&format!("SELECT * FROM {name} AS OF {ts}-2000"), &[])
+                .query(&format!("SELECT * FROM {name} AS OF {ts}-10000"), &[])
                 .await
                 .unwrap_err()
                 .to_string(),
             "not valid for all inputs"
         );
 
-        // Make sure we didn't fail just because the index didn't have enough time after creation.
-        tokio::time::sleep(Duration::from_secs(3)).await;
-        let ts = get_explain_timestamp(name, &client).await;
-        assert_contains!(
-            client
-                .query(&format!("SELECT * FROM {name} AS OF {ts}-2000"), &[])
-                .await
-                .unwrap_err()
-                .to_string(),
-            "not valid for all inputs"
-        );
+        // We sanity check that we have _some_
+        assert!(now_vals > 0);
+        assert!(earlier_values > 0);
+        // The `s` view is of the counter source, so it should have more values now than earlier.
+        if name == "s" {
+            assert!(now_vals > earlier_values);
+        }
     }
 }
 

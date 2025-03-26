@@ -126,12 +126,12 @@ impl RustType<ProtoJoinClosure> for JoinClosure {
 impl JoinClosure {
     /// Applies per-row filtering and logic.
     #[inline(always)]
-    pub fn apply<'a>(
+    pub fn apply<'a, 'row>(
         &'a self,
         datums: &mut Vec<Datum<'a>>,
         temp_storage: &'a RowArena,
-        row: &'a mut Row,
-    ) -> Result<Option<Row>, mz_expr::EvalError> {
+        row: &'row mut Row,
+    ) -> Result<Option<&'row Row>, mz_expr::EvalError> {
         for exprs in self.ready_equivalences.iter() {
             // Each list of expressions should be equal to the same value.
             let val = exprs[0].eval(&datums[..], temp_storage)?;

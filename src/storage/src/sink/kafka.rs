@@ -79,6 +79,11 @@ use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
+use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::metrics::sink::kafka::KafkaSinkMetrics;
+use crate::render::sinks::SinkRender;
+use crate::statistics::SinkStatistics;
+use crate::storage_state::StorageState;
 use anyhow::{anyhow, bail, Context};
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::StreamExt;
@@ -89,6 +94,7 @@ use mz_interchange::encode::Encode;
 use mz_interchange::envelopes::dbz_format;
 use mz_interchange::json::JsonEncoder;
 use mz_interchange::text_binary::{BinaryEncoder, TextEncoder};
+use mz_kafka_util::admin::EnsureTopicConfig;
 use mz_kafka_util::client::{
     GetPartitionsError, MzClientContext, TimeoutConfig, TunnelingClientContext,
     DEFAULT_FETCH_METADATA_TIMEOUT,
@@ -107,7 +113,7 @@ use mz_storage_client::sink::progress_key::ProgressKey;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs::{
-    KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS, SINK_PROGRESS_SEARCH,
+    KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS, SINK_ENSURE_TOPIC_CONFIG, SINK_PROGRESS_SEARCH,
 };
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, DataflowError};
 use mz_storage_types::sinks::{
@@ -133,12 +139,6 @@ use timely::PartialOrder;
 use tokio::sync::watch;
 use tokio::time::{self, MissedTickBehavior};
 use tracing::{debug, error, info, warn};
-
-use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::metrics::sink::kafka::KafkaSinkMetrics;
-use crate::render::sinks::SinkRender;
-use crate::statistics::SinkStatistics;
-use crate::storage_state::StorageState;
 
 impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
     fn get_key_indices(&self) -> Option<&[usize]> {
@@ -399,6 +399,7 @@ impl TransactionalProducer {
                     storage_configuration,
                     &connection.topic,
                     &connection.topic_options,
+                    EnsureTopicConfig::Skip,
                 )
                 .await?;
                 Antichain::from_elem(Timestamp::minimum())
@@ -928,11 +929,25 @@ async fn determine_sink_progress(
     let ctx = Arc::clone(progress_client_read_committed.client().context());
 
     // Ensure the progress topic exists.
+    let ensure_topic_config =
+        match &*SINK_ENSURE_TOPIC_CONFIG.get(storage_configuration.config_set()) {
+            "skip" => EnsureTopicConfig::Skip,
+            "check" => EnsureTopicConfig::Check,
+            "alter" => EnsureTopicConfig::Alter,
+            _ => {
+                tracing::warn!(
+                    topic = progress_topic,
+                    "unexpected value for ensure-topic-config; skipping checks"
+                );
+                EnsureTopicConfig::Skip
+            }
+        };
     mz_storage_client::sink::ensure_kafka_topic(
         connection,
         storage_configuration,
         &progress_topic,
         progress_topic_options,
+        ensure_topic_config,
     )
     .await
     .add_context("error registering kafka progress topic for sink")?;

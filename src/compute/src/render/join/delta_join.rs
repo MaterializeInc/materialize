@@ -283,6 +283,7 @@ where
                                     // TODO(mcsherry): re-use `row` allocation.
                                     final_closure
                                         .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                                        .map(|row| row.cloned())
                                         .map_err(DataflowError::from)
                                         .transpose()
                                 }
@@ -396,7 +397,9 @@ where
                 datums_local.extend(stream_row.iter());
                 datums_local.extend(lookup_row.to_datum_iter());
 
-                let row = closure.apply(&mut datums_local, &temp_storage, &mut row_builder);
+                let row = closure
+                    .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                    .map(|row| row.cloned());
                 let diff = diff1.clone() * diff2.clone();
                 let dout = (row, time.clone());
                 Some((dout, initial.clone(), diff))
@@ -443,6 +446,7 @@ where
 
                 let row = closure
                     .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                    .map(|row| row.cloned())
                     .expect("Closure claimed to never errer");
                 let diff = diff1.clone() * diff2.clone();
                 row.map(|r| ((r, time.clone()), initial.clone(), diff))
@@ -516,6 +520,7 @@ where
                                                         &temp_storage,
                                                         &mut row_builder,
                                                     )
+                                                    .map(|row| row.cloned())
                                                     .transpose()
                                                 {
                                                     Some(Ok(row)) => ok_session.give((

@@ -679,6 +679,8 @@ async fn upgrade_check(
             .storage_metadata()
             .get_collection_shard::<Timestamp>(gid)
             .context("getting shard_id")?;
+        println!("checking Persist schema info for {gid}: {shard_id}");
+
         let diagnostics = Diagnostics {
             shard_name: gid.to_string(),
             handle_purpose: "catalog upgrade check".to_string(),
@@ -690,7 +692,7 @@ async fn upgrade_check(
         // We should always have schemas registered for Shards, unless their environment happened
         // to crash after running DDL and hasn't come back up yet.
         let Some((_schema_id, persisted_relation_desc, _)) = persisted_schema else {
-            anyhow::bail!("no schema found for {gid}, did their environment crash?");
+            anyhow::bail!("no schema found for {gid}: {shard_id}, did their environment crash?");
         };
 
         let persisted_data_type =

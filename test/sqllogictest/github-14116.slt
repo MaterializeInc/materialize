@@ -28,21 +28,21 @@ statement error more than one record produced in subquery
 select a, b, ( select c from test3 where a = test3.a and b = test3.b) from test1;
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR select a, b, ( select c from test3 where a = test3.a and b = test3.b) from test1;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select a, b, ( select c from test3 where a = test3.a and b = test3.b) from test1;
 ----
 Explained Query:
   With
     cte l0 =
-      Project (#2) // { arity: 1 }
-        Reduce group_by=[#0, #1] aggregates=[count(*)] // { arity: 3 }
-          Filter (#0 = #0) AND (#1 = #1) // { arity: 2 }
+      Project (#2{count}) // { arity: 1 }
+        Reduce group_by=[#0{a}, #1{b}] aggregates=[count(*)] // { arity: 3 }
+          Filter (#0{a} = #0{a}) AND (#1{b} = #1{b}) // { arity: 2 }
             ReadStorage materialize.public.test2 // { arity: 2 }
     cte l1 =
       Union // { arity: 1 }
         Get l0 // { arity: 1 }
         Map (error("more than one record produced in subquery")) // { arity: 1 }
           Project () // { arity: 0 }
-            Filter (#0 > 1) // { arity: 1 }
+            Filter (#0{count} > 1) // { arity: 1 }
               Reduce aggregates=[count(*)] // { arity: 1 }
                 Project () // { arity: 0 }
                   Get l0 // { arity: 1 }
@@ -66,7 +66,7 @@ Explained Query:
 
 Source materialize.public.test1
 Source materialize.public.test2
-  filter=((#0 = #0) AND (#1 = #1))
+  filter=((#0{a} = #0{a}) AND (#1{b} = #1{b}))
 
 Target cluster: quickstart
 

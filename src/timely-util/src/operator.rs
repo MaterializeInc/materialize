@@ -235,12 +235,13 @@ where
         &self,
         name: &str,
         logic: L,
-    ) -> (Collection<G, D2, R>, Collection<G, E, R>)
+    ) -> (
+        Collection<G, D2, R, DCB::Container>,
+        Collection<G, E, R, ECB::Container>,
+    )
     where
-        DCB: ContainerBuilder<Container = Vec<(D2, G::Timestamp, R)>>
-            + PushInto<(D2, G::Timestamp, R)>,
-        ECB: ContainerBuilder<Container = Vec<(E, G::Timestamp, R)>>
-            + PushInto<(E, G::Timestamp, R)>,
+        DCB: ContainerBuilder + PushInto<(D2, G::Timestamp, R)>,
+        ECB: ContainerBuilder + PushInto<(E, G::Timestamp, R)>,
         D2: Data,
         E: Data,
         I: IntoIterator<Item = Result<D2, E>>,
@@ -579,12 +580,13 @@ where
         &self,
         name: &str,
         mut logic: L,
-    ) -> (Collection<G, D2, R>, Collection<G, E, R>)
+    ) -> (
+        Collection<G, D2, R, DCB::Container>,
+        Collection<G, E, R, ECB::Container>,
+    )
     where
-        DCB: ContainerBuilder<Container = Vec<(D2, G::Timestamp, R)>>
-            + PushInto<(D2, G::Timestamp, R)>,
-        ECB: ContainerBuilder<Container = Vec<(E, G::Timestamp, R)>>
-            + PushInto<(E, G::Timestamp, R)>,
+        DCB: ContainerBuilder + PushInto<(D2, G::Timestamp, R)>,
+        ECB: ContainerBuilder + PushInto<(E, G::Timestamp, R)>,
         D2: Data,
         E: Data,
         I: IntoIterator<Item = Result<D2, E>>,

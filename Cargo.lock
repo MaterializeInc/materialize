@@ -4779,6 +4779,7 @@ dependencies = [
  "mz-storage-types",
  "serde",
  "timely",
+ "tracing",
  "workspace-hack",
 ]
 
@@ -4813,7 +4814,7 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "num-traits",
- "ordered-float 4.6.0",
+ "ordered-float 5.0.0",
  "serde",
  "serde_json",
  "uuid",
@@ -4903,7 +4904,7 @@ dependencies = [
 
 [[package]]
 name = "mz-balancerd"
-version = "0.138.0-dev.0"
+version = "0.139.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5040,7 +5041,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "0.138.0-dev.0"
+version = "0.139.0-dev.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -5203,7 +5204,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.138.0-dev.0"
+version = "0.139.0-dev.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -5474,7 +5475,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.138.0-dev.0"
+version = "0.139.0-dev.0"
 dependencies = [
  "anyhow",
  "askama",
@@ -5634,7 +5635,7 @@ dependencies = [
  "mz-sql-pretty",
  "num",
  "num_enum 0.7.3",
- "ordered-float 4.6.0",
+ "ordered-float 5.0.0",
  "paste",
  "proc-macro2",
  "proptest",
@@ -5649,6 +5650,7 @@ dependencies = [
  "serde_json",
  "sha1",
  "sha2",
+ "smallvec",
  "subtle",
  "timely",
  "tracing",
@@ -5837,7 +5839,7 @@ dependencies = [
  "mz-ore",
  "mz-pgrepr",
  "mz-repr",
- "ordered-float 4.6.0",
+ "ordered-float 5.0.0",
  "prost",
  "prost-build",
  "prost-reflect",
@@ -5865,6 +5867,7 @@ dependencies = [
  "crossbeam",
  "fancy-regex",
  "futures",
+ "itertools 0.12.1",
  "mz-avro",
  "mz-build-tools",
  "mz-ccsr",
@@ -5948,7 +5951,7 @@ dependencies = [
 
 [[package]]
 name = "mz-materialized"
-version = "0.138.0-dev.0"
+version = "0.139.0-dev.0"
 dependencies = [
  "mz-clusterd",
  "mz-environmentd",
@@ -6146,7 +6149,7 @@ dependencies = [
 
 [[package]]
 name = "mz-orchestratord"
-version = "0.138.0-dev.0"
+version = "0.139.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6322,7 +6325,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.138.0-dev.0"
+version = "0.139.0-dev.0"
 dependencies = [
  "anyhow",
  "arrayvec 0.7.6",
@@ -6699,7 +6702,7 @@ dependencies = [
  "mz-sql-parser",
  "num-traits",
  "num_enum 0.7.3",
- "ordered-float 4.6.0",
+ "ordered-float 5.0.0",
  "postgres-protocol",
  "proptest",
  "proptest-derive",
@@ -6827,7 +6830,7 @@ dependencies = [
 
 [[package]]
 name = "mz-self-managed-debug"
-version = "0.138.0-dev.0"
+version = "0.139.0-dev.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6838,10 +6841,13 @@ dependencies = [
  "mz-build-info",
  "mz-cloud-resources",
  "mz-ore",
+ "mz-tls-util",
+ "postgres-openssl",
  "serde",
  "serde_yaml",
  "tokio",
  "tokio-postgres",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "workspace-hack",
@@ -7440,7 +7446,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "0.138.0-dev.0"
+version = "0.139.0-dev.0"
 dependencies = [
  "anyhow",
  "arrow",
@@ -7613,7 +7619,7 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "mz-sql",
- "ordered-float 4.6.0",
+ "ordered-float 5.0.0",
  "paste",
  "proc-macro2",
  "proptest",
@@ -8155,6 +8161,15 @@ name = "ordered-float"
 version = "4.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7bb71e1b3fa6ca1c61f383464aaf2bb0e2f8e772a1f01d486832464de363b951"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
+name = "ordered-float"
+version = "5.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2c1f9f56e534ac6a9b8a4600bdf0f530fb393b5f393e7b4d03489c3cf0c3f01"
 dependencies = [
  "num-traits",
  "rand 0.8.5",
@@ -12113,7 +12128,6 @@ dependencies = [
  "num-traits",
  "openssl",
  "openssl-sys",
- "ordered-float 4.6.0",
  "parking_lot",
  "parquet",
  "pathdiff",
