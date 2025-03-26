@@ -18,7 +18,6 @@ import time
 from materialize import buildkite
 from materialize.data_ingest.executor import (
     KafkaExecutor,
-    KafkaRoundtripExecutor,
     MySqlExecutor,
 )
 from materialize.data_ingest.workload import *  # noqa: F401 F403
@@ -107,7 +106,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "mysql",
     )
 
-    executor_classes = [MySqlExecutor, KafkaRoundtripExecutor, KafkaExecutor]
+    # KafkaRoundtripExecutor disabled due to intermittent test failure (https://github.com/MaterializeInc/database-issues/issues/8657)
+    # executor_classes = [MySqlExecutor, KafkaRoundtripExecutor, KafkaExecutor]
+    executor_classes = [MySqlExecutor, KafkaExecutor]
 
     with c.override(
         # Fixed port so that we keep the same port after restarting Mz in disruptions
