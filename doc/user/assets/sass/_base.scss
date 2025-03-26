@@ -342,3 +342,12 @@ select.version-dropdown {
 
 red { color: var(--code-red); }
 blue { color: #2300ce; }
+
+blockquote {
+    margin: 1em 0;
+    padding: 0.5em 1em;
+    border-left: 4px solid #ccc; /* Adds a left border */
+    color: #555; /* Changes text color */
+    font-style: italic;
+    background-color: #f9f9f9; /* Light gray background */
+}
