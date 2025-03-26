@@ -89,7 +89,7 @@ If you do not have Helm version 3.2.0+ installed, install.  For details, see the
 Terraform outputs. Alternatively, you can manually specify the name and region.
 If you want to use `jq` and do not have `jq` installed, install.
 
-## A. Configure GCP project andservice account
+## A. Configure GCP project and service account
 
 1. Open a Terminal window.
 
@@ -202,11 +202,15 @@ evaluation purposes only. The modules deploy a sample infrastructure on GCP
 - Materialize instances (during subsequent runs after the Operator is running)
 
 {{< tip >}}
-The tutorial uses the module found in the `examples/simple/`
-directory, which requires minimal user input. For more configuration options,
-you can run the modules at the [root of the
+
+The tutorial uses the `main.tf` found in the `examples/simple/` directory, which
+requires minimal user input. For more configuration options, you can run the
+`main.tf` file at the [root of the
 repository](https://github.com/MaterializeInc/terraform-google-materialize/)
-instead.
+instead. When running from the root `main.tf`, you must declare the required
+providers. See [Providers
+Configuration](/installation/install-on-gcp/appendix-gcp-provider-configuration/)
+for details.
 
 For details on the  `examples/simple/` infrastructure configuration (such as the
 node instance type, etc.), see the
@@ -224,11 +228,15 @@ node instance type, etc.), see the
    ```
 
    {{< tip >}}
-   The tutorial uses the module found in the `examples/simple/` directory, which
-   requires minimal user input. For more configuration options, you can run the
-   modules at the [root of the
+
+   The tutorial uses the `main.tf` found in the `examples/simple/` directory,
+   which requires minimal user input. For more configuration options, you can
+   run the `main.tf` file at the [root of the
    repository](https://github.com/MaterializeInc/terraform-google-materialize/)
-   instead.
+   instead. When running from the root `main.tf`, you must declare the required
+   providers. See [Providers
+   Configuration](/installation/install-on-gcp/appendix-gcp-provider-configuration/)
+   for details.
 
    For details on the  `examples/simple/` infrastructure configuration (such as
    the node instance type, etc.), see the [examples/simple/main.tf](https://github.com/MaterializeInc/terraform-google-materialize/blob/main/examples/simple/main.tf).
