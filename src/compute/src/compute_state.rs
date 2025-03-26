@@ -1430,7 +1430,7 @@ impl IndexPeek {
         let mut literals = peek.literal_constraints.iter().flatten();
         let mut current_literal = None;
 
-        let static_mfp = StaticMapFilterProject::from(peek.map_filter_project.clone());
+        let static_mfp = StaticMapFilterProject::from(&peek.map_filter_project);
 
         while cursor.key_valid(&storage) {
             if has_literal_constraints {

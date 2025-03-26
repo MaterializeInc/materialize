@@ -2129,22 +2129,18 @@ pub struct StaticMapFilterProject {
     pub input_arity: usize,
 }
 
-impl From<SafeMfpPlan> for StaticMapFilterProject {
-    fn from(value: SafeMfpPlan) -> Self {
-        value.mfp.into()
+impl From<&SafeMfpPlan> for StaticMapFilterProject {
+    fn from(value: &SafeMfpPlan) -> Self {
+        (&value.mfp).into()
     }
 }
 
-impl From<MapFilterProject> for StaticMapFilterProject {
-    fn from(mfp: MapFilterProject) -> Self {
+impl From<&MapFilterProject> for StaticMapFilterProject {
+    fn from(mfp: &MapFilterProject) -> Self {
         Self {
-            expressions: mfp.expressions.into_iter().map(Into::into).collect(),
-            predicates: mfp
-                .predicates
-                .into_iter()
-                .map(|(i, e)| (i, e.into()))
-                .collect(),
-            projection: mfp.projection,
+            expressions: mfp.expressions.iter().map(|e| e.into()).collect(),
+            predicates: mfp.predicates.iter().map(|(i, e)| (*i, e.into())).collect(),
+            projection: mfp.projection.clone(),
             input_arity: mfp.input_arity,
         }
     }
