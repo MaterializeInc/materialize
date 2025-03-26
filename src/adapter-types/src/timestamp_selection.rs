@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use serde::{Deserialize, Serialize};
+use std::default::Default;
 
 /// Whether to use the constraint-based timestamp selection.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -17,7 +18,7 @@ pub enum ConstraintBasedTimestampSelection {
     Verify,
 }
 
-impl std::default::Default for ConstraintBasedTimestampSelection {
+impl Default for ConstraintBasedTimestampSelection {
     fn default() -> Self {
         Self::Verify
     }
