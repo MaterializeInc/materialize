@@ -52,6 +52,7 @@ use mz_expr::{
 };
 use mz_ore::assert_none;
 use mz_ore::collections::CollectionExt;
+use mz_ore::id_gen::IdGen;
 use mz_ore::option::FallibleMapExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::str::StrExt;
@@ -77,7 +78,6 @@ use mz_sql_parser::ast::{
     WindowFrameBound, WindowFrameUnits, WindowSpec,
 };
 use mz_sql_parser::ident;
-use uuid::Uuid;
 
 use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
 use crate::func::{self, Func, FuncSpec};
@@ -6042,6 +6042,7 @@ struct AggregateTableFuncVisitor<'a> {
     tables: BTreeMap<Function<Aug>, String>,
     table_disallowed_context: Vec<&'static str>,
     in_select_item: bool,
+    id_gen: IdGen,
     err: Option<PlanError>,
 }
 
@@ -6054,6 +6055,7 @@ impl<'a> AggregateTableFuncVisitor<'a> {
             tables: BTreeMap::new(),
             table_disallowed_context: Vec::new(),
             in_select_item: false,
+            id_gen: Default::default(),
             err: None,
         }
     }
@@ -6171,11 +6173,12 @@ impl<'a> VisitMut<'_, Aug> for AggregateTableFuncVisitor<'a> {
             } = &func
             {
                 // Identical table functions can be de-duplicated.
+                let unique_id = self.id_gen.allocate_id();
                 let id = self
                     .tables
                     .entry(func)
-                    .or_insert_with(|| format!("table_func_{}", Uuid::new_v4()));
-                // We know this is okay because id is is 11 characters + 36 characters, which is
+                    .or_insert_with(|| format!("table_func_{unique_id}"));
+                // We know this is okay because id is is 11 characters + <=20 characters, which is
                 // less than our max length.
                 *expr = Expr::Identifier(vec![Ident::new_unchecked(id.clone())]);
             }
