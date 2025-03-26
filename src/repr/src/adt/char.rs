@@ -141,6 +141,12 @@ fn format_char_str(
         // does.
         Some(l) => {
             let l = usize::cast_from(l.into_u32());
+            // The number of chars in a string is always less or equal to the length of the string.
+            // Hence, if the string is shorter than the length, we do not have to check for
+            // the maximum length.
+            if s.len() < l {
+                return Ok(white_space.process_str(s, Some(l)));
+            }
             match s.char_indices().nth(l) {
                 None => white_space.process_str(s, Some(l)),
                 Some((idx, _)) => {
