@@ -383,6 +383,13 @@ pub trait StorageController: Debug {
     /// Panics if a storage instance with the given ID does not exist.
     fn drop_instance(&mut self, id: StorageInstanceId);
 
+    /// Updates a storage instance's workload class.
+    fn update_instance_workload_class(
+        &mut self,
+        id: StorageInstanceId,
+        workload_class: Option<String>,
+    );
+
     /// Connects the storage instance to the specified replica.
     ///
     /// If the storage instance is already attached to a replica, communication

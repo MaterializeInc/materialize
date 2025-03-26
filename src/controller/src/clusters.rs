@@ -364,6 +364,8 @@ where
         id: ClusterId,
         workload_class: Option<String>,
     ) -> Result<(), anyhow::Error> {
+        self.storage
+            .update_instance_workload_class(id, workload_class.clone());
         self.compute
             .update_instance_workload_class(id, workload_class)?;
         Ok(())

@@ -40,7 +40,7 @@ use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{Datum, DatumMap, Diff, GlobalId, Row};
+use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_storage_client::controller::{IntrospectionType, WallclockLagHistogramPeriod};
 use mz_storage_types::read_holds::{self, ReadHold};
 use mz_storage_types::read_policy::ReadPolicy;
@@ -229,6 +229,10 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     /// controlled by it are allowed to affect changes to external systems
     /// (largely persist).
     read_only: bool,
+    /// The workload class of this instance.
+    ///
+    /// This is currently only used to annotate metrics.
+    workload_class: Option<String>,
     /// The replicas of this compute instance.
     replicas: BTreeMap<ReplicaId, ReplicaState<T>>,
     /// Currently installed compute collections.
@@ -609,8 +613,13 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         }
 
         let histogram_period = WallclockLagHistogramPeriod::from_epoch_millis(now_ms, &self.dyncfg);
+        let histogram_labels = match &self.workload_class {
+            Some(wc) => [("workload_class", wc.clone())].into(),
+            None => BTreeMap::new(),
+        };
 
         let mut histogram_updates = Vec::new();
+        let mut row_buf = Row::default();
         for (collection_id, collection) in &mut self.collections {
             if !ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION.get(&self.dyncfg) {
                 continue;
@@ -620,19 +629,22 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
                 let lag = collection.shared.lock_write_frontier(|f| frontier_lag(f));
                 let bucket = lag.as_secs().next_power_of_two();
 
-                let key = (histogram_period, bucket);
+                let key = (histogram_period, bucket, histogram_labels.clone());
                 *stash.entry(key).or_default() += 1;
 
                 if refresh_histogram {
-                    for ((period, lag), count) in std::mem::take(stash) {
-                        let row = Row::pack_slice(&[
+                    for ((period, lag, labels), count) in std::mem::take(stash) {
+                        let mut packer = row_buf.packer();
+                        packer.extend([
                             Datum::TimestampTz(period.start),
                             Datum::TimestampTz(period.end),
                             Datum::String(&collection_id.to_string()),
                             Datum::UInt64(lag),
-                            Datum::Map(DatumMap::empty()),
                         ]);
-                        histogram_updates.push((row, count));
+                        let labels = labels.iter().map(|(k, v)| (*k, Datum::String(v)));
+                        packer.push_dict(labels);
+
+                        histogram_updates.push((row_buf.clone(), count));
                     }
                 }
             }
@@ -847,6 +859,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             storage_collections: _,
             initialized,
             read_only,
+            workload_class,
             replicas,
             collections,
             log_sources: _,
@@ -906,6 +919,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         let map = serde_json::Map::from_iter([
             field("initialized", initialized)?,
             field("read_only", read_only)?,
+            field("workload_class", workload_class)?,
             field("replicas", replicas)?,
             field("collections", collections)?,
             field("peeks", peeks)?,
@@ -969,6 +983,7 @@ where
             storage_collections: storage,
             initialized: false,
             read_only: true,
+            workload_class: None,
             replicas: Default::default(),
             collections,
             log_sources,
@@ -1023,6 +1038,10 @@ where
     /// Update instance configuration.
     #[mz_ore::instrument(level = "debug")]
     pub fn update_configuration(&mut self, config_params: ComputeParameters) {
+        if let Some(workload_class) = &config_params.workload_class {
+            self.workload_class = workload_class.clone();
+        }
+
         self.send(ComputeCommand::UpdateConfiguration(config_params));
     }
 
@@ -2212,8 +2231,19 @@ struct CollectionState<T: ComputeControllerTimestamp> {
     /// Frontier wallclock lag measurements stashed until the next `WallclockLagHistogram`
     /// introspection update.
     ///
+    /// Keys are `(period, lag, labels)` triples, values are counts.
+    ///
     /// If this is `None`, wallclock lag is not tracked for this collection.
-    wallclock_lag_histogram_stash: Option<BTreeMap<(WallclockLagHistogramPeriod, u64), i64>>,
+    wallclock_lag_histogram_stash: Option<
+        BTreeMap<
+            (
+                WallclockLagHistogramPeriod,
+                u64,
+                BTreeMap<&'static str, String>,
+            ),
+            i64,
+        >,
+    >,
 }
 
 impl<T: ComputeControllerTimestamp> CollectionState<T> {

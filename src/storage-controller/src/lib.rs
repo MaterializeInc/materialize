@@ -49,9 +49,7 @@ use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::{
-    Datum, DatumMap, Diff, GlobalId, RelationDesc, RelationVersion, Row, TimestampManipulation,
-};
+use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationVersion, Row, TimestampManipulation};
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand, RunOneshotIngestion,
     RunSinkCommand, Status, StatusUpdate, StorageCommand, StorageResponse, TableData,
@@ -535,6 +533,19 @@ where
     fn drop_instance(&mut self, id: StorageInstanceId) {
         let instance = self.instances.remove(&id);
         assert!(instance.is_some(), "storage instance {id} does not exist");
+    }
+
+    fn update_instance_workload_class(
+        &mut self,
+        id: StorageInstanceId,
+        workload_class: Option<String>,
+    ) {
+        let instance = self
+            .instances
+            .get_mut(&id)
+            .unwrap_or_else(|| panic!("instance {id} does not exist"));
+
+        instance.workload_class = workload_class;
     }
 
     fn connect_replica(
@@ -3479,6 +3490,7 @@ where
 
         let mut history_updates = Vec::new();
         let mut histogram_updates = Vec::new();
+        let mut row_buf = Row::default();
         for frontiers in self.storage_collections.active_collection_frontiers() {
             let id = frontiers.id;
             let Some(collection) = self.collections.get_mut(&id) else {
@@ -3508,19 +3520,36 @@ where
 
             if let Some(stash) = &mut collection.wallclock_lag_histogram_stash {
                 let bucket = lag.as_secs().next_power_of_two();
-                let key = (histogram_period, bucket);
+
+                let instance_id = match &collection.extra_state {
+                    CollectionStateExtra::Ingestion(i) => Some(i.instance_id),
+                    CollectionStateExtra::Export(e) => Some(e.cluster_id()),
+                    CollectionStateExtra::None => None,
+                };
+                let workload_class = instance_id
+                    .and_then(|id| self.instances.get(&id))
+                    .and_then(|i| i.workload_class.clone());
+                let labels = match workload_class {
+                    Some(wc) => [("workload_class", wc.clone())].into(),
+                    None => BTreeMap::new(),
+                };
+
+                let key = (histogram_period, bucket, labels);
                 *stash.entry(key).or_default() += 1;
 
                 if refresh_histogram {
-                    for ((period, lag), count) in std::mem::take(stash) {
-                        let row = Row::pack_slice(&[
+                    for ((period, lag, labels), count) in std::mem::take(stash) {
+                        let mut packer = row_buf.packer();
+                        packer.extend([
                             Datum::TimestampTz(period.start),
                             Datum::TimestampTz(period.end),
                             Datum::String(&id.to_string()),
                             Datum::UInt64(lag),
-                            Datum::Map(DatumMap::empty()),
                         ]);
-                        histogram_updates.push((row, count));
+                        let labels = labels.iter().map(|(k, v)| (*k, Datum::String(v)));
+                        packer.push_dict(labels);
+
+                        histogram_updates.push((row_buf.clone(), count));
                     }
                 }
             }
@@ -3667,8 +3696,19 @@ struct CollectionState<T: TimelyTimestamp> {
     /// Frontier wallclock lag measurements stashed until the next `WallclockLagHistogram`
     /// introspection update.
     ///
+    /// Keys are `(period, lag, labels)` triples, values are counts.
+    ///
     /// If this is `None`, wallclock lag is not tracked for this collection.
-    wallclock_lag_histogram_stash: Option<BTreeMap<(WallclockLagHistogramPeriod, u64), i64>>,
+    wallclock_lag_histogram_stash: Option<
+        BTreeMap<
+            (
+                WallclockLagHistogramPeriod,
+                u64,
+                BTreeMap<&'static str, String>,
+            ),
+            i64,
+        >,
+    >,
     /// Frontier wallclock lag metrics tracked for this collection.
     wallclock_lag_metrics: WallclockLagMetrics,
 }
