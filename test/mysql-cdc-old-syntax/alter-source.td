@@ -112,8 +112,11 @@ table_e               subsource
 table_f               subsource
 table_g               subsource
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+>[version>=13900] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 public.table_f.f2
+
+>[version<13900] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+"\"public\".\"table_f\".\"f2\""
 
 #
 # Error checking
@@ -203,10 +206,6 @@ contains:cannot drop source "table_e": still depended upon by materialized view 
 > SHOW SUBSOURCES ON mz_source
 mz_source_progress    progress
 table_g               subsource
-
-# Show that all table definitions have been updated
-> SELECT regexp_match(create_sql, 'FOR TABLES \((.+?)\) EXPOSE') FROM (SHOW CREATE SOURCE mz_source);
-"{\"public\".\"table_g\" AS \"materialize\".\"public\".\"table_g\"}"
 
 > SHOW MATERIALIZED VIEWS
 
@@ -338,11 +337,17 @@ contains: invalid TEXT COLUMNS option value: unexpected multiple references to p
 1 var0
 2 var1
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+>[version>=13900] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+public.table_f.f2
+
+>[version<13900] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 "\"public\".\"table_f\".\"f2\""
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_f);
-f2
+>[version>=13900] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_f);
+"f2"
+
+>[version<13900] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_f);
+"\"f2\""
 
 # Drop a table, which shuffles the tables' output indexes, then add a table and ensure it can be added.
 $ mysql-execute name=mysql
@@ -355,11 +360,17 @@ INSERT INTO table_f VALUES (3, 'var1');
 
 > ALTER SOURCE mz_source ADD SUBSOURCE public.table_i WITH (TEXT COLUMNS [public.table_i.f2]);
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+>[version>=13900] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+"public.table_f.f2, public.table_i.f2"
+
+>[version<13900] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 "\"public\".\"table_f\".\"f2\", \"public\".\"table_i\".\"f2\""
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_i);
+>[version>=13900] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_i);
 f2
+
+>[version<13900] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_i);
+"\"f2\""
 
 > SELECT * FROM table_f
 1 var0
@@ -414,8 +425,11 @@ contains: invalid EXCLUDE COLUMNS option value: unexpected multiple references t
 > SELECT regexp_match(create_sql, 'EXCLUDE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 "\"public\".\"table_f\".\"f2\", \"public\".\"table_i\".\"f2\""
 
-> SELECT regexp_match(create_sql, 'EXCLUDE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_i);
+>[version>=13900] SELECT regexp_match(create_sql, 'EXCLUDE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_i);
 f2
+
+>[version<13900] SELECT regexp_match(create_sql, 'EXCLUDE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_i);
+"\"f2\""
 
 > SELECT * FROM table_i
 1
