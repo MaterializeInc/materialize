@@ -26,6 +26,7 @@ mod scalar;
 
 pub mod explain;
 pub mod row;
+mod static_eval;
 pub mod virtual_syntax;
 pub mod visit;
 
@@ -35,6 +36,7 @@ pub use linear::plan::{MfpPlan, SafeMfpPlan};
 pub use linear::util::{join_permutations, permutation_for_arrangement};
 pub use linear::{
     MapFilterProject, ProtoMapFilterProject, ProtoMfpPlan, ProtoSafeMfpPlan, memoize_expr,
+    StaticMapFilterProject,
 };
 pub use relation::func::order_aggregate_datums as order_aggregate_datums_exported_for_benchmarking;
 pub use relation::func::{
