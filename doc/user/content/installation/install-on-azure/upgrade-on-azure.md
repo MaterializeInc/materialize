@@ -4,8 +4,8 @@ description: "Procedure to upgrade your Materialize operator and instances runni
 menu:
   main:
     parent: "install-on-azure"
-    identifier: "upgrade-on-azure
-    "
+    identifier: "upgrade-on-azure"
+    weight: 10
 ---
 
 To upgrade your Materialize instances, upgrade the Materialize operator first
@@ -119,6 +119,8 @@ If you want to use `jq` and do not have `jq` installed, install.
 
 1. Optional. You may need to update your fork of the Terraform modules to
    upgrade.
+
+   {{% self-managed/azure-terraform-upgrade-notes %}}
 
 1. Optional. Create a virtual environment, specifying a path for the new virtual
    environment:
