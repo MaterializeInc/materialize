@@ -1307,12 +1307,8 @@ mod constraints {
     impl Debug for Reason {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
             match self {
-                Reason::ComputeInput(ids) => {
-                    write!(f, "ComputeInput({:?})", ids)
-                }
-                Reason::StorageInput(ids) => {
-                    write!(f, "StorageInput({:?})", ids)
-                }
+                Reason::ComputeInput(ids) => write_split_ids(f, "ComputeInput", ids),
+                Reason::StorageInput(ids) => write_split_ids(f, "StorageInput", ids),
                 Reason::IsolationLevel(level) => {
                     write!(f, "IsolationLevel({:?})", level)
                 }
@@ -1323,6 +1319,22 @@ mod constraints {
                     write!(f, "QueryAsOf")
                 }
             }
+        }
+    }
+
+    //TODO: This is a bit of a hack to make the debug output of constraints more readable.
+    //We should probably have a more structured way to do this.
+    fn write_split_ids<T: Debug>(f: &mut fmt::Formatter, label: &str, ids: &[T]) -> fmt::Result {
+        let (ids, rest) = if ids.len() > 10 {
+            ids.split_at(10)
+        } else {
+            let rest: &[T] = &[];
+            (ids, rest)
+        };
+        if rest.is_empty() {
+            write!(f, "{}({:?})", label, ids)
+        } else {
+            write!(f, "{}({:?}, ... {} more)", label, ids, rest.len())
         }
     }
 
