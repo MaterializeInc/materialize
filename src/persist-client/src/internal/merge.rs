@@ -167,21 +167,37 @@ impl<T: Send + 'static> Pending<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mz_ore::cast::CastLossy;
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn test_merge_tree() {
         // Exhaustively test the merge tree for small sizes.
+        struct Value {
+            merge_depth: usize,
+            elements: Vec<i64>,
+        }
+
         for max_len in 2..8 {
             for items in 0..100 {
-                let mut merge_tree = MergeTree::new(max_len, |vals: Vec<Vec<usize>>| {
+                let mut merge_tree = MergeTree::new(max_len, |vals: Vec<Value>| {
                     // Merge sequences by concatenation.
-                    vals.into_iter().flatten().collect()
+                    Value {
+                        merge_depth: vals.iter().map(|v| v.merge_depth).max().unwrap_or(0) + 1,
+                        elements: vals.into_iter().flat_map(|e| e.elements).collect(),
+                    }
                 });
                 for i in 0..items {
-                    merge_tree.push(vec![i]);
+                    merge_tree.push(Value {
+                        merge_depth: 0,
+                        elements: vec![i],
+                    });
                     assert!(
-                        merge_tree.iter().flatten().copied().eq(0..=i),
+                        merge_tree
+                            .iter()
+                            .flat_map(|v| v.elements.iter())
+                            .copied()
+                            .eq(0..=i),
                         "no parts should be lost"
                     );
                     merge_tree.assert_invariants();
@@ -191,7 +207,29 @@ mod tests {
                     parts.len() <= max_len,
                     "no more than {max_len} finished parts"
                 );
-                assert!(parts.into_iter().flatten().eq(0..items), "no parts lost");
+
+                // We want our merged tree to be "balanced".
+                // If we have 2^N elements in a binary tree, we want the depth to be N;
+                // and more generally, we want a depth of N for a K-ary tree with K^N elements...
+                // which is to say, a depth of log_K N for a tree with N elements.
+                let expected_merge_depth =
+                    usize::cast_lossy(f64::cast_lossy(items).log(f64::cast_lossy(max_len)).floor());
+                for part in &parts {
+                    assert!(
+                        part.merge_depth <= expected_merge_depth,
+                        "expected at most {expected_merge_depth} merges for a tree \
+                        with max len {max_len} and {items} elements, but got {}",
+                        part.merge_depth
+                    );
+                }
+                assert!(
+                    parts
+                        .iter()
+                        .flat_map(|v| v.elements.iter())
+                        .copied()
+                        .eq(0..items),
+                    "no parts lost"
+                );
             }
         }
     }
