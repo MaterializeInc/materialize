@@ -106,7 +106,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "mysql",
     )
 
-    # KafkaRoundtripExecutor disabled due to intermittent test failure (https://github.com/MaterializeInc/database-issues/issues/8657)
+    # TODO: Reenable when database-issues#8657 is fixed
     # executor_classes = [MySqlExecutor, KafkaRoundtripExecutor, KafkaExecutor]
     executor_classes = [MySqlExecutor, KafkaExecutor]
 
