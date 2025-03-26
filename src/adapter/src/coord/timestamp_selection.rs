@@ -670,7 +670,7 @@ pub trait TimestampProvider {
                     &since,
                 )?;
 
-                let constraint_determination = self.determine_timestamp_via_constraints(
+                match self.determine_timestamp_via_constraints(
                     session,
                     &read_holds,
                     id_bundle,
@@ -681,22 +681,33 @@ pub trait TimestampProvider {
                     isolation_level,
                     &timeline,
                     largest_not_in_advance_of_upper,
-                )?;
-                soft_assert_eq_or_log!(
-                    classical_determination.timestamp,
-                    constraint_determination.timestamp,
-                    "timestamp determination mismatch"
-                );
-                if classical_determination.timestamp != constraint_determination.timestamp {
-                    tracing::info!(
-                        "timestamp constrains: {:?}",
-                        constraint_determination.constraints
-                    );
-                }
-                RawTimestampDetermination {
-                    timestamp: classical_determination.timestamp,
-                    constraints: constraint_determination.constraints,
-                    session_oracle_read_ts: classical_determination.session_oracle_read_ts,
+                ) {
+                    Ok(constraint_determination) => {
+                        soft_assert_eq_or_log!(
+                            classical_determination.timestamp,
+                            constraint_determination.timestamp,
+                            "timestamp determination mismatch"
+                        );
+                        if classical_determination.timestamp != constraint_determination.timestamp {
+                            tracing::info!(
+                                "timestamp constrains: {:?}",
+                                constraint_determination.constraints
+                            );
+                        }
+                        RawTimestampDetermination {
+                            timestamp: classical_determination.timestamp,
+                            constraints: constraint_determination.constraints,
+                            session_oracle_read_ts: classical_determination.session_oracle_read_ts,
+                        }
+                    }
+                    Err(e) => {
+                        event!(Level::ERROR, error = ?e, "constraint-based timestamp determination failed");
+                        RawTimestampDetermination {
+                            timestamp: classical_determination.timestamp,
+                            constraints: classical_determination.constraints,
+                            session_oracle_read_ts: classical_determination.session_oracle_read_ts,
+                        }
+                    }
                 }
             }
         };
@@ -1159,18 +1170,10 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline + TimestampManipulatio
             )?;
         }
 
-        if self.determination.constraints.is_some() {
+        if let Some(constraints) = &self.determination.constraints {
             writeln!(f, "")?;
             writeln!(f, "binding constraints:")?;
-            write!(
-                f,
-                "{}",
-                self.determination
-                    .constraints
-                    .as_ref()
-                    .expect("constraints should be present")
-                    .display(timeline)
-            )?;
+            write!(f, "{}", constraints.display(timeline))?;
         }
 
         Ok(())
