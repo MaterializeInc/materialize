@@ -10,6 +10,7 @@
 use mz_ore::task::{JoinHandle, JoinHandleExt};
 use std::fmt::{Debug, Formatter};
 use std::mem;
+use std::ops::{Deref, DerefMut};
 
 /// A merge tree.
 ///
@@ -62,17 +63,6 @@ impl<T> MergeTree<T> {
         };
         new.assert_invariants();
         new
-    }
-
-    /// Iterate over (references to) the parts in this tree in first-to-latest order.
-    #[allow(unused)]
-    pub fn iter(&self) -> impl Iterator<Item = &T> + DoubleEndedIterator {
-        self.data.iter()
-    }
-
-    /// Iterate over (mutable references to) the parts in this tree in first-to-latest order.
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> + DoubleEndedIterator {
-        self.data.iter_mut()
     }
 
     fn merge_last(&mut self, level_len: usize) {
@@ -152,6 +142,20 @@ impl<T> MergeTree<T> {
             *deepest_len <= self.max_level_len,
             "at most max elements at deepest level"
         );
+    }
+}
+
+impl<T> Deref for MergeTree<T> {
+    type Target = [T];
+
+    fn deref(&self) -> &Self::Target {
+        &*self.data
+    }
+}
+
+impl<T> DerefMut for MergeTree<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut *self.data
     }
 }
 
