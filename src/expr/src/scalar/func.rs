@@ -60,11 +60,11 @@ use sha1::Sha1;
 use sha2::{Sha224, Sha256, Sha384, Sha512};
 use subtle::ConstantTimeEq;
 
-use crate::static_eval::StaticMirScalarExpr;
 use crate::scalar::func::format::DateTimeFormat;
 use crate::scalar::{
     ProtoBinaryFunc, ProtoUnaryFunc, ProtoUnmaterializableFunc, ProtoVariadicFunc,
 };
+use crate::static_eval::StaticMirScalarExpr;
 use crate::{like_pattern, EvalError, MirScalarExpr};
 
 #[macro_use]
