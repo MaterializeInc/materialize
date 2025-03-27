@@ -66,7 +66,6 @@ pub static MZ_NOTICES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_notices",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_NOTICES_OID,
-    column_defs: None,
     desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("notice_type", ScalarType::String.nullable(false))
@@ -109,7 +108,6 @@ pub static MZ_NOTICES_REDACTED: LazyLock<BuiltinView> = LazyLock::new(|| Builtin
     name: "mz_notices_redacted",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_NOTICES_REDACTED_OID,
-    column_defs: None,
     desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("notice_type", ScalarType::String.nullable(false))
