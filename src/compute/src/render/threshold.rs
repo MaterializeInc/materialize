@@ -88,7 +88,7 @@ where
             let oks = threshold_arrangement::<_, _, _, _, RowRowBuilder<_, _>, _, _>(
                 &oks,
                 "Threshold local",
-                |count| *count > 0,
+                |count| **count > 0,
             );
             CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))
         }
@@ -96,7 +96,7 @@ where
             let oks = threshold_arrangement::<_, _, _, _, RowRowBuilder<_, _>, _, _>(
                 &oks,
                 "Threshold trace",
-                |count| *count > 0,
+                |count| **count > 0,
             );
             let errs: KeyCollection<_, _, _> = errs.as_collection(|k, _| k.clone()).into();
             let errs = errs

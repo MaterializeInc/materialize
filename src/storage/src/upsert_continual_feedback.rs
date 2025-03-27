@@ -584,7 +584,7 @@ fn stage_input<T, FromTime>(
     let stash_for_timestamp = stash.entry(cap).or_default();
 
     stash_for_timestamp.extend(data.drain(..).map(|((key, value, order), time, diff)| {
-        assert!(diff > 0, "invalid upsert input");
+        assert!(*diff > 0, "invalid upsert input");
         (time, key, Reverse(order), value)
     }));
 }
@@ -777,7 +777,7 @@ where
             Some(value) => {
                 if let Some(old_value) = existing_state_cell.as_ref() {
                     if let Some(old_value) = old_value.provisional_value_ref(&ts) {
-                        output_updates.push((old_value.clone(), ts.clone(), -1));
+                        output_updates.push((old_value.clone(), ts.clone(), -Diff::ONE));
                     }
                 }
 
@@ -805,12 +805,12 @@ where
                     }
                 };
 
-                output_updates.push((value, ts, 1));
+                output_updates.push((value, ts, Diff::ONE));
             }
             None => {
                 if let Some(old_value) = existing_state_cell.as_ref() {
                     if let Some(old_value) = old_value.provisional_value_ref(&ts) {
-                        output_updates.push((old_value.clone(), ts.clone(), -1));
+                        output_updates.push((old_value.clone(), ts.clone(), -Diff::ONE));
                     }
                 }
 

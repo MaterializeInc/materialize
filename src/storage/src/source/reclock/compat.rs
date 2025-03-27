@@ -33,6 +33,7 @@ use mz_repr::{Diff, GlobalId, RelationDesc};
 use mz_storage_client::util::remap_handle::{RemapHandle, RemapHandleReader};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::{SourceData, SourceTimestamp};
+use mz_storage_types::StorageDiff;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp;
@@ -47,11 +48,11 @@ pub struct PersistHandle<FromTime: SourceTimestamp, IntoTime: Timestamp + Lattic
             (
                 (Result<SourceData, String>, Result<(), String>),
                 IntoTime,
-                Diff,
+                StorageDiff,
             ),
         >,
     >,
-    write_handle: WriteHandle<SourceData, (), IntoTime, Diff>,
+    write_handle: WriteHandle<SourceData, (), IntoTime, StorageDiff>,
     /// Whether or not this handle is in read-only mode.
     read_only_rx: watch::Receiver<bool>,
     pending_batch: Vec<(FromTime, IntoTime, Diff)>,
@@ -230,7 +231,7 @@ where
                         let from_ts = FromTime::decode_row(
                             &update.expect("invalid row").0.expect("invalid row"),
                         );
-                        self.pending_batch.push((from_ts, into_ts, diff));
+                        self.pending_batch.push((from_ts, into_ts, diff.into()));
                     }
                 }
             }

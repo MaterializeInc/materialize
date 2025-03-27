@@ -3371,8 +3371,8 @@ pub enum StateDiff {
 impl From<StateDiff> for Diff {
     fn from(diff: StateDiff) -> Self {
         match diff {
-            StateDiff::Retraction => -1,
-            StateDiff::Addition => 1,
+            StateDiff::Retraction => -Diff::ONE,
+            StateDiff::Addition => Diff::ONE,
         }
     }
 }
@@ -3380,7 +3380,7 @@ impl TryFrom<Diff> for StateDiff {
     type Error = String;
 
     fn try_from(diff: Diff) -> Result<Self, Self::Error> {
-        match diff {
+        match *diff {
             -1 => Ok(Self::Retraction),
             1 => Ok(Self::Addition),
             diff => Err(format!("invalid diff {diff}")),

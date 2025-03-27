@@ -16,7 +16,7 @@ use mz_catalog::memory::objects::{BootstrapStateUpdateKind, StateUpdate};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
 use mz_persist_types::ShardId;
-use mz_repr::{CatalogItemId, Timestamp};
+use mz_repr::{CatalogItemId, Diff, Timestamp};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::CreateSinkOptionName;
 use mz_sql::names::FullItemName;
@@ -83,7 +83,7 @@ where
 
 pub(crate) struct MigrateResult {
     pub(crate) builtin_table_updates: Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
-    pub(crate) post_item_updates: Vec<(BootstrapStateUpdateKind, Timestamp, i64)>,
+    pub(crate) post_item_updates: Vec<(BootstrapStateUpdateKind, Timestamp, Diff)>,
 }
 
 /// Migrates all user items and loads them into `state`.

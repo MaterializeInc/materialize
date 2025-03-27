@@ -254,7 +254,7 @@ impl Catalog {
         let mut updates = into_consolidatable_updates_startup(updates, config.boot_ts);
         differential_dataflow::consolidation::consolidate_updates(&mut updates);
         soft_assert_no_log!(
-            updates.iter().all(|(_, _, diff)| *diff == 1),
+            updates.iter().all(|(_, _, diff)| **diff == 1),
             "consolidated updates should be positive during startup: {updates:?}"
         );
 
@@ -531,7 +531,7 @@ impl Catalog {
                     mz_sql::func::Func::Scalar(impls) => {
                         for imp in impls {
                             builtin_table_updates.push(catalog.state.resolve_builtin_table_update(
-                                catalog.state.pack_op_update(op, imp.details(), 1),
+                                catalog.state.pack_op_update(op, imp.details(), Diff::ONE),
                             ));
                         }
                     }

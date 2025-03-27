@@ -98,7 +98,7 @@ impl<T> Interpreter<T> for SingleTimeMonotonic<'_, T> {
         // or all its rows have `Diff` values greater than zero.
         PhysicallyMonotonic(
             rows.as_ref()
-                .map_or(true, |rows| rows.iter().all(|(_, _, diff)| *diff > 0)),
+                .map_or(true, |rows| rows.iter().all(|(_, _, diff)| **diff > 0)),
         )
     }
 

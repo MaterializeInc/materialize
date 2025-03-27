@@ -50,6 +50,7 @@ use mz_storage_operators::stats::StatsCursor;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::SourceData;
 use mz_storage_types::time_dependence::TimeDependence;
+use mz_storage_types::StorageDiff;
 use mz_txn_wal::operator::TxnsContext;
 use mz_txn_wal::txn_cache::TxnsCache;
 use timely::communication::Allocate;
@@ -1174,7 +1175,7 @@ impl PersistPeek {
             .await
             .map_err(|e| e.to_string())?;
 
-        let mut reader: ReadHandle<SourceData, (), Timestamp, Diff> = client
+        let mut reader: ReadHandle<SourceData, (), Timestamp, StorageDiff> = client
             .open_leased_reader(
                 metadata.data_shard,
                 Arc::new(metadata.relation_desc.clone()),
@@ -1227,7 +1228,7 @@ impl PersistPeek {
                 let count: usize = d.try_into().map_err(|_| {
                     format!(
                         "Invalid data in source, saw retractions ({}) for row that does not exist: {:?}",
-                        d * -1,
+                        -d,
                         row,
                     )
                 })?;
@@ -1324,20 +1325,20 @@ impl IndexPeek {
         // find first.
         let (mut cursor, storage) = self.trace_bundle.errs_mut().cursor();
         while cursor.key_valid(&storage) {
-            let mut copies = 0;
+            let mut copies = Diff::ZERO;
             cursor.map_times(&storage, |time, diff| {
                 if time.less_equal(&self.peek.timestamp) {
                     copies += diff;
                 }
             });
-            if copies < 0 {
+            if *copies < 0 {
                 return Err(format!(
                     "Invalid data in source errors, saw retractions ({}) for row that does not exist: {}",
-                    copies * -1,
+                    -copies,
                     cursor.key(&storage),
                 ));
             }
-            if copies > 0 {
+            if *copies > 0 {
                 return Err(cursor.key(&storage).to_string());
             }
             cursor.step_key(&storage);
@@ -1453,16 +1454,16 @@ impl IndexPeek {
                     .map(|row| row.cloned())
                     .map_err_to_string_with_causes()?
                 {
-                    let mut copies = 0;
+                    let mut copies = Diff::ZERO;
                     cursor.map_times(&storage, |time, diff| {
                         if time.less_equal(&peek.timestamp) {
                             copies += diff;
                         }
                     });
-                    let copies: usize = if copies < 0 {
+                    let copies: usize = if *copies < 0 {
                         return Err(format!(
                             "Invalid data in source, saw retractions ({}) for row that does not exist: {:?}",
-                            copies * -1,
+                            -copies,
                             &*borrow,
                         ));
                     } else {

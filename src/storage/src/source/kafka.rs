@@ -688,7 +688,7 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                             outputs.iter().map(|o| o.output_index).repeat_clone(error)
                         {
                             data_output
-                                .give_fueled(&data_cap, ((output, error), time, 1))
+                                .give_fueled(&data_cap, ((output, error), time, Diff::ONE))
                                 .await;
                         }
 
@@ -1153,7 +1153,7 @@ impl KafkaSourceReader {
             *last_offset_ref = offset_as_i64;
 
             let ts = Partitioned::new_singleton(RangeBound::exact(partition), offset);
-            Some((message, ts, 1))
+            Some((message, ts, Diff::ONE))
         }
     }
 }

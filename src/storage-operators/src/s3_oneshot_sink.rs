@@ -371,14 +371,14 @@ where
                             // that the data is exchanged according to the batch.
                             let batch = row.hashed() % output_batch_count;
                             if !up_to.less_equal(ts) {
-                                if *diff < 0 {
+                                if **diff < 0 {
                                     anyhow::bail!(
                                         "Invalid data in source errors, saw retractions ({}) for \
                                         row that does not exist",
-                                        *diff * -1,
+                                        -*diff,
                                     )
                                 }
-                                row_count += u64::try_from(*diff).unwrap();
+                                row_count += u64::try_from(**diff).unwrap();
                                 let uploader = match s3_uploaders.entry(batch) {
                                     Entry::Occupied(entry) => entry.into_mut(),
                                     Entry::Vacant(entry) => {
@@ -392,7 +392,7 @@ where
                                         )?)
                                     }
                                 };
-                                for _ in 0..*diff {
+                                for _ in 0..**diff {
                                     uploader.append_row(row).await?;
                                 }
                             }

@@ -212,7 +212,7 @@ impl<'a> Transaction<'a> {
     pub fn insert_audit_log_events(&mut self, events: impl IntoIterator<Item = VersionedEvent>) {
         let events = events
             .into_iter()
-            .map(|event| (AuditLogKey { event }, 1, self.op_id));
+            .map(|event| (AuditLogKey { event }, Diff::ONE, self.op_id));
         self.audit_log_updates.extend(events);
     }
 
@@ -466,7 +466,7 @@ impl<'a> Transaction<'a> {
     ) -> Result<(), CatalogError> {
         let key = ClusterKey { id: cluster_id };
 
-        match self.clusters.update(
+        match *self.clusters.update(
             |k, v| {
                 if *k == key {
                     let mut value = v.clone();
@@ -494,7 +494,7 @@ impl<'a> Transaction<'a> {
     ) -> Result<(), CatalogError> {
         let key = ClusterReplicaKey { id: replica_id };
 
-        match self.cluster_replicas.update(|k, v| {
+        match *self.cluster_replicas.update(|k, v| {
             if *k == key {
                 let mut value = v.clone();
                 value.name = replica_to_name.to_string();
@@ -2949,7 +2949,7 @@ where
         let pending = self.pending.get(k).map(Vec::as_slice).unwrap_or_default();
         let mut updates = Vec::with_capacity(pending.len() + 1);
         if let Some(initial) = self.initial.get(k) {
-            updates.push((initial, 1));
+            updates.push((initial, Diff::ONE));
         }
         updates.extend(
             pending
@@ -3038,7 +3038,7 @@ where
         self.pending.entry(k).or_default().push(TransactionUpdate {
             value: v,
             ts,
-            diff: 1,
+            diff: Diff::ONE,
         });
         soft_assert_no_log!(self.verify().is_ok());
         Ok(())
@@ -3057,24 +3057,24 @@ where
         f: F,
         ts: Timestamp,
     ) -> Result<Diff, DurableCatalogError> {
-        let mut changed = 0;
+        let mut changed = Diff::ZERO;
         let mut keys = BTreeSet::new();
         // Keep a copy of pending in case of uniqueness violation.
         let pending = self.pending.clone();
         self.for_values_mut(|p, k, v| {
             if let Some(next) = f(k, v) {
-                changed += 1;
+                changed += Diff::ONE;
                 keys.insert(k.clone());
                 let updates = p.entry(k.clone()).or_default();
                 updates.push(TransactionUpdate {
                     value: v.clone(),
                     ts,
-                    diff: -1,
+                    diff: -Diff::ONE,
                 });
                 updates.push(TransactionUpdate {
                     value: next,
                     ts,
-                    diff: 1,
+                    diff: Diff::ONE,
                 });
             }
         });
@@ -3148,26 +3148,26 @@ where
                 entry.push(TransactionUpdate {
                     value: prev,
                     ts,
-                    diff: -1,
+                    diff: -Diff::ONE,
                 });
                 entry.push(TransactionUpdate {
                     value: v,
                     ts,
-                    diff: 1,
+                    diff: Diff::ONE,
                 });
             }
             (Some(v), None) => {
                 entry.push(TransactionUpdate {
                     value: v,
                     ts,
-                    diff: 1,
+                    diff: Diff::ONE,
                 });
             }
             (None, Some(prev)) => {
                 entry.push(TransactionUpdate {
                     value: prev,
                     ts,
-                    diff: -1,
+                    diff: -Diff::ONE,
                 });
             }
             (None, None) => {}
@@ -3211,26 +3211,26 @@ where
                     entry.push(TransactionUpdate {
                         value: prev,
                         ts,
-                        diff: -1,
+                        diff: -Diff::ONE,
                     });
                     entry.push(TransactionUpdate {
                         value: v,
                         ts,
-                        diff: 1,
+                        diff: Diff::ONE,
                     });
                 }
                 (Some(v), None) => {
                     entry.push(TransactionUpdate {
                         value: v,
                         ts,
-                        diff: 1,
+                        diff: Diff::ONE,
                     });
                 }
                 (None, Some(prev)) => {
                     entry.push(TransactionUpdate {
                         value: prev,
                         ts,
-                        diff: -1,
+                        diff: -Diff::ONE,
                     });
                 }
                 (None, None) => {}
@@ -3266,7 +3266,7 @@ where
                 p.entry(k.clone()).or_default().push(TransactionUpdate {
                     value: v.clone(),
                     ts,
-                    diff: -1,
+                    diff: -Diff::ONE,
                 });
             }
         });
@@ -3339,14 +3339,17 @@ mod tests {
         }
         let mut table: BTreeMap<Vec<u8>, String> = BTreeMap::new();
 
-        fn commit(table: &mut BTreeMap<Vec<u8>, String>, mut pending: Vec<(Vec<u8>, String, i64)>) {
+        fn commit(
+            table: &mut BTreeMap<Vec<u8>, String>,
+            mut pending: Vec<(Vec<u8>, String, Diff)>,
+        ) {
             // Sort by diff so that we process retractions first.
             pending.sort_by(|a, b| a.2.cmp(&b.2));
             for (k, v, diff) in pending {
-                if diff == -1 {
+                if *diff == -1 {
                     let prev = table.remove(&k);
                     assert_eq!(prev, Some(v));
-                } else if diff == 1 {
+                } else if *diff == 1 {
                     let prev = table.insert(k, v);
                     assert_eq!(prev, None);
                 } else {
@@ -3370,7 +3373,7 @@ mod tests {
             table_txn
                 .update(|_k, _v| Some("v3".to_string()), 2)
                 .unwrap(),
-            1
+            Diff::ONE
         );
 
         // Uniqueness violation.
@@ -3399,10 +3402,10 @@ mod tests {
         assert_eq!(
             pending,
             vec![
-                (1i64.to_le_bytes().to_vec(), "v1".to_string(), -1),
-                (1i64.to_le_bytes().to_vec(), "v3".to_string(), 1),
-                (2i64.to_le_bytes().to_vec(), "v2".to_string(), -1),
-                (3i64.to_le_bytes().to_vec(), "v4".to_string(), 1),
+                (1i64.to_le_bytes().to_vec(), "v1".to_string(), -Diff::ONE),
+                (1i64.to_le_bytes().to_vec(), "v3".to_string(), Diff::ONE),
+                (2i64.to_le_bytes().to_vec(), "v2".to_string(), -Diff::ONE),
+                (3i64.to_le_bytes().to_vec(), "v4".to_string(), Diff::ONE),
             ]
         );
         commit(&mut table, pending);
@@ -3447,9 +3450,9 @@ mod tests {
         assert_eq!(
             pending,
             vec![
-                (1i64.to_le_bytes().to_vec(), "v3".to_string(), -1),
-                (1i64.to_le_bytes().to_vec(), "v5".to_string(), 1),
-                (5i64.to_le_bytes().to_vec(), "v3".to_string(), 1),
+                (1i64.to_le_bytes().to_vec(), "v3".to_string(), -Diff::ONE),
+                (1i64.to_le_bytes().to_vec(), "v5".to_string(), Diff::ONE),
+                (5i64.to_le_bytes().to_vec(), "v3".to_string(), Diff::ONE),
             ]
         );
         commit(&mut table, pending);
@@ -3523,8 +3526,8 @@ mod tests {
         assert_eq!(
             pending,
             vec![
-                (1i64.to_le_bytes().to_vec(), "v5".to_string(), -1),
-                (3i64.to_le_bytes().to_vec(), "v6".to_string(), 1),
+                (1i64.to_le_bytes().to_vec(), "v5".to_string(), -Diff::ONE),
+                (3i64.to_le_bytes().to_vec(), "v6".to_string(), Diff::ONE),
             ]
         );
         commit(&mut table, pending);
@@ -3577,9 +3580,9 @@ mod tests {
         assert_eq!(
             pending,
             vec![
-                (1i64.to_le_bytes().to_vec(), "v6".to_string(), 1),
-                (3i64.to_le_bytes().to_vec(), "v6".to_string(), -1),
-                (42i64.to_le_bytes().to_vec(), "v7".to_string(), 1),
+                (1i64.to_le_bytes().to_vec(), "v6".to_string(), Diff::ONE),
+                (3i64.to_le_bytes().to_vec(), "v6".to_string(), -Diff::ONE),
+                (42i64.to_le_bytes().to_vec(), "v7".to_string(), Diff::ONE),
             ]
         );
         commit(&mut table, pending);
@@ -3631,8 +3634,8 @@ mod tests {
         assert_eq!(
             pending,
             vec![
-                (1i64.to_le_bytes().to_vec(), "v6".to_string(), -1),
-                (1i64.to_le_bytes().to_vec(), "v8".to_string(), 1),
+                (1i64.to_le_bytes().to_vec(), "v6".to_string(), -Diff::ONE),
+                (1i64.to_le_bytes().to_vec(), "v8".to_string(), Diff::ONE),
             ]
         );
         commit(&mut table, pending);
@@ -3683,7 +3686,7 @@ mod tests {
                 1,
             )
             .unwrap();
-        assert_eq!(n, 1);
+        assert_eq!(*n, 1);
         let n = table_txn
             .update_by_keys(
                 [
@@ -3693,13 +3696,13 @@ mod tests {
                 2,
             )
             .unwrap();
-        assert_eq!(n, 0);
+        assert_eq!(*n, 0);
         let pending = table_txn.pending();
         assert_eq!(
             pending,
             vec![
-                (1i64.to_le_bytes().to_vec(), "v8".to_string(), -1),
-                (1i64.to_le_bytes().to_vec(), "v9".to_string(), 1),
+                (1i64.to_le_bytes().to_vec(), "v8".to_string(), -Diff::ONE),
+                (1i64.to_le_bytes().to_vec(), "v9".to_string(), Diff::ONE),
             ]
         );
         commit(&mut table, pending);
@@ -3723,7 +3726,7 @@ mod tests {
                 0,
             )
             .unwrap();
-        assert_eq!(n, 2);
+        assert_eq!(*n, 2);
         let pending = table_txn.pending::<Vec<u8>, String>();
         assert!(pending.is_empty());
         commit(&mut table, pending);
@@ -3747,7 +3750,7 @@ mod tests {
         let pending = table_txn.pending();
         assert_eq!(
             pending,
-            vec![(1i64.to_le_bytes().to_vec(), "v9".to_string(), -1),]
+            vec![(1i64.to_le_bytes().to_vec(), "v9".to_string(), -Diff::ONE),]
         );
         commit(&mut table, pending);
         assert_eq!(
@@ -3779,7 +3782,7 @@ mod tests {
         let pending = table_txn.pending();
         assert_eq!(
             pending,
-            vec![(42i64.to_le_bytes().to_vec(), "v7".to_string(), -1),]
+            vec![(42i64.to_le_bytes().to_vec(), "v7".to_string(), -Diff::ONE),]
         );
         commit(&mut table, pending);
         assert_eq!(table, BTreeMap::new());

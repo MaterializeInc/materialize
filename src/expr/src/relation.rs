@@ -769,7 +769,7 @@ impl MirRelationExpr {
                     for (i, datum) in row.iter().enumerate() {
                         if datum != Datum::Dummy {
                             if let Some(unique_vals) = &mut unique_values_per_col[i] {
-                                let is_dupe = *diff != 1 || !unique_vals.insert(datum);
+                                let is_dupe = *diff != Diff::ONE || !unique_vals.insert(datum);
                                 if is_dupe {
                                     unique_values_per_col[i] = None;
                                 }
@@ -777,7 +777,7 @@ impl MirRelationExpr {
                         }
                     }
                 }
-                if rows.len() == 0 || (rows.len() == 1 && rows[0].1 == 1) {
+                if rows.len() == 0 || (rows.len() == 1 && *rows[0].1 == 1) {
                     vec![vec![]]
                 } else {
                     // XXX - Multi-column keys are not detected.
@@ -1259,7 +1259,7 @@ impl MirRelationExpr {
     /// Constructs a constant collection from specific rows and schema, where
     /// each row will have a multiplicity of one.
     pub fn constant(rows: Vec<Vec<Datum>>, typ: RelationType) -> Self {
-        let rows = rows.into_iter().map(|row| (row, 1)).collect();
+        let rows = rows.into_iter().map(|row| (row, Diff::ONE)).collect();
         MirRelationExpr::constant_diff(rows, typ)
     }
 
@@ -1318,7 +1318,7 @@ impl MirRelationExpr {
     /// Checks if `self` is the single element collection with no columns.
     pub fn is_constant_singleton(&self) -> bool {
         if let Some((Ok(rows), typ)) = self.as_const() {
-            rows.len() == 1 && typ.column_types.len() == 0 && rows[0].1 == 1
+            rows.len() == 1 && typ.column_types.len() == 0 && *rows[0].1 == 1
         } else {
             false
         }

@@ -25,7 +25,7 @@ mz-controller-types = { path = "../controller-types" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-expr = { path = "../expr" }
-mz-ore = { path = "../ore", features = ["tracing", "chrono"] }
+mz-ore = { path = "../ore", features = ["tracing", "chrono", "differential-dataflow"] }
 mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }

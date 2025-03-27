@@ -24,13 +24,14 @@ use mz_persist_client::read::ListenEvent;
 use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec64;
-use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
+use mz_repr::{GlobalId, Row, TimestampManipulation};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::{
     GenericSourceConnection, IngestionDescription, KafkaSourceConnection,
     LoadGeneratorSourceConnection, MySqlSourceConnection, PostgresSourceConnection,
     SourceConnection, SourceData, SourceEnvelope, SourceTimestamp,
 };
+use mz_storage_types::StorageDiff;
 use timely::order::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
@@ -119,7 +120,7 @@ where
                 Some(subscription) => subscription,
                 None => {
                     let read_handle = persist_client
-                        .open_leased_reader::<SourceData, (), IntoTime, Diff>(
+                        .open_leased_reader::<SourceData, (), IntoTime, StorageDiff>(
                             metadata.remap_shard.clone().unwrap(),
                             Arc::new(ingestion_description.desc.connection.timestamp_desc()),
                             Arc::new(UnitSchema),
@@ -232,7 +233,7 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
                                 .expect("error creating persist client");
 
                             let mut write_handle = client
-                                .open_writer::<SourceData, (), T, Diff>(
+                                .open_writer::<SourceData, (), T, StorageDiff>(
                                     *data_shard,
                                     Arc::new(relation_desc.clone()),
                                     Arc::new(UnitSchema),
@@ -287,7 +288,7 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
                             .await
                             .expect("error creating persist client");
                         let read_handle = client
-                            .open_leased_reader::<SourceData, (), T, Diff>(
+                            .open_leased_reader::<SourceData, (), T, StorageDiff>(
                                 seen_remap_shard,
                                 Arc::new(ingestion_description.desc.connection.timestamp_desc()),
                                 Arc::new(UnitSchema),

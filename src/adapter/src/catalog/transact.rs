@@ -41,7 +41,7 @@ use mz_persist_types::ShardId;
 use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::{strconv, CatalogItemId, ColumnName, ColumnType, GlobalId};
+use mz_repr::{strconv, CatalogItemId, ColumnName, ColumnType, Diff, GlobalId};
 use mz_sql::ast::RawDataType;
 use mz_sql::catalog::{
     CatalogDatabase, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogRole,
@@ -462,7 +462,7 @@ impl Catalog {
             self.state().pack_optimizer_notices(
                 &mut builtin_table_updates,
                 dropped_notices.iter(),
-                -1,
+                -Diff::ONE,
             );
         }
 
@@ -2347,7 +2347,7 @@ impl Catalog {
                 let id = tx.allocate_storage_usage_ids()?;
                 let metric =
                     VersionedStorageUsage::new(id, object_id, size_bytes, collection_timestamp);
-                let builtin_table_update = state.pack_storage_usage_update(metric, 1);
+                let builtin_table_update = state.pack_storage_usage_update(metric, Diff::ONE);
                 let builtin_table_update = state.resolve_builtin_table_update(builtin_table_update);
                 weird_builtin_table_update = Some(builtin_table_update);
             }

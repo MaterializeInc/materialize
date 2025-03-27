@@ -515,7 +515,7 @@ impl RustType<ProtoSubscribeBatch> for SubscribeBatch<mz_repr::Timestamp> {
                             .map(|(t, r, d)| ProtoUpdate {
                                 timestamp: t.into(),
                                 row: Some(r.into_proto()),
-                                diff: *d,
+                                diff: **d,
                             })
                             .collect();
 
@@ -549,7 +549,7 @@ impl RustType<ProtoSubscribeBatch> for SubscribeBatch<mz_repr::Timestamp> {
                         Ok((
                             update.timestamp.into(),
                             update.row.into_rust_if_some("ProtoUpdate::row")?,
-                            update.diff,
+                            update.diff.into(),
                         ))
                     })
                     .collect::<Result<Vec<_>, TryFromProtoError>>()?),

@@ -69,7 +69,8 @@ hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["
 hyper-dff4ba8e3ae991db = { package = "hyper", version = "1.4.1", features = ["client", "http1", "http2", "server"] }
 hyper-util = { version = "0.1.6", features = ["client-legacy", "server-auto", "service"] }
 insta = { version = "1.42.2", features = ["json"] }
-itertools = { version = "0.12.1" }
+itertools-594e8ee84c453af0 = { package = "itertools", version = "0.13.0" }
+itertools-5ef9efb8ec2df382 = { package = "itertools", version = "0.12.1" }
 k8s-openapi = { version = "0.22.0", default-features = false, features = ["schemars", "v1_30"] }
 kube = { version = "0.92.1", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
 kube-client = { version = "0.92.1", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
@@ -128,6 +129,7 @@ subtle = { version = "2.6.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.98", features = ["extra-traits", "full", "visit", "visit-mut"] }
 time = { version = "0.3.37", features = ["local-offset", "macros", "quickcheck", "serde-well-known"] }
+timely = { version = "0.20.0" }
 tokio = { version = "1.44.1", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.17", features = ["net", "sync"] }
@@ -204,7 +206,8 @@ hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["
 hyper-dff4ba8e3ae991db = { package = "hyper", version = "1.4.1", features = ["client", "http1", "http2", "server"] }
 hyper-util = { version = "0.1.6", features = ["client-legacy", "server-auto", "service"] }
 insta = { version = "1.42.2", features = ["json"] }
-itertools = { version = "0.12.1" }
+itertools-594e8ee84c453af0 = { package = "itertools", version = "0.13.0" }
+itertools-5ef9efb8ec2df382 = { package = "itertools", version = "0.12.1" }
 k8s-openapi = { version = "0.22.0", default-features = false, features = ["schemars", "v1_30"] }
 kube = { version = "0.92.1", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
 kube-client = { version = "0.92.1", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
@@ -265,6 +268,7 @@ syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extr
 syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.98", features = ["extra-traits", "full", "visit", "visit-mut"] }
 time = { version = "0.3.37", features = ["local-offset", "macros", "quickcheck", "serde-well-known"] }
 time-macros = { version = "0.2.19", default-features = false, features = ["formatting", "parsing", "serde"] }
+timely = { version = "0.20.0" }
 tokio = { version = "1.44.1", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.17", features = ["net", "sync"] }
