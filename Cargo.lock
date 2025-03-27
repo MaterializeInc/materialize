@@ -6835,6 +6835,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "csv-async",
  "futures",
  "k8s-openapi",
  "kube",
