@@ -9,10 +9,14 @@
 
 use std::collections::BTreeSet;
 use std::ops::DerefMut;
+use std::sync::Arc;
 
 use mz_ore::now::SYSTEM_TIME;
 use mz_repr::RelationDesc;
-use mz_sql_parser::ast::{ExternalReferences, Ident, IdentError, UnresolvedItemName};
+use mz_sql_parser::ast::{
+    ExternalReferences, Ident, IdentError, TableFromSourceOptionName, UnresolvedItemName,
+};
+use mz_sql_server_util::SqlServerError;
 use mz_storage_types::sources::load_generator::{LoadGenerator, LoadGeneratorOutput};
 use mz_storage_types::sources::{ExternalReferenceResolutionError, SourceReferenceResolver};
 
@@ -35,6 +39,10 @@ pub(super) enum SourceReferenceClient<'a> {
         /// retrieved references.
         include_system_schemas: bool,
     },
+    SqlServer {
+        client: &'a mut mz_sql_server_util::Client,
+        database: Arc<str>,
+    },
     Kafka {
         topic: &'a str,
     },
@@ -44,13 +52,17 @@ pub(super) enum SourceReferenceClient<'a> {
 }
 
 /// Metadata about an available source reference retrieved from the upstream system.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(super) enum ReferenceMetadata {
     Postgres {
         table: mz_postgres_util::desc::PostgresTableDesc,
         database: String,
     },
     MySql(mz_mysql_util::MySqlTableSchema),
+    SqlServer {
+        table: mz_sql_server_util::desc::SqlServerTableDesc,
+        database: Arc<str>,
+    },
     Kafka(String),
     LoadGenerator {
         name: String,
@@ -65,6 +77,7 @@ impl ReferenceMetadata {
         match self {
             ReferenceMetadata::Postgres { table, .. } => Some(&table.namespace),
             ReferenceMetadata::MySql(table) => Some(&table.schema_name),
+            ReferenceMetadata::SqlServer { table, .. } => Some(table.schema_name.as_ref()),
             ReferenceMetadata::Kafka(_) => None,
             ReferenceMetadata::LoadGenerator { namespace, .. } => Some(namespace),
         }
@@ -74,6 +87,7 @@ impl ReferenceMetadata {
         match self {
             ReferenceMetadata::Postgres { table, .. } => &table.name,
             ReferenceMetadata::MySql(table) => &table.name,
+            ReferenceMetadata::SqlServer { table, .. } => table.name.as_ref(),
             ReferenceMetadata::Kafka(topic) => topic,
             ReferenceMetadata::LoadGenerator { name, .. } => name,
         }
@@ -89,6 +103,13 @@ impl ReferenceMetadata {
     pub(super) fn mysql_table(&self) -> Option<&mz_mysql_util::MySqlTableSchema> {
         match self {
             ReferenceMetadata::MySql(table) => Some(table),
+            _ => None,
+        }
+    }
+
+    pub(super) fn sql_server_table(&self) -> Option<&mz_sql_server_util::desc::SqlServerTableDesc> {
+        match self {
+            ReferenceMetadata::SqlServer { table, .. } => Some(table),
             _ => None,
         }
     }
@@ -123,6 +144,13 @@ impl ReferenceMetadata {
                 Ident::new(&table.schema_name)?,
                 Ident::new(&table.name)?,
             ])),
+            ReferenceMetadata::SqlServer { table, database } => {
+                Ok(UnresolvedItemName::qualified(&[
+                    Ident::new(database.as_ref())?,
+                    Ident::new(table.schema_name.as_ref())?,
+                    Ident::new(table.name.as_ref())?,
+                ]))
+            }
             ReferenceMetadata::Kafka(topic) => {
                 Ok(UnresolvedItemName::qualified(&[Ident::new(topic)?]))
             }
@@ -144,7 +172,7 @@ impl ReferenceMetadata {
 }
 
 /// A set of resolved source references.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(super) struct RetrievedSourceReferences {
     updated_at: u64,
     references: Vec<ReferenceMetadata>,
@@ -202,6 +230,20 @@ impl<'a> SourceReferenceClient<'a> {
                 let tables = mz_mysql_util::schema_info((*conn).deref_mut(), &request).await?;
 
                 tables.into_iter().map(ReferenceMetadata::MySql).collect()
+            }
+            SourceReferenceClient::SqlServer {
+                ref mut client,
+                ref database,
+            } => {
+                let tables = mz_sql_server_util::inspect::get_tables(client).await?;
+                tables
+                    .into_iter()
+                    .map(|raw| {
+                        let table = mz_sql_server_util::desc::SqlServerTableDesc::try_new(raw)?;
+                        let database = Arc::clone(database);
+                        Ok::<_, SqlServerError>(ReferenceMetadata::SqlServer { table, database })
+                    })
+                    .collect::<Result<_, _>>()?
             }
             SourceReferenceClient::Kafka { topic } => {
                 vec![ReferenceMetadata::Kafka(topic.to_string())]
@@ -280,6 +322,15 @@ impl RetrievedSourceReferences {
                             .columns
                             .into_iter()
                             .map(|column| column.name())
+                            .collect(),
+                    },
+                    ReferenceMetadata::SqlServer { table, .. } => SourceReference {
+                        name: table.name.to_string(),
+                        namespace: Some(table.schema_name.to_string()),
+                        columns: table
+                            .columns
+                            .into_iter()
+                            .map(|c| c.name.to_string())
                             .collect(),
                     },
                     ReferenceMetadata::Kafka(topic) => SourceReference {

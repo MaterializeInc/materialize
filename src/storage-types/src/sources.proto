@@ -24,6 +24,7 @@ import "storage-types/src/sources/kafka.proto";
 import "storage-types/src/sources/load_generator.proto";
 import "storage-types/src/sources/mysql.proto";
 import "storage-types/src/sources/postgres.proto";
+import "storage-types/src/sources/sql_server.proto";
 
 message ProtoMzOffset {
   uint64 offset = 1;
@@ -57,6 +58,7 @@ message ProtoSourceConnection {
     mz_storage_types.sources.postgres.ProtoPostgresSourceConnection postgres = 4;
     mz_storage_types.sources.load_generator.ProtoLoadGeneratorSourceConnection loadgen = 6;
     mz_storage_types.sources.mysql.ProtoMySqlSourceConnection mysql = 8;
+    mz_storage_types.sources.sql_server.ProtoSqlServerSource sql_server = 9;
   }
 }
 

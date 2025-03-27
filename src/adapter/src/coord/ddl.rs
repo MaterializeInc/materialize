@@ -44,7 +44,7 @@ use mz_sql::session::vars::{
     MAX_CREDIT_CONSUMPTION_RATE, MAX_DATABASES, MAX_KAFKA_CONNECTIONS, MAX_MATERIALIZED_VIEWS,
     MAX_MYSQL_CONNECTIONS, MAX_NETWORK_POLICIES, MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS,
     MAX_REPLICAS_PER_CLUSTER, MAX_ROLES, MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS,
-    MAX_SOURCES, MAX_TABLES,
+    MAX_SOURCES, MAX_SQL_SERVER_CONNECTIONS, MAX_TABLES,
 };
 use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
 use mz_storage_types::connections::inline::IntoInlineConnection;
@@ -1402,6 +1402,7 @@ impl Coordinator {
         let mut new_kafka_connections = 0;
         let mut new_postgres_connections = 0;
         let mut new_mysql_connections = 0;
+        let mut new_sql_server_connections = 0;
         let mut new_aws_privatelink_connections = 0;
         let mut new_tables = 0;
         let mut new_sources = 0;
@@ -1469,6 +1470,7 @@ impl Coordinator {
                             ConnectionDetails::Kafka(_) => new_kafka_connections += 1,
                             ConnectionDetails::Postgres(_) => new_postgres_connections += 1,
                             ConnectionDetails::MySql(_) => new_mysql_connections += 1,
+                            ConnectionDetails::SqlServer(_) => new_sql_server_connections += 1,
                             ConnectionDetails::AwsPrivatelink(_) => {
                                 new_aws_privatelink_connections += 1
                             }
@@ -1639,6 +1641,7 @@ impl Coordinator {
         let mut current_aws_privatelink_connections = 0;
         let mut current_postgres_connections = 0;
         let mut current_mysql_connections = 0;
+        let mut current_sql_server_connections = 0;
         let mut current_kafka_connections = 0;
         for c in self.catalog().user_connections() {
             let connection = c
@@ -1649,6 +1652,7 @@ impl Coordinator {
                 ConnectionDetails::AwsPrivatelink(_) => current_aws_privatelink_connections += 1,
                 ConnectionDetails::Postgres(_) => current_postgres_connections += 1,
                 ConnectionDetails::MySql(_) => current_mysql_connections += 1,
+                ConnectionDetails::SqlServer(_) => current_sql_server_connections += 1,
                 ConnectionDetails::Kafka(_) => current_kafka_connections += 1,
                 ConnectionDetails::Csr(_)
                 | ConnectionDetails::Ssh { .. }
@@ -1675,6 +1679,13 @@ impl Coordinator {
             SystemVars::max_mysql_connections,
             "MySQL Connection",
             MAX_MYSQL_CONNECTIONS.name(),
+        )?;
+        self.validate_resource_limit(
+            current_sql_server_connections,
+            new_sql_server_connections,
+            SystemVars::max_sql_server_connections,
+            "SQL Server Connection",
+            MAX_SQL_SERVER_CONNECTIONS.name(),
         )?;
         self.validate_resource_limit(
             current_aws_privatelink_connections,

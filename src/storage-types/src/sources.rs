@@ -71,6 +71,7 @@ pub use crate::sources::kafka::KafkaSourceConnection;
 pub use crate::sources::load_generator::LoadGeneratorSourceConnection;
 pub use crate::sources::mysql::{MySqlSourceConnection, MySqlSourceExportDetails};
 pub use crate::sources::postgres::{PostgresSourceConnection, PostgresSourceExportDetails};
+pub use crate::sources::sql_server::{SqlServerSource, SqlServerSourceExtras};
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.sources.rs"));
 
@@ -770,13 +771,15 @@ impl<C: ConnectionAccess> SourceExportDataConfig<C> {
             SourceEnvelope::Upsert(_) | SourceEnvelope::CdcV2 => false,
             SourceEnvelope::None(_) => {
                 match connection {
-                    // Postgres can produce retractions (deletes)
+                    // Postgres can produce retractions (deletes).
                     GenericSourceConnection::Postgres(_) => false,
-                    // MySQL can produce retractions (deletes)
+                    // MySQL can produce retractions (deletes).
                     GenericSourceConnection::MySql(_) => false,
-                    // Loadgen
+                    // SQL Server can produce retractions (deletes).
+                    GenericSourceConnection::SqlServer(_) => false,
+                    // Whether or not a Loadgen source can produce retractions varies.
                     GenericSourceConnection::LoadGenerator(g) => g.load_generator.is_monotonic(),
-                    // Kafka exports with `None` envelope are append-only
+                    // Kafka exports with `None` envelope are append-only.
                     GenericSourceConnection::Kafka(_) => true,
                 }
             }
@@ -910,6 +913,7 @@ pub enum GenericSourceConnection<C: ConnectionAccess = InlinedConnection> {
     Kafka(KafkaSourceConnection<C>),
     Postgres(PostgresSourceConnection<C>),
     MySql(MySqlSourceConnection<C>),
+    SqlServer(SqlServerSource<C>),
     LoadGenerator(LoadGeneratorSourceConnection),
 }
 
@@ -928,6 +932,12 @@ impl<C: ConnectionAccess> From<PostgresSourceConnection<C>> for GenericSourceCon
 impl<C: ConnectionAccess> From<MySqlSourceConnection<C>> for GenericSourceConnection<C> {
     fn from(conn: MySqlSourceConnection<C>) -> Self {
         Self::MySql(conn)
+    }
+}
+
+impl<C: ConnectionAccess> From<SqlServerSource<C>> for GenericSourceConnection<C> {
+    fn from(conn: SqlServerSource<C>) -> Self {
+        Self::SqlServer(conn)
     }
 }
 
@@ -951,6 +961,9 @@ impl<R: ConnectionResolver> IntoInlineConnection<GenericSourceConnection, R>
             GenericSourceConnection::MySql(mysql) => {
                 GenericSourceConnection::MySql(mysql.into_inline_connection(r))
             }
+            GenericSourceConnection::SqlServer(sql_server) => {
+                GenericSourceConnection::SqlServer(sql_server.into_inline_connection(r))
+            }
             GenericSourceConnection::LoadGenerator(lg) => {
                 GenericSourceConnection::LoadGenerator(lg)
             }
@@ -964,6 +977,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::Kafka(conn) => conn.name(),
             Self::Postgres(conn) => conn.name(),
             Self::MySql(conn) => conn.name(),
+            Self::SqlServer(conn) => conn.name(),
             Self::LoadGenerator(conn) => conn.name(),
         }
     }
@@ -973,6 +987,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::Kafka(conn) => conn.external_reference(),
             Self::Postgres(conn) => conn.external_reference(),
             Self::MySql(conn) => conn.external_reference(),
+            Self::SqlServer(conn) => conn.external_reference(),
             Self::LoadGenerator(conn) => conn.external_reference(),
         }
     }
@@ -982,6 +997,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::Kafka(conn) => conn.default_key_desc(),
             Self::Postgres(conn) => conn.default_key_desc(),
             Self::MySql(conn) => conn.default_key_desc(),
+            Self::SqlServer(conn) => conn.default_key_desc(),
             Self::LoadGenerator(conn) => conn.default_key_desc(),
         }
     }
@@ -991,6 +1007,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::Kafka(conn) => conn.default_value_desc(),
             Self::Postgres(conn) => conn.default_value_desc(),
             Self::MySql(conn) => conn.default_value_desc(),
+            Self::SqlServer(conn) => conn.default_value_desc(),
             Self::LoadGenerator(conn) => conn.default_value_desc(),
         }
     }
@@ -1000,6 +1017,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::Kafka(conn) => conn.timestamp_desc(),
             Self::Postgres(conn) => conn.timestamp_desc(),
             Self::MySql(conn) => conn.timestamp_desc(),
+            Self::SqlServer(conn) => conn.timestamp_desc(),
             Self::LoadGenerator(conn) => conn.timestamp_desc(),
         }
     }
@@ -1009,6 +1027,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::Kafka(conn) => conn.connection_id(),
             Self::Postgres(conn) => conn.connection_id(),
             Self::MySql(conn) => conn.connection_id(),
+            Self::SqlServer(conn) => conn.connection_id(),
             Self::LoadGenerator(conn) => conn.connection_id(),
         }
     }
@@ -1018,6 +1037,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::Kafka(conn) => conn.primary_export_details(),
             Self::Postgres(conn) => conn.primary_export_details(),
             Self::MySql(conn) => conn.primary_export_details(),
+            Self::SqlServer(conn) => conn.primary_export_details(),
             Self::LoadGenerator(conn) => conn.primary_export_details(),
         }
     }
@@ -1027,6 +1047,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             GenericSourceConnection::Kafka(conn) => conn.supports_read_only(),
             GenericSourceConnection::Postgres(conn) => conn.supports_read_only(),
             GenericSourceConnection::MySql(conn) => conn.supports_read_only(),
+            GenericSourceConnection::SqlServer(conn) => conn.supports_read_only(),
             GenericSourceConnection::LoadGenerator(conn) => conn.supports_read_only(),
         }
     }
@@ -1036,6 +1057,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             GenericSourceConnection::Kafka(conn) => conn.prefers_single_replica(),
             GenericSourceConnection::Postgres(conn) => conn.prefers_single_replica(),
             GenericSourceConnection::MySql(conn) => conn.prefers_single_replica(),
+            GenericSourceConnection::SqlServer(conn) => conn.prefers_single_replica(),
             GenericSourceConnection::LoadGenerator(conn) => conn.prefers_single_replica(),
         }
     }
@@ -1049,6 +1071,7 @@ impl<C: ConnectionAccess> crate::AlterCompatible for GenericSourceConnection<C> 
             (Self::Kafka(conn), Self::Kafka(other)) => conn.alter_compatible(id, other),
             (Self::Postgres(conn), Self::Postgres(other)) => conn.alter_compatible(id, other),
             (Self::MySql(conn), Self::MySql(other)) => conn.alter_compatible(id, other),
+            (Self::SqlServer(conn), Self::SqlServer(other)) => conn.alter_compatible(id, other),
             (Self::LoadGenerator(conn), Self::LoadGenerator(other)) => {
                 conn.alter_compatible(id, other)
             }
@@ -1077,6 +1100,9 @@ impl RustType<ProtoSourceConnection> for GenericSourceConnection<InlinedConnecti
                     Kind::Postgres(postgres.into_proto())
                 }
                 GenericSourceConnection::MySql(mysql) => Kind::Mysql(mysql.into_proto()),
+                GenericSourceConnection::SqlServer(sql_server) => {
+                    Kind::SqlServer(sql_server.into_proto())
+                }
                 GenericSourceConnection::LoadGenerator(loadgen) => {
                     Kind::Loadgen(loadgen.into_proto())
                 }
@@ -1093,6 +1119,9 @@ impl RustType<ProtoSourceConnection> for GenericSourceConnection<InlinedConnecti
             Kind::Kafka(kafka) => GenericSourceConnection::Kafka(kafka.into_rust()?),
             Kind::Postgres(postgres) => GenericSourceConnection::Postgres(postgres.into_rust()?),
             Kind::Mysql(mysql) => GenericSourceConnection::MySql(mysql.into_rust()?),
+            Kind::SqlServer(sql_server) => {
+                GenericSourceConnection::SqlServer(sql_server.into_rust()?)
+            }
             Kind::Loadgen(loadgen) => GenericSourceConnection::LoadGenerator(loadgen.into_rust()?),
         })
     }
