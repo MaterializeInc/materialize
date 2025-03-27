@@ -127,11 +127,7 @@ def get_default_system_parameters(
         "kafka_default_metadata_fetch_interval": "1s",
         "mysql_offset_known_interval": "1s",
         "force_source_table_syntax": "true" if force_source_table_syntax else "false",
-        "persist_batch_columnar_format": (
-            "structured" if version > MzVersion.parse_mz("v0.135.0-dev") else "both_v2"
-        ),
         "persist_batch_delete_enabled": "true",
-        "persist_batch_structured_order": "true",
         "persist_batch_structured_key_lower_len": "256",
         "persist_batch_max_run_len": "4",
         "persist_catalog_force_compaction_fuel": "1024",
