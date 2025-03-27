@@ -6,8 +6,6 @@ menu:
     parent: commands
 ---
 
-{{< private-preview />}}
-
 `ALTER NETWORK POLICY` alters an existing network policy. Network policies are
 part of Materialize's framework for [access control](/manage/access-control/).
 
