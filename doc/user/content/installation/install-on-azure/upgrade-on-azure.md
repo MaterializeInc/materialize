@@ -120,7 +120,13 @@ If you want to use `jq` and do not have `jq` installed, install.
 1. Optional. You may need to update your fork of the Terraform modules to
    upgrade.
 
+   {{< yaml-table data="self_managed/azure_terraform_versions" >}}
+
+   {{< tip >}}
+
    {{% self-managed/azure-terraform-upgrade-notes %}}
+
+   {{</ tip >}}
 
 1. Optional. Create a virtual environment, specifying a path for the new virtual
    environment:
