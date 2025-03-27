@@ -23,7 +23,10 @@ use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_panic_or_log;
-use mz_persist_types::columnar::{codec_to_schema, data_type, schema_to_codec};
+use mz_persist_types::arrow::{ArrayBound, ArrayOrd};
+use mz_persist_types::columnar::{
+    codec_to_schema, data_type, schema_to_codec, ColumnEncoder, Schema,
+};
 use mz_persist_types::parquet::EncodingConfig;
 use mz_persist_types::schema::backward_compatible;
 use mz_persist_types::{Codec, Codec64};
@@ -378,7 +381,16 @@ impl BlobTraceUpdates {
         ensure_codec: bool,
     ) -> anyhow::Result<BlobTraceUpdates> {
         match updates.len() {
-            0 => return Ok(BlobTraceUpdates::Row(ColumnarRecords::default())),
+            0 => {
+                return Ok(BlobTraceUpdates::Structured {
+                    key_values: ColumnarRecordsStructuredExt {
+                        key: Arc::new(key_schema.encoder().expect("valid schema").finish()),
+                        val: Arc::new(val_schema.encoder().expect("valid schema").finish()),
+                    },
+                    timestamps: Int64Array::from_iter_values(vec![]),
+                    diffs: Int64Array::from_iter_values(vec![]),
+                })
+            }
             1 => return Ok(updates.into_iter().into_element()),
             _ => {}
         }

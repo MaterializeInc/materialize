@@ -386,21 +386,6 @@ pub(crate) const ENCODING_COMPRESSION_FORMAT: Config<&'static str> = Config::new
     "A feature flag to enable compression of Parquet data (Materialize).",
 );
 
-pub(crate) const STRUCTURED_ORDER: Config<bool> = Config::new(
-    "persist_batch_structured_order",
-    true,
-    "If enabled, output compaction batches in structured-data order.",
-);
-
-pub(crate) const STRUCTURED_ORDER_UNTIL_SHARD: Config<&'static str> = Config::new(
-    "persist_batch_structured_order_from_shard",
-    "sz",
-    "Restrict shards using structured ordering to those shards with formatted ids less than \
-    the given string. (For example, `s0` will disable it for all shards, `s8` will enable it for \
-    half of all shards, `s8888` will enable it for slightly more shards, and `sz` will enable it \
-    for everyone.)",
-);
-
 pub(crate) const STRUCTURED_KEY_LOWER_LEN: Config<usize> = Config::new(
     "persist_batch_structured_key_lower_len",
     256,
@@ -458,20 +443,13 @@ pub(crate) const INLINE_WRITES_TOTAL_MAX_BYTES: Config<usize> = Config::new(
 
 impl BatchBuilderConfig {
     /// Initialize a batch builder config based on a snapshot of the Persist config.
-    pub fn new(value: &PersistConfig, shard_id: ShardId) -> Self {
+    pub fn new(value: &PersistConfig, _shard_id: ShardId) -> Self {
         let writer_key = WriterKey::for_version(&value.build_version);
 
         let batch_columnar_format =
             BatchColumnarFormat::from_str(&BATCH_COLUMNAR_FORMAT.get(value));
 
-        let structured_order = STRUCTURED_ORDER.get(value) && {
-            shard_id.to_string() < STRUCTURED_ORDER_UNTIL_SHARD.get(value)
-        };
-        let preferred_order = if structured_order {
-            RunOrder::Structured
-        } else {
-            RunOrder::Codec
-        };
+        let preferred_order = RunOrder::Structured;
 
         BatchBuilderConfig {
             writer_key,

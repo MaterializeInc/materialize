@@ -23,7 +23,6 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::Stream;
 use futures_util::{stream, StreamExt};
-use itertools::Either;
 use mz_dyncfg::Config;
 use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
@@ -39,7 +38,7 @@ use tokio::runtime::Handle;
 use tracing::{debug_span, warn, Instrument};
 use uuid::Uuid;
 
-use crate::batch::{BLOB_TARGET_SIZE, STRUCTURED_ORDER, STRUCTURED_ORDER_UNTIL_SHARD};
+use crate::batch::BLOB_TARGET_SIZE;
 use crate::cfg::{RetryParameters, COMPACTION_MEMORY_BOUND_BYTES};
 use crate::fetch::{fetch_leased_part, FetchBatchFilter, FetchedPart, Lease, LeasedBatchPart};
 use crate::internal::encoding::Schemas;
@@ -47,7 +46,7 @@ use crate::internal::machine::{ExpireFn, Machine};
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{BatchPart, HollowBatch};
 use crate::internal::watch::StateWatch;
-use crate::iter::{CodecSort, Consolidator, StructuredSort};
+use crate::iter::{Consolidator, StructuredSort};
 use crate::schema::SchemaCache;
 use crate::stats::{SnapshotPartStats, SnapshotPartsStats, SnapshotStats};
 use crate::{parse_id, GarbageCollector, PersistConfig, ShardId};
@@ -873,9 +872,6 @@ pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
 
 #[derive(Debug)]
 enum CursorConsolidator<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
-    Codec {
-        consolidator: Consolidator<T, D, CodecSort<K, V, T, D>>,
-    },
     Structured {
         consolidator: Consolidator<T, D, StructuredSort<K, V, T, D>>,
         max_len: usize,
@@ -928,20 +924,7 @@ where
                     ((Ok(k), Ok(v)), t, d)
                 });
 
-                Some(Either::Left(iter))
-            }
-            CursorConsolidator::Codec { consolidator } => {
-                let iter = consolidator
-                    .next()
-                    .await
-                    .expect("fetching a leased part")?
-                    .map(|((k, v), t, d)| {
-                        let key = K::decode(k, &self.read_schemas.key);
-                        let val = V::decode(v, &self.read_schemas.val);
-                        ((key, val), t, d)
-                    });
-
-                Some(Either::Right(iter))
+                Some(iter)
             }
         }
     }
@@ -1012,10 +995,7 @@ where
         };
         let lease = self.lease_seqno();
 
-        let structured_order = STRUCTURED_ORDER.get(&self.cfg) && {
-            self.shard_id().to_string() < STRUCTURED_ORDER_UNTIL_SHARD.get(&self.cfg)
-        };
-        let consolidator = if structured_order {
+        let consolidator = {
             let mut consolidator = Consolidator::new(
                 context,
                 self.shard_id(),
@@ -1046,30 +1026,6 @@ where
                 max_len: self.cfg.compaction_yield_after_n_updates,
                 max_bytes: BLOB_TARGET_SIZE.get(&self.cfg).max(1),
             }
-        } else {
-            let mut consolidator = Consolidator::new(
-                context,
-                self.shard_id(),
-                CodecSort::new(self.read_schemas.clone()),
-                Arc::clone(&self.blob),
-                Arc::clone(&self.metrics),
-                Arc::clone(&self.machine.applier.shard_metrics),
-                self.metrics.read.snapshot.clone(),
-                filter,
-                COMPACTION_MEMORY_BOUND_BYTES.get(&self.cfg),
-            );
-            for batch in batches {
-                for (meta, run) in batch.runs() {
-                    consolidator.enqueue_run(
-                        &batch.desc,
-                        meta,
-                        run.into_iter()
-                            .filter(|p| should_fetch_part(p.stats()))
-                            .cloned(),
-                    );
-                }
-            }
-            CursorConsolidator::Codec { consolidator }
         };
 
         Ok(Cursor {

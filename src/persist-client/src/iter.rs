@@ -39,7 +39,6 @@ use tracing::{debug_span, warn, Instrument};
 use crate::fetch::{EncodedPart, FetchBatchFilter};
 use crate::internal::encoding::Schemas;
 use crate::internal::metrics::{ReadMetrics, ShardMetrics};
-use crate::internal::paths::WriterKey;
 use crate::internal::state::{HollowRun, RunMeta, RunOrder, RunPart};
 use crate::metrics::Metrics;
 use crate::ShardId;
@@ -140,90 +139,6 @@ fn interleave_updates<T: Codec64, D: Codec64>(
     }
 }
 
-/// Sort parts ordered by the codec-encoded key and value columns.
-#[derive(Debug, Clone)]
-pub struct CodecSort<K: Codec, V: Codec, T, D> {
-    schemas: Schemas<K, V>,
-    _time_diff: PhantomData<fn(T, D)>,
-}
-
-impl<K: Codec, V: Codec, T, D> CodecSort<K, V, T, D> {
-    /// A sort for codec data with the given schema.
-    pub fn new(schemas: Schemas<K, V>) -> Self {
-        Self {
-            schemas,
-            _time_diff: Default::default(),
-        }
-    }
-}
-
-impl<K: Codec, V: Codec, T: Codec64, D: Codec64> RowSort<T, D> for CodecSort<K, V, T, D> {
-    type Updates = (ColumnarRecords, BlobTraceUpdates);
-    type KV<'a> = (&'a [u8], &'a [u8]);
-
-    fn desired_sort(data: &FetchData<T>) -> bool {
-        match &data.run_meta.order {
-            Some(RunOrder::Codec) => true,
-            Some(_) => false,
-            None => {
-                // Returns false iff we were using a different ordering for data or timestamps
-                // when the part was created. This means parts or runs may not be ordered according to
-                // our modern definition, even if the metadata indicates they've been compacted before.
-                let min_version = WriterKey::for_version(&MINIMUM_CONSOLIDATED_VERSION);
-                match data.part.writer_key() {
-                    // Old hollow parts may have used a different sort
-                    Some(key) => key >= min_version,
-                    // Inline parts are all recent enough to have been sorted using the latest ordering,
-                    // if they're sorted at all.
-                    None => true,
-                }
-            }
-        }
-    }
-
-    fn kv_lower(data: &FetchData<T>) -> Option<Self::KV<'_>> {
-        Some((data.part.key_lower(), &[]))
-    }
-
-    fn updates_from_blob(&self, mut updates: BlobTraceUpdates) -> Self::Updates {
-        let codec = updates
-            .get_or_make_codec::<K, V>(self.schemas.key.as_ref(), self.schemas.val.as_ref())
-            .clone();
-        (codec, updates)
-    }
-
-    fn len((updates, _): &Self::Updates) -> usize {
-        updates.len()
-    }
-
-    fn kv_size((key, value): Self::KV<'_>) -> usize {
-        // Arrow offsets are 32-bit integers, so count the raw byte len plus 64 bits of metadata.
-        8 + key.len() + value.len()
-    }
-
-    fn get((updates, _): &Self::Updates, index: usize) -> Option<(Self::KV<'_>, T, D)> {
-        let ((k, v), t, d) = updates.get(index)?;
-        Some(((k, v), T::decode(t), D::decode(d)))
-    }
-
-    fn interleave_updates<'a>(
-        updates: &[&'a Self::Updates],
-        elements: impl IntoIterator<Item = (Indices, Self::KV<'a>, T, D)>,
-    ) -> Self::Updates {
-        let updates: Vec<_> = updates.iter().map(|(_, u)| u).collect();
-        let interleaved = interleave_updates(
-            &updates,
-            elements.into_iter().map(|(idx, _kv, t, d)| (idx, t, d)),
-        );
-        let codec = interleaved.records().expect("always present").clone();
-        (codec, interleaved)
-    }
-
-    fn updates_to_blob(&self, (_, updates): Self::Updates) -> BlobTraceUpdates {
-        updates
-    }
-}
-
 /// An opaque update set for use by StructuredSort.
 #[derive(Clone, Debug)]
 pub struct StructuredUpdates {
@@ -234,7 +149,7 @@ pub struct StructuredUpdates {
 }
 
 /// Sort parts ordered by the codec-encoded key and value columns.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StructuredSort<K: Codec, V: Codec, T, D> {
     schemas: Schemas<K, V>,
     _time_diff: PhantomData<fn(T, D)>,
@@ -752,6 +667,7 @@ where
     /// Wait until data is available, then return an iterator over the next
     /// consolidated chunk of output. If this method returns `None`, that all the data has been
     /// exhausted and the full consolidated dataset has been returned.
+    #[allow(unused)]
     pub(crate) async fn next(
         &mut self,
     ) -> anyhow::Result<Option<impl Iterator<Item = (Sort::KV<'_>, T, D)>>> {
@@ -760,19 +676,9 @@ where
         Ok(self.iter().map(|i| i.map(|(_idx, kv, t, d)| (kv, t, d))))
     }
 
-    /// Wait until data is available, then return an iterator over the next
-    /// consolidated chunk of output. If this method returns `None`, that all the data has been
-    /// exhausted and the full consolidated dataset has been returned.
-    pub(crate) async fn next_chunk(
-        &mut self,
-        max_len: usize,
-        max_bytes: usize,
-    ) -> anyhow::Result<Option<BlobTraceUpdates>> {
-        self.trim();
-        self.unblock_progress().await?;
-
+    fn chunk(&mut self, max_len: usize, max_bytes: usize) -> Option<BlobTraceUpdates> {
         let Some(mut iter) = self.iter() else {
-            return Ok(None);
+            return None;
         };
 
         let parts = iter.parts.clone();
@@ -795,7 +701,20 @@ where
 
         let updates = Sort::interleave_updates(&parts, iter.take(max_len));
         let updates = self.sort.updates_to_blob(updates);
-        Ok(Some(updates))
+        Some(updates)
+    }
+
+    /// Wait until data is available, then return an iterator over the next
+    /// consolidated chunk of output. If this method returns `None`, that all the data has been
+    /// exhausted and the full consolidated dataset has been returned.
+    pub(crate) async fn next_chunk(
+        &mut self,
+        max_len: usize,
+        max_bytes: usize,
+    ) -> anyhow::Result<Option<BlobTraceUpdates>> {
+        self.trim();
+        self.unblock_progress().await?;
+        Ok(self.chunk(max_len, max_bytes))
     }
 
     /// The size of the data that we _might_ be holding concurrently in memory. While this is
@@ -1108,6 +1027,11 @@ mod tests {
 
     use std::sync::Arc;
 
+    use crate::cfg::PersistConfig;
+    use crate::internal::paths::PartialBatchKey;
+    use crate::internal::state::{BatchPart, HollowBatchPart};
+    use crate::metrics::Metrics;
+    use crate::ShardId;
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::trace::Description;
     use mz_ore::metrics::MetricsRegistry;
@@ -1116,15 +1040,10 @@ mod tests {
     use mz_persist::location::Blob;
     use mz_persist::mem::{MemBlob, MemBlobConfig};
     use mz_persist_types::codec_impls::VecU8Schema;
+    use mz_persist_types::part::PartBuilder;
     use proptest::collection::vec;
     use proptest::prelude::*;
     use timely::progress::Antichain;
-
-    use crate::cfg::PersistConfig;
-    use crate::internal::paths::PartialBatchKey;
-    use crate::internal::state::{BatchPart, HollowBatchPart};
-    use crate::metrics::Metrics;
-    use crate::ShardId;
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
@@ -1133,13 +1052,31 @@ mod tests {
         type Part = Vec<((Vec<u8>, Vec<u8>), u64, i64)>;
 
         fn check(metrics: &Arc<Metrics>, parts: Vec<(Part, usize)>) {
+            let schemas = Schemas {
+                id: None,
+                key: Arc::new(VecU8Schema),
+                val: Arc::new(VecU8Schema),
+            };
             let original = {
                 let mut rows = parts
                     .iter()
                     .flat_map(|(p, _)| p.clone())
                     .collect::<Vec<_>>();
+
                 consolidate_updates(&mut rows);
-                rows
+                let mut builder = PartBuilder::new(&*schemas.key, &*schemas.val);
+                for ((k, v), t, d) in &rows {
+                    builder.push(k, v, *t, *d);
+                }
+                let part = builder.finish();
+                BlobTraceUpdates::Structured {
+                    key_values: ColumnarRecordsStructuredExt {
+                        key: part.key,
+                        val: part.val,
+                    },
+                    timestamps: part.time,
+                    diffs: part.diff,
+                }
             };
             let filter = FetchBatchFilter::Compaction {
                 since: Antichain::from_elem(0),
@@ -1149,11 +1086,8 @@ mod tests {
                 Antichain::new(),
                 Antichain::from_elem(0),
             );
-            let sort: CodecSort<Vec<u8>, Vec<u8>, _, _> = CodecSort::new(Schemas {
-                id: None,
-                key: Arc::new(VecU8Schema),
-                val: Arc::new(VecU8Schema),
-            });
+            let sort: StructuredSort<Vec<u8>, Vec<u8>, u64, i64> =
+                StructuredSort::new(schemas.clone());
             let streaming = {
                 // Toy compaction loop!
                 let mut consolidator = Consolidator {
@@ -1217,15 +1151,24 @@ mod tests {
                 let mut out = vec![];
                 loop {
                     consolidator.trim();
-                    let Some(iter) = consolidator.iter() else {
+                    let Some(chunk) = consolidator.chunk(1000, 1000) else {
                         break;
                     };
-                    out.extend(iter.map(|(_, (k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d)));
+                    if chunk.len() > 0 {
+                        out.push(chunk);
+                    }
                 }
-                out
+                BlobTraceUpdates::concat::<Vec<u8>, Vec<u8>>(
+                    out,
+                    &sort.schemas.key,
+                    &sort.schemas.val,
+                    &metrics.columnar,
+                    false,
+                )
+                .expect("same schema")
             };
 
-            assert_eq!(original, streaming);
+            assert_eq!(original.structured(), streaming.structured());
         }
 
         let metrics = Arc::new(Metrics::new(
@@ -1264,24 +1207,25 @@ mod tests {
                 &MetricsRegistry::new(),
             ));
             let shard_metrics = metrics.shards.shard(&shard_id, "");
-            let sort: CodecSort<Vec<u8>, Vec<u8>, _, _> = CodecSort::new(Schemas {
+            let sort: StructuredSort<Vec<u8>, Vec<u8>, _, _> = StructuredSort::new(Schemas {
                 id: None,
                 key: Arc::new(VecU8Schema),
                 val: Arc::new(VecU8Schema),
             });
-            let mut consolidator: Consolidator<u64, i64, CodecSort<_, _, _, _>> = Consolidator::new(
-                "test".to_string(),
-                shard_id,
-                sort,
-                blob,
-                Arc::clone(&metrics),
-                shard_metrics,
-                metrics.read.batch_fetcher.clone(),
-                FetchBatchFilter::Compaction {
-                    since: desc.since().clone(),
-                },
-                budget,
-            );
+            let mut consolidator: Consolidator<u64, i64, StructuredSort<_, _, _, _>> =
+                Consolidator::new(
+                    "test".to_string(),
+                    shard_id,
+                    sort,
+                    blob,
+                    Arc::clone(&metrics),
+                    shard_metrics,
+                    metrics.read.batch_fetcher.clone(),
+                    FetchBatchFilter::Compaction {
+                        since: desc.since().clone(),
+                    },
+                    budget,
+                );
 
             for run in runs {
                 let parts: Vec<_> = run
