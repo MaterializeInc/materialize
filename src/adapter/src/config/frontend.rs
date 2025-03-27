@@ -23,9 +23,9 @@ use mz_cluster_client::ReplicaId;
 use mz_controller_types::ClusterId;
 use mz_ore::metrics::UIntGauge;
 use mz_ore::now::NowFn;
+use mz_ore::retry::Retry;
 use mz_sql::catalog::EnvironmentId;
 use serde_json::Value as JsonValue;
-use tokio::time;
 use tracing::warn;
 
 use crate::config::{
@@ -72,9 +72,9 @@ impl SystemParameterFrontendClient {}
 impl SystemParameterFrontend {
     /// Create a new [SystemParameterFrontend] initialize.
     ///
-    /// This will create and initialize an [ld::Client] instance. The
-    /// [ld::Client::wait_for_initialization] call will be attempted in a loop with an
-    /// exponential backoff with power `2s` and max duration `60s`.
+    /// This will create and initialize an [ld::Client] instance. The client
+    /// initialization will be attempted in a loop with an exponential backoff
+    /// with factor 2 and max duration `60s`.
     pub async fn from(sync_config: &SystemParameterSyncConfig) -> Result<Self, anyhow::Error> {
         match &sync_config.backend_config {
             super::SystemParameterSyncClientConfig::File { path } => Ok(Self {
@@ -465,25 +465,35 @@ async fn ld_client(
 ) -> Result<ld::Client, anyhow::Error> {
     let ld_client = ld::Client::build(ld_config(api_key, base_uri, metrics, now_fn))?;
     tracing::info!("waiting for SystemParameterFrontend to initialize");
-    ld_client.start_with_default_executor();
 
-    let max_backoff = Duration::from_secs(60);
-    let mut backoff = Duration::from_secs(5);
-    let timeout = Duration::from_secs(10);
+    let try_init = |_| async {
+        ld_client.start_with_default_executor();
 
-    // TODO(materialize#32030): fix retry logic
-    loop {
-        match ld_client.wait_for_initialization(timeout).await {
-            Some(true) => break,
-            Some(false) => tracing::warn!("SystemParameterFrontend failed to initialize"),
-            None => tracing::warn!("SystemParameterFrontend initialization timed out"),
+        match ld_client
+            .wait_for_initialization(Duration::from_secs(10))
+            .await
+        {
+            Some(true) => {
+                tracing::info!("successfully initialized SystemParameterFrontend");
+                Ok(())
+            }
+            Some(false) => {
+                tracing::warn!("SystemParameterFrontend failed to initialize");
+                Err(())
+            }
+            None => {
+                tracing::warn!("SystemParameterFrontend initialization timed out");
+                Err(())
+            }
         }
+    };
 
-        time::sleep(backoff).await;
-        backoff = (backoff * 2).min(max_backoff);
-    }
-
-    tracing::info!("successfully initialized SystemParameterFrontend");
+    Retry::default()
+        .initial_backoff(Duration::from_secs(5))
+        .clamp_backoff(Duration::from_secs(60))
+        .retry_async(try_init)
+        .await
+        .expect("retries forever");
 
     Ok(ld_client)
 }

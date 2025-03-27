@@ -15,6 +15,7 @@ use launchdarkly_server_sdk as ld;
 use mz_build_info::BuildInfo;
 use mz_dyncfg::{ConfigSet, ConfigUpdates, ConfigVal};
 use mz_ore::cast::CastLossy;
+use mz_ore::retry::Retry;
 use mz_ore::task;
 use tokio::time;
 
@@ -48,6 +49,7 @@ where
     for entry in set.entries() {
         let _ = dyn_into_flag(entry.val())?;
     }
+
     let ld_client = if let Some(key) = launchdarkly_sdk_key {
         // The 300s streaming read timeout must stay above LaunchDarkly's
         // streaming heartbeat interval (roughly 3 minutes per LD's
@@ -77,23 +79,27 @@ where
             .build()
             .expect("valid config");
         let client = ld::Client::build(config)?;
-        client.start_with_default_executor();
+
         let init = async {
-            let max_backoff = Duration::from_secs(60);
-            let mut backoff = Duration::from_secs(5);
+            Retry::default()
+                .initial_backoff(Duration::from_secs(5))
+                .clamp_backoff(Duration::from_secs(60))
+                .retry_async(|_| async {
+                    client.start_with_default_executor();
 
-            // TODO(materialize#32030): fix retry logic
-            loop {
-                match client.wait_for_initialization(config_sync_timeout).await {
-                    Some(true) => break,
-                    Some(false) => tracing::warn!("SyncedConfigSet failed to initialize"),
-                    None => {}
-                }
-
-                tokio::time::sleep(backoff).await;
-                backoff = (backoff * 2).min(max_backoff);
-            }
+                    match client.wait_for_initialization(config_sync_timeout).await {
+                        Some(true) => Ok(()),
+                        Some(false) => {
+                            tracing::warn!("SyncedConfigSet failed to initialize");
+                            Err(())
+                        }
+                        None => Err(()),
+                    }
+                })
+                .await
+                .expect("retries forever")
         };
+
         if tokio::time::timeout(config_sync_timeout, init)
             .await
             .is_err()
