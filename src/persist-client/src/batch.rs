@@ -27,7 +27,6 @@ use futures_util::{stream, FutureExt};
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
-use mz_persist::indexed::columnar::ColumnarRecordsStructuredExt;
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::Blob;
 use mz_persist_types::arrow::{ArrayBound, ArrayOrd};
@@ -567,19 +566,7 @@ where
             }
         }
 
-        let updates = {
-            let Part {
-                key,
-                val,
-                time,
-                diff,
-            } = self.records_builder.finish();
-            BlobTraceUpdates::Structured {
-                key_values: ColumnarRecordsStructuredExt { key, val },
-                timestamps: time,
-                diffs: diff,
-            }
-        };
+        let updates = self.records_builder.finish();
         self.builder
             .flush_part(self.inline_desc.clone(), updates)
             .await;
@@ -616,20 +603,11 @@ where
             self.records_builder
                 .push(key, val, ts.clone(), diff.clone());
             if self.records_builder.goodbytes() >= self.builder.parts.cfg.blob_target_size {
-                let Part {
-                    key,
-                    val,
-                    time,
-                    diff,
-                } = self.records_builder.finish_and_replace(
+                let part = self.records_builder.finish_and_replace(
                     self.builder.write_schemas.key.as_ref(),
                     self.builder.write_schemas.val.as_ref(),
                 );
-                Some(BlobTraceUpdates::Structured {
-                    key_values: ColumnarRecordsStructuredExt { key, val },
-                    timestamps: time,
-                    diffs: diff,
-                })
+                Some(part)
             } else {
                 None
             }
@@ -748,12 +726,12 @@ where
     /// chunk `current_part` to be no greater than
     /// [BatchBuilderConfig::blob_target_size], and must absolutely be less than
     /// [mz_persist::indexed::columnar::KEY_VAL_DATA_MAX_LEN]
-    pub async fn flush_part(&mut self, part_desc: Description<T>, columnar: BlobTraceUpdates) {
+    pub async fn flush_part(&mut self, part_desc: Description<T>, columnar: Part) {
         let num_updates = columnar.len();
         if num_updates == 0 {
             return;
         }
-        let diffs_sum = diffs_sum::<D>(columnar.diffs()).expect("part is non empty");
+        let diffs_sum = diffs_sum::<D>(&columnar.diff).expect("part is non empty");
 
         let start = Instant::now();
         self.parts
@@ -967,7 +945,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         &mut self,
         write_schemas: &Schemas<K, V>,
         desc: Description<T>,
-        updates: BlobTraceUpdates,
+        updates: Part,
         diffs_sum: D,
     ) {
         let batch_metrics = self.batch_metrics.clone();
@@ -980,21 +958,12 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         // it twice, once as binary encoded and once as structured.
         let inline_threshold = self.cfg.inline_writes_single_max_bytes;
 
+        let updates = BlobTraceUpdates::from_part(updates);
         let (name, write_future) = if updates.goodbytes() < inline_threshold {
-            let metrics = Arc::clone(&self.metrics);
-            let write_schemas = write_schemas.clone();
-
             let span = debug_span!("batch::inline_part", shard = %self.shard_id).or_current();
             (
                 "batch::inline_part",
                 async move {
-                    let updates = metrics.columnar.arrow().measure_part_build(|| {
-                        updates.as_structured::<K, V>(
-                            write_schemas.key.as_ref(),
-                            write_schemas.val.as_ref(),
-                        )
-                    });
-
                     let start = Instant::now();
                     let updates = LazyInlineBatchPart::from(&ProtoInlineBatchPart {
                         desc: Some(desc.into_proto()),

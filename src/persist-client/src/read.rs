@@ -896,31 +896,27 @@ where
                 max_len,
                 max_bytes,
             } => {
-                let mut iter = consolidator
+                let part = consolidator
                     .next_chunk(*max_len, *max_bytes)
                     .await
                     .expect("fetching a leased part")?;
-                let structured = iter.get_or_make_structured::<K, V>(
-                    self.read_schemas.key.as_ref(),
-                    self.read_schemas.val.as_ref(),
-                );
                 let key_decoder = self
                     .read_schemas
                     .key
-                    .decoder_any(structured.key.as_ref())
+                    .decoder_any(part.key.as_ref())
                     .expect("ok");
                 let val_decoder = self
                     .read_schemas
                     .val
-                    .decoder_any(structured.val.as_ref())
+                    .decoder_any(part.val.as_ref())
                     .expect("ok");
-                let iter = (0..iter.len()).map(move |i| {
+                let iter = (0..part.len()).map(move |i| {
                     let mut k = K::default();
                     let mut v = V::default();
                     key_decoder.decode(i, &mut k);
                     val_decoder.decode(i, &mut v);
-                    let t = T::decode(iter.timestamps().value(i).to_le_bytes());
-                    let d = D::decode(iter.diffs().value(i).to_le_bytes());
+                    let t = T::decode(part.time.value(i).to_le_bytes());
+                    let d = D::decode(part.diff.value(i).to_le_bytes());
                     ((Ok(k), Ok(v)), t, d)
                 });
 

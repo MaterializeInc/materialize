@@ -12,12 +12,16 @@
 use std::mem;
 use std::sync::Arc;
 
-use arrow::array::{Array, Int64Array};
+use arrow::array::{Array, ArrayRef, AsArray, Int64Array};
+use arrow::datatypes::ToByteSlice;
+use mz_ore::result::ResultExt;
 
+use crate::arrow::ArrayOrd;
 use crate::columnar::{ColumnEncoder, Schema};
 use crate::Codec64;
 
 /// A structured columnar representation of one blob's worth of data.
+#[derive(Debug, Clone)]
 pub struct Part {
     /// The 'k' values from a Part, generally `SourceData`.
     pub key: Arc<dyn Array>,
@@ -27,6 +31,80 @@ pub struct Part {
     pub time: Int64Array,
     /// The `diff` values from a Part.
     pub diff: Int64Array,
+}
+
+impl Part {
+    /// The length of each of the arrays in the part.
+    pub fn len(&self) -> usize {
+        self.key.len()
+    }
+
+    /// See [ArrayOrd::goodbytes].
+    pub fn goodbytes(&self) -> usize {
+        ArrayOrd::new(&self.key).goodbytes()
+            + ArrayOrd::new(&self.val).goodbytes()
+            + self.time.values().to_byte_slice().len()
+            + self.diff.values().to_byte_slice().len()
+    }
+
+    fn combine(
+        parts: &[Part],
+        mut combine_fn: impl FnMut(&[&dyn Array]) -> anyhow::Result<ArrayRef>,
+    ) -> anyhow::Result<Option<Self>> {
+        match parts.len() {
+            0 => return Ok(None),
+            1 => return Ok(Some(parts[0].clone())),
+            _ => {}
+        }
+
+        let mut field_array = Vec::with_capacity(parts.len());
+        let mut combine = |get: fn(&Part) -> &dyn Array| {
+            field_array.extend(parts.iter().map(get));
+            let res = combine_fn(&field_array);
+            field_array.clear();
+            res
+        };
+
+        Ok(Some(Self {
+            key: combine(|p| &p.key)?,
+            val: combine(|p| &p.val)?,
+            time: combine(|p| &p.time)?.as_primitive().clone(),
+            diff: combine(|p| &p.diff)?.as_primitive().clone(),
+        }))
+    }
+
+    /// Executes [::arrow::compute::concat] columnwise.
+    pub fn concat(records: &[Part]) -> anyhow::Result<Option<Self>> {
+        Part::combine(records, |cols| ::arrow::compute::concat(cols).err_into())
+    }
+
+    /// Executes [::arrow::compute::interleave] columnwise.
+    pub fn interleave(
+        records: &[Part],
+        indices: &[(usize, usize)],
+    ) -> anyhow::Result<Option<Self>> {
+        Part::combine(records, |cols| {
+            ::arrow::compute::interleave(cols, indices).err_into()
+        })
+    }
+}
+
+impl PartialEq for Part {
+    fn eq(&self, other: &Self) -> bool {
+        let Part {
+            key,
+            val,
+            time,
+            diff,
+        } = self;
+        let Part {
+            key: other_key,
+            val: other_val,
+            time: other_time,
+            diff: other_diff,
+        } = other;
+        key == other_key && val == other_val && time == other_time && diff == other_diff
+    }
 }
 
 /// A builder for [`Part`].
