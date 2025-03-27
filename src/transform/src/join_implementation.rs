@@ -105,7 +105,7 @@ impl JoinImplementation {
                     MirRelationExpr::Reduce { group_key, .. } => {
                         indexes.add_local(
                             *id,
-                            (0..group_key.len()).map(MirScalarExpr::Column).collect(),
+                            (0..group_key.len()).map(MirScalarExpr::column).collect(),
                         );
                     }
                     _ => {}
@@ -311,7 +311,7 @@ impl JoinImplementation {
                     MirRelationExpr::Reduce { group_key, .. } => {
                         // The first `group_key.len()` columns form an arrangement key.
                         available_arrangements[index]
-                            .push((0..group_key.len()).map(MirScalarExpr::Column).collect());
+                            .push((0..group_key.len()).map(MirScalarExpr::column).collect());
                     }
                     MirRelationExpr::Join {
                         implementation: IndexedFilter(id, ..),
@@ -940,7 +940,7 @@ fn install_lifted_mfp(
                     #[allow(deprecated)]
                     expr.visit_mut_pre_post(
                         &mut |e| {
-                            if let MirScalarExpr::Column(c) = e {
+                            if let MirScalarExpr::Column(c, _) = e {
                                 if *c >= mfp.input_arity {
                                     *e = map[*c - mfp.input_arity].clone();
                                 }
@@ -1064,7 +1064,7 @@ impl<'a> Orderer<'a> {
             for key in keys.iter() {
                 unique_arrangement[input].push(unique_keys[input].iter().any(|cols| {
                     cols.iter()
-                        .all(|c| key.contains(&MirScalarExpr::Column(*c)))
+                        .all(|c| key.contains(&MirScalarExpr::column(*c)))
                 }));
             }
         }
@@ -1201,7 +1201,7 @@ impl<'a> Orderer<'a> {
                 let cardinality = self.cardinalities[start];
                 let is_unique = self.unique_keys[start].iter().any(|cols| {
                     cols.iter()
-                        .all(|c| candidate_start_key.contains(&MirScalarExpr::Column(*c)))
+                        .all(|c| candidate_start_key.contains(&MirScalarExpr::column(*c)))
                 });
                 let arranged = self.arrangements[start]
                     .iter()
@@ -1318,7 +1318,7 @@ impl<'a> Orderer<'a> {
                                 // does the relation we're joining on have a unique key wrt what's already bound?
                                 let is_unique = self.unique_keys[rel].iter().any(|cols| {
                                     cols.iter().all(|c| {
-                                        self.bound[rel].contains(&MirScalarExpr::Column(*c))
+                                        self.bound[rel].contains(&MirScalarExpr::column(*c))
                                     })
                                 });
                                 self.priority_queue.push((

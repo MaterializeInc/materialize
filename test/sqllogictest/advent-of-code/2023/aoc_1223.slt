@@ -295,10 +295,10 @@ Explained Query:
     With
       cte l0 =
         Project (#0, #2) // { arity: 2 }
-          Filter ("#" != substr(#1, #2, 1)) // { arity: 3 }
-            FlatMap generate_series(1, char_length(#1), 1) // { arity: 3 }
+          Filter ("#" != substr(#1{lines.line}, #2{c.c}, 1)) // { arity: 3 }
+            FlatMap generate_series(1, char_length(#1{lines.line}), 1) // { arity: 3 }
               Project (#1, #2) // { arity: 2 }
-                Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1))) // { arity: 3 }
+                Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1{r.r}))) // { arity: 3 }
                   FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#0{input}) array_length 1), 1) // { arity: 2 }
                     ReadStorage materialize.public.input // { arity: 1 }
       cte l1 =
@@ -314,7 +314,7 @@ Explained Query:
               Distinct project=[#0..=#2] // { arity: 3 }
                 Union // { arity: 3 }
                   Project (#0, #1, #4) // { arity: 3 }
-                    Map ((#0 + 1)) // { arity: 5 }
+                    Map ((#0{paths2.r} + 1)) // { arity: 5 }
                       Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 4 }
                         implementation
                           %1[#0, #1]UKKA » %0:l2[#0, #1]KK
@@ -322,14 +322,14 @@ Explained Query:
                         ArrangeBy keys=[[#0, #1]] // { arity: 2 }
                           Distinct project=[#0, #1] // { arity: 2 }
                             Project (#0, #1) // { arity: 2 }
-                              Join on=(#1 = #3 AND #2 = (#0 + 1)) type=differential // { arity: 4 }
+                              Join on=(#1{paths2.c} = #3{subquery14.right_col1_13} AND #2{subquery14.right_col0_12} = (#0{paths2.r} + 1)) type=differential // { arity: 4 }
                                 implementation
-                                  %0:l1[(#0 + 1), #1]KK » %1:l2[#0, #1]KK
-                                ArrangeBy keys=[[(#0 + 1), #1]] // { arity: 2 }
+                                  %0:l1[(#0{paths2.r} + 1), #1{paths2.c}]KK » %1:l2[#0{subquery14.right_col0_12}, #1{subquery14.right_col1_13}]KK
+                                ArrangeBy keys=[[(#0{paths2.r} + 1), #1{paths2.c}]] // { arity: 2 }
                                   Get l1 // { arity: 2 }
                                 Get l2 // { arity: 2 }
                   Project (#0, #1, #4) // { arity: 3 }
-                    Map ((#0 - 1)) // { arity: 5 }
+                    Map ((#0{paths2.r} - 1)) // { arity: 5 }
                       Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 4 }
                         implementation
                           %1[#0, #1]UKKA » %0:l2[#0, #1]KK
@@ -337,14 +337,14 @@ Explained Query:
                         ArrangeBy keys=[[#0, #1]] // { arity: 2 }
                           Distinct project=[#0, #1] // { arity: 2 }
                             Project (#0, #1) // { arity: 2 }
-                              Join on=(#1 = #3 AND #2 = (#0 - 1)) type=differential // { arity: 4 }
+                              Join on=(#1{paths2.c} = #3{subquery17.right_col1_16} AND #2{subquery17.right_col0_15} = (#0{paths2.r} - 1)) type=differential // { arity: 4 }
                                 implementation
-                                  %0:l1[(#0 - 1), #1]KK » %1:l2[#0, #1]KK
-                                ArrangeBy keys=[[(#0 - 1), #1]] // { arity: 2 }
+                                  %0:l1[(#0{paths2.r} - 1), #1{paths2.c}]KK » %1:l2[#0{subquery17.right_col0_15}, #1{subquery17.right_col1_16}]KK
+                                ArrangeBy keys=[[(#0{paths2.r} - 1), #1{paths2.c}]] // { arity: 2 }
                                   Get l1 // { arity: 2 }
                                 Get l2 // { arity: 2 }
             Project (#0, #1, #0, #4) // { arity: 4 }
-              Map ((#1 + 1)) // { arity: 5 }
+              Map ((#1{paths2.c} + 1)) // { arity: 5 }
                 Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 4 }
                   implementation
                     %1[#0, #1]UKKA » %0:l2[#0, #1]KK
@@ -352,14 +352,14 @@ Explained Query:
                   ArrangeBy keys=[[#0, #1]] // { arity: 2 }
                     Distinct project=[#0, #1] // { arity: 2 }
                       Project (#0, #1) // { arity: 2 }
-                        Join on=(#0 = #2 AND #3 = (#1 + 1)) type=differential // { arity: 4 }
+                        Join on=(#0{paths2.r} = #2{subquery20.right_col0_18} AND #3{subquery20.right_col1_19} = (#1{paths2.c} + 1)) type=differential // { arity: 4 }
                           implementation
-                            %0:l1[#0, (#1 + 1)]KK » %1:l2[#0, #1]KK
-                          ArrangeBy keys=[[#0, (#1 + 1)]] // { arity: 2 }
+                            %0:l1[#0{paths2.r}, (#1{paths2.c} + 1)]KK » %1:l2[#0{subquery20.right_col0_18}, #1{subquery20.right_col1_19}]KK
+                          ArrangeBy keys=[[#0{paths2.r}, (#1{paths2.c} + 1)]] // { arity: 2 }
                             Get l1 // { arity: 2 }
                           Get l2 // { arity: 2 }
             Project (#0, #1, #0, #4) // { arity: 4 }
-              Map ((#1 - 1)) // { arity: 5 }
+              Map ((#1{paths2.c} - 1)) // { arity: 5 }
                 Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 4 }
                   implementation
                     %1[#0, #1]UKKA » %0:l2[#0, #1]KK
@@ -367,10 +367,10 @@ Explained Query:
                   ArrangeBy keys=[[#0, #1]] // { arity: 2 }
                     Distinct project=[#0, #1] // { arity: 2 }
                       Project (#0, #1) // { arity: 2 }
-                        Join on=(#0 = #2 AND #3 = (#1 - 1)) type=differential // { arity: 4 }
+                        Join on=(#0{paths2.r} = #2{subquery23.right_col0_21} AND #3{subquery23.right_col1_22} = (#1{paths2.c} - 1)) type=differential // { arity: 4 }
                           implementation
-                            %0:l1[#0, (#1 - 1)]KK » %1:l2[#0, #1]KK
-                          ArrangeBy keys=[[#0, (#1 - 1)]] // { arity: 2 }
+                            %0:l1[#0{paths2.r}, (#1{paths2.c} - 1)]KK » %1:l2[#0{subquery23.right_col0_21}, #1{subquery23.right_col1_22}]KK
+                          ArrangeBy keys=[[#0{paths2.r}, (#1{paths2.c} - 1)]] // { arity: 2 }
                             Get l1 // { arity: 2 }
                           Get l2 // { arity: 2 }
       cte l4 =
@@ -384,7 +384,7 @@ Explained Query:
           Negate // { arity: 2 }
             Distinct project=[#0, #1] // { arity: 2 }
               Project (#0, #1) // { arity: 2 }
-                Filter (#0 = #2) AND (#1 = #3) // { arity: 4 }
+                Filter (#0{n2.r} = #2{subquery38.right_col0_36}) AND (#1{n2.c} = #3{subquery38.right_col1_37}) // { arity: 4 }
                   FlatMap wrap2(1, 2, 12, 20, 130, 126, 141, 140) // { arity: 4 }
                     Get l4 // { arity: 2 }
           Get l4 // { arity: 2 }
@@ -392,7 +392,7 @@ Explained Query:
         Distinct project=[#0, #1] // { arity: 2 }
           Get l5 // { arity: 2 }
       cte l7 =
-        Filter ((#2 < #0) OR ((#0 = #2) AND (#3 < #1))) // { arity: 4 }
+        Filter ((#2{n1.r} < #0{n2.r}) OR ((#0{n2.r} = #2{n1.r}) AND (#3{n1.c} < #1{n2.c}))) // { arity: 4 }
           CrossJoin type=differential // { arity: 4 }
             implementation
               %0:l6[×] » %1:l4[×]
@@ -417,12 +417,12 @@ Explained Query:
                   Negate // { arity: 2 }
                     Distinct project=[#0, #1] // { arity: 2 }
                       Project (#0, #1) // { arity: 2 }
-                        Filter (#0 = #2) AND (#1 = #3) // { arity: 4 }
+                        Filter (#0{n1.r} = #2{subquery35.right_col0_33}) AND (#1{n1.c} = #3{subquery35.right_col1_34}) // { arity: 4 }
                           FlatMap wrap2(1, 2, 12, 20, 130, 126, 141, 140) // { arity: 4 }
                             Get l8 // { arity: 2 }
                   Get l8 // { arity: 2 }
       cte l10 =
-        ArrangeBy keys=[[#0, #1]] // { arity: 4 }
+        ArrangeBy keys=[[#0{steps2.r1}, #1{steps2.c1}]] // { arity: 4 }
           Get l3 // { arity: 4 }
       cte l11 =
         ArrangeBy keys=[[#0, #1]] // { arity: 2 }
@@ -431,11 +431,11 @@ Explained Query:
       With Mutually Recursive
         cte l12 =
           Project (#0..=#4, #7, #8) // { arity: 7 }
-            Filter ((#0 != #7) OR (#1 != #8)) // { arity: 9 }
-              Join on=(#3 = #5 AND #4 = #6) type=differential // { arity: 9 }
+            Filter ((#0{trail.r1} != #7{steps2.r2}) OR (#1{trail.c1} != #8{steps2.c2})) // { arity: 9 }
+              Join on=(#3{trail.r2} = #5{steps2.r1} AND #4{trail.c2} = #6{steps2.c1}) type=differential // { arity: 9 }
                 implementation
-                  %0:l14[#3, #4]KK » %1:l10[#0, #1]KK
-                ArrangeBy keys=[[#3, #4]] // { arity: 5 }
+                  %0:l14[#3{trail.r2}, #4{trail.c2}]KK » %1:l10[#0{steps2.r1}, #1{steps2.c1}]KK
+                ArrangeBy keys=[[#3{trail.r2}, #4{trail.c2}]] // { arity: 5 }
                   Get l14 // { arity: 5 }
                 Get l10 // { arity: 4 }
         cte l13 =
@@ -444,7 +444,7 @@ Explained Query:
               Get l12 // { arity: 7 }
         cte l14 =
           Project (#0, #1, #4{min}, #2, #3) // { arity: 5 }
-            Reduce group_by=[#0, #1, #3, #4] aggregates=[min(#2)] // { arity: 5 }
+            Reduce group_by=[#0, #1, #3, #4] aggregates=[min(#2{d})] // { arity: 5 }
               Union // { arity: 5 }
                 Project (#0, #1, #6, #2, #3) // { arity: 5 }
                   Map (1) // { arity: 7 }
@@ -454,7 +454,7 @@ Explained Query:
                       Get l10 // { arity: 4 }
                       Get l11 // { arity: 2 }
                 Project (#0, #1, #9, #5, #6) // { arity: 5 }
-                  Map ((#2 + 1)) // { arity: 10 }
+                  Map ((#2{trail.d} + 1)) // { arity: 10 }
                     Join on=(#3 = #7 AND #4 = #8) type=differential // { arity: 9 }
                       implementation
                         %0:l12[#3, #4]KK » %1[#0, #1]KK
@@ -473,20 +473,20 @@ Explained Query:
                           Get l13 // { arity: 2 }
         cte l15 =
           Project (#0, #1, #3{max}, #2) // { arity: 4 }
-            Reduce group_by=[#0, #1, #3] aggregates=[max(#2)] // { arity: 4 }
+            Reduce group_by=[#0, #1, #3] aggregates=[max(#2{d})] // { arity: 4 }
               Union // { arity: 4 }
                 Project (#7, #8, #15, #16) // { arity: 4 }
-                  Filter (1 != ((#3 >> #14) % 2)) // { arity: 17 }
-                    Map (bigint_to_integer(#13{count}), (#2 + #6{min}), (#3 + (1 << #14))) // { arity: 17 }
-                      Join on=(#0 = #4 AND #1 = #5 AND #7 = #9 = #11 AND #8 = #10 = #12) type=delta // { arity: 14 }
+                  Filter (1 != ((#3{longest.v} >> #14) % 2)) // { arity: 17 }
+                    Map (bigint_to_integer(#13{count}), (#2{longest.d} + #6{min}), (#3{longest.v} + (1 << #14{internal.id}))) // { arity: 17 }
+                      Join on=(#0{longest.r} = #4{links.r1} AND #1{longest.c} = #5{links.c1} AND #7 = #9 = #11 AND #8 = #10 = #12) type=delta // { arity: 14 }
                         implementation
-                          %0:l15 » %1:l14[#0, #1]KK » %3[#0, #1]UKK » %2:l5[#0, #1]KK
-                          %1:l14 » %3[#0, #1]UKK » %0:l15[#0, #1]KK » %2:l5[#0, #1]KK
-                          %2:l5 » %3[#0, #1]UKK » %1:l14[#3, #4]KK » %0:l15[#0, #1]KK
-                          %3 » %1:l14[#3, #4]KK » %0:l15[#0, #1]KK » %2:l5[#0, #1]KK
-                        ArrangeBy keys=[[#0, #1]] // { arity: 4 }
+                          %0:l15 » %1:l14[#0{links.r1}, #1{links.c1}]KK » %3[#0, #1]UKK » %2:l5[#0, #1]KK
+                          %1:l14 » %3[#0, #1]UKK » %0:l15[#0{longest.r}, #1{longest.c}]KK » %2:l5[#0, #1]KK
+                          %2:l5 » %3[#0, #1]UKK » %1:l14[#3, #4]KK » %0:l15[#0{longest.r}, #1{longest.c}]KK
+                          %3 » %1:l14[#3, #4]KK » %0:l15[#0{longest.r}, #1{longest.c}]KK » %2:l5[#0, #1]KK
+                        ArrangeBy keys=[[#0{longest.r}, #1{longest.c}]] // { arity: 4 }
                           Get l15 // { arity: 4 }
-                        ArrangeBy keys=[[#0, #1], [#3, #4]] // { arity: 5 }
+                        ArrangeBy keys=[[#0{links.r1}, #1{links.c1}], [#3, #4]] // { arity: 5 }
                           Get l14 // { arity: 5 }
                         ArrangeBy keys=[[#0, #1]] // { arity: 2 }
                           Get l5 // { arity: 2 }

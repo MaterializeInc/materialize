@@ -742,7 +742,7 @@ impl fmt::Display for CastStringToVarChar {
 // position akin to array parsing.
 static INT2VECTOR_CAST_EXPR: LazyLock<MirScalarExpr> = LazyLock::new(|| MirScalarExpr::CallUnary {
     func: UnaryFunc::CastStringToInt16(CastStringToInt16),
-    expr: Box::new(MirScalarExpr::Column(0)),
+    expr: Box::new(MirScalarExpr::column(0)),
 });
 
 #[derive(

@@ -126,7 +126,7 @@ impl ThresholdPlan {
         // Arrange the input by all columns in order.
         let mut all_columns = Vec::new();
         for column in 0..arity {
-            all_columns.push(mz_expr::MirScalarExpr::Column(column));
+            all_columns.push(mz_expr::MirScalarExpr::column(column));
         }
         let (permutation, thinning) = permutation_for_arrangement(&all_columns, arity);
         let ensure_arrangement = (all_columns, permutation, thinning);

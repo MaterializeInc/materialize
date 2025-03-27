@@ -176,7 +176,7 @@ impl Join {
                             // the applied map elements will be at the end, starting at `outer_arity`.
                             for expr in map.iter_mut() {
                                 expr.visit_pre_mut(|e| {
-                                    if let MirScalarExpr::Column(c) = e {
+                                    if let MirScalarExpr::Column(c, _) = e {
                                         if *c >= mfp.input_arity {
                                             *c -= mfp.input_arity;
                                             *c += outer_arity;
@@ -188,7 +188,7 @@ impl Join {
                             }
                             for expr in filter.iter_mut() {
                                 expr.visit_pre_mut(|e| {
-                                    if let MirScalarExpr::Column(c) = e {
+                                    if let MirScalarExpr::Column(c, _) = e {
                                         if *c >= mfp.input_arity {
                                             *c -= mfp.input_arity;
                                             *c += outer_arity;

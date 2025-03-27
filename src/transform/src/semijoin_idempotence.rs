@@ -237,7 +237,7 @@ fn attempt_join_simplification(
                             if !typ1.column_types[*col1].nullable
                                 && typ0.column_types[*col0].nullable
                             {
-                                is_not_nulls.push(MirScalarExpr::Column(*col0).call_is_null().not())
+                                is_not_nulls.push(MirScalarExpr::column(*col0).call_is_null().not())
                             }
                         }
                         if !is_not_nulls.is_empty() {
@@ -269,7 +269,7 @@ fn attempt_join_simplification(
                             if !typ0.column_types[*col0].nullable
                                 && typ1.column_types[*col1].nullable
                             {
-                                is_not_nulls.push(MirScalarExpr::Column(*col1).call_is_null().not())
+                                is_not_nulls.push(MirScalarExpr::column(*col1).call_is_null().not())
                             }
                         }
                         if !is_not_nulls.is_empty() {
@@ -395,7 +395,7 @@ fn list_replacements(
                             .filter_map(|(c0, c1, c2)| {
                                 group_key
                                     .iter()
-                                    .position(|o| o == &MirScalarExpr::Column(*c1))
+                                    .position(|o| o.as_column() == Some(*c1))
                                     .map(|c| (*c0, c, *c2))
                             })
                             .collect::<Vec<_>>();
@@ -544,6 +544,7 @@ fn semijoin_bijection(
     let mut equiv_pairs = Vec::with_capacity(equivalences.len());
 
     // Populate `equiv_pairs`, ideally finding exactly one pair for each equivalence class.
+    // TODO(mgree) !!! store the column names
     for eq in equivalences.iter() {
         if eq.len() == 2 {
             // The equivalence class could reference the inputs in either order, or be some
@@ -555,8 +556,10 @@ fn semijoin_bijection(
                 (Some(0), Some(1)) => {
                     let expr0 = input_mapper.map_expr_to_local(eq[0].clone());
                     let expr1 = input_mapper.map_expr_to_local(eq[1].clone());
-                    if let (MirScalarExpr::Column(col0), MirScalarExpr::Column(col1)) =
-                        (expr0, expr1)
+                    if let (
+                        MirScalarExpr::Column(col0, _name0),
+                        MirScalarExpr::Column(col1, _name1),
+                    ) = (expr0, expr1)
                     {
                         equiv_pairs.push((col0, col1));
                     }
@@ -564,8 +567,10 @@ fn semijoin_bijection(
                 (Some(1), Some(0)) => {
                     let expr0 = input_mapper.map_expr_to_local(eq[1].clone());
                     let expr1 = input_mapper.map_expr_to_local(eq[0].clone());
-                    if let (MirScalarExpr::Column(col0), MirScalarExpr::Column(col1)) =
-                        (expr0, expr1)
+                    if let (
+                        MirScalarExpr::Column(col0, _name0),
+                        MirScalarExpr::Column(col1, _name1),
+                    ) = (expr0, expr1)
                     {
                         equiv_pairs.push((col0, col1));
                     }
