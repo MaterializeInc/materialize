@@ -176,7 +176,11 @@ If you want to use `jq` and do not have `jq` installed, install.
 1. Optional. You may need to update your fork of the Terraform modules to
    upgrade.
 
+   {{< yaml-table data="self_managed/gcp_terraform_versions" >}}
+
+   {{< tip >}}
    {{% self-managed/gcp-terraform-upgrade-notes %}}
+   {{</ tip >}}
 
 1. Configure `kubectl` to connect to your EKS cluster, specifying:
 
