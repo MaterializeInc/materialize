@@ -292,6 +292,42 @@ impl UpdateFrom<durable::Role> for Role {
     }
 }
 
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+pub struct RoleAuth {
+    pub role_id: RoleId,
+    pub password_secret: Option<String>,
+}
+
+impl From<RoleAuth> for durable::RoleAuth {
+    fn from(role_auth: RoleAuth) -> durable::RoleAuth {
+        durable::RoleAuth {
+            role_id: role_auth.role_id,
+            password_secret: role_auth.password_secret,
+        }
+    }
+}
+
+impl From<durable::RoleAuth> for RoleAuth {
+    fn from(
+        durable::RoleAuth {
+            role_id,
+            password_secret,
+        }: durable::RoleAuth,
+    ) -> RoleAuth {
+        RoleAuth {
+            role_id,
+            password_secret,
+        }
+    }
+}
+
+impl UpdateFrom<durable::RoleAuth> for RoleAuth {
+    fn update_from(&mut self, from: durable::RoleAuth) {
+        self.role_id = from.role_id;
+        self.password_secret = from.password_secret;
+    }
+}
+
 #[derive(Debug, Serialize, Clone, PartialEq)]
 pub struct Cluster {
     pub name: String,

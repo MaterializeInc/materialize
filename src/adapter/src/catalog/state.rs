@@ -31,8 +31,8 @@ use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap,
     Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView,
-    NetworkPolicy, Role, Schema, Secret, Sink, Source, SourceReferences, Table, TableDataSource,
-    Type, View,
+    NetworkPolicy, Role, RoleAuth, Schema, Secret, Sink, Source, SourceReferences, Table,
+    TableDataSource, Type, View,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
@@ -129,6 +129,8 @@ pub struct CatalogState {
     pub(super) network_policies_by_name: BTreeMap<String, NetworkPolicyId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) network_policies_by_id: BTreeMap<NetworkPolicyId, NetworkPolicy>,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    pub(super) role_auth_by_id: BTreeMap<RoleId, RoleAuth>,
 
     #[serde(skip)]
     pub(super) system_configuration: SystemVars,
@@ -277,6 +279,7 @@ impl CatalogState {
             roles_by_name: Default::default(),
             roles_by_id: Default::default(),
             network_policies_by_id: Default::default(),
+            role_auth_by_id: Default::default(),
             config: CatalogConfig {
                 start_time: Default::default(),
                 start_instant: Instant::now(),

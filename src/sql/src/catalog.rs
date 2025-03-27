@@ -511,7 +511,12 @@ impl RoleAttributes {
 }
 
 impl From<PlannedRoleAttributes> for RoleAttributes {
-    fn from(PlannedRoleAttributes { inherit }: PlannedRoleAttributes) -> RoleAttributes {
+    fn from(
+        PlannedRoleAttributes {
+            inherit,
+            password: _,
+        }: PlannedRoleAttributes,
+    ) -> RoleAttributes {
         let default_attributes = RoleAttributes::new();
         RoleAttributes {
             inherit: inherit.unwrap_or(default_attributes.inherit),

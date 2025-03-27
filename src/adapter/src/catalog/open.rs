@@ -141,6 +141,7 @@ impl Catalog {
             roles_by_name: BTreeMap::new(),
             roles_by_id: BTreeMap::new(),
             network_policies_by_id: BTreeMap::new(),
+            role_auth_by_id: BTreeMap::new(),
             network_policies_by_name: BTreeMap::new(),
             system_configuration,
             default_privileges: DefaultPrivileges::default(),

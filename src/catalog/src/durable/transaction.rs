@@ -33,7 +33,7 @@ use mz_sql::catalog::{
     RoleVars,
 };
 use mz_sql::names::{CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
-use mz_sql::plan::NetworkPolicyRule;
+use mz_sql::plan::{NetworkPolicyRule, Table};
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_client::controller::StorageTxn;
 use mz_storage_types::controller::StorageError;
@@ -82,6 +82,7 @@ pub struct Transaction<'a> {
     items: TableTransaction<ItemKey, ItemValue>,
     comments: TableTransaction<CommentKey, CommentValue>,
     roles: TableTransaction<RoleKey, RoleValue>,
+    role_auth: TableTransaction<RoleAuthKey, RoleAuthValue>,
     clusters: TableTransaction<ClusterKey, ClusterValue>,
     cluster_replicas: TableTransaction<ClusterReplicaKey, ClusterReplicaValue>,
     introspection_sources:
@@ -115,6 +116,7 @@ impl<'a> Transaction<'a> {
             databases,
             schemas,
             roles,
+            role_auth,
             items,
             comments,
             clusters,
@@ -158,6 +160,7 @@ impl<'a> Transaction<'a> {
             roles: TableTransaction::new_with_uniqueness_fn(roles, |a: &RoleValue, b| {
                 a.name == b.name
             })?,
+            role_auth: TableTransaction::new(role_auth)?,
             clusters: TableTransaction::new_with_uniqueness_fn(clusters, |a: &ClusterValue, b| {
                 a.name == b.name
             })?,
@@ -2186,6 +2189,7 @@ impl<'a> Transaction<'a> {
             items,
             comments,
             roles,
+            role_auth,
             clusters,
             network_policies,
             cluster_replicas,
@@ -2470,6 +2474,8 @@ impl<'a> Transaction<'a> {
 
 use crate::durable::async_trait;
 
+use super::objects::{RoleAuthKey, RoleAuthValue};
+
 #[async_trait]
 impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
     fn get_collection_metadata(&self) -> BTreeMap<GlobalId, ShardId> {
@@ -2753,6 +2759,7 @@ mod unique_name {
         StorageCollectionMetadataValue,
         SystemPrivilegesValue,
         TxnWalShardValue,
+        RoleAuthValue,
     );
 
     #[cfg(test)]
