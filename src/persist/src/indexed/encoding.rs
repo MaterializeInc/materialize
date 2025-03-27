@@ -13,6 +13,9 @@
 // Ditto for Log* and the Log. The others are used internally in these top-level
 // structs.
 
+use std::fmt::{self, Debug};
+use std::sync::Arc;
+
 use arrow::array::{Array, ArrayRef, AsArray, BinaryArray, Int64Array};
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Int64Type, ToByteSlice};
@@ -27,6 +30,7 @@ use mz_persist_types::columnar::{
     codec_to_schema, data_type, schema_to_codec, ColumnEncoder, Schema,
 };
 use mz_persist_types::parquet::EncodingConfig;
+use mz_persist_types::part::Part;
 use mz_persist_types::schema::backward_compatible;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{RustType, TryFromProtoError};
@@ -35,8 +39,6 @@ use proptest::prelude::*;
 use proptest::strategy::{BoxedStrategy, Just};
 use prost::Message;
 use serde::Serialize;
-use std::fmt::{self, Debug};
-use std::sync::Arc;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::error;
@@ -221,6 +223,18 @@ pub enum BlobTraceUpdates {
 }
 
 impl BlobTraceUpdates {
+    /// Convert from a [Part].
+    pub fn from_part(part: Part) -> Self {
+        Self::Structured {
+            key_values: ColumnarRecordsStructuredExt {
+                key: part.key,
+                val: part.val,
+            },
+            timestamps: part.time,
+            diffs: part.diff,
+        }
+    }
+
     /// The number of updates.
     pub fn len(&self) -> usize {
         match self {

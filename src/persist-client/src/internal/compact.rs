@@ -23,8 +23,8 @@ use futures_util::{StreamExt, TryFutureExt};
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
-use mz_persist::indexed::encoding::BlobTraceUpdates;
 use mz_persist::location::Blob;
+use mz_persist_types::part::Part;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -847,16 +847,11 @@ where
                 tokio::task::yield_now().await;
             }
 
-            if chunks.is_empty() {
-                break;
-            }
             // In the hopefully-common case of a single chunk, this will not copy.
-            let updates = BlobTraceUpdates::concat::<K, V>(
-                chunks,
-                write_schemas.key.as_ref(),
-                write_schemas.val.as_ref(),
-                &metrics.columnar,
-            )?;
+            let Some(updates) = Part::concat(&chunks).expect("compaction produces well-typed data")
+            else {
+                break;
+            };
             batch.flush_part(desc.clone(), updates).await;
         }
         let mut batch = batch.finish(desc.clone()).await?;
