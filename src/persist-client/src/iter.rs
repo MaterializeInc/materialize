@@ -1136,7 +1136,6 @@ mod tests {
                     &sort.schemas.key,
                     &sort.schemas.val,
                     &metrics.columnar,
-                    false,
                 )
                 .expect("same schema")
             };

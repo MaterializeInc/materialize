@@ -23,7 +23,7 @@ use futures_util::{StreamExt, TryFutureExt};
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
-use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceUpdates};
+use mz_persist::indexed::encoding::BlobTraceUpdates;
 use mz_persist::location::Blob;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
@@ -79,7 +79,6 @@ pub struct CompactRes<T> {
 pub struct CompactConfig {
     pub(crate) compaction_memory_bound_bytes: usize,
     pub(crate) compaction_yield_after_n_updates: usize,
-    pub(crate) compaction_output_structured_only: bool,
     pub(crate) version: semver::Version,
     pub(crate) batch: BatchBuilderConfig,
 }
@@ -90,7 +89,6 @@ impl CompactConfig {
         CompactConfig {
             compaction_memory_bound_bytes: COMPACTION_MEMORY_BOUND_BYTES.get(value),
             compaction_yield_after_n_updates: value.compaction_yield_after_n_updates,
-            compaction_output_structured_only: COMPACTION_OUTPUT_STRUCTURED_ONLY.get(value),
             version: value.build_version.clone(),
             batch: BatchBuilderConfig::new(value, shard_id),
         }
@@ -151,15 +149,6 @@ pub(crate) const COMPACTION_CHECK_PROCESS_FLAG: Config<bool> = Config::new(
     true,
     "Whether Compactor will obey the process_requests flag in PersistConfig, \
         which allows dynamically disabling compaction. If false, all compaction requests will be processed.",
-);
-
-pub(crate) const COMPACTION_OUTPUT_STRUCTURED_ONLY: Config<bool> = Config::new(
-    "persist_compaction_output_structured_only",
-    true,
-    "\
-    If our columnar batch format is structured only, then during compaction \
-    don't generate Codec data and just output the structured data.
-    ",
 );
 
 impl<K, V, T, D> Compactor<K, V, T, D>
@@ -861,19 +850,12 @@ where
             if chunks.is_empty() {
                 break;
             }
-
-            // If we're going to write this Batch in a structured format, and our CYA
-            // dyncfg is enabled, then don't worry about making sure Codec data exists.
-            let ensure_codec = !(cfg.compaction_output_structured_only
-                && cfg.batch.batch_columnar_format == BatchColumnarFormat::Structured);
-
             // In the hopefully-common case of a single chunk, this will not copy.
             let updates = BlobTraceUpdates::concat::<K, V>(
                 chunks,
                 write_schemas.key.as_ref(),
                 write_schemas.val.as_ref(),
                 &metrics.columnar,
-                ensure_codec,
             )?;
             batch.flush_part(desc.clone(), updates).await;
         }

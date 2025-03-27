@@ -18,7 +18,6 @@ use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Int64Type, ToByteSlice};
 use bytes::{BufMut, Bytes};
 use differential_dataflow::trace::Description;
-use itertools::Either;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
@@ -378,7 +377,6 @@ impl BlobTraceUpdates {
         key_schema: &K::Schema,
         val_schema: &V::Schema,
         metrics: &ColumnarMetrics,
-        ensure_codec: bool,
     ) -> anyhow::Result<BlobTraceUpdates> {
         match updates.len() {
             0 => {
@@ -410,39 +408,26 @@ impl BlobTraceUpdates {
 
         // If necessary, ensure we have `Codec` data, which internally includes
         // timestamps and diffs, otherwise get the timestamps and diffs separately.
-        let records = if ensure_codec {
-            let columnar: Vec<_> = updates
-                .iter_mut()
-                .map(|u| u.get_or_make_codec::<K, V>(key_schema, val_schema).clone())
-                .collect();
-            Either::Left(ColumnarRecords::concat(&columnar, metrics))
-        } else {
-            let mut timestamps: Vec<&dyn Array> = Vec::with_capacity(updates.len());
-            let mut diffs: Vec<&dyn Array> = Vec::with_capacity(updates.len());
+        let mut timestamps: Vec<&dyn Array> = Vec::with_capacity(updates.len());
+        let mut diffs: Vec<&dyn Array> = Vec::with_capacity(updates.len());
 
-            for update in &updates {
-                timestamps.push(update.timestamps());
-                diffs.push(update.diffs());
-            }
-            let timestamps = ::arrow::compute::concat(&timestamps)?
-                .as_primitive_opt::<Int64Type>()
-                .ok_or_else(|| anyhow::anyhow!("timestamps changed Array type"))?
-                .clone();
-            let diffs = ::arrow::compute::concat(&diffs)?
-                .as_primitive_opt::<Int64Type>()
-                .ok_or_else(|| anyhow::anyhow!("diffs changed Array type"))?
-                .clone();
+        for update in &updates {
+            timestamps.push(update.timestamps());
+            diffs.push(update.diffs());
+        }
+        let timestamps = ::arrow::compute::concat(&timestamps)?
+            .as_primitive_opt::<Int64Type>()
+            .ok_or_else(|| anyhow::anyhow!("timestamps changed Array type"))?
+            .clone();
+        let diffs = ::arrow::compute::concat(&diffs)?
+            .as_primitive_opt::<Int64Type>()
+            .ok_or_else(|| anyhow::anyhow!("diffs changed Array type"))?
+            .clone();
 
-            Either::Right((timestamps, diffs))
-        };
-
-        let out = match records {
-            Either::Left(codec) => Self::Both(codec, key_values),
-            Either::Right((timestamps, diffs)) => Self::Structured {
-                key_values,
-                timestamps,
-                diffs,
-            },
+        let out = Self::Structured {
+            key_values,
+            timestamps,
+            diffs,
         };
         metrics
             .arrow

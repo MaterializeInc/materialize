@@ -326,7 +326,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::internal::compact::COMPACTION_MINIMUM_TIMEOUT)
         .add(&crate::internal::compact::COMPACTION_USE_MOST_RECENT_SCHEMA)
         .add(&crate::internal::compact::COMPACTION_CHECK_PROCESS_FLAG)
-        .add(&crate::internal::compact::COMPACTION_OUTPUT_STRUCTURED_ONLY)
         .add(&crate::internal::machine::CLAIM_UNCLAIMED_COMPACTIONS)
         .add(&crate::internal::machine::CLAIM_COMPACTION_PERCENT)
         .add(&crate::internal::machine::CLAIM_COMPACTION_MIN_VERSION)
