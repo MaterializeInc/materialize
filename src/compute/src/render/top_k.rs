@@ -156,7 +156,7 @@ where
                             &format!("data={data:?}, diff={diff}"),
                         );
                         let m = "tried to build monotonic top-k on non-monotonic input".into();
-                        (DataflowError::from(EvalError::Internal(m)), 1)
+                        (DataflowError::from(EvalError::Internal(m)), Diff::ONE)
                     });
                     err_collection = err_collection.concat(&errs);
 
@@ -484,7 +484,7 @@ where
                 &format!("data={data:?}, diff={diff}"),
             );
             let m = "tried to build monotonic top-1 on non-monotonic input".into();
-            (EvalError::Internal(m).into(), 1)
+            (EvalError::Internal(m).into(), Diff::ONE)
         });
         let partial: KeyCollection<_, _, _> = partial
             .explode_one(move |(group_key, row)| {
@@ -505,7 +505,7 @@ where
                 "MonotonicTop1",
                 move |_key, input, output| {
                     let accum: &monoids::Top1Monoid = &input[0].1;
-                    output.push((accum.row.clone(), 1));
+                    output.push((accum.row.clone(), Diff::ONE));
                 },
             );
         // TODO(database-issues#2288): Here we discard the arranged output.
@@ -582,7 +582,7 @@ where
                     if diff.is_positive() {
                         continue;
                     }
-                    target.push((err((*datums).into_owned()), 1));
+                    target.push((err((*datums).into_owned()), Diff::ONE));
                     return;
                 }
             }
@@ -590,7 +590,7 @@ where
             // Determine if we must actually shrink the result set.
             let must_shrink = offset > 0
                 || limit
-                    .map(|l| source.iter().map(|(_, d)| *d).sum::<Diff>() > l)
+                    .map(|l| *source.iter().map(|(_, d)| *d).sum::<Diff>() > l)
                     .unwrap_or(false);
             if !must_shrink {
                 return;
@@ -642,11 +642,11 @@ where
                 }
                 // We should produce at most `limit` records.
                 if let Some(limit) = &mut limit {
-                    diff = std::cmp::min(diff, Diff::cast_from(*limit));
-                    *limit -= diff;
+                    diff = std::cmp::min(diff, Diff::from(*limit));
+                    *limit -= *diff;
                 }
                 // Output the indicated number of rows.
-                if diff > 0 {
+                if *diff > 0 {
                     // Emit retractions for the elements actually part of
                     // the set of TopK elements.
                     target.push((V::ok(datums.into_owned()), diff));
@@ -712,7 +712,7 @@ where
                         let topk = agg_time
                             .entry((grp_row, record_time))
                             .or_insert_with(move || topk_agg::TopKBatch::new(limit));
-                        topk.update(monoid, diff);
+                        topk.update(monoid, *diff);
                     }
                     notificator.notify_at(time.retain());
                 }
@@ -725,7 +725,7 @@ where
                                 (
                                     (grp_row.clone(), monoid.into_row()),
                                     record_time.clone(),
-                                    diff,
+                                    diff.into(),
                                 )
                             }))
                         }

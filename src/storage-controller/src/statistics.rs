@@ -20,7 +20,7 @@ use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_ore::now::EpochMillis;
 use mz_persist_types::Codec64;
-use mz_repr::TimestampManipulation;
+use mz_repr::{Diff, TimestampManipulation};
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::statistics::{PackableStats, SourceStatisticsUpdate, WebhookStatistics};
 use timely::progress::ChangeBatch;
@@ -137,7 +137,7 @@ where
             for (_, stats) in shared_stats.as_stats().iter() {
                 if let StatsState::Initialized(stats) = stats {
                     stats.pack(row_buf.packer());
-                    correction.push((row_buf.clone(), 1));
+                    correction.push((row_buf.clone(), Diff::ONE));
                 }
             }
         }
@@ -147,7 +147,7 @@ where
         // Make sure that the desired state matches what is already there, when
         // we start up!
         if !correction.is_empty() {
-            current_metrics.extend(correction.iter().cloned());
+            current_metrics.extend(correction.iter().map(|(r, d)| (r.clone(), **d)));
 
             collection_mgmt.differential_append(statistics_collection_id, correction);
         }
@@ -200,7 +200,7 @@ where
                     if !correction.is_empty() {
                         current_metrics.extend(correction.iter().cloned());
                         collection_mgmt
-                            .differential_append(statistics_collection_id, correction);
+                            .differential_append(statistics_collection_id, correction.into_iter().map(|(r, d)| (r, d.into())).collect());
                     }
                 }
             }

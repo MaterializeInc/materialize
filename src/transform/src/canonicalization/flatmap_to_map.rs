@@ -12,6 +12,7 @@
 
 use mz_expr::visit::Visit;
 use mz_expr::{MirRelationExpr, TableFunc};
+use mz_repr::Diff;
 
 use crate::TransformCtx;
 
@@ -61,7 +62,7 @@ impl FlatMapToMap {
                                 // If there are no elements in the literal argument, no output.
                                 relation.take_safely(None);
                             }
-                            (Some((row, 1)), None) => {
+                            (Some((row, Diff::ONE)), None) => {
                                 *relation =
                                     input.take_dangerous().map(vec![MirScalarExpr::Literal(
                                         Ok(row),

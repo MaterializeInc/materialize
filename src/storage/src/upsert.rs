@@ -476,7 +476,7 @@ where
             move |input, output| {
                 while let Some((cap, data)) = input.next() {
                     assert!(
-                        data.iter().all(|(_, _, diff)| *diff > 0),
+                        data.iter().all(|(_, _, diff)| **diff > 0),
                         "invalid upsert input"
                     );
                     updates.append(data);
@@ -529,7 +529,7 @@ fn stage_input<T, FromTime>(
     }
 
     stash.extend(data.drain(..).map(|((key, value, order), time, diff)| {
-        assert!(diff > 0, "invalid upsert input");
+        assert!(*diff > 0, "invalid upsert input");
         (time, key, Reverse(order), value)
     }));
 
@@ -655,15 +655,15 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
                     Some(from_time.0.clone()),
                 )) {
                     if let Value::FinalizedValue(old_value, _) = old_value.into_decoded() {
-                        output_updates.push((old_value, ts.clone(), -1));
+                        output_updates.push((old_value, ts.clone(), -Diff::ONE));
                     }
                 }
-                output_updates.push((value, ts, 1));
+                output_updates.push((value, ts, Diff::ONE));
             }
             None => {
                 if let Some(old_value) = existing_value.take() {
                     if let Value::FinalizedValue(old_value, _) = old_value.into_decoded() {
-                        output_updates.push((old_value, ts, -1));
+                        output_updates.push((old_value, ts, -Diff::ONE));
                     }
                 }
 

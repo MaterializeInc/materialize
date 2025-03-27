@@ -61,6 +61,7 @@ use mz_service::secrets::SecretsReaderCliArgs;
 use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::sources::SourceData;
+use mz_storage_types::StorageDiff;
 use serde::{Deserialize, Serialize};
 use tracing::{error, Instrument};
 
@@ -393,8 +394,8 @@ async fn dump(
             .collect();
 
         let total_count = entries.len();
-        let addition_count = entries.iter().filter(|entry| entry.diff == 1).count();
-        let retraction_count = entries.iter().filter(|entry| entry.diff == -1).count();
+        let addition_count = entries.iter().filter(|entry| *entry.diff == 1).count();
+        let retraction_count = entries.iter().filter(|entry| *entry.diff == -1).count();
         let entries = if stats_only { None } else { Some(entries) };
         let dumped_col = DumpedCollection {
             total_count,
@@ -686,7 +687,7 @@ async fn upgrade_check(
             handle_purpose: "catalog upgrade check".to_string(),
         };
         let persisted_schema = persist_client
-            .latest_schema::<SourceData, (), Timestamp, Diff>(shard_id, diagnostics)
+            .latest_schema::<SourceData, (), Timestamp, StorageDiff>(shard_id, diagnostics)
             .await
             .expect("invalid persist usage");
         // We should always have schemas registered for Shards, unless their environment happened

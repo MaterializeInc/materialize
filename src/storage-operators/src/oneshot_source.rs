@@ -82,6 +82,7 @@ use mz_storage_types::oneshot_sources::{
     ContentFilter, ContentFormat, ContentSource, OneshotIngestionRequest,
 };
 use mz_storage_types::sources::SourceData;
+use mz_storage_types::StorageDiff;
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
@@ -543,7 +544,7 @@ where
             handle_purpose: "CopyFrom::stage_batches".to_string(),
         };
         let write_handle = persist_client
-            .open_writer::<SourceData, (), mz_repr::Timestamp, Diff>(
+            .open_writer::<SourceData, (), mz_repr::Timestamp, StorageDiff>(
                 shard_id,
                 Arc::new(collection_desc),
                 Arc::new(UnitSchema),
@@ -572,7 +573,7 @@ where
                     Ok(row) => {
                         let data = SourceData(Ok(row));
                         batch_builder
-                            .add(&data, &(), &lower, &1)
+                            .add(&data, &(), &lower, &Diff::ONE)
                             .await
                             .expect("failed to add Row to batch");
                     }

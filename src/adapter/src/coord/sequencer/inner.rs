@@ -3074,20 +3074,20 @@ impl Coordinator {
                                 datums[idx] = new_value;
                             }
                             let updated = Row::pack_slice(&datums);
-                            diffs.push((updated, 1));
+                            diffs.push((updated, Diff::ONE));
                         }
                         match kind {
                             // Updates and deletes always remove the
                             // current row. Updates will also add an
                             // updated value.
                             MutationKind::Update | MutationKind::Delete => {
-                                diffs.push((row.to_owned(), -1))
+                                diffs.push((row.to_owned(), -Diff::ONE))
                             }
-                            MutationKind::Insert => diffs.push((row.to_owned(), 1)),
+                            MutationKind::Insert => diffs.push((row.to_owned(), Diff::ONE)),
                         }
                     }
                     for (row, diff) in &diffs {
-                        if *diff > 0 {
+                        if **diff > 0 {
                             for (idx, datum) in row.iter().enumerate() {
                                 desc.constraints_met(idx, &datum)?;
                             }
@@ -3137,7 +3137,7 @@ impl Coordinator {
                     .as_ref()
                     .expect("known to be `Ok` from `is_ok()` call above")
                 {
-                    if diff < &1 {
+                    if **diff < 1 {
                         continue;
                     }
                     let mut returning_row = Row::with_capacity(returning.len());
@@ -3154,7 +3154,7 @@ impl Coordinator {
                             }
                         }
                     }
-                    let diff = NonZeroI64::try_from(*diff).expect("known to be >= 1");
+                    let diff = NonZeroI64::try_from(**diff).expect("known to be >= 1");
                     let diff = match NonZeroUsize::try_from(diff) {
                         Ok(diff) => diff,
                         Err(err) => {
@@ -5158,7 +5158,7 @@ impl Coordinator {
             self.catalog().state().pack_optimizer_notices(
                 &mut builtin_table_updates,
                 df_meta.optimizer_notices.iter(),
-                1,
+                Diff::ONE,
             );
 
             // Save the metainfo.

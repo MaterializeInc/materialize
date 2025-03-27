@@ -9,7 +9,7 @@
 
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
-use mz_repr::{Datum, Row};
+use mz_repr::{Datum, Diff, Row};
 use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorOutput};
 use mz_storage_types::sources::MzOffset;
 use std::{iter, mem};
@@ -25,7 +25,7 @@ impl Generator for Clock {
         now: NowFn,
         _seed: Option<u64>,
         mut resume_offset: MzOffset,
-    ) -> Box<dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, i64)>)>> {
+    ) -> Box<dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>)>> {
         let interval_ms = self.tick_ms;
         let floor = move |t| t / interval_ms * interval_ms;
         let first_tick = floor(self.as_of_ms);
@@ -56,7 +56,7 @@ impl Generator for Clock {
                             .into_iter()
                             .flatten()
                             .map(move |(time, diff)| {
-                                Event::Message(MzOffset::from(at_offset), (row(time), diff))
+                                Event::Message(MzOffset::from(at_offset), (row(time), diff.into()))
                             })
                     });
                 let progress = iter::once(Event::Progress(Some(upper)));

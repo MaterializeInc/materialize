@@ -882,12 +882,12 @@ where
     /// columns in the key are not included in the value.
     fn arrange_collection(
         name: &String,
-        oks: Collection<S, Row, i64>,
+        oks: Collection<S, Row, Diff>,
         key: Vec<MirScalarExpr>,
         thinning: Vec<usize>,
     ) -> (
         Arranged<S, RowRowAgent<S::Timestamp, Diff>>,
-        Collection<S, DataflowError, i64>,
+        Collection<S, DataflowError, Diff>,
     ) {
         // The following `unary_fallible` implements a `map_fallible`, but produces columnar updates
         // for the ok stream. The `map_fallible` cannot be used here because the closure cannot
@@ -895,7 +895,7 @@ where
         // a bespoke operator that also optimizes reuse of allocations across individual updates.
         let (oks, errs) = oks
             .inner
-            .unary_fallible::<ColumnBuilder<((Row, Row), S::Timestamp, i64)>, _, _, _>(
+            .unary_fallible::<ColumnBuilder<((Row, Row), S::Timestamp, Diff)>, _, _, _>(
                 Pipeline,
                 "FormArrangementKey",
                 move |_, _| {
