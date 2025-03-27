@@ -20,6 +20,25 @@ menu:
 
 {{< yaml-table data="self_managed/self_managed_operator_compatibility" >}}
 
+### Terraform helpers
+
+To help you get started, Materialize also provides some template Terraforms.
+
+{{< important >}}
+These modules are intended for evaluation/demonstration purposes and for serving
+as a template when building your own production deployment. The modules should
+not be directly relied upon for production deployments: **future releases of the
+modules will contain breaking changes.** Instead, to use as a starting point for
+your own production deployment, either:
+
+- Fork the repo and pin to a specific version; or
+
+- Use the code as a reference when developing your own deployment.
+
+{{</ important >}}
+
+{{< yaml-table data="self_managed/terraform_list" >}}
+
 ### Known Limitations
 
 | Item                                    | Status      |

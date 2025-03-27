@@ -1,0 +1,29 @@
+columns:
+  - column: "Sample Module"
+  - column: "Description"
+
+rows:
+- "Sample Module": |
+    [terraform-helm-materialize](https://github.com/MaterializeInc/terraform-helm-materialize)
+  "Description": |
+    A sample Terraform module for installing the Materialize Helm chart into a Kubernetes cluster.
+
+- "Sample Module": |
+    [Materialize on AWS](https://github.com/MaterializeInc/terraform-aws-materialize)
+  "Description": |
+    A sample Terraform module for deploying Materialize on AWS Cloud Platform
+    with all required infrastructure components.
+    See [Install on AWS](/installation/install-on-aws/) for an example usage.
+
+- "Sample Module": |
+    [Materialize on Azure](https://github.com/MaterializeInc/terraform-azurerm-materialize)
+  "Description": |
+    A sample Terraform module for deploying Materialize on Azure with all
+    required infrastructure components. See [Install on
+    Azure](/installation/install-on-azure/) for an example usage.
+
+- "Sample Module": |
+    [Materialize on Google Cloud Platform (GCP)](https://github.com/MaterializeInc/terraform-google-materialize)
+  "Description": |
+    A sample Terraform module for deploying Materialize on Google Cloud Platform
+    (GCP) with all required infrastructure components. See [Install on GCP](/installation/install-on-gcp/) for an example usage.

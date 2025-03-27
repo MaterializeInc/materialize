@@ -2,15 +2,5 @@ If upgrading from a deployment that was set up using an earlier version of the
 Terraform modules, see the [Upgrade Notes] for any considerations that might
 apply when using an updated Terraform modules to your existing deployments.
 
-| Terraform version | Notable changes |
-|-------------------|-----------------|
-| v0.3.0            | By default, deploys the [AWS Load Balancer Controller] as well as [Network Load Balancers (NLBs)] for each Materialize instance. |
-| v0.3.1            | By default, deploys OpenEBS and NVMe instance storage to [enable spill-to-disk]. |
-
-[Upgrade Notes]: https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#upgrade-notes
-
-[AWS Load Balancer Controller]: https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#input_install_aws_load_balancer_controller
-
-[enable spill-to-disk]: https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#enabling-disk-support
-
-[Network Load Balancers (NLBs)]: https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#input_materialize_instances
+[Upgrade Notes]:
+https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#upgrade-notes

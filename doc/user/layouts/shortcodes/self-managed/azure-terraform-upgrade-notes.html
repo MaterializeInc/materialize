@@ -1,10 +1,3 @@
 If upgrading from a deployment that was set up using an earlier version of the
-Terraform modules, additional considerations may apply.
-apply when using an updated Terraform modules to your existing deployments.
-
-| Terraform version | Notable changes |
-|-------------------|-----------------|
-| v0.2.0            | <ul><li>The [providers](/installation/install-on-azure/appendix-azure-provider-configuration/) must be specified. The `examples/simple/main.tf` has been updated to reflect this.</li><li>The [network_config] is now a required input. Previously, a default value was provided. The `examples/simple/main.tf` has been updated to reflect this.</li></ul> |
-
-[network_config]:
-https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#input_network_config
+Terraform modules, additional considerations may apply when using an updated
+Terraform modules to your existing deployments.
