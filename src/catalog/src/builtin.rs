@@ -35,6 +35,7 @@ use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, Timely
 use mz_ore::collections::HashMap;
 use mz_pgrepr::oid;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::namespaces::{
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_INTROSPECTION_SCHEMA,
     MZ_UNSAFE_SCHEMA, PG_CATALOG_SCHEMA,
@@ -2971,6 +2972,16 @@ pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUSES: LazyLock<BuiltinView> =
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::VIEW_MZ_AWS_PRIVATELINK_CONNECTION_STATUSES_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("id", ScalarType::String.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column(
+                "last_status_change_at",
+                ScalarType::TimestampTz { precision: None }.nullable(true),
+            )
+            .with_column("status", ScalarType::String.nullable(true))
+            .with_key(vec![0])
+            .finish(),
         sql: "
     WITH statuses_w_last_status AS (
         SELECT
@@ -3017,6 +3028,27 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY_REDACTED: LazyLock<BuiltinView> = Lazy
     oid: oid::VIEW_MZ_STATEMENT_EXECUTION_HISTORY_REDACTED_OID,
     column_defs: None,
     // everything but `params` and `error_message`
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::Uuid.nullable(false))
+        .with_column("prepared_statement_id", ScalarType::Uuid.nullable(false))
+        .with_column("sample_rate", ScalarType::Float64.nullable(false))
+        .with_column("cluster_id", ScalarType::String.nullable(true))
+        .with_column("application_name", ScalarType::String.nullable(false))
+        .with_column("cluster_name", ScalarType::String.nullable(true))
+        .with_column("database_name", ScalarType::String.nullable(false))
+        .with_column("search_path", ScalarType::List { element_type: Box::new(ScalarType::String), custom_id: None }.nullable(false))
+        .with_column("transaction_isolation", ScalarType::String.nullable(false))
+        .with_column("execution_timestamp", ScalarType::UInt64.nullable(true))
+        .with_column("transaction_id", ScalarType::UInt64.nullable(false))
+        .with_column("transient_index_id", ScalarType::String.nullable(true))
+        .with_column("mz_version", ScalarType::String.nullable(false))
+        .with_column("began_at", ScalarType::TimestampTz { precision: None }.nullable(false))
+        .with_column("finished_at", ScalarType::TimestampTz { precision: None }.nullable(true))
+        .with_column("finished_status", ScalarType::String.nullable(true))
+        .with_column("result_size", ScalarType::Int64.nullable(true))
+        .with_column("rows_returned", ScalarType::Int64.nullable(true))
+        .with_column("execution_strategy", ScalarType::String.nullable(true))
+        .finish(),
     sql: "
 SELECT id, prepared_statement_id, sample_rate, cluster_id, application_name,
 cluster_name, database_name, search_path, transaction_isolation, execution_timestamp, transaction_id,
@@ -3058,6 +3090,10 @@ pub static MZ_SQL_TEXT_REDACTED: LazyLock<BuiltinView> = LazyLock::new(|| Builti
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SQL_TEXT_REDACTED_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("sql_hash", ScalarType::Bytes.nullable(false))
+        .with_column("redacted_sql", ScalarType::String.nullable(false))
+        .finish(),
     sql: "SELECT sql_hash, redacted_sql FROM mz_internal.mz_sql_text",
     access: vec![
         MONITOR_SELECT,
@@ -3077,6 +3113,12 @@ pub static MZ_RECENT_SQL_TEXT: LazyLock<BuiltinView> = LazyLock::new(|| {
         // `MZ_RECENT_THINNED_ACTIVITY_LOG` , because `prepared_day`
         // is rounded down to the nearest day.  Thus something that actually happened three days ago
         // could have a `prepared day` anywhere from 3 to 4 days back.
+        desc: RelationDesc::builder()
+            .with_column("sql_hash", ScalarType::Bytes.nullable(false))
+            .with_column("sql", ScalarType::String.nullable(false))
+            .with_column("redacted_sql", ScalarType::String.nullable(false))
+            .with_key(vec![0, 1, 2])
+            .finish(),
         sql: "SELECT DISTINCT sql_hash, sql, redacted_sql FROM mz_internal.mz_sql_text WHERE prepared_day + INTERVAL '4 days' >= mz_now()",
         access: vec![MONITOR_SELECT],
     }
@@ -3087,6 +3129,10 @@ pub static MZ_RECENT_SQL_TEXT_REDACTED: LazyLock<BuiltinView> = LazyLock::new(||
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_RECENT_SQL_TEXT_REDACTED_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("sql_hash", ScalarType::Bytes.nullable(false))
+        .with_column("redacted_sql", ScalarType::String.nullable(false))
+        .finish(),
     sql: "SELECT sql_hash, redacted_sql FROM mz_internal.mz_recent_sql_text",
     access: vec![
         MONITOR_SELECT,
@@ -3120,6 +3166,37 @@ pub static MZ_ACTIVITY_LOG_THINNED: LazyLock<BuiltinView> = LazyLock::new(|| {
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::VIEW_MZ_ACTIVITY_LOG_THINNED_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("execution_id", ScalarType::Uuid.nullable(false))
+            .with_column("sample_rate", ScalarType::Float64.nullable(false))
+            .with_column("cluster_id", ScalarType::String.nullable(true))
+            .with_column("application_name", ScalarType::String.nullable(false))
+            .with_column("cluster_name", ScalarType::String.nullable(true))
+            .with_column("database_name", ScalarType::String.nullable(false))
+            .with_column("search_path", ScalarType::List { element_type: Box::new(ScalarType::String), custom_id: None }.nullable(false))
+            .with_column("transaction_isolation", ScalarType::String.nullable(false))
+            .with_column("execution_timestamp", ScalarType::UInt64.nullable(true))
+            .with_column("transient_index_id", ScalarType::String.nullable(true))
+            .with_column("params", ScalarType::Array(Box::new(ScalarType::String)).nullable(false))
+            .with_column("mz_version", ScalarType::String.nullable(false))
+            .with_column("began_at", ScalarType::TimestampTz { precision: None }.nullable(false))
+            .with_column("finished_at", ScalarType::TimestampTz { precision: None }.nullable(true))
+            .with_column("finished_status", ScalarType::String.nullable(true))
+            .with_column("error_message", ScalarType::String.nullable(true))
+            .with_column("result_size", ScalarType::Int64.nullable(true))
+            .with_column("rows_returned", ScalarType::Int64.nullable(true))
+            .with_column("execution_strategy", ScalarType::String.nullable(true))
+            .with_column("transaction_id", ScalarType::UInt64.nullable(false))
+            .with_column("prepared_statement_id", ScalarType::Uuid.nullable(false))
+            .with_column("sql_hash", ScalarType::Bytes.nullable(false))
+            .with_column("prepared_statement_name", ScalarType::String.nullable(false))
+            .with_column("session_id", ScalarType::Uuid.nullable(false))
+            .with_column("prepared_at", ScalarType::TimestampTz { precision: None }.nullable(false))
+            .with_column("statement_type", ScalarType::String.nullable(true))
+            .with_column("throttled_count", ScalarType::UInt64.nullable(false))
+            .with_column("initial_application_name", ScalarType::String.nullable(false))
+            .with_column("authenticated_user", ScalarType::String.nullable(false))
+            .finish(),
         sql: "
 SELECT mseh.id AS execution_id, sample_rate, cluster_id, application_name, cluster_name, database_name, search_path,
 transaction_isolation, execution_timestamp, transient_index_id, params, mz_version, began_at, finished_at, finished_status,
@@ -3142,6 +3219,37 @@ pub static MZ_RECENT_ACTIVITY_LOG_THINNED: LazyLock<BuiltinView> = LazyLock::new
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::VIEW_MZ_RECENT_ACTIVITY_LOG_THINNED_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("execution_id", ScalarType::Uuid.nullable(false))
+            .with_column("sample_rate", ScalarType::Float64.nullable(false))
+            .with_column("cluster_id", ScalarType::String.nullable(true))
+            .with_column("application_name", ScalarType::String.nullable(false))
+            .with_column("cluster_name", ScalarType::String.nullable(true))
+            .with_column("database_name", ScalarType::String.nullable(false))
+            .with_column("search_path", ScalarType::List { element_type: Box::new(ScalarType::String), custom_id: None }.nullable(false))
+            .with_column("transaction_isolation", ScalarType::String.nullable(false))
+            .with_column("execution_timestamp", ScalarType::UInt64.nullable(true))
+            .with_column("transient_index_id", ScalarType::String.nullable(true))
+            .with_column("params", ScalarType::Array(Box::new(ScalarType::String)).nullable(false))
+            .with_column("mz_version", ScalarType::String.nullable(false))
+            .with_column("began_at", ScalarType::TimestampTz { precision: None }.nullable(false))
+            .with_column("finished_at", ScalarType::TimestampTz { precision: None }.nullable(true))
+            .with_column("finished_status", ScalarType::String.nullable(true))
+            .with_column("error_message", ScalarType::String.nullable(true))
+            .with_column("result_size", ScalarType::Int64.nullable(true))
+            .with_column("rows_returned", ScalarType::Int64.nullable(true))
+            .with_column("execution_strategy", ScalarType::String.nullable(true))
+            .with_column("transaction_id", ScalarType::UInt64.nullable(false))
+            .with_column("prepared_statement_id", ScalarType::Uuid.nullable(false))
+            .with_column("sql_hash", ScalarType::Bytes.nullable(false))
+            .with_column("prepared_statement_name", ScalarType::String.nullable(false))
+            .with_column("session_id", ScalarType::Uuid.nullable(false))
+            .with_column("prepared_at", ScalarType::TimestampTz { precision: None }.nullable(false))
+            .with_column("statement_type", ScalarType::String.nullable(true))
+            .with_column("throttled_count", ScalarType::UInt64.nullable(false))
+            .with_column("initial_application_name", ScalarType::String.nullable(false))
+            .with_column("authenticated_user", ScalarType::String.nullable(false))
+            .finish(),
         sql:
         "SELECT * FROM mz_internal.mz_activity_log_thinned WHERE prepared_at + INTERVAL '1 day' > mz_now()
 AND began_at + INTERVAL '1 day' > mz_now()",
@@ -3154,6 +3262,63 @@ pub static MZ_RECENT_ACTIVITY_LOG: LazyLock<BuiltinView> = LazyLock::new(|| Buil
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_RECENT_ACTIVITY_LOG_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("execution_id", ScalarType::Uuid.nullable(false))
+        .with_column("sample_rate", ScalarType::Float64.nullable(false))
+        .with_column("cluster_id", ScalarType::String.nullable(true))
+        .with_column("application_name", ScalarType::String.nullable(false))
+        .with_column("cluster_name", ScalarType::String.nullable(true))
+        .with_column("database_name", ScalarType::String.nullable(false))
+        .with_column(
+            "search_path",
+            ScalarType::List {
+                element_type: Box::new(ScalarType::String),
+                custom_id: None,
+            }
+            .nullable(false),
+        )
+        .with_column("transaction_isolation", ScalarType::String.nullable(false))
+        .with_column("execution_timestamp", ScalarType::UInt64.nullable(true))
+        .with_column("transient_index_id", ScalarType::String.nullable(true))
+        .with_column(
+            "params",
+            ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
+        )
+        .with_column("mz_version", ScalarType::String.nullable(false))
+        .with_column(
+            "began_at",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column(
+            "finished_at",
+            ScalarType::TimestampTz { precision: None }.nullable(true),
+        )
+        .with_column("finished_status", ScalarType::String.nullable(true))
+        .with_column("error_message", ScalarType::String.nullable(true))
+        .with_column("result_size", ScalarType::Int64.nullable(true))
+        .with_column("rows_returned", ScalarType::Int64.nullable(true))
+        .with_column("execution_strategy", ScalarType::String.nullable(true))
+        .with_column("transaction_id", ScalarType::UInt64.nullable(false))
+        .with_column("prepared_statement_id", ScalarType::Uuid.nullable(false))
+        .with_column("sql_hash", ScalarType::Bytes.nullable(false))
+        .with_column(
+            "prepared_statement_name",
+            ScalarType::String.nullable(false),
+        )
+        .with_column("session_id", ScalarType::Uuid.nullable(false))
+        .with_column(
+            "prepared_at",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column("statement_type", ScalarType::String.nullable(true))
+        .with_column("throttled_count", ScalarType::UInt64.nullable(false))
+        .with_column(
+            "initial_application_name",
+            ScalarType::String.nullable(false),
+        )
+        .with_column("authenticated_user", ScalarType::String.nullable(false))
+        .with_column("sql", ScalarType::String.nullable(false))
+        .finish(),
     sql: "SELECT mralt.*, mrst.sql
 FROM mz_internal.mz_recent_activity_log_thinned mralt,
      mz_internal.mz_recent_sql_text mrst
@@ -3168,6 +3333,37 @@ pub static MZ_RECENT_ACTIVITY_LOG_REDACTED: LazyLock<BuiltinView> = LazyLock::ne
     oid: oid::VIEW_MZ_RECENT_ACTIVITY_LOG_REDACTED_OID,
     column_defs: None,
     // Includes all the columns in mz_recent_activity_log_thinned except 'error_message'.
+    desc: RelationDesc::builder()
+        .with_column("execution_id", ScalarType::Uuid.nullable(false))
+        .with_column("sample_rate", ScalarType::Float64.nullable(false))
+        .with_column("cluster_id", ScalarType::String.nullable(true))
+        .with_column("application_name", ScalarType::String.nullable(false))
+        .with_column("cluster_name", ScalarType::String.nullable(true))
+        .with_column("database_name", ScalarType::String.nullable(false))
+        .with_column("search_path", ScalarType::List { element_type: Box::new(ScalarType::String), custom_id: None }.nullable(false))
+        .with_column("transaction_isolation", ScalarType::String.nullable(false))
+        .with_column("execution_timestamp", ScalarType::UInt64.nullable(true))
+        .with_column("transient_index_id", ScalarType::String.nullable(true))
+        .with_column("params", ScalarType::Array(Box::new(ScalarType::String)).nullable(false))
+        .with_column("mz_version", ScalarType::String.nullable(false))
+        .with_column("began_at", ScalarType::TimestampTz { precision: None }.nullable(false))
+        .with_column("finished_at", ScalarType::TimestampTz { precision: None }.nullable(true))
+        .with_column("finished_status", ScalarType::String.nullable(true))
+        .with_column("result_size", ScalarType::Int64.nullable(true))
+        .with_column("rows_returned", ScalarType::Int64.nullable(true))
+        .with_column("execution_strategy", ScalarType::String.nullable(true))
+        .with_column("transaction_id", ScalarType::UInt64.nullable(false))
+        .with_column("prepared_statement_id", ScalarType::Uuid.nullable(false))
+        .with_column("sql_hash", ScalarType::Bytes.nullable(false))
+        .with_column("prepared_statement_name", ScalarType::String.nullable(false))
+        .with_column("session_id", ScalarType::Uuid.nullable(false))
+        .with_column("prepared_at", ScalarType::TimestampTz { precision: None }.nullable(false))
+        .with_column("statement_type", ScalarType::String.nullable(true))
+        .with_column("throttled_count", ScalarType::UInt64.nullable(false))
+        .with_column("initial_application_name", ScalarType::String.nullable(false))
+        .with_column("authenticated_user", ScalarType::String.nullable(false))
+        .with_column("redacted_sql", ScalarType::String.nullable(false))
+        .finish(),
     sql: "SELECT mralt.execution_id, mralt.sample_rate, mralt.cluster_id, mralt.application_name,
     mralt.cluster_name, mralt.database_name, mralt.search_path, mralt.transaction_isolation, mralt.execution_timestamp,
     mralt.transient_index_id, mralt.params, mralt.mz_version, mralt.began_at, mralt.finished_at,
@@ -3214,6 +3410,18 @@ pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SOURCE_STATUSES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("type", ScalarType::String.nullable(false))
+        .with_column(
+            "last_status_change_at",
+            ScalarType::TimestampTz { precision: None }.nullable(true),
+        )
+        .with_column("status", ScalarType::String.nullable(false))
+        .with_column("error", ScalarType::String.nullable(true))
+        .with_column("details", ScalarType::Jsonb.nullable(true))
+        .finish(),
     sql: "
     WITH
     -- The status history contains per-replica events and source-global events.
@@ -3381,6 +3589,18 @@ pub static MZ_SINK_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVie
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SINK_STATUSES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("type", ScalarType::String.nullable(false))
+        .with_column(
+            "last_status_change_at",
+            ScalarType::TimestampTz { precision: None }.nullable(true),
+        )
+        .with_column("status", ScalarType::String.nullable(false))
+        .with_column("error", ScalarType::String.nullable(true))
+        .with_column("details", ScalarType::Jsonb.nullable(true))
+        .finish(),
     sql: "
 WITH
 -- The status history contains per-replica events and sink-global events.
@@ -3615,6 +3835,10 @@ pub static MZ_GLOBAL_FRONTIERS: LazyLock<BuiltinView> = LazyLock::new(|| Builtin
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_GLOBAL_FRONTIERS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column("time", ScalarType::MzTimestamp.nullable(false))
+        .finish(),
     sql: "
 SELECT object_id, write_frontier AS time
 FROM mz_internal.mz_frontiers
@@ -3653,6 +3877,15 @@ pub static MZ_WALLCLOCK_GLOBAL_LAG_HISTORY: LazyLock<BuiltinView> = LazyLock::ne
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_WALLCLOCK_GLOBAL_LAG_HISTORY_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column("lag", ScalarType::Interval.nullable(false))
+        .with_column(
+            "occurred_at",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_key(vec![0, 2])
+        .finish(),
     sql: "
 WITH times_binned AS (
     SELECT
@@ -3677,6 +3910,15 @@ pub static MZ_WALLCLOCK_GLOBAL_LAG_RECENT_HISTORY: LazyLock<BuiltinView> =
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::VIEW_MZ_WALLCLOCK_GLOBAL_LAG_RECENT_HISTORY_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("object_id", ScalarType::String.nullable(false))
+            .with_column("lag", ScalarType::Interval.nullable(false))
+            .with_column(
+                "occurred_at",
+                ScalarType::TimestampTz { precision: None }.nullable(false),
+            )
+            .with_key(vec![0, 2])
+            .finish(),
         sql: "
 SELECT object_id, lag, occurred_at
 FROM mz_internal.mz_wallclock_global_lag_history
@@ -3689,6 +3931,11 @@ pub static MZ_WALLCLOCK_GLOBAL_LAG: LazyLock<BuiltinView> = LazyLock::new(|| Bui
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_WALLCLOCK_GLOBAL_LAG_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column("lag", ScalarType::Interval.nullable(false))
+        .with_key(vec![0])
+        .finish(),
     sql: "
 SELECT DISTINCT ON (object_id) object_id, lag
 FROM mz_internal.mz_wallclock_global_lag_recent_history
@@ -3714,6 +3961,21 @@ pub static MZ_WALLCLOCK_GLOBAL_LAG_HISTOGRAM: LazyLock<BuiltinView> =
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::VIEW_MZ_WALLCLOCK_GLOBAL_LAG_HISTOGRAM_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column(
+                "period_start",
+                ScalarType::TimestampTz { precision: None }.nullable(false),
+            )
+            .with_column(
+                "period_end",
+                ScalarType::TimestampTz { precision: None }.nullable(false),
+            )
+            .with_column("object_id", ScalarType::String.nullable(false))
+            .with_column("lag_seconds", ScalarType::UInt64.nullable(false))
+            .with_column("labels", ScalarType::Jsonb.nullable(false))
+            .with_column("count", ScalarType::Int64.nullable(false))
+            .with_key(vec![0, 1, 2, 3, 4])
+            .finish(),
         sql: "
 SELECT *, count(*) AS count
 FROM mz_internal.mz_wallclock_global_lag_histogram_raw
@@ -3910,6 +4172,15 @@ pub static MZ_STORAGE_USAGE: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVie
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::VIEW_MZ_STORAGE_USAGE_OID,
     column_defs: Some("object_id, size_bytes, collection_timestamp"),
+    desc: RelationDesc::builder()
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column("size_bytes", ScalarType::UInt64.nullable(false))
+        .with_column(
+            "collection_timestamp",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_key(vec![0, 2])
+        .finish(),
     sql: "
 SELECT
     object_id,
@@ -3928,6 +4199,11 @@ pub static MZ_RECENT_STORAGE_USAGE: LazyLock<BuiltinView> = LazyLock::new(|| {
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::VIEW_MZ_RECENT_STORAGE_USAGE_OID,
     column_defs: Some("object_id, size_bytes"),
+    desc: RelationDesc::builder()
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column("size_bytes", ScalarType::UInt64.nullable(true))
+        .with_key(vec![0])
+        .finish(),
     sql: "
 WITH
 
@@ -3973,6 +4249,16 @@ pub static MZ_RELATIONS: LazyLock<BuiltinView> = LazyLock::new(|| {
         schema: MZ_CATALOG_SCHEMA,
         oid: oid::VIEW_MZ_RELATIONS_OID,
         column_defs: Some("id, oid, schema_id, name, type, owner_id, cluster_id, privileges"),
+        desc: RelationDesc::builder()
+            .with_column("id", ScalarType::String.nullable(false))
+            .with_column("oid", ScalarType::Oid.nullable(false))
+            .with_column("schema_id", ScalarType::String.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("type", ScalarType::String.nullable(false))
+            .with_column("owner_id", ScalarType::String.nullable(false))
+            .with_column("cluster_id", ScalarType::String.nullable(true))
+            .with_column("privileges", ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false))
+            .finish(),
         sql: "
       SELECT id, oid, schema_id, name, 'table', owner_id, NULL::text, privileges FROM mz_catalog.mz_tables
 UNION ALL SELECT id, oid, schema_id, name, 'source', owner_id, cluster_id, privileges FROM mz_catalog.mz_sources
@@ -3988,6 +4274,10 @@ pub static MZ_OBJECTS_ID_NAMESPACE_TYPES: LazyLock<BuiltinView> = LazyLock::new(
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_OBJECTS_ID_NAMESPACE_TYPES_OID,
     column_defs: Some("object_type"),
+    desc: RelationDesc::builder()
+        .with_column("object_type", ScalarType::String.nullable(false))
+        .with_key(vec![0])
+        .finish(),
     sql: r#"SELECT *
     FROM (
         VALUES
@@ -4011,6 +4301,11 @@ pub static MZ_OBJECT_OID_ALIAS: LazyLock<BuiltinView> = LazyLock::new(|| Builtin
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_OBJECT_OID_ALIAS_OID,
     column_defs: Some("object_type, oid_alias"),
+    desc: RelationDesc::builder()
+        .with_column("object_type", ScalarType::String.nullable(false))
+        .with_column("oid_alias", ScalarType::String.nullable(false))
+        .with_key(vec![0])
+        .finish(),
     sql: "SELECT object_type, oid_alias
     FROM (
         VALUES
@@ -4035,6 +4330,16 @@ pub static MZ_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| {
         schema: MZ_CATALOG_SCHEMA,
         oid: oid::VIEW_MZ_OBJECTS_OID,
         column_defs: Some("id, oid, schema_id, name, type, owner_id, cluster_id, privileges"),
+        desc: RelationDesc::builder()
+            .with_column("id", ScalarType::String.nullable(false))
+            .with_column("oid", ScalarType::Oid.nullable(false))
+            .with_column("schema_id", ScalarType::String.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("type", ScalarType::String.nullable(false))
+            .with_column("owner_id", ScalarType::String.nullable(false))
+            .with_column("cluster_id", ScalarType::String.nullable(true))
+            .with_column("privileges", ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(true))
+            .finish(),
         sql:
         "SELECT id, oid, schema_id, name, type, owner_id, cluster_id, privileges FROM mz_catalog.mz_relations
 UNION ALL
@@ -4062,6 +4367,16 @@ pub static MZ_OBJECT_FULLY_QUALIFIED_NAMES: LazyLock<BuiltinView> = LazyLock::ne
     column_defs: Some(
         "id, name, object_type, schema_id, schema_name, database_id, database_name, cluster_id",
     ),
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("object_type", ScalarType::String.nullable(false))
+        .with_column("schema_id", ScalarType::String.nullable(false))
+        .with_column("schema_name", ScalarType::String.nullable(false))
+        .with_column("database_id", ScalarType::String.nullable(true))
+        .with_column("database_name", ScalarType::String.nullable(true))
+        .with_column("cluster_id", ScalarType::String.nullable(true))
+        .finish(),
     sql: "
     SELECT o.id,
         o.name,
@@ -4084,6 +4399,16 @@ pub static MZ_OBJECT_LIFETIMES: LazyLock<BuiltinView> = LazyLock::new(|| Builtin
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_OBJECT_LIFETIMES_OID,
     column_defs: Some("id, previous_id, object_type, event_type, occurred_at"),
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::String.nullable(true))
+        .with_column("previous_id", ScalarType::String.nullable(true))
+        .with_column("object_type", ScalarType::String.nullable(false))
+        .with_column("event_type", ScalarType::String.nullable(false))
+        .with_column(
+            "occurred_at",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .finish(),
     sql: "
     SELECT
         CASE
@@ -4104,6 +4429,19 @@ pub static MZ_OBJECT_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVi
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_OBJECT_HISTORY_OID,
     column_defs: Some("id, cluster_id, object_type, created_at, dropped_at"),
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::String.nullable(true))
+        .with_column("cluster_id", ScalarType::String.nullable(true))
+        .with_column("object_type", ScalarType::String.nullable(false))
+        .with_column(
+            "created_at",
+            ScalarType::TimestampTz { precision: None }.nullable(true),
+        )
+        .with_column(
+            "dropped_at",
+            ScalarType::TimestampTz { precision: None }.nullable(true),
+        )
+        .finish(),
     sql: r#"
     WITH
         creates AS
@@ -4158,6 +4496,11 @@ pub static MZ_DATAFLOWS_PER_WORKER: LazyLock<BuiltinView> = LazyLock::new(|| Bui
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_DATAFLOWS_PER_WORKER_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::UInt64.nullable(true))
+        .with_column("worker_id", ScalarType::UInt64.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .finish(),
     sql: "SELECT
     addrs.address[1] AS id,
     ops.worker_id,
@@ -4177,6 +4520,10 @@ pub static MZ_DATAFLOWS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_DATAFLOWS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::UInt64.nullable(true))
+        .with_column("name", ScalarType::String.nullable(false))
+        .finish(),
     sql: "
 SELECT id, name
 FROM mz_introspection.mz_dataflows_per_worker
@@ -4189,6 +4536,17 @@ pub static MZ_DATAFLOW_ADDRESSES: LazyLock<BuiltinView> = LazyLock::new(|| Built
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_DATAFLOW_ADDRESSES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::UInt64.nullable(false))
+        .with_column(
+            "address",
+            ScalarType::List {
+                element_type: Box::new(ScalarType::UInt64),
+                custom_id: None,
+            }
+            .nullable(false),
+        )
+        .finish(),
     sql: "
 SELECT id, address
 FROM mz_introspection.mz_dataflow_addresses_per_worker
@@ -4201,6 +4559,13 @@ pub static MZ_DATAFLOW_CHANNELS: LazyLock<BuiltinView> = LazyLock::new(|| Builti
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_DATAFLOW_CHANNELS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::UInt64.nullable(false))
+        .with_column("from_index", ScalarType::UInt64.nullable(false))
+        .with_column("from_port", ScalarType::UInt64.nullable(false))
+        .with_column("to_index", ScalarType::UInt64.nullable(false))
+        .with_column("to_port", ScalarType::UInt64.nullable(false))
+        .finish(),
     sql: "
 SELECT id, from_index, from_port, to_index, to_port
 FROM mz_introspection.mz_dataflow_channels_per_worker
@@ -4213,6 +4578,10 @@ pub static MZ_DATAFLOW_OPERATORS: LazyLock<BuiltinView> = LazyLock::new(|| Built
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_DATAFLOW_OPERATORS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::UInt64.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .finish(),
     sql: "
 SELECT id, name
 FROM mz_introspection.mz_dataflow_operators_per_worker
@@ -4225,6 +4594,10 @@ pub static MZ_DATAFLOW_GLOBAL_IDS: LazyLock<BuiltinView> = LazyLock::new(|| Buil
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_DATAFLOW_GLOBAL_IDS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::UInt64.nullable(false))
+        .with_column("global_id", ScalarType::String.nullable(false))
+        .finish(),
     sql: "
 SELECT id, global_id
 FROM mz_introspection.mz_compute_dataflow_global_ids_per_worker
@@ -4238,6 +4611,10 @@ pub static MZ_MAPPABLE_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| {
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_MAPPABLE_OBJECTS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("global_id", ScalarType::String.nullable(false))
+        .finish(),
     sql: "
 SELECT SUBSTRING(name FROM 11) AS name, global_id
 FROM mz_introspection.mz_dataflows md JOIN mz_introspection.mz_dataflow_global_ids mdgi USING (id)
@@ -4253,6 +4630,15 @@ pub static MZ_LIR_MAPPING: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView 
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_LIR_MAPPING_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("global_id", ScalarType::String.nullable(false))
+        .with_column("lir_id", ScalarType::UInt64.nullable(false))
+        .with_column("operator", ScalarType::String.nullable(false))
+        .with_column("parent_lir_id", ScalarType::UInt64.nullable(true))
+        .with_column("nesting", ScalarType::UInt16.nullable(false))
+        .with_column("operator_id_start", ScalarType::UInt64.nullable(false))
+        .with_column("operator_id_end", ScalarType::UInt64.nullable(false))
+        .finish(),
     sql: "
 SELECT global_id, lir_id, operator, parent_lir_id, nesting, operator_id_start, operator_id_end
 FROM mz_introspection.mz_compute_lir_mapping_per_worker
@@ -4266,6 +4652,13 @@ pub static MZ_DATAFLOW_OPERATOR_DATAFLOWS_PER_WORKER: LazyLock<BuiltinView> =
         schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::VIEW_MZ_DATAFLOW_OPERATOR_DATAFLOWS_PER_WORKER_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("id", ScalarType::UInt64.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("worker_id", ScalarType::UInt64.nullable(false))
+            .with_column("dataflow_id", ScalarType::UInt64.nullable(false))
+            .with_column("dataflow_name", ScalarType::String.nullable(false))
+            .finish(),
         sql: "SELECT
     ops.id,
     ops.name,
@@ -4289,6 +4682,12 @@ pub static MZ_DATAFLOW_OPERATOR_DATAFLOWS: LazyLock<BuiltinView> = LazyLock::new
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_DATAFLOW_OPERATOR_DATAFLOWS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::UInt64.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("dataflow_id", ScalarType::UInt64.nullable(false))
+        .with_column("dataflow_name", ScalarType::String.nullable(false))
+        .finish(),
     sql: "
 SELECT id, name, dataflow_id, dataflow_name
 FROM mz_introspection.mz_dataflow_operator_dataflows_per_worker
@@ -4302,6 +4701,11 @@ pub static MZ_OBJECT_TRANSITIVE_DEPENDENCIES: LazyLock<BuiltinView> =
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::VIEW_MZ_OBJECT_TRANSITIVE_DEPENDENCIES_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("object_id", ScalarType::String.nullable(false))
+            .with_column("referenced_object_id", ScalarType::String.nullable(false))
+            .with_key(vec![0, 1])
+            .finish(),
         sql: "
 WITH MUTUALLY RECURSIVE
   reach(object_id text, referenced_object_id text) AS (
@@ -4318,6 +4722,10 @@ pub static MZ_COMPUTE_EXPORTS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_COMPUTE_EXPORTS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("export_id", ScalarType::String.nullable(false))
+        .with_column("dataflow_id", ScalarType::UInt64.nullable(false))
+        .finish(),
     sql: "
 SELECT export_id, dataflow_id
 FROM mz_introspection.mz_compute_exports_per_worker
@@ -4330,6 +4738,11 @@ pub static MZ_COMPUTE_FRONTIERS: LazyLock<BuiltinView> = LazyLock::new(|| Builti
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_COMPUTE_FRONTIERS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("export_id", ScalarType::String.nullable(false))
+        .with_column("time", ScalarType::MzTimestamp.nullable(false))
+        .with_key(vec![0])
+        .finish(),
     sql: "SELECT
     export_id, pg_catalog.min(time) AS time
 FROM mz_introspection.mz_compute_frontiers_per_worker
@@ -4343,6 +4756,28 @@ pub static MZ_DATAFLOW_CHANNEL_OPERATORS_PER_WORKER: LazyLock<BuiltinView> =
         schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::VIEW_MZ_DATAFLOW_CHANNEL_OPERATORS_PER_WORKER_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("id", ScalarType::UInt64.nullable(false))
+            .with_column("worker_id", ScalarType::UInt64.nullable(false))
+            .with_column("from_operator_id", ScalarType::UInt64.nullable(true))
+            .with_column(
+                "from_operator_address",
+                ScalarType::List {
+                    element_type: Box::new(ScalarType::UInt64),
+                    custom_id: None,
+                }
+                .nullable(true),
+            )
+            .with_column("to_operator_id", ScalarType::UInt64.nullable(true))
+            .with_column(
+                "to_operator_address",
+                ScalarType::List {
+                    element_type: Box::new(ScalarType::UInt64),
+                    custom_id: None,
+                }
+                .nullable(true),
+            )
+            .finish(),
         sql: "
 WITH
 channel_addresses(id, worker_id, address, from_index, to_index) AS (
@@ -4385,6 +4820,27 @@ pub static MZ_DATAFLOW_CHANNEL_OPERATORS: LazyLock<BuiltinView> = LazyLock::new(
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_DATAFLOW_CHANNEL_OPERATORS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::UInt64.nullable(false))
+        .with_column("from_operator_id", ScalarType::UInt64.nullable(true))
+        .with_column(
+            "from_operator_address",
+            ScalarType::List {
+                element_type: Box::new(ScalarType::UInt64),
+                custom_id: None,
+            }
+            .nullable(true),
+        )
+        .with_column("to_operator_id", ScalarType::UInt64.nullable(true))
+        .with_column(
+            "to_operator_address",
+            ScalarType::List {
+                element_type: Box::new(ScalarType::UInt64),
+                custom_id: None,
+            }
+            .nullable(true),
+        )
+        .finish(),
     sql: "
 SELECT id, from_operator_id, from_operator_address, to_operator_id, to_operator_address
 FROM mz_introspection.mz_dataflow_channel_operators_per_worker
@@ -4397,6 +4853,12 @@ pub static MZ_COMPUTE_IMPORT_FRONTIERS: LazyLock<BuiltinView> = LazyLock::new(||
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_COMPUTE_IMPORT_FRONTIERS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("export_id", ScalarType::String.nullable(false))
+        .with_column("import_id", ScalarType::String.nullable(false))
+        .with_column("time", ScalarType::MzTimestamp.nullable(false))
+        .with_key(vec![0, 1])
+        .finish(),
     sql: "SELECT
     export_id, import_id, pg_catalog.min(time) AS time
 FROM mz_introspection.mz_compute_import_frontiers_per_worker
@@ -4410,6 +4872,17 @@ pub static MZ_RECORDS_PER_DATAFLOW_OPERATOR_PER_WORKER: LazyLock<BuiltinView> =
         schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::VIEW_MZ_RECORDS_PER_DATAFLOW_OPERATOR_PER_WORKER_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("id", ScalarType::UInt64.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("worker_id", ScalarType::UInt64.nullable(false))
+            .with_column("dataflow_id", ScalarType::UInt64.nullable(false))
+            .with_column("records", ScalarType::Int64.nullable(false))
+            .with_column("batches", ScalarType::Int64.nullable(false))
+            .with_column("size", ScalarType::Int64.nullable(false))
+            .with_column("capacity", ScalarType::Int64.nullable(false))
+            .with_column("allocations", ScalarType::Int64.nullable(false))
+            .finish(),
         sql: "
 SELECT
     dod.id,
@@ -4435,6 +4908,47 @@ pub static MZ_RECORDS_PER_DATAFLOW_OPERATOR: LazyLock<BuiltinView> =
         schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::VIEW_MZ_RECORDS_PER_DATAFLOW_OPERATOR_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("id", ScalarType::UInt64.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("dataflow_id", ScalarType::UInt64.nullable(false))
+            .with_column(
+                "records",
+                ScalarType::Numeric {
+                    max_scale: Some(NumericMaxScale::ZERO),
+                }
+                .nullable(false),
+            )
+            .with_column(
+                "batches",
+                ScalarType::Numeric {
+                    max_scale: Some(NumericMaxScale::ZERO),
+                }
+                .nullable(false),
+            )
+            .with_column(
+                "size",
+                ScalarType::Numeric {
+                    max_scale: Some(NumericMaxScale::ZERO),
+                }
+                .nullable(false),
+            )
+            .with_column(
+                "capacity",
+                ScalarType::Numeric {
+                    max_scale: Some(NumericMaxScale::ZERO),
+                }
+                .nullable(false),
+            )
+            .with_column(
+                "allocations",
+                ScalarType::Numeric {
+                    max_scale: Some(NumericMaxScale::ZERO),
+                }
+                .nullable(false),
+            )
+            .with_key(vec![0, 1, 2])
+            .finish(),
         sql: "
 SELECT
     id,
@@ -4456,6 +4970,47 @@ pub static MZ_RECORDS_PER_DATAFLOW_PER_WORKER: LazyLock<BuiltinView> =
         schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::VIEW_MZ_RECORDS_PER_DATAFLOW_PER_WORKER_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("id", ScalarType::UInt64.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("worker_id", ScalarType::UInt64.nullable(false))
+            .with_column(
+                "records",
+                ScalarType::Numeric {
+                    max_scale: Some(NumericMaxScale::ZERO),
+                }
+                .nullable(false),
+            )
+            .with_column(
+                "batches",
+                ScalarType::Numeric {
+                    max_scale: Some(NumericMaxScale::ZERO),
+                }
+                .nullable(false),
+            )
+            .with_column(
+                "size",
+                ScalarType::Numeric {
+                    max_scale: Some(NumericMaxScale::ZERO),
+                }
+                .nullable(false),
+            )
+            .with_column(
+                "capacity",
+                ScalarType::Numeric {
+                    max_scale: Some(NumericMaxScale::ZERO),
+                }
+                .nullable(false),
+            )
+            .with_column(
+                "allocations",
+                ScalarType::Numeric {
+                    max_scale: Some(NumericMaxScale::ZERO),
+                }
+                .nullable(false),
+            )
+            .with_key(vec![0, 1, 2])
+            .finish(),
         sql: "
 SELECT
     rdo.dataflow_id as id,
@@ -4484,6 +5039,46 @@ pub static MZ_RECORDS_PER_DATAFLOW: LazyLock<BuiltinView> = LazyLock::new(|| Bui
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_RECORDS_PER_DATAFLOW_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::UInt64.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column(
+            "records",
+            ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO),
+            }
+            .nullable(false),
+        )
+        .with_column(
+            "batches",
+            ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO),
+            }
+            .nullable(false),
+        )
+        .with_column(
+            "size",
+            ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO),
+            }
+            .nullable(false),
+        )
+        .with_column(
+            "capacity",
+            ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO),
+            }
+            .nullable(false),
+        )
+        .with_column(
+            "allocations",
+            ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO),
+            }
+            .nullable(false),
+        )
+        .with_key(vec![0, 1])
+        .finish(),
     sql: "
 SELECT
     id,
@@ -4511,6 +5106,16 @@ pub static PG_NAMESPACE_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| 
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_PG_NAMESPACE_ALL_DATABASES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("nspname", ScalarType::String.nullable(false))
+        .with_column("nspowner", ScalarType::Oid.nullable(false))
+        .with_column(
+            "nspacl",
+            ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
+        )
+        .with_column("database_name", ScalarType::String.nullable(true))
+        .finish(),
     sql: "
 SELECT
     s.oid AS oid,
@@ -4538,6 +5143,15 @@ pub static PG_NAMESPACE: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_NAMESPACE_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("nspname", ScalarType::String.nullable(false))
+        .with_column("nspowner", ScalarType::Oid.nullable(false))
+        .with_column(
+            "nspacl",
+            ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
+        )
+        .finish(),
     sql: "
 SELECT
     oid, nspname, nspowner, nspacl
@@ -4557,6 +5171,31 @@ pub static PG_CLASS_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| {
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::VIEW_PG_CLASS_ALL_DATABASES_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("oid", ScalarType::Oid.nullable(false))
+            .with_column("relname", ScalarType::String.nullable(false))
+            .with_column("relnamespace", ScalarType::Oid.nullable(false))
+            .with_column("reloftype", ScalarType::Oid.nullable(false))
+            .with_column("relowner", ScalarType::Oid.nullable(false))
+            .with_column("relam", ScalarType::Oid.nullable(false))
+            .with_column("reltablespace", ScalarType::Oid.nullable(false))
+            .with_column("reltuples", ScalarType::Float32.nullable(false))
+            .with_column("reltoastrelid", ScalarType::Oid.nullable(false))
+            .with_column("relhasindex", ScalarType::Bool.nullable(false))
+            .with_column("relpersistence", ScalarType::PgLegacyChar.nullable(false))
+            .with_column("relkind", ScalarType::String.nullable(true))
+            .with_column("relchecks", ScalarType::Int16.nullable(false))
+            .with_column("relhasrules", ScalarType::Bool.nullable(false))
+            .with_column("relhastriggers", ScalarType::Bool.nullable(false))
+            .with_column("relhassubclass", ScalarType::Bool.nullable(false))
+            .with_column("relrowsecurity", ScalarType::Bool.nullable(false))
+            .with_column("relforcerowsecurity", ScalarType::Bool.nullable(false))
+            .with_column("relreplident", ScalarType::PgLegacyChar.nullable(false))
+            .with_column("relispartition", ScalarType::Bool.nullable(false))
+            .with_column("relhasoids", ScalarType::Bool.nullable(false))
+            .with_column("reloptions", ScalarType::Array(Box::new(ScalarType::String)).nullable(true))
+            .with_column("database_name", ScalarType::String.nullable(true))
+            .finish(),
         sql: "
 SELECT
     class_objects.oid,
@@ -4634,6 +5273,33 @@ pub static PG_CLASS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_CLASS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("relname", ScalarType::String.nullable(false))
+        .with_column("relnamespace", ScalarType::Oid.nullable(false))
+        .with_column("reloftype", ScalarType::Oid.nullable(false))
+        .with_column("relowner", ScalarType::Oid.nullable(false))
+        .with_column("relam", ScalarType::Oid.nullable(false))
+        .with_column("reltablespace", ScalarType::Oid.nullable(false))
+        .with_column("reltuples", ScalarType::Float32.nullable(false))
+        .with_column("reltoastrelid", ScalarType::Oid.nullable(false))
+        .with_column("relhasindex", ScalarType::Bool.nullable(false))
+        .with_column("relpersistence", ScalarType::PgLegacyChar.nullable(false))
+        .with_column("relkind", ScalarType::String.nullable(true))
+        .with_column("relchecks", ScalarType::Int16.nullable(false))
+        .with_column("relhasrules", ScalarType::Bool.nullable(false))
+        .with_column("relhastriggers", ScalarType::Bool.nullable(false))
+        .with_column("relhassubclass", ScalarType::Bool.nullable(false))
+        .with_column("relrowsecurity", ScalarType::Bool.nullable(false))
+        .with_column("relforcerowsecurity", ScalarType::Bool.nullable(false))
+        .with_column("relreplident", ScalarType::PgLegacyChar.nullable(false))
+        .with_column("relispartition", ScalarType::Bool.nullable(false))
+        .with_column("relhasoids", ScalarType::Bool.nullable(false))
+        .with_column(
+            "reloptions",
+            ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
+        )
+        .finish(),
     sql: "
 SELECT
     oid, relname, relnamespace, reloftype, relowner, relam, reltablespace, reltuples, reltoastrelid,
@@ -4650,6 +5316,15 @@ pub static PG_DEPEND: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_DEPEND_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("classid", ScalarType::Oid.nullable(true))
+        .with_column("objid", ScalarType::Oid.nullable(false))
+        .with_column("objsubid", ScalarType::Int32.nullable(false))
+        .with_column("refclassid", ScalarType::Oid.nullable(true))
+        .with_column("refobjid", ScalarType::Oid.nullable(false))
+        .with_column("refobjsubid", ScalarType::Int32.nullable(false))
+        .with_column("deptype", ScalarType::PgLegacyChar.nullable(false))
+        .finish(),
     sql: "
 WITH class_objects AS (
     SELECT
@@ -4705,6 +5380,21 @@ pub static PG_DATABASE: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_DATABASE_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("datname", ScalarType::String.nullable(false))
+        .with_column("datdba", ScalarType::Oid.nullable(false))
+        .with_column("encoding", ScalarType::Int32.nullable(false))
+        .with_column("datistemplate", ScalarType::Bool.nullable(false))
+        .with_column("datallowconn", ScalarType::Bool.nullable(false))
+        .with_column("datcollate", ScalarType::String.nullable(false))
+        .with_column("datctype", ScalarType::String.nullable(false))
+        .with_column(
+            "datacl",
+            ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
+        )
+        .with_key(vec![0])
+        .finish(),
     sql: "SELECT
     d.oid as oid,
     d.name as datname,
@@ -4727,6 +5417,21 @@ pub static PG_INDEX: LazyLock<BuiltinView> = LazyLock::new(|| {
         schema: PG_CATALOG_SCHEMA,
         oid: oid::VIEW_PG_INDEX_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("indexrelid", ScalarType::Oid.nullable(false))
+            .with_column("indrelid", ScalarType::Oid.nullable(false))
+            .with_column("indisunique", ScalarType::Bool.nullable(false))
+            .with_column("indisprimary", ScalarType::Bool.nullable(false))
+            .with_column("indimmediate", ScalarType::Bool.nullable(false))
+            .with_column("indisclustered", ScalarType::Bool.nullable(false))
+            .with_column("indisvalid", ScalarType::Bool.nullable(false))
+            .with_column("indisreplident", ScalarType::Bool.nullable(false))
+            .with_column("indkey", ScalarType::Int2Vector.nullable(false))
+            .with_column("indoption", ScalarType::Int2Vector.nullable(false))
+            .with_column("indexprs", ScalarType::String.nullable(true))
+            .with_column("indpred", ScalarType::String.nullable(true))
+            .with_key(vec![0, 1])
+            .finish(),
         sql: "SELECT
     mz_indexes.oid AS indexrelid,
     mz_relations.oid AS indrelid,
@@ -4768,6 +5473,14 @@ pub static PG_INDEXES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_INDEXES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("table_catalog", ScalarType::String.nullable(false))
+        .with_column("schemaname", ScalarType::String.nullable(false))
+        .with_column("tablename", ScalarType::String.nullable(false))
+        .with_column("indexname", ScalarType::String.nullable(false))
+        .with_column("tablespace", ScalarType::String.nullable(true))
+        .with_column("indexdef", ScalarType::String.nullable(true))
+        .finish(),
     sql: "SELECT
     current_database() as table_catalog,
     s.name AS schemaname,
@@ -4795,6 +5508,14 @@ pub static PG_DESCRIPTION_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::VIEW_PG_DESCRIPTION_ALL_DATABASES_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("objoid", ScalarType::Oid.nullable(false))
+            .with_column("classoid", ScalarType::Oid.nullable(true))
+            .with_column("objsubid", ScalarType::Int32.nullable(false))
+            .with_column("description", ScalarType::String.nullable(false))
+            .with_column("oid_database_name", ScalarType::String.nullable(true))
+            .with_column("class_database_name", ScalarType::String.nullable(true))
+            .finish(),
         sql: "
 (
     -- Gather all of the class oid's for objects that can have comments.
@@ -4857,6 +5578,12 @@ pub static PG_DESCRIPTION: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView 
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_DESCRIPTION_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("objoid", ScalarType::Oid.nullable(false))
+        .with_column("classoid", ScalarType::Oid.nullable(true))
+        .with_column("objsubid", ScalarType::Int32.nullable(false))
+        .with_column("description", ScalarType::String.nullable(false))
+        .finish(),
     sql: "
 SELECT
     objoid,
@@ -4882,6 +5609,27 @@ pub static PG_TYPE_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| {
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::VIEW_PG_TYPE_ALL_DATABASES_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("oid", ScalarType::Oid.nullable(false))
+            .with_column("typname", ScalarType::String.nullable(false))
+            .with_column("typnamespace", ScalarType::Oid.nullable(false))
+            .with_column("typowner", ScalarType::Oid.nullable(false))
+            .with_column("typlen", ScalarType::Int16.nullable(true))
+            .with_column("typtype", ScalarType::PgLegacyChar.nullable(false))
+            .with_column("typcategory", ScalarType::PgLegacyChar.nullable(true))
+            .with_column("typdelim", ScalarType::PgLegacyChar.nullable(false))
+            .with_column("typrelid", ScalarType::Oid.nullable(false))
+            .with_column("typelem", ScalarType::Oid.nullable(false))
+            .with_column("typarray", ScalarType::Oid.nullable(false))
+            .with_column("typinput", ScalarType::RegProc.nullable(true))
+            .with_column("typreceive", ScalarType::Oid.nullable(false))
+            .with_column("typnotnull", ScalarType::Bool.nullable(false))
+            .with_column("typbasetype", ScalarType::Oid.nullable(false))
+            .with_column("typtypmod", ScalarType::Int32.nullable(false))
+            .with_column("typcollation", ScalarType::Oid.nullable(false))
+            .with_column("typdefault", ScalarType::String.nullable(true))
+            .with_column("database_name", ScalarType::String.nullable(true))
+            .finish(),
         sql: "
 SELECT
     mz_types.oid,
@@ -4977,6 +5725,26 @@ pub static PG_TYPE: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_TYPE_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("typname", ScalarType::String.nullable(false))
+        .with_column("typnamespace", ScalarType::Oid.nullable(false))
+        .with_column("typowner", ScalarType::Oid.nullable(false))
+        .with_column("typlen", ScalarType::Int16.nullable(true))
+        .with_column("typtype", ScalarType::PgLegacyChar.nullable(false))
+        .with_column("typcategory", ScalarType::PgLegacyChar.nullable(true))
+        .with_column("typdelim", ScalarType::PgLegacyChar.nullable(false))
+        .with_column("typrelid", ScalarType::Oid.nullable(false))
+        .with_column("typelem", ScalarType::Oid.nullable(false))
+        .with_column("typarray", ScalarType::Oid.nullable(false))
+        .with_column("typinput", ScalarType::RegProc.nullable(true))
+        .with_column("typreceive", ScalarType::Oid.nullable(false))
+        .with_column("typnotnull", ScalarType::Bool.nullable(false))
+        .with_column("typbasetype", ScalarType::Oid.nullable(false))
+        .with_column("typtypmod", ScalarType::Int32.nullable(false))
+        .with_column("typcollation", ScalarType::Oid.nullable(false))
+        .with_column("typdefault", ScalarType::String.nullable(true))
+        .finish(),
     sql: "SELECT
     oid, typname, typnamespace, typowner, typlen, typtype, typcategory, typdelim, typrelid, typelem,
     typarray, typinput, typreceive, typnotnull, typbasetype, typtypmod, typcollation, typdefault
@@ -4996,6 +5764,22 @@ pub static PG_ATTRIBUTE_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| 
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::VIEW_PG_ATTRIBUTE_ALL_DATABASES_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("attrelid", ScalarType::Oid.nullable(false))
+            .with_column("attname", ScalarType::String.nullable(false))
+            .with_column("atttypid", ScalarType::Oid.nullable(false))
+            .with_column("attlen", ScalarType::Int16.nullable(true))
+            .with_column("attnum", ScalarType::Int16.nullable(false))
+            .with_column("atttypmod", ScalarType::Int32.nullable(false))
+            .with_column("attnotnull", ScalarType::Bool.nullable(false))
+            .with_column("atthasdef", ScalarType::Bool.nullable(false))
+            .with_column("attidentity", ScalarType::PgLegacyChar.nullable(false))
+            .with_column("attgenerated", ScalarType::PgLegacyChar.nullable(false))
+            .with_column("attisdropped", ScalarType::Bool.nullable(false))
+            .with_column("attcollation", ScalarType::Oid.nullable(false))
+            .with_column("database_name", ScalarType::String.nullable(true))
+            .with_column("pg_type_database_name", ScalarType::String.nullable(true))
+            .finish(),
         sql: "
 SELECT
     class_objects.oid as attrelid,
@@ -5051,6 +5835,20 @@ pub static PG_ATTRIBUTE: LazyLock<BuiltinView> = LazyLock::new(|| {
         schema: PG_CATALOG_SCHEMA,
         oid: oid::VIEW_PG_ATTRIBUTE_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("attrelid", ScalarType::Oid.nullable(false))
+            .with_column("attname", ScalarType::String.nullable(false))
+            .with_column("atttypid", ScalarType::Oid.nullable(false))
+            .with_column("attlen", ScalarType::Int16.nullable(true))
+            .with_column("attnum", ScalarType::Int16.nullable(false))
+            .with_column("atttypmod", ScalarType::Int32.nullable(false))
+            .with_column("attnotnull", ScalarType::Bool.nullable(false))
+            .with_column("atthasdef", ScalarType::Bool.nullable(false))
+            .with_column("attidentity", ScalarType::PgLegacyChar.nullable(false))
+            .with_column("attgenerated", ScalarType::PgLegacyChar.nullable(false))
+            .with_column("attisdropped", ScalarType::Bool.nullable(false))
+            .with_column("attcollation", ScalarType::Oid.nullable(false))
+            .finish(),
         sql: "
 SELECT
     attrelid, attname, atttypid, attlen, attnum, atttypmod, attnotnull, atthasdef, attidentity,
@@ -5070,6 +5868,14 @@ pub static PG_PROC: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_PROC_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("proname", ScalarType::String.nullable(false))
+        .with_column("pronamespace", ScalarType::Oid.nullable(false))
+        .with_column("proowner", ScalarType::Oid.nullable(false))
+        .with_column("proargdefaults", ScalarType::String.nullable(true))
+        .with_column("prorettype", ScalarType::Oid.nullable(false))
+        .finish(),
     sql: "SELECT
     mz_functions.oid,
     mz_functions.name AS proname,
@@ -5091,6 +5897,14 @@ pub static PG_OPERATOR: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_OPERATOR_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("oprname", ScalarType::String.nullable(false))
+        .with_column("oprresult", ScalarType::Oid.nullable(false))
+        .with_column("oprleft", ScalarType::Oid.nullable(false))
+        .with_column("oprright", ScalarType::Oid.nullable(false))
+        .with_key(vec![0, 1, 2, 3, 4])
+        .finish(),
     sql: "SELECT
     mz_operators.oid,
     mz_operators.name AS oprname,
@@ -5120,6 +5934,11 @@ pub static PG_RANGE: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_RANGE_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("rngtypid", ScalarType::Oid.nullable(false))
+        .with_column("rngsubtype", ScalarType::Oid.nullable(false))
+        .with_key(vec![])
+        .finish(),
     sql: "SELECT
     NULL::pg_catalog.oid AS rngtypid,
     NULL::pg_catalog.oid AS rngsubtype
@@ -5132,6 +5951,13 @@ pub static PG_ENUM: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_ENUM_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("enumtypid", ScalarType::Oid.nullable(false))
+        .with_column("enumsortorder", ScalarType::Float32.nullable(false))
+        .with_column("enumlabel", ScalarType::String.nullable(false))
+        .with_key(vec![])
+        .finish(),
     sql: "SELECT
     NULL::pg_catalog.oid AS oid,
     NULL::pg_catalog.oid AS enumtypid,
@@ -5149,6 +5975,13 @@ pub static PG_ATTRDEF_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| Bu
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_PG_ATTRDEF_ALL_DATABASES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("oid", ScalarType::Oid.nullable(true))
+        .with_column("adrelid", ScalarType::Oid.nullable(false))
+        .with_column("adnum", ScalarType::Int64.nullable(false))
+        .with_column("adbin", ScalarType::String.nullable(false))
+        .with_column("adsrc", ScalarType::String.nullable(false))
+        .finish(),
     sql: "
 SELECT
     NULL::pg_catalog.oid AS oid,
@@ -5176,6 +6009,13 @@ pub static PG_ATTRDEF: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_ATTRDEF_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("oid", ScalarType::Oid.nullable(true))
+        .with_column("adrelid", ScalarType::Oid.nullable(false))
+        .with_column("adnum", ScalarType::Int64.nullable(false))
+        .with_column("adbin", ScalarType::String.nullable(false))
+        .with_column("adsrc", ScalarType::String.nullable(false))
+        .finish(),
     sql: "
 SELECT
     pg_attrdef_all_databases.oid as oid,
@@ -5193,6 +6033,11 @@ pub static PG_SETTINGS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_SETTINGS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("setting", ScalarType::String.nullable(false))
+        .with_key(vec![])
+        .finish(),
     sql: "SELECT
     name, setting
 FROM (VALUES
@@ -5206,6 +6051,12 @@ pub static PG_AUTH_MEMBERS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_AUTH_MEMBERS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("roleid", ScalarType::Oid.nullable(false))
+        .with_column("member", ScalarType::Oid.nullable(false))
+        .with_column("grantor", ScalarType::Oid.nullable(false))
+        .with_column("admin_option", ScalarType::Bool.nullable(false))
+        .finish(),
     sql: "SELECT
     role.oid AS roleid,
     member.oid AS member,
@@ -5224,6 +6075,19 @@ pub static PG_EVENT_TRIGGER: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVie
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_EVENT_TRIGGER_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("evtname", ScalarType::String.nullable(false))
+        .with_column("evtevent", ScalarType::String.nullable(false))
+        .with_column("evtowner", ScalarType::Oid.nullable(false))
+        .with_column("evtfoid", ScalarType::Oid.nullable(false))
+        .with_column("evtenabled", ScalarType::PgLegacyChar.nullable(false))
+        .with_column(
+            "evttags",
+            ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
+        )
+        .with_key(vec![])
+        .finish(),
     sql: "SELECT
         NULL::pg_catalog.oid AS oid,
         NULL::pg_catalog.text AS evtname,
@@ -5241,6 +6105,21 @@ pub static PG_LANGUAGE: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_LANGUAGE_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("lanname", ScalarType::String.nullable(false))
+        .with_column("lanowner", ScalarType::Oid.nullable(false))
+        .with_column("lanispl", ScalarType::Bool.nullable(false))
+        .with_column("lanpltrusted", ScalarType::Bool.nullable(false))
+        .with_column("lanplcallfoid", ScalarType::Oid.nullable(false))
+        .with_column("laninline", ScalarType::Oid.nullable(false))
+        .with_column("lanvalidator", ScalarType::Oid.nullable(false))
+        .with_column(
+            "lanacl",
+            ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
+        )
+        .with_key(vec![])
+        .finish(),
     sql: "SELECT
         NULL::pg_catalog.oid  AS oid,
         NULL::pg_catalog.text AS lanname,
@@ -5260,6 +6139,12 @@ pub static PG_SHDESCRIPTION: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVie
     column_defs: None,
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_SHDESCRIPTION_OID,
+    desc: RelationDesc::builder()
+        .with_column("objoid", ScalarType::Oid.nullable(false))
+        .with_column("classoid", ScalarType::Oid.nullable(false))
+        .with_column("description", ScalarType::String.nullable(false))
+        .with_key(vec![])
+        .finish(),
     sql: "SELECT
         NULL::pg_catalog.oid AS objoid,
         NULL::pg_catalog.oid AS classoid,
@@ -5274,6 +6159,12 @@ pub static PG_TIMEZONE_ABBREVS: LazyLock<BuiltinView> = LazyLock::new(|| {
         schema: PG_CATALOG_SCHEMA,
         oid: oid::VIEW_PG_TIMEZONE_ABBREVS_OID,
         column_defs: Some("abbrev, utc_offset, is_dst"),
+        desc: RelationDesc::builder()
+            .with_column("abbrev", ScalarType::String.nullable(false))
+            .with_column("utc_offset", ScalarType::Interval.nullable(true))
+            .with_column("is_dst", ScalarType::Bool.nullable(true))
+            .with_key(vec![0])
+            .finish(),
         sql: "SELECT
     abbreviation AS abbrev,
     COALESCE(utc_offset, timezone_offset(timezone_name, now()).base_utc_offset + timezone_offset(timezone_name, now()).dst_offset)
@@ -5290,6 +6181,13 @@ pub static PG_TIMEZONE_NAMES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVi
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_TIMEZONE_NAMES_OID,
     column_defs: Some("name, abbrev, utc_offset, is_dst"),
+    desc: RelationDesc::builder()
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("abbrev", ScalarType::String.nullable(true))
+        .with_column("utc_offset", ScalarType::Interval.nullable(true))
+        .with_column("is_dst", ScalarType::Bool.nullable(true))
+        .with_key(vec![0])
+        .finish(),
     sql: "SELECT
     name,
     timezone_offset(name, now()).abbrev,
@@ -5306,6 +6204,13 @@ pub static MZ_TIMEZONE_ABBREVIATIONS: LazyLock<BuiltinView> = LazyLock::new(|| B
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::VIEW_MZ_TIMEZONE_ABBREVIATIONS_OID,
     column_defs: Some("abbreviation, utc_offset, dst, timezone_name"),
+    desc: RelationDesc::builder()
+        .with_column("abbreviation", ScalarType::String.nullable(false))
+        .with_column("utc_offset", ScalarType::Interval.nullable(true))
+        .with_column("dst", ScalarType::Bool.nullable(true))
+        .with_column("timezone_name", ScalarType::String.nullable(true))
+        .with_key(vec![0])
+        .finish(),
     sql: mz_pgtz::abbrev::MZ_CATALOG_TIMEZONE_ABBREVIATIONS_SQL,
     access: vec![PUBLIC_SELECT],
 });
@@ -5315,6 +6220,10 @@ pub static MZ_TIMEZONE_NAMES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVi
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::VIEW_MZ_TIMEZONE_NAMES_OID,
     column_defs: Some("name"),
+    desc: RelationDesc::builder()
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_key(vec![0])
+        .finish(),
     sql: mz_pgtz::timezone::MZ_CATALOG_TIMEZONE_NAMES_SQL,
     access: vec![PUBLIC_SELECT],
 });
@@ -5325,6 +6234,13 @@ pub static MZ_PEEK_DURATIONS_HISTOGRAM_PER_WORKER: LazyLock<BuiltinView> =
         schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::VIEW_MZ_PEEK_DURATIONS_HISTOGRAM_PER_WORKER_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("worker_id", ScalarType::UInt64.nullable(false))
+            .with_column("type", ScalarType::String.nullable(false))
+            .with_column("duration_ns", ScalarType::UInt64.nullable(false))
+            .with_column("count", ScalarType::Int64.nullable(false))
+            .with_key(vec![0, 1, 2])
+            .finish(),
         sql: "SELECT
     worker_id, type, duration_ns, pg_catalog.count(*) AS count
 FROM
@@ -5339,6 +6255,18 @@ pub static MZ_PEEK_DURATIONS_HISTOGRAM: LazyLock<BuiltinView> = LazyLock::new(||
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_PEEK_DURATIONS_HISTOGRAM_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("type", ScalarType::String.nullable(false))
+        .with_column("duration_ns", ScalarType::UInt64.nullable(false))
+        .with_column(
+            "count",
+            ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO),
+            }
+            .nullable(false),
+        )
+        .with_key(vec![0, 1])
+        .finish(),
     sql: "
 SELECT
     type, duration_ns,
@@ -5354,6 +6282,12 @@ pub static MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_PER_WORKER: LazyLock<Builtin
         schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::VIEW_MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_PER_WORKER_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("worker_id", ScalarType::UInt64.nullable(false))
+            .with_column("duration_ns", ScalarType::UInt64.nullable(false))
+            .with_column("count", ScalarType::Int64.nullable(false))
+            .with_key(vec![0, 1])
+            .finish(),
         sql: "SELECT
     worker_id, duration_ns, pg_catalog.count(*) AS count
 FROM
@@ -5369,6 +6303,17 @@ pub static MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM: LazyLock<BuiltinView> =
         schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::VIEW_MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("duration_ns", ScalarType::UInt64.nullable(false))
+            .with_column(
+                "count",
+                ScalarType::Numeric {
+                    max_scale: Some(NumericMaxScale::ZERO),
+                }
+                .nullable(false),
+            )
+            .with_key(vec![0])
+            .finish(),
         sql: "
 SELECT
     duration_ns,
@@ -5384,6 +6329,12 @@ pub static MZ_SCHEDULING_ELAPSED_PER_WORKER: LazyLock<BuiltinView> =
         schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::VIEW_MZ_SCHEDULING_ELAPSED_PER_WORKER_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("id", ScalarType::UInt64.nullable(false))
+            .with_column("worker_id", ScalarType::UInt64.nullable(false))
+            .with_column("elapsed_ns", ScalarType::Int64.nullable(false))
+            .with_key(vec![0, 1])
+            .finish(),
         sql: "SELECT
     id, worker_id, pg_catalog.count(*) AS elapsed_ns
 FROM
@@ -5398,6 +6349,17 @@ pub static MZ_SCHEDULING_ELAPSED: LazyLock<BuiltinView> = LazyLock::new(|| Built
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_SCHEDULING_ELAPSED_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::UInt64.nullable(false))
+        .with_column(
+            "elapsed_ns",
+            ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO),
+            }
+            .nullable(false),
+        )
+        .with_key(vec![0])
+        .finish(),
     sql: "
 SELECT
     id,
@@ -5413,6 +6375,13 @@ pub static MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_PER_WORKER: LazyLock<BuiltinV
         schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::VIEW_MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_PER_WORKER_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("id", ScalarType::UInt64.nullable(false))
+            .with_column("worker_id", ScalarType::UInt64.nullable(false))
+            .with_column("duration_ns", ScalarType::UInt64.nullable(false))
+            .with_column("count", ScalarType::Int64.nullable(false))
+            .with_key(vec![0, 1, 2])
+            .finish(),
         sql: "SELECT
     id, worker_id, duration_ns, pg_catalog.count(*) AS count
 FROM
@@ -5428,6 +6397,18 @@ pub static MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM: LazyLock<BuiltinView> =
         schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::VIEW_MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("id", ScalarType::UInt64.nullable(false))
+            .with_column("duration_ns", ScalarType::UInt64.nullable(false))
+            .with_column(
+                "count",
+                ScalarType::Numeric {
+                    max_scale: Some(NumericMaxScale::ZERO),
+                }
+                .nullable(false),
+            )
+            .with_key(vec![0, 1])
+            .finish(),
         sql: "
 SELECT
     id,
@@ -5444,6 +6425,13 @@ pub static MZ_SCHEDULING_PARKS_HISTOGRAM_PER_WORKER: LazyLock<BuiltinView> =
         schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::VIEW_MZ_SCHEDULING_PARKS_HISTOGRAM_PER_WORKER_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("worker_id", ScalarType::UInt64.nullable(false))
+            .with_column("slept_for_ns", ScalarType::UInt64.nullable(false))
+            .with_column("requested_ns", ScalarType::UInt64.nullable(false))
+            .with_column("count", ScalarType::Int64.nullable(false))
+            .with_key(vec![0, 1, 2])
+            .finish(),
         sql: "SELECT
     worker_id, slept_for_ns, requested_ns, pg_catalog.count(*) AS count
 FROM
@@ -5458,6 +6446,18 @@ pub static MZ_SCHEDULING_PARKS_HISTOGRAM: LazyLock<BuiltinView> = LazyLock::new(
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_SCHEDULING_PARKS_HISTOGRAM_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("slept_for_ns", ScalarType::UInt64.nullable(false))
+        .with_column("requested_ns", ScalarType::UInt64.nullable(false))
+        .with_column(
+            "count",
+            ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO),
+            }
+            .nullable(false),
+        )
+        .with_key(vec![0, 1])
+        .finish(),
     sql: "
 SELECT
     slept_for_ns,
@@ -5474,6 +6474,12 @@ pub static MZ_COMPUTE_ERROR_COUNTS_PER_WORKER: LazyLock<BuiltinView> =
         schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::VIEW_MZ_COMPUTE_ERROR_COUNTS_PER_WORKER_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("export_id", ScalarType::String.nullable(false))
+            .with_column("worker_id", ScalarType::UInt64.nullable(false))
+            .with_column("count", ScalarType::Int64.nullable(false))
+            .with_key(vec![0, 1, 2])
+            .finish(),
         sql: "
 WITH MUTUALLY RECURSIVE
     -- Indexes that reuse existing indexes rather than maintaining separate dataflows.
@@ -5510,6 +6516,17 @@ pub static MZ_COMPUTE_ERROR_COUNTS: LazyLock<BuiltinView> = LazyLock::new(|| Bui
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_COMPUTE_ERROR_COUNTS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("export_id", ScalarType::String.nullable(false))
+        .with_column(
+            "count",
+            ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO),
+            }
+            .nullable(false),
+        )
+        .with_key(vec![0])
+        .finish(),
     sql: "
 SELECT
     export_id,
@@ -5570,6 +6587,12 @@ pub static MZ_COMPUTE_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyLock::new(
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_COMPUTE_HYDRATION_STATUSES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column("replica_id", ScalarType::String.nullable(false))
+        .with_column("hydrated", ScalarType::Bool.nullable(false))
+        .with_column("hydration_time", ScalarType::Interval.nullable(true))
+        .finish(),
     sql: "
 WITH
     dataflows AS (
@@ -5619,6 +6642,13 @@ pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES: LazyLock<BuiltinView> =
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::VIEW_MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("object_id", ScalarType::String.nullable(false))
+            .with_column("physical_plan_node_id", ScalarType::UInt64.nullable(false))
+            .with_column("replica_id", ScalarType::String.nullable(false))
+            .with_column("hydrated", ScalarType::Bool.nullable(false))
+            .with_key(vec![0, 1, 2])
+            .finish(),
         sql: "
 SELECT
     object_id,
@@ -5635,6 +6665,16 @@ pub static MZ_MESSAGE_COUNTS_PER_WORKER: LazyLock<BuiltinView> = LazyLock::new(|
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_MESSAGE_COUNTS_PER_WORKER_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("channel_id", ScalarType::UInt64.nullable(false))
+        .with_column("from_worker_id", ScalarType::UInt64.nullable(false))
+        .with_column("to_worker_id", ScalarType::UInt64.nullable(false))
+        .with_column("sent", ScalarType::Int64.nullable(false))
+        .with_column("received", ScalarType::Int64.nullable(false))
+        .with_column("batch_sent", ScalarType::Int64.nullable(false))
+        .with_column("batch_received", ScalarType::Int64.nullable(false))
+        .with_key(vec![0, 1, 2])
+        .finish(),
     sql: "
 WITH batch_sent_cte AS (
     SELECT
@@ -5700,6 +6740,38 @@ pub static MZ_MESSAGE_COUNTS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVi
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_MESSAGE_COUNTS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("channel_id", ScalarType::UInt64.nullable(false))
+        .with_column(
+            "sent",
+            ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO),
+            }
+            .nullable(false),
+        )
+        .with_column(
+            "received",
+            ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO),
+            }
+            .nullable(false),
+        )
+        .with_column(
+            "batch_sent",
+            ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO),
+            }
+            .nullable(false),
+        )
+        .with_column(
+            "batch_received",
+            ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO),
+            }
+            .nullable(false),
+        )
+        .with_key(vec![0])
+        .finish(),
     sql: "
 SELECT
     channel_id,
@@ -5717,6 +6789,12 @@ pub static MZ_ACTIVE_PEEKS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_ACTIVE_PEEKS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::Uuid.nullable(false))
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column("type", ScalarType::String.nullable(false))
+        .with_column("time", ScalarType::MzTimestamp.nullable(false))
+        .finish(),
     sql: "
 SELECT id, object_id, type, time
 FROM mz_introspection.mz_active_peeks_per_worker
@@ -5730,6 +6808,15 @@ pub static MZ_DATAFLOW_OPERATOR_REACHABILITY_PER_WORKER: LazyLock<BuiltinView> =
         schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::VIEW_MZ_DATAFLOW_OPERATOR_REACHABILITY_PER_WORKER_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("id", ScalarType::UInt64.nullable(false))
+            .with_column("worker_id", ScalarType::UInt64.nullable(false))
+            .with_column("port", ScalarType::UInt64.nullable(false))
+            .with_column("update_type", ScalarType::String.nullable(false))
+            .with_column("time", ScalarType::MzTimestamp.nullable(true))
+            .with_column("count", ScalarType::Int64.nullable(false))
+            .with_key(vec![0, 1, 2, 3, 4])
+            .finish(),
         sql: "SELECT
     addr2.id,
     reachability.worker_id,
@@ -5760,6 +6847,20 @@ pub static MZ_DATAFLOW_OPERATOR_REACHABILITY: LazyLock<BuiltinView> =
         schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::VIEW_MZ_DATAFLOW_OPERATOR_REACHABILITY_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("id", ScalarType::UInt64.nullable(false))
+            .with_column("port", ScalarType::UInt64.nullable(false))
+            .with_column("update_type", ScalarType::String.nullable(false))
+            .with_column("time", ScalarType::MzTimestamp.nullable(true))
+            .with_column(
+                "count",
+                ScalarType::Numeric {
+                    max_scale: Some(NumericMaxScale::ZERO),
+                }
+                .nullable(false),
+            )
+            .with_key(vec![0, 1, 2, 3])
+            .finish(),
         sql: "
 SELECT
     id,
@@ -5778,6 +6879,15 @@ pub static MZ_ARRANGEMENT_SIZES_PER_WORKER: LazyLock<BuiltinView> = LazyLock::ne
         schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::VIEW_MZ_ARRANGEMENT_SIZES_PER_WORKER_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("operator_id", ScalarType::UInt64.nullable(false))
+            .with_column("worker_id", ScalarType::UInt64.nullable(false))
+            .with_column("records", ScalarType::Int64.nullable(false))
+            .with_column("batches", ScalarType::Int64.nullable(false))
+            .with_column("size", ScalarType::Int64.nullable(false))
+            .with_column("capacity", ScalarType::Int64.nullable(false))
+            .with_column("allocations", ScalarType::Int64.nullable(false))
+            .finish(),
         sql: "
 WITH batches_cte AS (
     SELECT
@@ -5895,6 +7005,45 @@ pub static MZ_ARRANGEMENT_SIZES: LazyLock<BuiltinView> = LazyLock::new(|| Builti
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_ARRANGEMENT_SIZES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("operator_id", ScalarType::UInt64.nullable(false))
+        .with_column(
+            "records",
+            ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO),
+            }
+            .nullable(false),
+        )
+        .with_column(
+            "batches",
+            ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO),
+            }
+            .nullable(false),
+        )
+        .with_column(
+            "size",
+            ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO),
+            }
+            .nullable(false),
+        )
+        .with_column(
+            "capacity",
+            ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO),
+            }
+            .nullable(false),
+        )
+        .with_column(
+            "allocations",
+            ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO),
+            }
+            .nullable(false),
+        )
+        .with_key(vec![0])
+        .finish(),
     sql: "
 SELECT
     operator_id,
@@ -5914,6 +7063,12 @@ pub static MZ_ARRANGEMENT_SHARING_PER_WORKER: LazyLock<BuiltinView> =
         schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::VIEW_MZ_ARRANGEMENT_SHARING_PER_WORKER_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("operator_id", ScalarType::UInt64.nullable(false))
+            .with_column("worker_id", ScalarType::UInt64.nullable(false))
+            .with_column("count", ScalarType::Int64.nullable(false))
+            .with_key(vec![0, 1])
+            .finish(),
         sql: "
 SELECT
     operator_id,
@@ -5929,6 +7084,10 @@ pub static MZ_ARRANGEMENT_SHARING: LazyLock<BuiltinView> = LazyLock::new(|| Buil
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_ARRANGEMENT_SHARING_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("operator_id", ScalarType::UInt64.nullable(false))
+        .with_column("count", ScalarType::Int64.nullable(false))
+        .finish(),
     sql: "
 SELECT operator_id, count
 FROM mz_introspection.mz_arrangement_sharing_per_worker
@@ -5941,6 +7100,13 @@ pub static MZ_CLUSTER_REPLICA_UTILIZATION: LazyLock<BuiltinView> = LazyLock::new
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_CLUSTER_REPLICA_UTILIZATION_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("replica_id", ScalarType::String.nullable(false))
+        .with_column("process_id", ScalarType::UInt64.nullable(false))
+        .with_column("cpu_percent", ScalarType::Float64.nullable(true))
+        .with_column("memory_percent", ScalarType::Float64.nullable(true))
+        .with_column("disk_percent", ScalarType::Float64.nullable(true))
+        .finish(),
     sql: "
 SELECT
     r.id AS replica_id,
@@ -5961,6 +7127,17 @@ pub static MZ_CLUSTER_REPLICA_UTILIZATION_HISTORY: LazyLock<BuiltinView> =
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::VIEW_MZ_CLUSTER_REPLICA_UTILIZATION_HISTORY_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("replica_id", ScalarType::String.nullable(false))
+            .with_column("process_id", ScalarType::UInt64.nullable(false))
+            .with_column("cpu_percent", ScalarType::Float64.nullable(true))
+            .with_column("memory_percent", ScalarType::Float64.nullable(true))
+            .with_column("disk_percent", ScalarType::Float64.nullable(true))
+            .with_column(
+                "occurred_at",
+                ScalarType::TimestampTz { precision: None }.nullable(false),
+            )
+            .finish(),
         sql: "
 SELECT
     r.id AS replica_id,
@@ -5982,6 +7159,11 @@ pub static MZ_DATAFLOW_OPERATOR_PARENTS_PER_WORKER: LazyLock<BuiltinView> =
         schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::VIEW_MZ_DATAFLOW_OPERATOR_PARENTS_PER_WORKER_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("id", ScalarType::UInt64.nullable(false))
+            .with_column("parent_id", ScalarType::UInt64.nullable(false))
+            .with_column("worker_id", ScalarType::UInt64.nullable(false))
+            .finish(),
         sql: "
 WITH operator_addrs AS(
     SELECT
@@ -6010,6 +7192,10 @@ pub static MZ_DATAFLOW_OPERATOR_PARENTS: LazyLock<BuiltinView> = LazyLock::new(|
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_DATAFLOW_OPERATOR_PARENTS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::UInt64.nullable(false))
+        .with_column("parent_id", ScalarType::UInt64.nullable(false))
+        .finish(),
     sql: "
 SELECT id, parent_id
 FROM mz_introspection.mz_dataflow_operator_parents_per_worker
@@ -6022,6 +7208,31 @@ pub static MZ_DATAFLOW_ARRANGEMENT_SIZES: LazyLock<BuiltinView> = LazyLock::new(
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_DATAFLOW_ARRANGEMENT_SIZES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::UInt64.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column(
+            "records",
+            ScalarType::Numeric { max_scale: None }.nullable(false),
+        )
+        .with_column(
+            "batches",
+            ScalarType::Numeric { max_scale: None }.nullable(false),
+        )
+        .with_column(
+            "size",
+            ScalarType::Numeric { max_scale: None }.nullable(false),
+        )
+        .with_column(
+            "capacity",
+            ScalarType::Numeric { max_scale: None }.nullable(false),
+        )
+        .with_column(
+            "allocations",
+            ScalarType::Numeric { max_scale: None }.nullable(false),
+        )
+        .with_key(vec![0, 1])
+        .finish(),
     sql: "
 SELECT
     mdod.dataflow_id AS id,
@@ -6043,6 +7254,22 @@ pub static MZ_EXPECTED_GROUP_SIZE_ADVICE: LazyLock<BuiltinView> = LazyLock::new(
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_EXPECTED_GROUP_SIZE_ADVICE_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("dataflow_id", ScalarType::UInt64.nullable(false))
+        .with_column("dataflow_name", ScalarType::String.nullable(false))
+        .with_column("region_id", ScalarType::UInt64.nullable(false))
+        .with_column("region_name", ScalarType::String.nullable(false))
+        .with_column("levels", ScalarType::Int64.nullable(false))
+        .with_column("to_cut", ScalarType::Int64.nullable(false))
+        .with_column(
+            "savings",
+            ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO),
+            }
+            .nullable(false),
+        )
+        .with_column("hint", ScalarType::Float64.nullable(false))
+        .finish(),
     sql: "
         -- The mz_expected_group_size_advice view provides tuning suggestions for the GROUP SIZE
         -- query hints. This tuning hint is effective for min/max/top-k patterns, where a stack
@@ -6180,6 +7407,12 @@ pub static MZ_INDEX_ADVICE: LazyLock<BuiltinView> = LazyLock::new(|| {
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::VIEW_MZ_INDEX_ADVICE_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("object_id", ScalarType::String.nullable(true))
+            .with_column("hint", ScalarType::String.nullable(false))
+            .with_column("details", ScalarType::String.nullable(false))
+            .with_column("referenced_object_ids", ScalarType::List { element_type: Box::new(ScalarType::String), custom_id: None }.nullable(true))
+            .finish(),
         sql: "
 -- To avoid confusion with sources and sinks in the materialize sense,
 -- the following uses the terms leafs (instead of sinks) and roots (instead of sources)
@@ -6504,6 +7737,52 @@ pub static PG_CONSTRAINT: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_CONSTRAINT_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("conname", ScalarType::String.nullable(false))
+        .with_column("connamespace", ScalarType::Oid.nullable(false))
+        .with_column("contype", ScalarType::PgLegacyChar.nullable(false))
+        .with_column("condeferrable", ScalarType::Bool.nullable(false))
+        .with_column("condeferred", ScalarType::Bool.nullable(false))
+        .with_column("convalidated", ScalarType::Bool.nullable(false))
+        .with_column("conrelid", ScalarType::Oid.nullable(false))
+        .with_column("contypid", ScalarType::Oid.nullable(false))
+        .with_column("conindid", ScalarType::Oid.nullable(false))
+        .with_column("conparentid", ScalarType::Oid.nullable(false))
+        .with_column("confrelid", ScalarType::Oid.nullable(false))
+        .with_column("confupdtype", ScalarType::PgLegacyChar.nullable(false))
+        .with_column("confdeltype", ScalarType::PgLegacyChar.nullable(false))
+        .with_column("confmatchtype", ScalarType::PgLegacyChar.nullable(false))
+        .with_column("conislocal", ScalarType::Bool.nullable(false))
+        .with_column("coninhcount", ScalarType::Int32.nullable(false))
+        .with_column("connoinherit", ScalarType::Bool.nullable(false))
+        .with_column(
+            "conkey",
+            ScalarType::Array(Box::new(ScalarType::Int16)).nullable(false),
+        )
+        .with_column(
+            "confkey",
+            ScalarType::Array(Box::new(ScalarType::Int16)).nullable(false),
+        )
+        .with_column(
+            "conpfeqop",
+            ScalarType::Array(Box::new(ScalarType::Oid)).nullable(false),
+        )
+        .with_column(
+            "conppeqop",
+            ScalarType::Array(Box::new(ScalarType::Oid)).nullable(false),
+        )
+        .with_column(
+            "conffeqop",
+            ScalarType::Array(Box::new(ScalarType::Oid)).nullable(false),
+        )
+        .with_column(
+            "conexclop",
+            ScalarType::Array(Box::new(ScalarType::Oid)).nullable(false),
+        )
+        .with_column("conbin", ScalarType::String.nullable(false))
+        .with_key(vec![])
+        .finish(),
     sql: "SELECT
     NULL::pg_catalog.oid as oid,
     NULL::pg_catalog.text as conname,
@@ -6539,6 +7818,11 @@ pub static PG_TABLES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_TABLES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("schemaname", ScalarType::String.nullable(true))
+        .with_column("tablename", ScalarType::String.nullable(false))
+        .with_column("tableowner", ScalarType::String.nullable(false))
+        .finish(),
     sql: "
 SELECT n.nspname AS schemaname,
     c.relname AS tablename,
@@ -6554,6 +7838,20 @@ pub static PG_TABLESPACE: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_TABLESPACE_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("spcname", ScalarType::String.nullable(false))
+        .with_column("spcowner", ScalarType::Oid.nullable(true))
+        .with_column(
+            "spcacl",
+            ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
+        )
+        .with_column(
+            "spcoptions",
+            ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
+        )
+        .with_key(vec![])
+        .finish(),
     sql: "
     SELECT oid, spcname, spcowner, spcacl, spcoptions
     FROM (
@@ -6575,6 +7873,13 @@ pub static PG_ACCESS_METHODS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVi
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_AM_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("amname", ScalarType::String.nullable(false))
+        .with_column("amhandler", ScalarType::RegProc.nullable(false))
+        .with_column("amtype", ScalarType::PgLegacyChar.nullable(false))
+        .with_key(vec![])
+        .finish(),
     sql: "
 SELECT NULL::pg_catalog.oid AS oid,
     NULL::pg_catalog.text AS amname,
@@ -6589,6 +7894,27 @@ pub static PG_ROLES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_ROLES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("rolname", ScalarType::String.nullable(false))
+        .with_column("rolsuper", ScalarType::Bool.nullable(true))
+        .with_column("rolinherit", ScalarType::Bool.nullable(false))
+        .with_column("rolcreaterole", ScalarType::Bool.nullable(true))
+        .with_column("rolcreatedb", ScalarType::Bool.nullable(true))
+        .with_column("rolcanlogin", ScalarType::Bool.nullable(false))
+        .with_column("rolreplication", ScalarType::Bool.nullable(false))
+        .with_column("rolconnlimit", ScalarType::Int32.nullable(false))
+        .with_column("rolpassword", ScalarType::String.nullable(false))
+        .with_column(
+            "rolvaliduntil",
+            ScalarType::TimestampTz { precision: None }.nullable(true),
+        )
+        .with_column("rolbypassrls", ScalarType::Bool.nullable(false))
+        .with_column(
+            "rolconfig",
+            ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
+        )
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .finish(),
     sql: "SELECT
     rolname,
     rolsuper,
@@ -6617,6 +7943,23 @@ pub static PG_USER: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_USER_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("usename", ScalarType::String.nullable(false))
+        .with_column("usesysid", ScalarType::Oid.nullable(false))
+        .with_column("usecreatedb", ScalarType::Bool.nullable(true))
+        .with_column("usesuper", ScalarType::Bool.nullable(true))
+        .with_column("userepl", ScalarType::Bool.nullable(false))
+        .with_column("usebypassrls", ScalarType::Bool.nullable(false))
+        .with_column("passwd", ScalarType::String.nullable(false))
+        .with_column(
+            "valuntil",
+            ScalarType::TimestampTz { precision: None }.nullable(true),
+        )
+        .with_column(
+            "useconfig",
+            ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
+        )
+        .finish(),
     sql: "
 SELECT
     rolname as usename,
@@ -6643,6 +7986,12 @@ pub static PG_VIEWS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_VIEWS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("schemaname", ScalarType::String.nullable(true))
+        .with_column("viewname", ScalarType::String.nullable(false))
+        .with_column("viewowner", ScalarType::Oid.nullable(false))
+        .with_column("definition", ScalarType::String.nullable(false))
+        .finish(),
     sql: "SELECT
     s.name AS schemaname,
     v.name AS viewname,
@@ -6661,6 +8010,12 @@ pub static PG_MATVIEWS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_MATVIEWS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("schemaname", ScalarType::String.nullable(true))
+        .with_column("matviewname", ScalarType::String.nullable(false))
+        .with_column("matviewowner", ScalarType::Oid.nullable(false))
+        .with_column("definition", ScalarType::String.nullable(false))
+        .finish(),
     sql: "SELECT
     s.name AS schemaname,
     m.name AS matviewname,
@@ -6680,6 +8035,11 @@ pub static INFORMATION_SCHEMA_APPLICABLE_ROLES: LazyLock<BuiltinView> =
         schema: INFORMATION_SCHEMA,
         oid: oid::VIEW_APPLICABLE_ROLES_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("grantee", ScalarType::String.nullable(false))
+            .with_column("role_name", ScalarType::String.nullable(false))
+            .with_column("is_grantable", ScalarType::String.nullable(false))
+            .finish(),
         sql: "
 SELECT
     member.name AS grantee,
@@ -6698,6 +8058,19 @@ pub static INFORMATION_SCHEMA_COLUMNS: LazyLock<BuiltinView> = LazyLock::new(|| 
     schema: INFORMATION_SCHEMA,
     oid: oid::VIEW_COLUMNS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("table_catalog", ScalarType::String.nullable(false))
+        .with_column("table_schema", ScalarType::String.nullable(false))
+        .with_column("table_name", ScalarType::String.nullable(false))
+        .with_column("column_name", ScalarType::String.nullable(false))
+        .with_column("ordinal_position", ScalarType::Int64.nullable(false))
+        .with_column("column_default", ScalarType::String.nullable(true))
+        .with_column("is_nullable", ScalarType::String.nullable(false))
+        .with_column("data_type", ScalarType::String.nullable(false))
+        .with_column("character_maximum_length", ScalarType::Int32.nullable(true))
+        .with_column("numeric_precision", ScalarType::Int32.nullable(true))
+        .with_column("numeric_scale", ScalarType::Int32.nullable(true))
+        .finish(),
     sql: "
 SELECT
     current_database() as table_catalog,
@@ -6725,6 +8098,9 @@ pub static INFORMATION_SCHEMA_ENABLED_ROLES: LazyLock<BuiltinView> =
         schema: INFORMATION_SCHEMA,
         oid: oid::VIEW_ENABLED_ROLES_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("role_name", ScalarType::String.nullable(false))
+            .finish(),
         sql: "
 SELECT name AS role_name
 FROM mz_catalog.mz_roles
@@ -6738,6 +8114,16 @@ pub static INFORMATION_SCHEMA_ROLE_TABLE_GRANTS: LazyLock<BuiltinView> = LazyLoc
         schema: INFORMATION_SCHEMA,
         oid: oid::VIEW_ROLE_TABLE_GRANTS_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("grantor", ScalarType::String.nullable(false))
+            .with_column("grantee", ScalarType::String.nullable(true))
+            .with_column("table_catalog", ScalarType::String.nullable(true))
+            .with_column("table_schema", ScalarType::String.nullable(false))
+            .with_column("table_name", ScalarType::String.nullable(false))
+            .with_column("privilege_type", ScalarType::String.nullable(true))
+            .with_column("is_grantable", ScalarType::String.nullable(false))
+            .with_column("with_hierarchy", ScalarType::String.nullable(false))
+            .finish(),
         sql: "
 SELECT grantor, grantee, table_catalog, table_schema, table_name, privilege_type, is_grantable, with_hierarchy
 FROM information_schema.table_privileges
@@ -6754,6 +8140,21 @@ pub static INFORMATION_SCHEMA_KEY_COLUMN_USAGE: LazyLock<BuiltinView> =
         schema: INFORMATION_SCHEMA,
         oid: oid::VIEW_KEY_COLUMN_USAGE_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("constraint_catalog", ScalarType::String.nullable(false))
+            .with_column("constraint_schema", ScalarType::String.nullable(false))
+            .with_column("constraint_name", ScalarType::String.nullable(false))
+            .with_column("table_catalog", ScalarType::String.nullable(false))
+            .with_column("table_schema", ScalarType::String.nullable(false))
+            .with_column("table_name", ScalarType::String.nullable(false))
+            .with_column("column_name", ScalarType::String.nullable(false))
+            .with_column("ordinal_position", ScalarType::Int32.nullable(false))
+            .with_column(
+                "position_in_unique_constraint",
+                ScalarType::Int32.nullable(false),
+            )
+            .with_key(vec![])
+            .finish(),
         sql: "SELECT
     NULL::text AS constraint_catalog,
     NULL::text AS constraint_schema,
@@ -6774,6 +8175,24 @@ pub static INFORMATION_SCHEMA_REFERENTIAL_CONSTRAINTS: LazyLock<BuiltinView> =
         schema: INFORMATION_SCHEMA,
         oid: oid::VIEW_REFERENTIAL_CONSTRAINTS_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("constraint_catalog", ScalarType::String.nullable(false))
+            .with_column("constraint_schema", ScalarType::String.nullable(false))
+            .with_column("constraint_name", ScalarType::String.nullable(false))
+            .with_column(
+                "unique_constraint_catalog",
+                ScalarType::String.nullable(false),
+            )
+            .with_column(
+                "unique_constraint_schema",
+                ScalarType::String.nullable(false),
+            )
+            .with_column("unique_constraint_name", ScalarType::String.nullable(false))
+            .with_column("match_option", ScalarType::String.nullable(false))
+            .with_column("update_rule", ScalarType::String.nullable(false))
+            .with_column("delete_rule", ScalarType::String.nullable(false))
+            .with_key(vec![])
+            .finish(),
         sql: "SELECT
     NULL::text AS constraint_catalog,
     NULL::text AS constraint_schema,
@@ -6793,6 +8212,13 @@ pub static INFORMATION_SCHEMA_ROUTINES: LazyLock<BuiltinView> = LazyLock::new(||
     schema: INFORMATION_SCHEMA,
     oid: oid::VIEW_ROUTINES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("routine_catalog", ScalarType::String.nullable(false))
+        .with_column("routine_schema", ScalarType::String.nullable(false))
+        .with_column("routine_name", ScalarType::String.nullable(false))
+        .with_column("routine_type", ScalarType::String.nullable(false))
+        .with_column("routine_definition", ScalarType::String.nullable(true))
+        .finish(),
     sql: "SELECT
     current_database() as routine_catalog,
     s.name AS routine_schema,
@@ -6811,6 +8237,10 @@ pub static INFORMATION_SCHEMA_SCHEMATA: LazyLock<BuiltinView> = LazyLock::new(||
     schema: INFORMATION_SCHEMA,
     oid: oid::VIEW_SCHEMATA_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("catalog_name", ScalarType::String.nullable(false))
+        .with_column("schema_name", ScalarType::String.nullable(false))
+        .finish(),
     sql: "
 SELECT
     current_database() as catalog_name,
@@ -6826,6 +8256,12 @@ pub static INFORMATION_SCHEMA_TABLES: LazyLock<BuiltinView> = LazyLock::new(|| B
     schema: INFORMATION_SCHEMA,
     oid: oid::VIEW_TABLES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("table_catalog", ScalarType::String.nullable(false))
+        .with_column("table_schema", ScalarType::String.nullable(false))
+        .with_column("table_name", ScalarType::String.nullable(false))
+        .with_column("table_type", ScalarType::String.nullable(false))
+        .finish(),
     sql: "SELECT
     current_database() as table_catalog,
     s.name AS table_schema,
@@ -6848,6 +8284,20 @@ pub static INFORMATION_SCHEMA_TABLE_CONSTRAINTS: LazyLock<BuiltinView> =
         schema: INFORMATION_SCHEMA,
         oid: oid::VIEW_TABLE_CONSTRAINTS_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("constraint_catalog", ScalarType::String.nullable(false))
+            .with_column("constraint_schema", ScalarType::String.nullable(false))
+            .with_column("constraint_name", ScalarType::String.nullable(false))
+            .with_column("table_catalog", ScalarType::String.nullable(false))
+            .with_column("table_schema", ScalarType::String.nullable(false))
+            .with_column("table_name", ScalarType::String.nullable(false))
+            .with_column("constraint_type", ScalarType::String.nullable(false))
+            .with_column("is_deferrable", ScalarType::String.nullable(false))
+            .with_column("initially_deferred", ScalarType::String.nullable(false))
+            .with_column("enforced", ScalarType::String.nullable(false))
+            .with_column("nulls_distinct", ScalarType::String.nullable(false))
+            .with_key(vec![])
+            .finish(),
         sql: "SELECT
     NULL::text AS constraint_catalog,
     NULL::text AS constraint_schema,
@@ -6870,6 +8320,16 @@ pub static INFORMATION_SCHEMA_TABLE_PRIVILEGES: LazyLock<BuiltinView> = LazyLock
         schema: INFORMATION_SCHEMA,
         oid: oid::VIEW_TABLE_PRIVILEGES_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("grantor", ScalarType::String.nullable(false))
+            .with_column("grantee", ScalarType::String.nullable(true))
+            .with_column("table_catalog", ScalarType::String.nullable(true))
+            .with_column("table_schema", ScalarType::String.nullable(false))
+            .with_column("table_name", ScalarType::String.nullable(false))
+            .with_column("privilege_type", ScalarType::String.nullable(true))
+            .with_column("is_grantable", ScalarType::String.nullable(false))
+            .with_column("with_hierarchy", ScalarType::String.nullable(false))
+            .finish(),
         sql: "
 SELECT
     grantor,
@@ -6929,6 +8389,29 @@ pub static INFORMATION_SCHEMA_TRIGGERS: LazyLock<BuiltinView> = LazyLock::new(||
     schema: INFORMATION_SCHEMA,
     oid: oid::VIEW_TRIGGERS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("trigger_catalog", ScalarType::String.nullable(false))
+        .with_column("trigger_schema", ScalarType::String.nullable(false))
+        .with_column("trigger_name", ScalarType::String.nullable(false))
+        .with_column("event_manipulation", ScalarType::String.nullable(false))
+        .with_column("event_object_catalog", ScalarType::String.nullable(false))
+        .with_column("event_object_schema", ScalarType::String.nullable(false))
+        .with_column("event_object_table", ScalarType::String.nullable(false))
+        .with_column("action_order", ScalarType::Int32.nullable(false))
+        .with_column("action_condition", ScalarType::String.nullable(false))
+        .with_column("action_statement", ScalarType::String.nullable(false))
+        .with_column("action_orientation", ScalarType::String.nullable(false))
+        .with_column("action_timing", ScalarType::String.nullable(false))
+        .with_column(
+            "action_reference_old_table",
+            ScalarType::String.nullable(false),
+        )
+        .with_column(
+            "action_reference_new_table",
+            ScalarType::String.nullable(false),
+        )
+        .with_key(vec![])
+        .finish(),
     sql: "SELECT
     NULL::text as trigger_catalog,
     NULL::text AS trigger_schema,
@@ -6953,6 +8436,12 @@ pub static INFORMATION_SCHEMA_VIEWS: LazyLock<BuiltinView> = LazyLock::new(|| Bu
     schema: INFORMATION_SCHEMA,
     oid: oid::VIEW_VIEWS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("table_catalog", ScalarType::String.nullable(false))
+        .with_column("table_schema", ScalarType::String.nullable(false))
+        .with_column("table_name", ScalarType::String.nullable(false))
+        .with_column("view_definition", ScalarType::String.nullable(false))
+        .finish(),
     sql: "SELECT
     current_database() as table_catalog,
     s.name AS table_schema,
@@ -6971,6 +8460,20 @@ pub static INFORMATION_SCHEMA_CHARACTER_SETS: LazyLock<BuiltinView> =
         schema: INFORMATION_SCHEMA,
         oid: oid::VIEW_CHARACTER_SETS_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("character_set_catalog", ScalarType::String.nullable(true))
+            .with_column("character_set_schema", ScalarType::String.nullable(true))
+            .with_column("character_set_name", ScalarType::String.nullable(false))
+            .with_column("character_repertoire", ScalarType::String.nullable(false))
+            .with_column("form_of_use", ScalarType::String.nullable(false))
+            .with_column(
+                "default_collate_catalog",
+                ScalarType::String.nullable(false),
+            )
+            .with_column("default_collate_schema", ScalarType::String.nullable(false))
+            .with_column("default_collate_name", ScalarType::String.nullable(false))
+            .with_key(vec![])
+            .finish(),
         sql: "SELECT
     NULL as character_set_catalog,
     NULL as character_set_schema,
@@ -6990,6 +8493,19 @@ pub static PG_COLLATION: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_COLLATION_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("collname", ScalarType::String.nullable(false))
+        .with_column("collnamespace", ScalarType::Oid.nullable(false))
+        .with_column("collowner", ScalarType::Oid.nullable(false))
+        .with_column("collprovider", ScalarType::PgLegacyChar.nullable(false))
+        .with_column("collisdeterministic", ScalarType::Bool.nullable(false))
+        .with_column("collencoding", ScalarType::Int32.nullable(false))
+        .with_column("collcollate", ScalarType::String.nullable(false))
+        .with_column("collctype", ScalarType::String.nullable(false))
+        .with_column("collversion", ScalarType::String.nullable(false))
+        .with_key(vec![])
+        .finish(),
     sql: "
 SELECT
     NULL::pg_catalog.oid AS oid,
@@ -7012,6 +8528,20 @@ pub static PG_POLICY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_POLICY_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("polname", ScalarType::String.nullable(false))
+        .with_column("polrelid", ScalarType::Oid.nullable(false))
+        .with_column("polcmd", ScalarType::PgLegacyChar.nullable(false))
+        .with_column("polpermissive", ScalarType::Bool.nullable(false))
+        .with_column(
+            "polroles",
+            ScalarType::Array(Box::new(ScalarType::Oid)).nullable(false),
+        )
+        .with_column("polqual", ScalarType::String.nullable(false))
+        .with_column("polwithcheck", ScalarType::String.nullable(false))
+        .with_key(vec![])
+        .finish(),
     sql: "
 SELECT
     NULL::pg_catalog.oid AS oid,
@@ -7032,6 +8562,13 @@ pub static PG_INHERITS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_INHERITS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("inhrelid", ScalarType::Oid.nullable(false))
+        .with_column("inhparent", ScalarType::Oid.nullable(false))
+        .with_column("inhseqno", ScalarType::Int32.nullable(false))
+        .with_column("inhdetachpending", ScalarType::Bool.nullable(false))
+        .with_key(vec![])
+        .finish(),
     sql: "
 SELECT
     NULL::pg_catalog.oid AS inhrelid,
@@ -7047,6 +8584,28 @@ pub static PG_LOCKS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_LOCKS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("locktype", ScalarType::String.nullable(false))
+        .with_column("database", ScalarType::Oid.nullable(false))
+        .with_column("relation", ScalarType::Oid.nullable(false))
+        .with_column("page", ScalarType::Int32.nullable(false))
+        .with_column("tuple", ScalarType::Int16.nullable(false))
+        .with_column("virtualxid", ScalarType::String.nullable(false))
+        .with_column("transactionid", ScalarType::String.nullable(false))
+        .with_column("classid", ScalarType::Oid.nullable(false))
+        .with_column("objid", ScalarType::Oid.nullable(false))
+        .with_column("objsubid", ScalarType::Int16.nullable(false))
+        .with_column("virtualtransaction", ScalarType::String.nullable(false))
+        .with_column("pid", ScalarType::Int32.nullable(false))
+        .with_column("mode", ScalarType::String.nullable(false))
+        .with_column("granted", ScalarType::Bool.nullable(false))
+        .with_column("fastpath", ScalarType::Bool.nullable(false))
+        .with_column(
+            "waitstart",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_key(vec![])
+        .finish(),
     sql: "
 SELECT
 -- While there exist locks in Materialize, we don't expose them, so all of these fields are NULL.
@@ -7075,6 +8634,23 @@ pub static PG_AUTHID: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_AUTHID_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("rolname", ScalarType::String.nullable(false))
+        .with_column("rolsuper", ScalarType::Bool.nullable(true))
+        .with_column("rolinherit", ScalarType::Bool.nullable(false))
+        .with_column("rolcreaterole", ScalarType::Bool.nullable(true))
+        .with_column("rolcreatedb", ScalarType::Bool.nullable(true))
+        .with_column("rolcanlogin", ScalarType::Bool.nullable(false))
+        .with_column("rolreplication", ScalarType::Bool.nullable(false))
+        .with_column("rolbypassrls", ScalarType::Bool.nullable(false))
+        .with_column("rolconnlimit", ScalarType::Int32.nullable(false))
+        .with_column("rolpassword", ScalarType::String.nullable(false))
+        .with_column(
+            "rolvaliduntil",
+            ScalarType::TimestampTz { precision: None }.nullable(true),
+        )
+        .finish(),
     sql: r#"
 SELECT
     r.oid AS oid,
@@ -7130,6 +8706,30 @@ pub static PG_AGGREGATE: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_AGGREGATE_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("aggfnoid", ScalarType::Oid.nullable(false))
+        .with_column("aggkind", ScalarType::String.nullable(false))
+        .with_column("aggnumdirectargs", ScalarType::Int16.nullable(false))
+        .with_column("aggtransfn", ScalarType::RegProc.nullable(true))
+        .with_column("aggfinalfn", ScalarType::RegProc.nullable(false))
+        .with_column("aggcombinefn", ScalarType::RegProc.nullable(false))
+        .with_column("aggserialfn", ScalarType::RegProc.nullable(false))
+        .with_column("aggdeserialfn", ScalarType::RegProc.nullable(false))
+        .with_column("aggmtransfn", ScalarType::RegProc.nullable(false))
+        .with_column("aggminvtransfn", ScalarType::RegProc.nullable(false))
+        .with_column("aggmfinalfn", ScalarType::RegProc.nullable(false))
+        .with_column("aggfinalextra", ScalarType::Bool.nullable(false))
+        .with_column("aggmfinalextra", ScalarType::Bool.nullable(false))
+        .with_column("aggfinalmodify", ScalarType::PgLegacyChar.nullable(true))
+        .with_column("aggmfinalmodify", ScalarType::PgLegacyChar.nullable(true))
+        .with_column("aggsortop", ScalarType::Oid.nullable(false))
+        .with_column("aggtranstype", ScalarType::Oid.nullable(true))
+        .with_column("aggtransspace", ScalarType::Int32.nullable(true))
+        .with_column("aggmtranstype", ScalarType::Oid.nullable(false))
+        .with_column("aggmtransspace", ScalarType::Int32.nullable(true))
+        .with_column("agginitval", ScalarType::String.nullable(true))
+        .with_column("aggminitval", ScalarType::String.nullable(true))
+        .finish(),
     sql: "SELECT
     a.oid as aggfnoid,
     -- Currently Materialize only support 'normal' aggregate functions.
@@ -7164,6 +8764,28 @@ pub static PG_TRIGGER: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_TRIGGER_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("tgrelid", ScalarType::Oid.nullable(false))
+        .with_column("tgparentid", ScalarType::Oid.nullable(false))
+        .with_column("tgname", ScalarType::String.nullable(false))
+        .with_column("tgfoid", ScalarType::Oid.nullable(false))
+        .with_column("tgtype", ScalarType::Int16.nullable(false))
+        .with_column("tgenabled", ScalarType::PgLegacyChar.nullable(false))
+        .with_column("tgisinternal", ScalarType::Bool.nullable(false))
+        .with_column("tgconstrrelid", ScalarType::Oid.nullable(false))
+        .with_column("tgconstrindid", ScalarType::Oid.nullable(false))
+        .with_column("tgconstraint", ScalarType::Oid.nullable(false))
+        .with_column("tgdeferrable", ScalarType::Bool.nullable(false))
+        .with_column("tginitdeferred", ScalarType::Bool.nullable(false))
+        .with_column("tgnargs", ScalarType::Int16.nullable(false))
+        .with_column("tgattr", ScalarType::Int2Vector.nullable(false))
+        .with_column("tgargs", ScalarType::Bytes.nullable(false))
+        .with_column("tgqual", ScalarType::String.nullable(false))
+        .with_column("tgoldtable", ScalarType::String.nullable(false))
+        .with_column("tgnewtable", ScalarType::String.nullable(false))
+        .with_key(vec![])
+        .finish(),
     sql: "SELECT
     -- MZ doesn't support triggers so all of these fields are NULL.
     NULL::pg_catalog.oid AS oid,
@@ -7197,6 +8819,17 @@ pub static PG_REWRITE: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_REWRITE_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("rulename", ScalarType::String.nullable(false))
+        .with_column("ev_class", ScalarType::Oid.nullable(false))
+        .with_column("ev_type", ScalarType::PgLegacyChar.nullable(false))
+        .with_column("ev_enabled", ScalarType::PgLegacyChar.nullable(false))
+        .with_column("is_instead", ScalarType::Bool.nullable(false))
+        .with_column("ev_qual", ScalarType::String.nullable(false))
+        .with_column("ev_action", ScalarType::String.nullable(false))
+        .with_key(vec![])
+        .finish(),
     sql: "SELECT
     -- MZ doesn't support rewrite rules so all of these fields are NULL.
     NULL::pg_catalog.oid AS oid,
@@ -7219,6 +8852,23 @@ pub static PG_EXTENSION: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_EXTENSION_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("extname", ScalarType::String.nullable(false))
+        .with_column("extowner", ScalarType::Oid.nullable(false))
+        .with_column("extnamespace", ScalarType::Oid.nullable(false))
+        .with_column("extrelocatable", ScalarType::Bool.nullable(false))
+        .with_column("extversion", ScalarType::String.nullable(false))
+        .with_column(
+            "extconfig",
+            ScalarType::Array(Box::new(ScalarType::Oid)).nullable(false),
+        )
+        .with_column(
+            "extcondition",
+            ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
+        )
+        .with_key(vec![])
+        .finish(),
     sql: "SELECT
     -- MZ doesn't support extensions so all of these fields are NULL.
     NULL::pg_catalog.oid AS oid,
@@ -7239,6 +8889,12 @@ pub static MZ_SHOW_ALL_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| Builtin
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_ALL_OBJECTS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("schema_id", ScalarType::String.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("type", ScalarType::String.nullable(false))
+        .with_column("comment", ScalarType::String.nullable(false))
+        .finish(),
     sql: "WITH comments AS (
         SELECT id, object_type, comment
         FROM mz_internal.mz_comments
@@ -7257,6 +8913,11 @@ pub static MZ_SHOW_CLUSTERS: LazyLock<BuiltinView> = LazyLock::new(|| {
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_CLUSTERS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("replicas", ScalarType::String.nullable(true))
+        .with_column("comment", ScalarType::String.nullable(false))
+        .finish(),
     sql: "
     WITH clusters AS (
         SELECT
@@ -7285,6 +8946,11 @@ pub static MZ_SHOW_SECRETS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_SECRETS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("schema_id", ScalarType::String.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("comment", ScalarType::String.nullable(false))
+        .finish(),
     sql: "WITH comments AS (
         SELECT id, comment
         FROM mz_internal.mz_comments
@@ -7301,6 +8967,14 @@ pub static MZ_SHOW_COLUMNS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_COLUMNS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("nullable", ScalarType::Bool.nullable(false))
+        .with_column("type", ScalarType::String.nullable(false))
+        .with_column("position", ScalarType::UInt64.nullable(false))
+        .with_column("comment", ScalarType::String.nullable(false))
+        .finish(),
     sql: "
     SELECT columns.id, name, nullable, type, position, COALESCE(comment, '') as comment
     FROM mz_catalog.mz_columns columns
@@ -7314,6 +8988,10 @@ pub static MZ_SHOW_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVi
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_DATABASES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("comment", ScalarType::String.nullable(false))
+        .finish(),
     sql: "WITH comments AS (
         SELECT id, comment
         FROM mz_internal.mz_comments
@@ -7330,6 +9008,11 @@ pub static MZ_SHOW_SCHEMAS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_SCHEMAS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("database_id", ScalarType::String.nullable(true))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("comment", ScalarType::String.nullable(false))
+        .finish(),
     sql: "WITH comments AS (
         SELECT id, comment
         FROM mz_internal.mz_comments
@@ -7346,6 +9029,10 @@ pub static MZ_SHOW_ROLES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_ROLES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("comment", ScalarType::String.nullable(false))
+        .finish(),
     sql: "WITH comments AS (
         SELECT id, comment
         FROM mz_internal.mz_comments
@@ -7364,6 +9051,12 @@ pub static MZ_SHOW_TABLES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView 
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_TABLES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("schema_id", ScalarType::String.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("comment", ScalarType::String.nullable(false))
+        .with_column("source_id", ScalarType::String.nullable(true))
+        .finish(),
     sql: "WITH comments AS (
         SELECT id, comment
         FROM mz_internal.mz_comments
@@ -7380,6 +9073,11 @@ pub static MZ_SHOW_VIEWS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_VIEWS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("schema_id", ScalarType::String.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("comment", ScalarType::String.nullable(false))
+        .finish(),
     sql: "WITH comments AS (
         SELECT id, comment
         FROM mz_internal.mz_comments
@@ -7396,6 +9094,11 @@ pub static MZ_SHOW_TYPES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_TYPES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("schema_id", ScalarType::String.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("comment", ScalarType::String.nullable(false))
+        .finish(),
     sql: "WITH comments AS (
         SELECT id, comment
         FROM mz_internal.mz_comments
@@ -7412,6 +9115,12 @@ pub static MZ_SHOW_CONNECTIONS: LazyLock<BuiltinView> = LazyLock::new(|| Builtin
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_CONNECTIONS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("schema_id", ScalarType::String.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("type", ScalarType::String.nullable(false))
+        .with_column("comment", ScalarType::String.nullable(false))
+        .finish(),
     sql: "WITH comments AS (
         SELECT id, comment
         FROM mz_internal.mz_comments
@@ -7428,6 +9137,15 @@ pub static MZ_SHOW_SOURCES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_SOURCES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("type", ScalarType::String.nullable(false))
+        .with_column("cluster", ScalarType::String.nullable(true))
+        .with_column("schema_id", ScalarType::String.nullable(false))
+        .with_column("cluster_id", ScalarType::String.nullable(true))
+        .with_column("comment", ScalarType::String.nullable(false))
+        .finish(),
     sql: "
 WITH comments AS (
     SELECT id, comment
@@ -7456,6 +9174,15 @@ pub static MZ_SHOW_SINKS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_SINKS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("type", ScalarType::String.nullable(false))
+        .with_column("cluster", ScalarType::String.nullable(false))
+        .with_column("schema_id", ScalarType::String.nullable(false))
+        .with_column("cluster_id", ScalarType::String.nullable(false))
+        .with_column("comment", ScalarType::String.nullable(false))
+        .finish(),
     sql: "
 WITH comments AS (
     SELECT id, comment
@@ -7484,6 +9211,14 @@ pub static MZ_SHOW_MATERIALIZED_VIEWS: LazyLock<BuiltinView> = LazyLock::new(|| 
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_MATERIALIZED_VIEWS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("cluster", ScalarType::String.nullable(false))
+        .with_column("schema_id", ScalarType::String.nullable(false))
+        .with_column("cluster_id", ScalarType::String.nullable(false))
+        .with_column("comment", ScalarType::String.nullable(false))
+        .finish(),
     sql: "
 WITH comments AS (
     SELECT id, comment
@@ -7509,6 +9244,20 @@ pub static MZ_SHOW_INDEXES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_INDEXES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("on", ScalarType::String.nullable(false))
+        .with_column("cluster", ScalarType::String.nullable(false))
+        .with_column(
+            "key",
+            ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
+        )
+        .with_column("on_id", ScalarType::String.nullable(false))
+        .with_column("schema_id", ScalarType::String.nullable(false))
+        .with_column("cluster_id", ScalarType::String.nullable(false))
+        .with_column("comment", ScalarType::String.nullable(false))
+        .finish(),
     sql: "
 WITH comments AS (
     SELECT id, comment
@@ -7555,6 +9304,14 @@ pub static MZ_SHOW_CLUSTER_REPLICAS: LazyLock<BuiltinView> = LazyLock::new(|| Bu
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_CLUSTER_REPLICAS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("cluster", ScalarType::String.nullable(false))
+        .with_column("replica", ScalarType::String.nullable(false))
+        .with_column("replica_id", ScalarType::String.nullable(false))
+        .with_column("size", ScalarType::String.nullable(true))
+        .with_column("ready", ScalarType::Bool.nullable(false))
+        .with_column("comment", ScalarType::String.nullable(false))
+        .finish(),
     sql: r#"SELECT
     mz_catalog.mz_clusters.name AS cluster,
     mz_catalog.mz_cluster_replicas.name AS replica,
@@ -7588,6 +9345,14 @@ pub static MZ_SHOW_CONTINUAL_TASKS: LazyLock<BuiltinView> = LazyLock::new(|| Bui
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_CONTINUAL_TASKS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("cluster", ScalarType::String.nullable(false))
+        .with_column("schema_id", ScalarType::String.nullable(false))
+        .with_column("cluster_id", ScalarType::String.nullable(false))
+        .with_column("comment", ScalarType::String.nullable(false))
+        .finish(),
     sql: "
 WITH comments AS (
     SELECT id, comment
@@ -7613,6 +9378,11 @@ pub static MZ_SHOW_ROLE_MEMBERS: LazyLock<BuiltinView> = LazyLock::new(|| Builti
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_ROLE_MEMBERS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("role", ScalarType::String.nullable(false))
+        .with_column("member", ScalarType::String.nullable(false))
+        .with_column("grantor", ScalarType::String.nullable(false))
+        .finish(),
     sql: r#"SELECT
     r1.name AS role,
     r2.name AS member,
@@ -7630,6 +9400,11 @@ pub static MZ_SHOW_MY_ROLE_MEMBERS: LazyLock<BuiltinView> = LazyLock::new(|| Bui
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_MY_ROLE_MEMBERS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("role", ScalarType::String.nullable(false))
+        .with_column("member", ScalarType::String.nullable(false))
+        .with_column("grantor", ScalarType::String.nullable(false))
+        .finish(),
     sql: r#"SELECT role, member, grantor
 FROM mz_internal.mz_show_role_members
 WHERE pg_has_role(member, 'USAGE')"#,
@@ -7641,6 +9416,11 @@ pub static MZ_SHOW_SYSTEM_PRIVILEGES: LazyLock<BuiltinView> = LazyLock::new(|| B
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_SYSTEM_PRIVILEGES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("grantor", ScalarType::String.nullable(true))
+        .with_column("grantee", ScalarType::String.nullable(true))
+        .with_column("privilege_type", ScalarType::String.nullable(false))
+        .finish(),
     sql: r#"SELECT
     grantor.name AS grantor,
     CASE privileges.grantee
@@ -7662,6 +9442,11 @@ pub static MZ_SHOW_MY_SYSTEM_PRIVILEGES: LazyLock<BuiltinView> = LazyLock::new(|
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_MY_SYSTEM_PRIVILEGES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("grantor", ScalarType::String.nullable(true))
+        .with_column("grantee", ScalarType::String.nullable(true))
+        .with_column("privilege_type", ScalarType::String.nullable(false))
+        .finish(),
     sql: r#"SELECT grantor, grantee, privilege_type
 FROM mz_internal.mz_show_system_privileges
 WHERE
@@ -7677,6 +9462,12 @@ pub static MZ_SHOW_CLUSTER_PRIVILEGES: LazyLock<BuiltinView> = LazyLock::new(|| 
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_CLUSTER_PRIVILEGES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("grantor", ScalarType::String.nullable(true))
+        .with_column("grantee", ScalarType::String.nullable(true))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("privilege_type", ScalarType::String.nullable(false))
+        .finish(),
     sql: r#"SELECT
     grantor.name AS grantor,
     CASE privileges.grantee
@@ -7700,6 +9491,12 @@ pub static MZ_SHOW_MY_CLUSTER_PRIVILEGES: LazyLock<BuiltinView> = LazyLock::new(
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_MY_CLUSTER_PRIVILEGES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("grantor", ScalarType::String.nullable(true))
+        .with_column("grantee", ScalarType::String.nullable(true))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("privilege_type", ScalarType::String.nullable(false))
+        .finish(),
     sql: r#"SELECT grantor, grantee, name, privilege_type
 FROM mz_internal.mz_show_cluster_privileges
 WHERE
@@ -7715,6 +9512,12 @@ pub static MZ_SHOW_DATABASE_PRIVILEGES: LazyLock<BuiltinView> = LazyLock::new(||
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_DATABASE_PRIVILEGES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("grantor", ScalarType::String.nullable(true))
+        .with_column("grantee", ScalarType::String.nullable(true))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("privilege_type", ScalarType::String.nullable(false))
+        .finish(),
     sql: r#"SELECT
     grantor.name AS grantor,
     CASE privileges.grantee
@@ -7738,6 +9541,12 @@ pub static MZ_SHOW_MY_DATABASE_PRIVILEGES: LazyLock<BuiltinView> = LazyLock::new
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_MY_DATABASE_PRIVILEGES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("grantor", ScalarType::String.nullable(true))
+        .with_column("grantee", ScalarType::String.nullable(true))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("privilege_type", ScalarType::String.nullable(false))
+        .finish(),
     sql: r#"SELECT grantor, grantee, name, privilege_type
 FROM mz_internal.mz_show_database_privileges
 WHERE
@@ -7753,6 +9562,13 @@ pub static MZ_SHOW_SCHEMA_PRIVILEGES: LazyLock<BuiltinView> = LazyLock::new(|| B
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_SCHEMA_PRIVILEGES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("grantor", ScalarType::String.nullable(true))
+        .with_column("grantee", ScalarType::String.nullable(true))
+        .with_column("database", ScalarType::String.nullable(true))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("privilege_type", ScalarType::String.nullable(false))
+        .finish(),
     sql: r#"SELECT
     grantor.name AS grantor,
     CASE privileges.grantee
@@ -7778,6 +9594,13 @@ pub static MZ_SHOW_MY_SCHEMA_PRIVILEGES: LazyLock<BuiltinView> = LazyLock::new(|
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_MY_SCHEMA_PRIVILEGES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("grantor", ScalarType::String.nullable(true))
+        .with_column("grantee", ScalarType::String.nullable(true))
+        .with_column("database", ScalarType::String.nullable(true))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("privilege_type", ScalarType::String.nullable(false))
+        .finish(),
     sql: r#"SELECT grantor, grantee, database, name, privilege_type
 FROM mz_internal.mz_show_schema_privileges
 WHERE
@@ -7793,6 +9616,15 @@ pub static MZ_SHOW_OBJECT_PRIVILEGES: LazyLock<BuiltinView> = LazyLock::new(|| B
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_OBJECT_PRIVILEGES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("grantor", ScalarType::String.nullable(true))
+        .with_column("grantee", ScalarType::String.nullable(true))
+        .with_column("database", ScalarType::String.nullable(true))
+        .with_column("schema", ScalarType::String.nullable(true))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("object_type", ScalarType::String.nullable(false))
+        .with_column("privilege_type", ScalarType::String.nullable(false))
+        .finish(),
     sql: r#"SELECT
     grantor.name AS grantor,
     CASE privileges.grantee
@@ -7821,6 +9653,15 @@ pub static MZ_SHOW_MY_OBJECT_PRIVILEGES: LazyLock<BuiltinView> = LazyLock::new(|
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_MY_OBJECT_PRIVILEGES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("grantor", ScalarType::String.nullable(true))
+        .with_column("grantee", ScalarType::String.nullable(true))
+        .with_column("database", ScalarType::String.nullable(true))
+        .with_column("schema", ScalarType::String.nullable(true))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("object_type", ScalarType::String.nullable(false))
+        .with_column("privilege_type", ScalarType::String.nullable(false))
+        .finish(),
     sql: r#"SELECT grantor, grantee, database, schema, name, object_type, privilege_type
 FROM mz_internal.mz_show_object_privileges
 WHERE
@@ -7836,6 +9677,15 @@ pub static MZ_SHOW_ALL_PRIVILEGES: LazyLock<BuiltinView> = LazyLock::new(|| Buil
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_ALL_PRIVILEGES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("grantor", ScalarType::String.nullable(true))
+        .with_column("grantee", ScalarType::String.nullable(true))
+        .with_column("database", ScalarType::String.nullable(true))
+        .with_column("schema", ScalarType::String.nullable(true))
+        .with_column("name", ScalarType::String.nullable(true))
+        .with_column("object_type", ScalarType::String.nullable(false))
+        .with_column("privilege_type", ScalarType::String.nullable(false))
+        .finish(),
     sql: r#"SELECT grantor, grantee, NULL AS database, NULL AS schema, NULL AS name, 'system' AS object_type, privilege_type
 FROM mz_internal.mz_show_system_privileges
 UNION ALL
@@ -7858,6 +9708,15 @@ pub static MZ_SHOW_ALL_MY_PRIVILEGES: LazyLock<BuiltinView> = LazyLock::new(|| B
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_ALL_MY_PRIVILEGES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("grantor", ScalarType::String.nullable(true))
+        .with_column("grantee", ScalarType::String.nullable(true))
+        .with_column("database", ScalarType::String.nullable(true))
+        .with_column("schema", ScalarType::String.nullable(true))
+        .with_column("name", ScalarType::String.nullable(true))
+        .with_column("object_type", ScalarType::String.nullable(false))
+        .with_column("privilege_type", ScalarType::String.nullable(false))
+        .finish(),
     sql: r#"SELECT grantor, grantee, database, schema, name, object_type, privilege_type
 FROM mz_internal.mz_show_all_privileges
 WHERE
@@ -7873,6 +9732,14 @@ pub static MZ_SHOW_DEFAULT_PRIVILEGES: LazyLock<BuiltinView> = LazyLock::new(|| 
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_DEFAULT_PRIVILEGES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("object_owner", ScalarType::String.nullable(true))
+        .with_column("database", ScalarType::String.nullable(true))
+        .with_column("schema", ScalarType::String.nullable(true))
+        .with_column("object_type", ScalarType::String.nullable(false))
+        .with_column("grantee", ScalarType::String.nullable(true))
+        .with_column("privilege_type", ScalarType::String.nullable(true))
+        .finish(),
     sql: r#"SELECT
     CASE defaults.role_id
         WHEN 'p' THEN 'PUBLIC'
@@ -7902,6 +9769,14 @@ pub static MZ_SHOW_MY_DEFAULT_PRIVILEGES: LazyLock<BuiltinView> = LazyLock::new(
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_MY_DEFAULT_PRIVILEGES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("object_owner", ScalarType::String.nullable(true))
+        .with_column("database", ScalarType::String.nullable(true))
+        .with_column("schema", ScalarType::String.nullable(true))
+        .with_column("object_type", ScalarType::String.nullable(false))
+        .with_column("grantee", ScalarType::String.nullable(true))
+        .with_column("privilege_type", ScalarType::String.nullable(true))
+        .finish(),
     sql: r#"SELECT object_owner, database, schema, object_type, grantee, privilege_type
 FROM mz_internal.mz_show_default_privileges
 WHERE
@@ -7917,6 +9792,11 @@ pub static MZ_SHOW_NETWORK_POLICIES: LazyLock<BuiltinView> = LazyLock::new(|| Bu
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_NETWORK_POLICIES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("rules", ScalarType::String.nullable(true))
+        .with_column("comment", ScalarType::String.nullable(false))
+        .finish(),
     sql: "
 WITH comments AS (
     SELECT id, comment
@@ -7946,6 +9826,25 @@ pub static MZ_CLUSTER_REPLICA_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| 
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_CLUSTER_REPLICA_HISTORY_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("replica_id", ScalarType::String.nullable(true))
+        .with_column("size", ScalarType::String.nullable(true))
+        .with_column("cluster_id", ScalarType::String.nullable(true))
+        .with_column("cluster_name", ScalarType::String.nullable(true))
+        .with_column("replica_name", ScalarType::String.nullable(true))
+        .with_column(
+            "created_at",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column(
+            "dropped_at",
+            ScalarType::TimestampTz { precision: None }.nullable(true),
+        )
+        .with_column(
+            "credits_per_hour",
+            ScalarType::Numeric { max_scale: None }.nullable(true),
+        )
+        .finish(),
     sql: r#"
         WITH
             creates AS
@@ -7994,6 +9893,15 @@ pub static MZ_CLUSTER_REPLICA_NAME_HISTORY: LazyLock<BuiltinView> = LazyLock::ne
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_CLUSTER_REPLICA_NAME_HISTORY_OID,
     column_defs: Some("occurred_at, id, previous_name, new_name"),
+    desc: RelationDesc::builder()
+        .with_column(
+            "occurred_at",
+            ScalarType::TimestampTz { precision: None }.nullable(true),
+        )
+        .with_column("id", ScalarType::String.nullable(true))
+        .with_column("previous_name", ScalarType::String.nullable(true))
+        .with_column("new_name", ScalarType::String.nullable(true))
+        .finish(),
     sql: r#"WITH user_replica_alter_history AS (
   SELECT occurred_at,
     audit_events.details->>'replica_id' AS id,
@@ -8040,6 +9948,11 @@ pub static MZ_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| Built
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_HYDRATION_STATUSES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column("replica_id", ScalarType::String.nullable(true))
+        .with_column("hydrated", ScalarType::Bool.nullable(true))
+        .finish(),
     sql: r#"WITH
 -- Joining against the linearizable catalog tables ensures that this view
 -- always contains the set of installed objects, even when it depends
@@ -8126,6 +10039,10 @@ pub static MZ_MATERIALIZATION_DEPENDENCIES: LazyLock<BuiltinView> = LazyLock::ne
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_MATERIALIZATION_DEPENDENCIES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column("dependency_id", ScalarType::String.nullable(false))
+        .finish(),
     sql: "
 SELECT object_id, dependency_id
 FROM mz_internal.mz_compute_dependencies
@@ -8142,6 +10059,16 @@ pub static MZ_MATERIALIZATION_LAG: LazyLock<BuiltinView> = LazyLock::new(|| Buil
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_MATERIALIZATION_LAG_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column("local_lag", ScalarType::Interval.nullable(true))
+        .with_column("global_lag", ScalarType::Interval.nullable(true))
+        .with_column("slowest_local_input_id", ScalarType::String.nullable(false))
+        .with_column(
+            "slowest_global_input_id",
+            ScalarType::String.nullable(false),
+        )
+        .finish(),
     sql: "
 WITH MUTUALLY RECURSIVE
     -- IDs of objects for which we want to know the lag.
@@ -8257,6 +10184,52 @@ pub static MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW: LazyLock<BuiltinView> = Lazy
             cluster_id,
             size"#,
         ),
+        desc: RelationDesc::builder()
+            .with_column(
+                "bucket_start",
+                ScalarType::TimestampTz { precision: None }.nullable(false),
+            )
+            .with_column("replica_id", ScalarType::String.nullable(false))
+            .with_column("memory_percent", ScalarType::Float64.nullable(true))
+            .with_column(
+                "max_memory_at",
+                ScalarType::TimestampTz { precision: None }.nullable(false),
+            )
+            .with_column("disk_percent", ScalarType::Float64.nullable(true))
+            .with_column(
+                "max_disk_at",
+                ScalarType::TimestampTz { precision: None }.nullable(false),
+            )
+            .with_column(
+                "memory_and_disk_percent",
+                ScalarType::Float64.nullable(true),
+            )
+            .with_column(
+                "max_memory_and_disk_memory_percent",
+                ScalarType::Float64.nullable(true),
+            )
+            .with_column(
+                "max_memory_and_disk_disk_percent",
+                ScalarType::Float64.nullable(true),
+            )
+            .with_column(
+                "max_memory_and_disk_at",
+                ScalarType::TimestampTz { precision: None }.nullable(false),
+            )
+            .with_column("max_cpu_percent", ScalarType::Float64.nullable(true))
+            .with_column(
+                "max_cpu_at",
+                ScalarType::TimestampTz { precision: None }.nullable(false),
+            )
+            .with_column("offline_events", ScalarType::Jsonb.nullable(true))
+            .with_column(
+                "bucket_end",
+                ScalarType::TimestampTz { precision: None }.nullable(false),
+            )
+            .with_column("name", ScalarType::String.nullable(true))
+            .with_column("cluster_id", ScalarType::String.nullable(true))
+            .with_column("size", ScalarType::String.nullable(true))
+            .finish(),
         sql: r#"WITH replica_history AS (
   SELECT replica_id,
     size,
@@ -8487,6 +10460,15 @@ pub static MZ_CLUSTER_DEPLOYMENT_LINEAGE: LazyLock<BuiltinView> = LazyLock::new(
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_CLUSTER_DEPLOYMENT_LINEAGE_OID,
     column_defs: Some(r#"cluster_id, current_deployment_cluster_id, cluster_name"#),
+    desc: RelationDesc::builder()
+        .with_column("cluster_id", ScalarType::String.nullable(true))
+        .with_column(
+            "current_deployment_cluster_id",
+            ScalarType::String.nullable(false),
+        )
+        .with_column("cluster_name", ScalarType::String.nullable(false))
+        .with_key(vec![0, 1, 2])
+        .finish(),
     sql: r#"WITH MUTUALLY RECURSIVE cluster_events (
   cluster_id text,
   cluster_name text,
@@ -8939,6 +10921,22 @@ pub static MZ_SOURCE_STATISTICS_WITH_HISTORY: LazyLock<BuiltinView> =
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::VIEW_MZ_SOURCE_STATISTICS_WITH_HISTORY_OID,
         column_defs: None,
+        desc: RelationDesc::builder()
+            .with_column("id", ScalarType::String.nullable(false))
+            .with_column("messages_received", ScalarType::UInt64.nullable(false))
+            .with_column("bytes_received", ScalarType::UInt64.nullable(false))
+            .with_column("updates_staged", ScalarType::UInt64.nullable(false))
+            .with_column("updates_committed", ScalarType::UInt64.nullable(false))
+            .with_column("records_indexed", ScalarType::UInt64.nullable(false))
+            .with_column("bytes_indexed", ScalarType::UInt64.nullable(false))
+            .with_column("rehydration_latency", ScalarType::Interval.nullable(true))
+            .with_column("snapshot_records_known", ScalarType::UInt64.nullable(true))
+            .with_column("snapshot_records_staged", ScalarType::UInt64.nullable(true))
+            .with_column("snapshot_committed", ScalarType::Bool.nullable(false))
+            .with_column("offset_known", ScalarType::UInt64.nullable(true))
+            .with_column("offset_committed", ScalarType::UInt64.nullable(true))
+            .with_key(vec![0])
+            .finish(),
         sql: "
 SELECT
     id,
@@ -8983,6 +10981,22 @@ pub static MZ_SOURCE_STATISTICS: LazyLock<BuiltinView> = LazyLock::new(|| Builti
     oid: oid::VIEW_MZ_SOURCE_STATISTICS_OID,
     column_defs: None,
     // We need to add a redundant where clause for a new dataflow to be created.
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("messages_received", ScalarType::UInt64.nullable(false))
+        .with_column("bytes_received", ScalarType::UInt64.nullable(false))
+        .with_column("updates_staged", ScalarType::UInt64.nullable(false))
+        .with_column("updates_committed", ScalarType::UInt64.nullable(false))
+        .with_column("records_indexed", ScalarType::UInt64.nullable(false))
+        .with_column("bytes_indexed", ScalarType::UInt64.nullable(false))
+        .with_column("rehydration_latency", ScalarType::Interval.nullable(true))
+        .with_column("snapshot_records_known", ScalarType::UInt64.nullable(true))
+        .with_column("snapshot_records_staged", ScalarType::UInt64.nullable(true))
+        .with_column("snapshot_committed", ScalarType::Bool.nullable(false))
+        .with_column("offset_known", ScalarType::UInt64.nullable(true))
+        .with_column("offset_committed", ScalarType::UInt64.nullable(true))
+        .with_key(vec![0])
+        .finish(),
     sql: "SELECT * FROM mz_internal.mz_source_statistics_with_history WHERE length(id) > 0",
     access: vec![PUBLIC_SELECT],
 });
@@ -9001,6 +11015,14 @@ pub static MZ_SINK_STATISTICS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SINK_STATISTICS_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("messages_staged", ScalarType::UInt64.nullable(false))
+        .with_column("messages_committed", ScalarType::UInt64.nullable(false))
+        .with_column("bytes_staged", ScalarType::UInt64.nullable(false))
+        .with_column("bytes_committed", ScalarType::UInt64.nullable(false))
+        .with_key(vec![0])
+        .finish(),
     sql: "
 SELECT
     id,

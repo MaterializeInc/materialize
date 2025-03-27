@@ -67,6 +67,23 @@ pub static MZ_NOTICES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_NOTICES_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("notice_type", ScalarType::String.nullable(false))
+        .with_column("message", ScalarType::String.nullable(false))
+        .with_column("hint", ScalarType::String.nullable(false))
+        .with_column("action", ScalarType::String.nullable(true))
+        .with_column("redacted_message", ScalarType::String.nullable(true))
+        .with_column("redacted_hint", ScalarType::String.nullable(true))
+        .with_column("redacted_action", ScalarType::String.nullable(true))
+        .with_column("action_type", ScalarType::String.nullable(true))
+        .with_column("object_id", ScalarType::String.nullable(true))
+        .with_column(
+            "created_at",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_key(vec![0])
+        .finish(),
     sql: "SELECT
     n.id,
     n.notice_type,
@@ -93,6 +110,20 @@ pub static MZ_NOTICES_REDACTED: LazyLock<BuiltinView> = LazyLock::new(|| Builtin
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_NOTICES_REDACTED_OID,
     column_defs: None,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("notice_type", ScalarType::String.nullable(false))
+        .with_column("message", ScalarType::String.nullable(false))
+        .with_column("hint", ScalarType::String.nullable(false))
+        .with_column("action", ScalarType::String.nullable(true))
+        .with_column("action_type", ScalarType::String.nullable(true))
+        .with_column("object_id", ScalarType::String.nullable(true))
+        .with_column(
+            "created_at",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_key(vec![0])
+        .finish(),
     sql: "SELECT
     id,
     notice_type,
