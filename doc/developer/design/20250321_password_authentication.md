@@ -16,7 +16,7 @@ A successful solution should accomplish the following:
 3. **Broad PostgreSQL Driver Support**: Ensure the password authentication mechanism works seamlessly with various PostgreSQL clients and tools, including pgwire, Tableau, PowerBI, etc.
 4. **HTTP support**: The authentication should work for the external HTTP interface to materialize.
 5. **Password Storage Upgrade Path**: Implement a system for securely storing passwords in a way that can be easily upgraded to stronger encryption mechanisms, such as SCRAM-SHA256.
-6. **Configurable System User Password**: Support settings passwords for internal roles, `mz_system` and `mz_support`, via environment variables that can be set up in Orchestratord using k8s secrets.
+6. **Bootstrapping System Users**: Provide a mechanism for bootstrapping the password and enabling login for system users.
 7. **Compatibility with Cloud Product**: The solution should be optionally enabled allowing both the current Frontegg authentication and no authentication to be used.
 
 ## Out of Scope
@@ -76,9 +76,10 @@ Users should be able to manage their passwords and set passwords for roles they 
 
 -   **OPTIONAL: Password Versioning**: Updates to the password hashing mechanisms may be required. As long as we are receiving passwords in plain text we should be able to take a validated password and replace the existing a new securely hashed value. This may require prefixing the password with data about the hash algorithm or parameters.
 
-### 4. Configurable System User Passwords:
+### 4. Configurable admin system login:
 
-Passwords for `mz_system` and `mz_support` roles will be settable via environment variables `MZ_MZ_SYSTEM_ROLE_PASSWORD` and `MZ_MZ_SUPPORT_ROLE_PASSWORD`. Orchestratord should provide a set of parameters to set these variables via a kubernetes secret. Additionally, We should enable login of `mz_system` through the external ports when they have passwords set. This should require both an explicit feature flag, `enable_public_internal_user_login` to be set to true, and a password set in an environment variable.
+Passwords for `mz_system` and `mz_support` roles will be settable via environment variables `MZ_MZ_<USER>_EXTERNAL_LOGIN_PASSWORD`. Orchestratord should provide a set of parameters to set these variables via a Kubernetes secret. Additionally, We should enable login of system users through the external ports when they have external login passwords set. Login through the external port must not be possible unless this flag is set, this logic should not rely on whether the internal user has a password.
+
 
 ### 5. HTTP Authentication:
 
@@ -95,7 +96,7 @@ A minimal viable prototype (MVP) for this solution will include:
 1. **Password Authentication Implementation**: Implement the basic password authentication flow that authenticates users in the pgwire and HTTP protocol layers.
 2. **Password Management**: Add password management via role create/alter.
 3. **Secure Password Storage**: Implement hashed salted password storage using compatible with `scram-sha-256`.
-4. **Environment Variables for System Roles **: Create new flags to set passwords for system roles (`mz_system` and `mz_support`). Update orchestratord to pass in these flags as environment variables from k8s secrets.
+4. **Bootstrapping System Users**: Provide a mechanism for bootstrapping the password and enabling login for system users.
 5. **HTTP Session Management**: Environmentd's HTTP layer needs to handle session management via cookies and internal session storage.
 
 ## Alternatives
