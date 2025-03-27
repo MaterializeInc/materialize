@@ -24,6 +24,7 @@
 
 pub mod notice;
 
+use std::collections::BTreeMap;
 use std::hash::Hash;
 use std::string::ToString;
 use std::sync::LazyLock;
@@ -164,6 +165,7 @@ pub struct BuiltinTable {
     pub schema: &'static str,
     pub oid: u32,
     pub desc: RelationDesc,
+    pub column_comments: BTreeMap<&'static str, &'static str>,
     /// Whether the table's retention policy is controlled by
     /// the system variable `METRICS_RETENTION`
     pub is_retained_metrics_object: bool,
@@ -177,6 +179,7 @@ pub struct BuiltinSource {
     pub schema: &'static str,
     pub oid: u32,
     pub desc: RelationDesc,
+    pub column_comments: BTreeMap<&'static str, &'static str>,
     pub data_source: IntrospectionType,
     /// Whether the source's retention policy is controlled by
     /// the system variable `METRICS_RETENTION`
@@ -202,6 +205,8 @@ pub struct BuiltinView {
     pub schema: &'static str,
     pub oid: u32,
     pub column_defs: Option<&'static str>,
+    pub desc: RelationDesc,
+    pub column_comments: BTreeMap<&'static str, &'static str>,
     pub sql: &'static str,
     /// ACL items to apply to the object
     pub access: Vec<MzAclItem>,
