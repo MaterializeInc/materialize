@@ -522,39 +522,18 @@ impl BlobTraceUpdates {
 
     /// Convert these updates into the specified batch format, re-encoding or discarding key-value
     /// data as necessary.
-    pub fn as_format<K: Codec, V: Codec>(
+    pub fn as_structured<K: Codec, V: Codec>(
         &self,
-        format: BatchColumnarFormat,
         key_schema: &K::Schema,
         val_schema: &V::Schema,
     ) -> Self {
-        match format {
-            BatchColumnarFormat::Row => {
-                let mut this = self.clone();
-                Self::Row(
-                    this.get_or_make_codec::<K, V>(key_schema, val_schema)
-                        .clone(),
-                )
-            }
-            BatchColumnarFormat::Both(_) => {
-                let mut this = self.clone();
-                Self::Both(
-                    this.get_or_make_codec::<K, V>(key_schema, val_schema)
-                        .clone(),
-                    this.get_or_make_structured::<K, V>(key_schema, val_schema)
-                        .clone(),
-                )
-            }
-            BatchColumnarFormat::Structured => {
-                let mut this = self.clone();
-                Self::Structured {
-                    key_values: this
-                        .get_or_make_structured::<K, V>(key_schema, val_schema)
-                        .clone(),
-                    timestamps: this.timestamps().clone(),
-                    diffs: this.diffs().clone(),
-                }
-            }
+        let mut this = self.clone();
+        Self::Structured {
+            key_values: this
+                .get_or_make_structured::<K, V>(key_schema, val_schema)
+                .clone(),
+            timestamps: this.timestamps().clone(),
+            diffs: this.diffs().clone(),
         }
     }
 }
