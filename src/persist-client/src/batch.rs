@@ -344,7 +344,6 @@ pub struct BatchBuilderConfig {
     pub(crate) blob_target_size: usize,
     pub(crate) batch_delete_enabled: bool,
     pub(crate) batch_builder_max_outstanding_parts: usize,
-    pub(crate) batch_columnar_format: BatchColumnarFormat,
     pub(crate) inline_writes_single_max_bytes: usize,
     pub(crate) stats_collection_enabled: bool,
     pub(crate) stats_budget: usize,
@@ -364,12 +363,6 @@ pub(crate) const BATCH_DELETE_ENABLED: Config<bool> = Config::new(
     "persist_batch_delete_enabled",
     true,
     "Whether to actually delete blobs when batch delete is called (Materialize).",
-);
-
-pub(crate) const BATCH_COLUMNAR_FORMAT: Config<&'static str> = Config::new(
-    "persist_batch_columnar_format",
-    BatchColumnarFormat::default().as_str(),
-    "Columnar format for a batch written to Persist, either 'row', 'both', or 'both_v2' (Materialize).",
 );
 
 pub(crate) const ENCODING_ENABLE_DICTIONARY: Config<bool> = Config::new(
@@ -437,9 +430,6 @@ impl BatchBuilderConfig {
     pub fn new(value: &PersistConfig, _shard_id: ShardId) -> Self {
         let writer_key = WriterKey::for_version(&value.build_version);
 
-        let batch_columnar_format =
-            BatchColumnarFormat::from_str(&BATCH_COLUMNAR_FORMAT.get(value));
-
         let preferred_order = RunOrder::Structured;
 
         BatchBuilderConfig {
@@ -447,7 +437,6 @@ impl BatchBuilderConfig {
             blob_target_size: BLOB_TARGET_SIZE.get(value).clamp(1, usize::MAX),
             batch_delete_enabled: BATCH_DELETE_ENABLED.get(value),
             batch_builder_max_outstanding_parts: BATCH_BUILDER_MAX_OUTSTANDING_PARTS.get(value),
-            batch_columnar_format,
             inline_writes_single_max_bytes: INLINE_WRITES_SINGLE_MAX_BYTES.get(value),
             stats_collection_enabled: STATS_COLLECTION_ENABLED.get(value),
             stats_budget: STATS_BUDGET_BYTES.get(value),
@@ -986,17 +975,10 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         self.next_index += 1;
         let ts_rewrite = None;
         let schema_id = write_schemas.id;
-        let batch_format = self.cfg.batch_columnar_format;
 
         // If we're going to encode structured data then halve our limit since we're storing
         // it twice, once as binary encoded and once as structured.
-        let inline_threshold = match batch_format {
-            BatchColumnarFormat::Row => self.cfg.inline_writes_single_max_bytes,
-            BatchColumnarFormat::Both(_) => {
-                self.cfg.inline_writes_single_max_bytes.saturating_div(2)
-            }
-            BatchColumnarFormat::Structured => self.cfg.inline_writes_single_max_bytes,
-        };
+        let inline_threshold = self.cfg.inline_writes_single_max_bytes;
 
         let (name, write_future) = if updates.goodbytes() < inline_threshold {
             let metrics = Arc::clone(&self.metrics);
@@ -1007,8 +989,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 "batch::inline_part",
                 async move {
                     let updates = metrics.columnar.arrow().measure_part_build(|| {
-                        updates.as_format::<K, V>(
-                            batch_format,
+                        updates.as_structured::<K, V>(
                             write_schemas.key.as_ref(),
                             write_schemas.val.as_ref(),
                         )
@@ -1166,8 +1147,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     };
 
                     // Ensure the updates are in the specified columnar format before encoding.
-                    updates.updates = updates.updates.as_format::<K, V>(
-                        cfg.batch_columnar_format,
+                    updates.updates = updates.updates.as_structured::<K, V>(
                         write_schemas.key.as_ref(),
                         write_schemas.val.as_ref(),
                     );
@@ -1273,7 +1253,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             stats,
             ts_rewrite,
             diffs_sum: Some(diffs_sum),
-            format: Some(cfg.batch_columnar_format),
+            format: Some(BatchColumnarFormat::Structured),
             schema_id,
             // Field has been deprecated but kept around to roundtrip state.
             deprecated_schema_id: None,
@@ -1753,7 +1733,6 @@ mod tests {
     async fn structured_lowers() {
         let cache = PersistClientCache::new_no_metrics();
         // Ensure structured data is calculated, and that we give some budget for a key lower.
-        cache.cfg().set_config(&BATCH_COLUMNAR_FORMAT, "both_v2");
         cache.cfg().set_config(&STRUCTURED_KEY_LOWER_LEN, 1024);
         // Otherwise fails: expected hollow part!
         cache.cfg().set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
