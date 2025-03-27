@@ -2776,6 +2776,48 @@ mod tests {
         .await;
     }
 
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn verify_builtin_descs() {
+        Catalog::with_debug(|catalog| async move {
+            let conn_catalog = catalog.for_system_session();
+
+            let builtins_cfg = BuiltinsConfig {
+                include_continual_tasks: true,
+            };
+            for builtin in BUILTINS::iter(&builtins_cfg) {
+                let (schema, name, expected_desc) = match builtin {
+                    Builtin::Table(t) => (&t.schema, &t.name, &t.desc),
+                    Builtin::View(v) => (&v.schema, &v.name, &v.desc),
+                    Builtin::Source(s) => (&s.schema, &s.name, &s.desc),
+                    Builtin::Log(_)
+                    | Builtin::Type(_)
+                    | Builtin::Func(_)
+                    | Builtin::ContinualTask(_)
+                    | Builtin::Index(_)
+                    | Builtin::Connection(_) => continue,
+                };
+                let item = conn_catalog
+                    .resolve_item(&PartialItemName {
+                        database: None,
+                        schema: Some(schema.to_string()),
+                        item: name.to_string(),
+                    })
+                    .expect("unable to resolve item")
+                    .at_version(RelationVersionSelector::Latest);
+
+                let full_name = conn_catalog.resolve_full_name(item.name());
+                let actual_desc = item.desc(&full_name).expect("invalid item type");
+                assert_eq!(
+                    &*actual_desc, expected_desc,
+                    "item {schema}.{name} did not match its expected RelationDesc"
+                );
+            }
+            catalog.expire().await;
+        })
+        .await
+    }
+
     // Connect to a running Postgres server and verify that our builtin
     // types and functions match it, in addition to some other things.
     #[mz_ore::test(tokio::test)]
