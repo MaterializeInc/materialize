@@ -1059,7 +1059,6 @@ class FlipFlagsAction(Action):
             "both_v2",
             "structured",
         ]
-        self.flags_with_values["persist_batch_structured_order"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_batch_builder_structured"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_batch_structured_key_lower_len"] = [
             "0",
