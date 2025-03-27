@@ -120,16 +120,16 @@ SELECT x, y, ox, oy, COUNT(*) FROM coincidence_xz GROUP BY x, y, ox, oy HAVING C
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#5]] // { arity: 6 }
+      ArrangeBy keys=[[#5{o1.oy}]] // { arity: 6 }
         Project (#0..=#2, #6, #8, #7) // { arity: 6 }
-          Map ((#3 - -117), integer_to_numeric(#5), (#4 - #7)) // { arity: 9 }
+          Map ((#3{observation.dx} - -117), integer_to_numeric(#5{oz.oz}), (#4{observation.dz} - #7)) // { arity: 9 }
             CrossJoin type=differential // { arity: 6 }
               implementation
                 %0[×]if » %1[×]if
               ArrangeBy keys=[[]] // { arity: 5 }
                 Project (#1, #3..=#6) // { arity: 5 }
-                  Filter (#1 < 10) // { arity: 7 }
-                    Map (regexp_split_to_array[" ", case_insensitive=false](array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1))), text_to_numeric(btrim(array_index(#2, 1), ",")), text_to_numeric(btrim(array_index(#2, 3), ",")), text_to_numeric(btrim(array_index(#2, 5), ",")), text_to_numeric(btrim(array_index(#2, 7), ","))) // { arity: 7 }
+                  Filter (#1{observation.r} < 10) // { arity: 7 }
+                    Map (regexp_split_to_array[" ", case_insensitive=false](array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1{r.r}))), text_to_numeric(btrim(array_index(#2, 1), ",")), text_to_numeric(btrim(array_index(#2, 3), ",")), text_to_numeric(btrim(array_index(#2, 5), ",")), text_to_numeric(btrim(array_index(#2, 7), ","))) // { arity: 7 }
                       FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#0{input}) array_length 1), 1) // { arity: 2 }
                         ReadStorage materialize.public.input // { arity: 1 }
               ArrangeBy keys=[[]] // { arity: 1 }
@@ -160,12 +160,12 @@ Explained Query:
     Project (#0, #1, #4, #2, #3{count}) // { arity: 5 }
       Filter (#3{count} > 1) // { arity: 5 }
         Map (-117) // { arity: 5 }
-          Reduce group_by=[(#0 + ((#2 * (((#5 - #0) * #8) - ((#6 - #1) * #7))) / ((#2 * #8) - (#3 * #7)))), (#1 + ((#3 * (((#5 - #0) * #8) - ((#6 - #1) * #7))) / ((#2 * #8) - (#3 * #7)))), #4] aggregates=[count(*)] // { arity: 4 }
+          Reduce group_by=[(#0{o1.x} + ((#2{o1.dx} * (((#5{o2.x} - #0{o1.x}) * #8{o2.dy}) - ((#6{o2.y} - #1{o1.y}) * #7{o2.dx}))) / ((#2{o1.dx} * #8{o2.dy}) - (#3{o1.dy} * #7{o2.dx})))), (#1{o1.y} + ((#3{o1.dy} * (((#5{o2.x} - #0{o1.x}) * #8{o2.dy}) - ((#6{o2.y} - #1{o1.y}) * #7{o2.dx}))) / ((#2{o1.dx} * #8{o2.dy}) - (#3{o1.dy} * #7{o2.dx})))), #4] aggregates=[count(*)] // { arity: 4 }
             Project (#1..=#5, #7..=#10) // { arity: 9 }
-              Filter (#0 < #6) AND ((#3 * #10) != (#4 * #9)) // { arity: 12 }
-                Join on=(#5 = #11) type=differential // { arity: 12 }
+              Filter (#0{o1.r} < #6{o2.r}) AND ((#3{o1.dx} * #10{o2.dy}) != (#4{o1.dy} * #9{o2.dx})) // { arity: 12 }
+                Join on=(#5{o1.oy} = #11{o2.oy}) type=differential // { arity: 12 }
                   implementation
-                    %0:l0[#5]K » %1:l0[#5]K
+                    %0:l0[#5{o1.oy}]K » %1:l0[#5{o2.oy}]K
                   Get l0 // { arity: 6 }
                   Get l0 // { arity: 6 }
 

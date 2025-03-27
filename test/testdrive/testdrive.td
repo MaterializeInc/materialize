@@ -46,10 +46,12 @@ row 2
 $ set-regex match=u\d+ replacement=UID
 
 ? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 IS NOT NULL;
-Explained Query:
+Optimized Plan
+----
+"Explained Query:
   CrossJoin type=differential
     ArrangeBy keys=[[]]
-      Filter (#0) IS NOT NULL
+      Filter (#0{a1.f1}) IS NOT NULL
         ReadStorage materialize.public.t1
     ArrangeBy keys=[[]]
       ReadStorage materialize.public.t1
@@ -57,8 +59,7 @@ Explained Query:
 Source materialize.public.t1
 
 Target cluster: quickstart
-
-! SELECT * FROM u1234;
+"
 contains:unknown catalog item 'UID'
 
 # Exclude FETCH from the retry logic

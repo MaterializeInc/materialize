@@ -54,10 +54,12 @@
 
 # Check that index is actually used
 ? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT min(counter) FROM mv;
-Explained Query:
+Optimized Plan
+----
+"Explained Query:
   With
     cte l0 =
-      Reduce aggregates=[min(#0)]
+      Reduce aggregates=[min(#0{mv.counter})]
         ReadIndex on=mv mv_counter_idx=[*** full scan ***]
   Return
     Union
@@ -74,8 +76,7 @@ Used Indexes:
   - materialize.public.mv_counter_idx (*** full scan ***)
 
 Target cluster: cluster2
-
-> SELECT 1
+"
 1
 # Should return instantly since it only uses the index and we have selected serializable isolation
 > SELECT min(counter) FROM mv;
