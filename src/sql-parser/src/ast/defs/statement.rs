@@ -1904,6 +1904,8 @@ pub enum RoleAttribute {
     Inherit,
     /// The `NOINHERIT` option.
     NoInherit,
+    /// The `PASSWORD` option.
+    Password(String),
     // The following are not supported, but included to give helpful error messages.
     Login,
     NoLogin,
@@ -1932,6 +1934,7 @@ impl AstDisplay for RoleAttribute {
             RoleAttribute::NoCreateDB => f.write_str("NOCREATEDB"),
             RoleAttribute::CreateRole => f.write_str("CREATEROLE"),
             RoleAttribute::NoCreateRole => f.write_str("NOCREATEROLE"),
+            RoleAttribute::Password(_) => f.write_str("PASSWORD"),
         }
     }
 }

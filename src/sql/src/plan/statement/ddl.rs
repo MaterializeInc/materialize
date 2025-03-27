@@ -4143,10 +4143,14 @@ pub enum PlannedAlterRoleOption {
 #[derive(Debug)]
 pub struct PlannedRoleAttributes {
     pub inherit: Option<bool>,
+    pub password: Option<String>,
 }
 
 fn plan_role_attributes(options: Vec<RoleAttribute>) -> Result<PlannedRoleAttributes, PlanError> {
-    let mut planned_attributes = PlannedRoleAttributes { inherit: None };
+    let mut planned_attributes = PlannedRoleAttributes {
+        inherit: None,
+        password: None,
+    };
 
     for option in options {
         match option {
@@ -4182,9 +4186,13 @@ fn plan_role_attributes(options: Vec<RoleAttribute>) -> Result<PlannedRoleAttrib
                     "Use system privileges instead."
                 );
             }
+            RoleAttribute::Password(_) if planned_attributes.password.is_some() => {
+                sql_bail!("conflicting or redundant options");
+            }
 
             RoleAttribute::Inherit => planned_attributes.inherit = Some(true),
             RoleAttribute::NoInherit => planned_attributes.inherit = Some(false),
+            RoleAttribute::Password(password) => planned_attributes.password = Some(password),
         }
     }
     if planned_attributes.inherit == Some(false) {
