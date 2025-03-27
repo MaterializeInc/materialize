@@ -55,6 +55,10 @@ use crate::history::CommandHistory;
 /// lead to panics.
 #[derive(Debug)]
 pub(crate) struct Instance<T> {
+    /// The workload class of this instance.
+    ///
+    /// This is currently only used to annotate metrics.
+    pub workload_class: Option<String>,
     /// The replicas connected to this storage instance.
     replicas: BTreeMap<ReplicaId, Replica<T>>,
     /// The ingestions currently running on this instance.
@@ -114,6 +118,7 @@ where
         let epoch = ClusterStartupEpoch::new(envd_epoch, 0);
 
         let mut instance = Self {
+            workload_class: None,
             replicas: Default::default(),
             active_ingestions: Default::default(),
             ingestion_exports: Default::default(),

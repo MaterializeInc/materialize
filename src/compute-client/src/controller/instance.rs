@@ -26,7 +26,10 @@ use mz_compute_types::sinks::{
 };
 use mz_compute_types::sources::SourceInstanceDesc;
 use mz_compute_types::ComputeInstanceId;
-use mz_controller_types::dyncfgs::WALLCLOCK_LAG_REFRESH_INTERVAL;
+use mz_controller_types::dyncfgs::{
+    ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION, WALLCLOCK_LAG_HISTOGRAM_REFRESH_INTERVAL,
+    WALLCLOCK_LAG_HISTORY_REFRESH_INTERVAL,
+};
 use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
@@ -35,9 +38,10 @@ use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_repr::adt::interval::Interval;
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, Row};
-use mz_storage_client::controller::IntrospectionType;
+use mz_storage_client::controller::{IntrospectionType, WallclockLagHistogramPeriod};
 use mz_storage_types::read_holds::{self, ReadHold};
 use mz_storage_types::read_policy::ReadPolicy;
 use serde::Serialize;
@@ -225,6 +229,10 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     /// controlled by it are allowed to affect changes to external systems
     /// (largely persist).
     read_only: bool,
+    /// The workload class of this instance.
+    ///
+    /// This is currently only used to annotate metrics.
+    workload_class: Option<String>,
     /// The replicas of this compute instance.
     replicas: BTreeMap<ReplicaId, ReplicaState<T>>,
     /// Currently installed compute collections.
@@ -289,8 +297,10 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     now: NowFn,
     /// A function that computes the lag between the given time and wallclock time.
     wallclock_lag: WallclockLagFn<T>,
-    /// The last time wallclock lag introspection was refreshed.
-    wallclock_lag_last_refresh: Instant,
+    /// The last time `WallclockLagHistory` introspection was refreshed.
+    wallclock_lag_history_last_refresh: Instant,
+    /// The last time `WallclockLagHistogram` introspection was refreshed.
+    wallclock_lag_histogram_last_refresh: Instant,
 
     /// Sender for updates to collection read holds.
     ///
@@ -547,40 +557,45 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             .set(u64::cast_from(connected_replica_count));
     }
 
-    /// Refresh the `WallclockLagHistory` introspection and the `wallclock_lag_*_seconds` metrics
-    /// with the current lag values.
+    /// Refresh the wallclock lag introspection and metrics with the current lag values.
     ///
     /// This method is invoked by `ComputeController::maintain`, which we expect to be called once
     /// per second during normal operation.
     fn refresh_wallclock_lag(&mut self) {
-        let refresh_introspection = !self.read_only
-            && self.wallclock_lag_last_refresh.elapsed()
-                >= WALLCLOCK_LAG_REFRESH_INTERVAL.get(&self.dyncfg);
-        let mut introspection_updates = refresh_introspection.then(Vec::new);
+        let refresh_history = !self.read_only
+            && self.wallclock_lag_history_last_refresh.elapsed()
+                >= WALLCLOCK_LAG_HISTORY_REFRESH_INTERVAL.get(&self.dyncfg);
+        let refresh_histogram = !self.read_only
+            && self.wallclock_lag_histogram_last_refresh.elapsed()
+                >= WALLCLOCK_LAG_HISTOGRAM_REFRESH_INTERVAL.get(&self.dyncfg);
 
-        let now = mz_ore::now::to_datetime((self.now)());
-        let now_tz = now.try_into().expect("must fit");
+        let now_ms = (self.now)();
+        let now_dt = mz_ore::now::to_datetime(now_ms);
+        let now_ts: CheckedTimestamp<_> = now_dt.try_into().expect("must fit");
 
+        let frontier_lag = |frontier: &Antichain<_>| match frontier.as_option() {
+            Some(ts) => (self.wallclock_lag)(ts),
+            None => Duration::ZERO,
+        };
+
+        let mut history_updates = Vec::new();
         for (replica_id, replica) in &mut self.replicas {
             for (collection_id, collection) in &mut replica.collections {
-                let lag = match collection.write_frontier.as_option() {
-                    Some(ts) => (self.wallclock_lag)(ts),
-                    None => Duration::ZERO,
-                };
+                let lag = frontier_lag(&collection.write_frontier);
 
                 if let Some(wallclock_lag_max) = &mut collection.wallclock_lag_max {
                     *wallclock_lag_max = std::cmp::max(*wallclock_lag_max, lag);
 
-                    if let Some(updates) = &mut introspection_updates {
+                    if refresh_history {
                         let max_lag = std::mem::take(wallclock_lag_max);
                         let max_lag_us = i64::try_from(max_lag.as_micros()).expect("must fit");
                         let row = Row::pack_slice(&[
                             Datum::String(&collection_id.to_string()),
                             Datum::String(&replica_id.to_string()),
                             Datum::Interval(Interval::new(0, 0, max_lag_us)),
-                            Datum::TimestampTz(now_tz),
+                            Datum::TimestampTz(now_ts),
                         ]);
-                        updates.push((row, 1));
+                        history_updates.push((row, 1));
                     }
                 }
 
@@ -589,10 +604,57 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
                 };
             }
         }
+        if !history_updates.is_empty() {
+            self.deliver_introspection_updates(
+                IntrospectionType::WallclockLagHistory,
+                history_updates,
+            );
+            self.wallclock_lag_history_last_refresh = Instant::now();
+        }
 
-        if let Some(updates) = introspection_updates {
-            self.deliver_introspection_updates(IntrospectionType::WallclockLagHistory, updates);
-            self.wallclock_lag_last_refresh = Instant::now();
+        let histogram_period = WallclockLagHistogramPeriod::from_epoch_millis(now_ms, &self.dyncfg);
+        let histogram_labels = match &self.workload_class {
+            Some(wc) => [("workload_class", wc.clone())].into(),
+            None => BTreeMap::new(),
+        };
+
+        let mut histogram_updates = Vec::new();
+        let mut row_buf = Row::default();
+        for (collection_id, collection) in &mut self.collections {
+            if !ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION.get(&self.dyncfg) {
+                continue;
+            }
+
+            if let Some(stash) = &mut collection.wallclock_lag_histogram_stash {
+                let lag = collection.shared.lock_write_frontier(|f| frontier_lag(f));
+                let bucket = lag.as_secs().next_power_of_two();
+
+                let key = (histogram_period, bucket, histogram_labels.clone());
+                *stash.entry(key).or_default() += 1;
+
+                if refresh_histogram {
+                    for ((period, lag, labels), count) in std::mem::take(stash) {
+                        let mut packer = row_buf.packer();
+                        packer.extend([
+                            Datum::TimestampTz(period.start),
+                            Datum::TimestampTz(period.end),
+                            Datum::String(&collection_id.to_string()),
+                            Datum::UInt64(lag),
+                        ]);
+                        let labels = labels.iter().map(|(k, v)| (*k, Datum::String(v)));
+                        packer.push_dict(labels);
+
+                        histogram_updates.push((row_buf.clone(), count));
+                    }
+                }
+            }
+        }
+        if !histogram_updates.is_empty() {
+            self.deliver_introspection_updates(
+                IntrospectionType::WallclockLagHistogram,
+                histogram_updates,
+            );
+            self.wallclock_lag_histogram_last_refresh = Instant::now();
         }
     }
 
@@ -797,6 +859,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             storage_collections: _,
             initialized,
             read_only,
+            workload_class,
             replicas,
             collections,
             log_sources: _,
@@ -813,7 +876,8 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             dyncfg: _,
             now: _,
             wallclock_lag: _,
-            wallclock_lag_last_refresh,
+            wallclock_lag_history_last_refresh,
+            wallclock_lag_histogram_last_refresh,
             read_hold_tx: _,
             replica_tx: _,
             replica_rx: _,
@@ -848,11 +912,14 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             .iter()
             .map(|(id, epoch)| (id.to_string(), epoch))
             .collect();
-        let wallclock_lag_last_refresh = format!("{wallclock_lag_last_refresh:?}");
+        let wallclock_lag_history_last_refresh = format!("{wallclock_lag_history_last_refresh:?}");
+        let wallclock_lag_histogram_last_refresh =
+            format!("{wallclock_lag_histogram_last_refresh:?}");
 
         let map = serde_json::Map::from_iter([
             field("initialized", initialized)?,
             field("read_only", read_only)?,
+            field("workload_class", workload_class)?,
             field("replicas", replicas)?,
             field("collections", collections)?,
             field("peeks", peeks)?,
@@ -860,7 +927,14 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             field("copy_tos", copy_tos)?,
             field("envd_epoch", envd_epoch)?,
             field("replica_epochs", replica_epochs)?,
-            field("wallclock_lag_last_refresh", wallclock_lag_last_refresh)?,
+            field(
+                "wallclock_lag_history_last_refresh",
+                wallclock_lag_history_last_refresh,
+            )?,
+            field(
+                "wallclock_lag_histogram_last_refresh",
+                wallclock_lag_histogram_last_refresh,
+            )?,
         ]);
         Ok(serde_json::Value::Object(map))
     }
@@ -909,6 +983,7 @@ where
             storage_collections: storage,
             initialized: false,
             read_only: true,
+            workload_class: None,
             replicas: Default::default(),
             collections,
             log_sources,
@@ -925,7 +1000,8 @@ where
             dyncfg,
             now,
             wallclock_lag,
-            wallclock_lag_last_refresh: Instant::now(),
+            wallclock_lag_history_last_refresh: Instant::now(),
+            wallclock_lag_histogram_last_refresh: Instant::now(),
             read_hold_tx,
             replica_tx,
             replica_rx,
@@ -962,6 +1038,10 @@ where
     /// Update instance configuration.
     #[mz_ore::instrument(level = "debug")]
     pub fn update_configuration(&mut self, config_params: ComputeParameters) {
+        if let Some(workload_class) = &config_params.workload_class {
+            self.workload_class = workload_class.clone();
+        }
+
         self.send(ComputeCommand::UpdateConfiguration(config_params));
     }
 
@@ -2147,6 +2227,23 @@ struct CollectionState<T: ComputeControllerTimestamp> {
 
     /// Introspection state associated with this collection.
     introspection: CollectionIntrospection<T>,
+
+    /// Frontier wallclock lag measurements stashed until the next `WallclockLagHistogram`
+    /// introspection update.
+    ///
+    /// Keys are `(period, lag, labels)` triples, values are counts.
+    ///
+    /// If this is `None`, wallclock lag is not tracked for this collection.
+    wallclock_lag_histogram_stash: Option<
+        BTreeMap<
+            (
+                WallclockLagHistogramPeriod,
+                u64,
+                BTreeMap<&'static str, String>,
+            ),
+            i64,
+        >,
+    >,
 }
 
 impl<T: ComputeControllerTimestamp> CollectionState<T> {
@@ -2181,6 +2278,14 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
             c.update_iter(updates);
         });
 
+        // In an effort to keep the produced wallclock lag introspection data small and
+        // predictable, we disable wallclock lag tracking for transient collections, i.e. slow-path
+        // select indexes and subscribes.
+        let wallclock_lag_histogram_stash = match collection_id.is_transient() {
+            true => None,
+            false => Some(Default::default()),
+        };
+
         Self {
             log_collection: false,
             dropped: false,
@@ -2192,6 +2297,7 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
             storage_dependencies,
             compute_dependencies,
             introspection,
+            wallclock_lag_histogram_stash,
         }
     }
 
@@ -2785,7 +2891,7 @@ struct ReplicaCollectionState<T: ComputeControllerTimestamp> {
     /// compaction of compute inputs is implicitly held back by Timely/DD.
     input_read_holds: Vec<ReadHold<T>>,
 
-    /// Maximum frontier wallclock lag since the last introspection update.
+    /// Maximum frontier wallclock lag since the last `WallclockLagHistory` introspection update.
     ///
     /// If this is `None`, wallclock lag is not tracked for this collection.
     wallclock_lag_max: Option<Duration>,

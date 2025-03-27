@@ -1251,6 +1251,8 @@ for each table, source, index, materialized view, and sink in the system.
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_wallclock_global_lag_history -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_wallclock_global_lag_recent_history -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_wallclock_global_lag_histogram -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_wallclock_global_lag_histogram_raw -->
 
 ## `mz_webhook_sources`
 

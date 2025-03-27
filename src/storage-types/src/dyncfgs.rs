@@ -71,6 +71,13 @@ pub const WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL: Config<Duration> = Config::n
     "The interval of time to keep when truncating the wallclock lag history.",
 );
 
+/// The interval of time to keep when truncating the wallclock lag histogram.
+pub const WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL: Config<Duration> = Config::new(
+    "wallclock_global_lag_histogram_retention_interval",
+    Duration::from_secs(60 * 60 * 24 * 30), // 30 days
+    "The interval of time to keep when truncating the wallclock lag histogram.",
+);
+
 // Kafka
 
 /// Rules for enriching the `client.id` property of Kafka clients with
@@ -281,6 +288,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
         .add(&REPLICA_METRICS_HISTORY_RETENTION_INTERVAL)
         .add(&WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL)
+        .add(&WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL)
         .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)
         .add(&KAFKA_POLL_MAX_WAIT)
         .add(&KAFKA_METADATA_FETCH_INTERVAL)

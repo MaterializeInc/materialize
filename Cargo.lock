@@ -7231,6 +7231,7 @@ dependencies = [
  "mz-build-tools",
  "mz-ccsr",
  "mz-cluster-client",
+ "mz-controller-types",
  "mz-dyncfg",
  "mz-dyncfgs",
  "mz-kafka-util",
