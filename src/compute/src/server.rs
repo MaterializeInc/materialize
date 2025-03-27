@@ -749,34 +749,55 @@ fn spawn_channel_adapter(
             // for previous clients.
             let mut epoch = 0;
 
+            // It's possible that we receive responses with epochs from the future: Worker 0 might
+            // have increased its epoch before us and broadcasted it to our Timely cluster. When we
+            // receive a response with a future epoch, we need to wait with forwarding it until we
+            // have increased our own epoch sufficiently (by observing new client connections). We
+            // need to stash the response in the meantime.
+            let mut stashed_response = None;
+
             while let Ok((command_rx, response_tx, activator_tx)) = client_rx.recv() {
                 epoch += 1;
-
-                // Serve this connection until we see any of the channels disconnect.
 
                 let activator = LocalActivator::new(thread::current());
                 if activator_tx.send(activator).is_err() {
                     continue;
                 }
 
-                loop {
+                // Wait for a new response while forwarding received commands.
+                let serve_rx_channels = || loop {
                     crossbeam_channel::select! {
                         recv(command_rx) -> msg => match msg {
                             Ok(cmd) => command_tx.send((cmd, epoch)),
-                            Err(_) => break,
+                            Err(_) => return Err(()),
                         },
                         recv(response_rx) -> msg => {
-                            let (resp, resp_epoch) = msg.expect("worker connected");
+                            return Ok(msg.expect("worker connected"));
+                        }
+                    }
+                };
 
-                            if resp_epoch < epoch {
-                                continue; // response for a previous connection
-                            } else if resp_epoch > epoch {
-                                panic!("epoch from the future: {resp_epoch} > {epoch}");
-                            }
+                // Serve this connection until we see any of the channels disconnect.
+                loop {
+                    let (resp, resp_epoch) = match stashed_response.take() {
+                        Some(stashed) => stashed,
+                        None => match serve_rx_channels() {
+                            Ok(response) => response,
+                            Err(()) => break,
+                        },
+                    };
 
-                            if response_tx.send(resp).is_err() {
-                                break;
-                            }
+                    if resp_epoch < epoch {
+                        // Response for a previous connection; discard it.
+                        continue;
+                    } else if resp_epoch > epoch {
+                        // Response for a future connection; stash it and reconnect.
+                        stashed_response = Some((resp, resp_epoch));
+                        break;
+                    } else {
+                        // Response for the current connection; forward it.
+                        if response_tx.send(resp).is_err() {
+                            break;
                         }
                     }
                 }
