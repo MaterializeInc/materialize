@@ -1803,4 +1803,11 @@ select string_to_array(word, ' ', NULL) from string_to_array_words;
 ----
 {hello,world}
 
+# string_to_array - first word delimiter and null_string not set.
+# expectation: delimiter should convert a full match to empty string.
+query T
+select string_to_array(word, 'hello') from string_to_array_words;
+----
+{""," world"}
+
 # string_to_array - end.
