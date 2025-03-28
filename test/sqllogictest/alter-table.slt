@@ -439,5 +439,5 @@ statement ok
 DROP TABLE t2 CASCADE;
 
 query TTIT
-SELECT * FROM mz_internal.mz_comments;
+SELECT * FROM mz_internal.mz_comments WHERE id = 'u1';
 ----
