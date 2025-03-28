@@ -56,6 +56,7 @@ pub use scalar::{
     EvalError, FilterCharacteristics, MirScalarExpr, ProtoDomainLimit, ProtoEvalError,
     ProtoMirScalarExpr, like_pattern,
 };
+pub use static_eval::StaticMirScalarExprs;
 
 /// A [`MirRelationExpr`] that claims to have been optimized, e.g., by an
 /// `transform::Optimizer`.

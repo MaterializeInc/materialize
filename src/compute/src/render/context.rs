@@ -26,7 +26,7 @@ use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION;
 use mz_compute_types::plan::{AvailableCollections, LirId};
 use mz_dyncfg::ConfigSet;
-use mz_expr::{Id, MapFilterProject, MirScalarExpr};
+use mz_expr::{Id, MapFilterProject, MirScalarExpr, StaticMirScalarExprs};
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
 use mz_storage_types::controller::CollectionMetadata;
@@ -905,6 +905,7 @@ where
         Arranged<S, RowRowAgent<S::Timestamp, Diff>>,
         Collection<S, DataflowError, Diff>,
     ) {
+        let key: Vec<_> = key.iter().map(StaticMirScalarExprs::from).collect();
         // The following `unary_fallible` implements a `map_fallible`, but produces columnar updates
         // for the ok stream. The `map_fallible` cannot be used here because the closure cannot
         // return references, which is what we need to push into columnar streams. Instead, we use

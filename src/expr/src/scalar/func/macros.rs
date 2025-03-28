@@ -368,17 +368,16 @@ macro_rules! derive_unary {
             }
 
             paste::paste! {
-                pub fn static_fn(&self) -> for<'a> fn(
-                    this: &'a StaticMirScalarExpr,
-                    datums: &[Datum<'a>],
+                pub fn static_unary_fn(&self) -> for<'a> fn(
+                    this: &'a UnaryFunc,
+                    datum: Result<Datum<'a>, EvalError>,
                     temp_storage: &'a RowArena,
                 ) -> Result<Datum<'a>, EvalError> {
                     $(
                         #[allow(non_snake_case)]
-                        fn $name<'a>(this: &'a StaticMirScalarExpr, datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Result<Datum<'a>, EvalError> {
-                            let (func, expr) = this.params().unwrap_call_unary();
+                        fn $name<'a>(func: &'a UnaryFunc, datum: Result<Datum<'a>, EvalError>, temp_storage: &'a RowArena) -> Result<Datum<'a>, EvalError> {
                             let func = func.[< unwrap_$name >]();
-                            func.eval_input(temp_storage, expr.eval(datums, temp_storage))
+                            func.eval_input(temp_storage, datum)
                         }
                     )*
                     match self {
@@ -386,7 +385,7 @@ macro_rules! derive_unary {
                     }
                 }
 
-                    $(
+                $(
                     #[allow(non_snake_case)]
                     fn [<unwrap_$name>](&self) -> &$name {
                         match self {
@@ -394,7 +393,7 @@ macro_rules! derive_unary {
                             _ => panic!("Unexpected type, expected {}", stringify!($name)),
                         }
                     }
-                    )*
+                )*
             }
 
             pub fn output_type(&self, input_type: ColumnType) -> ColumnType {

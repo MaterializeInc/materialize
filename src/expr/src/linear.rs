@@ -15,7 +15,7 @@ use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::linear::proto_map_filter_project::ProtoPredicate;
-use crate::static_eval::StaticMirScalarExpr;
+use crate::static_eval::StaticMirScalarExprs;
 use crate::visit::Visit;
 use crate::{EvalError, MirRelationExpr, MirScalarExpr, SafeMfpPlan};
 
@@ -2108,7 +2108,7 @@ pub struct StaticMapFilterProject {
     ///
     /// Many of these expressions may not be produced in the output,
     /// and may only be present as common subexpressions.
-    pub expressions: Vec<StaticMirScalarExpr>,
+    pub expressions: Vec<StaticMirScalarExprs>,
     /// Expressions that must evaluate to `Datum::True` for the output
     /// row to be produced.
     ///
@@ -2119,7 +2119,7 @@ pub struct StaticMapFilterProject {
     /// guarded evaluation of predicates.
     ///
     /// This list should be sorted by the first field.
-    pub predicates: Vec<(usize, StaticMirScalarExpr)>,
+    pub predicates: Vec<(usize, StaticMirScalarExprs)>,
     /// A sequence of column identifiers whose data form the output row.
     pub projection: Vec<usize>,
     /// The expected number of input columns.
