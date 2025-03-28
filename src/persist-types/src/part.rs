@@ -17,7 +17,7 @@ use arrow::datatypes::ToByteSlice;
 use mz_ore::result::ResultExt;
 
 use crate::arrow::ArrayOrd;
-use crate::columnar::{ColumnEncoder, Schema};
+use crate::columnar::{ColumnDecoder, ColumnEncoder, Schema};
 use crate::Codec64;
 
 /// A structured columnar representation of one blob's worth of data.
@@ -86,6 +86,32 @@ impl Part {
         Part::combine(records, |cols| {
             ::arrow::compute::interleave(cols, indices).err_into()
         })
+    }
+
+    /// Iterate over the contents of this part, decoding as we go.
+    pub fn decode_iter<
+        'a,
+        K: Default + Clone + 'static,
+        V: Default + Clone + 'static,
+        T: Codec64,
+        D: Codec64,
+    >(
+        &'a self,
+        key_schema: &'a impl Schema<K>,
+        val_schema: &'a impl Schema<V>,
+    ) -> anyhow::Result<impl Iterator<Item = ((K, V), T, D)> + 'a> {
+        let key_decoder = key_schema.decoder_any(&*self.key)?;
+        let val_decoder = val_schema.decoder_any(&*self.val)?;
+        let mut key = K::default();
+        let mut val = V::default();
+        let iter = (0..self.len()).map(move |i| {
+            key_decoder.decode(i, &mut key);
+            val_decoder.decode(i, &mut val);
+            let time = T::decode(self.time.value(i).to_le_bytes());
+            let diff = D::decode(self.diff.value(i).to_le_bytes());
+            ((key.clone(), val.clone()), time, diff)
+        });
+        Ok(iter)
     }
 }
 

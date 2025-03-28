@@ -25,13 +25,12 @@ use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_panic_or_log;
-use mz_persist_types::columnar::{
-    codec_to_schema, data_type, schema_to_codec, ColumnEncoder, Schema,
-};
+use mz_persist_types::arrow::{ArrayBound, ArrayOrd};
+use mz_persist_types::columnar::{codec_to_schema, data_type, schema_to_codec, ColumnEncoder};
 use mz_persist_types::parquet::EncodingConfig;
 use mz_persist_types::part::Part;
 use mz_persist_types::schema::backward_compatible;
-use mz_persist_types::{Codec, Codec64};
+use mz_persist_types::{columnar::Schema, Codec, Codec64};
 use mz_proto::{RustType, TryFromProtoError};
 use proptest::arbitrary::Arbitrary;
 use proptest::prelude::*;
@@ -381,6 +380,23 @@ impl BlobTraceUpdates {
         structured
     }
 
+    /// Convert this blob into a structured part, transforming the codec data if necessary.
+    pub fn into_part<K: Codec, V: Codec>(
+        &mut self,
+        key_schema: &K::Schema,
+        val_schema: &V::Schema,
+    ) -> Part {
+        let ext = self
+            .get_or_make_structured::<K, V>(key_schema, val_schema)
+            .clone();
+        Part {
+            key: ext.key,
+            val: ext.val,
+            time: self.timestamps().clone(),
+            diff: self.diffs().clone(),
+        }
+    }
+
     /// Concatenate the given records together, column-by-column.
     ///
     /// If `ensure_codec` is true, then we'll ensure the returned [`BlobTraceUpdates`] includes
@@ -686,6 +702,16 @@ impl<T: Timestamp + Codec64> BlobTraceBatchPart<T> {
             .records()
             .and_then(|r| r.keys().iter().flatten().min())
             .unwrap_or(&[])
+    }
+
+    /// Scans the part and returns a lower bound on the contained keys.
+    pub fn structured_key_lower(&self) -> Option<ArrayBound> {
+        self.updates.structured().and_then(|r| {
+            let ord = ArrayOrd::new(&r.key);
+            (0..r.key.len())
+                .min_by_key(|i| ord.at(*i))
+                .map(|i| ArrayBound::new(Arc::clone(&r.key), i))
+        })
     }
 }
 
