@@ -157,13 +157,13 @@ mod container {
         type Iter<'a> = IterOwn<<C::Container as columnar::Container<C>>::Borrowed<'a>>;
 
         fn iter(&self) -> Self::Iter<'_> {
-            self.borrow().into_iter()
+            self.borrow().into_index_iter()
         }
 
         type DrainIter<'a> = IterOwn<<C::Container as columnar::Container<C>>::Borrowed<'a>>;
 
         fn drain(&mut self) -> Self::DrainIter<'_> {
-            self.borrow().into_iter()
+            self.borrow().into_index_iter()
         }
     }
 
