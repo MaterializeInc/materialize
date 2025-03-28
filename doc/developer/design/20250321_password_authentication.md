@@ -74,6 +74,19 @@ Users should be able to manage their passwords and set passwords for roles they 
 
 -   **Password Dating**: The creation date of passwords will be recorded along with the hashed and salted password. When the password changes a creation date should be reset. The creation date of passwords should be queryable.
 
+-   **Storage Location Password Hash**: The password will be stored in the catalog in its own object, `RoleAuth`. This object must record the following:
+    - role_id
+    - creation_date
+    - algorithm / algorithm meta: IE for sha256: algo: sha256, salt: "some-string", iteration_count: some-int
+    Example struct:
+    ```Rust
+    RoleAuth {
+        role_id: ident
+        password_hash: String
+        creation_date: Date
+    }
+    ```
+
 -   **OPTIONAL: Password Versioning**: Updates to the password hashing mechanisms may be required. As long as we are receiving passwords in plain text we should be able to take a validated password and replace the existing a new securely hashed value. This may require prefixing the password with data about the hash algorithm or parameters.
 
 ### 4. Configurable admin system login:
@@ -83,11 +96,38 @@ Passwords for `mz_system` and `mz_support` roles will be settable via environmen
 
 ### 5. HTTP Authentication:
 
-Environmentd's HTTP endpoint will need to have added support for session-based authentication. This includes session creation, storage, and deleting/setting cookies. To handle sessions we should use [tower session-store](https://docs.rs/tower-sessions/latest/tower_sessions/). This should explicitly require secure cookies `.with_secure(true)` when running with TLS.
+Environmentd's HTTP endpoint will have added support for session-based authentication. This includes session creation, storage, and deleting/setting cookies. To handle sessions we should use [tower session-store](https://docs.rs/tower-sessions/latest/tower_sessions/). This should explicitly require secure cookies `.with_secure(true)` when running with TLS.
+Required new endpoints:
+  - POST: api/login 
+    - Accepts username, password Authentication Headers
+    - imposes strict rate limiting : returning 429
+    - returns 401 on auth failure
+    - returns 201 on success and sets a session token in the cookies
+  - POST: api/logout
+    - returns 204 if session is found
+    - returns 404 if session is not found
 
-### Configurable Authentication Mechanism
+Additionally, we'll need to add a tower middleware layer that validates cookie authentication for all endpoints returning 403 when the user is not authenticated.
+
+
+### Related Superuser Details:
+Enabling this feature we will require us to provide an alternative method to declare superusers. This is currently done through JWT metadata. In order for this to work with passwords we will need to provide syntax:
+```sql
+ALTER ROLE ... WITH SUPERUSER;
+ALTER ROLE ... WITH NO SUPERUSER;
+```
+
+A role's superuser state should be stored as a rolsuper along with the user in the catalog. It may make sense to make this an Option<bool>. If the value of rolsuper is not `Some(v)` then we defer to metadata if we're using frontegg auth. 
+
+
+### Note on Configurable Authentication Mechanism
 
 The authentication mechanism for an environment must be configurable. A new flag will be created to select the authentication `mz_authentication_type` with the options of `frontegg`, `password`, and `disabled`. This will subsume the enable_authentication flag.
+
+
+### Note on Console builds:
+
+We currently re-use the same Console build for the emulator and self-managed. For practical purposes we can build both with password auth enabled with no option to disable. 
 
 ## Minimal Viable Prototype
 
@@ -98,6 +138,7 @@ A minimal viable prototype (MVP) for this solution will include:
 3. **Secure Password Storage**: Implement hashed salted password storage using compatible with `scram-sha-256`.
 4. **Bootstrapping System Users**: Provide a mechanism for bootstrapping the password and enabling login for system users.
 5. **HTTP Session Management**: Environmentd's HTTP layer needs to handle session management via cookies and internal session storage.
+6. **Enhanced Superuser Management**: Support assigning / unassigning superuser for roles.
 
 ## Alternatives
 
@@ -111,7 +152,7 @@ A minimal viable prototype (MVP) for this solution will include:
 
 3. **Store Passwords in K8s Secrets**: It would be viable to store passwords in Kubernetes secrets.
 
--   **Reasons Not Chosen**: This may create an untenable number of Kubernetes secrets.
+-   **Reasons Not Chosen**: This may create an untenable number of Kubernetes secrets, and may cause issues with passing security reviews.
 
 4. **App Passwords**: Rather than allowing users to configure a password per user we could generate "app-passwords" that have a many-to-one relationship with users, are auto-generated, and stored in k8s secrets.
 
