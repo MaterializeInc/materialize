@@ -87,11 +87,14 @@ Users should be able to manage their passwords and set passwords for roles they 
     }
     ```
 
--   **OPTIONAL: Password Versioning**: Updates to the password hashing mechanisms may be required. As long as we are receiving passwords in plain text we should be able to take a validated password and replace the existing a new securely hashed value. This may require prefixing the password with data about the hash algorithm or parameters.
+-   **OPTIONAL: Password Versioning**: Updates to the password hashing mechanisms may be required. 
+  - For passwords received in plain text we should be able re-encrypt them with stronger algorithms.
+  - For client side challenges we may be able to increase the number of hash iterations.
+  We will already be storing the necessary password hashing metadata to perform these actions.
 
 ### 4. Configurable admin system login:
 
-Passwords for `mz_system` and `mz_support` roles will be settable via environment variables `MZ_MZ_<USER>_EXTERNAL_LOGIN_PASSWORD`. Orchestratord should provide a set of parameters to set these variables via a Kubernetes secret. Additionally, We should enable login of system users through the external ports when they have external login passwords set. Login through the external port must not be possible unless this flag is set, this logic should not rely on whether the internal user has a password.
+Passwords for `mz_system` and `mz_support` roles will be settable via environment variables `MZ_MZ_<USER>_EXTERNAL_LOGIN_PASSWORD`. Orchestratord should provide a set of parameters to set these variables via a Kubernetes secret. Additionally, We should enable login of system users through the external ports when they have external login passwords set. Login through the external port must not be possible unless this flag is set, this logic should not rely on whether the internal user has a password. Our Helm chart and Orchestratord will be adjusted to support these parameters.
 
 
 ### 5. HTTP Authentication:
@@ -127,7 +130,7 @@ The authentication mechanism for an environment must be configurable. A new flag
 
 ### Note on Console builds:
 
-We currently re-use the same Console build for the emulator and self-managed. For practical purposes we can build both with password auth enabled with no option to disable. 
+Console does currently do not support runtime or startup configuration. Configuration is handled only at build time. To resolve this we should add a `config.json` or `config.js` file which can be mounted directly into the Nginx container assets. This file should come from a materialize-console config map which must be setup by Orchestratord.  We will also need changes to the console to support reading in configuration from this map. The initial config value here should be `authentication_type: password`, in cloud we should use `authentication_type: frontegg` or `authentication_type: jwt`. The console build process can still be used to set default values for this config file. 
 
 ## Minimal Viable Prototype
 
