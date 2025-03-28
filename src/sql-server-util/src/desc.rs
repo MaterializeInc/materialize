@@ -223,7 +223,7 @@ fn parse_data_type(
         }
         "real" => (ScalarType::Float32, SqlServerColumnDecodeType::F32),
         "double" => (ScalarType::Float64, SqlServerColumnDecodeType::F64),
-        "char" | "nchar" | "varchar" | "nvarchar" | "text" | "sysname" => {
+        "char" | "nchar" | "varchar" | "nvarchar" | "sysname" => {
             // When the `max_length` is -1 SQL Server will not present us with the "before" value
             // for updated columns.
             //
@@ -238,7 +238,32 @@ fn parse_data_type(
 
             (ScalarType::String, SqlServerColumnDecodeType::String)
         }
-        "xml" => (ScalarType::String, SqlServerColumnDecodeType::Xml),
+        "text" | "ntext" | "image" => {
+            // SQL Server docs indicate this should always be 16. There's no
+            // issue if it's not, but it's good to track.
+            mz_ore::soft_assert_eq_no_log!(raw.max_length, 16);
+
+            // TODO(sql_server3): Support UPSERT semantics for SQL Server.
+            return Err(SqlServerError::UnsupportedDataType {
+                column_name: raw.name.to_string(),
+                column_type: raw.data_type.to_string(),
+                reason: "columns with unlimited size do not support CDC".to_string(),
+            });
+        }
+        "xml" => {
+            // When the `max_length` is -1 SQL Server will not present us with the "before" value
+            // for updated columns.
+            //
+            // TODO(sql_server3): Support UPSERT semantics for SQL Server.
+            if raw.max_length == -1 {
+                return Err(SqlServerError::UnsupportedDataType {
+                    column_name: raw.name.to_string(),
+                    column_type: raw.data_type.to_string(),
+                    reason: "columns with unlimited size do not support CDC".to_string(),
+                });
+            }
+            (ScalarType::String, SqlServerColumnDecodeType::Xml)
+        }
         "binary" | "varbinary" => {
             // When the `max_length` is -1 if this column changes as part of an `UPDATE`
             // or `DELETE` statement, SQL Server will not provide the "old" value for
@@ -296,6 +321,11 @@ pub struct SqlServerColumnRaw {
     ///
     /// For `varchar(max)`, `nvarchar(max)`, `varbinary(max)`, or `xml` this will be `-1`. For
     /// `text`, `ntext`, and `image` columns this will be 16.
+    ///
+    /// See: <https://learn.microsoft.com/en-us/sql/relational-databases/system-catalog-views/sys-columns-transact-sql?view=sql-server-ver16>.
+    ///
+    /// TODO(sql_server2): Validate this value for `json` columns where were introduced
+    /// Azure SQL 2024.
     pub max_length: i16,
     /// Precision of the column, if numeric-based; otherwise 0.
     pub precision: u8,
@@ -339,42 +369,42 @@ impl SqlServerColumnDecodeType {
         name: &'a str,
         column: &'a ColumnType,
     ) -> Result<Datum<'a>, SqlServerError> {
-        let maybe_datum = match (self, &column.scalar_type) {
-            (SqlServerColumnDecodeType::Bool, ScalarType::Bool) => data
+        let maybe_datum = match (&column.scalar_type, self) {
+            (ScalarType::Bool, SqlServerColumnDecodeType::Bool) => data
                 .try_get(name)
                 .context("bool")?
                 .map(|val: bool| if val { Datum::True } else { Datum::False }),
-            (SqlServerColumnDecodeType::U8, ScalarType::Int16) => data
+            (ScalarType::Int16, SqlServerColumnDecodeType::U8) => data
                 .try_get(name)
                 .context("u8")?
                 .map(|val: u8| Datum::Int16(i16::cast_from(val))),
-            (SqlServerColumnDecodeType::I16, ScalarType::Int16) => {
+            (ScalarType::Int16, SqlServerColumnDecodeType::I16) => {
                 data.try_get(name).context("i16")?.map(Datum::Int16)
             }
-            (SqlServerColumnDecodeType::I32, ScalarType::Int32) => {
+            (ScalarType::Int32, SqlServerColumnDecodeType::I32) => {
                 data.try_get(name).context("i32")?.map(Datum::Int32)
             }
-            (SqlServerColumnDecodeType::I64, ScalarType::Int64) => {
+            (ScalarType::Int64, SqlServerColumnDecodeType::I64) => {
                 data.try_get(name).context("i64")?.map(Datum::Int64)
             }
-            (SqlServerColumnDecodeType::F32, ScalarType::Float32) => data
+            (ScalarType::Float32, SqlServerColumnDecodeType::F32) => data
                 .try_get(name)
                 .context("f32")?
                 .map(|val: f32| Datum::Float32(ordered_float::OrderedFloat(val))),
-            (SqlServerColumnDecodeType::F64, ScalarType::Float64) => data
+            (ScalarType::Float64, SqlServerColumnDecodeType::F64) => data
                 .try_get(name)
                 .context("f64")?
                 .map(|val: f64| Datum::Float64(ordered_float::OrderedFloat(val))),
-            (SqlServerColumnDecodeType::String, ScalarType::String) => {
+            (ScalarType::String, SqlServerColumnDecodeType::String) => {
                 data.try_get(name).context("string")?.map(Datum::String)
             }
-            (SqlServerColumnDecodeType::Bytes, ScalarType::Bytes) => {
+            (ScalarType::Bytes, SqlServerColumnDecodeType::Bytes) => {
                 data.try_get(name).context("bytes")?.map(Datum::Bytes)
             }
-            (SqlServerColumnDecodeType::Uuid, ScalarType::Uuid) => {
+            (ScalarType::Uuid, SqlServerColumnDecodeType::Uuid) => {
                 data.try_get(name).context("uuid")?.map(Datum::Uuid)
             }
-            (SqlServerColumnDecodeType::Numeric, ScalarType::Numeric { .. }) => data
+            (ScalarType::Numeric { .. }, SqlServerColumnDecodeType::Numeric) => data
                 .try_get(name)
                 .context("numeric")?
                 .map(|val: tiberius::numeric::Numeric| {
@@ -385,11 +415,11 @@ impl SqlServerColumnDecodeType {
                     Ok::<_, SqlServerError>(Datum::Numeric(OrderedDecimal(numeric)))
                 })
                 .transpose()?,
-            (SqlServerColumnDecodeType::Xml, ScalarType::String) => data
+            (ScalarType::String, SqlServerColumnDecodeType::Xml) => data
                 .try_get(name)
                 .context("xml")?
                 .map(|val: &tiberius::xml::XmlData| Datum::String(val.as_ref())),
-            (SqlServerColumnDecodeType::NaiveDate, ScalarType::Date) => data
+            (ScalarType::Date, SqlServerColumnDecodeType::NaiveDate) => data
                 .try_get(name)
                 .context("date")?
                 .map(|val: chrono::NaiveDate| {
@@ -402,10 +432,10 @@ impl SqlServerColumnDecodeType {
             //
             // Internally we can support 1 nanosecond precision, but we should exercise
             // this case and see what breaks.
-            (SqlServerColumnDecodeType::NaiveTime, ScalarType::Time) => {
+            (ScalarType::Time, SqlServerColumnDecodeType::NaiveTime) => {
                 data.try_get(name).context("time")?.map(Datum::Time)
             }
-            (SqlServerColumnDecodeType::NaiveDateTime, ScalarType::Timestamp { .. }) => data
+            (ScalarType::Timestamp { .. }, SqlServerColumnDecodeType::NaiveDateTime) => data
                 .try_get(name)
                 .context("timestamp")?
                 .map(|val: chrono::NaiveDateTime| {
@@ -413,15 +443,15 @@ impl SqlServerColumnDecodeType {
                     Ok::<_, SqlServerError>(Datum::Timestamp(ts))
                 })
                 .transpose()?,
-            (SqlServerColumnDecodeType::DateTime, ScalarType::Interval) => data
+            (ScalarType::TimestampTz { .. }, SqlServerColumnDecodeType::DateTime) => data
                 .try_get(name)
-                .context("interval")?
+                .context("timestamptz")?
                 .map(|val: chrono::DateTime<chrono::Utc>| {
                     let ts = val.try_into().context("parse timestamptz")?;
                     Ok::<_, SqlServerError>(Datum::TimestampTz(ts))
                 })
                 .transpose()?,
-            (decode_type, column_type) => {
+            (column_type, decode_type) => {
                 let msg = format!("don't know how to parse {decode_type:?} as {column_type:?}");
                 return Err(SqlServerError::ProgrammingError(msg));
             }
