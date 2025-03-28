@@ -274,7 +274,7 @@ pub fn and<'a>(
     }
 }
 
-pub fn static_and_2<'a>(
+pub fn static_and<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
     exprs: &'a [StaticMirScalarExprs],
@@ -324,7 +324,7 @@ pub fn or<'a>(
     }
 }
 
-pub fn static_or_2<'a>(
+pub fn static_or<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
     exprs: &'a [StaticMirScalarExprs],
@@ -6363,7 +6363,7 @@ fn coalesce<'a>(
     Ok(Datum::Null)
 }
 
-fn static_coalesce_2<'a>(
+fn static_coalesce<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
     exprs: &'a [StaticMirScalarExprs],
@@ -6389,7 +6389,7 @@ fn greatest<'a>(
         .unwrap_or(Datum::Null))
 }
 
-fn static_greatest_2<'a>(
+fn static_greatest<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
     exprs: &'a [StaticMirScalarExprs],
@@ -6413,7 +6413,7 @@ fn least<'a>(
         .unwrap_or(Datum::Null))
 }
 
-fn static_least_2<'a>(
+fn static_least<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
     exprs: &'a [StaticMirScalarExprs],
@@ -6447,7 +6447,7 @@ fn error_if_null<'a>(
     }
 }
 
-fn static_error_if_null_2<'a>(
+fn static_error_if_null<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
     exprs: &'a [StaticMirScalarExprs],
@@ -8020,14 +8020,14 @@ impl VariadicFunc {
     ) -> Result<Datum<'a>, EvalError> {
         // Evaluate all non-eager functions directly
         match self {
-            VariadicFunc::Coalesce => return static_coalesce_2(columns, temp_storage, exprs),
-            VariadicFunc::Greatest => return static_greatest_2(columns, temp_storage, exprs),
-            VariadicFunc::And => return static_and_2(columns, temp_storage, exprs),
-            VariadicFunc::Or => return static_or_2(columns, temp_storage, exprs),
+            VariadicFunc::Coalesce => return static_coalesce(columns, temp_storage, exprs),
+            VariadicFunc::Greatest => return static_greatest(columns, temp_storage, exprs),
+            VariadicFunc::And => return static_and(columns, temp_storage, exprs),
+            VariadicFunc::Or => return static_or(columns, temp_storage, exprs),
             VariadicFunc::ErrorIfNull => {
-                return static_error_if_null_2(columns, temp_storage, exprs)
+                return static_error_if_null(columns, temp_storage, exprs)
             }
-            VariadicFunc::Least => return static_least_2(columns, temp_storage, exprs),
+            VariadicFunc::Least => return static_least(columns, temp_storage, exprs),
             _ => {}
         };
 
