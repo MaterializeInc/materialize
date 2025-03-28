@@ -7,8 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::{BinaryFunc, EvalError, MirScalarExpr, UnaryFunc, UnmaterializableFunc, VariadicFunc};
+use std::mem::MaybeUninit;
+
 use mz_repr::{Datum, Row, RowArena};
+
+use crate::{BinaryFunc, EvalError, MirScalarExpr, UnaryFunc, UnmaterializableFunc, VariadicFunc};
 
 #[derive(Debug, Clone)]
 pub(crate) enum StaticMirScalarExprParams {
@@ -60,6 +63,81 @@ enum PendingInstruction<'a> {
     Label(usize),
     Skip(usize),
     SkipIfFalse(usize),
+}
+
+#[derive(Debug)]
+struct Stack<T, const N: usize> {
+    size: usize,
+    locals: [MaybeUninit<T>; N],
+    /// The stack of datums.
+    stack: Vec<T>,
+}
+
+impl<T: std::fmt::Debug, const N: usize> Stack<T, N> {
+    fn new() -> Self {
+        Self {
+            size: 0,
+            locals: unsafe { MaybeUninit::uninit().assume_init() },
+            stack: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, value: T) {
+        // for x in self.stack.iter().chain(
+        //     self.locals[..self.size]
+        //         .iter()
+        //         .map(|x| unsafe { x.assume_init_ref() }),
+        // ) {
+        //     println!("{:?}", x);
+        // }
+
+        if self.size == N {
+            self.stack.extend(
+                self.locals[..N / 2]
+                    .iter()
+                    .map(|x| unsafe { x.assume_init_read() }),
+            );
+            for i in 0..N / 2 {
+                self.locals[i].write(unsafe { self.locals[N / 2 + i].assume_init_read() });
+            }
+            self.size = N / 2;
+        }
+        self.locals[self.size].write(value);
+        self.size += 1;
+    }
+
+    fn pop(&mut self) -> Option<T> {
+        // for x in self.stack.iter().chain(
+        //     self.locals[..self.size]
+        //         .iter()
+        //         .map(|x| unsafe { x.assume_init_ref() }),
+        // ) {
+        //     println!("{:?}", x);
+        // }
+
+        if self.size == 0 {
+            for (i, t) in self.stack.drain(self.stack.len() - N / 2..).enumerate() {
+                self.locals[i].write(t);
+                self.size = i + 1;
+            }
+        }
+
+        if self.size == 0 {
+            return None;
+        }
+
+        self.size -= 1;
+        let res = unsafe { self.locals[self.size].assume_init_read() };
+        Some(res)
+    }
+}
+
+impl<T, const N: usize> Drop for Stack<T, N> {
+    fn drop(&mut self) {
+        for i in 0..self.size {
+            unsafe { self.locals[i].assume_init_drop() };
+        }
+    }
 }
 
 /// TODO
@@ -212,7 +290,7 @@ impl StaticMirScalarExprs {
         temp_storage: &'a RowArena,
     ) -> Result<Datum<'a>, EvalError> {
         // TODO: have two registers for the topmost datums.
-        let mut stack = Vec::new();
+        let mut stack = Stack::<Result<_, _>, 4>::new();
         let mut pointer = 0;
         while pointer < self.instructions.len() {
             let instruction = &self.instructions[pointer];
