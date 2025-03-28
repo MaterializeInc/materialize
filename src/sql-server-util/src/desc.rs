@@ -240,8 +240,9 @@ fn parse_data_type(
         }
         "xml" => (ScalarType::String, SqlServerColumnDecodeType::Xml),
         "binary" | "varbinary" => {
-            // When the `max_length` is -1 SQL Server will not present us with the "before" value
-            // for updated columns.
+            // When the `max_length` is -1 if this column changes as part of an `UPDATE`
+            // or `DELETE` statement, SQL Server will not provide the "old" value for
+            // this column, but we need this value so we can emit a retraction.
             //
             // TODO(sql_server3): Support UPSERT semantics for SQL Server.
             if raw.max_length == -1 {
