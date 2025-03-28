@@ -1797,4 +1797,10 @@ select string_to_array(word, '', 'hello world') from string_to_array_words;
 ----
 {"hello world"}
 
+# string_to_array - white space delimiter and null_string set to NULL.
+query T
+select string_to_array(word, ' ', NULL) from string_to_array_words;
+----
+{hello,world}
+
 # string_to_array - end.
