@@ -4,11 +4,11 @@ columns:
 
 rows:
 - "Terraform version": |
-    
+
     [v0.2.0](https://github.com/MaterializeInc/terraform-google-materialize/releases/tag/v0.2.0)
-    
+
   "Notable changes": |
-   
+
     The
     [providers](/installation/install-on-gcp/appendix-gcp-provider-configuration/)
     must be specified. The `examples/simple/main.tf` has been updated to reflect
