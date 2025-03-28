@@ -21,6 +21,8 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 
+pub mod desc;
+
 // Re-export tiberius' Config type since it's needed by our Client wrapper.
 pub use tiberius::Config;
 
@@ -530,4 +532,22 @@ impl<'a, T: tiberius::ToSql> From<&'a T> for OwnedColumnData {
     fn from(value: &'a T) -> Self {
         OwnedColumnData::from(value.to_sql())
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SqlServerError {
+    #[error(transparent)]
+    SqlServer(#[from] tiberius::error::Error),
+    #[error("'{column_type}' from column '{column_name}' is not supported: {reason}")]
+    UnsupportedDataType {
+        column_name: String,
+        column_type: String,
+        reason: String,
+    },
+    #[error("found invalid data in the column '{column_name}': {error}")]
+    InvalidData { column_name: String, error: String },
+    #[error(transparent)]
+    Generic(#[from] anyhow::Error),
+    #[error("programming error! {0}")]
+    ProgrammingError(String),
 }

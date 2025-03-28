@@ -7050,13 +7050,27 @@ name = "mz-sql-server-util"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
+ "dec",
  "derivative",
  "futures",
+ "mz-build-tools",
+ "mz-ore",
+ "mz-proto",
+ "mz-repr",
+ "ordered-float 5.0.0",
+ "proptest",
+ "proptest-derive",
+ "prost",
+ "prost-build",
+ "serde",
  "smallvec",
  "static_assertions",
+ "thiserror 2.0.12",
  "tiberius",
  "tokio",
  "tokio-util",
+ "tonic-build",
  "tracing",
  "uuid",
  "workspace-hack",
@@ -10615,13 +10629,13 @@ dependencies = [
 [[package]]
 name = "tiberius"
 version = "0.12.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1446cb4198848d1562301a3340424b4f425ef79f35ef9ee034769a9dd92c10d"
+source = "git+https://github.com/MaterializeInc/tiberius?rev=06423ac498a78ba2a1df8fd595208e6bdf0d5939#06423ac498a78ba2a1df8fd595208e6bdf0d5939"
 dependencies = [
  "async-trait",
  "asynchronous-codec",
  "byteorder",
  "bytes",
+ "chrono",
  "connection-string",
  "encoding_rs",
  "enumflags2",
@@ -10631,6 +10645,8 @@ dependencies = [
  "pin-project-lite",
  "pretty-hex",
  "thiserror 1.0.69",
+ "tokio",
+ "tokio-util",
  "tracing",
  "uuid",
 ]
