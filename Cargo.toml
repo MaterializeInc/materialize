@@ -295,6 +295,7 @@ incremental = true
 # merged), after which point it becomes impossible to build that historical
 # version of Materialize.
 [patch.crates-io]
+differential-dataflow = { git = "https://github.com/antiguru/differential-dataflow", branch = "enter_time_negate" }
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
