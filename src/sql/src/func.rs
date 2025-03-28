@@ -3161,6 +3161,10 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             }) => String, 3538;
             params!(Bytes, Bytes) => Operation::binary(|_ecx, _l, _r| bail_unsupported!("string_agg on BYTEA")) => Bytes, 3545;
         },
+        "string_to_array" => Scalar {
+            params!(String, Any) => VariadicFunc::StringToArray => ScalarType::Array(Box::new(ScalarType::String)), 3165;
+            params!(String, Any, String) => VariadicFunc::StringToArray => ScalarType::Array(Box::new(ScalarType::String)), 3166;
+        },
         "sum" => Aggregate {
             params!(Int16) => AggregateFunc::SumInt16 => Int64, 2109;
             params!(Int32) => AggregateFunc::SumInt32 => Int64, 2108;

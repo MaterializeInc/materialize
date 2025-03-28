@@ -2125,6 +2125,72 @@ fn parse_ident<'a>(
     })?)
 }
 
+fn string_to_array<'a>(
+    string_datum: Datum<'a>,
+    delimiter: Datum<'a>,
+    null_string: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let string = string_datum.unwrap_str();
+
+    if delimiter.is_null() {
+        let split_all_chars_delimiter = "";
+        return string_to_array_impl(string, split_all_chars_delimiter, null_string, temp_storage);
+    }
+
+    let delimiter = delimiter.unwrap_str();
+    if delimiter.is_empty() {
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        packer.try_push_array(
+            &[ArrayDimension {
+                lower_bound: 1,
+                length: 1,
+            }],
+            vec![string].into_iter().map(Datum::String),
+        )?;
+
+        Ok(temp_storage.push_unary_row(row))
+    } else {
+        string_to_array_impl(string, delimiter, null_string, temp_storage)
+    }
+}
+
+fn string_to_array_impl<'a>(
+    string: &str,
+    delimiter: &str,
+    null_string: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let mut row = Row::default();
+    let mut packer = row.packer();
+    let empty_flags = "";
+    let regex = build_regex(delimiter, empty_flags)?;
+
+    let found = mz_regexp::regexp_split_to_array(string, &regex);
+    let array_dimensions = [ArrayDimension {
+        lower_bound: 1,
+        length: found.len(),
+    }];
+
+    if !null_string.is_null() {
+        let null_string = null_string.unwrap_str();
+        let found_datums = found.into_iter().map(|chunk| {
+            if chunk.eq(null_string) {
+                Datum::Null
+            } else {
+                Datum::String(chunk)
+            }
+        });
+
+        packer.try_push_array(&array_dimensions, found_datums)?;
+    } else {
+        packer.try_push_array(&array_dimensions, found.into_iter().map(Datum::String))?;
+    }
+
+    Ok(temp_storage.push_unary_row(row))
+}
+
 fn regexp_split_to_array<'a>(
     text: Datum<'a>,
     regexp: Datum<'a>,
@@ -7845,6 +7911,7 @@ pub enum VariadicFunc {
     ArrayFill {
         elem_type: ScalarType,
     },
+    StringToArray,
     TimezoneTime,
     RegexpSplitToArray,
     RegexpReplace,
@@ -7951,6 +8018,11 @@ impl VariadicFunc {
                 regexp_split_to_array(ds[0], ds[1], flags, temp_storage)
             }
             VariadicFunc::RegexpReplace => regexp_replace_dynamic(&ds, temp_storage),
+            VariadicFunc::StringToArray => {
+                let null_string = if ds.len() == 2 { Datum::Null } else { ds[2] };
+
+                string_to_array(ds[0], ds[1], null_string, temp_storage)
+            }
         }
     }
 
@@ -7997,6 +8069,7 @@ impl VariadicFunc {
             | VariadicFunc::ArrayFill { .. }
             | VariadicFunc::TimezoneTime
             | VariadicFunc::RegexpSplitToArray
+            | VariadicFunc::StringToArray
             | VariadicFunc::RegexpReplace => false,
         }
     }
@@ -8102,6 +8175,7 @@ impl VariadicFunc {
                 ScalarType::Array(Box::new(ScalarType::String)).nullable(in_nullable)
             }
             RegexpReplace => ScalarType::String.nullable(in_nullable),
+            StringToArray => ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
         }
     }
 
@@ -8129,6 +8203,7 @@ impl VariadicFunc {
                 | VariadicFunc::RangeCreate { .. }
                 | VariadicFunc::ArrayPosition
                 | VariadicFunc::ArrayFill { .. }
+                | VariadicFunc::StringToArray
         )
     }
 
@@ -8173,6 +8248,7 @@ impl VariadicFunc {
             | ArrayFill { .. }
             | TimezoneTime
             | RegexpSplitToArray
+            | StringToArray
             | RegexpReplace => false,
             Coalesce
             | Greatest
@@ -8286,6 +8362,7 @@ impl VariadicFunc {
             | VariadicFunc::DateDiffTime
             | VariadicFunc::TimezoneTime
             | VariadicFunc::RegexpSplitToArray
+            | VariadicFunc::StringToArray
             | VariadicFunc::RegexpReplace => false,
         }
     }
@@ -8344,6 +8421,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::TimezoneTime => f.write_str("timezonet"),
             VariadicFunc::RegexpSplitToArray => f.write_str("regexp_split_to_array"),
             VariadicFunc::RegexpReplace => f.write_str("regexp_replace"),
+            VariadicFunc::StringToArray => f.write_str("string_to_array"),
         }
     }
 }
@@ -8466,6 +8544,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
             VariadicFunc::TimezoneTime => TimezoneTime(()),
             VariadicFunc::RegexpSplitToArray => RegexpSplitToArray(()),
             VariadicFunc::RegexpReplace => RegexpReplace(()),
+            VariadicFunc::StringToArray => StringToArray(()),
         };
         ProtoVariadicFunc { kind: Some(kind) }
     }
@@ -8532,6 +8611,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
                 TimezoneTime(()) => Ok(VariadicFunc::TimezoneTime),
                 RegexpSplitToArray(()) => Ok(VariadicFunc::RegexpSplitToArray),
                 RegexpReplace(()) => Ok(VariadicFunc::RegexpReplace),
+                StringToArray(()) => Ok(VariadicFunc::StringToArray),
             }
         } else {
             Err(TryFromProtoError::missing_field(
