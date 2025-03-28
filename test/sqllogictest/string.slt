@@ -1757,3 +1757,35 @@ select reverse(word) from words;
 !
 dlrow
 olleh
+
+# string_to_array - NULL delimeter and null_string not set.
+statement ok
+create table string_to_array_words (word text);
+
+statement ok
+insert into string_to_array_words values ('hello world');
+
+query T
+select string_to_array(word, NULL) from string_to_array_words;
+----
+{h,e,l,l,o," ",w,o,r,l,d}
+
+query T
+select string_to_array(word, '') from string_to_array_words;
+----
+{"hello world"}
+
+query T
+select string_to_array(word, ' ') from string_to_array_words;
+----
+{hello,world}
+
+query T
+select string_to_array(word, ' ', 'hello') from string_to_array_words;
+----
+{NULL,world}
+
+query T
+select string_to_array(word, '', 'hello world') from string_to_array_words;
+----
+{"hello world"}
