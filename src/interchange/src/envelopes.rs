@@ -72,7 +72,7 @@ where
                                         v.clone(),
                                         usize::cast_from(diff.unsigned_abs()),
                                     );
-                                    if diff < 0 {
+                                    if diff < Diff::ZERO {
                                         befores.push(update);
                                     } else {
                                         afters.push(update);
@@ -115,7 +115,7 @@ where
                                 let group = group
                                     .map(|(_t, before, after)| DiffPair { before, after })
                                     .collect();
-                                session.give(((k.clone(), group), t, 1));
+                                session.give(((k.clone(), group), t, Diff::ONE));
                             }
 
                             cursor.step_key(&batch);

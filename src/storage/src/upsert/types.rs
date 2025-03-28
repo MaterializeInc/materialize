@@ -92,11 +92,12 @@ use bincode::Options;
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
+use mz_repr::Diff;
 use serde::{de::DeserializeOwned, Serialize};
 
-use super::{UpsertKey, UpsertValue};
 use crate::metrics::upsert::{UpsertMetrics, UpsertSharedMetrics};
 use crate::statistics::SourceStatistics;
+use crate::upsert::{UpsertKey, UpsertValue};
 
 /// The default set of `bincode` options used for consolidating
 /// upsert updates (and writing values to RocksDB).
@@ -165,7 +166,7 @@ pub struct PutValue<V> {
 pub struct MergeValue<V> {
     /// The value of the merge operand to write to the backend.
     pub value: V,
-    /// The 'diff' of this merge operand value, used to estimate the the overall size diff
+    /// The 'diff' of this merge operand value, used to estimate the overall size diff
     /// of the working set after this merge operand is merged by the backend.
     pub diff: i64,
 }
@@ -599,13 +600,13 @@ impl<T: Eq, O: Default> StateValue<T, O> {
                     .unwrap();
                 let len = i64::try_from(bincode_buffer.len()).unwrap();
 
-                *diff_sum += diff;
-                *len_sum += len.wrapping_mul(diff);
+                *diff_sum += *diff;
+                *len_sum += len.wrapping_mul(*diff);
                 // Truncation is fine (using `as`) as this is just a checksum
-                *checksum_sum += (seahash::hash(&*bincode_buffer) as i64).wrapping_mul(diff);
+                *checksum_sum += (seahash::hash(&*bincode_buffer) as i64).wrapping_mul(*diff);
 
                 // XOR of even diffs cancel out, so we only do it if diff is odd
-                if diff.abs() % 2 == 1 {
+                if diff.abs() % Diff::from(2) == Diff::ONE {
                     if value_xor.len() < bincode_buffer.len() {
                         value_xor.resize(bincode_buffer.len(), 0);
                     }
@@ -632,7 +633,8 @@ impl<T: Eq, O: Default> StateValue<T, O> {
                 if let Some((finalized_value, _order)) = finalized_value {
                     // If we had a value before, merge it into the
                     // now-consolidating state first.
-                    let _ = self.merge_update(finalized_value, 1, bincode_opts, bincode_buffer);
+                    let _ =
+                        self.merge_update(finalized_value, Diff::ONE, bincode_opts, bincode_buffer);
 
                     // Then merge the new value in.
                     self.merge_update(value, diff, bincode_opts, bincode_buffer)
@@ -1026,7 +1028,7 @@ where
                     let mut update = StateValue::default();
                     update.merge_update(
                         finalized_value,
-                        1,
+                        Diff::ONE,
                         upsert_bincode_opts(),
                         &mut bincode_buf,
                     );
@@ -1255,9 +1257,9 @@ where
                     val.merge_update(v, diff, self.bincode_opts, &mut self.bincode_buffer);
 
                     stats.updates += 1;
-                    if diff > 0 {
+                    if *diff > 0 {
                         stats.inserts += 1;
-                    } else if diff < 0 {
+                    } else if *diff < 0 {
                         stats.deletes += 1;
                     }
 
@@ -1269,9 +1271,15 @@ where
                     //
                     // This does not accurately report values that have been consolidated to diff == 0, as tracking that
                     // per-key is extremely difficult.
-                    stats.values_diff += diff;
+                    stats.values_diff += *diff;
 
-                    (k, MergeValue { value: val, diff })
+                    (
+                        k,
+                        MergeValue {
+                            value: val,
+                            diff: *diff,
+                        },
+                    )
                 }))
                 .await?;
 
@@ -1313,9 +1321,9 @@ where
 
             for (key, value, diff) in self.consolidate_scratch.drain(..) {
                 stats.updates += 1;
-                if diff > 0 {
+                if *diff > 0 {
                     stats.inserts += 1;
-                } else if diff < 0 {
+                } else if *diff < 0 {
                     stats.deletes += 1;
                 }
 
@@ -1323,7 +1331,7 @@ where
                 // multi_put below. This makes sure we report the same stats as
                 // `consolidate_merge_inner`, regardless of what values
                 // there were in state before.
-                stats.values_diff += diff;
+                stats.values_diff += *diff;
 
                 let entry = self.consolidate_upsert_scratch.get_mut(&key).unwrap();
                 let val = entry.value.get_or_insert_with(Default::default);
@@ -1454,14 +1462,14 @@ mod tests {
 
         let mut s = StateValue::<(), ()>::Consolidating(Consolidating::default());
 
-        let small_row = Ok(mz_repr::Row::default());
-        let longer_row = Ok(mz_repr::Row::pack([mz_repr::Datum::Null]));
-        s.merge_update(small_row, 1, opts, &mut buf);
-        s.merge_update(longer_row.clone(), -1, opts, &mut buf);
+        let small_row = Ok(Row::default());
+        let longer_row = Ok(Row::pack([mz_repr::Datum::Null]));
+        s.merge_update(small_row, Diff::ONE, opts, &mut buf);
+        s.merge_update(longer_row.clone(), -Diff::ONE, opts, &mut buf);
         // This clears the retraction of the `longer_row`, but the
         // `value_xor` is the length of the `longer_row`. This tests
         // that we are tracking checksums correctly.
-        s.merge_update(longer_row, 1, opts, &mut buf);
+        s.merge_update(longer_row, Diff::ONE, opts, &mut buf);
 
         // Assert that the `Consolidating` value is fully merged.
         s.ensure_decoded(opts);
@@ -1498,7 +1506,7 @@ mod tests {
         let mut consolidating_value: StateValue<(), ()> = StateValue::default();
         consolidating_value.merge_update(
             Ok(Row::default()),
-            1,
+            Diff::ONE,
             upsert_bincode_opts(),
             &mut Vec::new(),
         );
@@ -1521,8 +1529,8 @@ mod tests {
 
         let small_row = Ok(mz_repr::Row::default());
         let longer_row = Ok(mz_repr::Row::pack([mz_repr::Datum::Null]));
-        s.merge_update(longer_row.clone(), 1, opts, &mut buf);
-        s.merge_update(small_row.clone(), -1, opts, &mut buf);
+        s.merge_update(longer_row.clone(), Diff::ONE, opts, &mut buf);
+        s.merge_update(small_row.clone(), -Diff::ONE, opts, &mut buf);
 
         s.ensure_decoded(opts);
     }
@@ -1539,9 +1547,9 @@ mod tests {
 
         let small_row = Ok(mz_repr::Row::default());
         let longer_row = Ok(mz_repr::Row::pack([mz_repr::Datum::Null]));
-        s.merge_update(longer_row.clone(), 1, opts, &mut buf);
-        s.merge_update(small_row.clone(), -1, opts, &mut buf);
-        s.merge_update(longer_row.clone(), 1, opts, &mut buf);
+        s.merge_update(longer_row.clone(), Diff::ONE, opts, &mut buf);
+        s.merge_update(small_row.clone(), -Diff::ONE, opts, &mut buf);
+        s.merge_update(longer_row.clone(), Diff::ONE, opts, &mut buf);
 
         s.ensure_decoded(opts);
     }
@@ -1556,9 +1564,9 @@ mod tests {
 
         let small_row = Ok(mz_repr::Row::pack([mz_repr::Datum::Int64(2)]));
         let longer_row = Ok(mz_repr::Row::pack([mz_repr::Datum::Int64(1)]));
-        s.merge_update(longer_row.clone(), 1, opts, &mut buf);
-        s.merge_update(small_row.clone(), -1, opts, &mut buf);
-        s.merge_update(longer_row.clone(), 1, opts, &mut buf);
+        s.merge_update(longer_row.clone(), Diff::ONE, opts, &mut buf);
+        s.merge_update(small_row.clone(), -Diff::ONE, opts, &mut buf);
+        s.merge_update(longer_row.clone(), Diff::ONE, opts, &mut buf);
 
         s.ensure_decoded(opts);
     }

@@ -11,7 +11,7 @@ use std::collections::VecDeque;
 use std::iter;
 
 use mz_ore::now::{to_datetime, NowFn};
-use mz_repr::{Datum, Row};
+use mz_repr::{Datum, Diff, Row};
 use mz_storage_types::sources::load_generator::{
     AuctionView, Event, Generator, LoadGeneratorOutput,
 };
@@ -72,7 +72,7 @@ impl Generator for Auction {
         now: NowFn,
         seed: Option<u64>,
         _resume_offset: MzOffset,
-    ) -> Box<(dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, i64)>)>)>
+    ) -> Box<(dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>)>)>
     {
         let mut rng = SmallRng::seed_from_u64(seed.unwrap_or_default());
 
@@ -160,7 +160,7 @@ impl Generator for Auction {
                     pend.map(|(output, row)| {
                         let msg = (
                             LoadGeneratorOutput::Auction(output),
-                            Event::Message(MzOffset::from(offset), (row, 1)),
+                            Event::Message(MzOffset::from(offset), (row, Diff::ONE)),
                         );
 
                         // The first batch (orgs, users, accounts) is a single txn, all others (auctions and bids) are separate.

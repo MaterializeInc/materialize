@@ -132,7 +132,7 @@ use mz_compute_types::plan::LirId;
 use mz_expr::{EvalError, Id};
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::explain::DummyHumanizer;
-use mz_repr::{Datum, GlobalId, Row, SharedRow};
+use mz_repr::{Datum, Diff, GlobalId, Row, SharedRow};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
@@ -889,7 +889,7 @@ where
                     )
                     .mz_reduce_abelian::<_, _, _, ErrBuilder<_, _>, ErrSpine<_, _>>(
                         "Distinct recursive err",
-                        move |_k, _s, t| t.push(((), 1)),
+                        move |_k, _s, t| t.push(((), Diff::ONE)),
                     )
                     .as_collection(|k, _| k.clone());
                 if let Some(token) = &self.shutdown_token.get_inner() {
@@ -1079,7 +1079,7 @@ where
                         (
                             DataflowError::from(e),
                             <G::Timestamp as Refines<mz_repr::Timestamp>>::to_inner(error_time),
-                            1,
+                            Diff::ONE,
                         )
                     })
                     .to_stream(&mut self.scope)

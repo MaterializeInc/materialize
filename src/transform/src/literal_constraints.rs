@@ -29,7 +29,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::iter::IteratorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::vec::swap_remove_multiple;
-use mz_repr::{GlobalId, RelationType, Row};
+use mz_repr::{Diff, GlobalId, RelationType, Row};
 
 use crate::canonicalize_mfp::CanonicalizeMfp;
 use crate::notice::IndexTooWideForLiteralConstraints;
@@ -146,7 +146,10 @@ impl LiteralConstraints {
 
                     let inp_id = id.clone();
                     let filter_list = MirRelationExpr::Constant {
-                        rows: Ok(possible_vals.iter().map(|val| (val.clone(), 1)).collect()),
+                        rows: Ok(possible_vals
+                            .iter()
+                            .map(|val| (val.clone(), Diff::ONE))
+                            .collect()),
                         typ: mz_repr::RelationType {
                             column_types: key
                                 .iter()

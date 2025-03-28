@@ -528,7 +528,7 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
                     Datum::UInt64(u64::cast_from(datum.operator_span.0)),
                     Datum::UInt64(u64::cast_from(datum.operator_span.1)),
                 ]);
-                (row, Timestamp::into_owned(time), *diff)
+                (row, Timestamp::into_owned(time), diff)
             })
             .as_collection();
 
@@ -815,7 +815,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
             export_id,
             dataflow_index,
         };
-        self.output.export.give((datum, ts, 1));
+        self.output.export.give((datum, ts, Diff::ONE));
 
         let existing = self
             .state
@@ -836,7 +836,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
             export_id,
             time_ns: None,
         };
-        self.output.hydration_time.give((datum, ts, 1));
+        self.output.hydration_time.give((datum, ts, Diff::ONE));
     }
 
     fn handle_export_dropped(
@@ -856,7 +856,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
             export_id,
             dataflow_index,
         };
-        self.output.export.give((datum, ts, -1));
+        self.output.export.give((datum, ts, -Diff::ONE));
 
         match self.state.dataflow_export_counts.get_mut(&dataflow_index) {
             entry @ Some(0) | entry @ None => {
@@ -876,7 +876,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
                 export_id,
                 count: export.error_count,
             };
-            self.output.error_count.give((datum, ts, -1));
+            self.output.error_count.give((datum, ts, -Diff::ONE));
         }
 
         // Remove hydration time logging for this export.
@@ -884,7 +884,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
             export_id,
             time_ns: export.hydration_time_ns,
         };
-        self.output.hydration_time.give((datum, ts, -1));
+        self.output.hydration_time.give((datum, ts, -Diff::ONE));
     }
 
     fn handle_dataflow_dropped(&mut self, dataflow_index: usize) {
@@ -892,7 +892,9 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
 
         if self.state.shutdown_dataflows.remove(&dataflow_index) {
             // Dataflow has already shut down before it was dropped.
-            self.output.shutdown_duration.give((0, self.ts(), 1));
+            self.output
+                .shutdown_duration
+                .give((0, self.ts(), Diff::ONE));
         } else {
             // Dataflow has not yet shut down.
             let existing = self
@@ -915,7 +917,9 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
             // Dataflow has already been dropped.
             let elapsed_ns = self.time.saturating_sub(start).as_nanos();
             let elapsed_pow = elapsed_ns.next_power_of_two();
-            self.output.shutdown_duration.give((elapsed_pow, ts, 1));
+            self.output
+                .shutdown_duration
+                .give((elapsed_pow, ts, Diff::ONE));
         } else {
             // Dataflow has not yet been dropped.
             let was_new = self.state.shutdown_dataflows.insert(dataflow_index);
@@ -932,7 +936,9 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
                     dataflow_index,
                     global_id,
                 };
-                self.output.dataflow_global_ids.give((datum, ts, -1));
+                self.output
+                    .dataflow_global_ids
+                    .give((datum, ts, -Diff::ONE));
 
                 // Remove LIR mapping.
                 if let Some(mappings) = self.state.lir_mapping.remove(&global_id) {
@@ -954,7 +960,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
                             nesting,
                             operator_span,
                         };
-                        self.output.lir_mapping.give(&(datum, ts, -1));
+                        self.output.lir_mapping.give(&(datum, ts, -Diff::ONE));
                     }
                 }
             }
@@ -982,14 +988,14 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
                 export_id,
                 count: old_count,
             };
-            self.output.error_count.give((datum, ts, -1));
+            self.output.error_count.give((datum, ts, -Diff::ONE));
         }
         if new_count != 0 {
             let datum = ErrorCountDatum {
                 export_id,
                 count: new_count,
             };
-            self.output.error_count.give((datum, ts, 1));
+            self.output.error_count.give((datum, ts, Diff::ONE));
         }
 
         export.error_count = new_count;
@@ -1023,8 +1029,10 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
             export_id,
             time_ns: Some(nanos),
         };
-        self.output.hydration_time.give((retraction, ts, -1));
-        self.output.hydration_time.give((insertion, ts, 1));
+        self.output
+            .hydration_time
+            .give((retraction, ts, -Diff::ONE));
+        self.output.hydration_time.give((insertion, ts, Diff::ONE));
 
         export.hydration_time_ns = Some(nanos);
     }
@@ -1042,7 +1050,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         let ts = self.ts();
         self.output
             .peek
-            .give((PeekDatum { peek, peek_type }, ts, 1));
+            .give((PeekDatum { peek, peek_type }, ts, Diff::ONE));
 
         let existing = self.state.peek_stash.insert(uuid, self.time);
         if existing.is_some() {
@@ -1063,14 +1071,16 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         let ts = self.ts();
         self.output
             .peek
-            .give((PeekDatum { peek, peek_type }, ts, -1));
+            .give((PeekDatum { peek, peek_type }, ts, -Diff::ONE));
 
         if let Some(start) = self.state.peek_stash.remove(&uuid) {
             let elapsed_ns = self.time.saturating_sub(start).as_nanos();
             let bucket = elapsed_ns.next_power_of_two();
-            self.output
-                .peek_duration
-                .give((PeekDurationDatum { peek_type, bucket }, ts, 1));
+            self.output.peek_duration.give((
+                PeekDurationDatum { peek_type, bucket },
+                ts,
+                Diff::ONE,
+            ));
         } else {
             error!(%uuid, "peek not yet registered");
         }
@@ -1085,7 +1095,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         }: <Frontier as Columnar>::Ref<'_>,
     ) {
         let export_id = Columnar::into_owned(export_id);
-        let diff = i64::from(*diff);
+        let diff = Diff::from(*diff);
         let ts = self.ts();
         let time = Columnar::into_owned(time);
         let datum = FrontierDatum { export_id, time };
@@ -1259,7 +1269,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
                 nesting: meta.nesting,
                 operator_span: meta.operator_span,
             };
-            self.output.lir_mapping.give((datum, ts, 1));
+            self.output.lir_mapping.give((datum, ts, Diff::ONE));
         }
     }
 
@@ -1287,7 +1297,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
             dataflow_index,
             global_id,
         };
-        self.output.dataflow_global_ids.give((datum, ts, 1));
+        self.output.dataflow_global_ids.give((datum, ts, Diff::ONE));
     }
 }
 
@@ -1428,7 +1438,7 @@ where
             .unary(Pipeline, "LogDataflowErrorsCollection", |_cap, _info| {
                 move |input, output| {
                     input.for_each(|cap, data| {
-                        let diff = data.iter().map(|(_d, _t, r)| r).sum();
+                        let diff = data.iter().map(|(_d, _t, r)| **r).sum();
                         logger.log(&ComputeEvent::ErrorCount(ErrorCount { export_id, diff }));
 
                         output.session(&cap).give_container(data);
@@ -1448,7 +1458,7 @@ where
         self.unary(Pipeline, "LogDataflowErrorsStream", |_cap, _info| {
             move |input, output| {
                 input.for_each(|cap, data| {
-                    let diff = data.iter().map(sum_batch_diffs).sum();
+                    let diff = *data.iter().map(sum_batch_diffs).sum::<Diff>();
                     logger.log(&ComputeEvent::ErrorCount(ErrorCount { export_id, diff }));
 
                     output.session(&cap).give_container(data);
@@ -1468,7 +1478,7 @@ fn sum_batch_diffs<B>(batch: &B) -> Diff
 where
     for<'a> B: BatchReader<DiffGat<'a> = &'a Diff>,
 {
-    let mut sum = 0;
+    let mut sum = Diff::ZERO;
     let mut cursor = batch.cursor();
 
     while cursor.key_valid(batch) {

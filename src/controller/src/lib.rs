@@ -582,7 +582,7 @@ where
                     m.disk_usage_bytes.into(),
                     Datum::TimestampTz(now_tz),
                 ]);
-                (row.clone(), 1)
+                (row.clone(), mz_repr::Diff::ONE)
             })
             .collect();
 

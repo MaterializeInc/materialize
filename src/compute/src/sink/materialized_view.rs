@@ -137,6 +137,7 @@ use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
+use mz_storage_types::StorageDiff;
 use mz_timely_util::builder_async::PressOnDropButton;
 use mz_timely_util::builder_async::{Event, OperatorBuilder};
 use mz_timely_util::probe::{Handle, ProbeNotify};
@@ -346,7 +347,7 @@ impl PersistApi {
             .unwrap_or_else(|error| panic!("error opening persist client: {error}"))
     }
 
-    async fn open_writer(&self) -> WriteHandle<SourceData, (), Timestamp, Diff> {
+    async fn open_writer(&self) -> WriteHandle<SourceData, (), Timestamp, StorageDiff> {
         self.open_client()
             .await
             .open_writer(
@@ -890,7 +891,7 @@ mod write {
     struct State {
         sink_id: GlobalId,
         worker_id: usize,
-        persist_writer: WriteHandle<SourceData, (), Timestamp, Diff>,
+        persist_writer: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
         /// Contains `desired - persist`, reflecting the updates we would like to commit to
         /// `persist` in order to "correct" it to track `desired`. This collection is only modified
         /// by updates received from either the `desired` or `persist` inputs.
@@ -922,7 +923,7 @@ mod write {
         fn new(
             sink_id: GlobalId,
             worker_id: usize,
-            persist_writer: WriteHandle<SourceData, (), Timestamp, Diff>,
+            persist_writer: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
             metrics: SinkMetrics,
             as_of: Antichain<Timestamp>,
             worker_config: &ConfigSet,
@@ -1064,8 +1065,8 @@ mod write {
             let ok_updates = self.corrections.ok.updates_before(&desc.upper);
             let err_updates = self.corrections.err.updates_before(&desc.upper);
 
-            let oks = ok_updates.map(|(d, t, r)| ((SourceData(Ok(d)), ()), t, r));
-            let errs = err_updates.map(|(d, t, r)| ((SourceData(Err(d)), ()), t, r));
+            let oks = ok_updates.map(|(d, t, r)| ((SourceData(Ok(d)), ()), t, *r));
+            let errs = err_updates.map(|(d, t, r)| ((SourceData(Err(d)), ()), t, *r));
             let mut updates = oks.chain(errs).peekable();
 
             // Don't write empty batches.
@@ -1170,7 +1171,7 @@ mod append {
     struct State {
         sink_id: GlobalId,
         worker_id: usize,
-        persist_writer: WriteHandle<SourceData, (), Timestamp, Diff>,
+        persist_writer: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
         /// The current input frontier of `batches`.
         batches_frontier: Antichain<Timestamp>,
         /// The greatest observed `lower` from both `descs` and `batches`.
@@ -1178,14 +1179,14 @@ mod append {
         /// The batch description for `lower`, if any.
         batch_description: Option<BatchDescription>,
         /// Batches received for `lower`.
-        batches: Vec<Batch<SourceData, (), Timestamp, Diff>>,
+        batches: Vec<Batch<SourceData, (), Timestamp, StorageDiff>>,
     }
 
     impl State {
         fn new(
             sink_id: GlobalId,
             worker_id: usize,
-            persist_writer: WriteHandle<SourceData, (), Timestamp, Diff>,
+            persist_writer: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
         ) -> Self {
             Self {
                 sink_id,
@@ -1342,10 +1343,10 @@ mod append {
 
     /// Advance the frontier of the given writer's shard to at least the given `upper`.
     async fn advance_shard_upper(
-        persist_writer: &mut WriteHandle<SourceData, (), Timestamp, Diff>,
+        persist_writer: &mut WriteHandle<SourceData, (), Timestamp, StorageDiff>,
         upper: Antichain<Timestamp>,
     ) {
-        let empty_updates: &[((SourceData, ()), Timestamp, Diff)] = &[];
+        let empty_updates: &[((SourceData, ()), Timestamp, StorageDiff)] = &[];
         let lower = Antichain::from_elem(Timestamp::MIN);
         persist_writer
             .append(empty_updates, lower, upper)

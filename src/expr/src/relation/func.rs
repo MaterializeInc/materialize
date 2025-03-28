@@ -3096,7 +3096,7 @@ fn jsonb_each<'a>(
         if stringify {
             v = jsonb_stringify(v, temp_storage);
         }
-        (Row::pack_slice(&[Datum::String(k), v]), 1)
+        (Row::pack_slice(&[Datum::String(k), v]), Diff::ONE)
     })
 }
 
@@ -3107,7 +3107,7 @@ fn jsonb_object_keys<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a
     };
 
     map.iter()
-        .map(move |(k, _)| (Row::pack_slice(&[Datum::String(k)]), 1))
+        .map(move |(k, _)| (Row::pack_slice(&[Datum::String(k)]), Diff::ONE))
 }
 
 fn jsonb_array_elements<'a>(
@@ -3123,7 +3123,7 @@ fn jsonb_array_elements<'a>(
         if stringify {
             e = jsonb_stringify(e, temp_storage);
         }
-        (Row::pack_slice(&[e]), 1)
+        (Row::pack_slice(&[e]), Diff::ONE)
     })
 }
 
@@ -3135,7 +3135,7 @@ fn regexp_extract(a: Datum, r: &AnalyzedRegex) -> Option<(Row, Diff)> {
         .iter()
         .skip(1)
         .map(|m| Datum::from(m.map(|m| m.as_str())));
-    Some((Row::pack(datums), 1))
+    Some((Row::pack(datums), Diff::ONE))
 }
 
 fn regexp_matches<'a, 'r: 'a>(
@@ -3179,7 +3179,7 @@ fn regexp_matches<'a, 'r: 'a>(
             .try_push_array(&[dimension], matches)
             .expect("generated dimensions above");
 
-        (binding.clone(), 1)
+        (binding.clone(), Diff::ONE)
     });
 
     // This is slightly unfortunate, but we need to collect the captures into a
@@ -3210,7 +3210,7 @@ where
         ));
     }
     Ok(num::range_step_inclusive(start, stop, step)
-        .map(move |i| (Row::pack_slice(&[Datum::from(i)]), 1)))
+        .map(move |i| (Row::pack_slice(&[Datum::from(i)]), Diff::ONE)))
 }
 
 /// Like
@@ -3276,7 +3276,7 @@ fn generate_series_ts<T: TimestampLike>(
         done: false,
     };
 
-    Ok(trsi.map(move |i| (Row::pack_slice(&[conv(i)]), 1)))
+    Ok(trsi.map(move |i| (Row::pack_slice(&[conv(i)]), Diff::ONE)))
 }
 
 fn generate_subscripts_array(
@@ -3310,19 +3310,19 @@ fn unnest_array<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
     a.unwrap_array()
         .elements()
         .iter()
-        .map(move |e| (Row::pack_slice(&[e]), 1))
+        .map(move |e| (Row::pack_slice(&[e]), Diff::ONE))
 }
 
 fn unnest_list<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
     a.unwrap_list()
         .iter()
-        .map(move |e| (Row::pack_slice(&[e]), 1))
+        .map(move |e| (Row::pack_slice(&[e]), Diff::ONE))
 }
 
 fn unnest_map<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
     a.unwrap_map()
         .iter()
-        .map(move |(k, v)| (Row::pack_slice(&[Datum::from(k), v]), 1))
+        .map(move |(k, v)| (Row::pack_slice(&[Datum::from(k), v]), Diff::ONE))
 }
 
 impl AggregateFunc {
@@ -3645,7 +3645,7 @@ pub fn csv_extract(a: Datum, n_cols: usize) -> impl Iterator<Item = (Row, Diff)>
     csv_reader.into_records().filter_map(move |res| match res {
         Ok(sr) if sr.len() == n_cols => {
             row.packer().extend(sr.iter().map(Datum::String));
-            Some((row.clone(), 1))
+            Some((row.clone(), Diff::ONE))
         }
         _ => None,
     })
@@ -3654,14 +3654,16 @@ pub fn csv_extract(a: Datum, n_cols: usize) -> impl Iterator<Item = (Row, Diff)>
 pub fn repeat(a: Datum) -> Option<(Row, Diff)> {
     let n = a.unwrap_int64();
     if n != 0 {
-        Some((Row::default(), n))
+        Some((Row::default(), n.into()))
     } else {
         None
     }
 }
 
 fn wrap<'a>(datums: &'a [Datum<'a>], width: usize) -> impl Iterator<Item = (Row, Diff)> + 'a {
-    datums.chunks(width).map(|chunk| (Row::pack(chunk), 1))
+    datums
+        .chunks(width)
+        .map(|chunk| (Row::pack(chunk), Diff::ONE))
 }
 
 fn acl_explode<'a>(
@@ -3683,7 +3685,7 @@ fn acl_explode<'a>(
                 // GRANT OPTION is not implemented, so we hardcode false.
                 Datum::False,
             ];
-            res.push((Row::pack_slice(&row), 1));
+            res.push((Row::pack_slice(&row), Diff::ONE));
         }
     }
     Ok(res.into_iter())
@@ -3708,7 +3710,7 @@ fn mz_acl_explode<'a>(
                 // GRANT OPTION is not implemented, so we hardcode false.
                 Datum::False,
             ];
-            res.push((Row::pack_slice(&row), 1));
+            res.push((Row::pack_slice(&row), Diff::ONE));
         }
     }
     Ok(res.into_iter())
@@ -3916,7 +3918,7 @@ impl TableFunc {
             TableFunc::Wrap { width, .. } => Ok(Box::new(wrap(datums, *width))),
             TableFunc::TabletizedScalar { .. } => {
                 let r = Row::pack_slice(datums);
-                Ok(Box::new(std::iter::once((r, 1))))
+                Ok(Box::new(std::iter::once((r, Diff::ONE))))
             }
             TableFunc::RegexpMatches => Ok(Box::new(regexp_matches(datums)?)),
         }
