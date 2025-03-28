@@ -96,6 +96,8 @@ If you want to use `jq` and do not have `jq` installed, install.
 
 ## Procedure
 
+### A. Setup GCP service account and authenticate
+
 1. Open a Terminal window.
 
 1. Initialize the gcloud CLI (`gcloud init`) to specify the GCP project you want
@@ -165,6 +167,7 @@ If you want to use `jq` and do not have `jq` installed, install.
    If using `GOOGLE_APPLICATION_CREDENTIALS`, use absolute path to your key file.
    {{</ tip >}}
 
+### B. Upgrade Materialize operator and instances
 
 1. Go to the `examples/simple` folder in the Materialize Terraform repo
    directory.
