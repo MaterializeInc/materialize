@@ -1758,34 +1758,43 @@ select reverse(word) from words;
 dlrow
 olleh
 
-# string_to_array - NULL delimeter and null_string not set.
+# string_to_array - begin.
+
 statement ok
 create table string_to_array_words (word text);
 
 statement ok
 insert into string_to_array_words values ('hello world');
 
+# string_to_array - NULL delimiter and null_string not set.
 query T
 select string_to_array(word, NULL) from string_to_array_words;
 ----
 {h,e,l,l,o," ",w,o,r,l,d}
 
+# string_to_array - empty string delimiter and null_string not set.
 query T
 select string_to_array(word, '') from string_to_array_words;
 ----
 {"hello world"}
 
+# string_to_array - white space delimiter and null_string not set.
 query T
 select string_to_array(word, ' ') from string_to_array_words;
 ----
 {hello,world}
 
+# string_to_array - white space delimiter and null_string set to first word in results.
 query T
 select string_to_array(word, ' ', 'hello') from string_to_array_words;
 ----
 {NULL,world}
 
+# string_to_array - empty string delimiter and null_string set to whole word.
+# expectation: null_string is ignored if no delimiter is passed.
 query T
 select string_to_array(word, '', 'hello world') from string_to_array_words;
 ----
 {"hello world"}
+
+# string_to_array - end.
