@@ -18,7 +18,7 @@ aws-types = "1.1.1"
 base64 = "0.22.0"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive"] }
-crossbeam = "0.8.2"
+crossbeam = "0.8.4"
 fancy-regex = "0.14.0"
 futures = "0.3.31"
 mz-avro = { path = "../avro" }
