@@ -3,6 +3,10 @@ title: "Arrangements"
 description: "Understand how Materialize arrangements work."
 aliases:
   - /overview/arrangements/
+  - /get-started/arrangements/
+menu:
+  main:
+    parent: architecture
 ---
 
 The mechanisms that maintain materialized views for Materialize dataflows are
@@ -122,7 +126,7 @@ For more in-depth details on joins, see [Joins in Materialize](https://materiali
 
 ### Type casting
 
-Currently, Materialize handles implicit casts inserted in join constraints in a very memory-intensive way.
+Currently, Materialize handles implicit casts inserted in join constraints in a very memory-intensive way {{% gh 4171 %}}.
 Until this issue
 is resolved, you can reduce memory usage by building an index on the view with
 the type changed for any queries that include implicit casts, for example,
