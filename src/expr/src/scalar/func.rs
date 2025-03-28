@@ -2173,7 +2173,9 @@ fn string_to_array_impl<'a>(
         length: found.len(),
     }];
 
-    if !null_string.is_null() {
+    if null_string.is_null() {
+        packer.try_push_array(&array_dimensions, found.into_iter().map(Datum::String))?;
+    } else {
         let null_string = null_string.unwrap_str();
         let found_datums = found.into_iter().map(|chunk| {
             if chunk.eq(null_string) {
@@ -2184,8 +2186,6 @@ fn string_to_array_impl<'a>(
         });
 
         packer.try_push_array(&array_dimensions, found_datums)?;
-    } else {
-        packer.try_push_array(&array_dimensions, found.into_iter().map(Datum::String))?;
     }
 
     Ok(temp_storage.push_unary_row(row))
