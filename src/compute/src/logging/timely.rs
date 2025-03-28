@@ -666,9 +666,7 @@ impl DemuxHandler<'_, '_> {
                 channel: event.channel,
                 worker: event.source,
             };
-            self.output
-                .messages_received
-                .give(((datum, ()), ts, count.into()));
+            self.output.messages_received.give(((datum, ()), ts, count));
             self.output
                 .batches_received
                 .give(((datum, ()), ts, Diff::ONE));
