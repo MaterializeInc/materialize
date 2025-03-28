@@ -11,16 +11,37 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.66"
+chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+dec = "0.4.8"
 derivative = "2.2.0"
 futures = "0.3.31"
+mz-ore = { path = "../ore", features = ["async"] }
+mz-proto = { path = "../proto" }
+mz-repr = { path = "../repr" }
+ordered-float = { version = "5.0.0", features = ["serde"] }
+proptest = { version = "1.6.0", default-features = false, features = ["std"] }
+proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
+prost = { version = "0.13.5", features = ["no-recursion-limit"] }
+serde = { version = "1.0.218", features = ["derive"] }
 smallvec = { version = "1.14.0", features = ["union"] }
 static_assertions = "1.1"
-tiberius = { version = "0.12", default-features = false, features = ["tds73"] }
+thiserror = "2.0.11"
+tiberius = { version = "0.12", features = [
+    "chrono",
+    "rustls",
+    "sql-browser-tokio",
+    "tds73",
+], default-features = false }
 tokio = { version = "1.44.1", features = ["net"] }
 tokio-util = { version = "0.7.4", features = ["compat"] }
 tracing = "0.1.37"
 uuid = "1.16.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[build-dependencies]
+mz-build-tools = { path = "../build-tools", default-features = false }
+prost-build = "0.13.4"
+tonic-build = "0.12.3"
 
 [features]
 default = ["workspace-hack"]
