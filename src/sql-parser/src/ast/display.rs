@@ -154,23 +154,21 @@ pub trait AstDisplay {
     where
         W: fmt::Write;
 
-    fn to_ast_string(&self) -> String {
-        let mut buf = String::new();
-        let mut f = AstFormatter::new(&mut buf, FormatMode::Simple);
-        self.fmt(&mut f);
-        buf
+    fn to_ast_string_simple(&self) -> String {
+        self.to_ast_string(FormatMode::Simple)
     }
 
     fn to_ast_string_stable(&self) -> String {
-        let mut buf = String::new();
-        let mut f = AstFormatter::new(&mut buf, FormatMode::Stable);
-        self.fmt(&mut f);
-        buf
+        self.to_ast_string(FormatMode::Stable)
     }
 
     fn to_ast_string_redacted(&self) -> String {
+        self.to_ast_string(FormatMode::SimpleRedacted)
+    }
+
+    fn to_ast_string(&self, format_mode: FormatMode) -> String {
         let mut buf = String::new();
-        let mut f = AstFormatter::new(&mut buf, FormatMode::SimpleRedacted);
+        let mut f = AstFormatter::new(&mut buf, format_mode);
         self.fmt(&mut f);
         buf
     }
@@ -321,7 +319,7 @@ impl<'a> AstDisplay for EscapeSingleQuoteString<'a> {
 
 impl<'a> fmt::Display for EscapeSingleQuoteString<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(&self.to_ast_string())
+        f.write_str(&self.to_ast_string_simple())
     }
 }
 
@@ -341,7 +339,7 @@ impl<'a> AstDisplay for EscapedStringLiteral<'a> {
 
 impl<'a> fmt::Display for EscapedStringLiteral<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(&self.to_ast_string())
+        f.write_str(&self.to_ast_string_simple())
     }
 }
 

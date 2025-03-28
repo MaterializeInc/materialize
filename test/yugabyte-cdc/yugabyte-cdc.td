@@ -672,7 +672,7 @@ enum_table              subsource cdc_cluster  ""
 2 var1
 
 > SHOW CREATE SOURCE enum_table
-materialize.public.enum_table "CREATE SUBSOURCE \"materialize\".\"public\".\"enum_table\" (\"pk\" \"pg_catalog\".\"int4\" NOT NULL, \"a\" \"pg_catalog\".\"text\", CONSTRAINT \"enum_table_pkey\" PRIMARY KEY (\"pk\")) OF SOURCE \"materialize\".\"public\".\"enum_source\" WITH (EXTERNAL REFERENCE = \"yugabyte\".\"public\".\"enum_table\", TEXT COLUMNS = (\"a\"))"
+materialize.public.enum_table "CREATE SUBSOURCE materialize.public.enum_table (pk pg_catalog.int4 NOT NULL, a pg_catalog.text, CONSTRAINT enum_table_pkey PRIMARY KEY (pk)) OF SOURCE materialize.public.enum_source WITH (EXTERNAL REFERENCE = yugabyte.public.enum_table, TEXT COLUMNS = (a));"
 
 > SELECT "колона" FROM another_enum_table
 var2

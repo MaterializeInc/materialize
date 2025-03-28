@@ -739,7 +739,7 @@ var1
 $ set-regex match="DETAILS = '[a-f0-9]+'" replacement=<DETAILS>
 
 > SHOW CREATE TABLE enum_table
-materialize.public.enum_table "CREATE TABLE \"materialize\".\"public\".\"enum_table\" (\"a\" \"pg_catalog\".\"text\") FROM SOURCE \"materialize\".\"public\".\"enum_source\" (REFERENCE = \"postgres\".\"public\".\"enum_table\") WITH (TEXT COLUMNS = (\"a\"), <DETAILS>)"
+materialize.public.enum_table "CREATE TABLE materialize.public.enum_table (a pg_catalog.text) FROM SOURCE materialize.public.enum_source (REFERENCE = postgres.public.enum_table) WITH (TEXT COLUMNS = (a), <DETAILS>);"
 
 # Test that TEXT COLUMN types can change
 $ postgres-execute connection=postgres://postgres:postgres@postgres

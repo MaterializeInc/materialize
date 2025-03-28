@@ -22,7 +22,7 @@ contains:unknown catalog item 't'
 > SHOW CREATE TABLE t;
 name   create_sql
 ------------------------
-materialize.public.t  "CREATE TABLE \"materialize\".\"public\".\"t\" (\"a\" \"pg_catalog\".\"int4\", \"b\" \"pg_catalog\".\"text\" NOT NULL)"
+materialize.public.t  "CREATE TABLE materialize.public.t (a pg_catalog.int4, b pg_catalog.text NOT NULL);"
 
 > CREATE TABLE s (a int DEFAULT 1)
 > DROP TABLE s;

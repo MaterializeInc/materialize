@@ -214,6 +214,7 @@ class MySqlCdcBase:
             H 200 {self.expects}
 
             # TODO: Figure out the quoting here -- it returns "f4" when done using the SQL shell
+            # (Might have changed again with https://github.com/MaterializeInc/materialize/pull/31933)
             # > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \\((.*?)\\)')[1] FROM (SHOW CREATE SOURCE mysql_source_tableA{self.suffix});
             # "\"f4\""
 

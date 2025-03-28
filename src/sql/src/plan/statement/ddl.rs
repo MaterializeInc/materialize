@@ -3484,9 +3484,9 @@ impl std::convert::TryFrom<Vec<CsrConfigOption<Aug>>> for CsrConfigOptionExtract
                 }));
             }
             let option_name = option.name.clone();
-            let option_name_str = option_name.to_ast_string();
+            let option_name_str = option_name.to_ast_string_simple();
             let better_error = |e: PlanError| PlanError::InvalidOptionValue {
-                option_name: option_name.to_ast_string(),
+                option_name: option_name.to_ast_string_simple(),
                 err: e.into(),
             };
             let to_compatibility_level = |val: Option<WithOptionValue<Aug>>| {
@@ -5200,7 +5200,7 @@ pub fn plan_drop_objects(
         match id {
             Some(id) => referenced_ids.push(id),
             None => scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_ast_string(),
+                name: name.to_ast_string_simple(),
                 object_type,
             }),
         }
@@ -5851,7 +5851,7 @@ pub fn plan_alter_cluster(
         Some(entry) => entry,
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_ast_string(),
+                name: name.to_ast_string_simple(),
                 object_type: ObjectType::Cluster,
             });
 
@@ -6157,7 +6157,7 @@ pub fn plan_alter_item_set_cluster(
         }
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_ast_string(),
+                name: name.to_ast_string_simple(),
                 object_type,
             });
 
@@ -6219,7 +6219,7 @@ pub fn plan_alter_schema_rename(
     let Some((db_spec, schema_spec)) = resolve_schema(scx, name.clone(), if_exists)? else {
         let object_type = ObjectType::Schema;
         scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-            name: name.to_ast_string(),
+            name: name.to_ast_string_simple(),
             object_type,
         });
         return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
@@ -6350,7 +6350,7 @@ pub fn plan_alter_item_rename(
         }
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_ast_string(),
+                name: name.to_ast_string_simple(),
                 object_type,
             });
 
@@ -6374,7 +6374,7 @@ pub fn plan_alter_cluster_rename(
         })),
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_ast_string(),
+                name: name.to_ast_string_simple(),
                 object_type,
             });
 
@@ -6441,7 +6441,7 @@ pub fn plan_alter_cluster_replica_rename(
         }
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_ast_string(),
+                name: name.to_ast_string_simple(),
                 object_type,
             });
 
@@ -6586,7 +6586,7 @@ fn alter_retain_history(
         }
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_ast_string(),
+                name: name.to_ast_string_simple(),
                 object_type,
             });
 
@@ -6677,7 +6677,10 @@ pub fn plan_alter_connection(
         if !with_options.is_empty() {
             sql_bail!(
                 "ALTER CONNECTION...ROTATE KEYS does not support WITH ({})",
-                with_options.iter().map(|o| o.to_ast_string()).join(", ")
+                with_options
+                    .iter()
+                    .map(|o| o.to_ast_string_simple())
+                    .join(", ")
             );
         }
 
@@ -6951,7 +6954,7 @@ pub fn plan_alter_source(
             // planned directly.
             sql_bail!(
                 "Cannot modify the {} of a SOURCE.",
-                option.name.to_ast_string()
+                option.name.to_ast_string_simple()
             );
         }
         AlterSourceAction::ResetOptions(reset) => {
@@ -6969,7 +6972,10 @@ pub fn plan_alter_source(
                     None,
                 );
             }
-            sql_bail!("Cannot modify the {} of a SOURCE.", option.to_ast_string());
+            sql_bail!(
+                "Cannot modify the {} of a SOURCE.",
+                option.to_ast_string_simple()
+            );
         }
         AlterSourceAction::DropSubsources { .. } => {
             sql_bail!("ALTER SOURCE...DROP SUBSOURCE no longer supported; use DROP SOURCE")
@@ -7092,7 +7098,7 @@ pub fn plan_alter_table_add_column(
             }
             None => {
                 scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                    name: name.to_ast_string(),
+                    name: name.to_ast_string_simple(),
                     object_type,
                 });
                 return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));

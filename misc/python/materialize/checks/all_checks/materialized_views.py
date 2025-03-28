@@ -287,35 +287,6 @@ class MaterializedViewsRefresh(Check):
                 2
                 3
 
-                $ set-regex match=\\d{13} replacement=<TIMESTAMP>
-
-                > SHOW CREATE MATERIALIZED VIEW refresh_view_2s_1
-                "materialize.public.refresh_view_2s_1" "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"refresh_view_2s_1\\" IN CLUSTER \\"quickstart\\" WITH (REFRESH = EVERY '2 seconds' ALIGNED TO <TIMESTAMP>::\\"mz_catalog\\".\\"mz_timestamp\\") AS SELECT DISTINCT (\\"x\\") FROM \\"materialize\\".\\"public\\".\\"refresh_table\\""
-
-                > SHOW CREATE MATERIALIZED VIEW refresh_view_2s_2
-                "materialize.public.refresh_view_2s_2" "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"refresh_view_2s_2\\" IN CLUSTER \\"quickstart\\" WITH (REFRESH = EVERY '2 seconds' ALIGNED TO <TIMESTAMP>::\\"mz_catalog\\".\\"mz_timestamp\\") AS SELECT DISTINCT (\\"x\\") FROM \\"materialize\\".\\"public\\".\\"refresh_table\\""
-
-                > SHOW CREATE MATERIALIZED VIEW refresh_view_2s_3
-                "materialize.public.refresh_view_2s_3" "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"refresh_view_2s_3\\" IN CLUSTER \\"quickstart\\" WITH (REFRESH = EVERY '2 seconds' ALIGNED TO <TIMESTAMP>::\\"mz_catalog\\".\\"mz_timestamp\\") AS SELECT DISTINCT (\\"x\\") FROM \\"materialize\\".\\"public\\".\\"refresh_table\\""
-
-                > SHOW CREATE MATERIALIZED VIEW refresh_view_at_1
-                "materialize.public.refresh_view_at_1" "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"refresh_view_at_1\\" IN CLUSTER \\"quickstart\\" WITH (REFRESH = AT <TIMESTAMP>::\\"mz_catalog\\".\\"mz_timestamp\\"::\\"pg_catalog\\".\\"text\\"::\\"pg_catalog\\".\\"int8\\") AS SELECT DISTINCT (\\"x\\") FROM \\"materialize\\".\\"public\\".\\"refresh_table\\""
-
-                > SHOW CREATE MATERIALIZED VIEW refresh_view_at_2
-                "materialize.public.refresh_view_at_2" "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"refresh_view_at_2\\" IN CLUSTER \\"quickstart\\" WITH (REFRESH = AT <TIMESTAMP>::\\"mz_catalog\\".\\"mz_timestamp\\"::\\"pg_catalog\\".\\"text\\"::\\"pg_catalog\\".\\"int8\\") AS SELECT DISTINCT (\\"x\\") FROM \\"materialize\\".\\"public\\".\\"refresh_table\\""
-
-                > SHOW CREATE MATERIALIZED VIEW refresh_view_at_3
-                "materialize.public.refresh_view_at_3" "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"refresh_view_at_3\\" IN CLUSTER \\"quickstart\\" WITH (REFRESH = AT <TIMESTAMP>::\\"mz_catalog\\".\\"mz_timestamp\\"::\\"pg_catalog\\".\\"text\\"::\\"pg_catalog\\".\\"int8\\") AS SELECT DISTINCT (\\"x\\") FROM \\"materialize\\".\\"public\\".\\"refresh_table\\""
-
-                > SHOW CREATE MATERIALIZED VIEW refresh_view_late_1
-                "materialize.public.refresh_view_late_1" "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"refresh_view_late_1\\" IN CLUSTER \\"quickstart\\" WITH (REFRESH = AT <TIMESTAMP>::\\"mz_catalog\\".\\"mz_timestamp\\"::\\"pg_catalog\\".\\"text\\"::\\"pg_catalog\\".\\"int8\\" + 86400000) AS SELECT DISTINCT (\\"x\\") FROM \\"materialize\\".\\"public\\".\\"refresh_table\\""
-
-                > SHOW CREATE MATERIALIZED VIEW refresh_view_late_2
-                "materialize.public.refresh_view_late_2" "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"refresh_view_late_2\\" IN CLUSTER \\"quickstart\\" WITH (REFRESH = AT <TIMESTAMP>::\\"mz_catalog\\".\\"mz_timestamp\\"::\\"pg_catalog\\".\\"text\\"::\\"pg_catalog\\".\\"int8\\" + 86400000) AS SELECT DISTINCT (\\"x\\") FROM \\"materialize\\".\\"public\\".\\"refresh_table\\""
-
-                > SHOW CREATE MATERIALIZED VIEW refresh_view_late_3
-                "materialize.public.refresh_view_late_3" "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"refresh_view_late_3\\" IN CLUSTER \\"quickstart\\" WITH (REFRESH = AT <TIMESTAMP>::\\"mz_catalog\\".\\"mz_timestamp\\"::\\"pg_catalog\\".\\"text\\"::\\"pg_catalog\\".\\"int8\\" + 86400000) AS SELECT DISTINCT (\\"x\\") FROM \\"materialize\\".\\"public\\".\\"refresh_table\\""
-
                 $ set-regex match=(s\\d+|\\d{13}|[ ]{12}0|u\\d{1,3}|\\(\\d+-\\d\\d-\\d\\d\\s\\d\\d:\\d\\d:\\d\\d\\.\\d\\d\\d\\)|\\(\\d+\\)) replacement=<>
 
                 >[version<13900] EXPLAIN TIMESTAMP FOR SELECT * FROM refresh_view_late_1
