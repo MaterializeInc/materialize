@@ -6,20 +6,20 @@ always-up-to-date query results, serving results to external clients, or a
 combination.
 
 In this step, you'll create a dedicated cluster for ingesting source data from
-topics in your Kafka (or Kafka-API compatible) broker.
+your PostgreSQL database.
 
 1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
    client connected to Materialize, use the [`CREATE CLUSTER`](/sql/create-cluster/)
    command to create the new cluster:
 
     ```mzsql
-    CREATE CLUSTER ingest_kafka (SIZE = '50cc');
+    CREATE CLUSTER ingest_postgres (SIZE = '50cc');
 
-    SET CLUSTER = ingest_kafka;
+    SET CLUSTER = ingest_postgres;
     ```
 
     A cluster of [size](/sql/create-cluster/#size) `50cc` should be enough to
-    accommodate multiple Kafka sources, depending on the source
+    accommodate multiple PostgreSQL sources, depending on the source
     characteristics (e.g., sources with [`ENVELOPE UPSERT`](/sql/create-source/#upsert-envelope)
     or [`ENVELOPE DEBEZIUM`](/sql/create-source/#debezium-envelope) will be more
     memory-intensive) and the upstream traffic patterns. You can readjust the
