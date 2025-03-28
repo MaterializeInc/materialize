@@ -64,7 +64,7 @@ use crate::scalar::func::format::DateTimeFormat;
 use crate::scalar::{
     ProtoBinaryFunc, ProtoUnaryFunc, ProtoUnmaterializableFunc, ProtoVariadicFunc,
 };
-use crate::static_eval::StaticMirScalarExpr;
+use crate::StaticMirScalarExprs;
 use crate::{like_pattern, EvalError, MirScalarExpr};
 
 #[macro_use]
@@ -274,10 +274,10 @@ pub fn and<'a>(
     }
 }
 
-pub fn static_and<'a>(
+pub fn static_and_2<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
-    exprs: &'a [StaticMirScalarExpr],
+    exprs: &'a [StaticMirScalarExprs],
 ) -> Result<Datum<'a>, EvalError> {
     // If any is false, then return false. Else, if any is null, then return null. Else, return true.
     let mut null = false;
@@ -324,10 +324,10 @@ pub fn or<'a>(
     }
 }
 
-pub fn static_or<'a>(
+pub fn static_or_2<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
-    exprs: &'a [StaticMirScalarExpr],
+    exprs: &'a [StaticMirScalarExprs],
 ) -> Result<Datum<'a>, EvalError> {
     // If any is true, then return true. Else, if any is null, then return null. Else, return false.
     let mut null = false;
@@ -6363,10 +6363,10 @@ fn coalesce<'a>(
     Ok(Datum::Null)
 }
 
-fn static_coalesce<'a>(
+fn static_coalesce_2<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
-    exprs: &'a [StaticMirScalarExpr],
+    exprs: &'a [StaticMirScalarExprs],
 ) -> Result<Datum<'a>, EvalError> {
     for e in exprs {
         let d = e.eval(datums, temp_storage)?;
@@ -6389,10 +6389,10 @@ fn greatest<'a>(
         .unwrap_or(Datum::Null))
 }
 
-fn static_greatest<'a>(
+fn static_greatest_2<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
-    exprs: &'a [StaticMirScalarExpr],
+    exprs: &'a [StaticMirScalarExprs],
 ) -> Result<Datum<'a>, EvalError> {
     let datums = fallible_iterator::convert(exprs.iter().map(|e| e.eval(datums, temp_storage)));
     Ok(datums
@@ -6413,10 +6413,10 @@ fn least<'a>(
         .unwrap_or(Datum::Null))
 }
 
-fn static_least<'a>(
+fn static_least_2<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
-    exprs: &'a [StaticMirScalarExpr],
+    exprs: &'a [StaticMirScalarExprs],
 ) -> Result<Datum<'a>, EvalError> {
     let datums = fallible_iterator::convert(exprs.iter().map(|e| e.eval(datums, temp_storage)));
     Ok(datums
@@ -6447,10 +6447,10 @@ fn error_if_null<'a>(
     }
 }
 
-fn static_error_if_null<'a>(
+fn static_error_if_null_2<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
-    exprs: &'a [StaticMirScalarExpr],
+    exprs: &'a [StaticMirScalarExprs],
 ) -> Result<Datum<'a>, EvalError> {
     let first = exprs[0].eval(datums, temp_storage)?;
     match first {
@@ -8012,27 +8012,29 @@ impl VariadicFunc {
         self.eval_eager(&ds, temp_storage)
     }
 
-    pub fn eval_static<'a>(
+    pub fn eval_static_the_second<'a>(
         &'a self,
-        datums: &[Datum<'a>],
+        columns: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        exprs: &'a [StaticMirScalarExpr],
+        exprs: &'a [StaticMirScalarExprs],
     ) -> Result<Datum<'a>, EvalError> {
         // Evaluate all non-eager functions directly
         match self {
-            VariadicFunc::Coalesce => return static_coalesce(datums, temp_storage, exprs),
-            VariadicFunc::Greatest => return static_greatest(datums, temp_storage, exprs),
-            VariadicFunc::And => return static_and(datums, temp_storage, exprs),
-            VariadicFunc::Or => return static_or(datums, temp_storage, exprs),
-            VariadicFunc::ErrorIfNull => return static_error_if_null(datums, temp_storage, exprs),
-            VariadicFunc::Least => return static_least(datums, temp_storage, exprs),
+            VariadicFunc::Coalesce => return static_coalesce_2(columns, temp_storage, exprs),
+            VariadicFunc::Greatest => return static_greatest_2(columns, temp_storage, exprs),
+            VariadicFunc::And => return static_and_2(columns, temp_storage, exprs),
+            VariadicFunc::Or => return static_or_2(columns, temp_storage, exprs),
+            VariadicFunc::ErrorIfNull => {
+                return static_error_if_null_2(columns, temp_storage, exprs)
+            }
+            VariadicFunc::Least => return static_least_2(columns, temp_storage, exprs),
             _ => {}
         };
 
         // Compute parameters to eager functions
         let ds = exprs
             .iter()
-            .map(|e| e.eval(datums, temp_storage))
+            .map(|e| e.eval(columns, temp_storage))
             .collect::<Result<Vec<_>, _>>()?;
         self.eval_eager(&ds, temp_storage)
     }
