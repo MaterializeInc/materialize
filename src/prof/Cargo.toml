@@ -11,8 +11,8 @@ license = "Apache-2.0"
 workspace = true
 
 [dependencies]
-anyhow = "1.0.95"
-backtrace = "0.3.66"
+anyhow = "1.0.97"
+backtrace = "0.3.74"
 flate2 = "1.1.0"
 jemalloc_pprof = { version = "0.6", optional = true }
 pprof_util = "0.6"
@@ -25,9 +25,9 @@ tokio = { version = "1.44.1", features = ["time"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [build-dependencies]
-anyhow = "1.0.95"
+anyhow = "1.0.97"
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.13.4"
+prost-build = "0.13.5"
 
 [features]
 default = ["mz-build-tools/default", "workspace-hack"]

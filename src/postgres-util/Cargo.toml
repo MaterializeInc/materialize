@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.95"
+anyhow = "1.0.97"
 mz-cloud-resources = { path = "../cloud-resources", optional = true }
 mz-ore = { path = "../ore", features = ["async"], optional = true }
 mz-proto = { path = "../proto", optional = true }
@@ -52,7 +52,7 @@ tunnel = [
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.13.4"
+prost-build = "0.13.5"
 tonic-build = "0.12.3"
 
 [package.metadata.cargo-udeps.ignore]

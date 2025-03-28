@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.95"
+anyhow = "1.0.97"
 itertools = "0.12.1"
 mz-ore-build = { path = "../ore-build", default-features = false }
 quote = "1.0.40"
@@ -20,7 +20,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 [dev-dependencies]
 datadriven = "0.8.0"
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
-tempfile = "3.19.0"
+tempfile = "3.19.1"
 
 [features]
 default = ["workspace-hack"]

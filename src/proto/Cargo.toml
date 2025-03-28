@@ -11,7 +11,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.95"
+anyhow = "1.0.97"
 chrono = { version = "0.4.39", default-features = false, features = ["serde", "std"], optional = true }
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"], optional = true }
 globset = "0.4.16"
@@ -23,7 +23,7 @@ proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 regex = "1.10.6"
 serde = { version = "1.0.219", features = ["derive", "rc"] }
-serde_json = { version = "1.0.125", features = ["arbitrary_precision"] }
+serde_json = { version = "1.0.127", features = ["arbitrary_precision"] }
 tokio-postgres = { version = "0.7.8", optional = true }
 url = { version = "2.3.1", features = ["serde"] }
 uuid = "1.16.0"
@@ -35,7 +35,7 @@ chrono = ["dep:chrono", "dep:chrono-tz"]
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.13.4"
+prost-build = "0.13.5"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
