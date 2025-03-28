@@ -188,7 +188,7 @@ class Benchbase:
                 """
                 $ postgres-connect name=mz_system url=postgres://mz_system@materialized:6877/materialize
                 $ postgres-execute connection=mz_system
-                ALTER SYSTEM SET wallclock_lag_refresh_interval = '10s';
+                ALTER SYSTEM SET wallclock_lag_history_refresh_interval = '10s';
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 ALTER USER postgres WITH replication;
                 DROP SCHEMA IF EXISTS public CASCADE;
