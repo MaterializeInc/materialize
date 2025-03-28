@@ -6,13 +6,13 @@ rows:
 - "Terraform version": |
     [v0.2.0](https://github.com/MaterializeInc/terraform-azurerm-materialize/releases/tag/v0.2.0)
   "Notable changes": |
-   
-    The
+
+    - The
     [providers](/installation/install-on-azure/appendix-azure-provider-configuration/)
     must be specified. The `examples/simple/main.tf` has been updated to reflect
     this.
 
-    The
+    - The
     [network_config](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#input_network_config)
     is now a required input. Previously, a default value was provided. The
     `examples/simple/main.tf` has been updated to reflect this.
