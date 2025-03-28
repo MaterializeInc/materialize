@@ -25,13 +25,12 @@ pub struct CastListToString {
 }
 
 impl LazyUnaryFunc for CastListToString {
-    fn eval<'a>(
+    fn eval_input<'a>(
         &'a self,
-        datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        input: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
+        let a = input?;
         if a.is_null() {
             return Ok(Datum::Null);
         }
@@ -80,13 +79,12 @@ pub struct CastListToJsonb {
 }
 
 impl LazyUnaryFunc for CastListToJsonb {
-    fn eval<'a>(
+    fn eval_input<'a>(
         &'a self,
-        datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        input: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
+        let a = input?;
         if a.is_null() {
             return Ok(Datum::Null);
         }
@@ -148,13 +146,12 @@ pub struct CastList1ToList2 {
 }
 
 impl LazyUnaryFunc for CastList1ToList2 {
-    fn eval<'a>(
+    fn eval_input<'a>(
         &'a self,
-        datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        input: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
+        let a = input?;
         if a.is_null() {
             return Ok(Datum::Null);
         }
@@ -209,13 +206,12 @@ impl fmt::Display for CastList1ToList2 {
 pub struct ListLength;
 
 impl LazyUnaryFunc for ListLength {
-    fn eval<'a>(
+    fn eval_input<'a>(
         &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        _temp_storage: &'a RowArena,
+        input: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
+        let a = input?;
         if a.is_null() {
             return Ok(Datum::Null);
         }

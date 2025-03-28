@@ -1931,7 +1931,7 @@ impl MirScalarExpr {
         temp_storage: &'a RowArena,
     ) -> Result<Datum<'a>, EvalError> {
         match self {
-            MirScalarExpr::Column(index) => Ok(datums[*index].clone()),
+            MirScalarExpr::Column(index) => Ok(datums[*index]),
             MirScalarExpr::Literal(res, _column_type) => match res {
                 Ok(row) => Ok(row.unpack_first()),
                 Err(e) => Err(e.clone()),
