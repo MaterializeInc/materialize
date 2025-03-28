@@ -15,7 +15,7 @@ use std::fmt::{Display, Write};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use columnar::{Columnar, Index};
+use columnar::Columnar;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::trace::{BatchReader, Cursor};
 use differential_dataflow::Collection;
