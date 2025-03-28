@@ -42,7 +42,7 @@
 macro_rules! halt {
     ($($arg:expr),* $(,)?) => {{
         $crate::__private::tracing::warn!("halting process: {}", format!($($arg),*));
-        $crate::process::exit_thread_safe(2);
+        $crate::process::exit_thread_safe(3);
     }}
 }
 
