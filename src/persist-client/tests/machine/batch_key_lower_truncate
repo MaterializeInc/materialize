@@ -11,6 +11,7 @@
 dyncfg
 persist_inline_writes_single_max_bytes 0
 persist_inline_writes_total_max_bytes 0
+persist_batch_structured_key_lower_len 100
 ----
 ok
 
@@ -23,7 +24,6 @@ parts=1 len=1
 fetch-batch input=b0 stats=lower
 ----
 <part 0>
-<key lower=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA>
 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABBBBBBBBBB 0 1
 <run 0>
 part 0

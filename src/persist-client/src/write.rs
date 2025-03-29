@@ -778,7 +778,6 @@ where
         BatchBuilder::new(
             builder,
             Description::new(lower, Antichain::new(), Antichain::from_elem(T::minimum())),
-            Arc::clone(&self.metrics),
         )
     }
 

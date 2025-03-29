@@ -23,6 +23,7 @@
 //! [Arrow IPC]: https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc
 
 use std::cmp::Ordering;
+use std::fmt::Display;
 use std::sync::Arc;
 
 use arrow::array::*;
@@ -446,12 +447,56 @@ pub struct ArrayIdx<'a> {
     pub array: &'a ArrayOrd,
 }
 
+impl Display for ArrayIdx<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.array {
+            ArrayOrd::Null(_) => write!(f, "null"),
+            ArrayOrd::Bool(a) => write!(f, "{}", a.value(self.idx)),
+            ArrayOrd::Int8(a) => write!(f, "{}", a.value(self.idx)),
+            ArrayOrd::Int16(a) => write!(f, "{}", a.value(self.idx)),
+            ArrayOrd::Int32(a) => write!(f, "{}", a.value(self.idx)),
+            ArrayOrd::Int64(a) => write!(f, "{}", a.value(self.idx)),
+            ArrayOrd::UInt8(a) => write!(f, "{}", a.value(self.idx)),
+            ArrayOrd::UInt16(a) => write!(f, "{}", a.value(self.idx)),
+            ArrayOrd::UInt32(a) => write!(f, "{}", a.value(self.idx)),
+            ArrayOrd::UInt64(a) => write!(f, "{}", a.value(self.idx)),
+            ArrayOrd::Float32(a) => write!(f, "{}", a.value(self.idx)),
+            ArrayOrd::Float64(a) => write!(f, "{}", a.value(self.idx)),
+            ArrayOrd::String(a) => write!(f, "{}", a.value(self.idx)),
+            ArrayOrd::Binary(a) => {
+                for byte in a.value(self.idx) {
+                    write!(f, "{:02x}", byte)?;
+                }
+                Ok(())
+            }
+            ArrayOrd::FixedSizeBinary(a) => {
+                for byte in a.value(self.idx) {
+                    write!(f, "{:02x}", byte)?;
+                }
+                Ok(())
+            }
+            ArrayOrd::List(_, offsets, nested) => {
+                write!(
+                    f,
+                    "[{}]",
+                    mz_ore::str::separated(", ", list_range(offsets, nested, self.idx))
+                )
+            }
+            ArrayOrd::Struct(_, nested) => write!(
+                f,
+                "{{{}}}",
+                mz_ore::str::separated(", ", nested.iter().map(|f| f.at(self.idx)))
+            ),
+        }
+    }
+}
+
 #[inline]
 fn list_range<'a>(
     offsets: &OffsetBuffer<i32>,
     values: &'a ArrayOrd,
     idx: usize,
-) -> impl Iterator<Item = ArrayIdx<'a>> {
+) -> impl Iterator<Item = ArrayIdx<'a>> + Clone {
     let offsets = offsets.inner();
     let from = offsets[idx].as_usize();
     let to = offsets[idx + 1].as_usize();
