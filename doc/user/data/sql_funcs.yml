@@ -473,6 +473,15 @@
   - signature: 'reverse(s: str) -> str'
     description: Reverse the characters in `s`.
 
+  - signature: 'string_to_array(s: str, delimiter: str, null_string: str) -> [str]'
+    description: |
+      Splits the string at occurrences of delimiter and forms the resulting fields into a text array.
+      If delimiter is NULL, each character in the string will become a separate element in the array.
+      If delimiter is an empty string, then the string is treated as a single field. If null_string is supplied
+      and is not NULL, fields matching that string are replaced by NULL.
+
+      string_to_array('xx~~yy~~zz', '~~', 'yy') → {xx,NULL,zz}
+
 - type: Scalar
   description: Scalar functions take a list of scalar expressions
   functions:
