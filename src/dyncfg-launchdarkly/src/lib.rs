@@ -11,6 +11,7 @@
 
 use std::time::Duration;
 
+use hyper_tls::HttpsConnector;
 use launchdarkly_server_sdk as ld;
 use mz_build_info::BuildInfo;
 use mz_dyncfg::{ConfigSet, ConfigUpdates, ConfigVal};
@@ -49,13 +50,29 @@ where
         let _ = dyn_into_flag(entry.val())?;
     }
     let ld_client = if let Some(key) = launchdarkly_sdk_key {
-        let client = ld::Client::build(ld::ConfigBuilder::new(key).build())?;
+        let config = ld::ConfigBuilder::new(key)
+            .event_processor(
+                ld::EventProcessorBuilder::new().https_connector(HttpsConnector::new()),
+            )
+            .data_source(
+                ld::StreamingDataSourceBuilder::new().https_connector(HttpsConnector::new()),
+            )
+            .build()
+            .expect("valid config");
+        let client = ld::Client::build(config)?;
         client.start_with_default_executor();
         let init = async {
             let max_backoff = Duration::from_secs(60);
             let mut backoff = Duration::from_secs(5);
-            while !client.initialized_async().await {
-                tracing::warn!("SyncedConfigSet failed to initialize");
+
+            // TODO(materialize#32030): fix retry logic
+            loop {
+                match client.wait_for_initialization(config_sync_timeout).await {
+                    Some(true) => break,
+                    Some(false) => tracing::warn!("SyncedConfigSet failed to initialize"),
+                    None => {}
+                }
+
                 tokio::time::sleep(backoff).await;
                 backoff = (backoff * 2).min(max_backoff);
             }

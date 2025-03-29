@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use derivative::Derivative;
+use hyper_tls::HttpsConnector;
 use launchdarkly_server_sdk as ld;
 use mz_build_info::BuildInfo;
 use mz_cloud_provider::CloudProvider;
@@ -92,17 +93,25 @@ impl SystemParameterFrontend {
 
 fn ld_config(sync_config: &SystemParameterSyncConfig) -> ld::Config {
     ld::ConfigBuilder::new(&sync_config.ld_sdk_key)
-        .event_processor(ld::EventProcessorBuilder::new().on_success({
-            let last_cse_time_seconds = sync_config.metrics.last_cse_time_seconds.clone();
-            Arc::new(move |result| {
-                if let Ok(ts) = u64::try_from(result.time_from_server / 1000) {
-                    last_cse_time_seconds.set(ts);
-                } else {
-                    tracing::warn!("Cannot convert time_from_server / 1000 from u128 to u64");
-                }
-            })
-        }))
+        .event_processor(
+            ld::EventProcessorBuilder::new()
+                .https_connector(HttpsConnector::new())
+                .on_success({
+                    let last_cse_time_seconds = sync_config.metrics.last_cse_time_seconds.clone();
+                    Arc::new(move |result| {
+                        if let Ok(ts) = u64::try_from(result.time_from_server / 1000) {
+                            last_cse_time_seconds.set(ts);
+                        } else {
+                            tracing::warn!(
+                                "Cannot convert time_from_server / 1000 from u128 to u64"
+                            );
+                        }
+                    })
+                }),
+        )
+        .data_source(ld::StreamingDataSourceBuilder::new().https_connector(HttpsConnector::new()))
         .build()
+        .expect("valid config")
 }
 
 async fn ld_client(sync_config: &SystemParameterSyncConfig) -> Result<ld::Client, anyhow::Error> {
@@ -124,8 +133,16 @@ async fn ld_client(sync_config: &SystemParameterSyncConfig) -> Result<ld::Client
 
     let max_backoff = Duration::from_secs(60);
     let mut backoff = Duration::from_secs(5);
-    while !ld_client.initialized_async().await {
-        tracing::warn!("SystemParameterFrontend failed to initialize");
+    let timeout = Duration::from_secs(10);
+
+    // TODO(materialize#32030): fix retry logic
+    loop {
+        match ld_client.wait_for_initialization(timeout).await {
+            Some(true) => break,
+            Some(false) => tracing::warn!("SystemParameterFrontend failed to initialize"),
+            None => tracing::warn!("SystemParameterFrontend initialization timed out"),
+        }
+
         time::sleep(backoff).await;
         backoff = (backoff * 2).min(max_backoff);
     }

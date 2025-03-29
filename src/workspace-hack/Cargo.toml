@@ -36,7 +36,7 @@ axum-core = { version = "0.4.5", default-features = false, features = ["tracing"
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
 byteorder = { version = "1.5.0" }
 bytes = { version = "1.10.1", features = ["serde"] }
-chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "wasmbind"] }
+chrono = { version = "0.4.39", features = ["serde"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
 clap_builder = { version = "4.5.23", default-features = false, features = ["color", "env", "std", "string", "suggestions", "usage", "wrap_help"] }
 concurrent-queue = { version = "2.5.0" }
@@ -63,7 +63,7 @@ futures-io = { version = "0.3.31" }
 futures-sink = { version = "0.3.31" }
 futures-task = { version = "0.3.31" }
 futures-util = { version = "0.3.31", features = ["channel", "io", "sink"] }
-getrandom = { version = "0.2.10", default-features = false, features = ["std"] }
+getrandom-6f8ce4dd05d13bba = { package = "getrandom", version = "0.2.10", default-features = false, features = ["std"] }
 half = { version = "2.4.1", features = ["num-traits"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-dff4ba8e3ae991db = { package = "hyper", version = "1.4.1", features = ["client", "http1", "http2", "server"] }
@@ -171,7 +171,7 @@ bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
 byteorder = { version = "1.5.0" }
 bytes = { version = "1.10.1", features = ["serde"] }
 cc = { version = "1.2.16", default-features = false, features = ["parallel"] }
-chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "wasmbind"] }
+chrono = { version = "0.4.39", features = ["serde"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
 clap_builder = { version = "4.5.23", default-features = false, features = ["color", "env", "std", "string", "suggestions", "usage", "wrap_help"] }
 concurrent-queue = { version = "2.5.0" }
@@ -198,7 +198,7 @@ futures-io = { version = "0.3.31" }
 futures-sink = { version = "0.3.31" }
 futures-task = { version = "0.3.31" }
 futures-util = { version = "0.3.31", features = ["channel", "io", "sink"] }
-getrandom = { version = "0.2.10", default-features = false, features = ["std"] }
+getrandom-6f8ce4dd05d13bba = { package = "getrandom", version = "0.2.10", default-features = false, features = ["std"] }
 half = { version = "2.4.1", features = ["num-traits"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-dff4ba8e3ae991db = { package = "hyper", version = "1.4.1", features = ["client", "http1", "http2", "server"] }
@@ -289,6 +289,7 @@ zstd-sys = { version = "2.0.13", features = ["std"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
 camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
+getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3.1", default-features = false, features = ["std"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-features = false, features = ["runtime"] }
 linux-raw-sys = { version = "0.4.14", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
@@ -298,6 +299,7 @@ rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "proce
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
+getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3.1", default-features = false, features = ["std"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-features = false, features = ["runtime"] }
 linux-raw-sys = { version = "0.4.14", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
@@ -307,6 +309,7 @@ rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "proce
 
 [target.x86_64-apple-darwin.dependencies]
 camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
+getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3.1", default-features = false, features = ["std"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-features = false, features = ["runtime"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
@@ -316,6 +319,7 @@ security-framework = { version = "2.10.0", features = ["alpn"] }
 
 [target.x86_64-apple-darwin.build-dependencies]
 camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
+getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3.1", default-features = false, features = ["std"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-features = false, features = ["runtime"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
