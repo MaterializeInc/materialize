@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.66"
+async-stream = "0.3.3"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 dec = "0.4.8"
 derivative = "2.2.0"
@@ -36,6 +37,10 @@ tokio-util = { version = "0.7.4", features = ["compat"] }
 tracing = "0.1.37"
 uuid = "1.16.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[dev-dependencies]
+hex = "0.4.3"
+tracing-subscriber = "0.3.19"
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }

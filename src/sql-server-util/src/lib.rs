@@ -9,6 +9,7 @@
 
 use std::borrow::Cow;
 use std::future::IntoFuture;
+use std::sync::Arc;
 
 use anyhow::Context;
 use derivative::Derivative;
@@ -21,7 +22,9 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 
+pub mod cdc;
 pub mod desc;
+pub mod inspect;
 
 // Re-export tiberius' Config type since it's needed by our Client wrapper.
 pub use tiberius::Config;
@@ -208,6 +211,14 @@ impl Client {
             }
             other => anyhow::bail!("expected one row, got {other:?}"),
         }
+    }
+
+    /// Return a [`CdcStream`] that can be used to track changes for the specified
+    /// `capture_instance`.
+    ///
+    /// [`CdcStream`]: crate::cdc::CdcStream
+    pub fn cdc(&mut self, capture_instance: impl Into<Arc<str>>) -> crate::cdc::CdcStream<'_> {
+        crate::cdc::CdcStream::new(self, capture_instance.into())
     }
 }
 
@@ -538,6 +549,8 @@ impl<'a, T: tiberius::ToSql> From<&'a T> for OwnedColumnData {
 pub enum SqlServerError {
     #[error(transparent)]
     SqlServer(#[from] tiberius::error::Error),
+    #[error(transparent)]
+    CdcError(#[from] crate::cdc::CdcError),
     #[error("'{column_type}' from column '{column_name}' is not supported: {reason}")]
     UnsupportedDataType {
         column_name: String,
