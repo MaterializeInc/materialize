@@ -9,6 +9,7 @@
 
 import json
 import operator
+import os
 import urllib.parse
 from collections.abc import Callable
 
@@ -25,16 +26,20 @@ from kubernetes.client import (
     V1PodSpec,
     V1PodTemplateSpec,
     V1ResourceRequirements,
+    V1Secret,
+    V1SecretVolumeSource,
     V1Service,
     V1ServicePort,
     V1ServiceSpec,
     V1StatefulSet,
     V1StatefulSetSpec,
     V1Toleration,
+    V1Volume,
     V1VolumeMount,
 )
 
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
+from materialize.cloudtest.k8s.api.k8s_secret import K8sSecret
 from materialize.cloudtest.k8s.api.k8s_service import K8sService
 from materialize.cloudtest.k8s.api.k8s_stateful_set import K8sStatefulSet
 from materialize.mz_version import MzVersion
@@ -43,6 +48,17 @@ from materialize.mzcompose import (
     cluster_replica_size_map,
     get_default_system_parameters,
 )
+
+
+class EnvironmentdSecret(K8sSecret):
+    def __init__(self, namespace: str = DEFAULT_K8S_NAMESPACE) -> None:
+        super().__init__(namespace)
+        self.secret = V1Secret(
+            metadata=V1ObjectMeta(name="license-key"),
+            string_data={
+                "license_key": os.environ["MZ_CI_LICENSE_KEY"],
+            },
+        )
 
 
 class EnvironmentdService(K8sService):
@@ -111,7 +127,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
 
         ports = [V1ContainerPort(container_port=5432, name="sql")]
 
-        volume_mounts = []
+        volume_mounts = [V1VolumeMount(name="license_key", mount_path="/license_key")]
 
         if self.coverage_mode:
             volume_mounts.append(V1VolumeMount(name="coverage", mount_path="/coverage"))
@@ -140,11 +156,23 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             effect="NoSchedule",
         )
 
+        volumes = [
+            V1Volume(
+                name="license_key",
+                secret=V1SecretVolumeSource(
+                    default_mode=256,
+                    optional=False,
+                    secret_name="license-key",
+                ),
+            )
+        ]
+
         pod_spec = V1PodSpec(
             containers=[container],
             tolerations=[taint_toleration],
             node_selector=node_selector,
             termination_grace_period_seconds=0,
+            volumes=volumes,
         )
         template_spec = V1PodTemplateSpec(metadata=metadata, spec=pod_spec)
 
@@ -264,6 +292,9 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                 "--announce-egress-ip=1.2.3.4",
                 "--announce-egress-ip=88.77.66.55",
             ]
+
+        if self._meets_minimum_version("0.140.0-dev"):
+            args += ["--license-key=/license_key/license_key"]
 
         return args + self.extra_args
 

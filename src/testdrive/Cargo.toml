@@ -42,6 +42,7 @@ mz-adapter = { path = "../adapter" }
 mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
+mz-license-keys = { path = "../license-keys" }
 mz-ore = { path = "../ore", features = ["async"] }
 mz-persist-types = { path = "../persist-types" }
 mz-persist-client = { path = "../persist-client" }
