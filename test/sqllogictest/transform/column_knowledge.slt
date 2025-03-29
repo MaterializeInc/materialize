@@ -32,12 +32,9 @@ CREATE TABLE t3 (f1 INTEGER PRIMARY KEY, f2 INTEGER);
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 WHERE t1.f1 = 123 AND t1.f1 = t1.f2
 ----
-Explained Query:
-  Filter (#0{f1} = 123) AND (#0{f1} = #1{f2}) // { arity: 2 }
-    ReadStorage materialize.public.t1 // { arity: 2 }
-
-Source materialize.public.t1
-  filter=((#0{f1} = 123) AND (#0{f1} = #1{f2}))
+Explained Query (fast path):
+  Filter (#0{f1} = 123) AND (#0{f1} = #1{f2})
+    PeekPersist materialize.public.t1 [value=(123)]
 
 Target cluster: quickstart
 
@@ -469,13 +466,10 @@ CREATE TABLE t4 (f1 INTEGER, f2 INTEGER, PRIMARY KEY (f1, f2));
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t4 AS a1, t4 AS a2 WHERE a1.f1 = 123 AND a1.f2 = 234 AND a1.f1 = a2.f1 AND a1.f2 = a2.f2;
 ----
-Explained Query:
-  Project (#0{f1}, #1{f2}, #0{f1}, #1{f2}) // { arity: 4 }
-    Filter (#0{f1} = 123) AND (#1{f2} = 234) // { arity: 2 }
-      ReadStorage materialize.public.t4 // { arity: 2 }
-
-Source materialize.public.t4
-  filter=((#0{f1} = 123) AND (#1{f2} = 234))
+Explained Query (fast path):
+  Project (#0{f1}, #1{f2}, #0{f1}, #1{f2})
+    Filter (#0{f1} = 123) AND (#1{f2} = 234)
+      PeekPersist materialize.public.t4 [value=(123, 234)]
 
 Target cluster: quickstart
 
@@ -484,12 +478,9 @@ EOF
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t4 AS a1 LEFT JOIN t4 AS a2 USING (f1, f2) WHERE a1.f1 = 123 AND a1.f2 = 234;
 ----
-Explained Query:
-  Filter (#0{f1} = 123) AND (#1{f2} = 234) // { arity: 2 }
-    ReadStorage materialize.public.t4 // { arity: 2 }
-
-Source materialize.public.t4
-  filter=((#0{f1} = 123) AND (#1{f2} = 234))
+Explained Query (fast path):
+  Filter (#0{f1} = 123) AND (#1{f2} = 234)
+    PeekPersist materialize.public.t4 [value=(123, 234)]
 
 Target cluster: quickstart
 
@@ -502,12 +493,9 @@ EOF
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t4 AS a1 LEFT JOIN t4 AS a2 USING (f1, f2) WHERE a1.f1 = 123 AND a2.f2 = 234;
 ----
-Explained Query:
-  Filter (#0{f1} = 123) AND (#1{f2} = 234) // { arity: 2 }
-    ReadStorage materialize.public.t4 // { arity: 2 }
-
-Source materialize.public.t4
-  filter=((#0{f1} = 123) AND (#1{f2} = 234))
+Explained Query (fast path):
+  Filter (#0{f1} = 123) AND (#1{f2} = 234)
+    PeekPersist materialize.public.t4 [value=(123, 234)]
 
 Target cluster: quickstart
 
