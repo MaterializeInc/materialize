@@ -11,7 +11,7 @@ use datadriven::walk;
 use mz_sql_parser::ast::display::{AstDisplay, FormatMode};
 use mz_sql_parser::datadriven_testcase;
 use mz_sql_parser::parser::{parse_expr, parse_statements};
-use mz_sql_pretty::{doc_expr, to_pretty, PrettyConfig};
+use mz_sql_pretty::{to_pretty, Pretty, PrettyConfig};
 
 // Use the parser's datadriven tests to get a comprehensive set of SQL statements. Assert they all
 // generate identical ASTs when pretty printed. Output the same output as the parser so datadriven
@@ -43,26 +43,26 @@ fn verify_pretty_expr(expr: &str) {
         let n = *n;
         let pretty1 = format!(
             "{}",
-            doc_expr(
-                &original,
-                PrettyConfig {
+            Pretty {
+                config: PrettyConfig {
                     width: n,
                     format_mode: FormatMode::Simple
                 }
-            )
+            }
+            .doc_expr(&original)
             .pretty(n)
         );
         let prettied = parse_expr(&pretty1)
             .unwrap_or_else(|_| panic!("could not parse: {pretty1}, original: {expr}"));
         let pretty2 = format!(
             "{}",
-            doc_expr(
-                &prettied,
-                PrettyConfig {
+            Pretty {
+                config: PrettyConfig {
                     width: n,
                     format_mode: FormatMode::Simple
                 }
-            )
+            }
+            .doc_expr(&prettied)
             .pretty(n)
         );
         assert_eq!(pretty1, pretty2);

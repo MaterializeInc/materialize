@@ -16,29 +16,9 @@ use mz_sql_parser::parser::{parse_statements, ParserStatementError};
 use pretty::RcDoc;
 use thiserror::Error;
 
-use crate::doc::{
-    doc_copy, doc_create_materialized_view, doc_create_source, doc_create_view, doc_display,
-    doc_insert, doc_select_statement, doc_subscribe,
-};
-
-pub use crate::doc::doc_expr;
-
 pub const DEFAULT_WIDTH: usize = 100;
 
 const TAB: isize = 4;
-
-fn to_doc<T: AstInfo>(v: &Statement<T>, config: PrettyConfig) -> RcDoc {
-    match v {
-        Statement::Select(v) => doc_select_statement(v, config),
-        Statement::Insert(v) => doc_insert(v, config),
-        Statement::CreateView(v) => doc_create_view(v, config),
-        Statement::CreateMaterializedView(v) => doc_create_materialized_view(v, config),
-        Statement::Copy(v) => doc_copy(v, config),
-        Statement::Subscribe(v) => doc_subscribe(v, config),
-        Statement::CreateSource(v) => doc_create_source(v, config),
-        _ => doc_display(v, config, "statement"),
-    }
-}
 
 #[derive(Clone, Copy)]
 pub struct PrettyConfig {
@@ -48,7 +28,7 @@ pub struct PrettyConfig {
 
 /// Pretty prints a statement at a width.
 pub fn to_pretty<T: AstInfo>(stmt: &Statement<T>, config: PrettyConfig) -> String {
-    format!("{};", to_doc(stmt, config).pretty(config.width))
+    format!("{};", Pretty { config }.to_doc(stmt).pretty(config.width))
 }
 
 /// Parses `str` into SQL statements and pretty prints them.
@@ -94,4 +74,24 @@ pub enum Error {
     Parser(#[from] ParserStatementError),
     #[error("expected exactly one statement")]
     ExpectedOne,
+}
+
+/// (Public only for tests)
+pub struct Pretty {
+    pub config: PrettyConfig,
+}
+
+impl Pretty {
+    fn to_doc<'a, T: AstInfo>(&'a self, v: &'a Statement<T>) -> RcDoc<'a> {
+        match v {
+            Statement::Select(v) => self.doc_select_statement(v),
+            Statement::Insert(v) => self.doc_insert(v),
+            Statement::CreateView(v) => self.doc_create_view(v),
+            Statement::CreateMaterializedView(v) => self.doc_create_materialized_view(v),
+            Statement::Copy(v) => self.doc_copy(v),
+            Statement::Subscribe(v) => self.doc_subscribe(v),
+            Statement::CreateSource(v) => self.doc_create_source(v),
+            _ => self.doc_display(v, "statement"),
+        }
+    }
 }
