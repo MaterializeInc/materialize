@@ -46,7 +46,7 @@ pub struct Client {
 static_assertions::assert_not_impl_all!(Client: Clone);
 
 impl Client {
-    pub async fn connect(config: tiberius::Config) -> Result<(Self, Connection), anyhow::Error> {
+    pub async fn connect(config: tiberius::Config) -> Result<(Self, Connection), SqlServerError> {
         let tcp = TcpStream::connect(config.get_addr()).await?;
         tcp.set_nodelay(true)?;
         Self::connect_raw(config, tcp).await
@@ -55,7 +55,7 @@ impl Client {
     pub async fn connect_raw(
         config: tiberius::Config,
         tcp: tokio::net::TcpStream,
-    ) -> Result<(Self, Connection), anyhow::Error> {
+    ) -> Result<(Self, Connection), SqlServerError> {
         let client = tiberius::Client::connect(config, tcp.compat_write())
             .await
             .context("connecting to SQL Server")?;
@@ -76,7 +76,7 @@ impl Client {
         &mut self,
         query: impl Into<Cow<'a, str>>,
         params: &[&dyn ToSql],
-    ) -> Result<SmallVec<[u64; 1]>, anyhow::Error> {
+    ) -> Result<SmallVec<[u64; 1]>, SqlServerError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         let params = params
@@ -114,7 +114,7 @@ impl Client {
         &mut self,
         query: impl Into<Cow<'a, str>>,
         params: &[&dyn tiberius::ToSql],
-    ) -> Result<SmallVec<[tiberius::Row; 1]>, anyhow::Error> {
+    ) -> Result<SmallVec<[tiberius::Row; 1]>, SqlServerError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         let params = params
@@ -152,7 +152,7 @@ impl Client {
     pub async fn simple_query<'a>(
         &mut self,
         query: impl Into<Cow<'a, str>>,
-    ) -> Result<SmallVec<[tiberius::Row; 1]>, anyhow::Error> {
+    ) -> Result<SmallVec<[tiberius::Row; 1]>, SqlServerError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let kind = RequestKind::SimpleQuery {
             query: query.into().to_string(),
@@ -176,40 +176,38 @@ impl Client {
     ///
     /// To commit or rollback the transaction, see [`Transaction::commit`] and
     /// [`Transaction::rollback`] respectively.
-    pub async fn transaction(&mut self) -> Result<Transaction<'_>, anyhow::Error> {
-        Transaction::new(self).await.context("new transaction")
+    pub async fn transaction(&mut self) -> Result<Transaction<'_>, SqlServerError> {
+        Transaction::new(self).await
     }
 
     /// Sets the transaction isolation level for the current session.
     pub async fn set_transaction_isolation(
         &mut self,
         level: TransactionIsolationLevel,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), SqlServerError> {
         let query = format!("SET TRANSACTION ISOLATION LEVEL {}", level.as_str());
-        self.simple_query(query)
-            .await
-            .context("set transaction isolation")?;
+        self.simple_query(query).await?;
         Ok(())
     }
 
     /// Returns the current transaction isolation level for the current session.
     pub async fn get_transaction_isolation(
         &mut self,
-    ) -> Result<TransactionIsolationLevel, anyhow::Error> {
+    ) -> Result<TransactionIsolationLevel, SqlServerError> {
         const QUERY: &str = "SELECT transaction_isolation_level FROM sys.dm_exec_sessions where session_id = @@SPID;";
-        let rows = self
-            .simple_query(QUERY)
-            .await
-            .context("get transaction isolation")?;
+        let rows = self.simple_query(QUERY).await?;
         match &rows[..] {
             [row] => {
                 let val: i16 = row
                     .try_get(0)
                     .context("getting 0th column")?
                     .ok_or_else(|| anyhow::anyhow!("no 0th column?"))?;
-                TransactionIsolationLevel::try_from_sql_server(val)
+                let level = TransactionIsolationLevel::try_from_sql_server(val)?;
+                Ok(level)
             }
-            other => anyhow::bail!("expected one row, got {other:?}"),
+            other => Err(SqlServerError::InvariantViolated(format!(
+                "expected one row, got {other:?}"
+            ))),
         }
     }
 
@@ -225,19 +223,25 @@ impl Client {
 #[derive(Debug)]
 pub struct Transaction<'a> {
     client: &'a mut Client,
+    closed: bool,
 }
 
 impl<'a> Transaction<'a> {
-    async fn new(client: &'a mut Client) -> Result<Self, anyhow::Error> {
+    async fn new(client: &'a mut Client) -> Result<Self, SqlServerError> {
         let results = client
             .simple_query("BEGIN TRANSACTION")
             .await
             .context("begin")?;
         if !results.is_empty() {
-            anyhow::bail!("unexpected result back from BEGIN TRANSACTION: {results:?}");
+            Err(SqlServerError::InvariantViolated(format!(
+                "expected empty result from BEGIN TRANSACTION. Got: {results:?}"
+            )))
+        } else {
+            Ok(Transaction {
+                client,
+                closed: false,
+            })
         }
-
-        Ok(Transaction { client })
     }
 
     /// See [`Client::execute`].
@@ -245,7 +249,7 @@ impl<'a> Transaction<'a> {
         &mut self,
         query: impl Into<Cow<'q, str>>,
         params: &[&dyn ToSql],
-    ) -> Result<SmallVec<[u64; 1]>, anyhow::Error> {
+    ) -> Result<SmallVec<[u64; 1]>, SqlServerError> {
         self.client.execute(query, params).await
     }
 
@@ -254,7 +258,7 @@ impl<'a> Transaction<'a> {
         &mut self,
         query: impl Into<Cow<'q, str>>,
         params: &[&dyn tiberius::ToSql],
-    ) -> Result<SmallVec<[tiberius::Row; 1]>, anyhow::Error> {
+    ) -> Result<SmallVec<[tiberius::Row; 1]>, SqlServerError> {
         self.client.query(query, params).await
     }
 
@@ -262,27 +266,27 @@ impl<'a> Transaction<'a> {
     pub async fn simple_query<'q>(
         &mut self,
         query: impl Into<Cow<'q, str>>,
-    ) -> Result<SmallVec<[tiberius::Row; 1]>, anyhow::Error> {
+    ) -> Result<SmallVec<[tiberius::Row; 1]>, SqlServerError> {
         self.client.simple_query(query).await
     }
 
     /// Rollback the [`Transaction`].
-    pub async fn rollback(self) -> Result<(), anyhow::Error> {
+    pub async fn rollback(mut self) -> Result<(), SqlServerError> {
         static ROLLBACK_QUERY: &str = "ROLLBACK TRANSACTION";
-        self.client
-            .execute(ROLLBACK_QUERY, &[])
-            .await
-            .context("rollback")?;
+        // N.B. Mark closed _before_ running the query. This prevents us from
+        // double closing the transaction if this query itself fails.
+        self.closed = true;
+        self.client.simple_query(ROLLBACK_QUERY).await?;
         Ok(())
     }
 
     /// Commit the [`Transaction`].
-    pub async fn commit(self) -> Result<(), anyhow::Error> {
+    pub async fn commit(mut self) -> Result<(), SqlServerError> {
         static COMMIT_QUERY: &str = "COMMIT TRANSACTION";
-        self.client
-            .execute(COMMIT_QUERY, &[])
-            .await
-            .context("commit")?;
+        // N.B. Mark closed _before_ running the query. This prevents us from
+        // double closing the transaction if this query itself fails.
+        self.closed = true;
+        self.client.simple_query(COMMIT_QUERY).await?;
         Ok(())
     }
 }
@@ -291,7 +295,9 @@ impl Drop for Transaction<'_> {
     fn drop(&mut self) {
         // Internally the query is synchronously sent down a channel, and the response is what
         // we await. In other words, we don't need to `.await` here for the query to be run.
-        let _fut = self.client.simple_query("ROLLBACK TRANSACTION");
+        if !self.closed {
+            let _fut = self.client.simple_query("ROLLBACK TRANSACTION");
+        }
     }
 }
 
@@ -341,7 +347,7 @@ enum Response {
 
 #[derive(Debug)]
 struct Request {
-    tx: oneshot::Sender<Result<Response, anyhow::Error>>,
+    tx: oneshot::Sender<Result<Response, SqlServerError>>,
     kind: RequestKind,
 }
 
