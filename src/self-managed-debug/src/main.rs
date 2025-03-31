@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 //! Debug tool for self managed environments.
+use std::path::PathBuf;
 use std::process;
 use std::sync::LazyLock;
 
@@ -19,13 +20,15 @@ use mz_build_info::{build_info, BuildInfo};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::task;
-use tracing::error;
+use tracing::{error, info};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
 use crate::docker_dumper::DockerDumper;
 use crate::k8s_dumper::K8sDumper;
 use crate::kubectl_port_forwarder::create_kubectl_port_forwarder;
-use crate::utils::validate_pg_connection_string;
+use crate::utils::{create_tracing_log_file, validate_pg_connection_string, zip_debug_folder};
 
 mod docker_dumper;
 mod k8s_dumper;
@@ -33,8 +36,9 @@ mod kubectl_port_forwarder;
 mod system_catalog_dumper;
 mod utils;
 
-pub const BUILD_INFO: BuildInfo = build_info!();
-pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
+const BUILD_INFO: BuildInfo = build_info!();
+static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
+static ENV_FILTER: &str = "mz_self_managed_debug=info";
 
 #[derive(Parser, Debug, Clone)]
 pub struct SelfManagedDebugMode {
@@ -90,6 +94,9 @@ pub struct Args {
     // TODO(debug_tool3): Allow users to specify the pgconfig via separate variables
     #[clap(long, required = true, value_parser = validate_pg_connection_string)]
     url: String,
+    /// The name of the zip file to create. Should end with `.zip`.
+    #[clap(long, default_value = "mz-debug.zip")]
+    zip_file_name: String,
     /// If true, the tool will not dump the system catalog.
     #[clap(long, default_value = "false")]
     skip_system_catalog_dump: bool,
@@ -141,18 +148,35 @@ pub struct Context {
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::new("mz_self_managed_debug=info"))
-        .without_time()
-        .with_target(false)
-        .init();
-
     let args: Args = cli::parse_args(CliConfig {
         env_prefix: Some("SELF_MANAGED_DEBUG_"),
         enable_version_flag: true,
     });
 
     let start_time = Utc::now();
+
+    // We use tracing_subscriber to display the output of tracing to stdout
+    // and log to a file included in the debug zip.
+    let stdout_layer = tracing_subscriber::fmt::layer()
+        .with_target(false)
+        .without_time();
+
+    if let Ok(file) = create_tracing_log_file(start_time) {
+        let file_layer = tracing_subscriber::fmt::layer()
+            .with_writer(file)
+            .with_ansi(false);
+
+        let _ = tracing_subscriber::registry()
+            .with(EnvFilter::new(ENV_FILTER))
+            .with(stdout_layer)
+            .with(file_layer)
+            .try_init();
+    } else {
+        let _ = tracing_subscriber::registry()
+            .with(EnvFilter::new(ENV_FILTER))
+            .with(stdout_layer)
+            .try_init();
+    }
 
     let context = Context { start_time };
 
@@ -235,7 +259,15 @@ async fn run(context: Context, args: Args) -> Result<(), anyhow::Error> {
             dumper.dump_all_relations().await;
         }
     }
-    // TODO(debug_tool1): Compress files to ZIP
+
+    info!("Zipping debug directory");
+
+    if let Err(e) = zip_debug_folder(PathBuf::from(&args.zip_file_name)) {
+        error!("Failed to zip debug directory: {}", e);
+    } else {
+        info!("Created zip debug at {}", &args.zip_file_name);
+    }
+
     Ok(())
 }
 
