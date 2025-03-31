@@ -764,19 +764,23 @@ impl<'n> SystemCatalogDumper<'n> {
                     // TODO (debug_tool3): Use a transaction for the entire dump instead of per query.
                     let mut pg_client = pg_client.lock().await;
 
-                    // We cannot query the column names in the transaction because SUBSCRIBE queries
-                    // cannot be executed with SELECT and SHOW queries in the same transaction.
-                    let column_names = query_column_names(&pg_client, relation).await?;
+                    match async {
+                        // We cannot query the column names in the transaction because SUBSCRIBE queries
+                        // cannot be executed with SELECT and SHOW queries in the same transaction.
+                        let column_names = query_column_names(&pg_client, relation).await?;
 
-                    let transaction = pg_client.transaction().await?;
+                        let transaction = pg_client.transaction().await?;
+                        query_relation(
+                            &transaction,
+                            start_time,
+                            relation,
+                            &column_names,
+                            cluster_replica,
+                        )
+                        .await?;
 
-                    match query_relation(
-                        &transaction,
-                        start_time,
-                        relation,
-                        &column_names,
-                        cluster_replica,
-                    )
+                        Ok::<(), anyhow::Error>(())
+                    }
                     .await
                     {
                         Ok(()) => Ok(()),
