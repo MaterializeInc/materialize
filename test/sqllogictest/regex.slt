@@ -734,11 +734,8 @@ EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT s, regexp_replace(s, 'b(..', replacement, 'ig') FROM e;
 ----
 Explained Query:
-  Project (#0{s}, #3)
-    Map (regexp_replace[EvalError]: invalid regular expression: regex parse error:
-    b(..
-     ^
-error: unclosed group(#0{s}, #2{replacement}))
+  Map (error("invalid regular expression: regex parse error:\n    b(..\n     ^\nerror: unclosed group"))
+    Project (#0{s})
       ReadStorage materialize.public.e
 
 Source materialize.public.e
