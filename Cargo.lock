@@ -7069,6 +7069,7 @@ dependencies = [
  "derivative",
  "futures",
  "hex",
+ "itertools 0.12.1",
  "mz-build-tools",
  "mz-ore",
  "mz-proto",

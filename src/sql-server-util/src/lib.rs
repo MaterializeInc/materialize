@@ -255,8 +255,16 @@ impl Client {
     /// `capture_instance`.
     ///
     /// [`CdcStream`]: crate::cdc::CdcStream
-    pub fn cdc(&mut self, capture_instance: impl Into<Arc<str>>) -> crate::cdc::CdcStream<'_> {
-        crate::cdc::CdcStream::new(self, capture_instance.into())
+    pub fn cdc<I>(&mut self, capture_instances: I) -> crate::cdc::CdcStream<'_>
+    where
+        I: IntoIterator,
+        I::Item: Into<Arc<str>>,
+    {
+        let instances = capture_instances
+            .into_iter()
+            .map(|i| (i.into(), None))
+            .collect();
+        crate::cdc::CdcStream::new(self, instances)
     }
 }
 

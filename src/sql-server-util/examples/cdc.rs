@@ -57,20 +57,25 @@ async fn main() -> Result<(), anyhow::Error> {
     mz_ore::task::spawn(|| "sql-server connection", async move { connection.await });
     tracing::info!("connection successful!");
 
-    let mut cdc_handle = client.cdc("materialize_t1");
+    let capture_instances = ["materialize_t1", "materialize_t2"];
+    let mut cdc_handle = client.cdc(capture_instances);
 
     // Get an initial snapshot of the table.
-    let (lsn, snapshot) = cdc_handle.snapshot().await?;
+    let (lsn, snapshot) = cdc_handle.snapshot(None).await?;
     {
         let mut snapshot = std::pin::pin!(snapshot);
-        while let Some(result) = snapshot.next().await {
+        while let Some((capture_instance, result)) = snapshot.next().await {
             let row = result?;
-            tracing::info!("snapshot: {row:?}");
+            tracing::info!("snapshot: {capture_instance} {row:?}");
         }
     }
 
+    // Initialize all capture instances at the LSN we just snapshotted.
+    for instance in capture_instances {
+        cdc_handle = cdc_handle.start_lsn(instance, lsn);
+    }
     // Get a stream of changes from the table with the provided LSN.
-    let changes = cdc_handle.start_lsn(lsn).into_stream();
+    let changes = cdc_handle.into_stream();
     let mut changes = std::pin::pin!(changes);
     while let Some(change) = changes.next().await {
         let change = change?;

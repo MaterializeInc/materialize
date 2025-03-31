@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,20 +29,20 @@ pub struct CdcStream<'a> {
     /// Client we use for querying SQL Server.
     client: &'a mut Client,
     /// Upstream capture instance we'll list changes from.
-    capture_instance: Arc<str>,
+    capture_instances: BTreeMap<Arc<str>, Option<Lsn>>,
     /// How often we poll the upstream for changes.
     poll_interval: Duration,
-    /// The log sequence number we start streaming changes from.
-    start_lsn: Option<Lsn>,
 }
 
 impl<'a> CdcStream<'a> {
-    pub(crate) fn new(client: &'a mut Client, capture_instance: Arc<str>) -> Self {
+    pub(crate) fn new(
+        client: &'a mut Client,
+        capture_instances: BTreeMap<Arc<str>, Option<Lsn>>,
+    ) -> Self {
         CdcStream {
             client,
-            capture_instance,
+            capture_instances,
             poll_interval: Duration::from_secs(1),
-            start_lsn: None,
         }
     }
 
@@ -50,8 +50,12 @@ impl<'a> CdcStream<'a> {
     ///
     /// If the provided [`Lsn`] is not available, the stream will return an error
     /// when first polled.
-    pub fn start_lsn(mut self, lsn: Lsn) -> Self {
-        self.start_lsn = Some(lsn);
+    pub fn start_lsn(mut self, capture_instance: &str, lsn: Lsn) -> Self {
+        let start_lsn = self
+            .capture_instances
+            .get_mut(capture_instance)
+            .expect("capture instance does not exist");
+        *start_lsn = Some(lsn);
         self
     }
 
@@ -65,20 +69,31 @@ impl<'a> CdcStream<'a> {
 
     /// Takes a snapshot of the upstream table that the specified `capture_instance` is
     /// replicating changes from.
+    ///
+    /// An optional `instances` parameter can be provided to only snapshot the specified instances.
     pub async fn snapshot<'b>(
         &'b mut self,
+        instances: Option<BTreeSet<Arc<str>>>,
     ) -> Result<
         (
             Lsn,
-            impl Stream<Item = Result<tiberius::Row, SqlServerError>> + use<'b, 'a>,
+            impl Stream<Item = (Arc<str>, Result<tiberius::Row, SqlServerError>)> + use<'b, 'a>,
         ),
         SqlServerError,
     > {
         // Determine what table we need to snapshot.
-        let (schema_name, table_name) =
-            crate::inspect::get_table_for_capture_instance(self.client, &*self.capture_instance)
-                .await?;
-        tracing::info!(?schema_name, ?table_name, "got table for capture instance");
+        let instances = self
+            .capture_instances
+            .keys()
+            .filter(|i| match instances.as_ref() {
+                // Only snapshot the instance if the filter includes it.
+                Some(filter) => filter.contains(i.as_ref()),
+                None => true,
+            })
+            .map(|i| i.as_ref());
+        let tables =
+            crate::inspect::get_tables_for_capture_instance(self.client, instances).await?;
+        tracing::info!(?tables, "got table for capture instance");
 
         self.client
             .set_transaction_isolation(TransactionIsolationLevel::Snapshot)
@@ -87,19 +102,26 @@ impl<'a> CdcStream<'a> {
 
         // Get the current LSN of the database.
         let lsn = crate::inspect::get_max_lsn(txn.client).await?;
-        tracing::info!(?schema_name, ?table_name, ?lsn, "starting snapshot");
+        tracing::info!(?tables, ?lsn, "starting snapshot");
 
         // Run a `SELECT` query to snapshot the entire table.
         let stream = async_stream::stream! {
-            {
+            // TODO(sql_server3): A stream of streams would be better here than
+            // returning the name with each result, but the lifetimes are tricky.
+            for (capture_instance, schema_name, table_name) in tables {
                 let query = format!("SELECT * FROM {schema_name}.{table_name};");
                 let snapshot = txn.client.query_streaming(&query, &[]);
                 let mut snapshot = std::pin::pin!(snapshot);
                 while let Some(result) = snapshot.next().await {
-                    yield result;
+                    yield (Arc::clone(&capture_instance), result);
                 }
             }
-            txn.commit().await?;
+
+            // Slightly awkward, but if the commit fails we need to conform to
+            // type of the stream.
+            if let Err(e) = txn.commit().await {
+                yield ("commit".into(), Err(e));
+            }
         };
 
         Ok((lsn, stream))
@@ -108,8 +130,8 @@ impl<'a> CdcStream<'a> {
     /// Consume `self` returning a [`Stream`] of [`CdcEvent`]s.
     pub fn into_stream(mut self) -> impl Stream<Item = Result<CdcEvent, SqlServerError>> + use<'a> {
         async_stream::try_stream! {
-            // Determine the LSN to start streaming from.
-            let mut curr_lsn = self.determine_start_lsn().await?;
+            // Initialize all of our start LSNs.
+            self.initialize_start_lsns().await?;
 
             loop {
                 // Measure the tick before we do any operation so the time it takes
@@ -118,48 +140,82 @@ impl<'a> CdcStream<'a> {
                     .checked_add(self.poll_interval)
                     .expect("tick interval overflowed!");
 
+                // We always check for changes based on the "global" minimum LSN of any
+                // one capture instance.
+                let maybe_curr_lsn = self.capture_instances.values().filter_map(|x| *x).min();
+                let Some(curr_lsn) = maybe_curr_lsn else {
+                    tracing::warn!("shutting down CDC stream because nothing to replicate");
+                    break;
+                };
+
                 // Get the max LSN for the DB.
                 let new_lsn = crate::inspect::get_max_lsn(self.client).await?;
                 tracing::debug!(?new_lsn, ?curr_lsn, "got max LSN");
 
                 // If the LSN has increased then get all of our changes.
                 if new_lsn > curr_lsn {
-                    let changes = crate::inspect::get_changes(
-                        self.client,
-                        &*self.capture_instance,
-                        curr_lsn,
-                        new_lsn,
-                        RowFilterOption::AllUpdateOld,
-                    )
-                    .await?;
+                    for (instance, instance_lsn) in &self.capture_instances {
+                        let Some(instance_lsn) = instance_lsn.as_ref() else {
+                            tracing::error!(?instance, "found uninitialized LSN!");
+                            continue;
+                        };
 
-                    // TODO(sql_server1): For very large changes it feels bad collecting
-                    // them all in memory, it would be best if we streamed them to the
-                    // caller.
+                        // We've already replicated everything up-to new_lsn, so
+                        // nothing to do.
+                        if new_lsn < *instance_lsn {
+                            continue;
+                        }
 
-                    let mut events: BTreeMap<Lsn, Vec<Operation>> = BTreeMap::default();
-                    for change in changes {
-                        let (lsn, operation) = Operation::try_parse(change)?;
-                        // Group all the operations by their LSN.
-                        events.entry(lsn).or_default().push(operation);
-                    }
+                        // List all the changes for the current instance.
+                        let changes = crate::inspect::get_changes(
+                            self.client,
+                            &*instance,
+                            *instance_lsn,
+                            new_lsn,
+                            RowFilterOption::AllUpdateOld,
+                        )
+                        .await?;
 
-                    for (lsn, changes) in events {
-                        // TODO(sql_server1): Handle these events and notify the upstream
-                        // that we can cleanup this LSN.
-                        let capture_instance = Arc::clone(&self.capture_instance);
-                        let mark_complete = Box::new(move || {
-                            let _capture_isntance = capture_instance;
-                            let _completed_lsn = lsn;
-                        });
+                        // TODO(sql_server1): For very large changes it feels bad collecting
+                        // them all in memory, it would be best if we streamed them to the
+                        // caller.
 
-                        yield CdcEvent { lsn, changes, mark_complete }
+                        let mut events: BTreeMap<Lsn, Vec<Operation>> = BTreeMap::default();
+                        for change in changes {
+                            let (lsn, operation) = Operation::try_parse(change)?;
+                            // Group all the operations by their LSN.
+                            events.entry(lsn).or_default().push(operation);
+                        }
+
+                        for (lsn, changes) in events {
+                            // TODO(sql_server1): Handle these events and notify the upstream
+                            // that we can cleanup this LSN.
+                            let capture_instance = Arc::clone(instance);
+                            let mark_complete = Box::new(move || {
+                                let _capture_isntance = capture_instance;
+                                let _completed_lsn = lsn;
+                            });
+                            let event = CdcEvent {
+                                capture_instance: Arc::clone(instance),
+                                lsn,
+                                changes,
+                                mark_complete,
+                            };
+
+                            yield event;
+                        }
                     }
 
                     // Increment our LSN (`get_changes` is inclusive).
                     let next_lsn = crate::inspect::increment_lsn(self.client, new_lsn).await?;
                     tracing::debug!(?curr_lsn, ?next_lsn, "incrementing LSN");
-                    curr_lsn = next_lsn;
+
+                    // We just listed everything upto next_lsn.
+                    for (_instance, instance_lsn) in &mut self.capture_instances {
+                        let instance_lsn = instance_lsn.as_mut().expect("should be initialized");
+                        // Ensure LSNs don't go backwards.
+                        *instance_lsn = std::cmp::max(*instance_lsn, next_lsn);
+                    }
                 }
 
                 tokio::time::sleep_until(next_tick).await;
@@ -168,29 +224,36 @@ impl<'a> CdcStream<'a> {
     }
 
     /// Determine the [`Lsn`] to start streaming changes from.
-    async fn determine_start_lsn(&mut self) -> Result<Lsn, SqlServerError> {
-        match self.start_lsn {
-            Some(start_lsn) => {
-                let min_lsn =
-                    crate::inspect::get_min_lsn(self.client, &*self.capture_instance).await?;
-
-                if start_lsn < min_lsn {
-                    // The requested start_lsn is not available!
-                    Err(CdcError::LsnNotAvailable {
-                        requested: start_lsn,
-                        minimum: min_lsn,
-                    }
-                    .into())
-                } else {
-                    Ok(start_lsn)
-                }
-            }
-            // If no start_lsn is provided, then begin streaming from the most recent changes.
-            None => {
-                let max_lsn = crate::inspect::get_max_lsn(self.client).await?;
-                Ok(max_lsn)
+    async fn initialize_start_lsns(&mut self) -> Result<(), SqlServerError> {
+        // First, initialize all start LSNs. If a capture instance didn't have
+        // one specified then we'll start from the current max.
+        let max_lsn = crate::inspect::get_max_lsn(self.client).await?;
+        for (_instance, requsted_lsn) in self.capture_instances.iter_mut() {
+            if requsted_lsn.is_none() {
+                *requsted_lsn = Some(max_lsn);
             }
         }
+
+        // For each instance, ensure their requested LSN is available.
+        for (instance, requested_lsn) in self.capture_instances.iter() {
+            let requested_lsn = requested_lsn
+                .as_ref()
+                .expect("initialized all values above");
+
+            // Get the minimum Lsn available for this instance.
+            let available_lsn = crate::inspect::get_min_lsn(self.client, &*instance).await?;
+
+            // If we cannot start at our desired LSN, we must return an error!.
+            if *requested_lsn < available_lsn {
+                return Err(CdcError::LsnNotAvailable {
+                    requested: *requested_lsn,
+                    minimum: available_lsn,
+                }
+                .into());
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -198,6 +261,8 @@ impl<'a> CdcStream<'a> {
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct CdcEvent {
+    /// The capture instance these changes are for.
+    pub capture_instance: Arc<str>,
     /// The LSN that this change occurred at.
     pub lsn: Lsn,
     /// The change itself.
