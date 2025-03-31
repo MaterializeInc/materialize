@@ -115,6 +115,16 @@ impl<'n> DockerDumper {
 
         Ok(())
     }
+
+    async fn dump_top(&self) -> Result<(), anyhow::Error> {
+        let (stdout, _) = self
+            .execute_docker_command(&["top".to_string(), self.container_id.to_string()])
+            .await?;
+
+        write_output(stdout, &self.directory_path, "top.txt")?;
+
+        Ok(())
+    }
 }
 
 impl ContainerDumper for DockerDumper {
@@ -122,6 +132,7 @@ impl ContainerDumper for DockerDumper {
         let _ = self.dump_logs().await;
         let _ = self.dump_inspect().await;
         let _ = self.dump_stats().await;
+        let _ = self.dump_top().await;
     }
 }
 
