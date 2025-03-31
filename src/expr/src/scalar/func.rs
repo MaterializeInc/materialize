@@ -2133,6 +2133,14 @@ fn string_to_array<'a>(
 ) -> Result<Datum<'a>, EvalError> {
     let string = string_datum.unwrap_str();
 
+    if string.is_empty() {
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        packer.try_push_array(&[], std::iter::empty::<Datum>())?;
+
+        return Ok(temp_storage.push_unary_row(row));
+    }
+
     if delimiter.is_null() {
         let split_all_chars_delimiter = "";
         return string_to_array_impl(string, split_all_chars_delimiter, null_string, temp_storage);
@@ -2164,10 +2172,14 @@ fn string_to_array_impl<'a>(
 ) -> Result<Datum<'a>, EvalError> {
     let mut row = Row::default();
     let mut packer = row.packer();
-    let empty_flags = "";
-    let regex = build_regex(delimiter, empty_flags)?;
 
-    let found = mz_regexp::regexp_split_to_array(string, &regex);
+    let result = string.split(delimiter);
+    let found: Vec<&str>;
+    if delimiter.is_empty() {
+        found = result.filter(|s| !s.is_empty()).collect();
+    } else {
+        found = result.collect()
+    }
     let array_dimensions = [ArrayDimension {
         lower_bound: 1,
         length: found.len(),

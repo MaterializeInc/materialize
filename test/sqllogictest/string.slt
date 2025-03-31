@@ -1810,4 +1810,21 @@ select string_to_array(word, 'hello') from string_to_array_words;
 ----
 {""," world"}
 
+# string_to_array - empty string must return an empty array
+query T
+select string_to_array('', 'hello') from string_to_array_words;
+----
+{}
+
+query T
+select string_to_array('', '') from string_to_array_words;
+----
+{}
+
+# string_to_array - whitespace
+query T
+select string_to_array(' ', '') from string_to_array_words;
+----
+{" "}
+
 # string_to_array - end.
