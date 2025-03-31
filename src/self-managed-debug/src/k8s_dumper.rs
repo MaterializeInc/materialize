@@ -43,7 +43,7 @@ use mz_cloud_resources::crd::gen::cert_manager::certificates::Certificate;
 use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 
 use serde::{de::DeserializeOwned, Serialize};
-use tracing::{error, info};
+use tracing::{info, warn};
 
 use crate::utils::format_base_path;
 use crate::{ContainerDumper, Context};
@@ -96,7 +96,7 @@ where
             if let Some(namespace) = &self.namespace {
                 err_msg = format!("{} for namespace {}", err_msg, namespace);
             }
-            error!("{}", err_msg);
+            warn!("{}", err_msg);
             return Ok(());
         }
         let file_path = format_resource_path(
@@ -132,7 +132,7 @@ where
 
     async fn dump(&self) {
         if let Err(e) = self._dump().await {
-            error!("Failed to write k8s {}: {}", self.resource_type, e);
+            warn!("Failed to write k8s {}: {}", self.resource_type, e);
         }
     }
 }
@@ -203,7 +203,7 @@ impl<'n> K8sDumper<'n> {
             if let Some(namespace) = namespace {
                 err_msg = format!("{} for namespace {}", err_msg, namespace);
             }
-            error!("{}", err_msg);
+            warn!("{}", err_msg);
             return Ok(());
         }
 
@@ -224,7 +224,7 @@ impl<'n> K8sDumper<'n> {
         K: kube::Resource<DynamicType = ()>,
     {
         if let Err(e) = self._dump_kubectl_describe::<K>(namespace).await {
-            error!(
+            warn!(
                 "Failed to dump kubectl describe for {}: {}",
                 K::plural(&()).into_owned(),
                 e
@@ -323,7 +323,7 @@ impl<'n> K8sDumper<'n> {
                     .await?;
 
                 if logs.is_empty() {
-                    error!("No {} logs found for pod {}", suffix, pod_name);
+                    warn!("No {} logs found for pod {}", suffix, pod_name);
                     return Ok(());
                 }
 
@@ -337,10 +337,10 @@ impl<'n> K8sDumper<'n> {
             if let Err(e) = export_pod_logs(&pods, &pod_name, &file_path, true).await {
                 match e.downcast_ref::<kube::Error>() {
                     Some(kube::Error::Api(e)) if e.code == 400 => {
-                        error!("No previous logs available for pod {}", pod_name);
+                        warn!("No previous logs available for pod {}", pod_name);
                     }
                     _ => {
-                        error!(
+                        warn!(
                             "Failed to export previous logs for pod {}: {}",
                             &pod_name, e
                         );
@@ -349,7 +349,7 @@ impl<'n> K8sDumper<'n> {
             }
 
             if let Err(e) = export_pod_logs(&pods, &pod_name, &file_path, false).await {
-                error!("Failed to export current logs for pod {}: {}", &pod_name, e);
+                warn!("Failed to export current logs for pod {}: {}", &pod_name, e);
             }
         }
         Ok(())
@@ -358,7 +358,7 @@ impl<'n> K8sDumper<'n> {
     /// Write k8s pod logs to a yaml file per pod.
     async fn dump_k8s_pod_logs(&self, namespace: &String) {
         if let Err(e) = self._dump_k8s_pod_logs(namespace).await {
-            error!("Failed to dump k8s pod logs: {}", e);
+            warn!("Failed to dump k8s pod logs: {}", e);
         }
     }
 
