@@ -64,6 +64,7 @@ use std::fmt::Debug;
 use std::panic::AssertUnwindSafe;
 
 use mz_adapter_types::connection::ConnectionId;
+use mz_adapter_types::dyncfgs::PERSIST_FAST_PATH_ORDER;
 use mz_catalog::memory::objects::{CatalogCollectionEntry, CatalogEntry, Index};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
@@ -190,6 +191,9 @@ pub struct OptimizerConfig {
     /// Show the slow path plan even if a fast path plan was created. Useful for debugging.
     /// Enforced if `timing` is set.
     pub no_fast_path: bool,
+    // If set, allow some additional queries down the Persist fast path when we believe
+    // the orderings are compatible.
+    persist_fast_path_order: bool,
     /// Optimizer feature flags.
     pub features: OptimizerFeatures,
 }
@@ -208,6 +212,7 @@ impl From<&SystemVars> for OptimizerConfig {
             mode: OptimizeMode::Execute,
             replan: None,
             no_fast_path: false,
+            persist_fast_path_order: PERSIST_FAST_PATH_ORDER.get(vars.dyncfgs()),
             features: OptimizerFeatures::from(vars),
         }
     }
