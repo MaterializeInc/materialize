@@ -9,13 +9,15 @@
 
 use std::borrow::Cow;
 use std::future::IntoFuture;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use anyhow::Context;
 use derivative::Derivative;
 use futures::future::BoxFuture;
-use futures::FutureExt;
-use smallvec::SmallVec;
+use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
+use mz_ore::result::ResultExt;
+use smallvec::{smallvec, SmallVec};
 use tiberius::ToSql;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -94,10 +96,10 @@ impl Client {
         let response = rx.await.context("channel")?.context("execute")?;
         match response {
             Response::Execute { rows_affected } => Ok(rows_affected),
-            other @ Response::Rows(_) => {
-                let err =
-                    anyhow::anyhow!("programming error! expected Response::Execute, got {other:?}");
-                Err(err)
+            other @ Response::Rows(_) | other @ Response::RowStream { .. } => {
+                Err(SqlServerError::ProgrammingError(format!(
+                    "expected Response::Execute, got {other:?}"
+                )))
             }
         }
     }
@@ -132,12 +134,52 @@ impl Client {
         let response = rx.await.context("channel")?.context("query")?;
         match response {
             Response::Rows(rows) => Ok(rows),
-            other @ Response::Execute { .. } => {
-                let err =
-                    anyhow::anyhow!("programming error! expected Response::Rows, got {other:?}");
-                Err(err)
-            }
+            other @ Response::Execute { .. } | other @ Response::RowStream { .. } => Err(
+                SqlServerError::ProgrammingError(format!("expected Response::Rows, got {other:?}")),
+            ),
         }
+    }
+
+    /// Executes SQL statements in SQL Server, returning a [`Stream`] of
+    /// resulting rows.
+    ///
+    /// Passthrough method for [`tiberius::Client::query`].
+    pub fn query_streaming<'a>(
+        &mut self,
+        query: impl Into<Cow<'a, str>>,
+        params: &[&dyn tiberius::ToSql],
+    ) -> impl Stream<Item = Result<tiberius::Row, SqlServerError>> + Send + '_ {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let params = params
+            .iter()
+            .map(|p| OwnedColumnData::from(p.to_sql()))
+            .collect();
+        let kind = RequestKind::QueryStreamed {
+            query: query.into().to_string(),
+            params,
+        };
+
+        // Make our initial request which will return a Stream of Rows.
+        let request_future = async move {
+            self.tx
+                .send(Request { tx, kind })
+                .context("sending request")?;
+
+            let response = rx.await.context("channel")??;
+            match response {
+                Response::RowStream { stream } => {
+                    Ok(tokio_stream::wrappers::ReceiverStream::new(stream))
+                }
+                other @ Response::Execute { .. } | other @ Response::Rows(_) => {
+                    Err(SqlServerError::ProgrammingError(format!(
+                        "expected Response::Rows, got {other:?}"
+                    )))
+                }
+            }
+        };
+
+        // "flatten" our initial request into the returned stream.
+        futures::stream::once(request_future).try_flatten()
     }
 
     /// Executes multiple queries, delimited with `;` and return multiple
@@ -164,11 +206,9 @@ impl Client {
         let response = rx.await.context("channel")?.context("simple_query")?;
         match response {
             Response::Rows(rows) => Ok(rows),
-            other @ Response::Execute { .. } => {
-                let err =
-                    anyhow::anyhow!("programming error! expected Response::Rows, got {other:?}");
-                Err(err)
-            }
+            other @ Response::Execute { .. } | other @ Response::RowStream { .. } => Err(
+                SqlServerError::ProgrammingError(format!("expected Response::Rows, got {other:?}")),
+            ),
         }
     }
 
@@ -220,6 +260,10 @@ impl Client {
     }
 }
 
+/// A stream of [`tiberius::Row`]s.
+pub type RowStream<'a> =
+    Pin<Box<dyn Stream<Item = Result<tiberius::Row, SqlServerError>> + Send + 'a>>;
+
 #[derive(Debug)]
 pub struct Transaction<'a> {
     client: &'a mut Client,
@@ -260,6 +304,15 @@ impl<'a> Transaction<'a> {
         params: &[&dyn tiberius::ToSql],
     ) -> Result<SmallVec<[tiberius::Row; 1]>, SqlServerError> {
         self.client.query(query, params).await
+    }
+
+    /// See [`Client::query_streaming`]
+    pub fn query_streaming<'q>(
+        &mut self,
+        query: impl Into<Cow<'q, str>>,
+        params: &[&dyn tiberius::ToSql],
+    ) -> impl Stream<Item = Result<tiberius::Row, SqlServerError>> + Send + '_ {
+        self.client.query_streaming(query, params)
     }
 
     /// See [`Client::simple_query`].
@@ -339,10 +392,17 @@ impl TransactionIsolationLevel {
     }
 }
 
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 enum Response {
-    Execute { rows_affected: SmallVec<[u64; 1]> },
+    Execute {
+        rows_affected: SmallVec<[u64; 1]>,
+    },
     Rows(SmallVec<[tiberius::Row; 1]>),
+    RowStream {
+        #[derivative(Debug = "ignore")]
+        stream: tokio::sync::mpsc::Receiver<Result<tiberius::Row, SqlServerError>>,
+    },
 }
 
 #[derive(Debug)]
@@ -364,6 +424,11 @@ enum RequestKind {
         #[derivative(Debug = "ignore")]
         params: SmallVec<[OwnedColumnData; 4]>,
     },
+    QueryStreamed {
+        query: String,
+        #[derivative(Debug = "ignore")]
+        params: SmallVec<[OwnedColumnData; 4]>,
+    },
     SimpleQuery {
         query: String,
     },
@@ -378,26 +443,29 @@ impl Connection {
     async fn run(mut self) {
         while let Some(Request { tx, kind }) = self.rx.recv().await {
             tracing::debug!(?kind, "processing SQL Server query");
-
-            let context = match &kind {
-                RequestKind::Execute { .. } => "execute",
-                RequestKind::Query { .. } => "query",
-                RequestKind::SimpleQuery { .. } => "simple query",
+            let result = Connection::handle_request(&mut self.client, kind).await;
+            let (response, maybe_extra_work) = match result {
+                Ok((response, work)) => (Ok(response), work),
+                Err(err) => (Err(err), None),
             };
-            let response = Connection::handle_request(&mut self.client, kind)
-                .await
-                .context(context);
 
             // We don't care if our listener for this query has gone away.
             let _ = tx.send(response);
+
+            // After we handle a request there might still be something in-flight
+            // that we need to continue driving, e.g. when the response is a
+            // Stream of Rows.
+            if let Some(extra_work) = maybe_extra_work {
+                extra_work.await;
+            }
         }
         tracing::debug!("channel closed, SQL Server InnerClient shutting down");
     }
 
-    async fn handle_request(
-        client: &mut tiberius::Client<Compat<TcpStream>>,
+    async fn handle_request<'c>(
+        client: &'c mut tiberius::Client<Compat<TcpStream>>,
         kind: RequestKind,
-    ) -> Result<Response, anyhow::Error> {
+    ) -> Result<(Response, Option<BoxFuture<'c, ()>>), SqlServerError> {
         match kind {
             RequestKind::Execute { query, params } => {
                 #[allow(clippy::as_conversions)]
@@ -406,10 +474,15 @@ impl Connection {
                 let result = client.execute(query, &params[..]).await?;
 
                 match result.rows_affected() {
-                    [] => anyhow::bail!("got empty response"),
-                    rows_affected => Ok(Response::Execute {
-                        rows_affected: rows_affected.into(),
-                    }),
+                    [] => Err(SqlServerError::InvariantViolated(
+                        "got empty response".into(),
+                    )),
+                    rows_affected => {
+                        let response = Response::Execute {
+                            rows_affected: rows_affected.into(),
+                        };
+                        Ok((response, None))
+                    }
                 }
             }
             RequestKind::Query { query, params } => {
@@ -420,32 +493,74 @@ impl Connection {
 
                 let mut results = result.into_results().await.context("into results")?;
                 if results.is_empty() {
-                    anyhow::bail!("got empty response")
+                    Err(SqlServerError::InvariantViolated(
+                        "got empty response".into(),
+                    ))
                 } else if results.len() == 1 {
                     // TODO(sql_server3): Don't use `into_results()` above, instead directly
                     // push onto a SmallVec to avoid the heap allocations.
                     let rows = results.pop().expect("checked len").into();
-                    Ok(Response::Rows(rows))
+                    Ok((Response::Rows(rows), None))
                 } else {
-                    anyhow::bail!("Query only supports 1 statement, got {}", results.len())
+                    Err(SqlServerError::ProgrammingError(format!(
+                        "Query only supports 1 statement, got {}",
+                        results.len()
+                    )))
                 }
+            }
+            RequestKind::QueryStreamed { query, params } => {
+                #[allow(clippy::as_conversions)]
+                let params: SmallVec<[&dyn ToSql; 4]> =
+                    params.iter().map(|x| x as &dyn ToSql).collect();
+                let result = client.query(query, params.as_slice()).await?;
+
+                // ~~ Rust Lifetimes ~~
+                //
+                // What's going on here, why do we have some extra channel and
+                // this 'work' future?
+                //
+                // Remember, we run the actual `tiberius::Client` in a separate
+                // `tokio::task` and the `mz::Client` sends query requests via
+                // a channel, this allows us to "automatically" manage
+                // transactions.
+                //
+                // But the returned `QueryStream` from a `tiberius::Client` has
+                // a lifetime associated with said client running in this
+                // separate task. Thus we cannot send the `QueryStream` back to
+                // the `mz::Client` because the lifetime of these two clients
+                // is not linked at all. The fix is to create a separate owned
+                // channel and return the receiving end, while this work future
+                // pulls events off the `QueryStream` and sends them over the
+                // channel we just returned.
+                let (tx, rx) = tokio::sync::mpsc::channel(256);
+                let work = Box::pin(async move {
+                    let mut stream = result.into_row_stream();
+                    while let Some(result) = stream.next().await {
+                        if let Err(err) = tx.send(result.err_into()).await {
+                            tracing::warn!(?err, "SQL Server row stream receiver went away");
+                        }
+                    }
+                    tracing::info!("SQL Server row stream complete");
+                });
+
+                Ok((Response::RowStream { stream: rx }, Some(work)))
             }
             RequestKind::SimpleQuery { query } => {
                 let result = client.simple_query(query).await?;
 
                 let mut results = result.into_results().await.context("into results")?;
                 if results.is_empty() {
-                    anyhow::bail!("got empty response")
+                    Ok((Response::Rows(smallvec![]), None))
                 } else if results.len() == 1 {
                     // TODO(sql_server3): Don't use `into_results()` above, instead directly
                     // push onto a SmallVec to avoid the heap allocations.
                     let rows = results.pop().expect("checked len").into();
-                    Ok(Response::Rows(rows))
+                    Ok((Response::Rows(rows), None))
                 } else {
-                    anyhow::bail!(
+                    Err(SqlServerError::ProgrammingError(format!(
                         "Simple query only supports 1 statement, got {}",
                         results.len()
-                    )
+                    )))
                 }
             }
         }
@@ -563,8 +678,12 @@ pub enum SqlServerError {
         column_type: String,
         reason: String,
     },
+    #[error("sql server client encountered I/O error: {0}")]
+    IO(#[from] tokio::io::Error),
     #[error("found invalid data in the column '{column_name}': {error}")]
     InvalidData { column_name: String, error: String },
+    #[error("invariant was violated: {0}")]
+    InvariantViolated(String),
     #[error(transparent)]
     Generic(#[from] anyhow::Error),
     #[error("programming error! {0}")]
