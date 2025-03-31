@@ -279,6 +279,56 @@ impl TryFrom<&[u8]> for Lsn {
     }
 }
 
+impl fmt::Display for Lsn {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", hex::encode(&self.0[..]))
+    }
+}
+
+impl columnation::Columnation for Lsn {
+    type InnerRegion = columnation::CopyRegion<Lsn>;
+}
+
+impl timely::progress::Timestamp for Lsn {
+    // No need to describe complex summaries.
+    type Summary = ();
+
+    fn minimum() -> Self {
+        Lsn(Default::default())
+    }
+}
+
+impl timely::progress::PathSummary<Lsn> for () {
+    fn results_in(&self, src: &Lsn) -> Option<Lsn> {
+        Some(*src)
+    }
+
+    fn followed_by(&self, _other: &Self) -> Option<Self> {
+        Some(())
+    }
+}
+
+impl timely::progress::timestamp::Refines<()> for Lsn {
+    fn to_inner(_other: ()) -> Self {
+        use timely::progress::Timestamp;
+        Self::minimum()
+    }
+    fn to_outer(self) -> () {}
+
+    fn summarize(_path: <Self as timely::progress::Timestamp>::Summary) -> () {}
+}
+
+impl timely::order::PartialOrder for Lsn {
+    fn less_equal(&self, other: &Self) -> bool {
+        self <= other
+    }
+
+    fn less_than(&self, other: &Self) -> bool {
+        self < other
+    }
+}
+impl timely::order::TotalOrder for Lsn {}
+
 /// Structured format of an [`Lsn`].
 ///
 /// Note: The derived impl of [`PartialOrd`] and [`Ord`] relies on the field
