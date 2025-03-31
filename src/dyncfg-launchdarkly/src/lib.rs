@@ -15,6 +15,7 @@ use launchdarkly_server_sdk as ld;
 use mz_build_info::BuildInfo;
 use mz_dyncfg::{ConfigSet, ConfigUpdates, ConfigVal};
 use mz_ore::cast::CastLossy;
+use mz_ore::retry::Retry;
 use mz_ore::task;
 use tokio::time;
 
@@ -48,18 +49,27 @@ where
     for entry in set.entries() {
         let _ = dyn_into_flag(entry.val())?;
     }
+
     let ld_client = if let Some(key) = launchdarkly_sdk_key {
         let client = ld::Client::build(ld::ConfigBuilder::new(key).build())?;
-        client.start_with_default_executor();
+
         let init = async {
-            let max_backoff = Duration::from_secs(60);
-            let mut backoff = Duration::from_secs(5);
-            while !client.initialized_async().await {
-                tracing::warn!("SyncedConfigSet failed to initialize");
-                tokio::time::sleep(backoff).await;
-                backoff = (backoff * 2).min(max_backoff);
-            }
+            Retry::default()
+                .initial_backoff(Duration::from_secs(5))
+                .clamp_backoff(Duration::from_secs(60))
+                .retry_async(|_| async {
+                    client.start_with_default_executor();
+                    if client.initialized_async().await {
+                        Ok(())
+                    } else {
+                        tracing::warn!("SyncedConfigSet failed to initialize");
+                        Err(())
+                    }
+                })
+                .await
+                .expect("retries forever")
         };
+
         if tokio::time::timeout(config_sync_timeout, init)
             .await
             .is_err()

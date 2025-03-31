@@ -16,8 +16,8 @@ use launchdarkly_server_sdk as ld;
 use mz_build_info::BuildInfo;
 use mz_cloud_provider::CloudProvider;
 use mz_ore::now::NowFn;
+use mz_ore::retry::Retry;
 use mz_sql::catalog::EnvironmentId;
-use tokio::time;
 
 use crate::config::{Metrics, SynchronizedParameters, SystemParameterSyncConfig};
 
@@ -44,9 +44,9 @@ pub struct SystemParameterFrontend {
 impl SystemParameterFrontend {
     /// Create a new [SystemParameterFrontend] initialize.
     ///
-    /// This will create and initialize an [ld::Client] instance. The
-    /// [ld::Client::initialized_async] call will be attempted in a loop with an
-    /// exponential backoff with power `2s` and max duration `60s`.
+    /// This will create and initialize an [ld::Client] instance. The client
+    /// initialization will be attempted in a loop with an exponential backoff
+    /// with factor 2 and max duration `60s`.
     pub async fn from(sync_config: &SystemParameterSyncConfig) -> Result<Self, anyhow::Error> {
         Ok(Self {
             ld_client: ld_client(sync_config).await?,
@@ -110,27 +110,34 @@ async fn ld_client(sync_config: &SystemParameterSyncConfig) -> Result<ld::Client
 
     tracing::info!("waiting for SystemParameterFrontend to initialize");
 
-    // Start and initialize LD client for the frontend. The callback passed
-    // will export the last time when an SSE event from the LD server was
-    // received in a Prometheus metric.
-    ld_client.start_with_default_executor_and_callback({
-        let last_sse_time_seconds = sync_config.metrics.last_sse_time_seconds.clone();
-        let now_fn = sync_config.now_fn.clone();
-        Arc::new(move |_ev| {
-            let ts = now_fn() / 1000;
-            last_sse_time_seconds.set(ts);
-        })
-    });
+    let try_init = |_| async {
+        // Start and initialize LD client for the frontend. The callback passed
+        // will export the last time when an SSE event from the LD server was
+        // received in a Prometheus metric.
+        ld_client.start_with_default_executor_and_callback({
+            let last_sse_time_seconds = sync_config.metrics.last_sse_time_seconds.clone();
+            let now_fn = sync_config.now_fn.clone();
+            Arc::new(move |_ev| {
+                let ts = now_fn() / 1000;
+                last_sse_time_seconds.set(ts);
+            })
+        });
 
-    let max_backoff = Duration::from_secs(60);
-    let mut backoff = Duration::from_secs(5);
-    while !ld_client.initialized_async().await {
-        tracing::warn!("SystemParameterFrontend failed to initialize");
-        time::sleep(backoff).await;
-        backoff = (backoff * 2).min(max_backoff);
-    }
+        if ld_client.initialized_async().await {
+            tracing::info!("successfully initialized SystemParameterFrontend");
+            Ok(())
+        } else {
+            tracing::warn!("SystemParameterFrontend failed to initialize");
+            Err(())
+        }
+    };
 
-    tracing::info!("successfully initialized SystemParameterFrontend");
+    Retry::default()
+        .initial_backoff(Duration::from_secs(5))
+        .clamp_backoff(Duration::from_secs(60))
+        .retry_async(try_init)
+        .await
+        .expect("retries forever");
 
     Ok(ld_client)
 }
