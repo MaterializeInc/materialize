@@ -7056,10 +7056,12 @@ name = "mz-sql-server-util"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-stream",
  "chrono",
  "dec",
  "derivative",
  "futures",
+ "hex",
  "mz-build-tools",
  "mz-ore",
  "mz-proto",
@@ -7078,6 +7080,7 @@ dependencies = [
  "tokio-util",
  "tonic-build",
  "tracing",
+ "tracing-subscriber",
  "uuid",
  "workspace-hack",
 ]
