@@ -2131,6 +2131,10 @@ fn string_to_array<'a>(
     null_string: Datum<'a>,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
+    if string_datum.is_null() {
+        return Ok(Datum::Null);
+    }
+
     let string = string_datum.unwrap_str();
 
     if string.is_empty() {
@@ -8186,7 +8190,9 @@ impl VariadicFunc {
                 ScalarType::Array(Box::new(ScalarType::String)).nullable(in_nullable)
             }
             RegexpReplace => ScalarType::String.nullable(in_nullable),
-            StringToArray => ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
+            StringToArray => {
+                ScalarType::Array(Box::new(ScalarType::String)).nullable(input_types[0].nullable)
+            }
         }
     }
 

@@ -1827,4 +1827,10 @@ select string_to_array(' ', '') from string_to_array_words;
 ----
 {" "}
 
+# string_to_array - whitespace
+query T
+select string_to_array(null, '') from string_to_array_words;
+----
+NULL
+
 # string_to_array - end.
