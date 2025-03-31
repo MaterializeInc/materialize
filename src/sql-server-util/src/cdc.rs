@@ -91,7 +91,7 @@ impl<'a> CdcStream<'a> {
                     )
                     .await?;
 
-                    // TODO(sql_server3): For very large changes it feels bad collecting
+                    // TODO(sql_server1): For very large changes it feels bad collecting
                     // them all in memory, it would be best if we streamed them to the
                     // caller.
 
@@ -319,7 +319,7 @@ impl Operation {
             })?;
 
         let lsn = Lsn::try_from(lsn).map_err(|msg| SqlServerError::InvalidData {
-            column_name: "lsn".to_string(),
+            column_name: START_LSN_COLUMN.to_string(),
             error: msg,
         })?;
         let operation = match operation {
@@ -329,7 +329,7 @@ impl Operation {
             4 => Operation::UpdateNew(data),
             other => {
                 return Err(SqlServerError::InvalidData {
-                    column_name: "operation".to_string(),
+                    column_name: OPERATION_COLUMN.to_string(),
                     error: format!("unrecognized operation {other}"),
                 });
             }
