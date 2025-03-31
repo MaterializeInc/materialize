@@ -127,8 +127,52 @@ impl fmt::Display for NonNegError {
 impl Error for NonNegError {}
 
 /// Overflowing number. Operations panic on overflow, even in release mode.
+///
+/// The `MZ_OVERFLOWING_MODE` environment variable can be used to control the
+/// overflow behavior:
+/// * `panic`: panic on overflow (default when debug assertions are enabled).
+/// * `soft_panic`: log a warning on overflow, or panic, depending on whether
+///   soft assertions are enbaled.
+/// * `ignore`: ignore overflow (default debug assertions are disabled).
+/// The default value is `panic` when `debug_assertions` are enabled, or `ignore` otherwise.
+///
+/// The non-aborting modes simply return the result of the operation, which can
+/// include overflows.
 #[derive(Debug, Default, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Serialize, Deserialize)]
 pub struct Overflowing<T>(T);
+
+/// The behavior of the [`Overflowing`] type when an overflow occurs.
+#[derive(Debug)]
+pub enum OverflowingBehavior {
+    /// Panic on overflow. Corresponds to the `panic` string.
+    Panic,
+    /// Soft panic on overflow. Corresponds to the `soft_panic` string.
+    SoftPanic,
+    /// Ignore overflow. Corresponds to the `ignore` string.
+    Ignore,
+}
+
+impl std::str::FromStr for OverflowingBehavior {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            _ if s.eq_ignore_ascii_case("panic") => Ok(OverflowingBehavior::Panic),
+            _ if s.eq_ignore_ascii_case("soft_panic") => Ok(OverflowingBehavior::SoftPanic),
+            _ if s.eq_ignore_ascii_case("ignore") => Ok(OverflowingBehavior::Ignore),
+            _ => Err(format!("Invalid OverflowingBehavior: {s}")),
+        }
+    }
+}
+
+/// Set the overflowing behavior for the process.
+///
+/// This function is thread-safe and can be used to change the behavior at runtime.
+///
+/// The default behavior is to ignore overflows.
+pub fn set_overflowing_behavior(behavior: OverflowingBehavior) {
+    overflowing_support::set_overflowing_mode(behavior);
+}
 
 impl<T: fmt::Display> fmt::Display for Overflowing<T> {
     #[inline(always)]
@@ -305,7 +349,7 @@ macro_rules! impl_overflowing {
             #[inline(always)]
             fn add(self, rhs: Self) -> Self::Output {
                 match self.0.overflowing_add(rhs.0) {
-                    (_, true) => panic!("Overflow {self} + {rhs}"),
+                    (result, true) => overflowing_support::handle_overflow(result, format_args!("{self} + {rhs}")),
                     (result, false) => Self(result),
                 }
             }
@@ -317,7 +361,7 @@ macro_rules! impl_overflowing {
             #[inline(always)]
             fn add(self, rhs: &'a Self) -> Self::Output {
                 match self.0.overflowing_add(rhs.0) {
-                    (_, true) => panic!("Overflow {self} + {rhs}"),
+                    (result, true) => overflowing_support::handle_overflow(result, format_args!("{self} + {rhs}")),
                     (result, false) => Self(result),
                 }
             }
@@ -343,7 +387,7 @@ macro_rules! impl_overflowing {
             #[inline(always)]
             fn div(self, rhs: Self) -> Self::Output {
                 match self.0.overflowing_div(rhs.0) {
-                    (_, true) => panic!("Overflow {self} / {rhs}"),
+                    (result, true) => overflowing_support::handle_overflow(result, format_args!("{self} / {rhs}")),
                     (result, false) => Self(result),
                 }
             }
@@ -355,7 +399,7 @@ macro_rules! impl_overflowing {
             #[inline(always)]
             fn rem(self, rhs: Self) -> Self::Output {
                 match self.0.overflowing_rem(rhs.0) {
-                    (_, true) => panic!("Overflow {self} % {rhs}"),
+                    (result, true) => overflowing_support::handle_overflow(result, format_args!("{self} % {rhs}")),
                     (result, false) => Self(result),
                 }
             }
@@ -367,7 +411,7 @@ macro_rules! impl_overflowing {
             #[inline(always)]
             fn sub(self, rhs: Self) -> Self::Output {
                 match self.0.overflowing_sub(rhs.0) {
-                    (_, true) => panic!("Overflow {self} - {rhs}"),
+                    (result, true) => overflowing_support::handle_overflow(result, format_args!("{self} - {rhs}")),
                     (result, false) => Self(result),
                 }
             }
@@ -379,7 +423,7 @@ macro_rules! impl_overflowing {
             #[inline(always)]
             fn sub(self, rhs: &'a Self) -> Self::Output {
                 match self.0.overflowing_sub(rhs.0) {
-                    (_, true) => panic!("Overflow {self} - {rhs}"),
+                    (result, true) => overflowing_support::handle_overflow(result, format_args!("{self} - {rhs}")),
                     (result, false) => Self(result),
                 }
             }
@@ -425,7 +469,7 @@ macro_rules! impl_overflowing {
             #[inline(always)]
             fn neg(self) -> Self::Output {
                 match self.0.overflowing_neg() {
-                    (_, true) => panic!("Overflow -{self}"),
+                    (result, true) => overflowing_support::handle_overflow(result, format_args!("-{self}")),
                     (result, false) => Self(result),
                 }
             }
@@ -437,7 +481,7 @@ macro_rules! impl_overflowing {
             #[inline(always)]
             fn neg(self) -> Self::Output {
                 match self.0.overflowing_neg() {
-                    (_, true) => panic!("Overflow -{self}"),
+                    (result, true) => overflowing_support::handle_overflow(result, format_args!("-{self}")),
                     (result, false) => Overflowing(result),
                 }
             }
@@ -449,7 +493,7 @@ macro_rules! impl_overflowing {
             #[inline(always)]
             fn mul(self, rhs: Self) -> Self::Output {
                 match self.0.overflowing_mul(rhs.0) {
-                    (_, true) => panic!("Overflow {self} * {rhs}"),
+                    (result, true) => overflowing_support::handle_overflow(result, format_args!("{self} * {rhs}")),
                     (result, false) => Self(result),
                 }
             }
@@ -651,3 +695,67 @@ impl_overflowing!(i64, bool i8 u8 i16 u16 i32 u32 i64, bool i8 u8 i16 u16 i32 u3
 impl_overflowing_signed!(i64, u64);
 impl_overflowing!(i128, bool i8 u8 i16 u16 i32 u32 i64 u64 i128, bool i8 u8 i16 u16 i32 u32 i64 u64, isize usize);
 impl_overflowing_signed!(i128, u128);
+
+mod overflowing_support {
+    use std::sync::atomic::AtomicUsize;
+
+    use crate::num::OverflowingBehavior;
+
+    /// Ignore overflow.
+    const MODE_IGNORE: usize = 0;
+    /// Soft assert on overflow.
+    const MODE_SOFT_PANIC: usize = 1;
+    /// Panic on overflow.
+    const MODE_PANIC: usize = 2;
+
+    static OVERFLOWING_MODE: AtomicUsize = AtomicUsize::new(MODE_IGNORE);
+
+    /// Handles overflow for [`Overflowing`](super::Overflowing) numbers.
+    #[track_caller]
+    #[inline]
+    pub(super) fn handle_overflow<T: Into<O>, O>(result: T, description: std::fmt::Arguments) -> O {
+        let mode = OVERFLOWING_MODE.load(std::sync::atomic::Ordering::Relaxed);
+        match mode {
+            MODE_SOFT_PANIC => crate::soft_panic_or_log!("Overflow: {description}"),
+            MODE_PANIC => panic!("Overflow: {description}"),
+            // MODE_IGNORE and all other (impossible) values
+            _ => {}
+        }
+        result.into()
+    }
+
+    /// Set the overflowing mode.
+    pub(crate) fn set_overflowing_mode(behavior: OverflowingBehavior) {
+        let value = match behavior {
+            OverflowingBehavior::Panic => MODE_PANIC,
+            OverflowingBehavior::SoftPanic => MODE_SOFT_PANIC,
+            OverflowingBehavior::Ignore => MODE_IGNORE,
+        };
+        OVERFLOWING_MODE.store(value, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[cfg(debug_assertions)]
+    #[crate::test]
+    #[should_panic]
+    fn test_panicking_add() {
+        set_overflowing_behavior(OverflowingBehavior::Panic);
+        let _ = Overflowing::<i8>::MAX + Overflowing::<i8>::ONE;
+    }
+
+    #[crate::test]
+    fn test_wrapping_add() {
+        let result = Overflowing::<i8>::MAX.wrapping_add(Overflowing::<i8>::ONE);
+        assert_eq!(result, Overflowing::<i8>::MIN);
+    }
+
+    #[crate::test]
+    fn test_checked_add() {
+        let result = Overflowing::<i8>::MAX.checked_add(Overflowing::<i8>::ONE);
+        assert_eq!(result, None);
+    }
+}

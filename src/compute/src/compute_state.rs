@@ -48,6 +48,7 @@ use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_operators::stats::StatsCursor;
 use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::dyncfgs::ORE_OVERFLOWING_BEHAVIOR;
 use mz_storage_types::sources::SourceData;
 use mz_storage_types::time_dependence::TimeDependence;
 use mz_storage_types::StorageDiff;
@@ -308,6 +309,17 @@ impl ComputeState {
         // Remember the maintenance interval locally to avoid reading it from the config set on
         // every server iteration.
         self.server_maintenance_interval = COMPUTE_SERVER_MAINTENANCE_INTERVAL.get(config);
+
+        let overflowing_behavior = ORE_OVERFLOWING_BEHAVIOR.get(config);
+        match overflowing_behavior.parse() {
+            Ok(behavior) => mz_ore::num::set_overflowing_behavior(behavior),
+            Err(err) => {
+                warn!(
+                    err,
+                    overflowing_behavior, "Invalid value for ore_overflowing_behavior"
+                );
+            }
+        }
     }
 
     /// Apply the provided replica expiration `offset` by converting it to a frontier relative to
