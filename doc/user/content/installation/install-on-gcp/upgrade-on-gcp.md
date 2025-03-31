@@ -96,6 +96,8 @@ If you want to use `jq` and do not have `jq` installed, install.
 
 ## Procedure
 
+### A. Setup GCP service account and authenticate
+
 1. Open a Terminal window.
 
 1. Initialize the gcloud CLI (`gcloud init`) to specify the GCP project you want
@@ -165,6 +167,7 @@ If you want to use `jq` and do not have `jq` installed, install.
    If using `GOOGLE_APPLICATION_CREDENTIALS`, use absolute path to your key file.
    {{</ tip >}}
 
+### B. Upgrade Materialize operator and instances
 
 1. Go to the `examples/simple` folder in the Materialize Terraform repo
    directory.
@@ -176,10 +179,11 @@ If you want to use `jq` and do not have `jq` installed, install.
 1. Optional. You may need to update your fork of the Terraform modules to
    upgrade.
 
-   {{< yaml-table data="self_managed/gcp_terraform_versions" >}}
-
    {{< tip >}}
    {{% self-managed/gcp-terraform-upgrade-notes %}}
+
+   See [Materialize on GCP releases](/installation/appendix-terraforms/#materialize-on-gcp-terraform-modules) for notable changes.
+
    {{</ tip >}}
 
 1. Configure `kubectl` to connect to your EKS cluster, specifying:
