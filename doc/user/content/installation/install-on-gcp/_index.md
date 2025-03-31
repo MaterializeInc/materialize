@@ -15,7 +15,8 @@ menu:
 
 This tutorial deploys Materialize to GCP Google Kubernetes Engine (GKE) cluster
 with a Cloud SQL PostgreSQL database as the metadata database and Cloud Storage
-bucket for blob storage. Specifically, the tutorial uses [Materialize on Google Cloud Terraform
+bucket for blob storage. Specifically, the tutorial uses [Materialize on Google
+Cloud Provider Terraform
 modules](https://github.com/MaterializeInc/terraform-google-materialize) to:
 
 - Set up the GCP environment.
@@ -35,7 +36,7 @@ modules](https://github.com/MaterializeInc/terraform-google-materialize) to:
 
 ## Prerequisites
 
-### Google cloud project
+### Google cloud provider project
 
 You need a GCP project for which you have a role (such as
 `roles/resourcemanager.projectIamAdmin` or `roles/owner`) that includes [
@@ -217,26 +218,29 @@ evaluation purposes only. The modules deploy a sample infrastructure on GCP
    ```
 
    {{< tip >}}
-
    {{< self-managed/gcp-terraform-configs >}}
-
    {{< /tip >}}
 
 1. Create a `terraform.tfvars` file (you can copy from the
-   `terraform.tfvars.example` file) and specify:
+   `terraform.tfvars.example` file) and specify the following variables:
 
-   - Your GCP project ID.
-
-   - A prefix (e.g., `mz-simple`) for your resources. Prefix has a maximum of
-     10 characters and contains only alphanumeric characters and dashes.
-
-   - The region for the GKE cluster.
+   | **Variable** | **Description** |
+   |--------------|-----------------|
+   | `project_id` | Your GCP project ID. |
+   | `prefix`     | A prefix (e.g., `mz-simple`) for your resources. Prefix has a maximum of 15 characters and contains only alphanumeric characters and dashes. |
+   | `region`     | The region for the GKE cluster. |
 
    ```bash
    project_id = "enter-your-gcp-project-id"
    prefix  = "enter-your-prefix" //  Maximum of 15 characters, contain lowercase alphanumeric and hyphens only (e.g., mz-simple)
    region = "us-central1"
    ```
+
+   {{< tip >}}
+
+   {{< self-managed/gcp-terraform-configs >}}
+
+   {{< /tip >}}
 
 1. Initialize the terraform directory.
 
