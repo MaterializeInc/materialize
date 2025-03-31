@@ -896,10 +896,26 @@ impl<'n> SystemCatalogDumper<'n> {
                     error!("Consider increasing the size of the cluster {}", docs_link);
                 }
 
-                cluster_replica_error_counts
-                    .entry(replica_key.clone())
-                    .and_modify(|count| *count += 1)
-                    .or_insert(1);
+                let is_missing_catalog_item_err = match err.downcast_ref::<tokio_postgres::Error>()
+                {
+                    Some(pg_err) => pg_err
+                        .to_string()
+                        .to_lowercase()
+                        .contains("unknown catalog item"),
+                    None => false,
+                };
+
+                // If the error is due to a missing catalog item,
+                // we don't count it as an error since we expect some
+                // catalog items to be missing. This is because mz-debug
+                // is meant to be backwards compatible with older versions
+                // of Materialize.
+                if !is_missing_catalog_item_err {
+                    cluster_replica_error_counts
+                        .entry(replica_key.clone())
+                        .and_modify(|count| *count += 1)
+                        .or_insert(1);
+                }
             }
         }
     }
