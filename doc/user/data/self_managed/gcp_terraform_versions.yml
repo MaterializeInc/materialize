@@ -35,6 +35,19 @@ rows:
 
 - "Terraform version": |
 
+    [v0.2.1](https://github.com/MaterializeInc/terraform-google-materialize/releases/)
+
+  "Notable changes": |
+
+    Added configuration options (`storage_bucket_versioning` and
+    `storage_bucket_version_ttl`) for storage bucket versioning. By default,
+    storage bucket versioning is disabled to facilitate cleanup of resources
+    during testing. When running in production, versioning should be turned on
+    with a sufficient TTL to meet any data-recovery requirements.
+
+- "Terraform version": |
+
+
     [v0.2.0](https://github.com/MaterializeInc/terraform-google-materialize/releases/tag/v0.2.0)
 
   "Notable changes": |
