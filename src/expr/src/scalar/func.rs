@@ -2174,12 +2174,11 @@ fn string_to_array_impl<'a>(
     let mut packer = row.packer();
 
     let result = string.split(delimiter);
-    let found: Vec<&str>;
-    if delimiter.is_empty() {
-        found = result.filter(|s| !s.is_empty()).collect();
+    let found: Vec<&str> = if delimiter.is_empty() {
+        result.filter(|s| !s.is_empty()).collect()
     } else {
-        found = result.collect()
-    }
+        result.collect()
+    };
     let array_dimensions = [ArrayDimension {
         lower_bound: 1,
         length: found.len(),
