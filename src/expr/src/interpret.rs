@@ -688,12 +688,12 @@ impl SpecialBinary {
         }
 
         match func {
-            BinaryFunc::JsonbGetString { stringify } => Some(SpecialBinary {
-                map_fn: if *stringify {
-                    |l, r| jsonb_get_string(l, r, true)
-                } else {
-                    |l, r| jsonb_get_string(l, r, false)
-                },
+            BinaryFunc::JsonbGetString => Some(SpecialBinary {
+                map_fn: |l, r| jsonb_get_string(l, r, false),
+                pushdownable: (true, false),
+            }),
+            BinaryFunc::JsonbGetStringStringify => Some(SpecialBinary {
+                map_fn: |l, r| jsonb_get_string(l, r, true),
                 pushdownable: (true, false),
             }),
             BinaryFunc::Eq => Some(SpecialBinary {
@@ -1177,8 +1177,8 @@ mod tests {
             Lte,
             Gte,
             DateTruncTimestamp,
-            JsonbGetString { stringify: true },
-            JsonbGetString { stringify: false },
+            JsonbGetString,
+            JsonbGetStringStringify,
         ]
     };
 
@@ -1200,7 +1200,7 @@ mod tests {
                         .scalar_type
                         .base_eq(&ScalarType::Timestamp { precision: None })
             }
-            JsonbGetString { .. } => {
+            JsonbGetString | JsonbGetStringStringify => {
                 arg0.scalar_type.base_eq(&ScalarType::Jsonb)
                     && arg1.scalar_type.base_eq(&ScalarType::String)
             }
@@ -1567,7 +1567,7 @@ mod tests {
         let expr = MirScalarExpr::CallUnary {
             func: UnaryFunc::CastJsonbToNumeric(CastJsonbToNumeric(None)),
             expr: Box::new(MirScalarExpr::CallBinary {
-                func: BinaryFunc::JsonbGetString { stringify: false },
+                func: BinaryFunc::JsonbGetString,
                 expr1: Box::new(MirScalarExpr::Column(0)),
                 expr2: Box::new(MirScalarExpr::Literal(
                     Ok(Row::pack_slice(&["ts".into()])),

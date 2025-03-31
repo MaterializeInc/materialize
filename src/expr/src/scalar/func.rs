@@ -2310,15 +2310,12 @@ pub enum BinaryFunc {
     TimezoneIntervalTime,
     TimezoneOffset,
     TextConcat,
-    JsonbGetInt64 {
-        stringify: bool,
-    },
-    JsonbGetString {
-        stringify: bool,
-    },
-    JsonbGetPath {
-        stringify: bool,
-    },
+    JsonbGetInt64,
+    JsonbGetInt64Stringify,
+    JsonbGetString,
+    JsonbGetStringStringify,
+    JsonbGetPath,
+    JsonbGetPathStringify,
     JsonbContainsString,
     JsonbConcat,
     JsonbContainsJsonb,
@@ -2577,15 +2574,12 @@ impl BinaryFunc {
             BinaryFunc::TimezoneIntervalTime => timezone_interval_time(a, b),
             BinaryFunc::TimezoneOffset => timezone_offset(a, b, temp_storage),
             BinaryFunc::TextConcat => Ok(text_concat_binary(a, b, temp_storage)),
-            BinaryFunc::JsonbGetInt64 { stringify } => {
-                Ok(jsonb_get_int64(a, b, temp_storage, *stringify))
-            }
-            BinaryFunc::JsonbGetString { stringify } => {
-                Ok(jsonb_get_string(a, b, temp_storage, *stringify))
-            }
-            BinaryFunc::JsonbGetPath { stringify } => {
-                Ok(jsonb_get_path(a, b, temp_storage, *stringify))
-            }
+            BinaryFunc::JsonbGetInt64 => Ok(jsonb_get_int64(a, b, temp_storage, false)),
+            BinaryFunc::JsonbGetInt64Stringify => Ok(jsonb_get_int64(a, b, temp_storage, true)),
+            BinaryFunc::JsonbGetString => Ok(jsonb_get_string(a, b, temp_storage, false)),
+            BinaryFunc::JsonbGetStringStringify => Ok(jsonb_get_string(a, b, temp_storage, true)),
+            BinaryFunc::JsonbGetPath => Ok(jsonb_get_path(a, b, temp_storage, false)),
+            BinaryFunc::JsonbGetPathStringify => Ok(jsonb_get_path(a, b, temp_storage, true)),
             BinaryFunc::JsonbContainsString => Ok(jsonb_contains_string(a, b)),
             BinaryFunc::JsonbConcat => Ok(jsonb_concat(a, b, temp_storage)),
             BinaryFunc::JsonbContainsJsonb => Ok(jsonb_contains_jsonb(a, b)),
@@ -2783,13 +2777,13 @@ impl BinaryFunc {
 
             MzRenderTypmod | TextConcat => ScalarType::String.nullable(in_nullable),
 
-            JsonbGetInt64 { stringify: true }
-            | JsonbGetString { stringify: true }
-            | JsonbGetPath { stringify: true } => ScalarType::String.nullable(true),
+            JsonbGetInt64Stringify
+            | JsonbGetStringStringify
+            | JsonbGetPathStringify => ScalarType::String.nullable(true),
 
-            JsonbGetInt64 { stringify: false }
-            | JsonbGetString { stringify: false }
-            | JsonbGetPath { stringify: false }
+            JsonbGetInt64
+            | JsonbGetString
+            | JsonbGetPath
             | JsonbConcat
             | JsonbDeleteInt64
             | JsonbDeleteString => ScalarType::Jsonb.nullable(true),
@@ -3067,9 +3061,12 @@ impl BinaryFunc {
             | RegexpReplace { .. }
             | StartsWith => false,
 
-            JsonbGetInt64 { .. }
-            | JsonbGetString { .. }
-            | JsonbGetPath { .. }
+            JsonbGetInt64
+            | JsonbGetInt64Stringify
+            | JsonbGetString
+            | JsonbGetStringStringify
+            | JsonbGetPath
+            | JsonbGetPathStringify
             | JsonbConcat
             | JsonbDeleteInt64
             | JsonbDeleteString
@@ -3184,9 +3181,12 @@ impl BinaryFunc {
             | Gte
             | JsonbConcat
             | JsonbContainsJsonb
-            | JsonbGetInt64 { .. }
-            | JsonbGetString { .. }
-            | JsonbGetPath { .. }
+            | JsonbGetInt64
+            | JsonbGetInt64Stringify
+            | JsonbGetString
+            | JsonbGetStringStringify
+            | JsonbGetPath
+            | JsonbGetPathStringify
             | JsonbContainsString
             | JsonbDeleteInt64
             | JsonbDeleteString
@@ -3330,9 +3330,12 @@ impl BinaryFunc {
             | BinaryFunc::BitShiftRightUInt16
             | BinaryFunc::BitShiftRightUInt32
             | BinaryFunc::BitShiftRightUInt64 => false,
-            BinaryFunc::JsonbGetInt64 { .. }
-            | BinaryFunc::JsonbGetString { .. }
-            | BinaryFunc::JsonbGetPath { .. }
+            BinaryFunc::JsonbGetInt64
+            | BinaryFunc::JsonbGetInt64Stringify
+            | BinaryFunc::JsonbGetString
+            | BinaryFunc::JsonbGetStringStringify
+            | BinaryFunc::JsonbGetPath
+            | BinaryFunc::JsonbGetPathStringify
             | BinaryFunc::JsonbContainsString
             | BinaryFunc::JsonbConcat
             | BinaryFunc::JsonbContainsJsonb
@@ -3493,9 +3496,12 @@ impl BinaryFunc {
             | BinaryFunc::TimezoneIntervalTimestampTz
             | BinaryFunc::TimezoneIntervalTime
             | BinaryFunc::TimezoneOffset => (false, false),
-            BinaryFunc::JsonbGetInt64 { .. }
-            | BinaryFunc::JsonbGetString { .. }
-            | BinaryFunc::JsonbGetPath { .. }
+            BinaryFunc::JsonbGetInt64
+            | BinaryFunc::JsonbGetInt64Stringify
+            | BinaryFunc::JsonbGetString
+            | BinaryFunc::JsonbGetStringStringify
+            | BinaryFunc::JsonbGetPath
+            | BinaryFunc::JsonbGetPathStringify
             | BinaryFunc::JsonbContainsString
             | BinaryFunc::JsonbConcat
             | BinaryFunc::JsonbContainsJsonb
@@ -3697,12 +3703,12 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::TimezoneIntervalTime => f.write_str("timezoneit"),
             BinaryFunc::TimezoneOffset => f.write_str("timezone_offset"),
             BinaryFunc::TextConcat => f.write_str("||"),
-            BinaryFunc::JsonbGetInt64 { stringify: false } => f.write_str("->"),
-            BinaryFunc::JsonbGetInt64 { stringify: true } => f.write_str("->>"),
-            BinaryFunc::JsonbGetString { stringify: false } => f.write_str("->"),
-            BinaryFunc::JsonbGetString { stringify: true } => f.write_str("->>"),
-            BinaryFunc::JsonbGetPath { stringify: false } => f.write_str("#>"),
-            BinaryFunc::JsonbGetPath { stringify: true } => f.write_str("#>>"),
+            BinaryFunc::JsonbGetInt64 => f.write_str("->"),
+            BinaryFunc::JsonbGetInt64Stringify => f.write_str("->>"),
+            BinaryFunc::JsonbGetString => f.write_str("->"),
+            BinaryFunc::JsonbGetStringStringify => f.write_str("->>"),
+            BinaryFunc::JsonbGetPath => f.write_str("#>"),
+            BinaryFunc::JsonbGetPathStringify => f.write_str("#>>"),
             BinaryFunc::JsonbContainsString | BinaryFunc::MapContainsKey => f.write_str("?"),
             BinaryFunc::JsonbConcat => f.write_str("||"),
             BinaryFunc::JsonbContainsJsonb | BinaryFunc::MapContainsMap => f.write_str("@>"),
@@ -3925,15 +3931,12 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::TimezoneIntervalTime).boxed(),
             Just(BinaryFunc::TimezoneOffset).boxed(),
             Just(BinaryFunc::TextConcat).boxed(),
-            bool::arbitrary()
-                .prop_map(|stringify| BinaryFunc::JsonbGetInt64 { stringify })
-                .boxed(),
-            bool::arbitrary()
-                .prop_map(|stringify| BinaryFunc::JsonbGetString { stringify })
-                .boxed(),
-            bool::arbitrary()
-                .prop_map(|stringify| BinaryFunc::JsonbGetPath { stringify })
-                .boxed(),
+            Just(BinaryFunc::JsonbGetInt64).boxed(),
+            Just(BinaryFunc::JsonbGetInt64Stringify).boxed(),
+            Just(BinaryFunc::JsonbGetString).boxed(),
+            Just(BinaryFunc::JsonbGetStringStringify).boxed(),
+            Just(BinaryFunc::JsonbGetPath).boxed(),
+            Just(BinaryFunc::JsonbGetPathStringify).boxed(),
             Just(BinaryFunc::JsonbContainsString).boxed(),
             Just(BinaryFunc::JsonbConcat).boxed(),
             Just(BinaryFunc::JsonbContainsJsonb).boxed(),
@@ -4125,9 +4128,12 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::TimezoneIntervalTime => TimezoneIntervalTime(()),
             BinaryFunc::TimezoneOffset => TimezoneOffset(()),
             BinaryFunc::TextConcat => TextConcat(()),
-            BinaryFunc::JsonbGetInt64 { stringify } => JsonbGetInt64(*stringify),
-            BinaryFunc::JsonbGetString { stringify } => JsonbGetString(*stringify),
-            BinaryFunc::JsonbGetPath { stringify } => JsonbGetPath(*stringify),
+            BinaryFunc::JsonbGetInt64 => JsonbGetInt64(()),
+            BinaryFunc::JsonbGetInt64Stringify => JsonbGetInt64Stringify(()),
+            BinaryFunc::JsonbGetString => JsonbGetString(()),
+            BinaryFunc::JsonbGetStringStringify => JsonbGetStringStringify(()),
+            BinaryFunc::JsonbGetPath => JsonbGetPath(()),
+            BinaryFunc::JsonbGetPathStringify => JsonbGetPathStringify(()),
             BinaryFunc::JsonbContainsString => JsonbContainsString(()),
             BinaryFunc::JsonbConcat => JsonbConcat(()),
             BinaryFunc::JsonbContainsJsonb => JsonbContainsJsonb(()),
@@ -4344,9 +4350,12 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 TimezoneIntervalTime(()) => Ok(BinaryFunc::TimezoneIntervalTime),
                 TimezoneOffset(()) => Ok(BinaryFunc::TimezoneOffset),
                 TextConcat(()) => Ok(BinaryFunc::TextConcat),
-                JsonbGetInt64(stringify) => Ok(BinaryFunc::JsonbGetInt64 { stringify }),
-                JsonbGetString(stringify) => Ok(BinaryFunc::JsonbGetString { stringify }),
-                JsonbGetPath(stringify) => Ok(BinaryFunc::JsonbGetPath { stringify }),
+                JsonbGetInt64(()) => Ok(BinaryFunc::JsonbGetInt64),
+                JsonbGetInt64Stringify(()) => Ok(BinaryFunc::JsonbGetInt64Stringify),
+                JsonbGetString(()) => Ok(BinaryFunc::JsonbGetString),
+                JsonbGetStringStringify(()) => Ok(BinaryFunc::JsonbGetStringStringify),
+                JsonbGetPath(()) => Ok(BinaryFunc::JsonbGetPath),
+                JsonbGetPathStringify(()) => Ok(BinaryFunc::JsonbGetPathStringify),
                 JsonbContainsString(()) => Ok(BinaryFunc::JsonbContainsString),
                 JsonbConcat(()) => Ok(BinaryFunc::JsonbConcat),
                 JsonbContainsJsonb(()) => Ok(BinaryFunc::JsonbContainsJsonb),
