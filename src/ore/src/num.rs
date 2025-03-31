@@ -715,8 +715,12 @@ mod overflowing_support {
     #[inline]
     pub(super) fn handle_overflow<T: Into<O>, O>(result: T, description: std::fmt::Arguments) -> O {
         let mode = OVERFLOWING_MODE.load(std::sync::atomic::Ordering::Relaxed);
+        // We cannot use `soft_panic_or_log` in wasm.
         match mode {
+            #[cfg(not(target_arch = "wasm32"))]
             MODE_SOFT_PANIC => crate::soft_panic_or_log!("Overflow: {description}"),
+            #[cfg(target_arch = "wasm32")]
+            MODE_SOFT_PANIC => panic!("Overflow: {description}"),
             MODE_PANIC => panic!("Overflow: {description}"),
             // MODE_IGNORE and all other (impossible) values
             _ => {}
