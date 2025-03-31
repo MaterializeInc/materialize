@@ -11,8 +11,10 @@ menu:
 ## Syntax
 
 ```sql
-SHOW CREATE INDEX <index_name>
+SHOW [REDACTED] CREATE INDEX <index_name>
 ```
+
+{{< yaml-table data="show_create_redacted_option" >}}
 
 For available index names, see [`SHOW INDEXES`](/sql/show-indexes).
 

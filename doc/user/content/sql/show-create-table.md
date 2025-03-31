@@ -11,8 +11,10 @@ menu:
 ## Syntax
 
 ```sql
-SHOW CREATE TABLE <table_name>
+SHOW [REDACTED] CREATE TABLE <table_name>
 ```
+
+{{< yaml-table data="show_create_redacted_option" >}}
 
 For available table names, see [`SHOW TABLES`](/sql/show-tables).
 
