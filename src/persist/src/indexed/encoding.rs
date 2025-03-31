@@ -382,6 +382,23 @@ impl BlobTraceUpdates {
         structured
     }
 
+    /// Convert this blob into a structured part, transforming the codec data if necessary.
+    pub fn into_part<K: Codec, V: Codec>(
+        &mut self,
+        key_schema: &K::Schema,
+        val_schema: &V::Schema,
+    ) -> Part {
+        let ext = self
+            .get_or_make_structured::<K, V>(key_schema, val_schema)
+            .clone();
+        Part {
+            key: ext.key,
+            val: ext.val,
+            time: self.timestamps().clone(),
+            diff: self.diffs().clone(),
+        }
+    }
+
     /// Concatenate the given records together, column-by-column.
     ///
     /// If `ensure_codec` is true, then we'll ensure the returned [`BlobTraceUpdates`] includes
@@ -687,6 +704,16 @@ impl<T: Timestamp + Codec64> BlobTraceBatchPart<T> {
             .records()
             .and_then(|r| r.keys().iter().flatten().min())
             .unwrap_or(&[])
+    }
+
+    /// Scans the part and returns a lower bound on the contained keys.
+    pub fn structured_key_lower(&self) -> Option<ArrayBound> {
+        self.updates.structured().and_then(|r| {
+            let ord = ArrayOrd::new(&r.key);
+            (0..r.key.len())
+                .min_by_key(|i| ord.at(*i))
+                .map(|i| ArrayBound::new(Arc::clone(&r.key), i))
+        })
     }
 }
 
