@@ -117,6 +117,9 @@ for evaluation purposes only. The modules deploy a sample infrastructure on AWS
 1. Create a `terraform.tfvars` file (you can copy from the
    `terraform.tfvars.example` file) and specify the following variables:
 
+   {{< tabs >}}
+   {{< tab "Without cert-manager" >}}
+
    | Variable          | Description |
    |--------------------|-------------|
    | `namespace`       | A namespace (e.g., `my-demo`) that will be used to form part of the prefix for your AWS resources. <br> **Requirements:** <br> - Maximum of 12 characters <br> - Must start with a lowercase letter <br> - Must be lowercase alphanumeric and hyphens only |
@@ -124,13 +127,36 @@ for evaluation purposes only. The modules deploy a sample infrastructure on AWS
 
 
    ```bash
+   # The namespace and environment variables are used to construct the names of   the resources
+   # e.g. ${namespace}-${environment}-storage, ${namespace}-${environment}-db   etc.
+
+   namespace = "enter-namespace"   // maximum 12 characters, start with a   letter, contain lowercase alphanumeric and hyphens only (e.g. my-demo)
+   environment = "enter-environment" // maximum 8 characters, lowercase   alphanumeric only (e.g., dev, test)
+   ```
+
+   {{</ tab >}}
+
+   {{< tab "With cert-manager" >}}
+
+   | Variable          | Description |
+   |--------------------|-------------|
+   | `namespace`       | A namespace (e.g., `my-demo`) that will be used to form part of the prefix for your AWS resources. <br> **Requirements:** <br> - Maximum of 12 characters <br> - Must start with a lowercase letter <br> - Must be lowercase alphanumeric and hyphens only |
+   | `environment`     | An environment name (e.g., `dev`, `test`) that will be used to form part of the prefix for your AWS resources. <br> **Requirements:** <br> - Maximum of 8 characters <br> - Must be lowercase alphanumeric only |
+   | `install_cert_manager` | A boolean that specifies whether to install cert-manager. Available starting in [Materialize on AWS Terraform version v0.3.2](/installation/appendix-terraforms#materialize-on-aws-terraform-modules). |
+
+   ```bash
    # The namespace and environment variables are used to construct the names of the resources
    # e.g. ${namespace}-${environment}-storage, ${namespace}-${environment}-db etc.
 
    namespace = "enter-namespace"   // maximum 12 characters, start with a letter, contain lowercase alphanumeric and hyphens only (e.g. my-demo)
    environment = "enter-environment" // maximum 8 characters, lowercase alphanumeric only (e.g., dev, test)
+
+   install_cert_manager = true    // Install cert-manager
+   # use_self_signed_cluster_issuer = true // Uncomment, after cert-manager is installed and running, to use self-signed ClusterIssuer
    ```
 
+   {{</ tab >}}
+   {{</ tabs >}}
    {{< tip >}}
    {{< self-managed/aws-terraform-configs >}}
    {{< /tip >}}
@@ -156,9 +182,13 @@ for evaluation purposes only. The modules deploy a sample infrastructure on AWS
    To approve the changes and apply, enter `yes`.
 
    <a name="terraform-output"></a>
+
+   {{< tabs >}}
+   {{< tab "Without cert-manager" >}}
+
    Upon successful completion, various fields and their values are output:
 
-   ```bash
+   ```none
    Apply complete! Resources: 87 added, 0 changed, 0 destroyed.
 
    Outputs:
@@ -175,6 +205,30 @@ for evaluation purposes only. The modules deploy a sample infrastructure on AWS
    s3_bucket_name = "my-demo-dev-storage-f2def2a9"
    vpc_id = "vpc-0abc000bed1d111bd"
    ```
+   {{</ tab >}}
+   {{< tab "With cert-manager" >}}
+
+   Upon successful completion, various fields and their values are output:
+
+   ```none
+   Apply complete! Resources: 89 added, 0 changed, 0 destroyed.
+
+   Outputs:
+
+   cluster_certificate_authority_data = <sensitive>
+   database_endpoint = "my-demo-dev-db.abcdefg8dsto.us-east-1.rds.amazonaws.com:5432"
+   eks_cluster_endpoint = "https://0123456789A00BCD000E11BE12345A01.gr7.us-east-1.eks.amazonaws.com"
+   eks_cluster_name = "my-demo-dev-eks"
+   materialize_s3_role_arn = "arn:aws:iam::000111222333:role/my-demo-dev-mz-role"
+   metadata_backend_url = <sensitive>
+   nlb_details = []
+   oidc_provider_arn = "arn:aws:iam::000111222333:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/7D14BCA3A7AA896A836782D96A24F958"
+   persist_backend_url = "s3://my-demo-dev-storage-f2def2a9/dev:serviceaccount:materialize-environment:12345678-1234-1234-1234-12345678912"
+   s3_bucket_name = "my-demo-dev-storage-f2def2a9"
+   vpc_id = "vpc-0abc000bed1d111bd"
+   ```
+   {{</ tab >}}
+   {{</ tabs >}}
 
 1. Note your specific values for the following fields:
 
@@ -202,28 +256,120 @@ for evaluation purposes only. The modules deploy a sample infrastructure on AWS
    For help with `kubectl` commands, see [kubectl Quick
    reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
-1. By default, the example Terraform installs the Materialize Operator. Verify
-   the installation and check the status:
+1. By default, the example Terraform installs the Materialize Operator.
 
-    ```shell
-    kubectl get all -n materialize
-    ```
+   {{< tabs >}}
+   {{< tab "Without cert-manager" >}}
+   Verify the installation and check the status:
 
-    Wait for the components to be in the `Running` state:
+   ```shell
+   kubectl get all -n materialize
+   ```
 
-    ```none
-    NAME                                                           READY   STATUS    RESTARTS   AGE
-    pod/my-demo-dev-materialize-operator-84ff4b4648-brjhl   1/1     Running   0          12s
+   Wait for the components to be in the `Running` state:
 
-    NAME                                                      READY   UP-TO-DATE   AVAILABLE   AGE
-    deployment.apps/my-demo-dev-materialize-operator   1/1     1            1           12s
+   ```none
+   NAME                                                           READY  STATUS    RESTARTS   AGE
+   pod/my-demo-dev-materialize-operator-84ff4b4648-brjhl   1/1     Running  0          12s
 
-    NAME                                                               DESIRED   CURRENT   READY   AGE
-    replicaset.apps/my-demo-dev-materialize-operator-84ff4b4648   1         1         1       12s
-    ```
+   NAME                                                      READY  UP-TO-DATE   AVAILABLE   AGE
+   deployment.apps/my-demo-dev-materialize-operator   1/1     1           1           12s
 
-    If you run into an error during deployment, refer to the
-    [Troubleshooting](/installation/troubleshooting) guide.
+   NAME                                                              DESIRED   CURRENT   READY   AGE
+   replicaset.apps/my-demo-dev-materialize-operator-84ff4b4648   1        1         1       12s
+   ```
+   {{</ tab >}}
+   {{< tab "With cert-manager" >}}
+
+   Verify the installation and check the status:
+
+   ```shell
+   kubectl get all -n materialize
+   ```
+
+   Wait for the components to be in the `Running` state:
+
+   ```none
+   NAME                                                           READY  STATUS    RESTARTS   AGE
+   pod/my-demo-dev-materialize-operator-84ff4b4648-brjhl   1/1     Running  0          12s
+
+   NAME                                                      READY  UP-TO-DATE   AVAILABLE   AGE
+   deployment.apps/my-demo-dev-materialize-operator   1/1     1           1           12s
+
+   NAME                                                              DESIRED   CURRENT   READY   AGE
+   replicaset.apps/my-demo-dev-materialize-operator-84ff4b4648   1        1         1       12s
+   ```
+
+   If you opted to install `cert-manager`, verify its installation and checkhe
+   tatus.
+
+   ```shell
+   kubectl get all -n cert-manager
+   ```
+
+   Wait for the components to be in the `Running` state:
+
+   ```
+   NAME                                           READY   STATUS    RESTARTS   AGE
+   pod/cert-manager-cainjector-686546c9f7-v9hwp   1/1     Running   0          4m20s
+   pod/cert-manager-d6746cf45-cdmb5               1/1     Running   0          4m20s
+   pod/cert-manager-webhook-5f79cd6f4b-rcjbq      1/1     Running   0          4m20s
+
+   NAME                              TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)            AGE
+   service/cert-manager              ClusterIP   172.20.2.136     <none>        9402/TCP           4m20s
+   service/cert-manager-cainjector   ClusterIP   172.20.154.137   <none>        9402/TCP           4m20s
+   service/cert-manager-webhook      ClusterIP   172.20.63.217    <none>        443/TCP,9402/TCP   4m20s
+
+   NAME                                      READY   UP-TO-DATE   AVAILABLE   AGE
+   deployment.apps/cert-manager              1/1     1            1           4m20s
+   deployment.apps/cert-manager-cainjector   1/1     1            1           4m20s
+   deployment.apps/cert-manager-webhook      1/1     1            1           4m20s
+
+   NAME                                                 DESIRED   CURRENT   READY   AGE
+   replicaset.apps/cert-manager-cainjector-686546c9f7   1         1         1       4m20s
+   replicaset.apps/cert-manager-d6746cf45               1         1         1       4m20s
+   replicaset.apps/cert-manager-webhook-5f79cd6f4b      1         1         1
+   4m20s
+   ```
+   {{</ tab >}}
+   {{</ tabs >}}
+
+   If you run into an error during deployment, refer to the
+   [Troubleshooting](/installation/troubleshooting) guide.
+
+
+1. Optional. If you have installed `cert-manager` successfully, and would like
+   to use self-signed
+   [ClusterIssuer](https://cert-manager.io/docs/concepts/issuer/):
+
+
+   1. Uncomment the `use_self_signed_cluster_issuer` variable in your
+      `terraform.tfvars` file.
+
+      ```bash
+      # The namespace and environment variables are used to construct the names of    the resources
+      # e.g. ${namespace}-${environment}-storage, ${namespace}-${environment}-db    etc.
+
+      namespace = "enter-namespace"   // maximum 12 characters, start with a    letter, contain lowercase alphanumeric and hyphens only (e.g. my-demo)
+      environment = "enter-environment" // maximum 8 characters, lowercase    alphanumeric only (e.g., dev, test)
+
+      install_cert_manager = true    // Install cert-manager
+      use_self_signed_cluster_issuer = true // Uncomment, after cert-manager is    installed and running, to use self-signed ClusterIssuer
+      ```
+
+   1. Use terraform plan to review the changes to be made.
+
+      ```bash
+      terraform plan
+      ```
+
+   1. If you are satisfied with the changes, apply.
+
+      ```bash
+      terraform apply
+      ```
+
+      To approve the changes and apply, enter yes.
 
 1. Once the Materialize operator is deployed and running, you can deploy the
    Materialize instances. To deploy Materialize instances, create  a
@@ -384,21 +530,53 @@ for evaluation purposes only. The modules deploy a sample infrastructure on AWS
    The Network Load Balancer (NLB) details are found in the `nlb_details`  in
    the [Terraform output](#aws-terrafrom-output).
 
-
    {{</ tab >}}
 
    {{< tab "Via port forwarding" >}}
 
-   {{% self-managed/port-forwarding-handling %}}
+1. Find your console service name.
+
+   ```shell
+   MZ_SVC_CONSOLE=$(kubectl -n materialize-environment get svc \
+     -o custom-columns="NAME:.metadata.name" --no-headers | grep console)
+   echo $MZ_SVC_CONSOLE
+   ```
+
+2. Port forward the Materialize Console service to your local machine:[^1]
+
+   ```shell
+   (
+     while true; do
+        kubectl port-forward svc/$MZ_SVC_CONSOLE 8080:8080 -n materialize-environment 2>&1 | tee /dev/stderr |
+        grep -q "portforward.go" && echo "Restarting port forwarding due to an error." || break;
+     done;
+   ) &
+   ```
+
+   The command is run in background.
+   <br>- To list the background jobs, use `jobs`.
+   <br>- To bring back to foreground, use `fg %<job-number>`.
+   <br>- To kill the background job, use `kill %<job-number>`.
+
+1. Open a browser and navigate to either
+   [http://localhost:8080](http://localhost:8080), or, if you have enabled TLS,
+   [https://localhost:8080](https://localhost:8080).
+
+[^1]: The port forwarding command uses a while loop to handle a [known
+Kubernetes issue 78446](https://github.com/kubernetes/kubernetes/issues/78446),
+where interrupted long-running requests through a standard port-forward cause
+the port forward to hang. The command automatically restarts the port forwarding
+if an error occurs, ensuring a more stable connection. It detects failures by
+monitoring for "portforward.go" error messages.
 
    {{</ tab>}}
    {{</ tabs >}}
 
-      {{< tip >}}
+   {{< tip >}}
 
-      {{% self-managed/troubleshoot-console-mz_catalog_server_blurb %}}
+   {{% self-managed/troubleshoot-console-mz_catalog_server_blurb %}}
 
-      {{< /tip >}}
+   {{< /tip >}}
 
 ## Next steps
 

@@ -4,6 +4,11 @@ columns:
 
 rows:
 - "Terraform version": |
+    [v0.3.2](https://github.com/MaterializeInc/terraform-aws-materialize/releases/)
+  "Notable changes": |
+    Adds optional TLS support using [`cert-manager`](https://cert-manager.io/docs/) and a self-signed [`ClusterIssuer`](https://cert-manager.io/docs/concepts/issuer/).
+
+- "Terraform version": |
     [v0.3.1](https://github.com/MaterializeInc/terraform-aws-materialize/releases/tag/v0.3.1)
   "Notable changes": |
     By default, deploys OpenEBS and NVMe instance storage to [enable spill-to-disk](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#enabling-disk-support).
