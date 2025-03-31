@@ -14,6 +14,7 @@
 // limitations under the License.
 
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
 
@@ -21,4 +22,10 @@ pub fn format_base_path(date_time: DateTime<Utc>) -> PathBuf {
     let mut path = PathBuf::from("mz-debug");
     path = path.join(date_time.format("%Y-%m-%dT%H:%MZ").to_string());
     path
+}
+
+pub fn validate_pg_connection_string(connection_string: &str) -> Result<String, String> {
+    tokio_postgres::Config::from_str(connection_string)
+        .map(|_| connection_string.to_string())
+        .map_err(|e| format!("Invalid PostgreSQL connection string: {}", e))
 }

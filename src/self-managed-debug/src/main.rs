@@ -8,40 +8,28 @@
 // by the Apache License, Version 2.0.
 
 //! Debug tool for self managed environments.
-
-use std::fmt::Debug;
 use std::process;
 use std::sync::LazyLock;
 
 use chrono::{DateTime, Utc};
 use clap::Parser;
-use futures::future::join_all;
-use k8s_openapi::api::admissionregistration::v1::{
-    MutatingWebhookConfiguration, ValidatingWebhookConfiguration,
-};
-use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, ReplicaSet, StatefulSet};
-use k8s_openapi::api::core::v1::{
-    ConfigMap, Event, Node, PersistentVolume, PersistentVolumeClaim, Pod, Secret, Service,
-    ServiceAccount,
-};
-use k8s_openapi::api::networking::v1::NetworkPolicy;
-use k8s_openapi::api::rbac::v1::{Role, RoleBinding};
-use k8s_openapi::api::storage::v1::StorageClass;
-use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use kube::config::KubeConfigOptions;
 use kube::{Client, Config};
 use mz_build_info::{build_info, BuildInfo};
-use mz_cloud_resources::crd::gen::cert_manager::certificates::Certificate;
-use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
+use mz_ore::task;
 use tracing::error;
 use tracing_subscriber::EnvFilter;
 
-use crate::system_catalog_dumper::create_postgres_connection_string;
+use crate::docker_dumper::DockerDumper;
+use crate::k8s_dumper::K8sDumper;
+use crate::kubectl_port_forwarder::create_kubectl_port_forwarder;
+use crate::utils::validate_pg_connection_string;
 
-mod docker_resource_dumper;
-mod k8s_resource_dumper;
+mod docker_dumper;
+mod k8s_dumper;
+mod kubectl_port_forwarder;
 mod system_catalog_dumper;
 mod utils;
 
@@ -49,42 +37,106 @@ pub const BUILD_INFO: BuildInfo = build_info!();
 pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
 
 #[derive(Parser, Debug, Clone)]
-#[clap(name = "self-managed-debug", next_line_help = true, version = VERSION.as_str())]
-pub struct Args {
+pub struct SelfManagedDebugMode {
     // === Kubernetes options. ===
+    /// If true, the tool will not dump the Kubernetes cluster and will not port-forward the external SQL port.
+    #[clap(long, default_value = "false")]
+    skip_k8s_dump: bool,
+    /// A list of namespaces to dump.
+    #[clap(long= "k8s-namespace", required_unless_present = "skip_k8s_dump", action = clap::ArgAction::Append)]
+    k8s_namespaces: Vec<String>,
+    /// The kubernetes context to use.
     #[clap(long, env = "KUBERNETES_CONTEXT")]
     k8s_context: Option<String>,
-    #[clap(long= "k8s-namespace", required = true, action = clap::ArgAction::Append)]
-    k8s_namespaces: Vec<String>,
-    #[clap(long , action = clap::ArgAction::SetTrue)]
+    /// If true, the tool will dump the values of secrets in the Kubernetes cluster.
+    #[clap(long, default_value = "false")]
     k8s_dump_secret_values: bool,
-    // === Port forwarding options. ===
-    /// If true, the tool will not attempt to port-forward the SQL port.
-    #[clap(long , action = clap::ArgAction::SetTrue)]
-    skip_port_forward: bool,
-    /// The kubernetes service and port with the SQL connection we want to port-forward to
-    /// By default, we will attempt to find both by looking for an environmentd service with a port named "internal sql"
-    #[clap(long, requires = "sql_target_port")]
-    sql_target_service: Option<String>,
-    #[clap(long, requires = "sql_target_service")]
-    sql_target_port: Option<i32>,
-    /// The port that will be forwarded to the target port.
-    /// By default, this will be the same as the target port.
-    #[clap(long)]
-    sql_local_port: Option<i32>,
-    /// The address string to bind the local port to. e.g. "0.0.0.0"
-    /// By default, this will be "localhost".
-    #[clap(long)]
-    sql_local_address: Option<String>,
-    // TODO (debug_tool1): Separate emulator from k8s
-    #[clap(long)]
+    /// If true, the tool will automatically port-forward the external SQL port in the Kubernetes cluster.
+    #[clap(long, default_value = "false")]
+    skip_auto_port_forward: bool,
+    /// The address to listen on for the port-forward.
+    #[clap(long, default_value = "localhost")]
+    auto_port_forward_address: String,
+    /// The port to listen on for the port-forward.
+    #[clap(long, default_value = "6875")]
+    auto_port_forward_port: i32,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct EmulatorDebugMode {
+    /// If true, the tool will not dump the docker container.
+    #[clap(long, default_value = "false")]
+    skip_docker_dump: bool,
+    /// The ID of the docker container to dump.
+    #[clap(long, required_unless_present = "skip_docker_dump")]
     docker_container_id: Option<String>,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub enum DebugMode {
+    /// Debug self-managed environments
+    SelfManaged(SelfManagedDebugMode),
+    /// Debug emulator environments
+    Emulator(EmulatorDebugMode),
+}
+
+#[derive(Parser, Debug, Clone)]
+#[clap(name = "self-managed-debug", next_line_help = true, version = VERSION.as_str())]
+pub struct Args {
+    #[clap(subcommand)]
+    debug_mode: DebugMode,
+    /// The URL of the SQL connection used to dump the system catalog.
+    /// An example URL is `postgres://root@localhost:6875/materialize?sslmode=disable`.
+    // TODO(debug_tool3): Allow users to specify the pgconfig via separate variables
+    #[clap(long, required = true, value_parser = validate_pg_connection_string)]
+    url: String,
+    /// If true, the tool will not dump the system catalog.
+    #[clap(long, default_value = "false")]
+    skip_system_catalog_dump: bool,
+}
+
+pub trait ContainerDumper {
+    fn dump_container_resources(&self) -> impl std::future::Future<Output = ()>;
+}
+pub enum ContainerServiceDumper<'n> {
+    K8s(K8sDumper<'n>),
+    Docker(DockerDumper),
+}
+
+impl<'n> ContainerServiceDumper<'n> {
+    fn new_k8s_dumper(
+        context: &'n Context,
+        client: Client,
+        k8s_namespaces: Vec<String>,
+        k8s_context: Option<String>,
+        k8s_dump_secret_values: bool,
+    ) -> Self {
+        Self::K8s(K8sDumper::new(
+            context,
+            client,
+            k8s_namespaces,
+            k8s_context,
+            k8s_dump_secret_values,
+        ))
+    }
+
+    fn new_docker_dumper(context: &'n Context, docker_container_id: String) -> Self {
+        Self::Docker(DockerDumper::new(context, docker_container_id))
+    }
+}
+
+impl<'n> ContainerDumper for ContainerServiceDumper<'n> {
+    async fn dump_container_resources(&self) {
+        match self {
+            ContainerServiceDumper::K8s(dumper) => dumper.dump_container_resources().await,
+            ContainerServiceDumper::Docker(dumper) => dumper.dump_container_resources().await,
+        }
+    }
 }
 
 #[derive(Clone)]
 pub struct Context {
     start_time: DateTime<Utc>,
-    args: Args,
 }
 
 #[tokio::main]
@@ -102,9 +154,9 @@ async fn main() {
 
     let start_time = Utc::now();
 
-    let context = Context { start_time, args };
+    let context = Context { start_time };
 
-    if let Err(err) = run(context).await {
+    if let Err(err) = run(context, args).await {
         error!(
             "self-managed-debug: fatal: {}\nbacktrace: {}",
             err.display_with_causes(),
@@ -114,160 +166,75 @@ async fn main() {
     }
 }
 
-async fn run(context: Context) -> Result<(), anyhow::Error> {
-    let mut handles = Vec::new();
+async fn run(context: Context, args: Args) -> Result<(), anyhow::Error> {
+    // Depending on if the user is debugging either a k8s environments or docker environment,
+    // dump the respective system's resources.
+    let container_system_dumper = match args.debug_mode {
+        DebugMode::SelfManaged(args) => {
+            if args.skip_k8s_dump {
+                None
+            } else {
+                let client = match create_k8s_client(args.k8s_context.clone()).await {
+                    Ok(client) => client,
+                    Err(e) => {
+                        error!("Failed to create k8s client: {}", e);
+                        return Err(e);
+                    }
+                };
 
-    for namespace in context.args.k8s_namespaces.clone() {
-        handles.extend([
-            k8s_resource_dumper::spawn_dump_kubectl_describe_process::<Pod>(
-                context.clone(),
-                Some(namespace.clone()),
-            ),
-            k8s_resource_dumper::spawn_dump_kubectl_describe_process::<Service>(
-                context.clone(),
-                Some(namespace.clone()),
-            ),
-            k8s_resource_dumper::spawn_dump_kubectl_describe_process::<Deployment>(
-                context.clone(),
-                Some(namespace.clone()),
-            ),
-            k8s_resource_dumper::spawn_dump_kubectl_describe_process::<StatefulSet>(
-                context.clone(),
-                Some(namespace.clone()),
-            ),
-            k8s_resource_dumper::spawn_dump_kubectl_describe_process::<ReplicaSet>(
-                context.clone(),
-                Some(namespace.clone()),
-            ),
-            k8s_resource_dumper::spawn_dump_kubectl_describe_process::<NetworkPolicy>(
-                context.clone(),
-                Some(namespace.clone()),
-            ),
-            k8s_resource_dumper::spawn_dump_kubectl_describe_process::<Event>(
-                context.clone(),
-                Some(namespace.clone()),
-            ),
-            k8s_resource_dumper::spawn_dump_kubectl_describe_process::<Materialize>(
-                context.clone(),
-                Some(namespace.clone()),
-            ),
-            k8s_resource_dumper::spawn_dump_kubectl_describe_process::<Role>(
-                context.clone(),
-                Some(namespace.clone()),
-            ),
-            k8s_resource_dumper::spawn_dump_kubectl_describe_process::<RoleBinding>(
-                context.clone(),
-                Some(namespace.clone()),
-            ),
-            k8s_resource_dumper::spawn_dump_kubectl_describe_process::<ConfigMap>(
-                context.clone(),
-                Some(namespace.clone()),
-            ),
-            k8s_resource_dumper::spawn_dump_kubectl_describe_process::<Secret>(
-                context.clone(),
-                Some(namespace.clone()),
-            ),
-            k8s_resource_dumper::spawn_dump_kubectl_describe_process::<PersistentVolumeClaim>(
-                context.clone(),
-                Some(namespace.clone()),
-            ),
-            k8s_resource_dumper::spawn_dump_kubectl_describe_process::<ServiceAccount>(
-                context.clone(),
-                Some(namespace.clone()),
-            ),
-            k8s_resource_dumper::spawn_dump_kubectl_describe_process::<Certificate>(
-                context.clone(),
-                Some(namespace.clone()),
-            ),
-        ]);
-    }
+                if !args.skip_auto_port_forward {
+                    let port_forwarder = create_kubectl_port_forwarder(&client, &args).await?;
+                    task::spawn(|| "port-forwarding", async move {
+                        port_forwarder.port_forward().await;
+                    });
+                    // There may be a delay between when the port forwarding process starts and when it's ready
+                    // to use. We wait a few seconds to ensure that port forwarding is ready.
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
 
-    handles.extend([
-        k8s_resource_dumper::spawn_dump_kubectl_describe_process::<Node>(context.clone(), None),
-        k8s_resource_dumper::spawn_dump_kubectl_describe_process::<DaemonSet>(
-            context.clone(),
-            None,
-        ),
-        k8s_resource_dumper::spawn_dump_kubectl_describe_process::<StorageClass>(
-            context.clone(),
-            None,
-        ),
-        k8s_resource_dumper::spawn_dump_kubectl_describe_process::<PersistentVolume>(
-            context.clone(),
-            None,
-        ),
-        k8s_resource_dumper::spawn_dump_kubectl_describe_process::<MutatingWebhookConfiguration>(
-            context.clone(),
-            None,
-        ),
-        k8s_resource_dumper::spawn_dump_kubectl_describe_process::<ValidatingWebhookConfiguration>(
-            context.clone(),
-            None,
-        ),
-        k8s_resource_dumper::spawn_dump_kubectl_describe_process::<CustomResourceDefinition>(
-            context.clone(),
-            None,
-        ),
-    ]);
-
-    let client = match create_k8s_client(context.args.k8s_context.clone()).await {
-        Ok(client) => client,
-        Err(e) => {
-            error!("Failed to create k8s client: {}", e);
-            return Err(e);
+                let dumper = ContainerServiceDumper::new_k8s_dumper(
+                    &context,
+                    client,
+                    args.k8s_namespaces,
+                    args.k8s_context,
+                    args.k8s_dump_secret_values,
+                );
+                Some(dumper)
+            }
+        }
+        DebugMode::Emulator(args) => {
+            if args.skip_docker_dump {
+                None
+            } else {
+                let docker_container_id = args
+                    .docker_container_id
+                    .expect("docker_container_id is required");
+                let dumper =
+                    ContainerServiceDumper::new_docker_dumper(&context, docker_container_id);
+                Some(dumper)
+            }
         }
     };
 
-    for namespace in context.args.k8s_namespaces.clone() {
-        k8s_resource_dumper::dump_namespaced_resources(&context, &client, namespace).await;
-    }
-    k8s_resource_dumper::dump_cluster_resources(&context, &client).await;
-
-    if let Some(_) = context.args.docker_container_id {
-        docker_resource_dumper::dump_all_docker_resources(&context).await;
+    if let Some(dumper) = container_system_dumper {
+        dumper.dump_container_resources().await;
     }
 
-    let _port_forward_handle;
-    let mut host_port: Option<i32> = None;
-    let mut target_port: Option<i32> = None;
-    if !context.args.skip_port_forward {
-        // Find the namespace, service name, local port, and target port.
-        let port_forwarding_info =
-            system_catalog_dumper::get_sql_port_forwarding_info(&client, &context.args).await?;
-        host_port = Some(port_forwarding_info.local_port);
-        target_port = Some(port_forwarding_info.target_port);
+    if !args.skip_system_catalog_dump {
+        // Dump the system catalog.
+        let catalog_dumper =
+            match system_catalog_dumper::SystemCatalogDumper::new(&context, &args.url).await {
+                Ok(dumper) => Some(dumper),
+                Err(e) => {
+                    error!("Failed to dump system catalog: {}", e);
+                    None
+                }
+            };
 
-        _port_forward_handle = system_catalog_dumper::spawn_sql_port_forwarding_process(
-            &port_forwarding_info,
-            &context.args,
-        );
-        // There may be a delay between when the port forwarding process starts and when it's ready to use.
-        // We wait a few seconds to ensure that port forwarding is ready.
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    }
-
-    let catalog_dumper = match system_catalog_dumper::SystemCatalogDumper::new(
-        &context,
-        &create_postgres_connection_string(
-            context.args.sql_local_address.as_deref(),
-            host_port,
-            target_port,
-        ),
-    )
-    .await
-    {
-        Ok(dumper) => Some(dumper),
-        Err(e) => {
-            error!("Failed to dump system catalog: {}", e);
-            None
+        if let Some(dumper) = catalog_dumper {
+            dumper.dump_all_relations().await;
         }
-    };
-
-    if let Some(dumper) = catalog_dumper {
-        dumper.dump_all_relations().await;
     }
-
-    join_all(handles).await;
     // TODO(debug_tool1): Compress files to ZIP
     Ok(())
 }

@@ -24,17 +24,17 @@ use mz_ore::retry::{self, RetryResult};
 use tracing::{error, info};
 
 use crate::utils::format_base_path;
-use crate::Context;
+use crate::{ContainerDumper, Context};
 
 static DOCKER_RESOURCE_DUMP_TIMEOUT: Duration = Duration::from_secs(30);
 
-pub struct DockerResourceDumper {
+pub struct DockerDumper {
     container_id: String,
     directory_path: PathBuf,
 }
 
-impl DockerResourceDumper {
-    pub fn new(context: &Context, container_id: String) -> Self {
+impl<'n> DockerDumper {
+    pub fn new(context: &'n Context, container_id: String) -> Self {
         Self {
             directory_path: format_base_path(context.start_time)
                 .join("docker")
@@ -117,18 +117,12 @@ impl DockerResourceDumper {
     }
 }
 
-/// Dump all Docker resources.
-pub async fn dump_all_docker_resources(context: &Context) -> () {
-    let container_id = context
-        .args
-        .docker_container_id
-        .clone()
-        .expect("No container ID provided");
-    let dumper = DockerResourceDumper::new(context, container_id);
-
-    let _ = dumper.dump_logs().await;
-    let _ = dumper.dump_inspect().await;
-    let _ = dumper.dump_stats().await;
+impl ContainerDumper for DockerDumper {
+    async fn dump_container_resources(&self) {
+        let _ = self.dump_logs().await;
+        let _ = self.dump_inspect().await;
+        let _ = self.dump_stats().await;
+    }
 }
 
 /// Helper closure to write output to file

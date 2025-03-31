@@ -35,198 +35,14 @@ use tokio_postgres::{
 };
 use tokio_util::io::StreamReader;
 
-use k8s_openapi::api::core::v1::Service;
-use kube::{Api, Client};
 use mz_ore::collections::HashMap;
-use mz_ore::retry::{self, RetryResult};
+use mz_ore::retry::{self};
 use mz_ore::task::{self, JoinHandle};
 use postgres_openssl::{MakeTlsConnector, TlsStream};
 use tracing::{error, info};
 
 use crate::utils::format_base_path;
-use crate::{Args, Context};
-
-#[derive(Debug, Clone)]
-pub struct SqlPortForwardingInfo {
-    pub namespace: String,
-    pub service_name: String,
-    pub target_port: i32,
-    pub local_port: i32,
-}
-
-pub async fn get_sql_port_forwarding_info(
-    client: &Client,
-    args: &Args,
-) -> Result<SqlPortForwardingInfo, anyhow::Error> {
-    for namespace in &args.k8s_namespaces {
-        let services: Api<Service> = Api::namespaced(client.clone(), namespace);
-
-        // If override for target service and port is provided, verify that the
-        // service exists and has the port.
-        let maybe_service_and_port_override = match (&args.sql_target_service, args.sql_target_port)
-        {
-            (Some(service), Some(port)) => Some((service, port)),
-            _ => None,
-        };
-
-        if let Some((service_override, port_override)) = maybe_service_and_port_override {
-            let service = services.get(service_override).await?;
-            if let Some(spec) = service.spec {
-                let contains_port = spec
-                    .ports
-                    .unwrap_or_default()
-                    .iter()
-                    .any(|port_info| port_info.port == port_override);
-
-                if contains_port {
-                    return Ok(SqlPortForwardingInfo {
-                        namespace: namespace.clone(),
-                        service_name: service_override.clone(),
-                        target_port: port_override,
-                        local_port: args.sql_local_port.unwrap_or(port_override),
-                    });
-                }
-            }
-
-            return Err(anyhow::anyhow!(
-                "Service {} with port {} not found",
-                service_override,
-                port_override
-            ));
-        }
-        let services = services.list(&Default::default()).await?;
-        // Check if any service contains a port with name "internal-sql"
-        let maybe_port_info = services
-            .iter()
-            .filter_map(|service| {
-                let spec = service.spec.as_ref()?;
-                let service_name = service.metadata.name.as_ref()?;
-                Some((spec, service_name))
-            })
-            .flat_map(|(spec, service_name)| {
-                spec.ports
-                    .iter()
-                    .flatten()
-                    .map(move |port| (port, service_name))
-            })
-            .find_map(|(port_info, service_name)| {
-                if let Some(port_name) = &port_info.name {
-                    if port_name.to_lowercase().contains("internal")
-                        && port_name.to_lowercase().contains("sql")
-                    {
-                        return Some(SqlPortForwardingInfo {
-                            namespace: namespace.clone(),
-                            service_name: service_name.to_owned(),
-                            target_port: port_info.port,
-                            local_port: args.sql_local_port.unwrap_or(port_info.port),
-                        });
-                    }
-                }
-
-                None
-            });
-
-        if let Some(port_info) = maybe_port_info {
-            return Ok(port_info);
-        }
-    }
-
-    Err(anyhow::anyhow!("No SQL port forwarding info found"))
-}
-
-/// Spawns a port forwarding process for the given k8s service.
-/// The process will retry if the port-forwarding fails and
-/// will terminate once the port forwarding reaches the max number of retries.
-/// We retry since kubectl port-forward is flaky.
-pub fn spawn_sql_port_forwarding_process(
-    port_forwarding_info: &SqlPortForwardingInfo,
-    args: &Args,
-) -> JoinHandle<()> {
-    let port_forwarding_info = port_forwarding_info.clone();
-
-    let k8s_context = args.k8s_context.clone();
-    let local_address = args.sql_local_address.clone();
-
-    task::spawn(|| "port-forwarding", async move {
-        if let Err(err) = retry::Retry::default()
-            .max_duration(Duration::from_secs(60))
-            .retry_async(|retry_state| {
-                let k8s_context = k8s_context.clone();
-                let namespace = port_forwarding_info.namespace.clone();
-                let service_name = port_forwarding_info.service_name.clone();
-                let local_address = local_address.clone();
-                let local_port = port_forwarding_info.local_port;
-                let target_port = port_forwarding_info.target_port;
-                let local_address_or_default =
-                    local_address.clone().unwrap_or("localhost".to_string());
-
-                info!(
-                    "Spawning port forwarding process for {} from ports {}:{} -> {}",
-                    service_name, local_address_or_default, local_port, target_port
-                );
-
-                async move {
-                    let port_arg_str = format!("{}:{}", &local_port, &target_port);
-                    let service_name_arg_str = format!("services/{}", &service_name);
-                    let mut args = vec![
-                        "port-forward",
-                        &service_name_arg_str,
-                        &port_arg_str,
-                        "-n",
-                        &namespace,
-                    ];
-
-                    if let Some(k8s_context) = &k8s_context {
-                        args.extend(["--context", k8s_context]);
-                    }
-
-                    if let Some(local_address) = &local_address {
-                        args.extend(["--address", local_address]);
-                    }
-
-                    match tokio::process::Command::new("kubectl")
-                        .args(args)
-                        // Silence stdout/stderr
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .kill_on_drop(true)
-                        .output()
-                        .await
-                    {
-                        Ok(output) => {
-                            if !output.status.success() {
-                                let retry_err_msg = format!(
-                                    "Failed to port-forward{}: {}",
-                                    retry_state.next_backoff.map_or_else(
-                                        || "".to_string(),
-                                        |d| format!(", retrying in {:?}", d)
-                                    ),
-                                    String::from_utf8_lossy(&output.stderr)
-                                );
-                                error!("{}", retry_err_msg);
-
-                                return RetryResult::RetryableErr(anyhow::anyhow!(retry_err_msg));
-                            }
-                        }
-                        Err(err) => {
-                            return RetryResult::RetryableErr(anyhow::anyhow!(
-                                "Failed to port-forward: {}",
-                                err
-                            ));
-                        }
-                    }
-                    // The kubectl subprocess's future will only resolve on error, thus the
-                    // code here is unreachable. We return RetryResult::Ok to satisfy
-                    // the type checker.
-                    RetryResult::Ok(())
-                }
-            })
-            .await
-        {
-            error!("{}", err);
-        }
-    })
-}
+use crate::Context;
 
 #[derive(Debug, Clone)]
 pub enum RelationCategory {
@@ -681,6 +497,10 @@ pub async fn create_postgres_connection(
     let mut pg_config = PgConfig::from_str(connection_string)?;
     pg_config.connect_timeout(PG_CONNECTION_TIMEOUT);
     let tls = make_tls(&pg_config)?;
+    info!(
+        "Connecting to PostgreSQL server at {}...",
+        connection_string
+    );
     let (pg_client, pg_conn) = retry::Retry::default()
         .max_duration(PG_CONNECTION_TIMEOUT)
         .retry_async_canceling(|_| {
@@ -1055,20 +875,22 @@ impl<'n> SystemCatalogDumper<'n> {
             }
 
             if let Err(err) = self.dump_relation(relation, replica).await {
-                let docs_link = if replica.is_none()
-                    || replica.map_or(false, |r| r.cluster_name == "mz_catalog_server")
-                {
-                    "https://materialize.com/docs/self-managed/v25.1/installation/troubleshooting/#troubleshooting-console-unresponsiveness"
-                } else {
-                    "https://materialize.com/docs/sql/alter-cluster/#resizing-1"
-                };
-
                 error!(
-                    "{}: {:#}.\nConsider increasing the size of the cluster {}",
+                    "{}: {:#}.",
                     format_catalog_dump_error_message(relation.name, replica),
                     err,
-                    docs_link
                 );
+
+                if err.to_string().contains("deadline has elapsed") {
+                    let docs_link = if replica.is_none()
+                        || replica.map_or(false, |r| r.cluster_name == "mz_catalog_server")
+                    {
+                        "https://materialize.com/docs/self-managed/v25.1/installation/troubleshooting/#troubleshooting-console-unresponsiveness"
+                    } else {
+                        "https://materialize.com/docs/sql/alter-cluster/#resizing-1"
+                    };
+                    error!("Consider increasing the size of the cluster {}", docs_link);
+                }
 
                 cluster_replica_error_counts
                     .entry(replica_key.clone())
@@ -1098,29 +920,4 @@ fn format_file_path(date_time: DateTime<Utc>, cluster_replica: Option<&ClusterRe
     } else {
         path
     }
-}
-
-/// Create a postgres connection string.
-/// The following defaults are used if the arguments are not provided:
-/// - host_address: "localhost"
-/// - host_port: 6877
-/// - target_port: 6877
-pub fn create_postgres_connection_string(
-    host_address: Option<&str>,
-    host_port: Option<i32>,
-    target_port: Option<i32>,
-) -> String {
-    let host_address = host_address.unwrap_or("localhost");
-    let host_port = host_port.unwrap_or(6877);
-    let user = match target_port {
-        // We assume that if the target port is 6877, we are connecting to the
-        // internal SQL port.
-        Some(6877) => "mz_system",
-        _ => "materialize",
-    };
-
-    format!(
-        "postgres://{}:materialize@{}:{}",
-        user, host_address, host_port
-    )
 }
