@@ -10,6 +10,7 @@
 //! Useful queries to inspect the state of a SQL Server instance.
 
 use smallvec::SmallVec;
+use std::sync::Arc;
 
 use crate::cdc::{Lsn, RowFilterOption};
 use crate::{Client, SqlServerError};
@@ -98,4 +99,38 @@ pub async fn get_changes(
         .await?;
 
     Ok(results)
+}
+
+/// Returns the `(schema_name, table_name)` for the table that is tracked by
+/// the specified `capture_instance`.
+pub async fn get_table_for_capture_instance(
+    client: &mut Client,
+    capture_instance: &str,
+) -> Result<(Arc<str>, Arc<str>), SqlServerError> {
+    static TABLE_FOR_CAPTURE_INSTANCE_QUERY: &str = "
+SELECT SCHEMA_NAME(o.schema_id) as schema_name, o.name as obj_name
+FROM sys.objects o
+JOIN cdc.change_tables c
+ON o.object_id = c.source_object_id
+WHERE c.capture_instance = @P1;
+";
+    let result = client
+        .query(TABLE_FOR_CAPTURE_INSTANCE_QUERY, &[&capture_instance])
+        .await?;
+
+    match &result[..] {
+        [row] => {
+            let schema_name: &str = row.try_get("schema_name")?.ok_or_else(|| {
+                SqlServerError::ProgrammingError("missing column 'schema_name'".to_string())
+            })?;
+            let table_name: &str = row.try_get("obj_name")?.ok_or_else(|| {
+                SqlServerError::ProgrammingError("missing column 'schema_name'".to_string())
+            })?;
+
+            Ok((schema_name.into(), table_name.into()))
+        }
+        other => Err(SqlServerError::InvariantViolated(format!(
+            "expected one row found {other:?}"
+        ))),
+    }
 }
