@@ -471,9 +471,10 @@
     description: Convert `s` to uppercase.
 
   - signature: 'reverse(s: str) -> str'
-    description: |
-      Reverse the characters in `s`.
+    description: Reverse the characters in `s`.
 
+  - signature: 'string_to_array(s: str, ) -> str[]'
+    description: |
       Splits the string at occurrences of delimiter and returns a text array of
       the split segments.
 
