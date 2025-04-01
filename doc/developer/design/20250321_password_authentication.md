@@ -94,7 +94,7 @@ Users should be able to manage their passwords and set passwords for roles they 
 
 ### 4. Configurable admin system login:
 
-Passwords for `mz_system` and `mz_support` roles will be settable via environment variables `MZ_MZ_<USER>_EXTERNAL_LOGIN_PASSWORD`. Orchestratord should provide a set of parameters to set these variables via a Kubernetes secret. Additionally, We should enable login of system users through the external ports when they have external login passwords set. Login through the external port must not be possible unless this flag is set, this logic should not rely on whether the internal user has a password. Our Helm chart and Orchestratord will be adjusted to support these parameters.
+Passwords for `mz_system`(v1) and `mz_support`(TBD) roles will be configurable via an Environmentd flag `external_login_password_<USER>`, or `external_login_password_secret_<user>` only one is required to be implemented, but the emulator must support configuration via environment variables. Orchestratord should provide a set of parameters to set these parameters. Additionally, We should enable login of system users through the external ports when they have external login passwords set. Login through the external port must not be possible unless this flag is set, this logic should not rely on whether the internal user has a password. Our Helm chart and Orchestratord will be adjusted to support these parameters.
 
 
 ### 5. HTTP Authentication:
@@ -131,6 +131,10 @@ The authentication mechanism for an environment must be configurable. A new flag
 ### Note on Console builds:
 
 Console does currently do not support runtime or startup configuration. Configuration is handled only at build time. To resolve this we should add a `config.json` or `config.js` file which can be mounted directly into the Nginx container assets. This file should come from a materialize-console config map which must be setup by Orchestratord.  We will also need changes to the console to support reading in configuration from this map. The initial config value here should be `authentication_type: password`, in cloud we should use `authentication_type: frontegg` or `authentication_type: jwt`. The console build process can still be used to set default values for this config file. 
+
+
+### Note on Emulator Auth:
+By default authentication will not enabled in the emulator. This should be configurable with the ability to both turn on authentication and to set a password for the `mz_system` user.
 
 ## Minimal Viable Prototype
 
