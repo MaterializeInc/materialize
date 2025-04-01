@@ -31,4 +31,3 @@ rows:
       deployed on subsequent runs after the `cert-manager` is running.
     Version: |
       [v0.4.0+](/installation/appendix-terraforms/#materialize-on-aws-terraform-modules)
-
