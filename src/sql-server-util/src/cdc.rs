@@ -13,11 +13,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use derivative::Derivative;
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use crate::{Client, SqlServerError};
+use crate::{Client, SqlServerError, TransactionIsolationLevel};
 
 /// A stream of changes from a table in SQL Server that has CDC enabled.
 ///
@@ -61,6 +61,48 @@ impl<'a> CdcStream<'a> {
     pub fn poll_interval(mut self, interval: Duration) -> Self {
         self.poll_interval = interval;
         self
+    }
+
+    /// Takes a snapshot of the upstream table that the specified `capture_instance` is
+    /// replicating changes from.
+    pub async fn snapshot<'b>(
+        &'b mut self,
+    ) -> Result<
+        (
+            Lsn,
+            impl Stream<Item = Result<tiberius::Row, SqlServerError>> + use<'b, 'a>,
+        ),
+        SqlServerError,
+    > {
+        // Determine what table we need to snapshot.
+        let (schema_name, table_name) =
+            crate::inspect::get_table_for_capture_instance(self.client, &*self.capture_instance)
+                .await?;
+        tracing::info!(?schema_name, ?table_name, "got table for capture instance");
+
+        self.client
+            .set_transaction_isolation(TransactionIsolationLevel::Snapshot)
+            .await?;
+        let txn = self.client.transaction().await?;
+
+        // Get the current LSN of the database.
+        let lsn = crate::inspect::get_max_lsn(txn.client).await?;
+        tracing::info!(?schema_name, ?table_name, ?lsn, "starting snapshot");
+
+        // Run a `SELECT` query to snapshot the entire table.
+        let stream = async_stream::stream! {
+            {
+                let query = format!("SELECT * FROM {schema_name}.{table_name};");
+                let snapshot = txn.client.query_streaming(&query, &[]);
+                let mut snapshot = std::pin::pin!(snapshot);
+                while let Some(result) = snapshot.next().await {
+                    yield result;
+                }
+            }
+            txn.commit().await?;
+        };
+
+        Ok((lsn, stream))
     }
 
     /// Consume `self` returning a [`Stream`] of [`CdcEvent`]s.

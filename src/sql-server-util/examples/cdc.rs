@@ -46,6 +46,7 @@ async fn main() -> Result<(), anyhow::Error> {
         .init();
 
     let mut config = tiberius::Config::new();
+
     config.host("localhost");
     config.port(1433);
     config.database("materialize");
@@ -56,9 +57,21 @@ async fn main() -> Result<(), anyhow::Error> {
     mz_ore::task::spawn(|| "sql-server connection", async move { connection.await });
     tracing::info!("connection successful!");
 
-    let changes = client.cdc("materialize_t1").into_stream();
-    let mut changes = std::pin::pin!(changes);
+    let mut cdc_handle = client.cdc("materialize_t1");
 
+    // Get an initial snapshot of the table.
+    let (lsn, snapshot) = cdc_handle.snapshot().await?;
+    {
+        let mut snapshot = std::pin::pin!(snapshot);
+        while let Some(result) = snapshot.next().await {
+            let row = result?;
+            tracing::info!("snapshot: {row:?}");
+        }
+    }
+
+    // Get a stream of changes from the table with the provided LSN.
+    let changes = cdc_handle.start_lsn(lsn).into_stream();
+    let mut changes = std::pin::pin!(changes);
     while let Some(change) = changes.next().await {
         let change = change?;
         tracing::info!("event: {change:?}");

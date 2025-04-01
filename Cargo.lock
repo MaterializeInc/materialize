@@ -7077,6 +7077,7 @@ dependencies = [
  "thiserror 2.0.12",
  "tiberius",
  "tokio",
+ "tokio-stream",
  "tokio-util",
  "tonic-build",
  "tracing",
