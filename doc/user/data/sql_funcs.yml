@@ -471,7 +471,8 @@
     description: Convert `s` to uppercase.
 
   - signature: 'reverse(s: str) -> str'
-    description: Reverse the characters in `s`.
+    description: |
+      Reverse the characters in `s`.
 
       Splits the string at occurrences of delimiter and returns a text array of
       the split segments. 
@@ -486,6 +487,7 @@
       are replaced by NULL.
 
       For example: `string_to_array('xx~~yy~~zz', '~~', 'yy')` → `{xx,NULL,zz}`
+
 - type: Scalar
   description: Scalar functions take a list of scalar expressions
   functions:
