@@ -127,6 +127,7 @@ def get_default_system_parameters(
         "kafka_default_metadata_fetch_interval": "1s",
         "mysql_offset_known_interval": "1s",
         "force_source_table_syntax": "true" if force_source_table_syntax else "false",
+        "ore_overflowing_behavior": "panic",
         "persist_batch_columnar_format": (
             "structured" if version > MzVersion.parse_mz("v0.135.0-dev") else "both_v2"
         ),
