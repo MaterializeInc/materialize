@@ -73,27 +73,10 @@ modules](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/R
 for evaluation purposes only. The modules deploy a sample infrastructure on AWS
 (region `us-east-1`) with the following components:
 
-- A Kuberneted (EKS) cluster
-- A dedicated VPC
-- An S3 for blob storage
-- An RDS PostgreSQL cluster and database for metadata storage
-- Materialize Operator
-- Materialize instances (during subsequent runs after the Operator is running)
-
-- **Starting in v0.3.0 of Materialize on AWS Terraform**, AWS Load Balancer
-  Controller and AWS Network Load Balancers (NLBs) for each
-  Materialize instance. If your deployment is set up using an earlier version of
-  the Materialize AWS Terraform module, and you wish to upgrade to v0.3.0
-  Terraform modules, see the [Upgrade
-  Notes](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/README.md#upgrade-notes).
-
-- **Starting in v0.3.1 of Materialize on AWS Terraform**, OpenEBS and NVMe
-  instance storage to [enable
-  spill-to-disk](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#enabling-disk-support)
-  to support workloads that are larger than can fit into memory.
+{{< yaml-table data="self_managed/aws_terraform_deployed_components" >}}
 
 {{< tip >}}
-{{< self-managed/aws-terraform-configs >}}
+{{% self-managed/aws-terraform-configs %}}
 {{< /tip >}}
 
 1. Open a Terminal window.
@@ -124,11 +107,11 @@ for evaluation purposes only. The modules deploy a sample infrastructure on AWS
 
 
    ```bash
-   # The namespace and environment variables are used to construct the names of the resources
-   # e.g. ${namespace}-${environment}-storage, ${namespace}-${environment}-db etc.
+   # The namespace and environment variables are used to construct the names of   the resources
+   # e.g. ${namespace}-${environment}-storage, ${namespace}-${environment}-db   etc.
 
-   namespace = "enter-namespace"   // maximum 12 characters, start with a letter, contain lowercase alphanumeric and hyphens only (e.g. my-demo)
-   environment = "enter-environment" // maximum 8 characters, lowercase alphanumeric only (e.g., dev, test)
+   namespace = "enter-namespace"   // maximum 12 characters, start with a   letter, contain lowercase alphanumeric and hyphens only (e.g. my-demo)
+   environment = "enter-environment" // maximum 8 characters, lowercase   alphanumeric only (e.g., dev, test)
    ```
 
    {{< tip >}}
@@ -156,10 +139,11 @@ for evaluation purposes only. The modules deploy a sample infrastructure on AWS
    To approve the changes and apply, enter `yes`.
 
    <a name="terraform-output"></a>
+
    Upon successful completion, various fields and their values are output:
 
-   ```bash
-   Apply complete! Resources: 87 added, 0 changed, 0 destroyed.
+   ```none
+   Apply complete! Resources: 89 added, 0 changed, 0 destroyed.
 
    Outputs:
 
@@ -202,28 +186,64 @@ for evaluation purposes only. The modules deploy a sample infrastructure on AWS
    For help with `kubectl` commands, see [kubectl Quick
    reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
-1. By default, the example Terraform installs the Materialize Operator. Verify
-   the installation and check the status:
+1. By default, the example Terraform installs:
 
-    ```shell
-    kubectl get all -n materialize
-    ```
+   {{< tabs >}}
+   {{< tab "Materialize Operator" >}}
 
-    Wait for the components to be in the `Running` state:
+   Verify the installation and check the status:
+   
+   ```shell
+   kubectl get all -n materialize
+   ```
 
-    ```none
-    NAME                                                           READY   STATUS    RESTARTS   AGE
-    pod/my-demo-dev-materialize-operator-84ff4b4648-brjhl   1/1     Running   0          12s
+   Wait for the components to be in the `Running` state:
 
-    NAME                                                      READY   UP-TO-DATE   AVAILABLE   AGE
-    deployment.apps/my-demo-dev-materialize-operator   1/1     1            1           12s
+   ```none
+   NAME                                                           READY  STATUS    RESTARTS   AGE
+   pod/my-demo-dev-materialize-operator-84ff4b4648-brjhl   1/1     Running  0          12s
 
-    NAME                                                               DESIRED   CURRENT   READY   AGE
-    replicaset.apps/my-demo-dev-materialize-operator-84ff4b4648   1         1         1       12s
-    ```
+   NAME                                                      READY  UP-TO-DATE   AVAILABLE   AGE
+   deployment.apps/my-demo-dev-materialize-operator   1/1     1           1           12s
 
-    If you run into an error during deployment, refer to the
-    [Troubleshooting](/installation/troubleshooting) guide.
+   NAME                                                             DESIRED    CURRENT   READY   AGE
+   replicaset.apps/my-demo-dev-materialize-operator-84ff4b4648   1        1         1       12s
+   ```
+
+   {{</ tab >}}
+   {{< tab "cert-manager (Starting in version 0.4.0)" >}}
+   
+   Verify the installation and check the status:
+
+   ```shell
+   kubectl get all -n cert-manager
+   ```
+   Wait for the components to be in the `Running` state:
+   ```
+   NAME                                           READY   STATUS   RESTARTS     AGE
+   pod/cert-manager-cainjector-686546c9f7-v9hwp   1/1     Running  0            4m20s
+   pod/cert-manager-d6746cf45-cdmb5               1/1     Running  0            4m20s
+   pod/cert-manager-webhook-5f79cd6f4b-rcjbq      1/1     Running  0            4m20s
+   NAME                              TYPE        CLUSTER-IP      EXTERNAL-IP     PORT(S)            AGE
+   service/cert-manager              ClusterIP   172.20.2.136    <none>          9402/TCP           4m20s
+   service/cert-manager-cainjector   ClusterIP   172.20.154.137  <none>          9402/TCP           4m20s
+   service/cert-manager-webhook      ClusterIP   172.20.63.217   <none>          443/TCP,9402/TCP   4m20s
+   NAME                                      READY   UP-TO-DATE  AVAILABLE     AGE
+   deployment.apps/cert-manager              1/1     1           1             4m20s
+   deployment.apps/cert-manager-cainjector   1/1     1           1             4m20s
+   deployment.apps/cert-manager-webhook      1/1     1           1             4m20s
+   NAME                                                 DESIRED   CURRENT    READY   AGE
+   replicaset.apps/cert-manager-cainjector-686546c9f7   1         1          1       4m20s
+   replicaset.apps/cert-manager-d6746cf45               1         1          1       4m20s
+   replicaset.apps/cert-manager-webhook-5f79cd6f4b      1         1         1
+   4m20s
+   ```
+
+   {{</ tab >}}
+   {{</ tabs >}}
+
+   If you run into an error during deployment, refer to the
+   [Troubleshooting](/installation/troubleshooting) guide.
 
 1. Once the Materialize operator is deployed and running, you can deploy the
    Materialize instances. To deploy Materialize instances, create  a
@@ -259,6 +279,10 @@ for evaluation purposes only. The modules deploy a sample infrastructure on AWS
    https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#input_materialize_instances)
    for the Materialize instance configuration options.
 
+   Starting in v0.4.0, a self-signed `ClusterIssuer` is deployed by default. The
+   `ClusterIssuer` is deployed on subsequent after the `cert-manager` is
+   running.
+
    {{< tip >}}
    {{% self-managed/aws-terraform-upgrade-notes %}}
 
@@ -276,7 +300,7 @@ for evaluation purposes only. The modules deploy a sample infrastructure on AWS
    following:
 
    ```
-   Plan: 14 to add, 0 to change, 0 to destroy.
+   Plan: 17 to add, 1 to change, 0 to destroy.
    ```
 
 1. If you are satisfied with the changes, apply.
@@ -304,7 +328,7 @@ for evaluation purposes only. The modules deploy a sample infrastructure on AWS
    metadata_backend_url = <sensitive>
    nlb_details = [
      {
-       "arn" = "arn:aws:elasticloadbalancing:us-east-1:400121260767:loadbalancer/net/demo/aeae3d936afebcfe"
+       "arn" = "arn:aws:elasticloadbalancing:us-east-1:000111222333:loadbalancer/net/demo/aeae3d936afebcfe"
        "dns_name" = "demo-aeae3d936afebcfe.elb.us-east-1.amazonaws.com"
      },
    ]
@@ -384,21 +408,63 @@ for evaluation purposes only. The modules deploy a sample infrastructure on AWS
    The Network Load Balancer (NLB) details are found in the `nlb_details`  in
    the [Terraform output](#aws-terrafrom-output).
 
+   The example uses a self-signed ClusterIssuer. As such, you may encounter a
+   warning with regards to the certificate. In production, run with certificates
+   from an official Certificate Authority (CA) rather than self-signed
+   certificates.
 
    {{</ tab >}}
 
    {{< tab "Via port forwarding" >}}
 
-   {{% self-managed/port-forwarding-handling %}}
+1. Find your console service name.
+
+   ```shell
+   MZ_SVC_CONSOLE=$(kubectl -n materialize-environment get svc \
+     -o custom-columns="NAME:.metadata.name" --no-headers | grep console)
+   echo $MZ_SVC_CONSOLE
+   ```
+
+2. Port forward the Materialize Console service to your local machine:[^1]
+
+   ```shell
+   (
+     while true; do
+        kubectl port-forward svc/$MZ_SVC_CONSOLE 8080:8080 -n materialize-environment 2>&1 | tee /dev/stderr |
+        grep -q "portforward.go" && echo "Restarting port forwarding due to an error." || break;
+     done;
+   ) &
+   ```
+
+   The command is run in background.
+   <br>- To list the background jobs, use `jobs`.
+   <br>- To bring back to foreground, use `fg %<job-number>`.
+   <br>- To kill the background job, use `kill %<job-number>`.
+
+1. Open a browser and navigate to
+   [https://localhost:8080](https://localhost:8080) (or, if you have not enabled
+   TLS, [http://localhost:8080](http://localhost:8080)).
+
+   The example uses a self-signed ClusterIssuer. As such, you may encounter a
+   warning with regards to the certificate. In production, run with certificates
+   from an official Certificate Authority (CA) rather than self-signed
+   certificates.
+
+[^1]: The port forwarding command uses a while loop to handle a [known
+Kubernetes issue 78446](https://github.com/kubernetes/kubernetes/issues/78446),
+where interrupted long-running requests through a standard port-forward cause
+the port forward to hang. The command automatically restarts the port forwarding
+if an error occurs, ensuring a more stable connection. It detects failures by
+monitoring for "portforward.go" error messages.
 
    {{</ tab>}}
    {{</ tabs >}}
 
-      {{< tip >}}
+   {{< tip >}}
 
-      {{% self-managed/troubleshoot-console-mz_catalog_server_blurb %}}
+   {{% self-managed/troubleshoot-console-mz_catalog_server_blurb %}}
 
-      {{< /tip >}}
+   {{< /tip >}}
 
 ## Next steps
 

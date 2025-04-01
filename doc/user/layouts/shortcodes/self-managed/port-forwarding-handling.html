@@ -6,7 +6,7 @@
    echo $MZ_SVC_CONSOLE
    ```
 
-2. Port forward the Materialize Console service to your local machine:[^1]
+1. Port forward the Materialize Console service to your local machine:[^1]
 
    ```shell
    (
@@ -22,8 +22,7 @@
    <br>- To bring back to foreground, use `fg %<job-number>`.
    <br>- To kill the background job, use `kill %<job-number>`.
 
-1. Open a browser and navigate to
-[http://localhost:8080](http://localhost:8080).
+1. Open a browser and navigate to [http://localhost:8080](http://localhost:8080).
 
 [^1]: The port forwarding command uses a while loop to handle a [known
 Kubernetes issue 78446](https://github.com/kubernetes/kubernetes/issues/78446),
