@@ -39,6 +39,36 @@ your own production deployment, either:
 
 {{< yaml-table data="self_managed/terraform_list" >}}
 
+{{< tabs >}}
+{{< tab "Materialize on AWS" >}}
+
+{{< yaml-table data="self_managed/aws_terraform_versions" >}}
+
+{{% self-managed/aws-terraform-upgrade-notes %}}
+
+See also [Upgrade Notes](
+https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#upgrade-notes)
+for release-specific upgrade notes.
+
+{{</ tab >}}
+
+{{< tab "Materialize on Azure" >}}
+
+{{< yaml-table data="self_managed/azure_terraform_versions" >}}
+
+{{% self-managed/azure-terraform-upgrade-notes %}}
+
+{{</ tab >}}
+
+{{< tab "Materialize on GCP" >}}
+
+{{< yaml-table data="self_managed/gcp_terraform_versions" >}}
+
+{{% self-managed/gcp-terraform-upgrade-notes %}}
+
+{{</ tab >}}
+{{</ tabs >}}
+
 ### Known Limitations
 
 | Item                                    | Status      |

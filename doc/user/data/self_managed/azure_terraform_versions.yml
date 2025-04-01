@@ -16,3 +16,8 @@ rows:
     [network_config](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#input_network_config)
     is now a required input. Previously, a default value was provided. The
     `examples/simple/main.tf` has been updated to reflect this.
+
+- "Terraform version": |
+    [v0.1.4](https://github.com/MaterializeInc/terraform-azurerm-materialize/releases/tag/v0.1.4)
+  "Notable changes": |
+    Initial release of Materialize on Azure.
