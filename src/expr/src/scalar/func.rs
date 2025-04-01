@@ -47,10 +47,12 @@ use mz_repr::adt::mz_acl_item::{AclItem, AclMode, MzAclItem};
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric, NumericMaxScale};
 use mz_repr::adt::range::{self, Range, RangeBound, RangeOps};
 use mz_repr::adt::regex::{any_regex, Regex};
+use mz_repr::adt::system::Oid;
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use mz_repr::role_id::RoleId;
 use mz_repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
-use mz_sql_pretty::pretty_str;
+use mz_sql_parser::ast::display::FormatMode;
+use mz_sql_pretty::{pretty_str, PrettyConfig};
 use num::traits::CheckedNeg;
 use proptest::prelude::*;
 use proptest::strategy::*;
@@ -73,7 +75,6 @@ pub(crate) mod format;
 pub(crate) mod impls;
 
 pub use impls::*;
-use mz_repr::adt::system::Oid;
 
 /// The maximum size of a newly allocated string. Chosen to be the smallest number to keep our tests
 /// passing without changing. 100MiB is probably higher than what we want, but it's better than no
@@ -2246,8 +2247,14 @@ fn pretty_sql<'a>(
     let width = width.unwrap_int32();
     let width =
         usize::try_from(width).map_err(|_| EvalError::PrettyError("invalid width".into()))?;
-    let pretty =
-        pretty_str(sql, width).map_err(|e| EvalError::PrettyError(e.to_string().into()))?;
+    let pretty = pretty_str(
+        sql,
+        PrettyConfig {
+            width,
+            format_mode: FormatMode::Simple,
+        },
+    )
+    .map_err(|e| EvalError::PrettyError(e.to_string().into()))?;
     let pretty = temp_storage.push_string(pretty);
     Ok(Datum::String(pretty))
 }

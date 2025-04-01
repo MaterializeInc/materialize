@@ -1173,7 +1173,7 @@ async fn execute_request<S: ResultSender>(
                 }
             })
         {
-            return Err(Error::Unsupported(stmt.to_ast_string()));
+            return Err(Error::Unsupported(stmt.to_ast_string_simple()));
         }
         Ok(())
     }
@@ -1284,7 +1284,7 @@ async fn execute_stmt<S: ResultSender>(
         let message = anyhow!(
             "request supplied {actual} parameters, \
                         but {statement} requires {expected}",
-            statement = stmt.to_ast_string(),
+            statement = stmt.to_ast_string_simple(),
             actual = raw_params.len(),
             expected = param_types.len()
         );

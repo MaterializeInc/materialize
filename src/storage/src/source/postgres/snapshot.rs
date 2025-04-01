@@ -404,8 +404,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     (
                         format!(
                             "{}.{}",
-                            Ident::new_unchecked(desc.namespace.clone()).to_ast_string(),
-                            Ident::new_unchecked(desc.name.clone()).to_ast_string()
+                            Ident::new_unchecked(desc.namespace.clone()).to_ast_string_simple(),
+                            Ident::new_unchecked(desc.name.clone()).to_ast_string_simple()
                         ),
                         desc.oid.clone(),
                         outputs.len(),
@@ -473,8 +473,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 // emulate's PG's rules for name formatting.
                 let query = format!(
                     "COPY {}.{} TO STDOUT (FORMAT TEXT, DELIMITER '\t')",
-                    Ident::new_unchecked(namespace).to_ast_string(),
-                    Ident::new_unchecked(table).to_ast_string(),
+                    Ident::new_unchecked(namespace).to_ast_string_simple(),
+                    Ident::new_unchecked(table).to_ast_string_simple(),
                 );
                 let mut stream = pin!(client.copy_out_simple(&query).await?);
 
@@ -623,7 +623,7 @@ async fn export_snapshot_inner(
         .await?;
 
     // Note: Using unchecked here is okay because we're using it in a SQL query.
-    let slot = Ident::new_unchecked(slot).to_ast_string();
+    let slot = Ident::new_unchecked(slot).to_ast_string_simple();
     let temporary_str = if temporary { " TEMPORARY" } else { "" };
     let query =
         format!("CREATE_REPLICATION_SLOT {slot}{temporary_str} LOGICAL \"pgoutput\" USE_SNAPSHOT");

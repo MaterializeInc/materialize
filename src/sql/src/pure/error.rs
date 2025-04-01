@@ -135,7 +135,7 @@ impl PgSourcePurificationError {
 /// Logical errors detectable during purification for a KAFKA SOURCE.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum KafkaSourcePurificationError {
-    #[error("{} is only valid for multi-output sources", .0.to_ast_string())]
+    #[error("{} is only valid for multi-output sources", .0.to_ast_string_simple())]
     ReferencedSubsources(ExternalReferences),
     #[error("KAFKA CONNECTION without TOPIC")]
     ConnectionMissingTopic,

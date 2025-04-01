@@ -26,7 +26,7 @@ aws_conn aws
 mysql_conn mysql
 
 > SHOW CREATE CONNECTION mysql_conn
-materialize.public.mysql_conn   "CREATE CONNECTION \"materialize\".\"public\".\"mysql_conn\" TO MYSQL (AWS CONNECTION = \"materialize\".\"public\".\"aws_conn\", HOST = \"mysql\", SSL MODE = \"required\", USER = \"root\")"
+materialize.public.mysql_conn "CREATE CONNECTION materialize.public.mysql_conn TO MYSQL (AWS CONNECTION = materialize.public.aws_conn, HOST = mysql, SSL MODE = required, USER = root);"
 
 
 ! ALTER CONNECTION mysql_conn SET (PASSWORD SECRET mysqlpass);

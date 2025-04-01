@@ -700,7 +700,7 @@ async fn raw_stream<'a>(
     let lsn = PgLsn::from(resume_lsn.offset);
     let query = format!(
         r#"START_REPLICATION SLOT "{}" LOGICAL {} ("proto_version" '1', "publication_names" '{}')"#,
-        Ident::new_unchecked(slot).to_ast_string(),
+        Ident::new_unchecked(slot).to_ast_string_simple(),
         lsn,
         publication,
     );

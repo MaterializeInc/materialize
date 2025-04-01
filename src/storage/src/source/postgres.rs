@@ -374,7 +374,7 @@ impl From<DefiniteError> for DataflowError {
 
 async fn ensure_replication_slot(client: &Client, slot: &str) -> Result<(), TransientError> {
     // Note: Using unchecked here is okay because we're using it in a SQL query.
-    let slot = Ident::new_unchecked(slot).to_ast_string();
+    let slot = Ident::new_unchecked(slot).to_ast_string_simple();
     let query = format!("CREATE_REPLICATION_SLOT {slot} LOGICAL \"pgoutput\" NOEXPORT_SNAPSHOT");
     match simple_query_opt(client, &query).await {
         Ok(_) => Ok(()),

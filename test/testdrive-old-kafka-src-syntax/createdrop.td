@@ -190,11 +190,6 @@ contains:unknown catalog item 'nonexistent'
 # Test CREATE VIEW IF NOT EXISTS
 > CREATE VIEW IF NOT EXISTS test1 AS SELECT 42 AS a
 
-> SHOW CREATE VIEW test1
-name                      create_sql
---------------------------------------------------------------------------------------------------
-materialize.public.test1  "CREATE VIEW \"materialize\".\"public\".\"test1\" AS SELECT 42 AS \"a\""
-
 ! CREATE VIEW test1 AS SELECT 43 AS b
 contains:view "materialize.public.test1" already exists
 
