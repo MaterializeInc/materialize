@@ -2038,7 +2038,7 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
     }
 }
 
-/// The type for accumulator counting. Set to [`Overflowing<u128>`]
+/// The type for accumulator counting. Set to [`Overflowing<u128>`](mz_ore::Overflowing).
 type AccumCount = mz_ore::Overflowing<i128>;
 
 /// Accumulates values for the various types of accumulable aggregations.

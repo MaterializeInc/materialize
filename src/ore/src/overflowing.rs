@@ -19,7 +19,6 @@
 #[cfg(feature = "proptest")]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "proptest")]
 use std::ops::{Add, AddAssign, Div, Mul, Neg, Rem, Sub, SubAssign};
 
 /// Overflowing number. Operations panic on overflow, even in release mode.
@@ -537,7 +536,7 @@ macro_rules! impl_overflowing_signed {
             /// # Examples
             ///
             /// ```
-            /// # use mz_ore::num::Overflowing;
+            /// # use mz_ore::Overflowing;
             /// assert!(!Overflowing::<i64>::from(-10i32).is_positive());
             /// assert!(Overflowing::<i64>::from(10i32).is_positive());
             /// ```
@@ -551,7 +550,7 @@ macro_rules! impl_overflowing_signed {
             /// # Examples
             ///
             /// ```
-            /// # use mz_ore::num::Overflowing;
+            /// # use mz_ore::Overflowing;
             /// assert!(Overflowing::<i64>::from(-10i32).is_negative());
             /// assert!(!Overflowing::<i64>::from(10i32).is_negative());
             /// ```
@@ -667,9 +666,10 @@ mod overflowing_support {
         match mode {
             #[cfg(not(target_arch = "wasm32"))]
             MODE_SOFT_PANIC => crate::soft_panic_or_log!("Overflow: {description}"),
-            // We cannot use the logging `soft_panic_or_log` in wasm, so we skip logging instead.
+            // We cannot use the logging `soft_panic_or_log` in wasm, so we panic instead (soft
+            // assertions are always enabled in wasm).
             #[cfg(target_arch = "wasm32")]
-            MODE_SOFT_PANIC => crate::soft_panic_no_log!("Overflow: {description}"),
+            MODE_SOFT_PANIC => panic!("Overflow: {description}"),
             MODE_PANIC => panic!("Overflow: {description}"),
             // MODE_IGNORE and all other (impossible) values
             _ => {}
