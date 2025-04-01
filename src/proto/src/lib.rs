@@ -17,7 +17,8 @@ use std::num::{NonZeroU64, TryFromIntError};
 use std::sync::Arc;
 
 use mz_ore::cast::CastFrom;
-use mz_ore::num::{NonNeg, NonNegError, Overflowing};
+use mz_ore::num::{NonNeg, NonNegError};
+use mz_ore::Overflowing;
 use num::Signed;
 use proptest::prelude::Strategy;
 use prost::UnknownEnumValue;

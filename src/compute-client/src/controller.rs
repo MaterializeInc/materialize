@@ -666,9 +666,9 @@ where
 
         let overflowing_behavior = ORE_OVERFLOWING_BEHAVIOR.get(&self.dyncfg);
         match overflowing_behavior.parse() {
-            Ok(behavior) => mz_ore::num::set_overflowing_behavior(behavior),
+            Ok(behavior) => mz_ore::overflowing::set_behavior(behavior),
             Err(err) => {
-                tracing::warn!(
+                tracing::error!(
                     err,
                     overflowing_behavior,
                     "Invalid value for ore_overflowing_behavior"

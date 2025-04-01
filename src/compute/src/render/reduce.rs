@@ -32,7 +32,6 @@ use mz_compute_types::plan::reduce::{
 use mz_expr::{
     AggregateExpr, AggregateFunc, EvalError, MapFilterProject, MirScalarExpr, SafeMfpPlan,
 };
-use mz_ore::num::Overflowing;
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena, SharedRow};
@@ -2040,7 +2039,7 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
 }
 
 /// The type for accumulator counting. Set to [`Overflowing<u128>`]
-type AccumCount = Overflowing<i128>;
+type AccumCount = mz_ore::Overflowing<i128>;
 
 /// Accumulates values for the various types of accumulable aggregations.
 ///

@@ -6234,6 +6234,7 @@ dependencies = [
  "pin-project",
  "prometheus",
  "proptest",
+ "proptest-derive",
  "rand 0.8.5",
  "scopeguard",
  "sentry",

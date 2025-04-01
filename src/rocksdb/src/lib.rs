@@ -38,7 +38,7 @@ pub use config::{defaults, RocksDBConfig, RocksDBTuningParameters};
 
 use crate::config::WriteBufferManagerHandle;
 
-type Diff = mz_ore::num::Overflowing<i64>;
+type Diff = mz_ore::Overflowing<i64>;
 
 /// An error using this RocksDB wrapper.
 #[derive(Debug, thiserror::Error)]

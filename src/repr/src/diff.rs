@@ -8,4 +8,4 @@
 // by the Apache License, Version 2.0.
 
 /// System-wide record count difference type.
-pub type Diff = mz_ore::num::Overflowing<i64>;
+pub type Diff = mz_ore::Overflowing<i64>;

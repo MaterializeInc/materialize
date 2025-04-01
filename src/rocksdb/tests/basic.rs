@@ -18,7 +18,7 @@ use prometheus::{HistogramOpts, HistogramVec, IntCounterVec, Opts};
 use rocksdb::DB;
 
 // Same type as mz_rocksdb::Diff, but it's private.
-type Diff = mz_ore::num::Overflowing<i64>;
+type Diff = mz_ore::Overflowing<i64>;
 
 fn shared_metrics_for_tests() -> Result<Box<RocksDBSharedMetrics>, anyhow::Error> {
     let fake_hist_vec =

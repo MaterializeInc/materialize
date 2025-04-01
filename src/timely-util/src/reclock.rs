@@ -179,7 +179,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{consolidation, AsCollection, Collection, ExchangeData};
 use mz_ore::collections::CollectionExt;
-use mz_ore::num::Overflowing;
+use mz_ore::Overflowing;
 use timely::communication::{Pull, Push};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::Event;

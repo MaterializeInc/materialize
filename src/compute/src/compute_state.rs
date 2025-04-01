@@ -312,9 +312,9 @@ impl ComputeState {
 
         let overflowing_behavior = ORE_OVERFLOWING_BEHAVIOR.get(config);
         match overflowing_behavior.parse() {
-            Ok(behavior) => mz_ore::num::set_overflowing_behavior(behavior),
+            Ok(behavior) => mz_ore::overflowing::set_behavior(behavior),
             Err(err) => {
-                warn!(
+                error!(
                     err,
                     overflowing_behavior, "Invalid value for ore_overflowing_behavior"
                 );
