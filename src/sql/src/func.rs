@@ -4765,19 +4765,19 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
 
         // JSON, MAP, RANGE, LIST, ARRAY
         "->" => Scalar {
-            params!(Jsonb, Int64) => JsonbGetInt64 { stringify: false } => Jsonb, 3212;
-            params!(Jsonb, String) => JsonbGetString { stringify: false } => Jsonb, 3211;
+            params!(Jsonb, Int64) => JsonbGetInt64 => Jsonb, 3212;
+            params!(Jsonb, String) => JsonbGetString => Jsonb, 3211;
             params!(MapAny, String) => MapGetValue => Any, oid::OP_GET_VALUE_MAP_OID;
         },
         "->>" => Scalar {
-            params!(Jsonb, Int64) => JsonbGetInt64 { stringify: true } => String, 3481;
-            params!(Jsonb, String) => JsonbGetString { stringify: true } => String, 3477;
+            params!(Jsonb, Int64) => JsonbGetInt64Stringify => String, 3481;
+            params!(Jsonb, String) => JsonbGetStringStringify => String, 3477;
         },
         "#>" => Scalar {
-            params!(Jsonb, ScalarType::Array(Box::new(ScalarType::String))) => JsonbGetPath { stringify: false } => Jsonb, 3213;
+            params!(Jsonb, ScalarType::Array(Box::new(ScalarType::String))) => JsonbGetPath => Jsonb, 3213;
         },
         "#>>" => Scalar {
-            params!(Jsonb, ScalarType::Array(Box::new(ScalarType::String))) => JsonbGetPath { stringify: true } => String, 3206;
+            params!(Jsonb, ScalarType::Array(Box::new(ScalarType::String))) => JsonbGetPathStringify => String, 3206;
         },
         "@>" => Scalar {
             params!(Jsonb, Jsonb) => JsonbContainsJsonb => Bool, 3246;

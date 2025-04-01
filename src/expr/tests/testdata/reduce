@@ -50,7 +50,7 @@ false
 
 reduce
 (call_unary is_null
-    (call_binary (jsonb_get_int64 false) #1 #0))
+    (call_binary (jsonb_get_int64) #1 #0))
 [(jsonb false) (int64 false)]
 ----
 ((#1 -> #0)) IS NULL

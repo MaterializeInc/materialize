@@ -9,6 +9,8 @@
 
 // See https://developers.google.com/protocol-buffers for what's going on here.
 
+// buf breaking: ignore (Ignore because plans are currently not persisted.)
+
 syntax = "proto3";
 
 package mz_expr.scalar;
@@ -574,9 +576,12 @@ message ProtoBinaryFunc {
     google.protobuf.Empty timezone_interval_timestamp_tz = 95;
     google.protobuf.Empty timezone_interval_time = 96;
     google.protobuf.Empty text_concat = 97;
-    bool jsonb_get_int64 = 98;
-    bool jsonb_get_string = 99;
-    bool jsonb_get_path = 100;
+    google.protobuf.Empty jsonb_get_int64 = 98;
+    google.protobuf.Empty jsonb_get_int64_stringify = 197;
+    google.protobuf.Empty jsonb_get_string = 99;
+    google.protobuf.Empty jsonb_get_string_stringify = 198;
+    google.protobuf.Empty jsonb_get_path = 100;
+    google.protobuf.Empty jsonb_get_path_stringify = 199;
     google.protobuf.Empty jsonb_contains_string = 101;
     google.protobuf.Empty jsonb_concat = 102;
     google.protobuf.Empty jsonb_contains_jsonb = 103;

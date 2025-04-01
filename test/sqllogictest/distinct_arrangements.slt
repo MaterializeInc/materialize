@@ -984,8 +984,8 @@ Arrange␠export␠iterative  2
 Arrange␠export␠iterative␠err  2
 Arrange␠recursive␠err  3
 ArrangeAccumulable␠[val:␠empty]  10
-ArrangeBy[[CallBinary␠{␠func:␠JsonbGetString␠{␠stringify:␠true␠},␠expr1:␠Column(1),␠expr2:␠Literal(Ok(Row{[String("id")]}),␠ColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠})␠}]]  2
-ArrangeBy[[CallBinary␠{␠func:␠JsonbGetString␠{␠stringify:␠true␠},␠expr1:␠Column(2),␠expr2:␠Literal(Ok(Row{[String("id")]}),␠ColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠})␠}]]  1
+ArrangeBy[[CallBinary␠{␠func:␠JsonbGetStringStringify,␠expr1:␠Column(1),␠expr2:␠Literal(Ok(Row{[String("id")]}),␠ColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠})␠}]]  2
+ArrangeBy[[CallBinary␠{␠func:␠JsonbGetStringStringify,␠expr1:␠Column(2),␠expr2:␠Literal(Ok(Row{[String("id")]}),␠ColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠})␠}]]  1
 ArrangeBy[[CallVariadic␠{␠func:␠Coalesce,␠exprs:␠[Column(2),␠Column(3)]␠}]]  2
 ArrangeBy[[Column(0),␠CallUnary␠{␠func:␠CastInt32ToNumeric(CastInt32ToNumeric(None)),␠expr:␠Column(1)␠}]]  1
 ArrangeBy[[Column(0),␠CallUnary␠{␠func:␠CastUint64ToNumeric(CastUint64ToNumeric(None)),␠expr:␠Column(2)␠}]]  1
