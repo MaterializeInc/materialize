@@ -447,8 +447,8 @@ evaluation purposes only. The modules deploy a sample infrastructure on GCP
    gke_cluster = <sensitive>
    load_balancer_details = {
       "demo" = {
-         "balancerd_load_balancer_ip" = "192.168.119.101"
-         "console_load_balancer_ip" = "192.168.71.52"
+         "balancerd_load_balancer_ip" = "192.0.2.10"
+         "console_load_balancer_ip" = "192.0.2.254"
       }
    }
    network = {
@@ -482,11 +482,11 @@ evaluation purposes only. The modules deploy a sample infrastructure on GCP
 
    NAME                                               TYPE           CLUSTER-IP    EXTERNAL-IP     PORT(S)                                        AGE
    service/mzdtwvu4qe4q-balancerd                     ClusterIP      None          <none>          6876/TCP,6875/TCP                              3m54s
-   service/mzdtwvu4qe4q-balancerd-lb                  LoadBalancer   10.52.5.105   192.168.119.101   6875:30844/TCP,6876:32307/TCP                  4m9s
+   service/mzdtwvu4qe4q-balancerd-lb                  LoadBalancer   10.52.5.105   192.0.2.10      6875:30844/TCP,6876:32307/TCP                  4m9s
    service/mzdtwvu4qe4q-cluster-s2-replica-s1-gen-1   ClusterIP      None          <none>          2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   3m53s
    service/mzdtwvu4qe4q-cluster-u1-replica-u1-gen-1   ClusterIP      None          <none>          2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   3m52s
    service/mzdtwvu4qe4q-console                       ClusterIP      None          <none>          8080/TCP                                       3m41s
-   service/mzdtwvu4qe4q-console-lb                    LoadBalancer   10.52.4.2     192.168.71.52    8080:32193/TCP                                 4m9s
+   service/mzdtwvu4qe4q-console-lb                    LoadBalancer   10.52.4.2     192.0.2.254     8080:32193/TCP                                 4m9s
    service/mzdtwvu4qe4q-environmentd                  ClusterIP      None          <none>          6875/TCP,6876/TCP,6877/TCP,6878/TCP            3m54s
    service/mzdtwvu4qe4q-environmentd-1                ClusterIP      None          <none>          6875/TCP,6876/TCP,6877/TCP,6878/TCP            4m9s
    service/mzdtwvu4qe4q-persist-pubsub-1              ClusterIP      None          <none>          6879/TCP                                       4m9s
