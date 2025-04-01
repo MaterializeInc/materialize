@@ -1311,14 +1311,6 @@ impl Coordinator {
         let (item_id, global_id) =
             return_if_err!(self.catalog_mut().allocate_user_id(id_ts).await, ctx);
 
-        if let Some(cluster) = self.catalog().try_get_cluster(in_cluster) {
-            mz_ore::soft_assert_or_log!(
-                cluster.replica_ids().len() <= 1,
-                "cannot create sink in cluster {}; has >1 replicas",
-                cluster.id()
-            );
-        }
-
         let catalog_sink = Sink {
             create_sql: sink.create_sql,
             global_id,

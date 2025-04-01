@@ -3416,9 +3416,6 @@ fn plan_sink(
     // `in_cluster` value we plan to normalize when we canonicalize the create
     // statement.
     let in_cluster = source_sink_cluster_config(scx, &mut stmt.in_cluster)?;
-    if in_cluster.replica_ids().len() > 1 {
-        sql_bail!("cannot create sink in cluster with more than one replica")
-    }
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt))?;
 
     Ok(Plan::CreateSink(CreateSinkPlan {
@@ -5317,23 +5314,19 @@ fn plan_drop_network_policy(
 /// Returns `true` if the cluster has any object that requires a single replica.
 /// Returns `false` if the cluster has no objects.
 fn contains_single_replica_objects(scx: &StatementContext, cluster: &dyn CatalogCluster) -> bool {
-    cluster.bound_objects().iter().any(|id| {
-        let item = scx.catalog.get_item(id);
-        let single_replica_source = match item.source_desc() {
-            Ok(Some(desc)) => match desc.connection {
-                GenericSourceConnection::Kafka(_)
-                | GenericSourceConnection::LoadGenerator(_)
-                | GenericSourceConnection::MySql(_)
-                | GenericSourceConnection::Postgres(_) => {
-                    let enable_multi_replica_sources =
-                        ENABLE_MULTI_REPLICA_SOURCES.get(scx.catalog.system_vars().dyncfgs());
-                    !enable_multi_replica_sources
-                }
-            },
-            _ => false,
-        };
-        single_replica_source || matches!(item.item_type(), CatalogItemType::Sink)
-    })
+    // If this feature is enabled then all objects support multiple-replicas
+    if ENABLE_MULTI_REPLICA_SOURCES.get(scx.catalog.system_vars().dyncfgs()) {
+        false
+    } else {
+        // Othewise we check for the existence of sources or sinks
+        cluster.bound_objects().iter().any(|id| {
+            let item = scx.catalog.get_item(id);
+            matches!(
+                item.item_type(),
+                CatalogItemType::Sink | CatalogItemType::Source
+            )
+        })
+    }
 }
 
 fn plan_drop_cluster_replica(
