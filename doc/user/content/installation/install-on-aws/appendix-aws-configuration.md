@@ -1,22 +1,37 @@
 ---
-title: "Appendix: AWS provider configuration"
-description: ""
+title: "Appendix: Required configuration"
+description: "Required configuration for Materialize on AWS Terraform."
 menu:
   main:
     parent: "install-on-aws"
     identifier: "appendix-aws-provider-config"
     weight: 50
-
+aliases:
+  - /installation/install-on-aws/appendix-aws-provider-configuration
 ---
 
-To use [Materialize on AWS Terraform
-module](https://github.com/MaterializeInc/terraform-aws-materialize), you need
-to declare the following providers:[^1]
+## Required variables
+
+The following variables are required when using the [Materialize on AWS
+Terraform modules](https://github.com/MaterializeInc/terraform-aws-materialize):
+
+{{< yaml-table data="self_managed/aws_required_variables" >}}
+
+For a list of all variables, see the
+[README.md](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#inputs)
+or the [`variables.tf`
+file](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/variables.tf).
+
+## Required providers
+
+Starting in [Materialize on AWS Terraform module
+v0.3.0](https://github.com/MaterializeInc/terraform-aws-materialize), you need
+to declare the following providers:
 
 ```hcl
 provider "aws" {
   region = "us-east-1"  # or some other region
-  # Specify addition AWS provider configuration as needed
+  # Specify additional AWS provider configuration as needed
 }
 
 # Required for EKS authentication
@@ -45,6 +60,3 @@ provider "helm" {
   }
 }
 ```
-
-[^1]: If using the `examples/simple/main.tf`, the example configuration declares
-    the providers for you.

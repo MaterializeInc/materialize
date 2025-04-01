@@ -77,10 +77,11 @@ documentation](https://helm.sh/docs/intro/install/).
 1. Optional. You may need to update your fork of the Terraform modules to
    upgrade.
 
-   {{< yaml-table data="self_managed/aws_terraform_versions" >}}
-
    {{< tip >}}
    {{% self-managed/aws-terraform-upgrade-notes %}}
+
+   See [Materialize on AWS releases](/installation/appendix-terraforms/#materialize-on-aws-terraform-modules) for notable changes.
+
    {{</ tip >}}
 
 1. Configure `kubectl` to connect to your EKS cluster, replacing:
