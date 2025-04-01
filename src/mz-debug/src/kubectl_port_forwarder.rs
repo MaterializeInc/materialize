@@ -17,6 +17,7 @@
 
 use anyhow::Result;
 use k8s_openapi::api::core::v1::Service;
+use kube::api::ListParams;
 use kube::{Api, Client};
 
 use std::time::Duration;
@@ -123,13 +124,18 @@ pub async fn create_kubectl_port_forwarder(
 ) -> Result<KubectlPortForwarder, anyhow::Error> {
     for namespace in &args.k8s_namespaces {
         let services: Api<Service> = Api::namespaced(client.clone(), namespace);
-        let services = services.list(&Default::default()).await?;
+        let services = services
+            .list(&ListParams::default().labels("materialize.cloud/mz-resource-id"))
+            .await?;
         // Finds the sql service that contains a port with name "sql"
         let maybe_port_info = services
             .iter()
             .filter_map(|service| {
                 let spec = service.spec.as_ref()?;
                 let service_name = service.metadata.name.as_ref()?;
+                if !service_name.to_lowercase().contains("balancerd") {
+                    return None;
+                }
                 Some((spec, service_name))
             })
             .flat_map(|(spec, service_name)| {
@@ -141,16 +147,14 @@ pub async fn create_kubectl_port_forwarder(
             .find_map(|(port_info, service_name)| {
                 if let Some(port_name) = &port_info.name {
                     // We want to find the external SQL port and not the internal one
-                    if port_name.to_lowercase().contains("sql")
-                        && !port_name.to_lowercase().contains("internal")
-                    {
+                    if port_name.to_lowercase().contains("pgwire") {
                         return Some(KubectlPortForwarder {
                             context: args.k8s_context.clone(),
                             namespace: namespace.clone(),
                             service_name: service_name.to_owned(),
                             target_port: port_info.port,
-                            local_address: args.auto_port_forward_address.clone(),
-                            local_port: args.auto_port_forward_port,
+                            local_address: args.port_forward_local_address.clone(),
+                            local_port: args.port_forward_local_port,
                         });
                     }
                 }

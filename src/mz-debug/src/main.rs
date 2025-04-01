@@ -28,7 +28,9 @@ use tracing_subscriber::EnvFilter;
 use crate::docker_dumper::DockerDumper;
 use crate::k8s_dumper::K8sDumper;
 use crate::kubectl_port_forwarder::create_kubectl_port_forwarder;
-use crate::utils::{create_tracing_log_file, validate_pg_connection_string, zip_debug_folder};
+use crate::utils::{
+    create_tracing_log_file, format_base_path, validate_pg_connection_string, zip_debug_folder,
+};
 
 mod docker_dumper;
 mod k8s_dumper;
@@ -43,36 +45,37 @@ static ENV_FILTER: &str = "mz_debug=info";
 #[derive(Parser, Debug, Clone)]
 pub struct SelfManagedDebugMode {
     // === Kubernetes options. ===
-    /// If true, the tool will not dump the Kubernetes cluster and will not port-forward the external SQL port.
-    #[clap(long, default_value = "false")]
-    skip_k8s_dump: bool,
+    /// If true, the tool will dump debug information in Kubernetes cluster such as logs, pod describes, etc.
+    #[clap(long, default_value = "true", action = clap::ArgAction::Set)]
+    dump_k8s: bool,
     /// A list of namespaces to dump.
-    #[clap(long= "k8s-namespace", required_unless_present = "skip_k8s_dump", action = clap::ArgAction::Append)]
+    #[clap(long = "k8s-namespace", required_if_eq("dump_k8s", "true"), action = clap::ArgAction::Append)]
     k8s_namespaces: Vec<String>,
     /// The kubernetes context to use.
     #[clap(long, env = "KUBERNETES_CONTEXT")]
     k8s_context: Option<String>,
     /// If true, the tool will dump the values of secrets in the Kubernetes cluster.
-    #[clap(long, default_value = "false")]
+    #[clap(long, default_value = "false", action = clap::ArgAction::Set)]
     k8s_dump_secret_values: bool,
     /// If true, the tool will automatically port-forward the external SQL port in the Kubernetes cluster.
-    #[clap(long, default_value = "false")]
-    skip_auto_port_forward: bool,
+    /// If dump_k8s is false however, we will not automatically port-forward.
+    #[clap(long, default_value = "true", action = clap::ArgAction::Set)]
+    auto_port_forward: bool,
     /// The address to listen on for the port-forward.
-    #[clap(long, default_value = "localhost")]
-    auto_port_forward_address: String,
+    #[clap(long, default_value = "127.0.0.1")]
+    port_forward_local_address: String,
     /// The port to listen on for the port-forward.
     #[clap(long, default_value = "6875")]
-    auto_port_forward_port: i32,
+    port_forward_local_port: i32,
 }
 
 #[derive(Parser, Debug, Clone)]
 pub struct EmulatorDebugMode {
-    /// If true, the tool will not dump the docker container.
-    #[clap(long, default_value = "false")]
-    skip_docker_dump: bool,
+    /// If true, the tool will dump debug information of the docker container.
+    #[clap(long, default_value = "true", action = clap::ArgAction::Set)]
+    dump_docker: bool,
     /// The ID of the docker container to dump.
-    #[clap(long, required_unless_present = "skip_docker_dump")]
+    #[clap(long, required_if_eq("dump_docker", "true"))]
     docker_container_id: Option<String>,
 }
 
@@ -89,17 +92,14 @@ pub enum DebugMode {
 pub struct Args {
     #[clap(subcommand)]
     debug_mode: DebugMode,
-    /// The URL of the SQL connection used to dump the system catalog.
-    /// An example URL is `postgres://root@localhost:6875/materialize?sslmode=disable`.
+    /// If true, the tool will dump the system catalog in Materialize.
+    #[clap(long, default_value = "true", action = clap::ArgAction::Set)]
+    dump_system_catalog: bool,
+    /// The URL of the Materialize SQL connection used to dump the system catalog.
+    /// An example URL is `postgres://root@127.0.0.1:6875/materialize?sslmode=disable`.
     // TODO(debug_tool3): Allow users to specify the pgconfig via separate variables
     #[clap(long, required = true, value_parser = validate_pg_connection_string)]
-    url: String,
-    /// The name of the zip file to create. Should end with `.zip`.
-    #[clap(long, default_value = "mz-debug.zip")]
-    zip_file_name: String,
-    /// If true, the tool will not dump the system catalog.
-    #[clap(long, default_value = "false")]
-    skip_system_catalog_dump: bool,
+    mz_connection_url: String,
 }
 
 pub trait ContainerDumper {
@@ -195,9 +195,7 @@ async fn run(context: Context, args: Args) -> Result<(), anyhow::Error> {
     // dump the respective system's resources.
     let container_system_dumper = match args.debug_mode {
         DebugMode::SelfManaged(args) => {
-            if args.skip_k8s_dump {
-                None
-            } else {
+            if args.dump_k8s {
                 let client = match create_k8s_client(args.k8s_context.clone()).await {
                     Ok(client) => client,
                     Err(e) => {
@@ -206,7 +204,7 @@ async fn run(context: Context, args: Args) -> Result<(), anyhow::Error> {
                     }
                 };
 
-                if !args.skip_auto_port_forward {
+                if args.auto_port_forward {
                     let port_forwarder = create_kubectl_port_forwarder(&client, &args).await?;
                     task::spawn(|| "port-forwarding", async move {
                         port_forwarder.port_forward().await;
@@ -224,10 +222,12 @@ async fn run(context: Context, args: Args) -> Result<(), anyhow::Error> {
                     args.k8s_dump_secret_values,
                 );
                 Some(dumper)
+            } else {
+                None
             }
         }
         DebugMode::Emulator(args) => {
-            if args.skip_docker_dump {
+            if args.dump_docker {
                 None
             } else {
                 let docker_container_id = args
@@ -244,16 +244,20 @@ async fn run(context: Context, args: Args) -> Result<(), anyhow::Error> {
         dumper.dump_container_resources().await;
     }
 
-    if !args.skip_system_catalog_dump {
+    if args.dump_system_catalog {
         // Dump the system catalog.
-        let catalog_dumper =
-            match system_catalog_dumper::SystemCatalogDumper::new(&context, &args.url).await {
-                Ok(dumper) => Some(dumper),
-                Err(e) => {
-                    error!("Failed to dump system catalog: {}", e);
-                    None
-                }
-            };
+        let catalog_dumper = match system_catalog_dumper::SystemCatalogDumper::new(
+            &context,
+            &args.mz_connection_url,
+        )
+        .await
+        {
+            Ok(dumper) => Some(dumper),
+            Err(e) => {
+                error!("Failed to dump system catalog: {}", e);
+                None
+            }
+        };
 
         if let Some(dumper) = catalog_dumper {
             dumper.dump_all_relations().await;
@@ -262,10 +266,14 @@ async fn run(context: Context, args: Args) -> Result<(), anyhow::Error> {
 
     info!("Zipping debug directory");
 
-    if let Err(e) = zip_debug_folder(PathBuf::from(&args.zip_file_name)) {
+    let base_path = format_base_path(context.start_time);
+
+    let zip_file_name = format!("{}.zip", &base_path.display());
+
+    if let Err(e) = zip_debug_folder(PathBuf::from(&zip_file_name), &base_path) {
         error!("Failed to zip debug directory: {}", e);
     } else {
-        info!("Created zip debug at {}", &args.zip_file_name);
+        info!("Created zip debug at {}", &zip_file_name);
     }
 
     Ok(())

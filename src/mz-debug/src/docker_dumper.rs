@@ -33,8 +33,8 @@ pub struct DockerDumper {
     directory_path: PathBuf,
 }
 
-impl<'n> DockerDumper {
-    pub fn new(context: &'n Context, container_id: String) -> Self {
+impl DockerDumper {
+    pub fn new(context: &Context, container_id: String) -> Self {
         Self {
             directory_path: format_base_path(context.start_time)
                 .join("docker")

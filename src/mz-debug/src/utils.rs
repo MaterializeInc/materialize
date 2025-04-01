@@ -22,11 +22,9 @@ use chrono::{DateTime, Utc};
 use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
-static DEBUG_FOLDER: &str = "mz-debug";
-
+/// Formats the base path for the output of the debug tool.
 pub fn format_base_path(date_time: DateTime<Utc>) -> PathBuf {
-    let path = PathBuf::from(DEBUG_FOLDER).join(date_time.format("%Y-%m-%dT%H:%MZ").to_string());
-    path
+    PathBuf::from(format!("mz_debug_{}", date_time.format("%Y-%m-%dT%H:%MZ")))
 }
 
 pub fn validate_pg_connection_string(connection_string: &str) -> Result<String, String> {
@@ -46,8 +44,8 @@ pub fn create_tracing_log_file(date_time: DateTime<Utc>) -> Result<File, std::io
     file
 }
 
-/// Zips a folder and removes it after the zip is created.
-pub fn zip_debug_folder(zip_file_name: PathBuf) -> std::io::Result<()> {
+/// Zips a folder
+pub fn zip_debug_folder(zip_file_name: PathBuf, folder_path: &PathBuf) -> std::io::Result<()> {
     // Delete the zip file if it already exists
     if zip_file_name.exists() {
         std::fs::remove_file(&zip_file_name)?;
@@ -55,7 +53,7 @@ pub fn zip_debug_folder(zip_file_name: PathBuf) -> std::io::Result<()> {
     let zip_file = File::create(&zip_file_name)?;
     let mut zip_writer = ZipWriter::new(BufWriter::new(zip_file));
 
-    for entry in walkdir::WalkDir::new(&DEBUG_FOLDER) {
+    for entry in walkdir::WalkDir::new(folder_path) {
         let entry = entry?;
         let path = entry.path();
 
@@ -65,8 +63,6 @@ pub fn zip_debug_folder(zip_file_name: PathBuf) -> std::io::Result<()> {
             copy(&mut file, &mut zip_writer)?;
         }
     }
-
-    remove_dir_all(&DEBUG_FOLDER)?;
 
     zip_writer.finish()?;
     Ok(())
