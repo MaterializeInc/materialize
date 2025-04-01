@@ -110,9 +110,9 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec, Codec64};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::dyncfgs;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
+use mz_storage_types::{dyncfgs, StorageDiff};
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
@@ -244,7 +244,7 @@ struct BatchSet {
 
 #[derive(Debug)]
 struct FinishedBatch {
-    batch: Batch<SourceData, (), mz_repr::Timestamp, Diff>,
+    batch: Batch<SourceData, (), mz_repr::Timestamp, StorageDiff>,
     data_ts: mz_repr::Timestamp,
 }
 
@@ -421,7 +421,7 @@ where
                 .expect("could not open persist client");
 
             let mut write = persist_client
-                .open_writer::<SourceData, (), mz_repr::Timestamp, Diff>(
+                .open_writer::<SourceData, (), mz_repr::Timestamp, StorageDiff>(
                     shard_id,
                     Arc::new(target_relation_desc),
                     Arc::new(UnitSchema),
@@ -591,7 +591,7 @@ where
             .expect("could not open persist client");
 
         let write = persist_client
-            .open_writer::<SourceData, (), mz_repr::Timestamp, Diff>(
+            .open_writer::<SourceData, (), mz_repr::Timestamp, StorageDiff>(
                 shard_id,
                 Arc::new(target_relation_desc),
                 Arc::new(UnitSchema),
@@ -702,7 +702,9 @@ where
 
                                 let is_value = row.is_ok();
 
-                                builder.add(&SourceData(row), &(), &ts, &diff).await;
+                                builder
+                                    .add(&SourceData(row), &(), &ts, &diff.into_inner())
+                                    .await;
 
                                 source_statistics.inc_updates_staged_by(1);
 
@@ -984,7 +986,7 @@ where
             .await?;
 
         let mut write = persist_client
-            .open_writer::<SourceData, (), mz_repr::Timestamp, Diff>(
+            .open_writer::<SourceData, (), mz_repr::Timestamp, StorageDiff>(
                 shard_id,
                 Arc::new(target_relation_desc),
                 Arc::new(UnitSchema),

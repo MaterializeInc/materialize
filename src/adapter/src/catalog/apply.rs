@@ -42,7 +42,7 @@ use mz_ore::{instrument, soft_assert_no_log};
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId, RelationVersion, Timestamp, VersionedRelationDesc};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersion, Timestamp, VersionedRelationDesc};
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::catalog::{CatalogItem as SqlCatalogItem, CatalogItemType, CatalogSchema, CatalogType};
 use mz_sql::names::{
@@ -1319,7 +1319,7 @@ impl CatalogState {
             // catalog.
             let item_id = entry.id();
             state.insert_entry(entry);
-            builtin_table_updates.extend(state.pack_item_update(item_id, 1));
+            builtin_table_updates.extend(state.pack_item_update(item_id, Diff::ONE));
         }
 
         let mut handles = Vec::new();
@@ -1523,7 +1523,7 @@ impl CatalogState {
         builtin_table_updates.extend(
             item_ids
                 .into_iter()
-                .flat_map(|id| state.pack_item_update(id, 1)),
+                .flat_map(|id| state.pack_item_update(id, Diff::ONE)),
         );
 
         builtin_table_updates

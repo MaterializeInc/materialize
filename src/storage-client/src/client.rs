@@ -628,7 +628,7 @@ impl AppendOnlyUpdate {
     pub fn into_row(self) -> (Row, Diff) {
         match self {
             AppendOnlyUpdate::Row((row, diff)) => (row, diff),
-            AppendOnlyUpdate::Status(status) => (Row::from(status), 1),
+            AppendOnlyUpdate::Status(status) => (Row::from(status), Diff::ONE),
         }
     }
 }

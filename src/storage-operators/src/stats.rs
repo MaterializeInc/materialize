@@ -11,11 +11,12 @@
 
 use mz_persist_client::metrics::Metrics;
 use mz_persist_client::read::{Cursor, LazyPartStats, ReadHandle, Since};
-use mz_repr::{Diff, RelationDesc, Row, Timestamp};
+use mz_repr::{RelationDesc, Row, Timestamp};
 use mz_storage_types::controller::TxnsCodecRow;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_storage_types::stats::RelationPartStats;
+use mz_storage_types::StorageDiff;
 use mz_txn_wal::txn_cache::TxnsCache;
 use timely::progress::Antichain;
 
@@ -27,13 +28,13 @@ use timely::progress::Antichain;
 /// on the stats. (In particular, in the common case of no errors, we don't do any extra
 /// fetching.)
 pub struct StatsCursor {
-    errors: Cursor<SourceData, (), Timestamp, Diff>,
-    data: Cursor<SourceData, (), Timestamp, Diff>,
+    errors: Cursor<SourceData, (), Timestamp, StorageDiff>,
+    data: Cursor<SourceData, (), Timestamp, StorageDiff>,
 }
 
 impl StatsCursor {
     pub async fn new(
-        handle: &mut ReadHandle<SourceData, (), Timestamp, Diff>,
+        handle: &mut ReadHandle<SourceData, (), Timestamp, StorageDiff>,
         // If and only if we are using txn-wal to manage this shard, then
         // this must be Some. This is because the upper might be advanced lazily
         // and we have to go through txn-wal for reads.
@@ -83,17 +84,18 @@ impl StatsCursor {
 
     pub async fn next(
         &mut self,
-    ) -> Option<impl Iterator<Item = (Result<Row, DataflowError>, Timestamp, Diff)> + '_> {
+    ) -> Option<impl Iterator<Item = (Result<Row, DataflowError>, Timestamp, StorageDiff)> + '_>
+    {
         fn expect_decode(
             raw: impl Iterator<
                 Item = (
                     (Result<SourceData, String>, Result<(), String>),
                     Timestamp,
-                    Diff,
+                    StorageDiff,
                 ),
             >,
             is_err: bool,
-        ) -> impl Iterator<Item = (Result<Row, DataflowError>, Timestamp, Diff)> {
+        ) -> impl Iterator<Item = (Result<Row, DataflowError>, Timestamp, StorageDiff)> {
             raw.map(|((k, v), t, d)| {
                 // NB: this matches the decode behaviour in sources
                 let SourceData(row) = k.expect("decode error");

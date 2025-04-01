@@ -1960,7 +1960,7 @@ impl CatalogState {
             Datum::Int32(ip.prefix_len().into()),
             Datum::String(&format!("{}/{}", addr, ip.prefix_len())),
         ]);
-        Ok(BuiltinTableUpdate::row(id, row, 1))
+        Ok(BuiltinTableUpdate::row(id, row, Diff::ONE))
     }
 
     pub fn pack_replica_metric_updates(
@@ -2034,7 +2034,7 @@ impl CatalogState {
                         disk_bytes.into(),
                         (*credits_per_hour).into(),
                     ]);
-                    BuiltinTableUpdate::row(id, row, 1)
+                    BuiltinTableUpdate::row(id, row, Diff::ONE)
                 },
             )
             .collect();

@@ -10,6 +10,7 @@
 use itertools::Itertools;
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_ore::soft_assert_eq_or_log;
+use mz_repr::Diff;
 
 use crate::plan::hir::{HirRelationExpr, HirScalarExpr};
 use crate::plan::lowering::{ColumnMap, Context, CteMap};
@@ -239,7 +240,7 @@ pub(crate) fn attempt_left_join_magic(
                         mz_repr::Row::pack(
                             std::iter::repeat(mz_repr::Datum::Null).take(left_typ.arity()),
                         ),
-                        1,
+                        Diff::ONE,
                     )]),
                     typ: left_typ,
                 },

@@ -359,7 +359,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                             Err(DataflowError::from(err.clone())),
                                         ),
                                         MzOffset::from(u64::MAX),
-                                        1,
+                                        Diff::ONE,
                                     );
                                     data_output.give_fueled(&data_cap_set[0], update).await;
                                 }
@@ -406,7 +406,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                             let update = (
                                 (*oid, *output_index, Err(DataflowError::from(err.clone()))),
                                 MzOffset::from(u64::MAX),
-                                1,
+                                Diff::ONE,
                             );
                             data_output.give_fueled(&data_cap_set[0], update).await;
                         }
@@ -513,7 +513,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                                     Err(DataflowError::from(err.clone())),
                                                 ),
                                                 data_cap_set[0].time().clone(),
-                                                1,
+                                                Diff::ONE,
                                             );
                                             data_output.give_fueled(&data_cap_set[0], update).await;
                                         }
@@ -533,7 +533,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                     let update = (
                                         (oid, output_index, Err(error.into())),
                                         data_cap_set[0].time().clone(),
-                                        1,
+                                        Diff::ONE,
                                     );
                                     data_output.give_fueled(&data_cap_set[0], update).await;
                                     errored.insert(output_index);
@@ -876,7 +876,7 @@ fn extract_transaction<'a>(
                         .flatten()
                         .repeat_clone(row)
                     {
-                        yield (rel, *output, row, 1);
+                        yield (rel, *output, row, Diff::ONE);
                     }
                 }
                 Update(body) => match body.old_tuple() {
@@ -899,8 +899,8 @@ fn extract_transaction<'a>(
                             .flatten()
                             .repeat_clone((old_row, new_row))
                         {
-                            yield (rel, *output, old_row, -1);
-                            yield (rel, *output, new_row, 1);
+                            yield (rel, *output, old_row, Diff::MINUS_ONE);
+                            yield (rel, *output, new_row, Diff::ONE);
                         }
                     }
                     None => {
@@ -911,7 +911,12 @@ fn extract_transaction<'a>(
                             .into_iter()
                             .flatten()
                         {
-                            yield (rel, *output, Err(DefiniteError::DefaultReplicaIdentity), 1);
+                            yield (
+                                rel,
+                                *output,
+                                Err(DefiniteError::DefaultReplicaIdentity),
+                                Diff::ONE,
+                            );
                         }
                     }
                 },
@@ -927,7 +932,7 @@ fn extract_transaction<'a>(
                             .flatten()
                             .repeat_clone(row)
                         {
-                            yield (rel, *output, row, -1);
+                            yield (rel, *output, row, Diff::MINUS_ONE);
                         }
                     }
                     None => {
@@ -938,7 +943,12 @@ fn extract_transaction<'a>(
                             .into_iter()
                             .flatten()
                         {
-                            yield (rel, *output, Err(DefiniteError::DefaultReplicaIdentity), 1);
+                            yield (
+                                rel,
+                                *output,
+                                Err(DefiniteError::DefaultReplicaIdentity),
+                                Diff::ONE,
+                            );
                         }
                     }
                 },
@@ -970,7 +980,7 @@ fn extract_transaction<'a>(
                                 verify_schema(rel_id, &output.desc, &upstream_info, &output.casts)
                             {
                                 errored_outputs.insert(*output_index);
-                                yield (rel_id, *output_index, Err(err), 1);
+                                yield (rel_id, *output_index, Err(err), Diff::ONE);
                             }
 
                             // Error any dropped tables.
@@ -984,7 +994,7 @@ fn extract_transaction<'a>(
                                                 *oid,
                                                 *output,
                                                 Err(DefiniteError::TableDropped),
-                                                1,
+                                                Diff::ONE,
                                             );
                                         }
                                     }
@@ -998,7 +1008,12 @@ fn extract_transaction<'a>(
                         if let Some(outputs) = table_info.get(&rel_id) {
                             for (output, _) in outputs {
                                 if errored_outputs.insert(*output) {
-                                    yield (rel_id, *output, Err(DefiniteError::TableTruncated), 1);
+                                    yield (
+                                        rel_id,
+                                        *output,
+                                        Err(DefiniteError::TableTruncated),
+                                        Diff::ONE,
+                                    );
                                 }
                             }
                         }

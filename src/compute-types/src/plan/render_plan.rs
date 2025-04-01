@@ -1309,7 +1309,7 @@ impl RustType<ProtoExpr> for Expr {
 }
 
 impl RustType<proto_expr::ProtoConstantRows>
-    for Result<Vec<(Row, mz_repr::Timestamp, i64)>, EvalError>
+    for Result<Vec<(Row, mz_repr::Timestamp, Diff)>, EvalError>
 {
     fn into_proto(&self) -> proto_expr::ProtoConstantRows {
         use proto_expr::proto_constant_rows::Result;
@@ -1335,7 +1335,7 @@ impl RustType<proto_expr::ProtoConstantRows>
     }
 }
 
-impl RustType<proto_expr::ProtoUpdateVec> for Vec<(Row, mz_repr::Timestamp, i64)> {
+impl RustType<proto_expr::ProtoUpdateVec> for Vec<(Row, mz_repr::Timestamp, Diff)> {
     fn into_proto(&self) -> proto_expr::ProtoUpdateVec {
         proto_expr::ProtoUpdateVec {
             rows: self.into_proto(),
@@ -1347,12 +1347,12 @@ impl RustType<proto_expr::ProtoUpdateVec> for Vec<(Row, mz_repr::Timestamp, i64)
     }
 }
 
-impl RustType<proto_expr::ProtoUpdate> for (Row, mz_repr::Timestamp, i64) {
+impl RustType<proto_expr::ProtoUpdate> for (Row, mz_repr::Timestamp, Diff) {
     fn into_proto(&self) -> proto_expr::ProtoUpdate {
         proto_expr::ProtoUpdate {
             row: Some(self.0.into_proto()),
             timestamp: self.1.into(),
-            diff: self.2,
+            diff: self.2.into_proto(),
         }
     }
 
@@ -1360,7 +1360,7 @@ impl RustType<proto_expr::ProtoUpdate> for (Row, mz_repr::Timestamp, i64) {
         Ok((
             proto.row.into_rust_if_some("ProtoUpdate::row")?,
             proto.timestamp.into(),
-            proto.diff,
+            proto.diff.into(),
         ))
     }
 }

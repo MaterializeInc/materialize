@@ -87,7 +87,7 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = mz_repr::Timestamp>, FromTime: T
                             let mut update = update.unwrap_list().iter();
                             let data = update.next().unwrap().unwrap_list();
                             let time = update.next().unwrap().unwrap_int64();
-                            let diff = update.next().unwrap().unwrap_int64();
+                            let diff = Diff::from(update.next().unwrap().unwrap_int64());
 
                             row_buf.packer().extend(&data);
                             let data = row_buf.clone();

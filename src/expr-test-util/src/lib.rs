@@ -15,7 +15,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
 use mz_ore::str::separated;
 use mz_repr::explain::{DummyHumanizer, ExprHumanizer};
-use mz_repr::{ColumnType, GlobalId, RelationType, Row, ScalarType};
+use mz_repr::{ColumnType, Diff, GlobalId, RelationType, Row, ScalarType};
 use mz_repr_test_util::*;
 use proc_macro2::TokenTree;
 use serde::{Deserialize, Serialize};
@@ -433,7 +433,7 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
                             .zip(&typ.column_types)
                             .map(|(dat, col_typ)| (&dat[..], &col_typ.scalar_type)),
                     )?;
-                    rows.push((row, 1));
+                    rows.push((row, Diff::ONE));
                 }
             }
             invalid => return Err(format!("invalid rows spec for constant `{}`", invalid)),

@@ -429,7 +429,7 @@ where
                                 &temp_storage,
                                 key_len,
                             ) {
-                                output.push((row, 1));
+                                output.push((row, Diff::ONE));
                             }
                         }
                     }
@@ -448,7 +448,7 @@ where
                                 requested = input.len(),
                             ),
                         );
-                        output.push((EvalError::Internal(message.into()).into(), 1));
+                        output.push((EvalError::Internal(message.into()).into(), Diff::ONE));
                         return;
                     }
 
@@ -483,7 +483,7 @@ where
                             // This situation is not expected, so we log an error if it occurs.
                             let message = "Missing value for key in ReduceCollation";
                             error_logger.log(message, &format!("typ={typ:?}, key={key:?}"));
-                            output.push((EvalError::Internal(message.into()).into(), 1));
+                            output.push((EvalError::Internal(message.into()).into(), Diff::ONE));
                             return;
                         }
                     }
@@ -494,14 +494,14 @@ where
                     {
                         let message = "Rows too large for key in ReduceCollation";
                         error_logger.log(message, &format!("key={key:?}"));
-                        output.push((EvalError::Internal(message.into()).into(), 1));
+                        output.push((EvalError::Internal(message.into()).into(), Diff::ONE));
                     }
 
                     // Finally, if `mfp_after` can produce errors, then we should also report
                     // these here.
                     let Some(mfp) = &mfp_after2 else { return };
-                    if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage) {
-                        output.push((e.into(), 1));
+                    if let Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage) {
+                        output.push((e.into(), Diff::ONE));
                     }
                 },
             );
@@ -550,7 +550,7 @@ where
                         // We're pushing a unit value here because the key is implicitly added by the
                         // arrangement, and the permutation logic takes care of using the key part of the
                         // output.
-                        output.push((Row::default(), 1));
+                        output.push((Row::default(), Diff::ONE));
                     }
                 },
                 move |key, input: &[(_, Diff)], output: &mut Vec<(DataflowError, _)>| {
@@ -560,7 +560,7 @@ where
                         }
                         let message = "Non-positive multiplicity in DistinctBy";
                         error_logger.log(message, &format!("row={key:?}, count={count}"));
-                        output.push((EvalError::Internal(message.into()).into(), 1));
+                        output.push((EvalError::Internal(message.into()).into(), Diff::ONE));
                         return;
                     }
                     // If `mfp_after` can error, then evaluate it here.
@@ -570,8 +570,8 @@ where
                     let mut datums_local = datums2.borrow();
                     datums_local.extend(datum_iter);
 
-                    if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage) {
-                        output.push((e.into(), 1));
+                    if let Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage) {
+                        output.push((e.into(), Diff::ONE));
                     }
                 },
             );
@@ -652,7 +652,7 @@ where
                     if let Some(row) =
                         evaluate_mfp_after(&mfp_after1, &mut datums_local, &temp_storage, key_len)
                     {
-                        output.push((row, 1));
+                        output.push((row, Diff::ONE));
                     }
                 }
             },
@@ -678,9 +678,8 @@ where
                             datums_local.push(row.unpack_first());
                         }
 
-                        if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
-                        {
-                            output.push((e.into(), 1));
+                        if let Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage) {
+                            output.push((e.into(), Diff::ONE));
                         }
                     },
                 )
@@ -778,7 +777,7 @@ where
                     let iter = source.iter().flat_map(|(v, w)| {
                         // Note that in the non-positive case, this is wrong, but harmless because
                         // our other reduction will produce an error.
-                        let count = usize::try_from(*w).unwrap_or(0);
+                        let count = usize::try_from(w.into_inner()).unwrap_or(0);
                         std::iter::repeat(v.to_datum_iter().next().unwrap()).take(count)
                     });
 
@@ -799,7 +798,7 @@ where
                     if let Some(row) =
                         evaluate_mfp_after(&mfp_after1, &mut datums_local, &temp_storage, key_len)
                     {
-                        target.push((row, 1));
+                        target.push((row, Diff::ONE));
                     }
                 }
             })
@@ -808,7 +807,7 @@ where
                 move |key, source, target| {
                     // This part is the same as in the `!fused_unnest_list` if branch above.
                     let iter = source.iter().flat_map(|(v, w)| {
-                        let count = usize::try_from(*w).unwrap_or(0);
+                        let count = usize::try_from(w.into_inner()).unwrap_or(0);
                         std::iter::repeat(v.to_datum_iter().next().unwrap()).take(count)
                     });
 
@@ -831,7 +830,7 @@ where
                             &temp_storage,
                             key_len,
                         ) {
-                            target.push((row, 1));
+                            target.push((row, Diff::ONE));
                         }
                     }
                 }
@@ -863,7 +862,7 @@ where
                                     let message = "Non-positive accumulation in ReduceInaccumulable";
                                     error_logger
                                         .log(message, &format!("value={value:?}, count={count}"));
-                                    target.push((EvalError::Internal(message.into()).into(), 1));
+                                    target.push((EvalError::Internal(message.into()).into(), Diff::ONE));
                                     return;
                                 }
                             }
@@ -871,7 +870,7 @@ where
                             // We know that `mfp_after` can error if it exists, so try to evaluate it here.
                             let Some(mfp) = &mfp_after2 else { return };
                             let iter = source.iter().flat_map(|(mut v, w)| {
-                                let count = usize::try_from(*w).unwrap_or(0);
+                                let count = usize::try_from(w.into_inner()).unwrap_or(0);
                                 // This would ideally use `to_datum_iter` but we cannot as it needs to
                                 // borrow `v` and only presents datums with that lifetime, not any longer.
                                 std::iter::repeat(v.next().unwrap()).take(count)
@@ -889,7 +888,7 @@ where
                             );
                             if let Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
                             {
-                                target.push((e.into(), 1));
+                                target.push((e.into(), Diff::ONE));
                             }
                         },
                     )
@@ -907,7 +906,7 @@ where
                         &format!("{name} Error Check"),
                         move |key, source, target| {
                             let iter = source.iter().flat_map(|(mut v, w)| {
-                                let count = usize::try_from(*w).unwrap_or(0);
+                                let count = usize::try_from(w.into_inner()).unwrap_or(0);
                                 // This would ideally use `to_datum_iter` but we cannot as it needs to
                                 // borrow `v` and only presents datums with that lifetime, not any longer.
                                 std::iter::repeat(v.next().unwrap()).take(count)
@@ -929,7 +928,7 @@ where
                                 // above), so try to evaluate it here.
                                 if let Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
                                 {
-                                    target.push((e.into(), 1));
+                                    target.push((e.into(), Diff::ONE));
                                 }
                             }
                         },
@@ -985,11 +984,11 @@ where
 
                         let message = "Non-positive accumulation in ReduceInaccumulable DISTINCT";
                         error_logger.log(message, &format!("value={value:?}, count={count}"));
-                        t.push((err(message.to_string()), 1));
+                        t.push((err(message.to_string()), Diff::ONE));
                         return;
                     }
                 }
-                t.push((V::ok(()), 1))
+                t.push((V::ok(()), Diff::ONE))
             })
     }
 
@@ -1122,7 +1121,10 @@ where
                                     let message = "Non-positive accumulation in ReduceMinsMaxes";
                                     error_logger
                                         .log(message, &format!("val={val:?}, count={count}"));
-                                    target.push((EvalError::Internal(message.into()).into(), 1));
+                                    target.push((
+                                        EvalError::Internal(message.into()).into(),
+                                        Diff::ONE,
+                                    ));
                                     return;
                                 }
                             }
@@ -1146,7 +1148,7 @@ where
                             if let Result::Err(e) =
                                 mfp.evaluate_inner(&mut datums_local, &temp_storage)
                             {
-                                target.push((e.into(), 1));
+                                target.push((e.into(), Diff::ONE));
                             }
                         },
                     )
@@ -1184,7 +1186,7 @@ where
                             &temp_storage,
                             key_len,
                         ) {
-                            target.push((row, 1));
+                            target.push((row, Diff::ONE));
                         }
                     },
                 )
@@ -1302,7 +1304,7 @@ where
                         );
                         // After complaining, output an error here so that we can eventually
                         // report it in an error stream.
-                        target.push((err(key.into_owned()), -1));
+                        target.push((err(key.into_owned()), Diff::MINUS_ONE));
                         return;
                     }
                 }
@@ -1326,7 +1328,7 @@ where
                 // of the multiplicity of the final result in the input, we only want to have one copy
                 // in the output.
                 target.reserve(source.len().saturating_add(1));
-                target.push((V::ok(row_builder.clone()), -1));
+                target.push((V::ok(row_builder.clone()), Diff::MINUS_ONE));
                 target.extend(source.iter().map(|(values, cnt)| {
                     let mut cnt = *cnt;
                     cnt.negate();
@@ -1380,7 +1382,7 @@ where
                 &format!("data={data:?}, diff={diff}"),
             );
             let m = "tried to build a monotonic reduction on non-monotonic input".into();
-            (EvalError::Internal(m).into(), 1)
+            (EvalError::Internal(m).into(), Diff::ONE)
         });
         // We can place our rows directly into the diff field, and
         // only keep the relevant one corresponding to evaluating our
@@ -1423,7 +1425,7 @@ where
                     if let Some(row) =
                         evaluate_mfp_after(&mfp_after1, &mut datums_local, &temp_storage, key_len)
                     {
-                        output.push((row, 1));
+                        output.push((row, Diff::ONE));
                     }
                 }
             },
@@ -1448,7 +1450,7 @@ where
                         }
                         if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
                         {
-                            output.push((e.into(), 1));
+                            output.push((e.into(), Diff::ONE));
                         }
                     },
                 )
@@ -1508,7 +1510,7 @@ where
                 .iter()
                 .map(|f| accumulable_zero(&f.func))
                 .collect(),
-            0,
+            Diff::ZERO,
         );
 
         let mut to_aggregate = Vec::new();
@@ -1531,7 +1533,7 @@ where
                         }
                         let datum = datum.1;
                         diffs.0[*accumulable_index] = datum_to_accumulator(&aggr.func, datum);
-                        diffs.1 = 1;
+                        diffs.1 = Diff::ONE;
                     }
                     ((key, ()), diffs)
                 }
@@ -1552,7 +1554,7 @@ where
                 )
                 .mz_reduce_abelian::<_, _, _, RowBuilder<_, _>, RowSpine<_, _>>(
                     "Reduced Accumulable Distinct [val: empty]",
-                    move |_k, _s, t| t.push(((), 1)),
+                    move |_k, _s, t| t.push(((), Diff::ONE)),
                 )
                 .as_collection(move |key_val_iter, _| pairer.split(key_val_iter))
                 .explode_one({
@@ -1561,7 +1563,7 @@ where
                         let datum = row.iter().next().unwrap();
                         let mut diffs = zero_diffs.clone();
                         diffs.0[accumulable_index] = datum_to_accumulator(&aggr.func, datum);
-                        diffs.1 = 1;
+                        diffs.1 = Diff::ONE;
                         ((key, ()), diffs)
                     }
                 });
@@ -1608,7 +1610,7 @@ where
                             &temp_storage,
                             key_len,
                         ) {
-                            output.push((row, 1));
+                            output.push((row, Diff::ONE));
                         }
                     }
                 },
@@ -1617,7 +1619,7 @@ where
                     for (aggr, accum) in err_full_aggrs.iter().zip(accums) {
                         // We first test here if inputs without net-positive records are present,
                         // producing an error to the logs and to the query output if that is the case.
-                        if total == 0 && !accum.is_zero() {
+                        if total == Diff::ZERO && !accum.is_zero() {
                             error_logger.log(
                                 "Net-zero records with non-zero accumulation in ReduceAccumulable",
                                 &format!("aggr={aggr:?}, accum={accum:?}"),
@@ -1627,7 +1629,7 @@ where
                                 "Invalid data in source, saw net-zero records for key {key} \
                                  with non-zero accumulation in accumulable aggregate"
                             );
-                            output.push((EvalError::Internal(message.into()).into(), 1));
+                            output.push((EvalError::Internal(message.into()).into(), Diff::ONE));
                         }
                         match (&aggr.func, &accum) {
                             (AggregateFunc::SumUInt16, Accum::SimpleNumber { accum, .. })
@@ -1643,7 +1645,7 @@ where
                                         "Invalid data in source, saw negative accumulation with \
                                          unsigned type for key {key}"
                                     );
-                                    output.push((EvalError::Internal(message.into()).into(), 1));
+                                    output.push((EvalError::Internal(message.into()).into(), Diff::ONE));
                                 }
                             }
                             _ => (), // no more errors to check for at this point!
@@ -1661,7 +1663,7 @@ where
                     }
 
                     if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage) {
-                        output.push((e.into(), 1));
+                        output.push((e.into(), Diff::ONE));
                     }
                 },
             );
@@ -1703,26 +1705,26 @@ fn evaluate_mfp_after<'a, 'b>(
 fn accumulable_zero(aggr_func: &AggregateFunc) -> Accum {
     match aggr_func {
         AggregateFunc::Any | AggregateFunc::All => Accum::Bool {
-            trues: 0,
-            falses: 0,
+            trues: Diff::ZERO,
+            falses: Diff::ZERO,
         },
         AggregateFunc::SumFloat32 | AggregateFunc::SumFloat64 => Accum::Float {
-            accum: 0,
-            pos_infs: 0,
-            neg_infs: 0,
-            nans: 0,
-            non_nulls: 0,
+            accum: AccumCount::ZERO,
+            pos_infs: Diff::ZERO,
+            neg_infs: Diff::ZERO,
+            nans: Diff::ZERO,
+            non_nulls: Diff::ZERO,
         },
         AggregateFunc::SumNumeric => Accum::Numeric {
             accum: OrderedDecimal(NumericAgg::zero()),
-            pos_infs: 0,
-            neg_infs: 0,
-            nans: 0,
-            non_nulls: 0,
+            pos_infs: Diff::ZERO,
+            neg_infs: Diff::ZERO,
+            nans: Diff::ZERO,
+            non_nulls: Diff::ZERO,
         },
         _ => Accum::SimpleNumber {
-            accum: 0,
-            non_nulls: 0,
+            accum: AccumCount::ZERO,
+            non_nulls: Diff::ZERO,
         },
     }
 }
@@ -1732,28 +1734,32 @@ static FLOAT_SCALE: LazyLock<f64> = LazyLock::new(|| f64::from(1 << 24));
 fn datum_to_accumulator(aggregate_func: &AggregateFunc, datum: Datum) -> Accum {
     match aggregate_func {
         AggregateFunc::Count => Accum::SimpleNumber {
-            accum: 0, // unused for AggregateFunc::Count
-            non_nulls: if datum.is_null() { 0 } else { 1 },
+            accum: AccumCount::ZERO, // unused for AggregateFunc::Count
+            non_nulls: if datum.is_null() {
+                Diff::ZERO
+            } else {
+                Diff::ONE
+            },
         },
         AggregateFunc::Any | AggregateFunc::All => match datum {
             Datum::True => Accum::Bool {
-                trues: 1,
-                falses: 0,
+                trues: Diff::ONE,
+                falses: Diff::ZERO,
             },
             Datum::Null => Accum::Bool {
-                trues: 0,
-                falses: 0,
+                trues: Diff::ZERO,
+                falses: Diff::ZERO,
             },
             Datum::False => Accum::Bool {
-                trues: 0,
-                falses: 1,
+                trues: Diff::ZERO,
+                falses: Diff::ONE,
             },
             x => panic!("Invalid argument to AggregateFunc::Any: {x:?}"),
         },
         AggregateFunc::Dummy => match datum {
             Datum::Dummy => Accum::SimpleNumber {
-                accum: 0,
-                non_nulls: 0,
+                accum: AccumCount::ZERO,
+                non_nulls: Diff::ZERO,
             },
             x => panic!("Invalid argument to AggregateFunc::Dummy: {x:?}"),
         },
@@ -1772,15 +1778,13 @@ fn datum_to_accumulator(aggregate_func: &AggregateFunc, datum: Datum) -> Accum {
 
             // Map the floating point value onto a fixed precision domain
             // All special values should map to zero, since they are tracked separately
-            let accum = if nans > 0 || pos_infs > 0 || neg_infs > 0 {
-                0
+            let accum = if nans.is_positive() || pos_infs.is_positive() || neg_infs.is_positive() {
+                AccumCount::ZERO
             } else {
                 // This operation will truncate to i128::MAX if out of range.
                 // TODO(benesch): rewrite to avoid `as`.
                 #[allow(clippy::as_conversions)]
-                {
-                    (n * *FLOAT_SCALE) as i128
-                }
+                { (n * *FLOAT_SCALE) as i128 }.into()
             };
 
             Accum::Float {
@@ -1795,17 +1799,17 @@ fn datum_to_accumulator(aggregate_func: &AggregateFunc, datum: Datum) -> Accum {
             Datum::Numeric(n) => {
                 let (accum, pos_infs, neg_infs, nans) = if n.0.is_infinite() {
                     if n.0.is_negative() {
-                        (NumericAgg::zero(), 0, 1, 0)
+                        (NumericAgg::zero(), Diff::ZERO, Diff::ONE, Diff::ZERO)
                     } else {
-                        (NumericAgg::zero(), 1, 0, 0)
+                        (NumericAgg::zero(), Diff::ONE, Diff::ZERO, Diff::ZERO)
                     }
                 } else if n.0.is_nan() {
-                    (NumericAgg::zero(), 0, 0, 1)
+                    (NumericAgg::zero(), Diff::ZERO, Diff::ZERO, Diff::ONE)
                 } else {
                     // Take a narrow decimal (datum) into a wide decimal
                     // (aggregator).
                     let mut cx_agg = numeric::cx_agg();
-                    (cx_agg.to_width(n.0), 0, 0, 0)
+                    (cx_agg.to_width(n.0), Diff::ZERO, Diff::ZERO, Diff::ZERO)
                 };
 
                 Accum::Numeric {
@@ -1813,15 +1817,15 @@ fn datum_to_accumulator(aggregate_func: &AggregateFunc, datum: Datum) -> Accum {
                     pos_infs,
                     neg_infs,
                     nans,
-                    non_nulls: 1,
+                    non_nulls: Diff::ONE,
                 }
             }
             Datum::Null => Accum::Numeric {
                 accum: OrderedDecimal(NumericAgg::zero()),
-                pos_infs: 0,
-                neg_infs: 0,
-                nans: 0,
-                non_nulls: 0,
+                pos_infs: Diff::ZERO,
+                neg_infs: Diff::ZERO,
+                nans: Diff::ZERO,
+                non_nulls: Diff::ZERO,
             },
             x => panic!("Invalid argument to AggregateFunc::SumNumeric: {x:?}"),
         },
@@ -1831,36 +1835,36 @@ fn datum_to_accumulator(aggregate_func: &AggregateFunc, datum: Datum) -> Accum {
             // accumulated.
             match datum {
                 Datum::Int16(i) => Accum::SimpleNumber {
-                    accum: i128::from(i),
-                    non_nulls: 1,
+                    accum: i.into(),
+                    non_nulls: Diff::ONE,
                 },
                 Datum::Int32(i) => Accum::SimpleNumber {
-                    accum: i128::from(i),
-                    non_nulls: 1,
+                    accum: i.into(),
+                    non_nulls: Diff::ONE,
                 },
                 Datum::Int64(i) => Accum::SimpleNumber {
-                    accum: i128::from(i),
-                    non_nulls: 1,
+                    accum: i.into(),
+                    non_nulls: Diff::ONE,
                 },
                 Datum::UInt16(u) => Accum::SimpleNumber {
-                    accum: i128::from(u),
-                    non_nulls: 1,
+                    accum: u.into(),
+                    non_nulls: Diff::ONE,
                 },
                 Datum::UInt32(u) => Accum::SimpleNumber {
-                    accum: i128::from(u),
-                    non_nulls: 1,
+                    accum: u.into(),
+                    non_nulls: Diff::ONE,
                 },
                 Datum::UInt64(u) => Accum::SimpleNumber {
-                    accum: i128::from(u),
-                    non_nulls: 1,
+                    accum: u.into(),
+                    non_nulls: Diff::ONE,
                 },
                 Datum::MzTimestamp(t) => Accum::SimpleNumber {
-                    accum: i128::from(u64::from(t)),
-                    non_nulls: 1,
+                    accum: u64::from(t).into(),
+                    non_nulls: Diff::ONE,
                 },
                 Datum::Null => Accum::SimpleNumber {
-                    accum: 0,
-                    non_nulls: 0,
+                    accum: AccumCount::ZERO,
+                    non_nulls: Diff::ZERO,
                 },
                 x => panic!("Accumulating non-integer data: {x:?}"),
             }
@@ -1872,16 +1876,16 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
     // The finished value depends on the aggregation function in a variety of ways.
     // For all aggregates but count, if only null values were
     // accumulated, then the output is null.
-    if total > 0 && accum.is_zero() && *aggr_func != AggregateFunc::Count {
+    if total.is_positive() && accum.is_zero() && *aggr_func != AggregateFunc::Count {
         Datum::Null
     } else {
         match (&aggr_func, &accum) {
             (AggregateFunc::Count, Accum::SimpleNumber { non_nulls, .. }) => {
-                Datum::Int64(*non_nulls)
+                Datum::Int64(non_nulls.into_inner())
             }
             (AggregateFunc::All, Accum::Bool { falses, trues }) => {
                 // If any false, else if all true, else must be no false and some nulls.
-                if *falses > 0 {
+                if falses.is_positive() {
                     Datum::False
                 } else if *trues == total {
                     Datum::True
@@ -1891,7 +1895,7 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
             }
             (AggregateFunc::Any, Accum::Bool { falses, trues }) => {
                 // If any true, else if all false, else must be no true and some nulls.
-                if *trues > 0 {
+                if trues.is_positive() {
                     Datum::True
                 } else if *falses == total {
                     Datum::False
@@ -1908,7 +1912,7 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                 // TODO(benesch): are we guaranteed to have less than 2^32 summands?
                 // If so, rewrite to avoid `as`.
                 #[allow(clippy::as_conversions)]
-                Datum::Int64(*accum as i64)
+                Datum::Int64(accum.into_inner() as i64)
             }
             (AggregateFunc::SumInt64, Accum::SimpleNumber { accum, .. }) => Datum::from(*accum),
             (AggregateFunc::SumUInt16, Accum::SimpleNumber { accum, .. })
@@ -1920,7 +1924,7 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                     // signed types.
                     // TODO(vmarcos): remove potentially dangerous usage of `as`.
                     #[allow(clippy::as_conversions)]
-                    Datum::UInt64(*accum as u64)
+                    Datum::UInt64(accum.into_inner() as u64)
                 } else {
                     // Note that we return a value here, but an error in the other
                     // operator of the reduce_pair. Therefore, we expect that this
@@ -1948,19 +1952,19 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                     non_nulls: _,
                 },
             ) => {
-                if *nans > 0 || (*pos_infs > 0 && *neg_infs > 0) {
+                if nans.is_positive() || (pos_infs.is_positive() && neg_infs.is_positive()) {
                     // NaNs are NaNs and cases where we've seen a
                     // mixture of positive and negative infinities.
                     Datum::from(f32::NAN)
-                } else if *pos_infs > 0 {
+                } else if pos_infs.is_positive() {
                     Datum::from(f32::INFINITY)
-                } else if *neg_infs > 0 {
+                } else if neg_infs.is_positive() {
                     Datum::from(f32::NEG_INFINITY)
                 } else {
                     // TODO(benesch): remove potentially dangerous usage of `as`.
                     #[allow(clippy::as_conversions)]
                     {
-                        Datum::from(((*accum as f64) / *FLOAT_SCALE) as f32)
+                        Datum::from(((accum.into_inner() as f64) / *FLOAT_SCALE) as f32)
                     }
                 }
             }
@@ -1974,19 +1978,19 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                     non_nulls: _,
                 },
             ) => {
-                if *nans > 0 || (*pos_infs > 0 && *neg_infs > 0) {
+                if nans.is_positive() || (pos_infs.is_positive() && neg_infs.is_positive()) {
                     // NaNs are NaNs and cases where we've seen a
                     // mixture of positive and negative infinities.
                     Datum::from(f64::NAN)
-                } else if *pos_infs > 0 {
+                } else if pos_infs.is_positive() {
                     Datum::from(f64::INFINITY)
-                } else if *neg_infs > 0 {
+                } else if neg_infs.is_positive() {
                     Datum::from(f64::NEG_INFINITY)
                 } else {
                     // TODO(benesch): remove potentially dangerous usage of `as`.
                     #[allow(clippy::as_conversions)]
                     {
-                        Datum::from((*accum as f64) / *FLOAT_SCALE)
+                        Datum::from((accum.into_inner() as f64) / *FLOAT_SCALE)
                     }
                 }
             }
@@ -2009,9 +2013,9 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                 // the amount of overflow, making it invertible.
                 let inf_d = d.is_infinite();
                 let neg_d = d.is_negative();
-                let pos_inf = *pos_infs > 0 || (inf_d && !neg_d);
-                let neg_inf = *neg_infs > 0 || (inf_d && neg_d);
-                if *nans > 0 || (pos_inf && neg_inf) {
+                let pos_inf = pos_infs.is_positive() || (inf_d && !neg_d);
+                let neg_inf = neg_infs.is_positive() || (inf_d && neg_d);
+                if nans.is_positive() || (pos_inf && neg_inf) {
                     // NaNs are NaNs and cases where we've seen a
                     // mixture of positive and negative infinities.
                     Datum::from(Numeric::nan())
@@ -2033,6 +2037,9 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
         }
     }
 }
+
+/// The type for accumulator counting. Set to [`Overflowing<u128>`](mz_ore::Overflowing).
+type AccumCount = mz_ore::Overflowing<i128>;
 
 /// Accumulates values for the various types of accumulable aggregations.
 ///
@@ -2056,7 +2063,7 @@ enum Accum {
     /// Accumulates simple numeric values.
     SimpleNumber {
         /// The accumulation of all non-NULL values observed.
-        accum: i128,
+        accum: AccumCount,
         /// The number of non-NULL values observed.
         non_nulls: Diff,
     },
@@ -2064,7 +2071,7 @@ enum Accum {
     Float {
         /// Accumulates non-special float values, mapped to a fixed precision i128 domain to
         /// preserve associativity and commutativity
-        accum: i128,
+        accum: AccumCount,
         /// Counts +inf
         pos_infs: Diff,
         /// Counts -inf
@@ -2238,7 +2245,7 @@ impl Multiply<Diff> for Accum {
                 falses: falses * factor,
             },
             Accum::SimpleNumber { accum, non_nulls } => Accum::SimpleNumber {
-                accum: accum * i128::from(factor),
+                accum: accum * AccumCount::from(factor),
                 non_nulls: non_nulls * factor,
             },
             Accum::Float {
@@ -2248,10 +2255,12 @@ impl Multiply<Diff> for Accum {
                 nans,
                 non_nulls,
             } => Accum::Float {
-                accum: accum.checked_mul(i128::from(factor)).unwrap_or_else(|| {
-                    warn!("Float accumulator overflow. Incorrect results possible");
-                    accum.wrapping_mul(i128::from(factor))
-                }),
+                accum: accum
+                    .checked_mul(AccumCount::from(factor))
+                    .unwrap_or_else(|| {
+                        warn!("Float accumulator overflow. Incorrect results possible");
+                        accum.wrapping_mul(AccumCount::from(factor))
+                    }),
                 pos_infs: pos_infs * factor,
                 neg_infs: neg_infs * factor,
                 nans: nans * factor,
@@ -2265,7 +2274,7 @@ impl Multiply<Diff> for Accum {
                 non_nulls,
             } => {
                 let mut cx = numeric::cx_agg();
-                let mut f = NumericAgg::from(factor);
+                let mut f = NumericAgg::from(factor.into_inner());
                 // Unlike `plus_equals`, not necessary to reduce after this operation because `f` will
                 // always be an integer, i.e. we are never increasing the
                 // values' scale.
@@ -2575,14 +2584,14 @@ mod window_agg_helpers {
             AccumulableOneByOneAggr {
                 aggr_func: aggr_func.clone(),
                 accum: accumulable_zero(aggr_func),
-                total: 0,
+                total: Diff::ZERO,
             }
         }
 
         fn give(&mut self, d: &Datum) {
             self.accum
                 .plus_equals(&datum_to_accumulator(&self.aggr_func, d.clone()));
-            self.total += 1;
+            self.total += Diff::ONE;
         }
 
         fn get_current_aggregate<'a>(&self, temp_storage: &'a RowArena) -> Datum<'a> {

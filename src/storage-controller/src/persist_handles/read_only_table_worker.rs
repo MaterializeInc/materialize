@@ -17,10 +17,11 @@ use differential_dataflow::lattice::Lattice;
 use futures::FutureExt;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::Codec64;
-use mz_repr::{Diff, GlobalId, TimestampManipulation};
+use mz_repr::{GlobalId, TimestampManipulation};
 use mz_storage_client::client::{TableData, Update};
 use mz_storage_types::controller::InvalidUpper;
 use mz_storage_types::sources::SourceData;
+use mz_storage_types::StorageDiff;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::Span;
@@ -50,11 +51,12 @@ pub(crate) async fn read_only_mode_table_worker<
     T: Timestamp + Lattice + Codec64 + TimestampManipulation,
 >(
     mut rx: tokio::sync::mpsc::UnboundedReceiver<(Span, PersistTableWriteCmd<T>)>,
-    txns_handle: WriteHandle<SourceData, (), T, Diff>,
+    txns_handle: WriteHandle<SourceData, (), T, StorageDiff>,
 ) {
-    let mut write_handles = BTreeMap::<GlobalId, WriteHandle<SourceData, (), T, Diff>>::new();
+    let mut write_handles =
+        BTreeMap::<GlobalId, WriteHandle<SourceData, (), T, StorageDiff>>::new();
 
-    let gen_upper_future = |mut handle: WriteHandle<SourceData, (), T, i64>| {
+    let gen_upper_future = |mut handle: WriteHandle<SourceData, (), T, StorageDiff>| {
         let fut = async move {
             let current_upper = handle.shared_upper();
             handle.wait_for_upper_past(&current_upper).await;
@@ -114,7 +116,7 @@ pub(crate) async fn read_only_mode_table_worker<
 
 /// Handles the given commands.
 async fn handle_commands<T>(
-    write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), T, Diff>>,
+    write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), T, StorageDiff>>,
     mut commands: VecDeque<(Span, PersistTableWriteCmd<T>)>,
 ) -> ControlFlow<String>
 where
@@ -259,7 +261,7 @@ where
 /// Advances the upper of all registered tables (which are only the migrated
 /// builtin tables) to the given `upper`.
 async fn advance_uppers<T>(
-    write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), T, Diff>>,
+    write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), T, StorageDiff>>,
     upper: Antichain<T>,
 ) where
     T: Timestamp + Lattice + Codec64 + TimestampManipulation,

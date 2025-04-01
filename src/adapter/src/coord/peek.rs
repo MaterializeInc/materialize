@@ -466,14 +466,15 @@ impl crate::coord::Coordinator {
 
             let mut results = Vec::new();
             for (row, count) in rows {
-                if count < 0 {
+                if count.is_negative() {
                     Err(EvalError::InvalidParameterValue(
                         format!("Negative multiplicity in constant result: {}", count).into(),
                     ))?
                 };
-                if count > 0 {
+                if count.is_positive() {
                     let count = usize::cast_from(
-                        u64::try_from(count).expect("known to be positive from check above"),
+                        u64::try_from(count.into_inner())
+                            .expect("known to be positive from check above"),
                     );
                     results.push((
                         row,
@@ -853,9 +854,9 @@ mod tests {
         assert_eq!(text_string_at(&lookup, ctx_gen), lookup_exp);
 
         let mut constant_rows = vec![
-            (Row::pack(Some(Datum::String("hello"))), 1),
-            (Row::pack(Some(Datum::String("world"))), 2),
-            (Row::pack(Some(Datum::String("star"))), 500),
+            (Row::pack(Some(Datum::String("hello"))), Diff::ONE),
+            (Row::pack(Some(Datum::String("world"))), 2.into()),
+            (Row::pack(Some(Datum::String("star"))), 500.into()),
         ];
         let constant_exp1 =
             "Constant\n  - (\"hello\")\n  - ((\"world\") x 2)\n  - ((\"star\") x 500)\n";
@@ -866,7 +867,8 @@ mod tests {
             ),
             constant_exp1
         );
-        constant_rows.extend((0..20).map(|i| (Row::pack(Some(Datum::String(&i.to_string()))), 1)));
+        constant_rows
+            .extend((0..20).map(|i| (Row::pack(Some(Datum::String(&i.to_string()))), Diff::ONE)));
         let constant_exp2 =
             "Constant\n  total_rows (diffs absed): 523\n  first_rows:\n    - (\"hello\")\
         \n    - ((\"world\") x 2)\n    - ((\"star\") x 500)\n    - (\"0\")\n    - (\"1\")\

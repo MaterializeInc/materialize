@@ -389,7 +389,7 @@ impl TransactionalSnapshotProducer {
                 output_indexes
                     .iter()
                     .repeat_clone(msg)
-                    .map(move |(idx, msg)| ((*idx, msg), MzOffset::from(iter_round), 1))
+                    .map(move |(idx, msg)| ((*idx, msg), MzOffset::from(iter_round), Diff::ONE))
             });
 
         if !finished {
@@ -504,7 +504,7 @@ impl UpdateProducer {
                 output_indexes
                     .iter()
                     .repeat_clone(msg)
-                    .map(move |(idx, msg)| ((*idx, msg), MzOffset::from(iter_offset), 1))
+                    .map(move |(idx, msg)| ((*idx, msg), MzOffset::from(iter_offset), Diff::ONE))
             });
 
         // Advance to the next offset.

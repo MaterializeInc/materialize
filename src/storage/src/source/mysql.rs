@@ -389,7 +389,7 @@ async fn return_definite_error(
         let update = (
             (*output_index, Err(err.clone().into())),
             GtidPartition::new_range(Uuid::minimum(), Uuid::maximum(), GtidState::MAX),
-            1,
+            Diff::ONE,
         );
         data_handle.give_fueled(&data_cap_set[0], update).await;
     }

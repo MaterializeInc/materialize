@@ -154,7 +154,7 @@ fn drain_through_mfp<T>(
             &mut datums_local,
             &temp_storage,
             event_time,
-            diff * *input_diff,
+            *diff * *input_diff,
             |time| !until.less_equal(time),
             &mut row_builder,
         );

@@ -104,6 +104,7 @@ use mz_storage_types::parameters::{
     StorageParameters, STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT,
 };
 use mz_storage_types::sources::SourceData;
+use mz_storage_types::StorageDiff;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{Duration, Instant};
@@ -223,13 +224,14 @@ where
     pub(super) fn register_differential_collection<R>(
         &self,
         id: GlobalId,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
+        write_handle: WriteHandle<SourceData, (), T, StorageDiff>,
         read_handle_fn: R,
         force_writable: bool,
         introspection_config: DifferentialIntrospectionConfig<T>,
     ) where
-        R: FnMut() -> Pin<Box<dyn Future<Output = ReadHandle<SourceData, (), T, Diff>> + Send>>
-            + Send
+        R: FnMut() -> Pin<
+                Box<dyn Future<Output = ReadHandle<SourceData, (), T, StorageDiff>> + Send>,
+            > + Send
             + Sync
             + 'static,
     {
@@ -277,7 +279,7 @@ where
     pub(super) fn register_append_only_collection(
         &self,
         id: GlobalId,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
+        write_handle: WriteHandle<SourceData, (), T, StorageDiff>,
         force_writable: bool,
         introspection_config: Option<AppendOnlyIntrospectionConfig<T>>,
     ) {
@@ -472,14 +474,14 @@ where
 struct DifferentialWriteTask<T, R>
 where
     T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
-    R: FnMut() -> Pin<Box<dyn Future<Output = ReadHandle<SourceData, (), T, Diff>> + Send>>
+    R: FnMut() -> Pin<Box<dyn Future<Output = ReadHandle<SourceData, (), T, StorageDiff>> + Send>>
         + Send
         + 'static,
 {
     /// The collection that we are writing to.
     id: GlobalId,
 
-    write_handle: WriteHandle<SourceData, (), T, Diff>,
+    write_handle: WriteHandle<SourceData, (), T, StorageDiff>,
 
     /// For getting a [`ReadHandle`] to sync our state to persist contents.
     read_handle_fn: R,
@@ -510,11 +512,11 @@ where
     // We can optimize for a multi-writer case by keeping an open
     // ReadHandle and continually reading updates from persist, updating
     // a desired in place. Similar to the self-correcting persist_sink.
-    desired: Vec<(Row, i64)>,
+    desired: Vec<(Row, Diff)>,
 
     /// Updates that we have to write when next writing to persist. This is
     /// determined by looking at what is desired and what is in persist.
-    to_write: Vec<(Row, i64)>,
+    to_write: Vec<(Row, Diff)>,
 
     /// Current upper of the persist shard. We keep track of this so that we
     /// realize when someone else writes to the shard, in which case we have to
@@ -526,7 +528,7 @@ where
 impl<T, R> DifferentialWriteTask<T, R>
 where
     T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
-    R: FnMut() -> Pin<Box<dyn Future<Output = ReadHandle<SourceData, (), T, Diff>> + Send>>
+    R: FnMut() -> Pin<Box<dyn Future<Output = ReadHandle<SourceData, (), T, StorageDiff>> + Send>>
         + Send
         + Sync
         + 'static,
@@ -535,7 +537,7 @@ where
     /// handles for interacting with it.
     fn spawn(
         id: GlobalId,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
+        write_handle: WriteHandle<SourceData, (), T, StorageDiff>,
         read_handle_fn: R,
         read_only: bool,
         now: NowFn,
@@ -906,7 +908,7 @@ where
                     (
                         (SourceData(Ok(row.clone())), ()),
                         self.current_upper.clone(),
-                        diff.clone(),
+                        diff.into_inner(),
                     )
                 })
                 .collect::<Vec<_>>();
@@ -1001,7 +1003,7 @@ where
                 let mut snapshot = Vec::with_capacity(contents.len());
                 for ((data, _), _, diff) in contents {
                     let row = data.expect("invalid protobuf data").0.unwrap();
-                    snapshot.push((row, -diff));
+                    snapshot.push((row, -Diff::from(diff)));
                 }
                 snapshot
             }
@@ -1035,7 +1037,7 @@ where
 {
     /// The collection that we are writing to.
     id: GlobalId,
-    write_handle: WriteHandle<SourceData, (), T, Diff>,
+    write_handle: WriteHandle<SourceData, (), T, StorageDiff>,
     read_only: bool,
     now: NowFn,
     user_batch_duration_ms: Arc<AtomicU64>,
@@ -1064,7 +1066,7 @@ where
     /// TODO(parkmycar): Maybe add prometheus metrics for each collection?
     fn spawn(
         id: GlobalId,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
+        write_handle: WriteHandle<SourceData, (), T, StorageDiff>,
         read_only: bool,
         now: NowFn,
         user_batch_duration_ms: Arc<AtomicU64>,
@@ -1463,7 +1465,7 @@ where
 async fn partially_truncate_metrics_history<T>(
     id: GlobalId,
     introspection_type: IntrospectionType,
-    write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
+    write_handle: &mut WriteHandle<SourceData, (), T, StorageDiff>,
     config_set: Arc<ConfigSet>,
     now: NowFn,
     storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
@@ -1562,7 +1564,7 @@ where
 pub(crate) async fn partially_truncate_status_history<T, K>(
     id: GlobalId,
     introspection_type: IntrospectionType,
-    write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
+    write_handle: &mut WriteHandle<SourceData, (), T, StorageDiff>,
     status_history_desc: StatusHistoryDesc<K>,
     now: NowFn,
     storage_collections: &Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
@@ -1720,7 +1722,7 @@ where
 }
 
 async fn monotonic_append<T: Timestamp + Lattice + Codec64 + TimestampManipulation>(
-    write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
+    write_handle: &mut WriteHandle<SourceData, (), T, StorageDiff>,
     updates: Vec<TimestamplessUpdate>,
     at_least: T,
 ) {
@@ -1747,7 +1749,11 @@ async fn monotonic_append<T: Timestamp + Lattice + Codec64 + TimestampManipulati
         let updates = updates
             .iter()
             .map(|TimestamplessUpdate { row, diff }| {
-                ((SourceData(Ok(row.clone())), ()), lower.clone(), diff)
+                (
+                    (SourceData(Ok(row.clone())), ()),
+                    lower.clone(),
+                    diff.into_inner(),
+                )
             })
             .collect::<Vec<_>>();
         let res = write_handle

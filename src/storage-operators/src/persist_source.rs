@@ -38,6 +38,7 @@ use mz_storage_types::controller::{CollectionMetadata, TxnsCodecRow};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_storage_types::stats::RelationPartStats;
+use mz_storage_types::StorageDiff;
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
@@ -419,7 +420,7 @@ fn filter_may_match(
 
 pub fn decode_and_mfp<G>(
     cfg: PersistConfig,
-    fetched: &Stream<G, FetchedBlob<SourceData, (), Timestamp, Diff>>,
+    fetched: &Stream<G, FetchedBlob<SourceData, (), Timestamp, StorageDiff>>,
     name: &str,
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
@@ -508,9 +509,9 @@ struct PendingWork {
 }
 
 enum PendingPart {
-    Unparsed(FetchedBlob<SourceData, (), Timestamp, Diff>),
+    Unparsed(FetchedBlob<SourceData, (), Timestamp, StorageDiff>),
     Parsed {
-        part: ShardSourcePart<SourceData, (), Timestamp, Diff>,
+        part: ShardSourcePart<SourceData, (), Timestamp, StorageDiff>,
         error_free: bool,
     },
 }
@@ -522,7 +523,12 @@ impl PendingPart {
     /// Also returns a bool, which is true if the part is known (from pushdown
     /// stats) to be free of `SourceData(Err(_))`s. It will be false if the part
     /// is known to contain errors or if it's unknown.
-    fn part_mut(&mut self) -> (&mut FetchedPart<SourceData, (), Timestamp, Diff>, bool) {
+    fn part_mut(
+        &mut self,
+    ) -> (
+        &mut FetchedPart<SourceData, (), Timestamp, StorageDiff>,
+        bool,
+    ) {
         match self {
             PendingPart::Unparsed(x) => {
                 let error_free = error_free(x.stats(), "err").unwrap_or(false);
@@ -609,7 +615,7 @@ impl PendingWork {
                             &mut datums_local,
                             &arena,
                             time,
-                            diff,
+                            diff.into(),
                             |time| !until.less_equal(time),
                             row_builder,
                         ) {
@@ -663,14 +669,14 @@ impl PendingWork {
                     } else {
                         let mut emit_time = *self.capability.time();
                         emit_time.0 = time;
-                        session.give((Ok(row), emit_time, diff));
+                        session.give((Ok(row), emit_time, diff.into()));
                         *work += 1;
                     }
                 }
                 (Ok(SourceData(Err(err))), Ok(())) => {
                     let mut emit_time = *self.capability.time();
                     emit_time.0 = time;
-                    session.give((Err(err), emit_time, diff));
+                    session.give((Err(err), emit_time, diff.into()));
                     *work += 1;
                 }
                 // TODO(petrosagg): error handling

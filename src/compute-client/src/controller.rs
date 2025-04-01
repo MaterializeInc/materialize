@@ -56,6 +56,7 @@ use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::controller::{IntrospectionType, StorageController, StorageWriteOp};
+use mz_storage_types::dyncfgs::ORE_OVERFLOWING_BEHAVIOR;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
@@ -661,6 +662,18 @@ where
             let mut params = config_params.clone();
             params.workload_class = Some(instance_workload_classes[id].clone());
             instance.call(|i| i.update_configuration(params));
+        }
+
+        let overflowing_behavior = ORE_OVERFLOWING_BEHAVIOR.get(&self.dyncfg);
+        match overflowing_behavior.parse() {
+            Ok(behavior) => mz_ore::overflowing::set_behavior(behavior),
+            Err(err) => {
+                tracing::error!(
+                    err,
+                    overflowing_behavior,
+                    "Invalid value for ore_overflowing_behavior"
+                );
+            }
         }
 
         // Remember updates for future clusters.

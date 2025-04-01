@@ -82,7 +82,7 @@ use mz_storage_types::sources::{
     GenericSourceConnection, IngestionDescription, SourceConnection, SourceData, SourceDesc,
     SourceExport, SourceExportDataConfig,
 };
-use mz_storage_types::{dyncfgs, AlterCompatible};
+use mz_storage_types::{dyncfgs, AlterCompatible, StorageDiff};
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use mz_txn_wal::txn_read::TxnsRead;
 use mz_txn_wal::txns::TxnsHandle;
@@ -263,7 +263,7 @@ fn warm_persist_state_in_background(
                 let client = client.clone();
                 async move {
                     client
-                        .create_batch_fetcher::<SourceData, (), mz_repr::Timestamp, Diff>(
+                        .create_batch_fetcher::<SourceData, (), mz_repr::Timestamp, StorageDiff>(
                             shard_id,
                             Arc::new(RelationDesc::empty()),
                             Arc::new(UnitSchema),
@@ -674,7 +674,7 @@ where
                 handle_purpose: "evolve nullability for bootstrap".to_string(),
             };
             let latest_schema = persist_client
-                .latest_schema::<SourceData, (), T, Diff>(shard_id, diagnostics)
+                .latest_schema::<SourceData, (), T, StorageDiff>(shard_id, diagnostics)
                 .await
                 .expect("invalid persist usage");
             let Some((schema_id, current_schema, _)) = latest_schema else {
@@ -688,7 +688,7 @@ where
                 handle_purpose: "evolve nullability for bootstrap".to_string(),
             };
             let evolve_result = persist_client
-                .compare_and_evolve_schema::<SourceData, (), T, Diff>(
+                .compare_and_evolve_schema::<SourceData, (), T, StorageDiff>(
                     shard_id,
                     schema_id,
                     &relation_desc,
@@ -1202,7 +1202,7 @@ where
             }
         }
 
-        self.append_shard_mappings(new_collections.into_iter(), 1);
+        self.append_shard_mappings(new_collections.into_iter(), Diff::ONE);
 
         // TODO(guswynn): perform the io in this final section concurrently.
         for id in to_execute {
@@ -1960,7 +1960,7 @@ where
             .chain(collections_to_drop.iter())
             .cloned()
             .collect();
-        self.append_shard_mappings(shards_to_update.into_iter(), -1);
+        self.append_shard_mappings(shards_to_update.into_iter(), Diff::MINUS_ONE);
 
         let status_now = mz_ore::now::to_datetime((self.now)());
         let mut status_updates = vec![];
@@ -2944,7 +2944,7 @@ where
         shard: ShardId,
         relation_desc: RelationDesc,
         persist_client: &PersistClient,
-    ) -> WriteHandle<SourceData, (), T, Diff> {
+    ) -> WriteHandle<SourceData, (), T, StorageDiff> {
         let diagnostics = Diagnostics {
             shard_name: id.to_string(),
             handle_purpose: format!("controller data for {}", id),
@@ -2981,7 +2981,7 @@ where
         &mut self,
         id: GlobalId,
         introspection_type: IntrospectionType,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
+        write_handle: WriteHandle<SourceData, (), T, StorageDiff>,
         persist_client: PersistClient,
     ) -> Result<(), StorageError<T>> {
         tracing::info!(%id, ?introspection_type, "registering introspection collection");
@@ -3009,7 +3009,7 @@ where
 
             let fut = async move {
                 let read_handle = persist_client
-                    .open_leased_reader::<SourceData, (), T, Diff>(
+                    .open_leased_reader::<SourceData, (), T, StorageDiff>(
                         metadata.data_shard,
                         Arc::new(metadata.relation_desc.clone()),
                         Arc::new(UnitSchema),
@@ -3107,11 +3107,14 @@ where
     ///   a managed collection.
     /// - If diff is any value other than `1` or `-1`.
     #[instrument(level = "debug")]
-    fn append_shard_mappings<I>(&self, global_ids: I, diff: i64)
+    fn append_shard_mappings<I>(&self, global_ids: I, diff: Diff)
     where
         I: Iterator<Item = GlobalId>,
     {
-        mz_ore::soft_assert_or_log!(diff == -1 || diff == 1, "use 1 for insert or -1 for delete");
+        mz_ore::soft_assert_or_log!(
+            diff == Diff::MINUS_ONE || diff == Diff::ONE,
+            "use 1 for insert or -1 for delete"
+        );
 
         let id = *self
             .introspection_ids
@@ -3191,7 +3194,7 @@ where
     async fn read_handle_for_snapshot(
         &self,
         id: GlobalId,
-    ) -> Result<ReadHandle<SourceData, (), T, Diff>, StorageError<T>> {
+    ) -> Result<ReadHandle<SourceData, (), T, StorageDiff>, StorageError<T>> {
         let metadata = self.storage_collections.collection_metadata(id)?;
         read_handle_for_snapshot(&self.persist, id, &metadata).await
     }
@@ -3424,15 +3427,15 @@ where
         for (&id, new) in &self.recorded_frontiers {
             match old_global_frontiers.remove(&id) {
                 Some(old) if &old != new => {
-                    push_global_update(id, new.clone(), 1);
-                    push_global_update(id, old, -1);
+                    push_global_update(id, new.clone(), Diff::ONE);
+                    push_global_update(id, old, Diff::MINUS_ONE);
                 }
                 Some(_) => (),
-                None => push_global_update(id, new.clone(), 1),
+                None => push_global_update(id, new.clone(), Diff::ONE),
             }
         }
         for (id, old) in old_global_frontiers {
-            push_global_update(id, old, -1);
+            push_global_update(id, old, Diff::MINUS_ONE);
         }
 
         let mut old_replica_frontiers =
@@ -3440,15 +3443,15 @@ where
         for (&key, new) in &self.recorded_replica_frontiers {
             match old_replica_frontiers.remove(&key) {
                 Some(old) if &old != new => {
-                    push_replica_update(key, new.clone(), 1);
-                    push_replica_update(key, old, -1);
+                    push_replica_update(key, new.clone(), Diff::ONE);
+                    push_replica_update(key, old, Diff::MINUS_ONE);
                 }
                 Some(_) => (),
-                None => push_replica_update(key, new.clone(), 1),
+                None => push_replica_update(key, new.clone(), Diff::ONE),
             }
         }
         for (key, old) in old_replica_frontiers {
-            push_replica_update(key, old, -1);
+            push_replica_update(key, old, Diff::MINUS_ONE);
         }
 
         let id = self.introspection_ids[&IntrospectionType::Frontiers];
@@ -3509,7 +3512,7 @@ where
                     Datum::Interval(Interval::new(0, 0, max_lag_us)),
                     Datum::TimestampTz(now_ts),
                 ]);
-                history_updates.push((row, 1));
+                history_updates.push((row, Diff::ONE));
             }
 
             collection.wallclock_lag_metrics.observe(lag);
@@ -3535,7 +3538,7 @@ where
                 };
 
                 let key = (histogram_period, bucket, labels);
-                *stash.entry(key).or_default() += 1;
+                *stash.entry(key).or_default() += Diff::ONE;
 
                 if refresh_histogram {
                     for ((period, lag, labels), count) in std::mem::take(stash) {
@@ -3652,7 +3655,7 @@ async fn read_handle_for_snapshot<T>(
     persist: &PersistClientCache,
     id: GlobalId,
     metadata: &CollectionMetadata,
-) -> Result<ReadHandle<SourceData, (), T, Diff>, StorageError<T>>
+) -> Result<ReadHandle<SourceData, (), T, StorageDiff>, StorageError<T>>
 where
     T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
 {
@@ -3706,7 +3709,7 @@ struct CollectionState<T: TimelyTimestamp> {
                 u64,
                 BTreeMap<&'static str, String>,
             ),
-            i64,
+            Diff,
         >,
     >,
     /// Frontier wallclock lag metrics tracked for this collection.

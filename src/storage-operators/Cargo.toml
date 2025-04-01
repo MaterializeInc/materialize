@@ -30,7 +30,7 @@ mz-aws-util = { path = "../aws-util" }
 mz-arrow-util = { path = "../arrow-util" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
-mz-ore = { path = "../ore", features = ["async", "tracing"] }
+mz-ore = { path = "../ore", features = ["async", "tracing", "differential-dataflow", "columnation"] }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-pgcopy = { path = "../pgcopy" }

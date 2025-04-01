@@ -169,6 +169,7 @@ use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
+use mz_storage_types::StorageDiff;
 use mz_timely_util::builder_async::{Button, Event, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::probe;
@@ -279,7 +280,7 @@ impl ContinualTaskSourceTransformer {
             InsertsInput { source_id, .. } => {
                 let name = source_id.to_string();
                 // Keep only the inserts.
-                let oks = oks.inner.filter(|(_, _, diff)| *diff > 0);
+                let oks = oks.inner.filter(|(_, _, diff)| diff.is_positive());
                 // Grab the original times for use in the sink operator.
                 let (oks, times) = oks.as_collection().times_extract(&name);
                 // Then retract everything at the next timestamp.
@@ -500,7 +501,9 @@ fn continual_task_sink<G: Scope<Timestamp = Timestamp>>(
     to_append: Collection<G, SourceData, Diff>,
     append_times: Collection<G, (), Diff>,
     as_of: Antichain<Timestamp>,
-    write_handle: impl Future<Output = WriteHandle<SourceData, (), Timestamp, Diff>> + Send + 'static,
+    write_handle: impl Future<Output = WriteHandle<SourceData, (), Timestamp, StorageDiff>>
+        + Send
+        + 'static,
     start_signal: StartSignal,
     output_frontier: Rc<RefCell<Antichain<Timestamp>>>,
 ) -> Button {
@@ -624,8 +627,8 @@ fn continual_task_sink<G: Scope<Timestamp = Timestamp>>(
 ///
 /// Returns the latest known upper for the shard.
 async fn truncating_compare_and_append(
-    write_handle: &mut WriteHandle<SourceData, (), Timestamp, Diff>,
-    to_append: Vec<((&SourceData, &()), &Timestamp, &Diff)>,
+    write_handle: &mut WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+    to_append: Vec<((&SourceData, &()), &Timestamp, StorageDiff)>,
     new_upper: Antichain<Timestamp>,
 ) -> Antichain<Timestamp> {
     let mut expected_upper = write_handle.shared_upper();
@@ -684,7 +687,12 @@ impl<D: Ord> SinkState<D, Timestamp> {
     }
 
     /// Returns data to write to the output, if any, and the new upper to use.
-    fn process(&mut self) -> Option<(Antichain<Timestamp>, Vec<((&D, &()), &Timestamp, &Diff)>)> {
+    fn process(
+        &mut self,
+    ) -> Option<(
+        Antichain<Timestamp>,
+        Vec<((&D, &()), &Timestamp, StorageDiff)>,
+    )> {
         // We can only append at times >= the output_progress, so pop off
         // anything unnecessary.
         while let Some(x) = self.append_times.first() {
@@ -743,7 +751,7 @@ impl<D: Ord> SinkState<D, Timestamp> {
         let append_data = self
             .to_append
             .iter()
-            .filter_map(|((k, t), d)| (t <= write_ts).then_some(((k, &()), t, d)))
+            .filter_map(|((k, t), d)| (t <= write_ts).then_some(((k, &()), t, d.into_inner())))
             .collect();
         Some((Antichain::from_elem(write_ts.step_forward()), append_data))
     }
@@ -1040,8 +1048,8 @@ mod tests {
         assert_noop(&mut s);
 
         // Getting data to append is not enough to do anything yet.
-        s.to_append.push((("a", 1.into()), 1));
-        s.to_append.push((("b", 1.into()), 1));
+        s.to_append.push((("a", 1.into()), Diff::ONE));
+        s.to_append.push((("b", 1.into()), Diff::ONE));
         assert_noop(&mut s);
 
         // Knowing that this is the only data we'll get for that timestamp is
@@ -1087,8 +1095,8 @@ mod tests {
 
         // Retract one of the things currently in the collection and add a new
         // thing, to verify the consolidate.
-        s.to_append.push((("a", 5.into()), -1));
-        s.to_append.push((("c", 5.into()), 1));
+        s.to_append.push((("a", 5.into()), Diff::MINUS_ONE));
+        s.to_append.push((("c", 5.into()), Diff::ONE));
         s.to_append_progress = Antichain::from_elem(6.into());
         assert_write(&mut s, 6, &["b", "c"]);
     }
