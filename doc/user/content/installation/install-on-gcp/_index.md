@@ -195,18 +195,11 @@ modules](https://github.com/MaterializeInc/terraform-google-materialize) for
 evaluation purposes only. The modules deploy a sample infrastructure on GCP
 (region `us-central1`) with the following components:
 
-- Google Kubernetes Engine (GKE) cluster
-- Cloud SQL PostgreSQL database for metadata storage
-- Cloud Storage bucket for blob storage
-- A dedicated VPC
-- Service accounts with proper IAM permissions
-- Materialize Operator
-- Materialize instances (during subsequent runs after the Operator is running)
+{{< yaml-table data="self_managed/gcp_terraform_deployed_components" >}}
 
 {{< tip >}}
 {{< self-managed/gcp-terraform-configs >}}
 {{< /tip >}}
-
 
 {{% self-managed/versions/step-clone-google-terraform-repo %}}
 
@@ -265,15 +258,21 @@ evaluation purposes only. The modules deploy a sample infrastructure on GCP
    Upon successful completion, various fields and their values are output:
 
    ```bash
-   Apply complete! Resources: 20 added, 0 changed, 0 destroyed.
+   Apply complete! Resources: 22 added, 0 changed, 0 destroyed.
 
    Outputs:
 
    connection_strings = <sensitive>
    gke_cluster = <sensitive>
+   load_balancer_details = {}
+   network = {
+      "network_id" = "projects/my-project/global/networks/mz-simple-network"
+      "network_name" = "mz-simple-network"
+      "subnet_name" = "mz-simple-subnet"
+   }
    service_accounts = {
-   "gke_sa" = "mz-simple-gke-sa@my-project.iam.gserviceaccount.com"
-   "materialize_sa" = "mz-simple-materialize-sa@my-project.iam.gserviceaccount.com"
+      "gke_sa" = "mz-simple-gke-sa@my-project.iam.gserviceaccount.com"
+      "materialize_sa" = "mz-simple-materialize-sa@my-project.iam.gserviceaccount.com"
    }
    ```
 
@@ -311,9 +310,12 @@ evaluation purposes only. The modules deploy a sample infrastructure on GCP
    For help with `kubectl` commands, see [kubectl Quick
    reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
-1. By default, the example Terraform installs the Materialize Operator. Verify
-   the installation and check the status:
+1. By default, the example Terraform installs the Materialize Operator and,
+   starting in v0.3.0, a `cert-manager`. Verify the
+   installation and check the status:
 
+   {{< tabs >}}
+   {{< tab "Materialize Operator" >}}
    ```shell
    kubectl get all -n materialize
    ```
@@ -330,6 +332,40 @@ evaluation purposes only. The modules deploy a sample infrastructure on GCP
    NAME                                                                        DESIRED   CURRENT   READY   AGE
    replicaset.apps/materialize-mz-simple-materialize-operator-74d8f549d6       1         1         1       36m
    ```
+
+   {{</ tab >}}
+   {{< tab "cert-manager (Starting in version 0.3.0)" >}}
+
+   Verify the installation and check the status:
+
+   ```shell
+   kubectl get all -n cert-manager
+   ```
+   Wait for the components to be in the `Running` state:
+   ```
+   NAME                                           READY   STATUS    RESTARTS   AGE
+   pod/cert-manager-6794b8d569-vt264              1/1     Running   0          22m
+   pod/cert-manager-cainjector-7f69cd69f7-7brqw   1/1     Running   0          22m
+   pod/cert-manager-webhook-6cc5dccc4b-7tmd4      1/1     Running   0          22m
+
+   NAME                              TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)            AGE
+   service/cert-manager              ClusterIP   10.52.3.63     <none>        9402/TCP           22m
+   service/cert-manager-cainjector   ClusterIP   10.52.15.171   <none>        9402/TCP           22m
+   service/cert-manager-webhook      ClusterIP   10.52.5.148    <none>        443/TCP,9402/TCP   22m
+
+   NAME                                      READY   UP-TO-DATE   AVAILABLE   AGE
+   deployment.apps/cert-manager              1/1     1            1           22m
+   deployment.apps/cert-manager-cainjector   1/1     1            1           22m
+   deployment.apps/cert-manager-webhook      1/1     1            1           22m
+
+   NAME                                                 DESIRED   CURRENT   READY   AGE
+   replicaset.apps/cert-manager-6794b8d569              1         1         1       22m
+   replicaset.apps/cert-manager-cainjector-7f69cd69f7   1         1         1       22m
+   replicaset.apps/cert-manager-webhook-6cc5dccc4b      1         1         1       22m
+   ```
+
+   {{</ tab >}}
+   {{</ tabs >}}
 
    If you run into an error during deployment, refer to the
    [Troubleshooting](/installation/troubleshooting/).
@@ -356,6 +392,27 @@ evaluation purposes only. The modules deploy a sample infrastructure on GCP
    EOF
    ```
 
+   Starting in v0.3.0, the Materialize on AWS Terraform module also deploys, by
+   default,
+
+   - [Load
+    balancers](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#input_materialize_instances)
+    for Materialize instances (i.e., the
+    [`create_load_balancer`](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#input_materialize_instances)
+    flag defaults to `true`). The load balancers, by default, are configured to
+    be internal (i.e., the
+    [`internal_load_balancer`](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#input_materialize_instances)
+    flag defaults to `true`).
+
+   - A self-signed `ClusterIssuer`. The `ClusterIssuer` is deployed  after the
+     `cert-manager` is deployed and running.
+
+   {{< tip >}}
+   {{% self-managed/gcp-terraform-upgrade-notes %}}
+
+   See [Materialize on GCP releases](/installation/appendix-terraforms/#materialize-on-gcp-terraform-modules) for notable changes.
+   {{</ tip >}}
+
 1. Run `terraform plan` with both `.tfvars` files and review the changes to be
    made.
 
@@ -367,7 +424,7 @@ evaluation purposes only. The modules deploy a sample infrastructure on GCP
    following:
 
    ```
-   Plan: 4 to add, 0 to change, 0 to destroy.
+   Plan: 9 to add, 1 to change, 0 to destroy.
    ```
 
 1. If you are satisfied with the changes, apply.
@@ -378,18 +435,30 @@ evaluation purposes only. The modules deploy a sample infrastructure on GCP
 
    To approve the changes and apply, enter `yes`.
 
+   <a name="gcp-terraform-output"></a>
    Upon successful completion, you should see output with a summary similar to the following:
 
    ```bash
-   Apply complete! Resources: 4 added, 0 changed, 0 destroyed.
+   Apply complete! Resources: 9 added, 1 changed, 0 destroyed.
 
    Outputs:
 
    connection_strings = <sensitive>
    gke_cluster = <sensitive>
+   load_balancer_details = {
+      "demo" = {
+         "balancerd_load_balancer_ip" = "192.168.119.101"
+         "console_load_balancer_ip" = "192.168.71.52"
+      }
+   }
+   network = {
+      "network_id" = "projects/my-project/global/networks/mz-simple-network"
+      "network_name" = "mz-simple-network"
+      "subnet_name" = "mz-simple-subnet"
+   }
    service_accounts = {
-     "gke_sa" = "mz-simple-gke-sa@my-project.iam.gserviceaccount.com"
-     "materialize_sa" = "mz-simple-materialize-sa@my-project.iam.gserviceaccount.com"
+      "gke_sa" = "mz-simple-gke-sa@my-project.iam.gserviceaccount.com"
+      "materialize_sa" = "mz-simple-materialize-sa@my-project.iam.gserviceaccount.com"
    }
    ```
 
@@ -402,39 +471,42 @@ evaluation purposes only. The modules deploy a sample infrastructure on GCP
    Wait for the components to be in the `Running` state.
 
    ```none
-   NAME                                             READY   STATUS      RESTARTS      AGE
-   pod/create-db-demo-db-jcpnn                      0/1     Completed   0             2m11s
-   pod/mzpzk74xji8b-balancerd-669988bb94-5vbps      1/1     Running     0             98s
-   pod/mzpzk74xji8b-cluster-s2-replica-s1-gen-1-0   1/1     Running     0             96s
-   pod/mzpzk74xji8b-cluster-u1-replica-u1-gen-1-0   1/1     Running     0             96s
-   pod/mzpzk74xji8b-console-5dc9f87498-hqxdw        1/1     Running     0             91s
-   pod/mzpzk74xji8b-console-5dc9f87498-x95qj        1/1     Running     0             91s
-   pod/mzpzk74xji8b-environmentd-1-0                1/1     Running     0             113s
+   NAME                                             READY   STATUS      RESTARTS   AGE
+   pod/db-demo-db-wrvhw                             0/1     Completed   0          4m26s
+   pod/mzdtwvu4qe4q-balancerd-6989df5c75-mpmqx      1/1     Running     0          3m54s
+   pod/mzdtwvu4qe4q-cluster-s2-replica-s1-gen-1-0   1/1     Running     0          3m53s
+   pod/mzdtwvu4qe4q-cluster-u1-replica-u1-gen-1-0   1/1     Running     0          3m52s
+   pod/mzdtwvu4qe4q-console-7c9bc94bcb-6t7lg        1/1     Running     0          3m41s
+   pod/mzdtwvu4qe4q-console-7c9bc94bcb-9x5qq        1/1     Running     0          3m41s
+   pod/mzdtwvu4qe4q-environmentd-1-0                1/1     Running     0          4m9s
 
-   NAME                                               TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)                                        AGE
-   service/mzpzk74xji8b-balancerd                     ClusterIP   None            <none>        6876/TCP,6875/TCP                              98s
-   service/mzpzk74xji8b-cluster-s2-replica-s1-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   97s
-   service/mzpzk74xji8b-cluster-u1-replica-u1-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   96s
-   service/mzpzk74xji8b-console                       ClusterIP   None            <none>        8080/TCP                                       91s
-   service/mzpzk74xji8b-environmentd                  ClusterIP   None            <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            99s
-   service/mzpzk74xji8b-environmentd-1                ClusterIP   None            <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            113s
-   service/mzpzk74xji8b-persist-pubsub-1              ClusterIP   None            <none>        6879/TCP                                       113s
+   NAME                                               TYPE           CLUSTER-IP    EXTERNAL-IP     PORT(S)                                        AGE
+   service/mzdtwvu4qe4q-balancerd                     ClusterIP      None          <none>          6876/TCP,6875/TCP                              3m54s
+   service/mzdtwvu4qe4q-balancerd-lb                  LoadBalancer   10.52.5.105   192.168.119.101   6875:30844/TCP,6876:32307/TCP                  4m9s
+   service/mzdtwvu4qe4q-cluster-s2-replica-s1-gen-1   ClusterIP      None          <none>          2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   3m53s
+   service/mzdtwvu4qe4q-cluster-u1-replica-u1-gen-1   ClusterIP      None          <none>          2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   3m52s
+   service/mzdtwvu4qe4q-console                       ClusterIP      None          <none>          8080/TCP                                       3m41s
+   service/mzdtwvu4qe4q-console-lb                    LoadBalancer   10.52.4.2     192.168.71.52    8080:32193/TCP                                 4m9s
+   service/mzdtwvu4qe4q-environmentd                  ClusterIP      None          <none>          6875/TCP,6876/TCP,6877/TCP,6878/TCP            3m54s
+   service/mzdtwvu4qe4q-environmentd-1                ClusterIP      None          <none>          6875/TCP,6876/TCP,6877/TCP,6878/TCP            4m9s
+   service/mzdtwvu4qe4q-persist-pubsub-1              ClusterIP      None          <none>          6879/TCP                                       4m9s
 
    NAME                                     READY   UP-TO-DATE   AVAILABLE   AGE
-   deployment.apps/mzpzk74xji8b-balancerd   1/1     1            1           98s
-   deployment.apps/mzpzk74xji8b-console     2/2     2            2           91s
+   deployment.apps/mzdtwvu4qe4q-balancerd   1/1     1            1           3m54s
+   deployment.apps/mzdtwvu4qe4q-console     2/2     2            2           3m41s
 
-   NAME                                                DESIRED   CURRENT   READY      AGE
-   replicaset.apps/mzpzk74xji8b-balancerd-669988bb94   1         1         1          98s
-   replicaset.apps/mzpzk74xji8b-console-5dc9f87498     2         2         2          91s
+   NAME                                                DESIRED   CURRENT   READY   AGE
+   replicaset.apps/mzdtwvu4qe4q-balancerd-6989df5c75   1         1         1       3m54s
+   replicaset.apps/mzdtwvu4qe4q-console-7c9bc94bcb     2         2         2       3m41s
 
    NAME                                                        READY   AGE
-   statefulset.apps/mzpzk74xji8b-cluster-s2-replica-s1-gen-1   1/1     97s
-   statefulset.apps/mzpzk74xji8b-cluster-u1-replica-u1-gen-1   1/1     96s
-   statefulset.apps/mzpzk74xji8b-environmentd-1                1/1     113s
+   statefulset.apps/mzdtwvu4qe4q-cluster-s2-replica-s1-gen-1   1/1     3m53s
+   statefulset.apps/mzdtwvu4qe4q-cluster-u1-replica-u1-gen-1   1/1     3m52s
+   statefulset.apps/mzdtwvu4qe4q-environmentd-1                1/1     4m9s
 
-   NAME                          STATUS     COMPLETIONS   DURATION   AGE
-   job.batch/create-db-demo-db   Complete   1/1           13s        2m11s
+   NAME                   STATUS     COMPLETIONS   DURATION   AGE
+   job.batch/db-demo-db   Complete   1/1           12s        4m27s
+
    ```
 
    If you run into an error during deployment, refer to the
@@ -442,13 +514,44 @@ evaluation purposes only. The modules deploy a sample infrastructure on GCP
 
 1. Open the Materialize Console in your browser:
 
+   {{< tabs >}}
+
+   {{< tab  "Via Network Load Balancer" >}}
+
+   Starting in v0.3.0, for each Materialize instance, Materialize on GCP
+   Terraform module also deploys load balancers (by default, internal) with the
+   following listeners, including a listener on port 8080 for the Materialize
+   Console:
+
+   | Port | Description |
+   | ---- | ------------|
+   | 6875 | For SQL connections to the database |
+   | 6876 | For HTTP(S) connections to the database |
+   | **8080** | **For HTTP(S) connections to Materialize Console** |
+
+   The load balancer details are found in the `load_balancer_details`  in
+   the [Terraform output](#gcp-terraform-output).
+
+   The example uses a self-signed ClusterIssuer. As such, you may encounter a
+   warning with regards to the certificate. In production, run with certificates
+   from an official Certificate Authority (CA) rather than self-signed
+   certificates.
+
+   {{</ tab >}}
+
+   {{< tab "Via port forwarding" >}}
+
    {{% self-managed/port-forwarding-handling %}}
 
-      {{< tip >}}
+   {{</ tab>}}
+   {{</ tabs >}}
 
-      {{% self-managed/troubleshoot-console-mz_catalog_server_blurb %}}
 
-      {{< /tip >}}
+   {{< tip >}}
+
+   {{% self-managed/troubleshoot-console-mz_catalog_server_blurb %}}
+
+   {{< /tip >}}
 
 ## Next steps
 

@@ -66,6 +66,10 @@ for release-specific upgrade notes.
 
 {{% self-managed/gcp-terraform-upgrade-notes %}}
 
+See also [Upgrade
+Notes](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#upgrade-notes)
+for release specific notes.
+
 {{</ tab >}}
 {{</ tabs >}}
 
@@ -76,7 +80,7 @@ for release-specific upgrade notes.
 | **IAM** <br>Built-in authorization mechanisms. | In progress |
 | **License Compliance** <br>License key support to make it easier to comply with license terms. | In progress |
 | **Spill to disk** <br> Provide Terraform modules to set up  locally-attached NVMe storage to support workloads that are larger than can fit into memory. | <ul><li>AWS: Available in Materialize on AWS Terraform v0.3.1+</li><li>GCP: In progress</li><li>Azure: In progress</li><ul> |
-| **Ingress from outside cluster** <br> Provide Terraform modules to set up ingress from outside the Kubernetes cluster hosting self-managed Materialize. | <ul><li>AWS: Available in Materialize on AWS Terraform v0.3.0+</li><li>GCP: In progress</li><li>Azure: In progress</li><ul> |
+| **Ingress from outside cluster** <br> Provide Terraform modules to set up ingress from outside the Kubernetes cluster hosting self-managed Materialize. | <ul><li>AWS: Available in Materialize on AWS Terraform v0.3.0+</li><li>GCP:Available in Materialize on GCP Terraform v0.3.0+</li><li>Azure: In progress</li><ul> |
 | **AWS Connections** <br> AWS connections require backing cluster that hosts Materialize to be AWS EKS.  | |
 | **EKS/Azure Connections** | |
 | **Temporal Filtering** <br> Memory optimizations for filtering time-series data are not yet implemented. | |
