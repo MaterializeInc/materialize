@@ -108,7 +108,7 @@ pub async fn get_table_for_capture_instance(
     capture_instance: &str,
 ) -> Result<(Arc<str>, Arc<str>), SqlServerError> {
     static TABLE_FOR_CAPTURE_INSTANCE_QUERY: &str = "
-SELECT SCHEMA_NAME(o.schema_id) as schema_name, o.name as obj_name
+SELECT SCHEMA_NAME(o.schema_id) as schema_name, o.name as table_name
 FROM sys.objects o
 JOIN cdc.change_tables c
 ON o.object_id = c.source_object_id
@@ -123,8 +123,8 @@ WHERE c.capture_instance = @P1;
             let schema_name: &str = row.try_get("schema_name")?.ok_or_else(|| {
                 SqlServerError::ProgrammingError("missing column 'schema_name'".to_string())
             })?;
-            let table_name: &str = row.try_get("obj_name")?.ok_or_else(|| {
-                SqlServerError::ProgrammingError("missing column 'schema_name'".to_string())
+            let table_name: &str = row.try_get("table_name")?.ok_or_else(|| {
+                SqlServerError::ProgrammingError("missing column 'table_name'".to_string())
             })?;
 
             Ok((schema_name.into(), table_name.into()))
