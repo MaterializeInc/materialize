@@ -10,6 +10,7 @@
 use mz_ore::task::{JoinHandle, JoinHandleExt};
 use std::fmt::{Debug, Formatter};
 use std::mem;
+use std::ops::{Deref, DerefMut};
 
 /// A merge tree.
 ///
@@ -23,21 +24,28 @@ use std::mem;
 /// - The "depth" of the merge tree - the number of merges any particular element may undergo -
 ///   is `O(log N)`.
 pub struct MergeTree<T> {
-    pub(crate) max_len: usize,
-    pub(crate) levels: Vec<Vec<T>>,
+    /// Configuration: the largest any level in the tree is allowed to grow.
+    max_level_len: usize,
+    /// The length of each level in the tree, stored in order from shallowest to deepest.
+    level_lens: Vec<usize>,
+    /// A flattened representation of the contents of the tree, stored in order from earliest /
+    /// deepest to newest / shallowest.
+    data: Vec<T>,
     merge_fn: Box<dyn Fn(Vec<T>) -> T + Sync + Send>,
 }
 
 impl<T: Debug> Debug for MergeTree<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let Self {
-            max_len,
-            levels,
+            max_level_len,
+            level_lens,
+            data,
             merge_fn: _,
         } = self;
         f.debug_struct("MergeTree")
-            .field("max_len", max_len)
-            .field("levels", levels)
+            .field("max_level_len", max_level_len)
+            .field("level_lens", level_lens)
+            .field("data", data)
             .finish_non_exhaustive()
     }
 }
@@ -48,87 +56,106 @@ impl<T> MergeTree<T> {
     /// limit, the provided `merge_fn` is used to combine adjacent elements together.
     pub fn new(max_len: usize, merge_fn: impl Fn(Vec<T>) -> T + Send + Sync + 'static) -> Self {
         let new = Self {
-            max_len,
-            levels: vec![vec![]],
+            max_level_len: max_len,
+            level_lens: vec![0],
+            data: vec![],
             merge_fn: Box::new(merge_fn),
         };
         new.assert_invariants();
         new
     }
 
-    /// Iterate over (references to) the parts in this tree in first-to-latest order.
-    #[allow(unused)]
-    pub fn iter(&self) -> impl Iterator<Item = &T> + DoubleEndedIterator {
-        self.levels.iter().rev().flat_map(|l| l.iter())
-    }
-
-    /// Iterate over (mutable references to) the parts in this tree in first-to-latest order.
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> + DoubleEndedIterator {
-        self.levels.iter_mut().rev().flat_map(|l| l.iter_mut())
+    fn merge_last(&mut self, level_len: usize) {
+        let offset = self.data.len() - level_len;
+        let split = self.data.split_off(offset);
+        let merged = (self.merge_fn)(split);
+        self.data.push(merged);
     }
 
     /// Push a new part onto the end of this tree, possibly triggering a merge.
-    pub fn push(&mut self, mut part: T) {
+    pub fn push(&mut self, part: T) {
         // Normally, all levels have strictly less than max_len elements.
         // However, the _deepest_ level is allowed to have exactly max_len elements,
         // since that can save us an unnecessary merge in some cases.
         // (For example, when precisely max_len elements are added.)
-        if let Some(last) = self.levels.last_mut() {
-            if last.len() == self.max_len {
-                let merged = (self.merge_fn)(mem::take(last));
-                self.levels.push(vec![merged]);
+        if let Some(last_len) = self.level_lens.last_mut() {
+            if *last_len == self.max_level_len {
+                let len = mem::take(last_len);
+                self.merge_last(len);
+                self.level_lens.push(1);
             }
         }
 
         // At this point, all levels have room. Add our new part, then continue
         // merging up the tree until either there's still room in the current level
         // or we've reached the top.
-        let max_level = self.levels.len() - 1;
-        for depth in 0..=max_level {
-            let level = &mut self.levels[depth];
-            level.push(part);
+        self.data.push(part);
 
-            if level.len() < self.max_len || depth == max_level {
+        let max_level = self.level_lens.len() - 1;
+        for depth in 0..=max_level {
+            let level_len = &mut self.level_lens[depth];
+            *level_len += 1;
+
+            if *level_len < self.max_level_len || depth == max_level {
                 break;
             }
 
-            part = (self.merge_fn)(mem::take(level));
+            let len = mem::take(level_len);
+            self.merge_last(len);
         }
     }
 
     /// Return the contents of this merge tree, flattened into at most `max_len` parts.
-    pub fn finish(self) -> Vec<T> {
-        self.levels
-            .into_iter()
-            .reduce(|mut shallower, mut deeper| {
-                if shallower.len() + deeper.len() <= self.max_len {
-                    // Optimization: if there's enough room in the next level for everything at the
-                    // current level, add it directly.
-                    deeper.append(&mut shallower);
-                } else {
-                    // Otherwise, merge this up as if it were a full level.
-                    let merged = (self.merge_fn)(shallower);
-                    deeper.push(merged);
-                }
-                deeper
-            })
-            .expect("non-empty level array")
+    pub fn finish(mut self) -> Vec<T> {
+        let mut tail_len = 0;
+        for level_len in mem::take(&mut self.level_lens) {
+            if tail_len + level_len <= self.max_level_len {
+                // Optimization: we can combine the current level with the last level without
+                // going over our limit.
+                tail_len += level_len;
+            } else {
+                // Otherwise, perform the merge and start a new tail.
+                self.merge_last(tail_len);
+                tail_len = level_len + 1
+            }
+        }
+        assert!(self.data.len() <= self.max_level_len);
+        self.data
     }
 
     pub(crate) fn assert_invariants(&self) {
-        assert!(self.max_len >= 2, "max_len must be at least 2");
+        assert!(self.max_level_len >= 2, "max_len must be at least 2");
 
-        let (deepest, shallow) = self.levels.split_last().expect("non-empty level array");
-        for (depth, level) in shallow.iter().enumerate() {
+        assert_eq!(
+            self.data.len(),
+            self.level_lens.iter().copied().sum::<usize>(),
+            "level sizes should sum to overall len"
+        );
+        let (deepest_len, shallow) = self.level_lens.split_last().expect("non-empty level array");
+        for (depth, level_len) in shallow.iter().enumerate() {
             assert!(
-                level.len() < self.max_len,
+                *level_len < self.max_level_len,
                 "strictly less than max elements at level {depth}"
             );
         }
         assert!(
-            deepest.len() <= self.max_len,
+            *deepest_len <= self.max_level_len,
             "at most max elements at deepest level"
         );
+    }
+}
+
+impl<T> Deref for MergeTree<T> {
+    type Target = [T];
+
+    fn deref(&self) -> &Self::Target {
+        &*self.data
+    }
+}
+
+impl<T> DerefMut for MergeTree<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut *self.data
     }
 }
 
@@ -167,21 +194,37 @@ impl<T: Send + 'static> Pending<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mz_ore::cast::CastLossy;
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn test_merge_tree() {
         // Exhaustively test the merge tree for small sizes.
+        struct Value {
+            merge_depth: usize,
+            elements: Vec<i64>,
+        }
+
         for max_len in 2..8 {
             for items in 0..100 {
-                let mut merge_tree = MergeTree::new(max_len, |vals: Vec<Vec<usize>>| {
+                let mut merge_tree = MergeTree::new(max_len, |vals: Vec<Value>| {
                     // Merge sequences by concatenation.
-                    vals.into_iter().flatten().collect()
+                    Value {
+                        merge_depth: vals.iter().map(|v| v.merge_depth).max().unwrap_or(0) + 1,
+                        elements: vals.into_iter().flat_map(|e| e.elements).collect(),
+                    }
                 });
                 for i in 0..items {
-                    merge_tree.push(vec![i]);
+                    merge_tree.push(Value {
+                        merge_depth: 0,
+                        elements: vec![i],
+                    });
                     assert!(
-                        merge_tree.iter().flatten().copied().eq(0..=i),
+                        merge_tree
+                            .iter()
+                            .flat_map(|v| v.elements.iter())
+                            .copied()
+                            .eq(0..=i),
                         "no parts should be lost"
                     );
                     merge_tree.assert_invariants();
@@ -191,7 +234,29 @@ mod tests {
                     parts.len() <= max_len,
                     "no more than {max_len} finished parts"
                 );
-                assert!(parts.into_iter().flatten().eq(0..items), "no parts lost");
+
+                // We want our merged tree to be "balanced".
+                // If we have 2^N elements in a binary tree, we want the depth to be N;
+                // and more generally, we want a depth of N for a K-ary tree with K^N elements...
+                // which is to say, a depth of log_K N for a tree with N elements.
+                let expected_merge_depth =
+                    usize::cast_lossy(f64::cast_lossy(items).log(f64::cast_lossy(max_len)).floor());
+                for part in &parts {
+                    assert!(
+                        part.merge_depth <= expected_merge_depth,
+                        "expected at most {expected_merge_depth} merges for a tree \
+                        with max len {max_len} and {items} elements, but got {}",
+                        part.merge_depth
+                    );
+                }
+                assert!(
+                    parts
+                        .iter()
+                        .flat_map(|v| v.elements.iter())
+                        .copied()
+                        .eq(0..items),
+                    "no parts lost"
+                );
             }
         }
     }
