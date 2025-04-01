@@ -113,9 +113,13 @@ async fn append_work<T2: Timestamp + Lattice + Codec64 + Sync>(
     // for it. If yes, we send them all in one go.
     for (id, write) in write_handles.iter_mut() {
         if let Some((span, updates, expected_upper, new_upper)) = commands.remove(id) {
-            let updates = updates
-                .into_iter()
-                .map(|u| ((SourceData(Ok(u.row)), ()), u.timestamp, *u.diff));
+            let updates = updates.into_iter().map(|u| {
+                (
+                    (SourceData(Ok(u.row)), ()),
+                    u.timestamp,
+                    u.diff.into_inner(),
+                )
+            });
 
             futs.push(async move {
                 write
@@ -443,7 +447,9 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                 match update {
                     TableData::Rows(updates) => {
                         for (row, diff) in updates {
-                            let () = txn.write(data_id, SourceData(Ok(row)), (), *diff).await;
+                            let () = txn
+                                .write(data_id, SourceData(Ok(row)), (), diff.into_inner())
+                                .await;
                         }
                     }
                     TableData::Batches(batches) => {

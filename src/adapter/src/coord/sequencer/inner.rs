@@ -3087,7 +3087,7 @@ impl Coordinator {
                         }
                     }
                     for (row, diff) in &diffs {
-                        if **diff > 0 {
+                        if diff.is_positive() {
                             for (idx, datum) in row.iter().enumerate() {
                                 desc.constraints_met(idx, &datum)?;
                             }
@@ -3137,7 +3137,7 @@ impl Coordinator {
                     .as_ref()
                     .expect("known to be `Ok` from `is_ok()` call above")
                 {
-                    if **diff < 1 {
+                    if diff.is_negative() {
                         continue;
                     }
                     let mut returning_row = Row::with_capacity(returning.len());
@@ -3154,7 +3154,7 @@ impl Coordinator {
                             }
                         }
                     }
-                    let diff = NonZeroI64::try_from(**diff).expect("known to be >= 1");
+                    let diff = NonZeroI64::try_from(diff.into_inner()).expect("known to be >= 1");
                     let diff = match NonZeroUsize::try_from(diff) {
                         Ok(diff) => diff,
                         Err(err) => {

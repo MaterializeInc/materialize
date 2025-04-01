@@ -515,7 +515,7 @@ impl RustType<ProtoSubscribeBatch> for SubscribeBatch<mz_repr::Timestamp> {
                             .map(|(t, r, d)| ProtoUpdate {
                                 timestamp: t.into(),
                                 row: Some(r.into_proto()),
-                                diff: **d,
+                                diff: d.into_proto(),
                             })
                             .collect();
 

@@ -476,10 +476,10 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                 })
                 .collect();
             let contains_retraction = parsed_updates.iter().any(|(update, diff)| {
-                matches!(update, StateUpdateKind::FenceToken(..)) && **diff == -1
+                matches!(update, StateUpdateKind::FenceToken(..)) && *diff == Diff::MINUS_ONE
             });
             let contains_addition = parsed_updates.iter().any(|(update, diff)| {
-                matches!(update, StateUpdateKind::FenceToken(..)) && **diff == 1
+                matches!(update, StateUpdateKind::FenceToken(..)) && *diff == Diff::ONE
             });
             let contains_fence = contains_retraction && contains_addition;
             Some((contains_fence, updates))
@@ -489,7 +489,11 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
 
         let updates = updates.into_iter().map(|(kind, diff)| {
             let kind: StateUpdateKindJson = kind.into();
-            ((Into::<SourceData>::into(kind), ()), commit_ts, *diff)
+            (
+                (Into::<SourceData>::into(kind), ()),
+                commit_ts,
+                diff.into_inner(),
+            )
         });
         let next_upper = commit_ts.step_forward();
         let res = self
@@ -667,7 +671,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         let mut errors = Vec::new();
 
         for (kind, ts, diff) in updates {
-            if *diff != 1 && *diff != -1 {
+            if diff != Diff::ONE && diff != Diff::MINUS_ONE {
                 panic!("invalid update in consolidated trace: ({kind:?}, {ts:?}, {diff:?})");
             }
 
@@ -765,13 +769,13 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
         {
             let key = key.clone();
             let value = value.clone();
-            if *diff == 1 {
+            if diff == Diff::ONE {
                 let prev = map.insert(key, value);
                 assert_eq!(
                     prev, None,
                     "values must be explicitly retracted before inserting a new value"
                 );
-            } else if *diff == -1 {
+            } else if diff == Diff::MINUS_ONE {
                 let prev = map.remove(&key);
                 assert_eq!(
                     prev,
@@ -785,7 +789,7 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
             let mut snapshot = Snapshot::empty();
             for (kind, ts, diff) in trace {
                 let diff = *diff;
-                if *diff != 1 && *diff != -1 {
+                if diff != Diff::ONE && diff != Diff::MINUS_ONE {
                     panic!("invalid update in consolidated trace: ({kind:?}, {ts:?}, {diff:?})");
                 }
 
@@ -1094,7 +1098,7 @@ impl UnopenedPersistCatalogState {
         // If the snapshot is not consolidated, and we see multiple epoch values while applying the
         // updates, then we might accidentally fence ourselves out.
         soft_assert_no_log!(
-            snapshot.iter().all(|(_, _, diff)| **diff == 1),
+            snapshot.iter().all(|(_, _, diff)| *diff == Diff::ONE),
             "snapshot should be consolidated: {snapshot:#?}"
         );
 
@@ -1218,7 +1222,7 @@ impl UnopenedPersistCatalogState {
             .into_iter()
             .partition(|(update, _, _)| update.is_audit_log());
         self.snapshot = snapshot;
-        let audit_log_count = *audit_logs.iter().map(|(_, _, diff)| diff).sum::<Diff>();
+        let audit_log_count = audit_logs.iter().map(|(_, _, diff)| diff).sum::<Diff>();
         let audit_log_handle = AuditLogIterator::new(audit_logs);
 
         // Perform data migrations.
@@ -1254,7 +1258,7 @@ impl UnopenedPersistCatalogState {
             .metrics
             .collection_entries
             .with_label_values(&[&CollectionType::AuditLog.to_string()])
-            .add(audit_log_count);
+            .add(audit_log_count.into_inner());
         let updates = self.snapshot.into_iter().map(|(kind, ts, diff)| {
             let kind = TryIntoStateUpdateKind::try_into(kind).expect("kind decoding error");
             StateUpdate { kind, ts, diff }
@@ -1575,7 +1579,7 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
             metrics
                 .collection_entries
                 .with_label_values(&[&collection_type.to_string()])
-                .add(*update.diff);
+                .add(update.diff.into_inner());
         }
 
         {
@@ -2019,7 +2023,7 @@ impl UnopenedPersistCatalogState {
                 .values
                 .into_iter()
                 .filter(|((k, _), _, diff)| {
-                    soft_assert_eq_or_log!(**diff, 1, "trace is consolidated");
+                    soft_assert_eq_or_log!(*diff, Diff::ONE, "trace is consolidated");
                     &key == k
                 })
                 .collect();
@@ -2081,7 +2085,7 @@ impl UnopenedPersistCatalogState {
                 .values
                 .into_iter()
                 .filter(|((k, _), _, diff)| {
-                    soft_assert_eq_or_log!(**diff, 1, "trace is consolidated");
+                    soft_assert_eq_or_log!(*diff, Diff::ONE, "trace is consolidated");
                     &key == k
                 })
                 .map(|((k, v), _, _)| (T::update(k, v), -Diff::ONE))

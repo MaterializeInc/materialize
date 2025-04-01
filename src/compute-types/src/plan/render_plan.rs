@@ -1352,7 +1352,7 @@ impl RustType<proto_expr::ProtoUpdate> for (Row, mz_repr::Timestamp, Diff) {
         proto_expr::ProtoUpdate {
             row: Some(self.0.into_proto()),
             timestamp: self.1.into(),
-            diff: *self.2,
+            diff: self.2.into_proto(),
         }
     }
 

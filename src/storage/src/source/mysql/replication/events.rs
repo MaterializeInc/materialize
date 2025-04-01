@@ -309,7 +309,7 @@ pub(super) async fn handle_rows_event(
                         event_buffer.push((data.clone(), GtidPartition::minimum(), -diff));
                     }
                 }
-                if *diff > 0 {
+                if diff.is_positive() {
                     additions += 1;
                 } else {
                     retractions += 1;

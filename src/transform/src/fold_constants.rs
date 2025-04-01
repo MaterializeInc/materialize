@@ -160,7 +160,7 @@ impl FoldConstants {
             MirRelationExpr::Threshold { input } => {
                 if let Some((rows, ..)) = (**input).as_const_mut() {
                     if let Ok(rows) = rows {
-                        rows.retain(|(_, diff)| **diff > 0);
+                        rows.retain(|(_, diff)| diff.is_positive());
                     }
                     *relation = input.take_dangerous();
                 }
@@ -437,22 +437,23 @@ impl FoldConstants {
         let mut groups = BTreeMap::new();
         let temp_storage2 = RowArena::new();
         let mut row_buf = Row::default();
-        let mut limit_remaining = limit.unwrap_or(usize::MAX);
+        let mut limit_remaining =
+            limit.map_or(Diff::MAX, |limit| Diff::try_from(limit).expect("must fit"));
         for (row, diff) in rows {
             // We currently maintain the invariant that any negative
             // multiplicities will be consolidated away before they
             // arrive at a reduce.
 
-            if **diff <= 0 {
+            if *diff <= Diff::ZERO {
                 return Some(Err(EvalError::InvalidParameterValue(
                     "constant folding encountered reduce on collection with non-positive multiplicities".into()
                 )));
             }
 
-            if limit_remaining < **diff as usize {
+            if limit_remaining < *diff {
                 return None;
             }
-            limit_remaining -= **diff as usize;
+            limit_remaining -= diff;
 
             let datums = row.unpack();
             let temp_storage = RowArena::new();
@@ -478,7 +479,7 @@ impl FoldConstants {
                 Err(e) => return Some(Err(e)),
             };
             let entry = groups.entry(key).or_insert_with(Vec::new);
-            for _ in 0..**diff {
+            for _ in 0..diff.into_inner() {
                 entry.push(val.clone());
             }
         }
@@ -573,7 +574,7 @@ impl FoldConstants {
 
             let mut finger = cursor;
             while finger < rows.len() && same_group_key(&rows[cursor], &rows[finger]) {
-                if *rows[finger].1 < 0 {
+                if rows[finger].1.is_negative() {
                     // ignore elements with negative diff
                     rows[finger].1 = Diff::ZERO;
                 } else {

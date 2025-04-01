@@ -280,7 +280,7 @@ impl ContinualTaskSourceTransformer {
             InsertsInput { source_id, .. } => {
                 let name = source_id.to_string();
                 // Keep only the inserts.
-                let oks = oks.inner.filter(|(_, _, diff)| **diff > 0);
+                let oks = oks.inner.filter(|(_, _, diff)| diff.is_positive());
                 // Grab the original times for use in the sink operator.
                 let (oks, times) = oks.as_collection().times_extract(&name);
                 // Then retract everything at the next timestamp.
@@ -751,7 +751,7 @@ impl<D: Ord> SinkState<D, Timestamp> {
         let append_data = self
             .to_append
             .iter()
-            .filter_map(|((k, t), d)| (t <= write_ts).then_some(((k, &()), t, **d)))
+            .filter_map(|((k, t), d)| (t <= write_ts).then_some(((k, &()), t, d.into_inner())))
             .collect();
         Some((Antichain::from_elem(write_ts.step_forward()), append_data))
     }

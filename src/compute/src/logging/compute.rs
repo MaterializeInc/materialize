@@ -147,7 +147,7 @@ pub struct ErrorCount {
     /// Identifier of the export.
     pub export_id: GlobalId,
     /// The change in error count.
-    pub diff: i64,
+    pub diff: Diff,
 }
 
 /// An export is hydrated.
@@ -493,7 +493,7 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
                 packer.pack_slice_owned(&[
                     make_string_datum(datum.export_id, &mut scratch),
                     Datum::UInt64(u64::cast_from(worker_id)),
-                    Datum::Int64(datum.count),
+                    Datum::Int64(datum.count.into_inner()),
                 ])
             }
         });
@@ -643,7 +643,7 @@ struct ExportState {
     ///
     /// This must be a signed integer, since per-worker error counts can be negative, only the
     /// cross-worker total has to sum up to a non-negative value.
-    error_count: i64,
+    error_count: Diff,
     /// When this export was created.
     created_at: Instant,
     /// Whether the exported collection is hydrated.
@@ -654,7 +654,7 @@ impl ExportState {
     fn new(dataflow_index: usize) -> Self {
         Self {
             dataflow_index,
-            error_count: 0,
+            error_count: Diff::ZERO,
             created_at: Instant::now(),
             hydration_time_ns: None,
         }
@@ -734,7 +734,7 @@ struct ErrorCountDatum {
     // Normally we would use DD's diff field to encode counts, but in this case we can't: The total
     // per-worker error count might be negative and at the SQL level having negative multiplicities
     // is treated as an error.
-    count: i64,
+    count: Diff,
 }
 
 #[derive(Clone, Columnar)]
@@ -871,7 +871,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         }
 
         // Remove error count logging for this export.
-        if export.error_count != 0 {
+        if export.error_count != Diff::ZERO {
             let datum = ErrorCountDatum {
                 export_id,
                 count: export.error_count,
@@ -983,14 +983,14 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         let old_count = export.error_count;
         let new_count = old_count + diff;
 
-        if old_count != 0 {
+        if old_count != Diff::ZERO {
             let datum = ErrorCountDatum {
                 export_id,
                 count: old_count,
             };
             self.output.error_count.give((datum, ts, -Diff::ONE));
         }
-        if new_count != 0 {
+        if new_count != Diff::ZERO {
             let datum = ErrorCountDatum {
                 export_id,
                 count: new_count,
@@ -1438,7 +1438,7 @@ where
             .unary(Pipeline, "LogDataflowErrorsCollection", |_cap, _info| {
                 move |input, output| {
                     input.for_each(|cap, data| {
-                        let diff = data.iter().map(|(_d, _t, r)| **r).sum();
+                        let diff = data.iter().map(|(_d, _t, r)| *r).sum::<Diff>();
                         logger.log(&ComputeEvent::ErrorCount(ErrorCount { export_id, diff }));
 
                         output.session(&cap).give_container(data);
@@ -1458,7 +1458,7 @@ where
         self.unary(Pipeline, "LogDataflowErrorsStream", |_cap, _info| {
             move |input, output| {
                 input.for_each(|cap, data| {
-                    let diff = *data.iter().map(sum_batch_diffs).sum::<Diff>();
+                    let diff = data.iter().map(sum_batch_diffs).sum::<Diff>();
                     logger.log(&ComputeEvent::ErrorCount(ErrorCount { export_id, diff }));
 
                     output.session(&cap).give_container(data);

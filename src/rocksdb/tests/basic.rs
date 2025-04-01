@@ -17,6 +17,9 @@ use mz_rocksdb_types::RocksDBTuningParameters;
 use prometheus::{HistogramOpts, HistogramVec, IntCounterVec, Opts};
 use rocksdb::DB;
 
+// Same type as mz_rocksdb::Diff, but it's private.
+type Diff = mz_ore::num::Overflowing<i64>;
+
 fn shared_metrics_for_tests() -> Result<Box<RocksDBSharedMetrics>, anyhow::Error> {
     let fake_hist_vec =
         HistogramVec::new(HistogramOpts::new("fake", "fake_help"), &["fake_label"])?;
@@ -174,7 +177,7 @@ async fn associative_merge_operator_test() -> Result<(), anyhow::Error> {
             .multi_update(
                 merges
                     .into_iter()
-                    .map(|v| (key.clone(), KeyUpdate::Merge(v), Some(1))),
+                    .map(|v| (key.clone(), KeyUpdate::Merge(v), Some(Diff::ONE))),
             )
             .await?;
     }
@@ -201,7 +204,7 @@ async fn associative_merge_operator_test() -> Result<(), anyhow::Error> {
             .multi_update(
                 merges
                     .into_iter()
-                    .map(|v| (key.clone(), KeyUpdate::Merge(v), Some(1))),
+                    .map(|v| (key.clone(), KeyUpdate::Merge(v), Some(Diff::ONE))),
             )
             .await?;
 
@@ -234,7 +237,7 @@ async fn associative_merge_operator_test() -> Result<(), anyhow::Error> {
             .multi_update(
                 merges
                     .into_iter()
-                    .map(|v| (key.clone(), KeyUpdate::Merge(v), Some(1))),
+                    .map(|v| (key.clone(), KeyUpdate::Merge(v), Some(Diff::ONE))),
             )
             .await?;
 
@@ -283,24 +286,24 @@ async fn update_operation_stats_test() -> Result<(), anyhow::Error> {
             (
                 "two".to_string(),
                 KeyUpdate::Put("twov1".to_string()),
-                Some(1),
+                Some(Diff::ONE),
             ),
             (
                 "two".to_string(),
                 KeyUpdate::Put("twov1".to_string()),
-                Some(-1),
+                Some(Diff::MINUS_ONE),
             ),
             (
                 "two".to_string(),
                 KeyUpdate::Put("twov2".to_string()),
-                Some(1),
+                Some(Diff::ONE),
             ),
         ])
         .await?;
     assert_eq!(stats.processed_updates, 3);
     assert_eq!(
-        i64::try_from(stats.size_written).unwrap(),
-        3 * stats.size_diff.unwrap()
+        Diff::try_from(stats.size_written).unwrap(),
+        Diff::from(3) * stats.size_diff.unwrap()
     );
 
     instance.close().await?;

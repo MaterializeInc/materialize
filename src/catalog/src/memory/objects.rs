@@ -3380,9 +3380,9 @@ impl TryFrom<Diff> for StateDiff {
     type Error = String;
 
     fn try_from(diff: Diff) -> Result<Self, Self::Error> {
-        match *diff {
-            -1 => Ok(Self::Retraction),
-            1 => Ok(Self::Addition),
+        match diff {
+            Diff::MINUS_ONE => Ok(Self::Retraction),
+            Diff::ONE => Ok(Self::Addition),
             diff => Err(format!("invalid diff {diff}")),
         }
     }

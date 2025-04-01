@@ -106,7 +106,7 @@ where
         self.source_upper.update_iter(
             updates
                 .iter()
-                .map(|(src_ts, _dest_ts, diff)| (src_ts.clone(), **diff)),
+                .map(|(src_ts, _dest_ts, diff)| (src_ts.clone(), diff.into_inner())),
         );
 
         ReclockBatch {

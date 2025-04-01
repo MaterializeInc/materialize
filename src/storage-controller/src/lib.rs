@@ -3112,7 +3112,7 @@ where
         I: Iterator<Item = GlobalId>,
     {
         mz_ore::soft_assert_or_log!(
-            *diff == -1 || *diff == 1,
+            diff == Diff::MINUS_ONE || diff == Diff::ONE,
             "use 1 for insert or -1 for delete"
         );
 

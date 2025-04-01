@@ -476,7 +476,7 @@ where
             move |input, output| {
                 while let Some((cap, data)) = input.next() {
                     assert!(
-                        data.iter().all(|(_, _, diff)| **diff > 0),
+                        data.iter().all(|(_, _, diff)| diff.is_positive()),
                         "invalid upsert input"
                     );
                     updates.append(data);
@@ -529,7 +529,7 @@ fn stage_input<T, FromTime>(
     }
 
     stash.extend(data.drain(..).map(|((key, value, order), time, diff)| {
-        assert!(*diff > 0, "invalid upsert input");
+        assert!(diff.is_positive(), "invalid upsert input");
         (time, key, Reverse(order), value)
     }));
 

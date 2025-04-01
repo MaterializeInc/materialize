@@ -395,8 +395,14 @@ async fn dump(
             .collect();
 
         let total_count = entries.len();
-        let addition_count = entries.iter().filter(|entry| *entry.diff == 1).count();
-        let retraction_count = entries.iter().filter(|entry| *entry.diff == -1).count();
+        let addition_count = entries
+            .iter()
+            .filter(|entry| entry.diff == Diff::ONE)
+            .count();
+        let retraction_count = entries
+            .iter()
+            .filter(|entry| entry.diff == Diff::MINUS_ONE)
+            .count();
         let entries = if stats_only { None } else { Some(entries) };
         let dumped_col = DumpedCollection {
             total_count,

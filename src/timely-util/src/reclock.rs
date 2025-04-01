@@ -277,7 +277,7 @@ where
             while let Some((_, data)) = remap_input.next() {
                 for (from, mut into, diff) in data.drain(..) {
                     into.advance_by(as_of.borrow());
-                    remap_accum_buffer.update((into, from), *diff);
+                    remap_accum_buffer.update((into, from), diff.into_inner());
                 }
             }
             // Drain consolidated bindings into the `pending_remap` heap.

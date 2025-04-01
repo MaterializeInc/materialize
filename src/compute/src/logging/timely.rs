@@ -346,7 +346,7 @@ struct DemuxState {
     schedule_starts: BTreeMap<usize, Duration>,
     /// Maps operator IDs to a vector recording the (count, elapsed_ns) values in each histogram
     /// bucket.
-    schedules_data: BTreeMap<usize, Vec<(isize, i64)>>,
+    schedules_data: BTreeMap<usize, Vec<(isize, Diff)>>,
 }
 
 struct Park {
@@ -362,7 +362,7 @@ struct MessageCount {
     /// The number of batches sent across a channel.
     batches: i64,
     /// The number of records sent across a channel.
-    records: i64,
+    records: Diff,
 }
 
 type Pusher<D> =
@@ -659,7 +659,7 @@ impl DemuxHandler<'_, '_> {
                 .messages_sent
                 .entry(event.channel)
                 .or_insert_with(|| vec![Default::default(); self.peers].into_boxed_slice());
-            sent_counts[event.target].records += *count;
+            sent_counts[event.target].records += count;
             sent_counts[event.target].batches += 1;
         } else {
             let datum = MessageDatum {
@@ -676,7 +676,7 @@ impl DemuxHandler<'_, '_> {
                 .messages_received
                 .entry(event.channel)
                 .or_insert_with(|| vec![Default::default(); self.peers].into_boxed_slice());
-            received_counts[event.source].records += *count;
+            received_counts[event.source].records += count;
             received_counts[event.source].batches += 1;
         }
     }
@@ -719,7 +719,7 @@ impl DemuxHandler<'_, '_> {
                 grow_vec(data, index);
                 let (count, duration) = &mut data[index];
                 *count += 1;
-                *duration += *elapsed_diff;
+                *duration += elapsed_diff;
             }
         }
     }

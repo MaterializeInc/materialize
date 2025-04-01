@@ -174,26 +174,17 @@ pub fn set_overflowing_behavior(behavior: OverflowingBehavior) {
     overflowing_support::set_overflowing_mode(behavior);
 }
 
+impl<T> Overflowing<T> {
+    /// Returns the inner value.
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+
 impl<T: fmt::Display> fmt::Display for Overflowing<T> {
     #[inline(always)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
-    }
-}
-
-impl<T> Deref for Overflowing<T> {
-    type Target = T;
-
-    #[inline(always)]
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<T> std::borrow::Borrow<T> for Overflowing<T> {
-    #[inline(always)]
-    fn borrow(&self) -> &T {
-        &self.0
     }
 }
 
@@ -287,36 +278,29 @@ mod columnar {
     impl<T: Copy, TC: Push<T>> Push<Overflowing<T>> for Overflows<T, TC> {
         #[inline(always)]
         fn push(&mut self, item: Overflowing<T>) {
-            self.0.push(*item);
+            self.0.push(item.0);
         }
     }
 
     impl<T: Copy, TC: Push<T>> Push<&Overflowing<T>> for Overflows<T, TC> {
         #[inline(always)]
         fn push(&mut self, item: &Overflowing<T>) {
-            self.0.push(**item);
+            self.0.push(item.0);
         }
     }
 }
 
 macro_rules! impl_overflowing {
-    ($t:ty, $($f:ty)*, $($fo:ty)*, $($cf:ty)*) => {
+    ($t:ty) => {
         impl Overflowing<$t> {
             /// The value zero.
             pub const ZERO: Self = Self(0);
-            /// The value minus one.
-            pub const MINUS_ONE: Self = Self(-1);
             /// The value one.
             pub const ONE: Self = Self(1);
             /// The minimum value.
             pub const MIN: Self = Self(<$t>::min_value());
             /// The maximum value.
             pub const MAX: Self = Self(<$t>::max_value());
-
-            /// Returns the absolute value of the number.
-            pub fn abs(self) -> Self {
-                Self(self.0.abs())
-            }
 
             /// Checked addition. Returns `None` if overflow occurred.
             #[inline(always)]
@@ -341,6 +325,11 @@ macro_rules! impl_overflowing {
             pub fn wrapping_mul(self, rhs: Self) -> Self {
                 Self(self.0.wrapping_mul(rhs.0))
             }
+
+            /// Returns `true` if the number is zero.
+            pub fn is_zero(self) -> bool {
+                self == Self::ZERO
+            }
         }
 
         impl Add<Self> for Overflowing<$t> {
@@ -349,7 +338,9 @@ macro_rules! impl_overflowing {
             #[inline(always)]
             fn add(self, rhs: Self) -> Self::Output {
                 match self.0.overflowing_add(rhs.0) {
-                    (result, true) => overflowing_support::handle_overflow(result, format_args!("{self} + {rhs}")),
+                    (result, true) => {
+                        overflowing_support::handle_overflow(result, format_args!("{self} + {rhs}"))
+                    }
                     (result, false) => Self(result),
                 }
             }
@@ -361,7 +352,9 @@ macro_rules! impl_overflowing {
             #[inline(always)]
             fn add(self, rhs: &'a Self) -> Self::Output {
                 match self.0.overflowing_add(rhs.0) {
-                    (result, true) => overflowing_support::handle_overflow(result, format_args!("{self} + {rhs}")),
+                    (result, true) => {
+                        overflowing_support::handle_overflow(result, format_args!("{self} + {rhs}"))
+                    }
                     (result, false) => Self(result),
                 }
             }
@@ -387,7 +380,9 @@ macro_rules! impl_overflowing {
             #[inline(always)]
             fn div(self, rhs: Self) -> Self::Output {
                 match self.0.overflowing_div(rhs.0) {
-                    (result, true) => overflowing_support::handle_overflow(result, format_args!("{self} / {rhs}")),
+                    (result, true) => {
+                        overflowing_support::handle_overflow(result, format_args!("{self} / {rhs}"))
+                    }
                     (result, false) => Self(result),
                 }
             }
@@ -399,7 +394,9 @@ macro_rules! impl_overflowing {
             #[inline(always)]
             fn rem(self, rhs: Self) -> Self::Output {
                 match self.0.overflowing_rem(rhs.0) {
-                    (result, true) => overflowing_support::handle_overflow(result, format_args!("{self} % {rhs}")),
+                    (result, true) => {
+                        overflowing_support::handle_overflow(result, format_args!("{self} % {rhs}"))
+                    }
                     (result, false) => Self(result),
                 }
             }
@@ -411,7 +408,9 @@ macro_rules! impl_overflowing {
             #[inline(always)]
             fn sub(self, rhs: Self) -> Self::Output {
                 match self.0.overflowing_sub(rhs.0) {
-                    (result, true) => overflowing_support::handle_overflow(result, format_args!("{self} - {rhs}")),
+                    (result, true) => {
+                        overflowing_support::handle_overflow(result, format_args!("{self} - {rhs}"))
+                    }
                     (result, false) => Self(result),
                 }
             }
@@ -423,7 +422,9 @@ macro_rules! impl_overflowing {
             #[inline(always)]
             fn sub(self, rhs: &'a Self) -> Self::Output {
                 match self.0.overflowing_sub(rhs.0) {
-                    (result, true) => overflowing_support::handle_overflow(result, format_args!("{self} - {rhs}")),
+                    (result, true) => {
+                        overflowing_support::handle_overflow(result, format_args!("{self} - {rhs}"))
+                    }
                     (result, false) => Self(result),
                 }
             }
@@ -445,45 +446,15 @@ macro_rules! impl_overflowing {
 
         impl std::iter::Sum<Overflowing<$t>> for Overflowing<$t> {
             #[inline(always)]
-            fn sum<I: Iterator<Item=Self>>(iter: I) -> Self {
-                iter.fold(
-                    Self::ZERO,
-                    |a, b| a + b,
-                )
+            fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+                iter.fold(Self::ZERO, |a, b| a + b)
             }
         }
 
         impl<'a> std::iter::Sum<&'a Overflowing<$t>> for Overflowing<$t> {
             #[inline(always)]
-            fn sum<I: Iterator<Item=&'a Self>>(iter: I) -> Self {
-                iter.fold(
-                    Self::ZERO,
-                    |a, b| a + b,
-                )
-            }
-        }
-
-        impl Neg for Overflowing<$t> {
-            type Output = Overflowing<<$t as Neg>::Output>;
-
-            #[inline(always)]
-            fn neg(self) -> Self::Output {
-                match self.0.overflowing_neg() {
-                    (result, true) => overflowing_support::handle_overflow(result, format_args!("-{self}")),
-                    (result, false) => Self(result),
-                }
-            }
-        }
-
-        impl Neg for &Overflowing<$t> {
-            type Output = Overflowing<<$t as Neg>::Output>;
-
-            #[inline(always)]
-            fn neg(self) -> Self::Output {
-                match self.0.overflowing_neg() {
-                    (result, true) => overflowing_support::handle_overflow(result, format_args!("-{self}")),
-                    (result, false) => Overflowing(result),
-                }
+            fn sum<I: Iterator<Item = &'a Self>>(iter: I) -> Self {
+                iter.fold(Self::ZERO, |a, b| a + b)
             }
         }
 
@@ -493,38 +464,13 @@ macro_rules! impl_overflowing {
             #[inline(always)]
             fn mul(self, rhs: Self) -> Self::Output {
                 match self.0.overflowing_mul(rhs.0) {
-                    (result, true) => overflowing_support::handle_overflow(result, format_args!("{self} * {rhs}")),
+                    (result, true) => {
+                        overflowing_support::handle_overflow(result, format_args!("{self} * {rhs}"))
+                    }
                     (result, false) => Self(result),
                 }
             }
         }
-
-        $(
-            impl From<$f> for Overflowing<$t> {
-                #[inline(always)]
-                fn from(value: $f) -> Self {
-                    Self(value.into())
-                }
-            }
-        )*
-
-        $(
-            impl From<Overflowing<$fo>> for Overflowing<$t> {
-                #[inline(always)]
-                fn from(value: Overflowing<$fo>) -> Self {
-                    Self(value.0.into())
-                }
-            }
-        )*
-
-        $(
-            impl crate::cast::CastFrom<$cf> for Overflowing<$t> {
-                #[inline(always)]
-                fn cast_from(value: $cf) -> Self {
-                    Self(<$t>::cast_from(value))
-                }
-            }
-        )*
 
         #[cfg(feature = "differential-dataflow")]
         impl differential_dataflow::difference::IsZero for Overflowing<$t> {
@@ -539,14 +485,6 @@ macro_rules! impl_overflowing {
             #[inline(always)]
             fn plus_equals(&mut self, rhs: &Self) {
                 *self += *rhs
-            }
-        }
-
-        #[cfg(feature = "differential-dataflow")]
-        impl differential_dataflow::difference::Abelian for Overflowing<$t> {
-            #[inline(always)]
-            fn negate(&mut self) {
-                *self = -*self
             }
         }
 
@@ -581,28 +519,20 @@ macro_rules! impl_overflowing {
             }
         }
 
-        impl TryFrom<usize> for Overflowing<$t> {
-            type Error = <u32 as TryFrom<usize>>::Error;
-
-            #[inline(always)]
-            fn try_from(value: usize) -> Result<Self, Self::Error> {
-                <$t>::try_from(value).map(Self)
-            }
-        }
-
-        impl TryFrom<Overflowing<$t>> for usize {
-            type Error = <usize as TryFrom<$t>>::Error;
-
-            #[inline(always)]
-            fn try_from(value: Overflowing<$t>) -> Result<Self, Self::Error> {
-                Self::try_from(value.0)
-            }
-        }
-
         impl std::hash::Hash for Overflowing<$t> {
             #[inline(always)]
             fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
                 self.0.hash(state);
+            }
+        }
+
+        impl<T> crate::cast::CastFrom<T> for Overflowing<$t>
+        where
+            $t: crate::cast::CastFrom<T>,
+        {
+            #[inline(always)]
+            fn cast_from(value: T) -> Self {
+                Self(<$t>::cast_from(value))
             }
         }
 
@@ -645,6 +575,139 @@ macro_rules! impl_overflowing {
                 <$t>::from_str_radix(str, radix).map(Self)
             }
         }
+    };
+}
+
+macro_rules! impl_overflowing_from {
+    ($t:ty, $($f:ty)+) => {
+        $(
+            impl From<$f> for Overflowing<$t> {
+                #[inline(always)]
+                fn from(value: $f) -> Self {
+                    Self(value.into())
+                }
+            }
+        )+
+    };
+}
+
+macro_rules! impl_overflowing_from_overflowing {
+    ($t:ty, $($f:ty)+) => {
+        $(
+            impl From<Overflowing<$f>> for Overflowing<$t> {
+                #[inline(always)]
+                fn from(value: Overflowing<$f>) -> Self {
+                    Self(value.0.into())
+                }
+            }
+        )+
+    };
+}
+
+macro_rules! impl_overflowing_try_from {
+    ($t:ty, $($f:ty)+) => {
+        $(
+            impl TryFrom<$f> for Overflowing<$t> {
+                type Error = <$t as TryFrom<$f>>::Error;
+                #[inline(always)]
+                fn try_from(value: $f) -> Result<Self, Self::Error> {
+                    <$t>::try_from(value).map(Self)
+                }
+            }
+
+            impl TryFrom<Overflowing<$f>> for Overflowing<$t> {
+                type Error = <$t as TryFrom<$f>>::Error;
+                #[inline(always)]
+                fn try_from(value: Overflowing<$f>) -> Result<Self, Self::Error> {
+                    <$t>::try_from(value.0).map(Self)
+                }
+            }
+        )+
+    };
+}
+
+// Implement Overflowing for signed types.
+macro_rules! impl_overflowing_signed {
+    ($t:ty, $u:ty) => {
+        impl Overflowing<$t> {
+            /// The value minus one.
+            pub const MINUS_ONE: Self = Self(-1);
+
+            /// Returns the absolute value of the number.
+            pub fn abs(self) -> Self {
+                Self(self.0.abs())
+            }
+
+            /// Returns the absolute value of the number as an unsigned integer.
+            #[inline(always)]
+            pub fn unsigned_abs(self) -> $u {
+                self.0.unsigned_abs()
+            }
+
+            /// Returns `true` if the number is positive and `false` if the number is zero
+            /// or negative.
+            ///
+            /// # Examples
+            ///
+            /// ```
+            /// # use mz_ore::num::Overflowing;
+            /// assert!(!Overflowing::<i64>::from(-10i32).is_positive());
+            /// assert!(Overflowing::<i64>::from(10i32).is_positive());
+            /// ```
+            pub fn is_positive(self) -> bool {
+                self > Self::ZERO
+            }
+
+            /// Returns `true` if the number is negative and `false` if the number is zero
+            /// or positive.
+            ///
+            /// # Examples
+            ///
+            /// ```
+            /// # use mz_ore::num::Overflowing;
+            /// assert!(Overflowing::<i64>::from(-10i32).is_negative());
+            /// assert!(!Overflowing::<i64>::from(10i32).is_negative());
+            /// ```
+            pub fn is_negative(self) -> bool {
+                self < Self::ZERO
+            }
+        }
+
+        impl Neg for Overflowing<$t> {
+            type Output = Overflowing<<$t as Neg>::Output>;
+
+            #[inline(always)]
+            fn neg(self) -> Self::Output {
+                match self.0.overflowing_neg() {
+                    (result, true) => {
+                        overflowing_support::handle_overflow(result, format_args!("-{self}"))
+                    }
+                    (result, false) => Self(result),
+                }
+            }
+        }
+
+        impl Neg for &Overflowing<$t> {
+            type Output = Overflowing<<$t as Neg>::Output>;
+
+            #[inline(always)]
+            fn neg(self) -> Self::Output {
+                match self.0.overflowing_neg() {
+                    (result, true) => {
+                        overflowing_support::handle_overflow(result, format_args!("-{self}"))
+                    }
+                    (result, false) => Overflowing(result),
+                }
+            }
+        }
+
+        #[cfg(feature = "differential-dataflow")]
+        impl differential_dataflow::difference::Abelian for Overflowing<$t> {
+            #[inline(always)]
+            fn negate(&mut self) {
+                *self = -*self
+            }
+        }
 
         #[cfg(feature = "num-traits")]
         impl num_traits::sign::Signed for Overflowing<$t> {
@@ -671,30 +734,39 @@ macro_rules! impl_overflowing {
         }
     };
 }
-macro_rules! impl_overflowing_signed {
-    ($t:ty, $u:ty) => {
-        impl Overflowing<$t> {
-            /// Returns the absolute value of the number as an unsigned integer.
-            #[inline(always)]
-            pub fn unsigned_abs(self) -> $u {
-                self.0.unsigned_abs()
-            }
-        }
+
+macro_rules! overflowing {
+    ($t:ty, $($fit:ty)+, $($may_fit:ty)+ $(, $unsigned:ty)?) => {
+        impl_overflowing!($t);
+        impl_overflowing_from!($t, $($fit)+ $t);
+        impl_overflowing_from_overflowing!($t, $($fit)+);
+        impl_overflowing_try_from!($t, $($may_fit)+);
+        $( impl_overflowing_signed!($t, $unsigned); )?
     };
 }
 
-// TODO: Support unsigned integers.
-impl_overflowing!(i8, bool i8, bool,);
-impl_overflowing_signed!(i8, u8);
-impl_overflowing!(i16, bool i8 u8 i16, bool i8 u8,);
-impl_overflowing_signed!(i16, u16);
-impl_overflowing!(i32, bool i8 u8 i16 u16 i32, bool i8 u8 i16 u16, );
-impl_overflowing_signed!(i32, u32);
-// N.B. We're including `isize` here because we know it's 64 bits on all platforms we support.
-impl_overflowing!(i64, bool i8 u8 i16 u16 i32 u32 i64, bool i8 u8 i16 u16 i32 u32, isize);
-impl_overflowing_signed!(i64, u64);
-impl_overflowing!(i128, bool i8 u8 i16 u16 i32 u32 i64 u64 i128, bool i8 u8 i16 u16 i32 u32 i64 u64, isize usize);
-impl_overflowing_signed!(i128, u128);
+// type, types that certainly fit, types that may fit, optional corresponding unsigned type
+overflowing!(u8, bool, u16 u32 u64 u128 i8 i16 i32 i64 i128 isize usize);
+overflowing!(u16, bool u8, u32 u64 u128 i8 i16 i32 i64 i128 isize usize);
+overflowing!(u32, bool u8 u16, u64 u128 i8 i16 i32 i64 i128 isize usize);
+overflowing!(u64, bool u8 u16 u32, u128 i8 i16 i32 i64 i128 isize usize);
+overflowing!(u128, bool u8 u16 u32 u64, i8 i16 i32 i64 i128 isize usize);
+
+overflowing!(i8, bool, u8 i16 u16 i32 u32 i64 u64 i128 u128 isize usize, u8);
+overflowing!(i16, bool i8 u8, u16 i32 u32 i64 u64 i128 u128 isize usize, u16);
+overflowing!(i32, bool i8 u8 i16 u16, u32 i64 u64 i128 u128 isize usize, u32);
+overflowing!(i64, bool i8 u8 i16 u16 i32 u32, u64 i128 u128 isize usize, u64);
+overflowing!(i128, bool i8 u8 i16 u16 i32 u32 i64 u64, u128 isize usize, u128);
+
+// impl_overflowing!(i16, bool i8 u8 i16, bool i8 u8,);
+// impl_overflowing_signed!(i16, u16);
+// impl_overflowing!(i32, bool i8 u8 i16 u16 i32, bool i8 u8 i16 u16, );
+// impl_overflowing_signed!(i32, u32);
+// // N.B. We're including `isize` here because we know it's 64 bits on all platforms we support.
+// impl_overflowing!(i64, bool i8 u8 i16 u16 i32 u32 i64, bool i8 u8 i16 u16 i32 u32, isize);
+// impl_overflowing_signed!(i64, u64);
+// impl_overflowing!(i128, bool i8 u8 i16 u16 i32 u32 i64 u64 i128, bool i8 u8 i16 u16 i32 u32 i64 u64, isize usize);
+// impl_overflowing_signed!(i128, u128);
 
 mod overflowing_support {
     use std::sync::atomic::AtomicUsize;

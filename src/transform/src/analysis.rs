@@ -805,7 +805,7 @@ mod non_negative {
             match expr {
                 MirRelationExpr::Constant { rows, .. } => rows
                     .as_ref()
-                    .map(|r| r.iter().all(|(_, diff)| **diff >= 0))
+                    .map(|r| r.iter().all(|(_, diff)| *diff >= mz_repr::Diff::ZERO))
                     .unwrap_or(true),
                 MirRelationExpr::Get { id, .. } => match id {
                     Id::Local(id) => {

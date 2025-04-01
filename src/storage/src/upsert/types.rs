@@ -168,7 +168,7 @@ pub struct MergeValue<V> {
     pub value: V,
     /// The 'diff' of this merge operand value, used to estimate the overall size diff
     /// of the working set after this merge operand is merged by the backend.
-    pub diff: i64,
+    pub diff: Diff,
 }
 
 /// `UpsertState` has 2 modes:
@@ -600,10 +600,11 @@ impl<T: Eq, O: Default> StateValue<T, O> {
                     .unwrap();
                 let len = i64::try_from(bincode_buffer.len()).unwrap();
 
-                *diff_sum += *diff;
-                *len_sum += len.wrapping_mul(*diff);
+                *diff_sum += diff.into_inner();
+                *len_sum += len.wrapping_mul(diff.into_inner());
                 // Truncation is fine (using `as`) as this is just a checksum
-                *checksum_sum += (seahash::hash(&*bincode_buffer) as i64).wrapping_mul(*diff);
+                *checksum_sum +=
+                    (seahash::hash(&*bincode_buffer) as i64).wrapping_mul(diff.into_inner());
 
                 // XOR of even diffs cancel out, so we only do it if diff is odd
                 if diff.abs() % Diff::from(2) == Diff::ONE {
@@ -767,7 +768,7 @@ pub struct SnapshotStats {
     /// The number of updates processed.
     pub updates: u64,
     /// The aggregated number of values inserted or deleted into `state`.
-    pub values_diff: i64,
+    pub values_diff: Diff,
     /// The total aggregated size of values inserted, deleted, or updated in `state`.
     /// If the current call to `consolidate_chunk` deletes a lot of values,
     /// or updates values to smaller ones, this can be negative!
@@ -1184,15 +1185,19 @@ where
             .inc_by(stats.deletes);
 
         self.stats.update_bytes_indexed_by(stats.size_diff);
-        self.stats.update_records_indexed_by(stats.values_diff);
+        self.stats
+            .update_records_indexed_by(stats.values_diff.into_inner());
 
         self.snapshot_stats += stats;
 
         if !self.snapshot_completed {
             // Updating the metrics
             self.worker_metrics.rehydration_total.set(
-                self.snapshot_stats.values_diff.try_into().unwrap_or_else(
-                    |e: std::num::TryFromIntError| {
+                self.snapshot_stats
+                    .values_diff
+                    .into_inner()
+                    .try_into()
+                    .unwrap_or_else(|e: std::num::TryFromIntError| {
                         tracing::warn!(
                             "rehydration_total metric overflowed or is negative \
                         and is innacurate: {}. Defaulting to 0",
@@ -1200,8 +1205,7 @@ where
                         );
 
                         0
-                    },
-                ),
+                    }),
             );
             self.worker_metrics
                 .rehydration_updates
@@ -1257,9 +1261,9 @@ where
                     val.merge_update(v, diff, self.bincode_opts, &mut self.bincode_buffer);
 
                     stats.updates += 1;
-                    if *diff > 0 {
+                    if diff.is_positive() {
                         stats.inserts += 1;
-                    } else if *diff < 0 {
+                    } else if diff.is_negative() {
                         stats.deletes += 1;
                     }
 
@@ -1271,13 +1275,13 @@ where
                     //
                     // This does not accurately report values that have been consolidated to diff == 0, as tracking that
                     // per-key is extremely difficult.
-                    stats.values_diff += *diff;
+                    stats.values_diff += diff;
 
                     (
                         k,
                         MergeValue {
                             value: val,
-                            diff: *diff,
+                            diff: diff,
                         },
                     )
                 }))
@@ -1321,9 +1325,9 @@ where
 
             for (key, value, diff) in self.consolidate_scratch.drain(..) {
                 stats.updates += 1;
-                if *diff > 0 {
+                if diff.is_positive() {
                     stats.inserts += 1;
-                } else if *diff < 0 {
+                } else if diff.is_negative() {
                     stats.deletes += 1;
                 }
 
@@ -1331,7 +1335,7 @@ where
                 // multi_put below. This makes sure we report the same stats as
                 // `consolidate_merge_inner`, regardless of what values
                 // there were in state before.
-                stats.values_diff += *diff;
+                stats.values_diff += diff;
 
                 let entry = self.consolidate_upsert_scratch.get_mut(&key).unwrap();
                 let val = entry.value.get_or_insert_with(Default::default);

@@ -254,7 +254,7 @@ impl Catalog {
         let mut updates = into_consolidatable_updates_startup(updates, config.boot_ts);
         differential_dataflow::consolidation::consolidate_updates(&mut updates);
         soft_assert_no_log!(
-            updates.iter().all(|(_, _, diff)| **diff == 1),
+            updates.iter().all(|(_, _, diff)| *diff == Diff::ONE),
             "consolidated updates should be positive during startup: {updates:?}"
         );
 

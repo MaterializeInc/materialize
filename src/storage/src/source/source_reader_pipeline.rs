@@ -673,7 +673,7 @@ where
             while let Some((_, data)) = bindings.next() {
                 accepted_times.extend(data.drain(..).map(|(from, mut into, diff)| {
                     into.advance_by(as_of.borrow());
-                    ((into, from), *diff)
+                    ((into, from), diff.into_inner())
                 }));
             }
             // Extract ready bindings

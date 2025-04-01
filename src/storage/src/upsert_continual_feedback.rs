@@ -584,7 +584,7 @@ fn stage_input<T, FromTime>(
     let stash_for_timestamp = stash.entry(cap).or_default();
 
     stash_for_timestamp.extend(data.drain(..).map(|((key, value, order), time, diff)| {
-        assert!(*diff > 0, "invalid upsert input");
+        assert!(diff.is_positive(), "invalid upsert input");
         (time, key, Reverse(order), value)
     }));
 }

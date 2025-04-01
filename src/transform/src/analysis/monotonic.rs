@@ -99,7 +99,7 @@ impl Analysis for Monotonic {
                 results[index - 1] && func.preserves_monotonicity()
             }
             MirRelationExpr::Constant { rows: Ok(rows), .. } => {
-                rows.iter().all(|(_, diff)| **diff > 0)
+                rows.iter().all(|(_, diff)| diff.is_positive())
             }
             // TODO: database-issues#8337 (Investigate if constant expressions with error rows can be marked monotonic)
             MirRelationExpr::Constant { rows: Err(_), .. } => false,

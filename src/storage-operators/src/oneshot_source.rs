@@ -75,7 +75,7 @@ use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
+use mz_repr::{DatumVec, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::oneshot_sources::{
@@ -573,7 +573,7 @@ where
                     Ok(row) => {
                         let data = SourceData(Ok(row));
                         batch_builder
-                            .add(&data, &(), &lower, &Diff::ONE)
+                            .add(&data, &(), &lower, &1)
                             .await
                             .expect("failed to add Row to batch");
                     }

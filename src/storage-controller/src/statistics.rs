@@ -147,7 +147,7 @@ where
         // Make sure that the desired state matches what is already there, when
         // we start up!
         if !correction.is_empty() {
-            current_metrics.extend(correction.iter().map(|(r, d)| (r.clone(), **d)));
+            current_metrics.extend(correction.iter().map(|(r, d)| (r.clone(), d.into_inner())));
 
             collection_mgmt.differential_append(statistics_collection_id, correction);
         }

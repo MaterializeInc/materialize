@@ -778,7 +778,7 @@ where
                     let iter = source.iter().flat_map(|(v, w)| {
                         // Note that in the non-positive case, this is wrong, but harmless because
                         // our other reduction will produce an error.
-                        let count = usize::try_from(*w).unwrap_or(0);
+                        let count = usize::try_from(w.into_inner()).unwrap_or(0);
                         std::iter::repeat(v.to_datum_iter().next().unwrap()).take(count)
                     });
 
@@ -808,7 +808,7 @@ where
                 move |key, source, target| {
                     // This part is the same as in the `!fused_unnest_list` if branch above.
                     let iter = source.iter().flat_map(|(v, w)| {
-                        let count = usize::try_from(*w).unwrap_or(0);
+                        let count = usize::try_from(w.into_inner()).unwrap_or(0);
                         std::iter::repeat(v.to_datum_iter().next().unwrap()).take(count)
                     });
 
@@ -871,7 +871,7 @@ where
                             // We know that `mfp_after` can error if it exists, so try to evaluate it here.
                             let Some(mfp) = &mfp_after2 else { return };
                             let iter = source.iter().flat_map(|(mut v, w)| {
-                                let count = usize::try_from(*w).unwrap_or(0);
+                                let count = usize::try_from(w.into_inner()).unwrap_or(0);
                                 // This would ideally use `to_datum_iter` but we cannot as it needs to
                                 // borrow `v` and only presents datums with that lifetime, not any longer.
                                 std::iter::repeat(v.next().unwrap()).take(count)
@@ -907,7 +907,7 @@ where
                         &format!("{name} Error Check"),
                         move |key, source, target| {
                             let iter = source.iter().flat_map(|(mut v, w)| {
-                                let count = usize::try_from(*w).unwrap_or(0);
+                                let count = usize::try_from(w.into_inner()).unwrap_or(0);
                                 // This would ideally use `to_datum_iter` but we cannot as it needs to
                                 // borrow `v` and only presents datums with that lifetime, not any longer.
                                 std::iter::repeat(v.next().unwrap()).take(count)
@@ -1620,7 +1620,7 @@ where
                     for (aggr, accum) in err_full_aggrs.iter().zip(accums) {
                         // We first test here if inputs without net-positive records are present,
                         // producing an error to the logs and to the query output if that is the case.
-                        if *total == 0 && !accum.is_zero() {
+                        if total == Diff::ZERO && !accum.is_zero() {
                             error_logger.log(
                                 "Net-zero records with non-zero accumulation in ReduceAccumulable",
                                 &format!("aggr={aggr:?}, accum={accum:?}"),
@@ -1779,7 +1779,7 @@ fn datum_to_accumulator(aggregate_func: &AggregateFunc, datum: Datum) -> Accum {
 
             // Map the floating point value onto a fixed precision domain
             // All special values should map to zero, since they are tracked separately
-            let accum = if *nans > 0 || *pos_infs > 0 || *neg_infs > 0 {
+            let accum = if nans.is_positive() || pos_infs.is_positive() || neg_infs.is_positive() {
                 AccumCount::ZERO
             } else {
                 // This operation will truncate to i128::MAX if out of range.
@@ -1877,16 +1877,16 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
     // The finished value depends on the aggregation function in a variety of ways.
     // For all aggregates but count, if only null values were
     // accumulated, then the output is null.
-    if *total > 0 && accum.is_zero() && *aggr_func != AggregateFunc::Count {
+    if total.is_positive() && accum.is_zero() && *aggr_func != AggregateFunc::Count {
         Datum::Null
     } else {
         match (&aggr_func, &accum) {
             (AggregateFunc::Count, Accum::SimpleNumber { non_nulls, .. }) => {
-                Datum::Int64(**non_nulls)
+                Datum::Int64(non_nulls.into_inner())
             }
             (AggregateFunc::All, Accum::Bool { falses, trues }) => {
                 // If any false, else if all true, else must be no false and some nulls.
-                if **falses > 0 {
+                if falses.is_positive() {
                     Datum::False
                 } else if *trues == total {
                     Datum::True
@@ -1896,7 +1896,7 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
             }
             (AggregateFunc::Any, Accum::Bool { falses, trues }) => {
                 // If any true, else if all false, else must be no true and some nulls.
-                if **trues > 0 {
+                if trues.is_positive() {
                     Datum::True
                 } else if *falses == total {
                     Datum::False
@@ -1913,9 +1913,9 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                 // TODO(benesch): are we guaranteed to have less than 2^32 summands?
                 // If so, rewrite to avoid `as`.
                 #[allow(clippy::as_conversions)]
-                Datum::Int64(**accum as i64)
+                Datum::Int64(accum.into_inner() as i64)
             }
-            (AggregateFunc::SumInt64, Accum::SimpleNumber { accum, .. }) => Datum::from(**accum),
+            (AggregateFunc::SumInt64, Accum::SimpleNumber { accum, .. }) => Datum::from(*accum),
             (AggregateFunc::SumUInt16, Accum::SimpleNumber { accum, .. })
             | (AggregateFunc::SumUInt32, Accum::SimpleNumber { accum, .. }) => {
                 if !accum.is_negative() {
@@ -1925,7 +1925,7 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                     // signed types.
                     // TODO(vmarcos): remove potentially dangerous usage of `as`.
                     #[allow(clippy::as_conversions)]
-                    Datum::UInt64(**accum as u64)
+                    Datum::UInt64(accum.into_inner() as u64)
                 } else {
                     // Note that we return a value here, but an error in the other
                     // operator of the reduce_pair. Therefore, we expect that this
@@ -1935,7 +1935,7 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
             }
             (AggregateFunc::SumUInt64, Accum::SimpleNumber { accum, .. }) => {
                 if !accum.is_negative() {
-                    Datum::from(**accum)
+                    Datum::from(*accum)
                 } else {
                     // Note that we return a value here, but an error in the other
                     // operator of the reduce_pair. Therefore, we expect that this
@@ -1953,19 +1953,19 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                     non_nulls: _,
                 },
             ) => {
-                if **nans > 0 || (**pos_infs > 0 && **neg_infs > 0) {
+                if nans.is_positive() || (pos_infs.is_positive() && neg_infs.is_positive()) {
                     // NaNs are NaNs and cases where we've seen a
                     // mixture of positive and negative infinities.
                     Datum::from(f32::NAN)
-                } else if **pos_infs > 0 {
+                } else if pos_infs.is_positive() {
                     Datum::from(f32::INFINITY)
-                } else if **neg_infs > 0 {
+                } else if neg_infs.is_positive() {
                     Datum::from(f32::NEG_INFINITY)
                 } else {
                     // TODO(benesch): remove potentially dangerous usage of `as`.
                     #[allow(clippy::as_conversions)]
                     {
-                        Datum::from(((**accum as f64) / *FLOAT_SCALE) as f32)
+                        Datum::from(((accum.into_inner() as f64) / *FLOAT_SCALE) as f32)
                     }
                 }
             }
@@ -1979,19 +1979,19 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                     non_nulls: _,
                 },
             ) => {
-                if **nans > 0 || (**pos_infs > 0 && **neg_infs > 0) {
+                if nans.is_positive() || (pos_infs.is_positive() && neg_infs.is_positive()) {
                     // NaNs are NaNs and cases where we've seen a
                     // mixture of positive and negative infinities.
                     Datum::from(f64::NAN)
-                } else if **pos_infs > 0 {
+                } else if pos_infs.is_positive() {
                     Datum::from(f64::INFINITY)
-                } else if **neg_infs > 0 {
+                } else if neg_infs.is_positive() {
                     Datum::from(f64::NEG_INFINITY)
                 } else {
                     // TODO(benesch): remove potentially dangerous usage of `as`.
                     #[allow(clippy::as_conversions)]
                     {
-                        Datum::from((**accum as f64) / *FLOAT_SCALE)
+                        Datum::from((accum.into_inner() as f64) / *FLOAT_SCALE)
                     }
                 }
             }
@@ -2014,9 +2014,9 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                 // the amount of overflow, making it invertible.
                 let inf_d = d.is_infinite();
                 let neg_d = d.is_negative();
-                let pos_inf = **pos_infs > 0 || (inf_d && !neg_d);
-                let neg_inf = **neg_infs > 0 || (inf_d && neg_d);
-                if **nans > 0 || (pos_inf && neg_inf) {
+                let pos_inf = pos_infs.is_positive() || (inf_d && !neg_d);
+                let neg_inf = neg_infs.is_positive() || (inf_d && neg_d);
+                if nans.is_positive() || (pos_inf && neg_inf) {
                     // NaNs are NaNs and cases where we've seen a
                     // mixture of positive and negative infinities.
                     Datum::from(Numeric::nan())
@@ -2275,7 +2275,7 @@ impl Multiply<Diff> for Accum {
                 non_nulls,
             } => {
                 let mut cx = numeric::cx_agg();
-                let mut f = NumericAgg::from(*factor);
+                let mut f = NumericAgg::from(factor.into_inner());
                 // Unlike `plus_equals`, not necessary to reduce after this operation because `f` will
                 // always be an integer, i.e. we are never increasing the
                 // values' scale.

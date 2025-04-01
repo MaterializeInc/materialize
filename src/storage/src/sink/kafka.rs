@@ -451,7 +451,7 @@ impl TransactionalProducer {
         time: Timestamp,
         diff: Diff,
     ) -> Result<(), KafkaError> {
-        assert_eq!(*diff, 1, "invalid sink update");
+        assert_eq!(diff, Diff::ONE, "invalid sink update");
 
         let mut headers = OwnedHeaders::new().insert(Header {
             key: "materialize-timestamp",

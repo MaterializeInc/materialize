@@ -32,7 +32,7 @@ use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient};
 use mz_persist_types::codec_impls::ShardIdSchema;
 use mz_persist_types::ShardId;
-use mz_repr::{CatalogItemId, Diff, GlobalId, Timestamp};
+use mz_repr::{CatalogItemId, GlobalId, Timestamp};
 use mz_sql::catalog::CatalogItem as _;
 use mz_storage_client::controller::StorageTxn;
 use mz_storage_types::StorageDiff;
@@ -303,7 +303,7 @@ async fn migrate_builtin_items_0dt(
         .collect();
 
     // 4. Clean up contents of migration shard.
-    let mut migrated_shard_updates: Vec<((TableKey, ShardId), Timestamp, Diff)> = Vec::new();
+    let mut migrated_shard_updates: Vec<((TableKey, ShardId), Timestamp, StorageDiff)> = Vec::new();
     let mut migration_shards_to_finalize = BTreeSet::new();
     let storage_collection_metadata = {
         let txn: &mut dyn StorageTxn<Timestamp> = txn;
@@ -325,7 +325,7 @@ async fn migrate_builtin_items_0dt(
             if storage_collection_metadata.get(&GlobalId::System(table_key.global_id))
                 == Some(&shard_id)
             {
-                migrated_shard_updates.push(((table_key, shard_id.clone()), upper, -Diff::ONE));
+                migrated_shard_updates.push(((table_key, shard_id.clone()), upper, -1));
             } else {
                 migration_shards_to_finalize.insert((table_key, shard_id));
             }
@@ -345,7 +345,7 @@ async fn migrate_builtin_items_0dt(
                 global_id,
                 build_version: build_version.clone(),
             };
-            migrated_shard_updates.push(((table_key, shard_id), upper, Diff::ONE));
+            migrated_shard_updates.push(((table_key, shard_id), upper, 1));
         }
     }
 
@@ -414,7 +414,7 @@ async fn migrate_builtin_items_0dt(
         if !read_only {
             let updates: Vec<_> = migration_shards_to_finalize
                 .into_iter()
-                .map(|(table_key, shard_id)| ((table_key, shard_id), upper, -Diff::ONE))
+                .map(|(table_key, shard_id)| ((table_key, shard_id), upper, -1))
                 .collect();
             if !updates.is_empty() {
                 // Ignore any errors, these shards will get cleaned up in the next upgrade.
@@ -450,7 +450,7 @@ async fn fetch_upper(
 }
 
 async fn write_to_migration_shard(
-    updates: Vec<((TableKey, ShardId), Timestamp, Diff)>,
+    updates: Vec<((TableKey, ShardId), Timestamp, StorageDiff)>,
     upper: Timestamp,
     write_handle: &mut WriteHandle<TableKey, ShardId, Timestamp, StorageDiff>,
     since_handle: &mut SinceHandle<TableKey, ShardId, Timestamp, StorageDiff, i64>,

@@ -301,7 +301,7 @@ impl RustType<u64> for Option<NonZeroU64> {
 impl RustType<i64> for Overflowing<i64> {
     #[inline(always)]
     fn into_proto(&self) -> i64 {
-        **self
+        self.into_inner()
     }
 
     #[inline(always)]

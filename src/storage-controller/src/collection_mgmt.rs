@@ -908,7 +908,7 @@ where
                     (
                         (SourceData(Ok(row.clone())), ()),
                         self.current_upper.clone(),
-                        **diff,
+                        diff.into_inner(),
                     )
                 })
                 .collect::<Vec<_>>();
@@ -1749,7 +1749,11 @@ async fn monotonic_append<T: Timestamp + Lattice + Codec64 + TimestampManipulati
         let updates = updates
             .iter()
             .map(|TimestamplessUpdate { row, diff }| {
-                ((SourceData(Ok(row.clone())), ()), lower.clone(), **diff)
+                (
+                    (SourceData(Ok(row.clone())), ()),
+                    lower.clone(),
+                    diff.into_inner(),
+                )
             })
             .collect::<Vec<_>>();
         let res = write_handle

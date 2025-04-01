@@ -466,14 +466,15 @@ impl crate::coord::Coordinator {
 
             let mut results = Vec::new();
             for (row, count) in rows {
-                if *count < 0 {
+                if count.is_negative() {
                     Err(EvalError::InvalidParameterValue(
                         format!("Negative multiplicity in constant result: {}", count).into(),
                     ))?
                 };
-                if *count > 0 {
+                if count.is_positive() {
                     let count = usize::cast_from(
-                        u64::try_from(*count).expect("known to be positive from check above"),
+                        u64::try_from(count.into_inner())
+                            .expect("known to be positive from check above"),
                     );
                     results.push((
                         row,

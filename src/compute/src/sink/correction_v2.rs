@@ -1027,7 +1027,7 @@ fn consolidate<D: Data>(updates: &mut Vec<(D, Timestamp, Diff)>) {
         if this.0 == prev.0 && this.1 == prev.1 {
             accum += diff(&updates[idx]);
         } else {
-            if *accum != 0 {
+            if accum != Diff::ZERO {
                 updates.swap(offset, idx - 1);
                 updates[offset].2 = accum;
                 offset += 1;
@@ -1036,7 +1036,7 @@ fn consolidate<D: Data>(updates: &mut Vec<(D, Timestamp, Diff)>) {
         }
     }
 
-    if *accum != 0 {
+    if accum != Diff::ZERO {
         let len = updates.len();
         updates.swap(offset, len - 1);
         updates[offset].2 = accum;
@@ -1154,7 +1154,7 @@ fn merge_2<D: Data>(cursor1: Cursor<D>, cursor2: Cursor<D>) -> Chain<D> {
                     }
                     Ordering::Equal => {
                         let r = r1 + r2;
-                        if *r != 0 {
+                        if r != Diff::ZERO {
                             merged.push((d1, t1, r));
                         }
                         rest1 = c1.step();
@@ -1187,7 +1187,7 @@ fn merge_many<D: Data>(cursors: Vec<Cursor<D>>) -> Chain<D> {
             }
         }
 
-        if *diff != 0 {
+        if diff != Diff::ZERO {
             merged.push((data, time, diff));
         }
         if let Some(cursor1) = cursor1.step() {

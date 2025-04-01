@@ -777,7 +777,7 @@ impl MirRelationExpr {
                         }
                     }
                 }
-                if rows.len() == 0 || (rows.len() == 1 && *rows[0].1 == 1) {
+                if rows.len() == 0 || (rows.len() == 1 && rows[0].1 == Diff::ONE) {
                     vec![vec![]]
                 } else {
                     // XXX - Multi-column keys are not detected.
@@ -1318,7 +1318,7 @@ impl MirRelationExpr {
     /// Checks if `self` is the single element collection with no columns.
     pub fn is_constant_singleton(&self) -> bool {
         if let Some((Ok(rows), typ)) = self.as_const() {
-            rows.len() == 1 && typ.column_types.len() == 0 && *rows[0].1 == 1
+            rows.len() == 1 && typ.column_types.len() == 0 && rows[0].1 == Diff::ONE
         } else {
             false
         }

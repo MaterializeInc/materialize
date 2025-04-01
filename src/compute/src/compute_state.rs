@@ -1343,14 +1343,14 @@ impl IndexPeek {
                     copies += diff;
                 }
             });
-            if *copies < 0 {
+            if copies.is_negative() {
                 return Err(format!(
                     "Invalid data in source errors, saw retractions ({}) for row that does not exist: {}",
                     -copies,
                     cursor.key(&storage),
                 ));
             }
-            if *copies > 0 {
+            if copies.is_positive() {
                 return Err(cursor.key(&storage).to_string());
             }
             cursor.step_key(&storage);
@@ -1472,14 +1472,14 @@ impl IndexPeek {
                             copies += diff;
                         }
                     });
-                    let copies: usize = if *copies < 0 {
+                    let copies: usize = if copies.is_negative() {
                         return Err(format!(
                             "Invalid data in source, saw retractions ({}) for row that does not exist: {:?}",
                             -copies,
                             &*borrow,
                         ));
                     } else {
-                        copies.try_into().unwrap()
+                        copies.into_inner().try_into().unwrap()
                     };
                     // if copies > 0 ... otherwise skip
                     if let Some(copies) = NonZeroUsize::new(copies) {

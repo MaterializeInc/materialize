@@ -196,7 +196,7 @@ async fn test_debug(state_builder: TestCatalogStateBuilder) {
         assert_eq!(user_version_key.key, USER_VERSION_KEY);
         assert_eq!(user_version_value.value, CATALOG_VERSION);
         assert_eq!(user_version_ts, &expected_ts);
-        assert_eq!(**user_version_diff, 1);
+        assert_eq!(*user_version_diff, Diff::ONE);
 
         let (
             (builtin_migration_shard_key, builtin_migration_shard_value),
@@ -209,7 +209,7 @@ async fn test_debug(state_builder: TestCatalogStateBuilder) {
         );
         let _shard_id: ShardId = builtin_migration_shard_value.value.parse().unwrap();
         assert_eq!(builtin_migration_shard_ts, &expected_ts);
-        assert_eq!(**builtin_migration_shard_diff, 1);
+        assert_eq!(*builtin_migration_shard_diff, Diff::ONE);
 
         let (
             (expression_cache_shard_key, expression_cache_shard_value),
@@ -219,7 +219,7 @@ async fn test_debug(state_builder: TestCatalogStateBuilder) {
         assert_eq!(expression_cache_shard_key.name, EXPRESSION_CACHE_SHARD_KEY);
         let _shard_id: ShardId = expression_cache_shard_value.value.parse().unwrap();
         assert_eq!(expression_cache_shard_ts, &expected_ts);
-        assert_eq!(**expression_cache_shard_diff, 1);
+        assert_eq!(*expression_cache_shard_diff, Diff::ONE);
 
         insta::assert_debug_snapshot!("opened_trace".to_string(), test_trace);
     }
@@ -271,7 +271,7 @@ async fn test_debug(state_builder: TestCatalogStateBuilder) {
             value: "initial".to_string(),
         },
     );
-    assert_eq!(*diff, 1);
+    assert_eq!(diff, Diff::ONE);
 
     // Check modifying an existing value via `edit`.
     let prev = debug_state
@@ -312,7 +312,7 @@ async fn test_debug(state_builder: TestCatalogStateBuilder) {
             value: "final".to_string(),
         },
     );
-    assert_eq!(*diff, 1);
+    assert_eq!(diff, Diff::ONE);
 
     // Check deleting a value via `delete`.
     debug_state
