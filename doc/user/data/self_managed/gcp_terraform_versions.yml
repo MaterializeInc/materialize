@@ -3,9 +3,18 @@ columns:
   - column: "Notable changes"
 
 rows:
+
 - "Terraform version": |
 
-    [v0.2.0](https://github.com/MaterializeInc/terraform-google-materialize/releases/tag/v0.2.0)
+    [v0.3.0](https://github.com/MaterializeInc/terraform-google-materialize/releases/tag/v0.3.0)
+
+  "Notable changes": |
+
+    - The
+    [network_config](/installation/install-on-gcp/appendix-gcp-configuration/#required-variables)
+    variable no longer has a default value. Previously, a default value was
+    provided. The `examples/simple/main.tf` has been updated to reflect this.
+
 
   "Notable changes": |
 
@@ -13,11 +22,6 @@ rows:
     [providers](/installation/install-on-gcp/appendix-gcp-configuration/#required-providers-and-data-source-declaration)
     must be specified. The `examples/simple/main.tf` has been updated to reflect
     this.
-
-    - The
-    [network_config](/installation/install-on-gcp/appendix-gcp-configuration/#required-variables)
-    is now a required input. Previously, a default value was provided. The
-    `examples/simple/main.tf` has been updated to reflect this.
 
 - "Terraform version": |
 
