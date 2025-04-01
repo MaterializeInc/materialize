@@ -3,6 +3,27 @@ columns:
   - column: "Notable changes"
 
 rows:
+
+- "Terraform version": |
+
+    [v0.3.0](https://github.com/MaterializeInc/terraform-google-materialize/releases/tag/v0.3.0)
+
+  "Notable changes": |
+
+    - By default, deploys [`cert-manager`](https://cert-manager.io/docs/) and a
+    self-signed [`ClusterIssuer`](https://cert-manager.io/docs/concepts/issuer/).
+
+    - By default, deploys [load balancers](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#input_materialize_instances)
+    for each Materialize instance (i.e., the [`create_load_balancer`](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#input_materialize_instances) flag defaults to `true`).
+    The load balancers, by default, are configured to be internal (i.e., the
+    [`internal_load_balancer`](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#input_materialize_instances)
+    flag defaults to `true`).
+
+    - The
+    [network_config](/installation/install-on-gcp/appendix-gcp-configuration/#required-variables)
+    variable no longer has a default value. Previously, a default value was
+    provided.
+
 - "Terraform version": |
 
     [v0.2.0](https://github.com/MaterializeInc/terraform-google-materialize/releases/tag/v0.2.0)
@@ -14,15 +35,10 @@ rows:
     must be specified. The `examples/simple/main.tf` has been updated to reflect
     this.
 
-    - The
-    [network_config](/installation/install-on-gcp/appendix-gcp-configuration/#required-variables)
-    is now a required input. Previously, a default value was provided. The
-    `examples/simple/main.tf` has been updated to reflect this.
-
 - "Terraform version": |
 
     [v0.1.7](https://github.com/MaterializeInc/terraform-google-materialize/releases/tag/v0.1.7)
 
   "Notable changes": |
 
-    Initial release of Materialize on GCP.
+    - Initial release of Materialize on GCP.

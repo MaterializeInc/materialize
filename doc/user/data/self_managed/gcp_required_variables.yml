@@ -29,7 +29,7 @@ rows:
 - "Variable": |
 
     ```hcl
-    network_config = {     # required starting in v0.2.0
+    network_config = {     # required starting in v0.3.0
       subnet_cidr   = <string>
       pods_cidr     = <string>
       services_cidr = <string>

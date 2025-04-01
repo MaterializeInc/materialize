@@ -1,3 +1,4 @@
+
 1. Find your console service name.
 
    ```shell
@@ -22,7 +23,14 @@
    <br>- To bring back to foreground, use `fg %<job-number>`.
    <br>- To kill the background job, use `kill %<job-number>`.
 
-1. Open a browser and navigate to [http://localhost:8080](http://localhost:8080).
+1. Open a browser and navigate to
+   [https://localhost:8080](https://localhost:8080) (or, if you have not enabled
+   TLS, [http://localhost:8080](http://localhost:8080)).
+
+   The example uses a self-signed ClusterIssuer. As such, you may encounter a
+   warning with regards to the certificate. In production, run with certificates
+   from an official Certificate Authority (CA) rather than self-signed
+   certificates.
 
 [^1]: The port forwarding command uses a while loop to handle a [known
 Kubernetes issue 78446](https://github.com/kubernetes/kubernetes/issues/78446),

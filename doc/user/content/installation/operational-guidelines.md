@@ -25,9 +25,8 @@ to substantially improve the performance of compute-bound workloads.
 
 ## TLS
 
-The sample deployment uses a self-signed ClusterIssuer for demonstration
-purposes. In production, run with certificates from an official Certificate
-Authority (CA) rather than self-signed certificates.
+When running with TLS in production, run with certificates from an official
+Certificate Authority (CA) rather than self-signed certificates.
 
 ## Locally-attached NVMe storage
 
