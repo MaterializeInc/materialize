@@ -280,7 +280,7 @@ pub(super) async fn handle_rows_event(
         }
 
         let updates = [
-            before_row.map(|r| (r, -Diff::ONE)),
+            before_row.map(|r| (r, Diff::MINUS_ONE)),
             after_row.map(|r| (r, Diff::ONE)),
         ];
         for (binlog_row, diff) in updates.into_iter().flatten() {

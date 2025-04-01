@@ -675,7 +675,7 @@ mod test {
             |worker, mut bindings, (mut data, data_cap), reclocked| {
                 // Reclock offsets 1 and 3 to timestamp 1000
                 bindings.update_at(Partitioned::minimum(), 0, Diff::ONE);
-                bindings.update_at(Partitioned::minimum(), 1000, -Diff::ONE);
+                bindings.update_at(Partitioned::minimum(), 1000, Diff::MINUS_ONE);
                 for time in partitioned_frontier([(0, 4)]) {
                     bindings.update_at(time, 1000, Diff::ONE);
                 }
@@ -753,10 +753,10 @@ mod test {
                 );
 
                 // Mint a couple of bindings for multiple partitions
-                bindings.update_at(Partitioned::minimum(), 1000, -Diff::ONE);
+                bindings.update_at(Partitioned::minimum(), 1000, Diff::MINUS_ONE);
                 for time in partitioned_frontier([(1, 10)]) {
                     bindings.update_at(time.clone(), 1000, Diff::ONE);
-                    bindings.update_at(time, 2000, -Diff::ONE);
+                    bindings.update_at(time, 2000, Diff::MINUS_ONE);
                 }
                 for time in partitioned_frontier([(1, 10), (2, 10)]) {
                     bindings.update_at(time, 2000, Diff::ONE);
@@ -833,7 +833,7 @@ mod test {
                 );
 
                 part0_cap.downgrade(&Partitioned::new_singleton(0, 3));
-                bindings.update_at(Partitioned::minimum(), 1000, -Diff::ONE);
+                bindings.update_at(Partitioned::minimum(), 1000, Diff::MINUS_ONE);
                 bindings.update_at(part0_cap.time().clone(), 1000, Diff::ONE);
                 bindings.update_at(rest_cap.time().clone(), 1000, Diff::ONE);
                 bindings.advance_to(1001);
@@ -864,7 +864,7 @@ mod test {
                     ]
                     .into_iter(),
                 );
-                bindings.update_at(part0_cap.time().clone(), 2000, -Diff::ONE);
+                bindings.update_at(part0_cap.time().clone(), 2000, Diff::MINUS_ONE);
                 part0_cap.downgrade(&Partitioned::new_singleton(0, 5));
                 bindings.update_at(part0_cap.time().clone(), 2000, Diff::ONE);
                 bindings.advance_to(2001);
@@ -903,20 +903,20 @@ mod test {
                 // frontier.
                 bindings.update_at(Partitioned::minimum(), 0, Diff::ONE);
                 // First mint bindings for 0 at timestamp 1000
-                bindings.update_at(Partitioned::minimum(), 1000, -Diff::ONE);
+                bindings.update_at(Partitioned::minimum(), 1000, Diff::MINUS_ONE);
                 for time in partitioned_frontier([(0, 50)]) {
                     bindings.update_at(time, 1000, Diff::ONE);
                 }
                 // Then only for 1 at timestamp 2000
                 for time in partitioned_frontier([(0, 50)]) {
-                    bindings.update_at(time, 2000, -Diff::ONE);
+                    bindings.update_at(time, 2000, Diff::MINUS_ONE);
                 }
                 for time in partitioned_frontier([(0, 50), (1, 50)]) {
                     bindings.update_at(time, 2000, Diff::ONE);
                 }
                 // Then again only for 0 at timestamp 3000
                 for time in partitioned_frontier([(0, 50), (1, 50)]) {
-                    bindings.update_at(time, 3000, -Diff::ONE);
+                    bindings.update_at(time, 3000, Diff::MINUS_ONE);
                 }
                 for time in partitioned_frontier([(0, 100), (1, 50)]) {
                     bindings.update_at(time, 3000, Diff::ONE);
@@ -951,13 +951,13 @@ mod test {
         let mut remap = vec![];
         remap.push((Partitioned::minimum(), 0, Diff::ONE));
         // Reclock offsets 1 and 2 to timestamp 1000
-        remap.push((Partitioned::minimum(), 1000, -Diff::ONE));
+        remap.push((Partitioned::minimum(), 1000, Diff::MINUS_ONE));
         for time in partitioned_frontier([(0, 3)]) {
             remap.push((time, 1000, Diff::ONE));
         }
         // Reclock offsets 3 and 4 to timestamp 2000
         for time in partitioned_frontier([(0, 3)]) {
-            remap.push((time, 2000, -Diff::ONE));
+            remap.push((time, 2000, Diff::MINUS_ONE));
         }
         for time in partitioned_frontier([(0, 5)]) {
             remap.push((time, 2000, Diff::ONE));
@@ -1113,7 +1113,7 @@ mod test {
                 let instances_before = INSTANCES.load(Ordering::Relaxed);
                 for ts in 0..as_of {
                     if ts > 0 {
-                        bindings.update_at(Time::new(ts - 1), ts, -Diff::ONE);
+                        bindings.update_at(Time::new(ts - 1), ts, Diff::MINUS_ONE);
                     }
                     bindings.update_at(Time::new(ts), ts, Diff::ONE);
                 }
@@ -1136,7 +1136,7 @@ mod test {
                 let instances_before = INSTANCES.load(Ordering::Relaxed);
                 for ts in 0..as_of {
                     if ts > 0 {
-                        bindings.update_at(Time::new(ts - 1), ts, -Diff::ONE);
+                        bindings.update_at(Time::new(ts - 1), ts, Diff::MINUS_ONE);
                     }
                     bindings.update_at(Time::new(ts), ts, Diff::ONE);
                     bindings.advance_to(ts + 1);

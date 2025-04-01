@@ -264,7 +264,7 @@ impl DemuxHandler<'_, '_> {
         let operator_id = event.operator;
         self.output
             .batches
-            .give(((operator_id, ()), ts, -Diff::ONE));
+            .give(((operator_id, ()), ts, Diff::MINUS_ONE));
 
         let diff = Diff::try_from(done).expect("must fit")
             - Diff::try_from(event.length1 + event.length2).expect("must fit");
@@ -279,7 +279,7 @@ impl DemuxHandler<'_, '_> {
         let operator_id = event.operator;
         self.output
             .batches
-            .give(((operator_id, ()), ts, -Diff::ONE));
+            .give(((operator_id, ()), ts, Diff::MINUS_ONE));
 
         let diff = -Diff::try_from(event.length).expect("must fit");
         if diff != Diff::ZERO {

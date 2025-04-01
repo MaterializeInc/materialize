@@ -150,7 +150,7 @@ where
 
             let mut updates = vec![];
             for src_ts in self.source_upper.frontier().iter().cloned() {
-                updates.push((src_ts, binding_ts.clone(), -Diff::ONE));
+                updates.push((src_ts, binding_ts.clone(), Diff::MINUS_ONE));
             }
             for src_ts in new_from_upper.iter().cloned() {
                 updates.push((src_ts, binding_ts.clone(), Diff::ONE));
@@ -362,7 +362,7 @@ mod tests {
                 (
                     Partitioned::new_range(RB::NegInfinity, RB::PosInfinity, MzOffset::from(0)),
                     1000.into(),
-                    -Diff::ONE,
+                    Diff::MINUS_ONE,
                 ),
                 (
                     Partitioned::new_singleton(RB::exact(0), MzOffset::from(4)),
@@ -453,7 +453,7 @@ mod tests {
                 (
                     Partitioned::new_singleton(RB::exact(0), MzOffset::from(3)),
                     2000.into(),
-                    -Diff::ONE,
+                    Diff::MINUS_ONE,
                 ),
                 (
                     Partitioned::new_singleton(RB::exact(0), MzOffset::from(5)),
@@ -500,7 +500,7 @@ mod tests {
                 (
                     Partitioned::new_range(RB::NegInfinity, RB::PosInfinity, MzOffset::from(0)),
                     1000.into(),
-                    -Diff::ONE,
+                    Diff::MINUS_ONE,
                 ),
                 (
                     Partitioned::new_singleton(RB::exact(0), MzOffset::from(3)),
@@ -528,7 +528,7 @@ mod tests {
             (
                 Partitioned::new_singleton(RB::exact(0), MzOffset::from(3)),
                 11000.into(),
-                -Diff::ONE,
+                Diff::MINUS_ONE,
             ),
             (
                 Partitioned::new_singleton(RB::exact(0), MzOffset::from(5)),

@@ -1311,7 +1311,7 @@ impl Coordinator {
         let update = self
             .catalog()
             .state()
-            .pack_session_update(&conn, -Diff::ONE);
+            .pack_session_update(&conn, Diff::MINUS_ONE);
         let update = self.catalog().state().resolve_builtin_table_update(update);
 
         let _builtin_update_notify = self.builtin_table_update().defer(vec![update]);

@@ -561,7 +561,7 @@ impl Coordinator {
                     *replica_id,
                     process_id,
                     &status,
-                    -Diff::ONE,
+                    Diff::MINUS_ONE,
                 );
                 let builtin_table_update = catalog
                     .state()
@@ -577,7 +577,7 @@ impl Coordinator {
                         replica_id,
                         process_id,
                         &status,
-                        -Diff::ONE,
+                        Diff::MINUS_ONE,
                     );
                     let builtin_table_update = catalog
                         .state()
@@ -873,7 +873,7 @@ impl Coordinator {
                 let retractions = self.catalog().state().pack_replica_metric_updates(
                     replica_id,
                     &metrics,
-                    -Diff::ONE,
+                    Diff::MINUS_ONE,
                 );
                 let retractions = self
                     .catalog()

@@ -266,7 +266,7 @@ impl FenceableToken {
         if let Some(durable_token) = &durable_token {
             fence_updates.push((
                 StateUpdateKind::FenceToken(durable_token.clone()),
-                -Diff::ONE,
+                Diff::MINUS_ONE,
             ));
         }
 
@@ -2036,7 +2036,7 @@ impl UnopenedPersistCatalogState {
 
             let mut updates: Vec<_> = prev_values
                 .into_iter()
-                .map(|((k, v), _, _)| (T::update(k, v), -Diff::ONE))
+                .map(|((k, v), _, _)| (T::update(k, v), Diff::MINUS_ONE))
                 .collect();
             updates.push((T::update(key, value), Diff::ONE));
             // We must fence out all other catalogs, if we haven't already, since we are writing.
@@ -2088,7 +2088,7 @@ impl UnopenedPersistCatalogState {
                     soft_assert_eq_or_log!(*diff, Diff::ONE, "trace is consolidated");
                     &key == k
                 })
-                .map(|((k, v), _, _)| (T::update(k, v), -Diff::ONE))
+                .map(|((k, v), _, _)| (T::update(k, v), Diff::MINUS_ONE))
                 .collect();
 
             // We must fence out all other catalogs, if we haven't already, since we are writing.

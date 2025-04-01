@@ -777,7 +777,7 @@ where
             Some(value) => {
                 if let Some(old_value) = existing_state_cell.as_ref() {
                     if let Some(old_value) = old_value.provisional_value_ref(&ts) {
-                        output_updates.push((old_value.clone(), ts.clone(), -Diff::ONE));
+                        output_updates.push((old_value.clone(), ts.clone(), Diff::MINUS_ONE));
                     }
                 }
 
@@ -810,7 +810,7 @@ where
             None => {
                 if let Some(old_value) = existing_state_cell.as_ref() {
                     if let Some(old_value) = old_value.provisional_value_ref(&ts) {
-                        output_updates.push((old_value.clone(), ts.clone(), -Diff::ONE));
+                        output_updates.push((old_value.clone(), ts.clone(), Diff::MINUS_ONE));
                     }
                 }
 

@@ -1469,7 +1469,7 @@ mod tests {
         let small_row = Ok(Row::default());
         let longer_row = Ok(Row::pack([mz_repr::Datum::Null]));
         s.merge_update(small_row, Diff::ONE, opts, &mut buf);
-        s.merge_update(longer_row.clone(), -Diff::ONE, opts, &mut buf);
+        s.merge_update(longer_row.clone(), Diff::MINUS_ONE, opts, &mut buf);
         // This clears the retraction of the `longer_row`, but the
         // `value_xor` is the length of the `longer_row`. This tests
         // that we are tracking checksums correctly.
@@ -1534,7 +1534,7 @@ mod tests {
         let small_row = Ok(mz_repr::Row::default());
         let longer_row = Ok(mz_repr::Row::pack([mz_repr::Datum::Null]));
         s.merge_update(longer_row.clone(), Diff::ONE, opts, &mut buf);
-        s.merge_update(small_row.clone(), -Diff::ONE, opts, &mut buf);
+        s.merge_update(small_row.clone(), Diff::MINUS_ONE, opts, &mut buf);
 
         s.ensure_decoded(opts);
     }
@@ -1552,7 +1552,7 @@ mod tests {
         let small_row = Ok(mz_repr::Row::default());
         let longer_row = Ok(mz_repr::Row::pack([mz_repr::Datum::Null]));
         s.merge_update(longer_row.clone(), Diff::ONE, opts, &mut buf);
-        s.merge_update(small_row.clone(), -Diff::ONE, opts, &mut buf);
+        s.merge_update(small_row.clone(), Diff::MINUS_ONE, opts, &mut buf);
         s.merge_update(longer_row.clone(), Diff::ONE, opts, &mut buf);
 
         s.ensure_decoded(opts);
@@ -1569,7 +1569,7 @@ mod tests {
         let small_row = Ok(mz_repr::Row::pack([mz_repr::Datum::Int64(2)]));
         let longer_row = Ok(mz_repr::Row::pack([mz_repr::Datum::Int64(1)]));
         s.merge_update(longer_row.clone(), Diff::ONE, opts, &mut buf);
-        s.merge_update(small_row.clone(), -Diff::ONE, opts, &mut buf);
+        s.merge_update(small_row.clone(), Diff::MINUS_ONE, opts, &mut buf);
         s.merge_update(longer_row.clone(), Diff::ONE, opts, &mut buf);
 
         s.ensure_decoded(opts);

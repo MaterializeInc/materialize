@@ -515,7 +515,7 @@ impl DemuxHandler<'_, '_> {
         // Retract operator information.
         let ts = self.ts();
         let datum = (operator.id, operator.name);
-        self.output.operates.give((datum, ts, -Diff::ONE));
+        self.output.operates.give((datum, ts, Diff::MINUS_ONE));
 
         // Retract schedules information for the operator
         if let Some(schedules) = self.state.schedules_data.remove(&event.id) {
@@ -544,7 +544,7 @@ impl DemuxHandler<'_, '_> {
         }
 
         let datum = (operator.id, operator.addr);
-        self.output.addresses.give((datum, ts, -Diff::ONE));
+        self.output.addresses.give((datum, ts, Diff::MINUS_ONE));
     }
 
     fn handle_dataflow_shutdown(&mut self, dataflow_index: usize) {
@@ -566,10 +566,12 @@ impl DemuxHandler<'_, '_> {
                 source: channel.source,
                 target: channel.target,
             };
-            self.output.channels.give(((datum, ()), ts, -Diff::ONE));
+            self.output
+                .channels
+                .give(((datum, ()), ts, Diff::MINUS_ONE));
 
             let datum = (channel.id, channel.scope_addr);
-            self.output.addresses.give((datum, ts, -Diff::ONE));
+            self.output.addresses.give((datum, ts, Diff::MINUS_ONE));
 
             // Retract messages logged for this channel.
             if let Some(sent) = self.state.messages_sent.remove(&channel.id) {

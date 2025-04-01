@@ -3371,7 +3371,7 @@ pub enum StateDiff {
 impl From<StateDiff> for Diff {
     fn from(diff: StateDiff) -> Self {
         match diff {
-            StateDiff::Retraction => -Diff::ONE,
+            StateDiff::Retraction => Diff::MINUS_ONE,
             StateDiff::Addition => Diff::ONE,
         }
     }

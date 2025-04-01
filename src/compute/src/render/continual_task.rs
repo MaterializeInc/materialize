@@ -1095,7 +1095,7 @@ mod tests {
 
         // Retract one of the things currently in the collection and add a new
         // thing, to verify the consolidate.
-        s.to_append.push((("a", 5.into()), -Diff::ONE));
+        s.to_append.push((("a", 5.into()), Diff::MINUS_ONE));
         s.to_append.push((("c", 5.into()), Diff::ONE));
         s.to_append_progress = Antichain::from_elem(6.into());
         assert_write(&mut s, 6, &["b", "c"]);

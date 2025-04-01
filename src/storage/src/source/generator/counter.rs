@@ -48,7 +48,7 @@ impl Generator for Counter {
                             let row = Row::pack_slice(&[Datum::Int64(retracted_value)]);
                             Some((
                                 LoadGeneratorOutput::Default,
-                                Event::Message(MzOffset::from(offset), (row, -Diff::ONE)),
+                                Event::Message(MzOffset::from(offset), (row, Diff::MINUS_ONE)),
                             ))
                         }
                         _ => None,

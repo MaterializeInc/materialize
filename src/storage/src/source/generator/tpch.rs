@@ -214,7 +214,7 @@ impl Generator for Tpch {
                 for row in old_lineitems {
                     pending.push_back((
                         TpchView::Lineitem,
-                        Event::Message(MzOffset::from(offset), (row, -Diff::ONE)),
+                        Event::Message(MzOffset::from(offset), (row, Diff::MINUS_ONE)),
                     ));
                 }
                 let new_seed = rng.gen();
@@ -227,7 +227,7 @@ impl Generator for Tpch {
                 }
                 pending.push_back((
                     TpchView::Orders,
-                    Event::Message(MzOffset::from(offset), (old_order, -Diff::ONE)),
+                    Event::Message(MzOffset::from(offset), (old_order, Diff::MINUS_ONE)),
                 ));
                 pending.push_back((
                     TpchView::Orders,

@@ -3071,7 +3071,7 @@ where
                 updates.push(TransactionUpdate {
                     value: v.clone(),
                     ts,
-                    diff: -Diff::ONE,
+                    diff: Diff::MINUS_ONE,
                 });
                 updates.push(TransactionUpdate {
                     value: next,
@@ -3150,7 +3150,7 @@ where
                 entry.push(TransactionUpdate {
                     value: prev,
                     ts,
-                    diff: -Diff::ONE,
+                    diff: Diff::MINUS_ONE,
                 });
                 entry.push(TransactionUpdate {
                     value: v,
@@ -3169,7 +3169,7 @@ where
                 entry.push(TransactionUpdate {
                     value: prev,
                     ts,
-                    diff: -Diff::ONE,
+                    diff: Diff::MINUS_ONE,
                 });
             }
             (None, None) => {}
@@ -3213,7 +3213,7 @@ where
                     entry.push(TransactionUpdate {
                         value: prev,
                         ts,
-                        diff: -Diff::ONE,
+                        diff: Diff::MINUS_ONE,
                     });
                     entry.push(TransactionUpdate {
                         value: v,
@@ -3232,7 +3232,7 @@ where
                     entry.push(TransactionUpdate {
                         value: prev,
                         ts,
-                        diff: -Diff::ONE,
+                        diff: Diff::MINUS_ONE,
                     });
                 }
                 (None, None) => {}
@@ -3268,7 +3268,7 @@ where
                 p.entry(k.clone()).or_default().push(TransactionUpdate {
                     value: v.clone(),
                     ts,
-                    diff: -Diff::ONE,
+                    diff: Diff::MINUS_ONE,
                 });
             }
         });
@@ -3404,9 +3404,17 @@ mod tests {
         assert_eq!(
             pending,
             vec![
-                (1i64.to_le_bytes().to_vec(), "v1".to_string(), -Diff::ONE),
+                (
+                    1i64.to_le_bytes().to_vec(),
+                    "v1".to_string(),
+                    Diff::MINUS_ONE
+                ),
                 (1i64.to_le_bytes().to_vec(), "v3".to_string(), Diff::ONE),
-                (2i64.to_le_bytes().to_vec(), "v2".to_string(), -Diff::ONE),
+                (
+                    2i64.to_le_bytes().to_vec(),
+                    "v2".to_string(),
+                    Diff::MINUS_ONE
+                ),
                 (3i64.to_le_bytes().to_vec(), "v4".to_string(), Diff::ONE),
             ]
         );
@@ -3452,7 +3460,11 @@ mod tests {
         assert_eq!(
             pending,
             vec![
-                (1i64.to_le_bytes().to_vec(), "v3".to_string(), -Diff::ONE),
+                (
+                    1i64.to_le_bytes().to_vec(),
+                    "v3".to_string(),
+                    Diff::MINUS_ONE
+                ),
                 (1i64.to_le_bytes().to_vec(), "v5".to_string(), Diff::ONE),
                 (5i64.to_le_bytes().to_vec(), "v3".to_string(), Diff::ONE),
             ]
@@ -3528,7 +3540,11 @@ mod tests {
         assert_eq!(
             pending,
             vec![
-                (1i64.to_le_bytes().to_vec(), "v5".to_string(), -Diff::ONE),
+                (
+                    1i64.to_le_bytes().to_vec(),
+                    "v5".to_string(),
+                    Diff::MINUS_ONE
+                ),
                 (3i64.to_le_bytes().to_vec(), "v6".to_string(), Diff::ONE),
             ]
         );
@@ -3583,7 +3599,11 @@ mod tests {
             pending,
             vec![
                 (1i64.to_le_bytes().to_vec(), "v6".to_string(), Diff::ONE),
-                (3i64.to_le_bytes().to_vec(), "v6".to_string(), -Diff::ONE),
+                (
+                    3i64.to_le_bytes().to_vec(),
+                    "v6".to_string(),
+                    Diff::MINUS_ONE
+                ),
                 (42i64.to_le_bytes().to_vec(), "v7".to_string(), Diff::ONE),
             ]
         );
@@ -3636,7 +3656,11 @@ mod tests {
         assert_eq!(
             pending,
             vec![
-                (1i64.to_le_bytes().to_vec(), "v6".to_string(), -Diff::ONE),
+                (
+                    1i64.to_le_bytes().to_vec(),
+                    "v6".to_string(),
+                    Diff::MINUS_ONE
+                ),
                 (1i64.to_le_bytes().to_vec(), "v8".to_string(), Diff::ONE),
             ]
         );
@@ -3703,7 +3727,11 @@ mod tests {
         assert_eq!(
             pending,
             vec![
-                (1i64.to_le_bytes().to_vec(), "v8".to_string(), -Diff::ONE),
+                (
+                    1i64.to_le_bytes().to_vec(),
+                    "v8".to_string(),
+                    Diff::MINUS_ONE
+                ),
                 (1i64.to_le_bytes().to_vec(), "v9".to_string(), Diff::ONE),
             ]
         );
@@ -3752,7 +3780,11 @@ mod tests {
         let pending = table_txn.pending();
         assert_eq!(
             pending,
-            vec![(1i64.to_le_bytes().to_vec(), "v9".to_string(), -Diff::ONE),]
+            vec![(
+                1i64.to_le_bytes().to_vec(),
+                "v9".to_string(),
+                Diff::MINUS_ONE
+            ),]
         );
         commit(&mut table, pending);
         assert_eq!(
@@ -3784,7 +3816,11 @@ mod tests {
         let pending = table_txn.pending();
         assert_eq!(
             pending,
-            vec![(42i64.to_le_bytes().to_vec(), "v7".to_string(), -Diff::ONE),]
+            vec![(
+                42i64.to_le_bytes().to_vec(),
+                "v7".to_string(),
+                Diff::MINUS_ONE
+            ),]
         );
         commit(&mut table, pending);
         assert_eq!(table, BTreeMap::new());

@@ -1960,7 +1960,7 @@ where
             .chain(collections_to_drop.iter())
             .cloned()
             .collect();
-        self.append_shard_mappings(shards_to_update.into_iter(), -Diff::ONE);
+        self.append_shard_mappings(shards_to_update.into_iter(), Diff::MINUS_ONE);
 
         let status_now = mz_ore::now::to_datetime((self.now)());
         let mut status_updates = vec![];
@@ -3428,14 +3428,14 @@ where
             match old_global_frontiers.remove(&id) {
                 Some(old) if &old != new => {
                     push_global_update(id, new.clone(), Diff::ONE);
-                    push_global_update(id, old, -Diff::ONE);
+                    push_global_update(id, old, Diff::MINUS_ONE);
                 }
                 Some(_) => (),
                 None => push_global_update(id, new.clone(), Diff::ONE),
             }
         }
         for (id, old) in old_global_frontiers {
-            push_global_update(id, old, -Diff::ONE);
+            push_global_update(id, old, Diff::MINUS_ONE);
         }
 
         let mut old_replica_frontiers =
@@ -3444,14 +3444,14 @@ where
             match old_replica_frontiers.remove(&key) {
                 Some(old) if &old != new => {
                     push_replica_update(key, new.clone(), Diff::ONE);
-                    push_replica_update(key, old, -Diff::ONE);
+                    push_replica_update(key, old, Diff::MINUS_ONE);
                 }
                 Some(_) => (),
                 None => push_replica_update(key, new.clone(), Diff::ONE),
             }
         }
         for (key, old) in old_replica_frontiers {
-            push_replica_update(key, old, -Diff::ONE);
+            push_replica_update(key, old, Diff::MINUS_ONE);
         }
 
         let id = self.introspection_ids[&IntrospectionType::Frontiers];

@@ -3081,7 +3081,7 @@ impl Coordinator {
                             // current row. Updates will also add an
                             // updated value.
                             MutationKind::Update | MutationKind::Delete => {
-                                diffs.push((row.to_owned(), -Diff::ONE))
+                                diffs.push((row.to_owned(), Diff::MINUS_ONE))
                             }
                             MutationKind::Insert => diffs.push((row.to_owned(), Diff::ONE)),
                         }

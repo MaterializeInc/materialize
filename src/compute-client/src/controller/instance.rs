@@ -407,7 +407,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
 
     fn remove_collection(&mut self, id: GlobalId) {
         // Update introspection.
-        self.report_dependency_updates(id, -Diff::ONE);
+        self.report_dependency_updates(id, Diff::MINUS_ONE);
 
         // Remove per-replica collection state.
         for replica in self.replicas.values_mut() {
@@ -2513,7 +2513,7 @@ impl<T: ComputeControllerTimestamp> CollectionIntrospection<T> {
         let retraction = frontiers.row_for_collection(self.collection_id);
         frontiers.update(read_frontier, write_frontier);
         let insertion = frontiers.row_for_collection(self.collection_id);
-        let updates = vec![(retraction, -Diff::ONE), (insertion, Diff::ONE)];
+        let updates = vec![(retraction, Diff::MINUS_ONE), (insertion, Diff::ONE)];
         self.send(IntrospectionType::Frontiers, updates);
     }
 
@@ -2530,7 +2530,7 @@ impl<T: ComputeControllerTimestamp> CollectionIntrospection<T> {
             return; // no change
         }
 
-        let updates = vec![(retraction, -Diff::ONE), (insertion, Diff::ONE)];
+        let updates = vec![(retraction, Diff::MINUS_ONE), (insertion, Diff::ONE)];
         self.send(IntrospectionType::ComputeMaterializedViewRefreshes, updates);
     }
 
@@ -2546,14 +2546,14 @@ impl<T: ComputeControllerTimestamp> Drop for CollectionIntrospection<T> {
         // Retract collection frontiers.
         if let Some(frontiers) = &self.frontiers {
             let row = frontiers.row_for_collection(self.collection_id);
-            let updates = vec![(row, -Diff::ONE)];
+            let updates = vec![(row, Diff::MINUS_ONE)];
             self.send(IntrospectionType::Frontiers, updates);
         }
 
         // Retract MV refresh state.
         if let Some(refresh) = &self.refresh {
             let retraction = refresh.row_for_collection(self.collection_id);
-            let updates = vec![(retraction, -Diff::ONE)];
+            let updates = vec![(retraction, Diff::MINUS_ONE)];
             self.send(IntrospectionType::ComputeMaterializedViewRefreshes, updates);
         }
     }
@@ -3047,7 +3047,7 @@ impl<T: ComputeControllerTimestamp> ReplicaCollectionIntrospection<T> {
         }
 
         let updates = retraction
-            .map(|r| (r, -Diff::ONE))
+            .map(|r| (r, Diff::MINUS_ONE))
             .into_iter()
             .chain(insertion.map(|r| (r, Diff::ONE)))
             .collect();
@@ -3079,7 +3079,7 @@ impl<T: ComputeControllerTimestamp> ReplicaCollectionIntrospection<T> {
         self.write_frontier.clone_from(write_frontier);
         let insertion = self.write_frontier_row();
 
-        let updates = vec![(retraction, -Diff::ONE), (insertion, Diff::ONE)];
+        let updates = vec![(retraction, Diff::MINUS_ONE), (insertion, Diff::ONE)];
         self.send(IntrospectionType::ReplicaFrontiers, updates);
     }
 
@@ -3110,7 +3110,7 @@ impl<T: ComputeControllerTimestamp> Drop for ReplicaCollectionIntrospection<T> {
         let updates: Vec<_> = operators
             .into_iter()
             .flat_map(|(lir_id, worker_id)| self.operator_hydration_row(*lir_id, *worker_id))
-            .map(|r| (r, -Diff::ONE))
+            .map(|r| (r, Diff::MINUS_ONE))
             .collect();
         if !updates.is_empty() {
             self.send(IntrospectionType::ComputeOperatorHydrationStatus, updates);
@@ -3118,7 +3118,7 @@ impl<T: ComputeControllerTimestamp> Drop for ReplicaCollectionIntrospection<T> {
 
         // Retract the write frontier.
         let row = self.write_frontier_row();
-        let updates = vec![(row, -Diff::ONE)];
+        let updates = vec![(row, Diff::MINUS_ONE)];
         self.send(IntrospectionType::ReplicaFrontiers, updates);
     }
 }

@@ -302,7 +302,7 @@ impl Coordinator {
                     let update = self.catalog().state().pack_subscribe_update(
                         id,
                         active_subscribe,
-                        -Diff::ONE,
+                        Diff::MINUS_ONE,
                     );
                     let update = self.catalog().state().resolve_builtin_table_update(update);
                     self.builtin_table_update().blocking(vec![update]).await;

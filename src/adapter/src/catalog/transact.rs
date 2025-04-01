@@ -462,7 +462,7 @@ impl Catalog {
             self.state().pack_optimizer_notices(
                 &mut builtin_table_updates,
                 dropped_notices.iter(),
-                -Diff::ONE,
+                Diff::MINUS_ONE,
             );
         }
 

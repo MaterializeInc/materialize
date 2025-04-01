@@ -899,7 +899,7 @@ fn extract_transaction<'a>(
                             .flatten()
                             .repeat_clone((old_row, new_row))
                         {
-                            yield (rel, *output, old_row, -Diff::ONE);
+                            yield (rel, *output, old_row, Diff::MINUS_ONE);
                             yield (rel, *output, new_row, Diff::ONE);
                         }
                     }
@@ -932,7 +932,7 @@ fn extract_transaction<'a>(
                             .flatten()
                             .repeat_clone(row)
                         {
-                            yield (rel, *output, row, -Diff::ONE);
+                            yield (rel, *output, row, Diff::MINUS_ONE);
                         }
                     }
                     None => {

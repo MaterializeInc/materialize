@@ -655,7 +655,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
                     Some(from_time.0.clone()),
                 )) {
                     if let Value::FinalizedValue(old_value, _) = old_value.into_decoded() {
-                        output_updates.push((old_value, ts.clone(), -Diff::ONE));
+                        output_updates.push((old_value, ts.clone(), Diff::MINUS_ONE));
                     }
                 }
                 output_updates.push((value, ts, Diff::ONE));
@@ -663,7 +663,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
             None => {
                 if let Some(old_value) = existing_value.take() {
                     if let Value::FinalizedValue(old_value, _) = old_value.into_decoded() {
-                        output_updates.push((old_value, ts, -Diff::ONE));
+                        output_updates.push((old_value, ts, Diff::MINUS_ONE));
                     }
                 }
 

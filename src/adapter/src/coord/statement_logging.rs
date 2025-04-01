@@ -603,7 +603,7 @@ impl Coordinator {
     ) -> [(Row, Diff); 2] {
         let retraction = Self::pack_statement_began_execution_update(began_record);
         let new = Self::pack_full_statement_execution_update(began_record, ended_record);
-        [(retraction, -Diff::ONE), (new, Diff::ONE)]
+        [(retraction, Diff::MINUS_ONE), (new, Diff::ONE)]
     }
 
     /// Mutate a statement execution record via the given function `f`.
@@ -620,7 +620,7 @@ impl Coordinator {
         let retraction = Self::pack_statement_began_execution_update(record);
         self.statement_logging
             .pending_statement_execution_events
-            .push((retraction, -Diff::ONE));
+            .push((retraction, Diff::MINUS_ONE));
         f(record);
         let update = Self::pack_statement_began_execution_update(record);
         self.statement_logging

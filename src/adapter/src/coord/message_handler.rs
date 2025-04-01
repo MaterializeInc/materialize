@@ -422,7 +422,7 @@ impl Coordinator {
                         self.catalog().state().pack_replica_metric_updates(
                             replica_id,
                             &old,
-                            -Diff::ONE,
+                            Diff::MINUS_ONE,
                         )
                     });
                     let insertions = self.catalog().state().pack_replica_metric_updates(
@@ -738,7 +738,7 @@ impl Coordinator {
                     event.replica_id,
                     event.process_id,
                     old_process_status,
-                    -Diff::ONE,
+                    Diff::MINUS_ONE,
                 );
             let builtin_table_retraction = self
                 .catalog()

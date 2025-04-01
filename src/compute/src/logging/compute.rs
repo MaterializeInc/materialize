@@ -856,7 +856,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
             export_id,
             dataflow_index,
         };
-        self.output.export.give((datum, ts, -Diff::ONE));
+        self.output.export.give((datum, ts, Diff::MINUS_ONE));
 
         match self.state.dataflow_export_counts.get_mut(&dataflow_index) {
             entry @ Some(0) | entry @ None => {
@@ -876,7 +876,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
                 export_id,
                 count: export.error_count,
             };
-            self.output.error_count.give((datum, ts, -Diff::ONE));
+            self.output.error_count.give((datum, ts, Diff::MINUS_ONE));
         }
 
         // Remove hydration time logging for this export.
@@ -884,7 +884,9 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
             export_id,
             time_ns: export.hydration_time_ns,
         };
-        self.output.hydration_time.give((datum, ts, -Diff::ONE));
+        self.output
+            .hydration_time
+            .give((datum, ts, Diff::MINUS_ONE));
     }
 
     fn handle_dataflow_dropped(&mut self, dataflow_index: usize) {
@@ -938,7 +940,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
                 };
                 self.output
                     .dataflow_global_ids
-                    .give((datum, ts, -Diff::ONE));
+                    .give((datum, ts, Diff::MINUS_ONE));
 
                 // Remove LIR mapping.
                 if let Some(mappings) = self.state.lir_mapping.remove(&global_id) {
@@ -960,7 +962,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
                             nesting,
                             operator_span,
                         };
-                        self.output.lir_mapping.give(&(datum, ts, -Diff::ONE));
+                        self.output.lir_mapping.give(&(datum, ts, Diff::MINUS_ONE));
                     }
                 }
             }
@@ -988,7 +990,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
                 export_id,
                 count: old_count,
             };
-            self.output.error_count.give((datum, ts, -Diff::ONE));
+            self.output.error_count.give((datum, ts, Diff::MINUS_ONE));
         }
         if new_count != Diff::ZERO {
             let datum = ErrorCountDatum {
@@ -1031,7 +1033,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         };
         self.output
             .hydration_time
-            .give((retraction, ts, -Diff::ONE));
+            .give((retraction, ts, Diff::MINUS_ONE));
         self.output.hydration_time.give((insertion, ts, Diff::ONE));
 
         export.hydration_time_ns = Some(nanos);
@@ -1071,7 +1073,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         let ts = self.ts();
         self.output
             .peek
-            .give((PeekDatum { peek, peek_type }, ts, -Diff::ONE));
+            .give((PeekDatum { peek, peek_type }, ts, Diff::MINUS_ONE));
 
         if let Some(start) = self.state.peek_stash.remove(&uuid) {
             let elapsed_ns = self.time.saturating_sub(start).as_nanos();

@@ -3810,7 +3810,7 @@ impl Coordinator {
                     .expect("all collections happen after Jan 1 1970");
                 if collection_timestamp < cutoff_ts {
                     debug!("pruning storage event {row:?}");
-                    let builtin_update = BuiltinTableUpdate::row(item_id, row, -Diff::ONE);
+                    let builtin_update = BuiltinTableUpdate::row(item_id, row, Diff::MINUS_ONE);
                     expired.push(builtin_update);
                 }
             }

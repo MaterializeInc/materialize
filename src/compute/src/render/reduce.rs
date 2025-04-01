@@ -1305,7 +1305,7 @@ where
                         );
                         // After complaining, output an error here so that we can eventually
                         // report it in an error stream.
-                        target.push((err(key.into_owned()), -Diff::ONE));
+                        target.push((err(key.into_owned()), Diff::MINUS_ONE));
                         return;
                     }
                 }
@@ -1329,7 +1329,7 @@ where
                 // of the multiplicity of the final result in the input, we only want to have one copy
                 // in the output.
                 target.reserve(source.len().saturating_add(1));
-                target.push((V::ok(row_builder.clone()), -Diff::ONE));
+                target.push((V::ok(row_builder.clone()), Diff::MINUS_ONE));
                 target.extend(source.iter().map(|(values, cnt)| {
                     let mut cnt = *cnt;
                     cnt.negate();

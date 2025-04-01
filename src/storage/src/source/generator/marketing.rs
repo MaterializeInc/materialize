@@ -172,7 +172,7 @@ impl Generator for Marketing {
 
                             future_updates.insert(
                                 converted_at,
-                                (MarketingView::Leads, lead.to_row(), -Diff::ONE),
+                                (MarketingView::Leads, lead.to_row(), Diff::MINUS_ONE),
                             );
 
                             lead.converted_at = Some(converted_at);
