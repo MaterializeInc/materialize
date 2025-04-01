@@ -231,6 +231,8 @@ pub enum AdapterError {
     /// read-only mode.
     ReadOnly,
     AlterClusterTimeout,
+    /// Authentication error.
+    AuthenticationError,
 }
 
 impl AdapterError {
@@ -550,6 +552,7 @@ impl AdapterError {
             // transactions.
             AdapterError::ReadOnly => SqlState::READ_ONLY_SQL_TRANSACTION,
             AdapterError::AlterClusterTimeout => SqlState::QUERY_CANCELED,
+            AdapterError::AuthenticationError => SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
         }
     }
 
@@ -780,6 +783,9 @@ impl fmt::Display for AdapterError {
             AdapterError::ReadOnly => write!(f, "cannot write in read-only mode"),
             AdapterError::AlterClusterTimeout => {
                 write!(f, "canceling statement, provided timeout lapsed")
+            }
+            AdapterError::AuthenticationError => {
+                write!(f, "authentication error")
             }
         }
     }

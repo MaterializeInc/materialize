@@ -640,13 +640,19 @@ impl RustType<proto::RoleAuthKey> for RoleAuthKey {
 impl RustType<proto::RoleAuthValue> for RoleAuthValue {
     fn into_proto(&self) -> proto::RoleAuthValue {
         proto::RoleAuthValue {
-            password_secret: self.password_secret.clone(),
+            password_hash: self.password_hash.clone(),
+            updated_at: Some(proto::EpochMillis {
+                millis: self.updated_at,
+            }),
         }
     }
 
     fn from_proto(proto: proto::RoleAuthValue) -> Result<Self, TryFromProtoError> {
         Ok(RoleAuthValue {
-            password_secret: proto.password_secret,
+            password_hash: proto.password_hash,
+            updated_at: proto
+                .updated_at
+                .into_rust_if_some("RoleAuthValue::updated_at")?,
         })
     }
 }

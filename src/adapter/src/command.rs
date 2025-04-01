@@ -66,6 +66,12 @@ pub enum Command {
         notice_tx: mpsc::UnboundedSender<AdapterNotice>,
     },
 
+    AuthCheck {
+        tx: oneshot::Sender<Result<AuthResponse, AdapterError>>,
+        role_name: String,
+        password: Option<String>,
+    },
+
     Execute {
         portal_name: String,
         session: Session,
@@ -140,6 +146,7 @@ impl Command {
             Command::Execute { session, .. } | Command::Commit { session, .. } => Some(session),
             Command::CancelRequest { .. }
             | Command::Startup { .. }
+            | Command::AuthCheck { .. }
             | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::GetWebhook { .. }
@@ -157,6 +164,7 @@ impl Command {
             Command::Execute { session, .. } | Command::Commit { session, .. } => Some(session),
             Command::CancelRequest { .. }
             | Command::Startup { .. }
+            | Command::AuthCheck { .. }
             | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::GetWebhook { .. }
@@ -191,6 +199,14 @@ pub struct StartupResponse {
     /// Map of (name, VarInput::Flat) tuples of session default variables that should be set.
     pub session_defaults: BTreeMap<String, OwnedVarInput>,
     pub catalog: Arc<Catalog>,
+}
+
+/// The response to [`Client::authenticate`](crate::Client::authenticate).
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct AuthResponse {
+    /// RoleId for the user.
+    pub role_id: RoleId,
 }
 
 // Facile implementation for `StartupResponse`, which does not use the `allowed`

@@ -3395,6 +3395,10 @@ impl Coordinator {
                     attributes.inherit = inherit;
                 }
 
+                if let Some(password) = attrs.password {
+                    attributes.password = Some(password);
+                }
+
                 if let Some(notice) = self.should_emit_rbac_notice(session) {
                     notices.push(notice);
                 }

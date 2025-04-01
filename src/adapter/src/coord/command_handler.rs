@@ -58,7 +58,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug_span, info, warn, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::command::{CatalogSnapshot, Command, ExecuteResponse, StartupResponse};
+use crate::command::{AuthResponse, CatalogSnapshot, Command, ExecuteResponse, StartupResponse};
 use crate::coord::appends::PendingWriteTxn;
 use crate::coord::{
     validate_ip_with_policy_rules, ConnMeta, Coordinator, DeferredPlanStatement, Message,
@@ -108,6 +108,14 @@ impl Coordinator {
                         notice_tx,
                     )
                     .await;
+                }
+
+                Command::AuthCheck {
+                    tx,
+                    role_name,
+                    password,
+                } => {
+                    self.handle_auth_check(tx, role_name, password).await;
                 }
 
                 Command::Execute {
@@ -234,6 +242,31 @@ impl Coordinator {
         }
         .instrument(debug_span!("handle_command"))
         .boxed_local()
+    }
+
+    #[mz_ore::instrument(level = "debug")]
+    async fn handle_auth_check(
+        &mut self,
+        tx: oneshot::Sender<Result<AuthResponse, AdapterError>>,
+        role_name: String,
+        password: Option<String>,
+    ) {
+        //TODO(dov): actually implement authentication
+        if let Some(role) = self.catalog().try_get_role_by_name(role_name.as_str()) {
+            if let Some(auth) = self.catalog().try_get_role_auth_by_id(&role.id) {
+                if let Some(hash) = &auth.password_hash {
+                    if password.as_deref() == Some(hash) {
+                        let _ = tx.send(Ok(AuthResponse { role_id: role.id }));
+                        return;
+                    }
+                }
+            }
+            // Authentication failed due to incorrect password or missing password hash.
+            let _ = tx.send(Err(AdapterError::AuthenticationError));
+        } else {
+            // The user does not exist.
+            let _ = tx.send(Err(AdapterError::AuthenticationError));
+        }
     }
 
     #[mz_ore::instrument(level = "debug")]

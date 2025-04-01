@@ -163,6 +163,36 @@ where
     if let Err(err) = conn.inner().ensure_tls_compatibility(&tls_mode) {
         return conn.send(err).await;
     }
+    //TODO(dov): this is a temp hack for testing purposes, remove it
+    if user != "materialize" {
+        conn.send(BackendMessage::AuthenticationCleartextPassword)
+            .await?;
+        conn.flush().await?;
+        let password = match conn.recv().await? {
+            Some(FrontendMessage::Password { password }) => password,
+            _ => {
+                return conn
+                    .send(ErrorResponse::fatal(
+                        SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+                        "expected Password message",
+                    ))
+                    .await
+            }
+        };
+        let auth_response = match adapter_client.authenticate(&user, &password).await {
+            Ok(resp) => resp,
+            Err(err) => {
+                warn!(?err, "pgwire connection failed authentication");
+                return conn
+                    .send(ErrorResponse::fatal(
+                        SqlState::INVALID_PASSWORD,
+                        "invalid password",
+                    ))
+                    .await;
+            }
+        };
+        println!("auth_response: {:?}", auth_response);
+    }
 
     let (mut session, expired) = if let Some(frontegg) = frontegg {
         conn.send(BackendMessage::AuthenticationCleartextPassword)

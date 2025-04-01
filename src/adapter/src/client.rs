@@ -47,7 +47,9 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
-use crate::command::{CatalogDump, CatalogSnapshot, Command, ExecuteResponse, Response};
+use crate::command::{
+    AuthResponse, CatalogDump, CatalogSnapshot, Command, ExecuteResponse, Response,
+};
 use crate::coord::{Coordinator, ExecuteContextExtra};
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
@@ -146,6 +148,22 @@ impl Client {
         // intended to be 100% accurate and correct, so we don't burden the timestamp oracle with
         // generating a more correct timestamp.
         Session::new(self.build_info, config, self.metrics().session_metrics())
+    }
+
+    /// Preforms an authentication check for the given user.
+    pub async fn authenticate(
+        &self,
+        user: &String,
+        password: &String,
+    ) -> Result<AuthResponse, AdapterError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::AuthCheck {
+            role_name: user.to_string(),
+            password: Some(password.to_string()),
+            tx,
+        });
+        let response = rx.await.expect("sender dropped")?;
+        Ok(response)
     }
 
     /// Upgrades this client to a session client.
@@ -872,6 +890,7 @@ impl SessionClient {
                 Command::Execute { .. } => typ = Some("execute"),
                 Command::GetWebhook { .. } => typ = Some("webhook"),
                 Command::Startup { .. }
+                | Command::AuthCheck { .. }
                 | Command::CatalogSnapshot { .. }
                 | Command::Commit { .. }
                 | Command::CancelRequest { .. }

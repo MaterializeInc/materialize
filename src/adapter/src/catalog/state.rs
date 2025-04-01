@@ -864,6 +864,10 @@ impl CatalogState {
             .map(|id| &self.roles_by_id[id])
     }
 
+    pub(super) fn try_get_role_auth_by_id(&self, id: &RoleId) -> Option<&RoleAuth> {
+        self.role_auth_by_id.get(id)
+    }
+
     pub(super) fn try_get_network_policy_by_name(
         &self,
         policy_name: &str,

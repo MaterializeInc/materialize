@@ -212,7 +212,8 @@ impl DurableType for Role {
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct RoleAuth {
     pub role_id: RoleId,
-    pub password_secret: Option<String>,
+    pub password_hash: Option<String>,
+    pub updated_at: u64,
 }
 
 impl DurableType for RoleAuth {
@@ -225,7 +226,8 @@ impl DurableType for RoleAuth {
                 role_id: self.role_id,
             },
             RoleAuthValue {
-                password_secret: self.password_secret,
+                password_hash: self.password_hash,
+                updated_at: self.updated_at,
             },
         )
     }
@@ -233,7 +235,8 @@ impl DurableType for RoleAuth {
     fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
         Self {
             role_id: key.role_id,
-            password_secret: value.password_secret,
+            password_hash: value.password_hash,
+            updated_at: value.updated_at,
         }
     }
 
@@ -1489,7 +1492,8 @@ pub struct RoleAuthKey {
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct RoleAuthValue {
-    pub(crate) password_secret: Option<String>,
+    pub(crate) password_hash: Option<String>,
+    pub(crate) updated_at: u64,
 }
 
 #[cfg(test)]

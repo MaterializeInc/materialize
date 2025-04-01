@@ -351,6 +351,7 @@ impl Message {
                 Command::RetireExecute { .. } => "command-retire_execute",
                 Command::CheckConsistency { .. } => "command-check_consistency",
                 Command::Dump { .. } => "command-dump",
+                Command::AuthCheck { .. } => "command-auth_check",
             },
             Message::ControllerReady => "controller_ready",
             Message::PurifiedStatementReady(_) => "purified_statement_ready",

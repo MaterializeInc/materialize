@@ -485,6 +485,8 @@ pub trait CatalogSchema {
 pub struct RoleAttributes {
     /// Indicates whether the role has inheritance of privileges.
     pub inherit: bool,
+    /// The password for the role
+    pub password: Option<String>,
     // Force use of constructor.
     _private: (),
 }
@@ -494,11 +496,12 @@ impl RoleAttributes {
     pub const fn new() -> RoleAttributes {
         RoleAttributes {
             inherit: true,
+            password: None,
             _private: (),
         }
     }
 
-    /// Adds all attributes.
+    /// Adds all attributes except password.
     pub const fn with_all(mut self) -> RoleAttributes {
         self.inherit = true;
         self
@@ -508,18 +511,28 @@ impl RoleAttributes {
     pub const fn is_inherit(&self) -> bool {
         self.inherit
     }
+
+    /// Returns whether or not the role has a password.
+    pub const fn has_password(&self) -> bool {
+        self.password.is_some()
+    }
+
+    /// Returns self without the password.
+    pub fn without_password(self) -> RoleAttributes {
+        RoleAttributes {
+            inherit: self.inherit,
+            password: None,
+            _private: (),
+        }
+    }
 }
 
 impl From<PlannedRoleAttributes> for RoleAttributes {
-    fn from(
-        PlannedRoleAttributes {
-            inherit,
-            password: _,
-        }: PlannedRoleAttributes,
-    ) -> RoleAttributes {
+    fn from(PlannedRoleAttributes { inherit, password }: PlannedRoleAttributes) -> RoleAttributes {
         let default_attributes = RoleAttributes::new();
         RoleAttributes {
             inherit: inherit.unwrap_or(default_attributes.inherit),
+            password: password,
             _private: (),
         }
     }

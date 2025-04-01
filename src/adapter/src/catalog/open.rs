@@ -266,6 +266,7 @@ impl Catalog {
         for (kind, ts, diff) in updates {
             match kind {
                 BootstrapStateUpdateKind::Role(_)
+                | BootstrapStateUpdateKind::RoleAuth(_)
                 | BootstrapStateUpdateKind::Database(_)
                 | BootstrapStateUpdateKind::Schema(_)
                 | BootstrapStateUpdateKind::DefaultPrivilege(_)

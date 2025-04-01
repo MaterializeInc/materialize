@@ -4180,6 +4180,7 @@ impl<'a> Parser<'a> {
                 Some(CREATEROLE) => options.push(RoleAttribute::CreateRole),
                 Some(NOCREATEROLE) => options.push(RoleAttribute::NoCreateRole),
                 Some(PASSWORD) => {
+                    //TODO(dov): allow unsetting password with null
                     let password = self.parse_literal_string()?;
                     options.push(RoleAttribute::Password(password));
                 }
