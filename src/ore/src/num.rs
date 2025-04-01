@@ -784,7 +784,7 @@ mod overflowing_support {
 
     /// Handles overflow for [`Overflowing`](super::Overflowing) numbers.
     #[track_caller]
-    #[inline]
+    #[cold]
     pub(super) fn handle_overflow<T: Into<O>, O>(result: T, description: std::fmt::Arguments) -> O {
         let mode = OVERFLOWING_MODE.load(std::sync::atomic::Ordering::Relaxed);
         // We cannot use `soft_panic_or_log` in wasm.
