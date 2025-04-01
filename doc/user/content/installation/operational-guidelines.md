@@ -23,6 +23,12 @@ It is strongly recommended to enable the Kubernetes `static` [CPU management pol
 This ensures that each worker thread of Materialize is given exclusively access to a vCPU. Our benchmarks have shown this
 to substantially improve the performance of compute-bound workloads.
 
+## TLS
+
+The sample deployment uses a self-signed ClusterIssuer for demonstration
+purposes. In production, run with certificates from an official Certificate
+Authority (CA) rather than self-signed certificates.
+
 ## Locally-attached NVMe storage
 
 For optimal performance, Materialize requires fast, locally-attached NVMe
