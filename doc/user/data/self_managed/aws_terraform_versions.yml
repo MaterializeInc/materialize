@@ -17,4 +17,11 @@ rows:
     as well as [Network Load Balancers
     (NLBs)](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#input_materialize_instances)
     for each Materialize instance (i.e., the [`create_nlb`](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#input_materialize_instances) flag defaults to `true`).
-    The NLBs, by default, are configured to be internal (i.e., the [`internal_nlb`](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#input_materialize_instances) flag defaults to `true`).
+    The NLBs, by default, are configured to be internal (i.e., the
+    [`internal_nlb`](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#input_materialize_instances)
+    flag defaults to `true`).
+
+- "Terraform version": |
+    [v0.2.7](https://github.com/MaterializeInc/terraform-aws-materialize/releases/tag/v0.2.7)
+  "Notable changes": |
+    Initial release of Materialize on AWS.
