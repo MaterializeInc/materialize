@@ -35,6 +35,11 @@ your own production deployment, either:
 
 {{% self-managed/aws-terraform-upgrade-notes %}}
 
+See also [Upgrade Notes](
+https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#upgrade-notes)
+for release-specific upgrade notes.
+
+
 ### Materialize on Azure Terraform modules
 
 {{< yaml-table data="self_managed/azure_terraform_versions" >}}

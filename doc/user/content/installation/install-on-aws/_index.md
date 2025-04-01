@@ -93,20 +93,7 @@ for evaluation purposes only. The modules deploy a sample infrastructure on AWS
   to support workloads that are larger than can fit into memory.
 
 {{< tip >}}
-
-The tutorial uses the `main.tf` found in the `examples/simple/` directory, which
-requires minimal user input. For more configuration options, you can run the
-`main.tf` file at [root of the
-repository](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/README.md)
-instead. When running from the root, you must declare the required providers.
-See [Providers
-Configuration](/installation/install-on-aws/appendix-aws-provider-configuration/)
-for details.
-
-For details on the  `examples/simple/` infrastructure configuration (such as the
-node instance type, etc.), see the
-[examples/simple/main.tf](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/examples/simple/main.tf).
-
+{{< self-managed/aws-terraform-configs >}}
 {{< /tip >}}
 
 1. Open a Terminal window.
@@ -124,20 +111,7 @@ node instance type, etc.), see the
    ```
 
    {{< tip >}}
-
-   The tutorial uses the module found in the `examples/simple/` directory, which
-   requires minimal user input. For more configuration options, you can run from
-   the [root of the
-   repository](https://github.com/MaterializeInc/terraform-aws-materialize/)
-   instead. When running from the root `main.tf`, you must declare the required
-   providers. See [Providers
-   Configuration](/installation/install-on-aws/appendix-aws-provider-configuration/)
-   for details.
-
-   For details on the  `examples/simple/` infrastructure configuration (such as
-   the node instance type, etc.), see the
-   [examples/simple/main.tf](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/examples/simple/main.tf).
-
+   {{< self-managed/aws-terraform-configs >}}
    {{< /tip >}}
 
 1. Create a `terraform.tfvars` file (you can copy from the
@@ -156,6 +130,10 @@ node instance type, etc.), see the
    namespace = "enter-namespace"   // maximum 12 characters, start with a letter, contain lowercase alphanumeric and hyphens only (e.g. my-demo)
    environment = "enter-environment" // maximum 8 characters, lowercase alphanumeric only (e.g., dev, test)
    ```
+
+   {{< tip >}}
+   {{< self-managed/aws-terraform-configs >}}
+   {{< /tip >}}
 
 1. Initialize the terraform directory.
 
@@ -270,14 +248,21 @@ node instance type, etc.), see the
    EOF
    ```
 
-   Starting in v0.3.0, the Materialize on AWS Terraform module also deploys (by
-   default, internal) Network Load Balancers (NLBs) for each Materialize
-   instance. See [`materialize_instances`](
+   Starting in v0.3.0, the Materialize on AWS Terraform module also deploys, by
+   default, Network Load Balancers (NLBs) for each Materialize instance (i.e.,
+   the
+   [`create_nlb`](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#input_materialize_instances)
+   flag defaults to `true`).  The NLBs, by default, are configured to be
+    internal (i.e., the
+    [`internal_nlb`](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#input_materialize_instances)
+   flag defaults to `true`). See [`materialize_instances`](
    https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#input_materialize_instances)
    for the Materialize instance configuration options.
 
    {{< tip >}}
    {{% self-managed/aws-terraform-upgrade-notes %}}
+
+   See [Materialize on AWS releases](/installation/appendix-terraforms/#materialize-on-aws-terraform-modules) for notable changes.
    {{</ tip >}}
 
 1. Run `terraform plan` with both `.tfvars` files and review the changes to be
