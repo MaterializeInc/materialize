@@ -1277,13 +1277,7 @@ where
                     // per-key is extremely difficult.
                     stats.values_diff += diff;
 
-                    (
-                        k,
-                        MergeValue {
-                            value: val,
-                            diff: diff,
-                        },
-                    )
+                    (k, MergeValue { value: val, diff })
                 }))
                 .await?;
 
