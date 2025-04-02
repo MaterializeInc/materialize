@@ -590,9 +590,10 @@ impl Coordinator {
                         }
                     };
 
-                    let optimization_finished_at = (now)();
+                    let pipeline_result = pipeline();
+                    let optimization_finished_at = now();
 
-                    let stage = match pipeline() {
+                    let stage = match pipeline_result {
                         Ok(Either::Left(global_lir_plan)) => {
                             let optimizer = optimizer.unwrap_left();
                         // Enable fast path cluster calculation for slow path plans.
