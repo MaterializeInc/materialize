@@ -12,6 +12,11 @@
 
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true
+----
+COMPLETE 0
+
 statement ok
 CREATE VIEW objects AS
   SELECT
@@ -19,221 +24,222 @@ CREATE VIEW objects AS
     objects.name AS object,
     columns.position,
     columns.name,
-    columns.type
+    columns.type,
+    comments.comment
   FROM
-    mz_catalog.mz_columns AS columns,
-    mz_catalog.mz_objects AS objects,
-    mz_catalog.mz_schemas AS schema
-  WHERE columns.id = objects.id AND objects.schema_id = schema.id
+    mz_catalog.mz_columns AS columns
+    JOIN mz_catalog.mz_objects AS objects ON columns.id = objects.id
+    JOIN mz_catalog.mz_schemas AS schema ON objects.schema_id = schema.id
+    LEFT JOIN mz_internal.mz_comments AS comments ON columns.id = comments.id AND columns.position = comments.object_sub_id
 
 statement ok
 CREATE INDEX objects_idx ON objects(schema, object)
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_active_peeks' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_active_peeks' ORDER BY position
 ----
-1  id  uuid
-2  object_id  text
-3  type  text
-4  time  mz_timestamp
+id  uuid  The␠ID␠of␠the␠peek␠request.
+object_id  text  The␠ID␠of␠the␠collection␠the␠peek␠is␠targeting.␠Corresponds␠to␠`mz_catalog.mz_indexes.id`,␠`mz_catalog.mz_materialized_views.id`,␠`mz_catalog.mz_sources.id`,␠or␠`mz_catalog.mz_tables.id`.
+type  text  The␠type␠of␠the␠corresponding␠peek:␠`index`␠if␠targeting␠an␠index␠or␠temporary␠dataflow;␠`persist`␠for␠a␠source,␠materialized␠view,␠or␠table.
+time  mz_timestamp  The␠timestamp␠the␠peek␠has␠requested.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_arrangement_sharing' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_arrangement_sharing' ORDER BY position
 ----
-1  operator_id  uint8
-2  count  bigint
+operator_id  uint8  The␠ID␠of␠the␠operator␠that␠created␠the␠arrangement.␠Corresponds␠to␠`mz_dataflow_operators.id`.
+count  bigint  The␠number␠of␠operators␠that␠share␠the␠arrangement.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_arrangement_sizes' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_arrangement_sizes' ORDER BY position
 ----
-1  operator_id  uint8
-2  records  bigint
-3  batches  bigint
-4  size  bigint
-5  capacity  bigint
-6  allocations  bigint
+operator_id  uint8  The␠ID␠of␠the␠operator␠that␠created␠the␠arrangement.␠Corresponds␠to␠`mz_dataflow_operators.id`.
+records  bigint  The␠number␠of␠records␠in␠the␠arrangement.
+batches  bigint  The␠number␠of␠batches␠in␠the␠arrangement.
+size  bigint  The␠utilized␠size␠in␠bytes␠of␠the␠arrangement.
+capacity  bigint  The␠capacity␠in␠bytes␠of␠the␠arrangement.␠Can␠be␠larger␠than␠the␠size.
+allocations  bigint  The␠number␠of␠separate␠memory␠allocations␠backing␠the␠arrangement.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_compute_error_counts' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_compute_error_counts' ORDER BY position
 ----
-1  export_id  text
-2  count  numeric
+export_id  text  The␠ID␠of␠the␠dataflow␠export.␠Corresponds␠to␠`mz_compute_exports.export_id`.
+count  numeric  The␠count␠of␠errors␠present␠in␠this␠dataflow␠export.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_compute_exports' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_compute_exports' ORDER BY position
 ----
-1  export_id  text
-2  dataflow_id  uint8
+export_id  text  The␠ID␠of␠the␠index,␠materialized␠view,␠or␠subscription␠exported␠by␠the␠dataflow.␠Corresponds␠to␠`mz_catalog.mz_indexes.id`,␠`mz_catalog.mz_materialized_views.id`,␠or␠`mz_internal.mz_subscriptions`.
+dataflow_id  uint8  The␠ID␠of␠the␠dataflow.␠Corresponds␠to␠`mz_dataflows.id`.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_compute_frontiers' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_compute_frontiers' ORDER BY position
 ----
-1  export_id  text
-2  time  mz_timestamp
+export_id  text  The␠ID␠of␠the␠dataflow␠export.␠Corresponds␠to␠`mz_compute_exports.export_id`.
+time  mz_timestamp  The␠next␠timestamp␠at␠which␠the␠dataflow␠output␠may␠change.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_compute_import_frontiers' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_compute_import_frontiers' ORDER BY position
 ----
-1  export_id  text
-2  import_id  text
-3  time  mz_timestamp
+export_id  text  The␠ID␠of␠the␠dataflow␠export.␠Corresponds␠to␠`mz_compute_exports.export_id`.
+import_id  text  The␠ID␠of␠the␠dataflow␠import.␠Corresponds␠to␠`mz_catalog.mz_sources.id`␠or␠`mz_catalog.mz_tables.id`␠or␠`mz_compute_exports.export_id`.
+time  mz_timestamp  The␠next␠timestamp␠at␠which␠the␠dataflow␠input␠may␠change.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_compute_operator_durations_histogram' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_compute_operator_durations_histogram' ORDER BY position
 ----
-1  id  uint8
-2  duration_ns  uint8
-3  count  numeric
+id  uint8  The␠ID␠of␠the␠operator.␠Corresponds␠to␠`mz_dataflow_operators.id`.
+duration_ns  uint8  The␠upper␠bound␠of␠the␠duration␠bucket␠in␠nanoseconds.
+count  numeric  The␠(noncumulative)␠count␠of␠invocations␠in␠the␠bucket.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_dataflows' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_dataflows' ORDER BY position
 ----
-1  id  uint8
-2  name  text
+id  uint8  The␠ID␠of␠the␠dataflow.
+name  text  The␠internal␠name␠of␠the␠dataflow.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_dataflow_addresses' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_dataflow_addresses' ORDER BY position
 ----
-1  id  uint8
-2  address  list
+id  uint8  The␠ID␠of␠the␠channel␠or␠operator.␠Corresponds␠to␠`mz_dataflow_channels.id`␠or␠`mz_dataflow_operators.id`.
+address  list  A␠list␠of␠scope-local␠indexes␠indicating␠the␠path␠from␠the␠root␠to␠this␠channel␠or␠operator.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_dataflow_arrangement_sizes' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_dataflow_arrangement_sizes' ORDER BY position
 ----
-1  id  uint8
-2  name  text
-3  records  bigint
-4  batches  bigint
-5  size  bigint
-6  capacity  bigint
-7  allocations  bigint
+id  uint8  The␠ID␠of␠the␠[dataflow].␠Corresponds␠to␠`mz_dataflows.id`.
+name  text  The␠name␠of␠the␠[dataflow].
+records  bigint  The␠number␠of␠records␠in␠all␠arrangements␠in␠the␠dataflow.
+batches  bigint  The␠number␠of␠batches␠in␠all␠arrangements␠in␠the␠dataflow.
+size  bigint  The␠utilized␠size␠in␠bytes␠of␠the␠arrangements.
+capacity  bigint  The␠capacity␠in␠bytes␠of␠the␠arrangements.␠Can␠be␠larger␠than␠the␠size.
+allocations  bigint  The␠number␠of␠separate␠memory␠allocations␠backing␠the␠arrangements.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_dataflow_channels' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_dataflow_channels' ORDER BY position
 ----
-1  id  uint8
-2  from_index  uint8
-3  from_port  uint8
-4  to_index  uint8
-5  to_port  uint8
-6  type  text
+id  uint8  The␠ID␠of␠the␠channel.
+from_index  uint8  The␠scope-local␠index␠of␠the␠source␠operator.␠Corresponds␠to␠`mz_dataflow_addresses.address`.
+from_port  uint8  The␠source␠operator's␠output␠port.
+to_index  uint8  The␠scope-local␠index␠of␠the␠target␠operator.␠Corresponds␠to␠`mz_dataflow_addresses.address`.
+to_port  uint8  The␠target␠operator's␠input␠port.
+type  text  The␠container␠type␠of␠the␠channel.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_dataflow_channel_operators' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_dataflow_channel_operators' ORDER BY position
 ----
-1  id  uint8
-2  from_operator_id  uint8
-3  from_operator_address  list
-4  to_operator_id  uint8
-5  to_operator_address  list
-6  type  text
+id  uint8  The␠ID␠of␠the␠channel.␠Corresponds␠to␠`mz_dataflow_channels.id`.
+from_operator_id  uint8  The␠ID␠of␠the␠source␠of␠the␠channel.␠Corresponds␠to␠`mz_dataflow_operators.id`.
+from_operator_address  list  The␠address␠of␠the␠source␠of␠the␠channel.␠Corresponds␠to␠`mz_dataflow_addresses.address`.
+to_operator_id  uint8  The␠ID␠of␠the␠target␠of␠the␠channel.␠Corresponds␠to␠`mz_dataflow_operators.id`.
+to_operator_address  list  The␠address␠of␠the␠target␠of␠the␠channel.␠Corresponds␠to␠`mz_dataflow_addresses.address`.
+type  text  The␠container␠type␠of␠the␠channel.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_dataflow_global_ids' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_dataflow_global_ids' ORDER BY position
 ----
-1  id  uint8
-2  global_id  text
+id  uint8  The␠dataflow␠ID.
+global_id  text  A␠global␠ID␠associated␠with␠that␠dataflow.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_dataflow_operators' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_dataflow_operators' ORDER BY position
 ----
-1  id  uint8
-2  name  text
+id  uint8  The␠ID␠of␠the␠operator.
+name  text  The␠internal␠name␠of␠the␠operator.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_dataflow_operator_dataflows' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_dataflow_operator_dataflows' ORDER BY position
 ----
-1  id  uint8
-2  name  text
-3  dataflow_id  uint8
-4  dataflow_name  text
+id  uint8  The␠ID␠of␠the␠operator.␠Corresponds␠to␠`mz_dataflow_operators.id`.
+name  text  The␠internal␠name␠of␠the␠operator.
+dataflow_id  uint8  The␠ID␠of␠the␠dataflow␠hosting␠the␠operator.␠Corresponds␠to␠`mz_dataflows.id`.
+dataflow_name  text  The␠internal␠name␠of␠the␠dataflow␠hosting␠the␠operator.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_dataflow_operator_parents' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_dataflow_operator_parents' ORDER BY position
 ----
-1  id  uint8
-2  parent_id  uint8
+id  uint8  The␠ID␠of␠the␠operator.␠Corresponds␠to␠`mz_dataflow_operators.id`.
+parent_id  uint8  The␠ID␠of␠the␠operator's␠parent␠operator.␠Corresponds␠to␠`mz_dataflow_operators.id`.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_expected_group_size_advice' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_expected_group_size_advice' ORDER BY position
 ----
-1  dataflow_id  uint8
-2  dataflow_name  text
-3  region_id  uint8
-4  region_name  text
-5  levels  bigint
-6  to_cut  bigint
-7  savings  numeric
-8  hint  double␠precision
+dataflow_id  uint8  The␠ID␠of␠the␠[dataflow].␠Corresponds␠to␠`mz_dataflows.id`.
+dataflow_name  text  The␠internal␠name␠of␠the␠dataflow␠hosting␠the␠min/max␠aggregation␠or␠Top␠K.
+region_id  uint8  The␠ID␠of␠the␠root␠operator␠scope.␠Corresponds␠to␠`mz_dataflow_operators.id`.
+region_name  text  The␠internal␠name␠of␠the␠root␠operator␠scope␠for␠the␠min/max␠aggregation␠or␠Top␠K.
+levels  bigint  The␠number␠of␠levels␠in␠the␠hierarchical␠scheme␠implemented␠by␠the␠region.
+to_cut  bigint  The␠number␠of␠levels␠that␠can␠be␠eliminated␠(cut)␠from␠the␠region's␠hierarchy.
+savings  numeric  A␠conservative␠estimate␠of␠the␠amount␠of␠memory␠in␠bytes␠to␠be␠saved␠by␠applying␠the␠hint.
+hint  double␠precision  The␠hint␠value␠that␠will␠eliminate␠`to_cut`␠levels␠from␠the␠region's␠hierarchy.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_mappable_objects' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_mappable_objects' ORDER BY position
 ----
-1  name  text
-2  global_id  text
+name  text  The␠name␠of␠the␠object.
+global_id  text  The␠global␠ID␠of␠the␠object.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_lir_mapping' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_lir_mapping' ORDER BY position
 ----
-1  global_id           text
-2  lir_id              uint8
-3  operator            text
-4  parent_lir_id       uint8
-5  nesting             uint2
-6  operator_id_start   uint8
-7  operator_id_end     uint8
+global_id  text  The␠global␠ID.
+lir_id  uint8  The␠LIR␠node␠ID.
+operator  text  The␠LIR␠operator,␠in␠the␠format␠`OperatorName␠INPUTS␠[OPTIONS]`.
+parent_lir_id  uint8  The␠parent␠of␠this␠LIR␠node.␠May␠be␠`NULL`.
+nesting  uint2  The␠nesting␠level␠of␠this␠LIR␠node.
+operator_id_start  uint8  The␠first␠dataflow␠operator␠ID␠implementing␠this␠LIR␠operator␠(inclusive).
+operator_id_end  uint8  The␠first␠dataflow␠operator␠ID␠_after_␠this␠LIR␠operator␠(exclusive).
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_message_counts' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_message_counts' ORDER BY position
 ----
-1  channel_id  uint8
-2  sent  numeric
-3  received  numeric
-4  batch_sent  numeric
-5  batch_received  numeric
+channel_id  uint8  The␠ID␠of␠the␠channel.␠Corresponds␠to␠`mz_dataflow_channels.id`.
+sent  numeric  The␠number␠of␠messages␠sent.
+received  numeric  The␠number␠of␠messages␠received.
+batch_sent  numeric  The␠number␠of␠batches␠sent.
+batch_received  numeric  The␠number␠of␠batches␠received.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_peek_durations_histogram' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_peek_durations_histogram' ORDER BY position
 ----
-1  type  text
-2  duration_ns  uint8
-3  count  numeric
+type  text  The␠peek␠variant:␠`index`␠or␠`persist`.
+duration_ns  uint8  The␠upper␠bound␠of␠the␠bucket␠in␠nanoseconds.
+count  numeric  The␠(noncumulative)␠count␠of␠peeks␠in␠this␠bucket.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_records_per_dataflow' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_records_per_dataflow' ORDER BY position
 ----
-1  id  uint8
-2  name  text
-3  records  bigint
-4  batches  bigint
-5  size  bigint
-6  capacity  bigint
-7  allocations  bigint
+id  uint8  The␠ID␠of␠the␠dataflow.␠Corresponds␠to␠`mz_dataflows.id`.
+name  text  The␠internal␠name␠of␠the␠dataflow.
+records  bigint  The␠number␠of␠records␠in␠the␠dataflow.
+batches  bigint  The␠number␠of␠batches␠in␠the␠dataflow.
+size  bigint  The␠utilized␠size␠in␠bytes␠of␠the␠arrangements.
+capacity  bigint  The␠capacity␠in␠bytes␠of␠the␠arrangements.␠Can␠be␠larger␠than␠the␠size.
+allocations  bigint  The␠number␠of␠separate␠memory␠allocations␠backing␠the␠arrangements.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_records_per_dataflow_operator' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_records_per_dataflow_operator' ORDER BY position
 ----
-1  id  uint8
-2  name  text
-3  dataflow_id  uint8
-4  records  bigint
-5  batches  bigint
-6  size  bigint
-7  capacity  bigint
-8  allocations  bigint
+id  uint8  The␠ID␠of␠the␠operator.␠Corresponds␠to␠`mz_dataflow_operators.id`.
+name  text  The␠internal␠name␠of␠the␠operator.
+dataflow_id  uint8  The␠ID␠of␠the␠dataflow.␠Corresponds␠to␠`mz_dataflows.id`.
+records  bigint  The␠number␠of␠records␠in␠the␠operator.
+batches  bigint  The␠number␠of␠batches␠in␠the␠dataflow.
+size  bigint  The␠utilized␠size␠in␠bytes␠of␠the␠arrangement.
+capacity  bigint  The␠capacity␠in␠bytes␠of␠the␠arrangement.␠Can␠be␠larger␠than␠the␠size.
+allocations  bigint  The␠number␠of␠separate␠memory␠allocations␠backing␠the␠arrangement.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_scheduling_elapsed' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_scheduling_elapsed' ORDER BY position
 ----
-1  id  uint8
-2  elapsed_ns  numeric
+id  uint8  The␠ID␠of␠the␠operator.␠Corresponds␠to␠`mz_dataflow_operators.id`.
+elapsed_ns  numeric  The␠total␠elapsed␠time␠spent␠in␠the␠operator␠in␠nanoseconds.
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_scheduling_parks_histogram' ORDER BY position
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_scheduling_parks_histogram' ORDER BY position
 ----
-1  slept_for_ns  uint8
-2  requested_ns  uint8
-3  count  numeric
+slept_for_ns  uint8  The␠actual␠length␠of␠the␠park␠event␠in␠nanoseconds.
+requested_ns  uint8  The␠requested␠length␠of␠the␠park␠event␠in␠nanoseconds.
+count  numeric  The␠(noncumulative)␠count␠of␠park␠events␠in␠this␠bucket.
 
 query T
 SELECT DISTINCT object FROM objects WHERE schema IN ('mz_introspection') ORDER BY object
