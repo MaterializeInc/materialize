@@ -646,7 +646,7 @@ impl DataSubscribe {
         let (data, txns, capture, tokens) = worker.dataflow::<u64, _, _>(|scope| {
             let (data_stream, shard_source_token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
                 let client = client.clone();
-                let (data_stream, token) = shard_source::<String, (), u64, i64, _, _, _, _>(
+                let (data_stream, token) = shard_source::<String, (), u64, i64, _, _, _>(
                     scope,
                     name,
                     move || std::future::ready(client.clone()),

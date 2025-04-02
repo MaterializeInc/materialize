@@ -64,7 +64,7 @@ use crate::{Diagnostics, PersistClient, ShardId};
 /// usages for details.
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn shard_source<'g, K, V, T, D, F, DT, G, C>(
+pub fn shard_source<'g, K, V, T, D, DT, G, C>(
     scope: &mut Child<'g, G, T>,
     name: &str,
     client: impl Fn() -> C,
@@ -75,7 +75,7 @@ pub fn shard_source<'g, K, V, T, D, F, DT, G, C>(
     desc_transformer: Option<DT>,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
-    should_fetch_part: F,
+    should_fetch_part: impl FnMut(&PartStats, AntichainRef<G::Timestamp>) -> bool + 'static,
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
@@ -89,7 +89,6 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
-    F: FnMut(&PartStats, AntichainRef<G::Timestamp>) -> bool + 'static,
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
     G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
@@ -133,7 +132,7 @@ where
     // metrics.
     let is_transient = !until.is_empty();
 
-    let (descs, descs_token) = shard_source_descs::<K, V, D, _, G>(
+    let (descs, descs_token) = shard_source_descs::<K, V, D, G>(
         &scope.parent,
         name,
         client(),
@@ -219,7 +218,7 @@ impl<T: Timestamp + Codec64> LeaseManager<T> {
     }
 }
 
-pub(crate) fn shard_source_descs<K, V, D, F, G>(
+pub(crate) fn shard_source_descs<K, V, D, G>(
     scope: &G,
     name: &str,
     client: impl Future<Output = PersistClient> + Send + 'static,
@@ -231,7 +230,7 @@ pub(crate) fn shard_source_descs<K, V, D, F, G>(
     chosen_worker: usize,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
-    mut should_fetch_part: F,
+    mut should_fetch_part: impl FnMut(&PartStats, AntichainRef<G::Timestamp>) -> bool + 'static,
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
@@ -242,7 +241,6 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
-    F: FnMut(&PartStats, AntichainRef<G::Timestamp>) -> bool + 'static,
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
     G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
@@ -670,7 +668,7 @@ mod tests {
             let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
                 let (stream, token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
                     let transformer = move |_, descs: &Stream<_, _>, _| (descs.clone(), vec![]);
-                    let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _, _>(
+                    let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
                         scope,
                         "test_source",
                         move || std::future::ready(persist_client.clone()),
@@ -740,7 +738,7 @@ mod tests {
             let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
                 let (stream, token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
                     let transformer = move |_, descs: &Stream<_, _>, _| (descs.clone(), vec![]);
-                    let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _, _>(
+                    let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
                         scope,
                         "test_source",
                         move || std::future::ready(persist_client.clone()),
