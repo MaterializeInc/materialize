@@ -350,20 +350,20 @@ intelligible LIR operators.
 For example, to find out how much time is spent in each operator for the `wins_by_item` index (and the underlying `winning_bids` view), run the following query:
 
 ```sql
-SELECT 
-    mo.name AS name, 
-    mo.global_id AS global_id, 
-    mlm.lir_id, 
-    mlm.parent_lir_id, 
+SELECT
+    mo.name AS name,
+    mo.global_id AS global_id,
+    mlm.lir_id,
+    mlm.parent_lir_id,
     REPEAT(' ', mlm.nesting * 2) || mlm.operator AS operator,
     ( -- Subquery to extract the duration of operators in the id range
-        SELECT SUM(elapsed_ns)/1000 * '1 microsecond'::INTERVAL 
-        FROM mz_introspection.mz_scheduling_elapsed mse 
+        SELECT SUM(elapsed_ns)/1000 * '1 microsecond'::INTERVAL
+        FROM mz_introspection.mz_scheduling_elapsed mse
         WHERE mlm.operator_id_start <= mse.id AND mse.id < mlm.operator_id_end
     ) as duration,
     ( -- Subquery to extract the invocations of operators in the id range
-        SELECT SUM(count) 
-        FROM mz_introspection.mz_compute_operator_durations_histogram mcodh 
+        SELECT SUM(count)
+        FROM mz_introspection.mz_compute_operator_durations_histogram mcodh
         WHERE mlm.operator_id_start <= mcodh.id AND mcodh.id < mlm.operator_id_end
     ) as count
     FROM mz_introspection.mz_lir_mapping mlm
