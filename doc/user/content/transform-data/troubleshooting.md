@@ -350,15 +350,25 @@ intelligible LIR operators.
 For example, to find out how much time is spent in each operator for the `wins_by_item` index (and the underlying `winning_bids` view), run the following query:
 
 ```sql
-SELECT mo.name AS name, mo.global_id AS global_id, mlm.lir_id, mlm.parent_lir_id, REPEAT(' ', mlm.nesting * 2) || mlm.operator AS operator,
-       SUM(duration_ns)/1000 * '1 microsecond'::INTERVAL AS duration, SUM(count) AS count
-    FROM           mz_introspection.mz_lir_mapping mlm
-         LEFT JOIN mz_introspection.mz_compute_operator_durations_histogram mcodh
-                ON (mlm.operator_id_start <= mcodh.id AND mcodh.id < mlm.operator_id_end)
-              JOIN mz_introspection.mz_mappable_objects mo
-                ON (mlm.global_id = mo.global_id)
-   WHERE mo.name IN ('materialize.public.wins_by_item', 'materialize.public.winning_bids')
-GROUP BY mo.name, mo.global_id, lir_id, operator, parent_lir_id, nesting
+SELECT 
+    mo.name AS name, 
+    mo.global_id AS global_id, 
+    mlm.lir_id, 
+    mlm.parent_lir_id, 
+    REPEAT(' ', mlm.nesting * 2) || mlm.operator AS operator,
+    ( -- Subquery to extract the duration of operators in the id range
+        SELECT SUM(elapsed_ns)/1000 * '1 microsecond'::INTERVAL 
+        FROM mz_introspection.mz_scheduling_elapsed mse 
+        WHERE mlm.operator_id_start <= mse.id AND mse.id < mlm.operator_id_end
+    ) as duration,
+    ( -- Subquery to extract the invocations of operators in the id range
+        SELECT SUM(count) 
+        FROM mz_introspection.mz_compute_operator_durations_histogram mcodh 
+        WHERE mlm.operator_id_start <= mcodh.id AND mcodh.id < mlm.operator_id_end
+    ) as count
+    FROM mz_introspection.mz_lir_mapping mlm
+    JOIN mz_introspection.mz_mappable_objects mo ON (mlm.global_id = mo.global_id)
+GROUP BY 1, 2, 3, 4, 5, 6, 7
 ORDER BY mo.global_id, lir_id DESC;
 ```
 
