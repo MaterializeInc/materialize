@@ -70,7 +70,7 @@ where
                                     let update = (
                                         t.into_owned(),
                                         v.clone(),
-                                        usize::cast_from(diff.unsigned_abs()),
+                                        usize::cast_from(diff.unsigned_abs().into_inner()),
                                     );
                                     if diff < Diff::ZERO {
                                         befores.push(update);

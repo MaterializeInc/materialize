@@ -43,7 +43,6 @@ use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 use timely::progress::Timestamp;
 use timely::Container;
-use tracing::warn;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{MzReduce, ReduceExt};
@@ -1600,8 +1599,16 @@ where
                         let mut datums_local = datums1.borrow();
                         datums_local.extend(datum_iter);
                         let key_len = datums_local.len();
+                        let mut diff = Diff::ONE;
                         for (aggr, accum) in full_aggrs.iter().zip(accums) {
-                            datums_local.push(finalize_accum(&aggr.func, accum, total));
+                            match finalize_accum(&aggr.func, accum, total) {
+                                Ok(datum) =>
+                                datums_local.push(datum),
+                                Err(datum) => {
+                                    datums_local.push(datum);
+                                    diff = Diff::OVERFLOW;
+                                }
+                            }
                         }
 
                         if let Some(row) = evaluate_mfp_after(
@@ -1610,7 +1617,7 @@ where
                             &temp_storage,
                             key_len,
                         ) {
-                            output.push((row, Diff::ONE));
+                            output.push((row, diff));
                         }
                     }
                 },
@@ -1658,12 +1665,20 @@ where
                     let datum_iter = key.to_datum_iter();
                     let mut datums_local = datums2.borrow();
                     datums_local.extend(datum_iter);
+                    let mut diff = Diff::ONE;
                     for (aggr, accum) in full_aggrs2.iter().zip(accums) {
-                        datums_local.push(finalize_accum(&aggr.func, accum, total));
+                        match finalize_accum(&aggr.func, accum, total) {
+                            Ok(datum) =>
+                                datums_local.push(datum),
+                            Err(datum) => {
+                                datums_local.push(datum);
+                                diff = Diff::OVERFLOW;
+                            }
+                        }
                     }
 
                     if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage) {
-                        output.push((e.into(), Diff::ONE));
+                        output.push((e.into(), diff));
                     }
                 },
             );
@@ -1872,38 +1887,42 @@ fn datum_to_accumulator(aggregate_func: &AggregateFunc, datum: Datum) -> Accum {
     }
 }
 
-fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Diff) -> Datum<'a> {
+fn finalize_accum<'a>(
+    aggr_func: &'a AggregateFunc,
+    accum: &'a Accum,
+    total: Diff,
+) -> Result<Datum<'a>, Datum<'a>> {
     // The finished value depends on the aggregation function in a variety of ways.
     // For all aggregates but count, if only null values were
     // accumulated, then the output is null.
     if total.is_positive() && accum.is_zero() && *aggr_func != AggregateFunc::Count {
-        Datum::Null
+        Ok(Datum::Null)
     } else {
         match (&aggr_func, &accum) {
-            (AggregateFunc::Count, Accum::SimpleNumber { non_nulls, .. }) => {
-                Datum::Int64(non_nulls.into_inner())
-            }
+            (AggregateFunc::Count, Accum::SimpleNumber { non_nulls, .. }) => Ok(Datum::Int64(
+                non_nulls.into_inner_if_valid().ok_or(Datum::Int64(0))?,
+            )),
             (AggregateFunc::All, Accum::Bool { falses, trues }) => {
                 // If any false, else if all true, else must be no false and some nulls.
                 if falses.is_positive() {
-                    Datum::False
+                    Ok(Datum::False)
                 } else if *trues == total {
-                    Datum::True
+                    Ok(Datum::True)
                 } else {
-                    Datum::Null
+                    Ok(Datum::Null)
                 }
             }
             (AggregateFunc::Any, Accum::Bool { falses, trues }) => {
                 // If any true, else if all false, else must be no true and some nulls.
                 if trues.is_positive() {
-                    Datum::True
+                    Ok(Datum::True)
                 } else if *falses == total {
-                    Datum::False
+                    Ok(Datum::False)
                 } else {
-                    Datum::Null
+                    Ok(Datum::Null)
                 }
             }
-            (AggregateFunc::Dummy, _) => Datum::Dummy,
+            (AggregateFunc::Dummy, _) => Ok(Datum::Dummy),
             // If any non-nulls, just report the aggregate.
             (AggregateFunc::SumInt16, Accum::SimpleNumber { accum, .. })
             | (AggregateFunc::SumInt32, Accum::SimpleNumber { accum, .. }) => {
@@ -1912,9 +1931,13 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                 // TODO(benesch): are we guaranteed to have less than 2^32 summands?
                 // If so, rewrite to avoid `as`.
                 #[allow(clippy::as_conversions)]
-                Datum::Int64(accum.into_inner() as i64)
+                Ok(Datum::Int64(
+                    accum.into_inner_if_valid().ok_or(Datum::Int64(0))? as i64,
+                ))
             }
-            (AggregateFunc::SumInt64, Accum::SimpleNumber { accum, .. }) => Datum::from(*accum),
+            (AggregateFunc::SumInt64, Accum::SimpleNumber { accum, .. }) => {
+                Ok(Datum::from(accum.into_inner_if_valid().ok_or(0)?))
+            }
             (AggregateFunc::SumUInt16, Accum::SimpleNumber { accum, .. })
             | (AggregateFunc::SumUInt32, Accum::SimpleNumber { accum, .. }) => {
                 if !accum.is_negative() {
@@ -1924,22 +1947,24 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                     // signed types.
                     // TODO(vmarcos): remove potentially dangerous usage of `as`.
                     #[allow(clippy::as_conversions)]
-                    Datum::UInt64(accum.into_inner() as u64)
+                    Ok(Datum::UInt64(
+                        accum.into_inner_if_valid().ok_or(Datum::Int64(0))? as u64,
+                    ))
                 } else {
                     // Note that we return a value here, but an error in the other
                     // operator of the reduce_pair. Therefore, we expect that this
                     // value will never be exposed as an output.
-                    Datum::Null
+                    Ok(Datum::Null)
                 }
             }
             (AggregateFunc::SumUInt64, Accum::SimpleNumber { accum, .. }) => {
                 if !accum.is_negative() {
-                    Datum::from(*accum)
+                    Ok(Datum::from(accum.into_inner_if_valid().ok_or(0)?))
                 } else {
                     // Note that we return a value here, but an error in the other
                     // operator of the reduce_pair. Therefore, we expect that this
                     // value will never be exposed as an output.
-                    Datum::Null
+                    Ok(Datum::Null)
                 }
             }
             (
@@ -1955,16 +1980,19 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                 if nans.is_positive() || (pos_infs.is_positive() && neg_infs.is_positive()) {
                     // NaNs are NaNs and cases where we've seen a
                     // mixture of positive and negative infinities.
-                    Datum::from(f32::NAN)
+                    Ok(Datum::from(f32::NAN))
                 } else if pos_infs.is_positive() {
-                    Datum::from(f32::INFINITY)
+                    Ok(Datum::from(f32::INFINITY))
                 } else if neg_infs.is_positive() {
-                    Datum::from(f32::NEG_INFINITY)
+                    Ok(Datum::from(f32::NEG_INFINITY))
                 } else {
                     // TODO(benesch): remove potentially dangerous usage of `as`.
                     #[allow(clippy::as_conversions)]
                     {
-                        Datum::from(((accum.into_inner() as f64) / *FLOAT_SCALE) as f32)
+                        Ok(Datum::from(
+                            ((accum.into_inner_if_valid().ok_or(Datum::from(0.))? as f64)
+                                / *FLOAT_SCALE) as f32,
+                        ))
                     }
                 }
             }
@@ -1981,16 +2009,19 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                 if nans.is_positive() || (pos_infs.is_positive() && neg_infs.is_positive()) {
                     // NaNs are NaNs and cases where we've seen a
                     // mixture of positive and negative infinities.
-                    Datum::from(f64::NAN)
+                    Ok(Datum::from(f64::NAN))
                 } else if pos_infs.is_positive() {
-                    Datum::from(f64::INFINITY)
+                    Ok(Datum::from(f64::INFINITY))
                 } else if neg_infs.is_positive() {
-                    Datum::from(f64::NEG_INFINITY)
+                    Ok(Datum::from(f64::NEG_INFINITY))
                 } else {
                     // TODO(benesch): remove potentially dangerous usage of `as`.
                     #[allow(clippy::as_conversions)]
                     {
-                        Datum::from((accum.into_inner() as f64) / *FLOAT_SCALE)
+                        Ok(Datum::from(
+                            (accum.into_inner_if_valid().ok_or(Datum::from(0.))? as f64)
+                                / *FLOAT_SCALE,
+                        ))
                     }
                 }
             }
@@ -2018,16 +2049,16 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                 if nans.is_positive() || (pos_inf && neg_inf) {
                     // NaNs are NaNs and cases where we've seen a
                     // mixture of positive and negative infinities.
-                    Datum::from(Numeric::nan())
+                    Ok(Datum::from(Numeric::nan()))
                 } else if pos_inf {
-                    Datum::from(Numeric::infinity())
+                    Ok(Datum::from(Numeric::infinity()))
                 } else if neg_inf {
                     let mut cx = numeric::cx_datum();
                     let mut d = Numeric::infinity();
                     cx.neg(&mut d);
-                    Datum::from(d)
+                    Ok(Datum::from(d))
                 } else {
-                    Datum::from(d)
+                    Ok(Datum::from(d))
                 }
             }
             _ => panic!(
@@ -2170,10 +2201,7 @@ impl Semigroup for Accum {
                     non_nulls: other_non_nulls,
                 },
             ) => {
-                *accum = accum.checked_add(*other_accum).unwrap_or_else(|| {
-                    warn!("Float accumulator overflow. Incorrect results possible");
-                    accum.wrapping_add(*other_accum)
-                });
+                *accum += *other_accum;
                 *pos_infs += other_pos_infs;
                 *neg_infs += other_neg_infs;
                 *nans += other_nans;
@@ -2255,12 +2283,7 @@ impl Multiply<Diff> for Accum {
                 nans,
                 non_nulls,
             } => Accum::Float {
-                accum: accum
-                    .checked_mul(AccumCount::from(factor))
-                    .unwrap_or_else(|| {
-                        warn!("Float accumulator overflow. Incorrect results possible");
-                        accum.wrapping_mul(AccumCount::from(factor))
-                    }),
+                accum: accum * AccumCount::from(factor),
                 pos_infs: pos_infs * factor,
                 neg_infs: neg_infs * factor,
                 nans: nans * factor,
@@ -2563,7 +2586,7 @@ mod window_agg_helpers {
             }
         }
 
-        fn get_current_aggregate<'a>(&self, temp_storage: &'a RowArena) -> Datum<'a> {
+        fn get_current_aggregate<'a>(&mut self, temp_storage: &'a RowArena) -> Datum<'a> {
             // Note that the `reverse` parameter is currently forwarded only for Basic aggregations.
             match self {
                 OneByOneAggrImpls::Basic(i) => i.get_current_aggregate(temp_storage),
@@ -2594,9 +2617,16 @@ mod window_agg_helpers {
             self.total += Diff::ONE;
         }
 
-        fn get_current_aggregate<'a>(&self, temp_storage: &'a RowArena) -> Datum<'a> {
+        fn get_current_aggregate<'a>(&mut self, temp_storage: &'a RowArena) -> Datum<'a> {
+            let datum = match finalize_accum(&self.aggr_func, &self.accum, self.total) {
+                Ok(datum) => datum,
+                Err(datum) => {
+                    self.total = Diff::OVERFLOW;
+                    datum
+                }
+            };
             temp_storage.make_datum(|packer| {
-                packer.push(finalize_accum(&self.aggr_func, &self.accum, self.total));
+                packer.push(datum);
             })
         }
     }

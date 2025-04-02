@@ -1746,7 +1746,7 @@ pub trait OneByOneAggr {
     /// Pushes one input element into the aggregation.
     fn give(&mut self, d: &Datum);
     /// Returns the value of the aggregate computed on the given values so far.
-    fn get_current_aggregate<'a>(&self, temp_storage: &'a RowArena) -> Datum<'a>;
+    fn get_current_aggregate<'a>(&mut self, temp_storage: &'a RowArena) -> Datum<'a>;
 }
 
 /// Naive implementation of [OneByOneAggr], suitable for stuff like const folding, but too slow for
@@ -1776,7 +1776,7 @@ impl OneByOneAggr for NaiveOneByOneAggr {
         self.input.push(row);
     }
 
-    fn get_current_aggregate<'a>(&self, temp_storage: &'a RowArena) -> Datum<'a> {
+    fn get_current_aggregate<'a>(&mut self, temp_storage: &'a RowArena) -> Datum<'a> {
         temp_storage.make_datum(|packer| {
             packer.push(if !self.reverse {
                 self.agg

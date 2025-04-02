@@ -21,7 +21,6 @@ use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
-use mz_ore::Overflowing;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
@@ -1087,18 +1086,6 @@ impl<'a> From<bool> for Datum<'a> {
         } else {
             Datum::False
         }
-    }
-}
-
-// TODO: Reconsider whether we want this blanket impl or have precise control
-//   over the types.
-impl<'a, T> From<Overflowing<T>> for Datum<'a>
-where
-    Datum<'a>: From<T>,
-{
-    #[inline]
-    fn from(i: Overflowing<T>) -> Datum<'a> {
-        Datum::from(i.into_inner())
     }
 }
 
