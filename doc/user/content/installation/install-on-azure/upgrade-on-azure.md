@@ -117,7 +117,7 @@ If you want to use `jq` and do not have `jq` installed, install.
    cd terraform-azurerm-materialize/examples/simple
    ```
 
-1. Optional. You may need to update your fork of the Terraform modules to
+1. Optional. You may need to update your fork of the Terraform module to
    upgrade.
 
    {{< yaml-table data="self_managed/azure_terraform_versions" >}}

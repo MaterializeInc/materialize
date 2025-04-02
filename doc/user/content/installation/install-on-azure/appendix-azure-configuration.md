@@ -1,17 +1,32 @@
 ---
-title: "Appendix: Azure provider configuration"
-description: ""
+title: "Appendix: Required configuration"
+description: "Required configuration for Materialize on Azure Terraform."
 menu:
   main:
     parent: "install-on-azure"
-    identifier: "appendix-azure-provider-config"
+    identifier: "appendix-azure-config"
     weight: 50
-
+aliases:
+  - /installation/install-on-azure/appendix-azure-provider-configuration
 ---
+
+## Required variables
+
+The following variables are required when using the [Materialize on Azure
+Terraform
+module](https://github.com/MaterializeInc/terraform-azurerm-materialize).
+
+{{< yaml-table data="self_managed/azure_required_variables" >}}
+
+For a list of all variables, see the
+[README.md](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#inputs)
+or the [`variables.tf` file](https://github.com/MaterializeInc/terraform-azurerm-materialize/blob/main/variables.tf).
+
+## Required providers and data source declaration
 
 To use [Materialize on Azure Terraform
 module](https://github.com/MaterializeInc/terraform-azurerm-materialize)
-v0.2.0+, you need to declare the following providers: [^1]
+v0.2.0+, you need to declare the following providers:
 
 ```hcl
 provider "azurerm" {
@@ -40,6 +55,3 @@ provider "helm" {
   }
 }
 ```
-
-[^1]: If using the `examples/simple/main.tf`, the example configuration declares
-    the providers for you.

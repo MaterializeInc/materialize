@@ -6,20 +6,20 @@ rows:
 - "Terraform version": |
     [v0.4.0](https://github.com/MaterializeInc/terraform-aws-materialize/releases/tag/v0.4.0)
   "Notable changes": |
-    By default, deploys
+    - By default, deploys
     [`cert-manager`](https://cert-manager.io/docs/) and a self-signed
     [`ClusterIssuer`](https://cert-manager.io/docs/concepts/issuer/).
 
 - "Terraform version": |
     [v0.3.1](https://github.com/MaterializeInc/terraform-aws-materialize/releases/tag/v0.3.1)
   "Notable changes": |
-    By default, deploys OpenEBS and NVMe instance storage to [enable spill-to-disk](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#enabling-disk-support).
+    - By default, deploys OpenEBS and NVMe instance storage to [enable spill-to-disk](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#enabling-disk-support).
 
 - "Terraform version": |
     [v0.3.0](https://github.com/MaterializeInc/terraform-aws-materialize/releases/tag/v0.3.0)
   "Notable changes": |
 
-    By default, deploys the [AWS Load Balancer
+    - By default, deploys the [AWS Load Balancer
     Controller](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#input_install_aws_load_balancer_controller)
     as well as [Network Load Balancers
     (NLBs)](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#input_materialize_instances)
@@ -31,4 +31,4 @@ rows:
 - "Terraform version": |
     [v0.2.7](https://github.com/MaterializeInc/terraform-aws-materialize/releases/tag/v0.2.7)
   "Notable changes": |
-    Initial release of Materialize on AWS.
+    - Initial release of Materialize on AWS.

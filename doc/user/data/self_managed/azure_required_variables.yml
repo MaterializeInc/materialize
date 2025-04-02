@@ -1,0 +1,34 @@
+columns:
+  - column: "Variable"
+
+rows:
+
+- "Variable": |
+
+    ```hcl
+    resource_group_name = <string>
+    ```
+
+- "Variable": |
+
+    ```hcl
+    database_config = {
+      password            = <string>  # required
+      # sku_name          = <string>  # optional
+      # postgres_version  = <string>  # optional
+      # username          = <string>  # optional
+      # db_name           = <string>  # optional
+    }
+    ```
+
+- "Variable": |
+
+    ```hcl
+    network_config = {     # required starting in v0.2.0
+      vnet_address_space   = string
+      subnet_cidr          = string
+      postgres_subnet_cidr = string
+      service_cidr         = string
+      docker_bridge_cidr   = string
+    }
+    ```

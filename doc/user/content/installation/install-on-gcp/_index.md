@@ -17,7 +17,7 @@ This tutorial deploys Materialize to GCP Google Kubernetes Engine (GKE) cluster
 with a Cloud SQL PostgreSQL database as the metadata database and Cloud Storage
 bucket for blob storage. Specifically, the tutorial uses [Materialize on Google
 Cloud Provider Terraform
-modules](https://github.com/MaterializeInc/terraform-google-materialize) to:
+module](https://github.com/MaterializeInc/terraform-google-materialize) to:
 
 - Set up the GCP environment.
 
@@ -87,7 +87,7 @@ If you do not have Helm version 3.2.0+ installed, install.  For details, see the
 
 ### jq (Optional)
 
-*Optional*. `jq` is used to parse the EKS cluster name and region from the
+*Optional*. `jq` is used to parse the GKE cluster name and region from the
 Terraform outputs. Alternatively, you can manually specify the name and region.
 If you want to use `jq` and do not have `jq` installed, install.
 
@@ -190,10 +190,10 @@ If you want to use `jq` and do not have `jq` installed, install.
 
 {{< /warning >}}
 
-Materialize provides [sample Terraform
-modules](https://github.com/MaterializeInc/terraform-google-materialize) for
-evaluation purposes only. The modules deploy a sample infrastructure on GCP
-(region `us-central1`) with the following components:
+[Materialize on GCP Terraform
+module](https://github.com/MaterializeInc/terraform-google-materialize) deploys
+a sample infrastructure on GCP (region `us-central1`) with the following
+components:
 
 {{< yaml-table data="self_managed/gcp_terraform_deployed_components" >}}
 
@@ -276,7 +276,7 @@ evaluation purposes only. The modules deploy a sample infrastructure on GCP
    }
    ```
 
-1. Configure `kubectl` to connect to your EKS cluster, specifying:
+1. Configure `kubectl` to connect to your GKE cluster, specifying:
 
    - `<cluster name>`. Your cluster name has the form `<your prefix>-gke`; e.g.,
      `mz-simple-gke`.
@@ -316,6 +316,9 @@ evaluation purposes only. The modules deploy a sample infrastructure on GCP
 
    {{< tabs >}}
    {{< tab "Materialize Operator" >}}
+
+   Verify the installation and check the status:
+
    ```shell
    kubectl get all -n materialize
    ```
@@ -392,7 +395,7 @@ evaluation purposes only. The modules deploy a sample infrastructure on GCP
    EOF
    ```
 
-   Starting in v0.3.0, the Materialize on AWS Terraform module also deploys, by
+   Starting in v0.3.0, the Materialize on GCP Terraform module also deploys, by
    default,
 
    - [Load
@@ -410,7 +413,7 @@ evaluation purposes only. The modules deploy a sample infrastructure on GCP
    {{< tip >}}
    {{% self-managed/gcp-terraform-upgrade-notes %}}
 
-   See [Materialize on GCP releases](/installation/appendix-terraforms/#materialize-on-gcp-terraform-modules) for notable changes.
+   See [Materialize on GCP releases](/installation/appendix-terraforms/#materialize-on-gcp-terraform-module) for notable changes.
    {{</ tip >}}
 
 1. Run `terraform plan` with both `.tfvars` files and review the changes to be
