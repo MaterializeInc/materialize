@@ -503,9 +503,11 @@ impl<G: Scope> OperatorBuilder<G> {
             .push(Antichain::from_elem(G::Timestamp::minimum()));
 
         let outputs = self.builder.shape().outputs();
-        let handle = self
-            .builder
-            .new_input_connection(stream, pact, connection.describe(outputs));
+        let handle = self.builder.new_input_connection(
+            stream,
+            pact,
+            connection.describe(outputs).into_iter().enumerate(),
+        );
 
         let waker = Default::default();
         let queue = Default::default();
@@ -533,8 +535,7 @@ impl<G: Scope> OperatorBuilder<G> {
     ) {
         let index = self.builder.shape().outputs();
 
-        let connection = vec![Antichain::new(); self.builder.shape().inputs()];
-        let (wrapper, stream) = self.builder.new_output_connection(connection);
+        let (wrapper, stream) = self.builder.new_output_connection([]);
 
         let handle = AsyncOutputHandle::new(wrapper, index);
 

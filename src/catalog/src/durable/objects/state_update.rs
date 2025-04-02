@@ -42,6 +42,7 @@ use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::numeric::{Dec, Numeric};
 use mz_repr::Diff;
 use mz_storage_types::sources::SourceData;
+use mz_storage_types::StorageDiff;
 use proptest_derive::Arbitrary;
 use tracing::error;
 
@@ -391,7 +392,7 @@ impl StateUpdateKindJson {
 type PersistStateUpdate = (
     (Result<SourceData, String>, Result<(), String>),
     Timestamp,
-    i64,
+    StorageDiff,
 );
 
 impl TryFrom<&StateUpdate<StateUpdateKind>> for Option<memory::objects::StateUpdate> {
@@ -998,7 +999,7 @@ impl From<PersistStateUpdate> for StateUpdate<StateUpdateKindJson> {
         StateUpdate {
             kind: StateUpdateKindJson::from(key),
             ts,
-            diff,
+            diff: diff.into(),
         }
     }
 }

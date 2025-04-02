@@ -163,7 +163,7 @@ mod relation {
             }?;
         } else {
             row = inner1.parse::<Parsed<Row>>()?.into();
-            diff = 1;
+            diff = Diff::ONE;
         }
 
         Ok((row, diff))

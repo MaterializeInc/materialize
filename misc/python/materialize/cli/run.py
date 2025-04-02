@@ -495,7 +495,13 @@ def _cargo_build(
     programs = [*REQUIRED_SERVICES, *extra_programs]
     for program in programs:
         command += ["--bin", program]
-    completed_proc = spawn.runv(command, env=env)
+    completed_proc = spawn.runv(
+        command,
+        env=env,
+        cwd=pathlib.Path(
+            os.path.abspath(os.path.join(os.path.realpath(sys.argv[0]), "../.."))
+        ),
+    )
 
     artifacts = [str(_cargo_artifact_path(args, program)) for program in programs]
 

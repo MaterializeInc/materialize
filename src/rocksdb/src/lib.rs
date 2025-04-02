@@ -38,6 +38,8 @@ pub use config::{defaults, RocksDBConfig, RocksDBTuningParameters};
 
 use crate::config::WriteBufferManagerHandle;
 
+type Diff = mz_ore::Overflowing<i64>;
+
 /// An error using this RocksDB wrapper.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -254,7 +256,7 @@ pub struct MultiUpdateResult {
     /// The 'diff' size of the values we wrote to the database,
     /// returned when the `MultiUpdate` command included a multiplier 'diff'
     /// for at least one update value.
-    pub size_diff: Option<i64>,
+    pub size_diff: Option<Diff>,
 }
 
 /// The type of update to perform on a key.
@@ -291,10 +293,10 @@ enum Command<K, V> {
         // The batch of updates to perform. The 3rd item in each tuple is an optional diff
         // multiplier that when present, will be multiplied by the size of the encoded
         // value written to the database and summed into the `MultiUpdateResult::size_diff` field.
-        batch: Vec<(K, KeyUpdate<V>, Option<i64>)>,
+        batch: Vec<(K, KeyUpdate<V>, Option<Diff>)>,
         // Scratch vector to return results in.
         response_sender: oneshot::Sender<
-            Result<(MultiUpdateResult, Vec<(K, KeyUpdate<V>, Option<i64>)>), Error>,
+            Result<(MultiUpdateResult, Vec<(K, KeyUpdate<V>, Option<Diff>)>), Error>,
         >,
     },
     Shutdown {
@@ -319,7 +321,7 @@ pub struct RocksDBInstance<K, V> {
 
     // Scratch vector to send updates to the RocksDB thread
     // during `MultiUpdate`.
-    multi_update_scratch: Vec<(K, KeyUpdate<V>, Option<i64>)>,
+    multi_update_scratch: Vec<(K, KeyUpdate<V>, Option<Diff>)>,
 
     // Configuration that can change dynamically.
     dynamic_config: config::RocksDBDynamicConfig,
@@ -526,7 +528,7 @@ where
     /// summed into the `MultiUpdateResult::size_diff` field.
     pub async fn multi_update<P>(&mut self, puts: P) -> Result<MultiUpdateResult, Error>
     where
-        P: IntoIterator<Item = (K, KeyUpdate<V>, Option<i64>)>,
+        P: IntoIterator<Item = (K, KeyUpdate<V>, Option<Diff>)>,
     {
         let batch_size = self.dynamic_config.batch_size();
         let mut stats = MultiUpdateResult::default();
@@ -540,7 +542,7 @@ where
                 stats.processed_updates += ret.processed_updates;
                 stats.size_written += ret.size_written;
                 if let Some(diff) = ret.size_diff {
-                    stats.size_diff = Some(stats.size_diff.unwrap_or(0) + diff);
+                    stats.size_diff = Some(stats.size_diff.unwrap_or(Diff::ZERO) + diff);
                 }
             }
         }
@@ -550,7 +552,7 @@ where
 
     async fn multi_update_inner<P>(&mut self, updates: P) -> Result<MultiUpdateResult, Error>
     where
-        P: IntoIterator<Item = (K, KeyUpdate<V>, Option<i64>)>,
+        P: IntoIterator<Item = (K, KeyUpdate<V>, Option<Diff>)>,
     {
         let mut multi_put_vec = std::mem::take(&mut self.multi_update_scratch);
         multi_put_vec.clear();
@@ -816,10 +818,12 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
                                     ret.size_written += u64::cast_from(encode_buf.len());
                                     // calculate the diff size if the diff multiplier is present
                                     if let Some(diff) = diff {
-                                        let encoded_len = i64::try_from(encode_buf.len())
+                                        let encoded_len = Diff::try_from(encode_buf.len())
                                             .expect("less than i64 size");
-                                        ret.size_diff =
-                                            Some(ret.size_diff.unwrap_or(0) + (diff * encoded_len));
+                                        ret.size_diff = Some(
+                                            ret.size_diff.unwrap_or(Diff::ZERO)
+                                                + (diff * encoded_len),
+                                        );
                                     }
                                 }
                                 Err(e) => {

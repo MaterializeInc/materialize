@@ -29,7 +29,7 @@ static ALLOCATOR: LockedAllocator<FreeListAllocator> =
 /// SQL query is not parseable.
 #[wasm_bindgen(js_name = prettyStr)]
 pub fn pretty_str(query: &str, width: usize) -> Result<String, JsError> {
-    mz_sql_pretty::pretty_str(query, width).map_err(|e| JsError::new(&e.to_string()))
+    mz_sql_pretty::pretty_str_simple(query, width).map_err(|e| JsError::new(&e.to_string()))
 }
 
 /// Pretty prints many SQL queries.
@@ -38,7 +38,7 @@ pub fn pretty_str(query: &str, width: usize) -> Result<String, JsError> {
 /// error if any SQL query is not parseable.
 #[wasm_bindgen(js_name = prettyStrs)]
 pub fn pretty_strs(queries: &str, width: usize) -> Result<Vec<String>, JsError> {
-    Ok(mz_sql_pretty::pretty_strs(queries, width)
+    Ok(mz_sql_pretty::pretty_strs_simple(queries, width)
         .map_err(|e| JsError::new(&e.to_string()))?
         .into_iter()
         .collect())

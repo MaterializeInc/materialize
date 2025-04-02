@@ -161,7 +161,7 @@ the use of role assumption-based authentication instead.
 To create an AWS connection that uses static access key credentials:
 
 ```mzsql
-CREATE SECRET aws_secret_access_key = '...';
+CREATE SECRET aws_secret_access_key AS '...';
 CREATE CONNECTION aws_credentials TO AWS (
     ACCESS KEY ID = 'ASIAV2KIV5LPTG6HGXG6',
     SECRET ACCESS KEY = SECRET aws_secret_access_key

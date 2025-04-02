@@ -249,7 +249,7 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
                             massaged.extend(update.updates.iter().map(
                                 |(node, port, time, diff)| {
                                     let is_source = true;
-                                    (*node, *port, is_source, T::extract(time), *diff)
+                                    (*node, *port, is_source, T::extract(time), Diff::from(*diff))
                                 },
                             ));
 
@@ -260,7 +260,7 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
                             massaged.extend(update.updates.iter().map(
                                 |(node, port, time, diff)| {
                                     let is_source = false;
-                                    (*node, *port, is_source, time.extract(), *diff)
+                                    (*node, *port, is_source, time.extract(), Diff::from(*diff))
                                 },
                             ));
 

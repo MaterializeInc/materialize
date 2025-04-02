@@ -38,7 +38,7 @@ build-scalar
 case when (#0 > -2) then substr(#1, 1, 4) else "hello" end
 
 build-scalar
-(call_binary (jsonb_get_string true) #2 ("field1" string))
+(call_binary (jsonb_get_string_stringify) #2 ("field1" string))
 ----
 (#2 ->> "field1")
 

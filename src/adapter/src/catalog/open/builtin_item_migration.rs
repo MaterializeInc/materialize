@@ -32,9 +32,10 @@ use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient};
 use mz_persist_types::codec_impls::ShardIdSchema;
 use mz_persist_types::ShardId;
-use mz_repr::{CatalogItemId, Diff, GlobalId, Timestamp};
+use mz_repr::{CatalogItemId, GlobalId, Timestamp};
 use mz_sql::catalog::CatalogItem as _;
 use mz_storage_client::controller::StorageTxn;
+use mz_storage_types::StorageDiff;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tracing::{debug, error};
 
@@ -199,19 +200,20 @@ async fn migrate_builtin_items_0dt(
             "builtin table migration shard for org {organization_id:?} version {build_version:?}"
         ),
     };
-    let mut since_handle: SinceHandle<TableKey, ShardId, Timestamp, Diff, i64> = persist_client
-        .open_critical_since(
-            shard_id,
-            // TODO: We may need to use a different critical reader
-            // id for this if we want to be able to introspect it via SQL.
-            PersistClient::CONTROLLER_CRITICAL_SINCE,
-            diagnostics.clone(),
-        )
-        .await
-        .expect("invalid usage");
+    let mut since_handle: SinceHandle<TableKey, ShardId, Timestamp, StorageDiff, i64> =
+        persist_client
+            .open_critical_since(
+                shard_id,
+                // TODO: We may need to use a different critical reader
+                // id for this if we want to be able to introspect it via SQL.
+                PersistClient::CONTROLLER_CRITICAL_SINCE,
+                diagnostics.clone(),
+            )
+            .await
+            .expect("invalid usage");
     let (mut write_handle, mut read_handle): (
-        WriteHandle<TableKey, ShardId, Timestamp, Diff>,
-        ReadHandle<TableKey, ShardId, Timestamp, Diff>,
+        WriteHandle<TableKey, ShardId, Timestamp, StorageDiff>,
+        ReadHandle<TableKey, ShardId, Timestamp, StorageDiff>,
     ) = persist_client
         .open(
             shard_id,
@@ -223,7 +225,7 @@ async fn migrate_builtin_items_0dt(
         .await
         .expect("invalid usage");
     // Commit an empty write at the minimum timestamp so the shard is always readable.
-    const EMPTY_UPDATES: &[((TableKey, ShardId), Timestamp, Diff)] = &[];
+    const EMPTY_UPDATES: &[((TableKey, ShardId), Timestamp, StorageDiff)] = &[];
     let res = write_handle
         .compare_and_append(
             EMPTY_UPDATES,
@@ -301,7 +303,7 @@ async fn migrate_builtin_items_0dt(
         .collect();
 
     // 4. Clean up contents of migration shard.
-    let mut migrated_shard_updates: Vec<((TableKey, ShardId), Timestamp, Diff)> = Vec::new();
+    let mut migrated_shard_updates: Vec<((TableKey, ShardId), Timestamp, StorageDiff)> = Vec::new();
     let mut migration_shards_to_finalize = BTreeSet::new();
     let storage_collection_metadata = {
         let txn: &mut dyn StorageTxn<Timestamp> = txn;
@@ -437,7 +439,7 @@ async fn migrate_builtin_items_0dt(
 }
 
 async fn fetch_upper(
-    write_handle: &mut WriteHandle<TableKey, ShardId, Timestamp, Diff>,
+    write_handle: &mut WriteHandle<TableKey, ShardId, Timestamp, StorageDiff>,
 ) -> Timestamp {
     write_handle
         .fetch_recent_upper()
@@ -448,10 +450,10 @@ async fn fetch_upper(
 }
 
 async fn write_to_migration_shard(
-    updates: Vec<((TableKey, ShardId), Timestamp, Diff)>,
+    updates: Vec<((TableKey, ShardId), Timestamp, StorageDiff)>,
     upper: Timestamp,
-    write_handle: &mut WriteHandle<TableKey, ShardId, Timestamp, Diff>,
-    since_handle: &mut SinceHandle<TableKey, ShardId, Timestamp, Diff, i64>,
+    write_handle: &mut WriteHandle<TableKey, ShardId, Timestamp, StorageDiff>,
+    since_handle: &mut SinceHandle<TableKey, ShardId, Timestamp, StorageDiff, i64>,
 ) -> Result<Timestamp, Error> {
     let next_upper = upper.step_forward();
     // Lag the shard's upper by 1 to keep it readable.

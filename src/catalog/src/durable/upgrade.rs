@@ -227,13 +227,16 @@ impl<V1: IntoStateUpdateKindJson, V2: IntoStateUpdateKindJson> MigrationAction<V
     fn into_updates(self) -> Vec<(StateUpdateKindJson, Diff)> {
         match self {
             MigrationAction::Delete(kind) => {
-                vec![(kind.into(), -1)]
+                vec![(kind.into(), Diff::MINUS_ONE)]
             }
             MigrationAction::Insert(kind) => {
-                vec![(kind.into(), 1)]
+                vec![(kind.into(), Diff::ONE)]
             }
             MigrationAction::Update(old_kind, new_kind) => {
-                vec![(old_kind.into(), -1), (new_kind.into(), 1)]
+                vec![
+                    (old_kind.into(), Diff::MINUS_ONE),
+                    (new_kind.into(), Diff::ONE),
+                ]
             }
         }
     }
@@ -364,8 +367,8 @@ async fn run_versioned_upgrade<V1: IntoStateUpdateKindJson, V2: IntoStateUpdateK
         .iter()
         .map(|(kind, ts, diff)| {
             soft_assert_eq_or_log!(
-                1,
                 *diff,
+                Diff::ONE,
                 "snapshot is consolidated, ({kind:?}, {ts:?}, {diff:?})"
             );
             V1::try_from(kind.clone()).expect("invalid catalog data persisted")
@@ -387,9 +390,9 @@ async fn run_versioned_upgrade<V1: IntoStateUpdateKindJson, V2: IntoStateUpdateK
 
     // 3. Add a retraction for old version and insertion for new version into updates.
     let next_version = current_version + 1;
-    let version_retraction = (version_update_kind(current_version), -1);
+    let version_retraction = (version_update_kind(current_version), Diff::MINUS_ONE);
     updates.push(version_retraction);
-    let version_insertion = (version_update_kind(next_version), 1);
+    let version_insertion = (version_update_kind(next_version), Diff::ONE);
     updates.push(version_insertion);
 
     // 4. Apply migration to catalog.

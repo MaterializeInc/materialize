@@ -47,10 +47,12 @@ use mz_repr::adt::mz_acl_item::{AclItem, AclMode, MzAclItem};
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric, NumericMaxScale};
 use mz_repr::adt::range::{self, Range, RangeBound, RangeOps};
 use mz_repr::adt::regex::{any_regex, Regex};
+use mz_repr::adt::system::Oid;
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use mz_repr::role_id::RoleId;
 use mz_repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
-use mz_sql_pretty::pretty_str;
+use mz_sql_parser::ast::display::FormatMode;
+use mz_sql_pretty::{pretty_str, PrettyConfig};
 use num::traits::CheckedNeg;
 use proptest::prelude::*;
 use proptest::strategy::*;
@@ -73,7 +75,6 @@ pub(crate) mod format;
 pub(crate) mod impls;
 
 pub use impls::*;
-use mz_repr::adt::system::Oid;
 
 /// The maximum size of a newly allocated string. Chosen to be the smallest number to keep our tests
 /// passing without changing. 100MiB is probably higher than what we want, but it's better than no
@@ -2125,6 +2126,87 @@ fn parse_ident<'a>(
     })?)
 }
 
+fn string_to_array<'a>(
+    string_datum: Datum<'a>,
+    delimiter: Datum<'a>,
+    null_string: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    if string_datum.is_null() {
+        return Ok(Datum::Null);
+    }
+
+    let string = string_datum.unwrap_str();
+
+    if string.is_empty() {
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        packer.try_push_array(&[], std::iter::empty::<Datum>())?;
+
+        return Ok(temp_storage.push_unary_row(row));
+    }
+
+    if delimiter.is_null() {
+        let split_all_chars_delimiter = "";
+        return string_to_array_impl(string, split_all_chars_delimiter, null_string, temp_storage);
+    }
+
+    let delimiter = delimiter.unwrap_str();
+    if delimiter.is_empty() {
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        packer.try_push_array(
+            &[ArrayDimension {
+                lower_bound: 1,
+                length: 1,
+            }],
+            vec![string].into_iter().map(Datum::String),
+        )?;
+
+        Ok(temp_storage.push_unary_row(row))
+    } else {
+        string_to_array_impl(string, delimiter, null_string, temp_storage)
+    }
+}
+
+fn string_to_array_impl<'a>(
+    string: &str,
+    delimiter: &str,
+    null_string: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let mut row = Row::default();
+    let mut packer = row.packer();
+
+    let result = string.split(delimiter);
+    let found: Vec<&str> = if delimiter.is_empty() {
+        result.filter(|s| !s.is_empty()).collect()
+    } else {
+        result.collect()
+    };
+    let array_dimensions = [ArrayDimension {
+        lower_bound: 1,
+        length: found.len(),
+    }];
+
+    if null_string.is_null() {
+        packer.try_push_array(&array_dimensions, found.into_iter().map(Datum::String))?;
+    } else {
+        let null_string = null_string.unwrap_str();
+        let found_datums = found.into_iter().map(|chunk| {
+            if chunk.eq(null_string) {
+                Datum::Null
+            } else {
+                Datum::String(chunk)
+            }
+        });
+
+        packer.try_push_array(&array_dimensions, found_datums)?;
+    }
+
+    Ok(temp_storage.push_unary_row(row))
+}
+
 fn regexp_split_to_array<'a>(
     text: Datum<'a>,
     regexp: Datum<'a>,
@@ -2165,8 +2247,14 @@ fn pretty_sql<'a>(
     let width = width.unwrap_int32();
     let width =
         usize::try_from(width).map_err(|_| EvalError::PrettyError("invalid width".into()))?;
-    let pretty =
-        pretty_str(sql, width).map_err(|e| EvalError::PrettyError(e.to_string().into()))?;
+    let pretty = pretty_str(
+        sql,
+        PrettyConfig {
+            width,
+            format_mode: FormatMode::Simple,
+        },
+    )
+    .map_err(|e| EvalError::PrettyError(e.to_string().into()))?;
     let pretty = temp_storage.push_string(pretty);
     Ok(Datum::String(pretty))
 }
@@ -2310,15 +2398,12 @@ pub enum BinaryFunc {
     TimezoneIntervalTime,
     TimezoneOffset,
     TextConcat,
-    JsonbGetInt64 {
-        stringify: bool,
-    },
-    JsonbGetString {
-        stringify: bool,
-    },
-    JsonbGetPath {
-        stringify: bool,
-    },
+    JsonbGetInt64,
+    JsonbGetInt64Stringify,
+    JsonbGetString,
+    JsonbGetStringStringify,
+    JsonbGetPath,
+    JsonbGetPathStringify,
     JsonbContainsString,
     JsonbConcat,
     JsonbContainsJsonb,
@@ -2577,15 +2662,12 @@ impl BinaryFunc {
             BinaryFunc::TimezoneIntervalTime => timezone_interval_time(a, b),
             BinaryFunc::TimezoneOffset => timezone_offset(a, b, temp_storage),
             BinaryFunc::TextConcat => Ok(text_concat_binary(a, b, temp_storage)),
-            BinaryFunc::JsonbGetInt64 { stringify } => {
-                Ok(jsonb_get_int64(a, b, temp_storage, *stringify))
-            }
-            BinaryFunc::JsonbGetString { stringify } => {
-                Ok(jsonb_get_string(a, b, temp_storage, *stringify))
-            }
-            BinaryFunc::JsonbGetPath { stringify } => {
-                Ok(jsonb_get_path(a, b, temp_storage, *stringify))
-            }
+            BinaryFunc::JsonbGetInt64 => Ok(jsonb_get_int64(a, b, temp_storage, false)),
+            BinaryFunc::JsonbGetInt64Stringify => Ok(jsonb_get_int64(a, b, temp_storage, true)),
+            BinaryFunc::JsonbGetString => Ok(jsonb_get_string(a, b, temp_storage, false)),
+            BinaryFunc::JsonbGetStringStringify => Ok(jsonb_get_string(a, b, temp_storage, true)),
+            BinaryFunc::JsonbGetPath => Ok(jsonb_get_path(a, b, temp_storage, false)),
+            BinaryFunc::JsonbGetPathStringify => Ok(jsonb_get_path(a, b, temp_storage, true)),
             BinaryFunc::JsonbContainsString => Ok(jsonb_contains_string(a, b)),
             BinaryFunc::JsonbConcat => Ok(jsonb_concat(a, b, temp_storage)),
             BinaryFunc::JsonbContainsJsonb => Ok(jsonb_contains_jsonb(a, b)),
@@ -2783,13 +2865,13 @@ impl BinaryFunc {
 
             MzRenderTypmod | TextConcat => ScalarType::String.nullable(in_nullable),
 
-            JsonbGetInt64 { stringify: true }
-            | JsonbGetString { stringify: true }
-            | JsonbGetPath { stringify: true } => ScalarType::String.nullable(true),
+            JsonbGetInt64Stringify
+            | JsonbGetStringStringify
+            | JsonbGetPathStringify => ScalarType::String.nullable(true),
 
-            JsonbGetInt64 { stringify: false }
-            | JsonbGetString { stringify: false }
-            | JsonbGetPath { stringify: false }
+            JsonbGetInt64
+            | JsonbGetString
+            | JsonbGetPath
             | JsonbConcat
             | JsonbDeleteInt64
             | JsonbDeleteString => ScalarType::Jsonb.nullable(true),
@@ -3067,9 +3149,12 @@ impl BinaryFunc {
             | RegexpReplace { .. }
             | StartsWith => false,
 
-            JsonbGetInt64 { .. }
-            | JsonbGetString { .. }
-            | JsonbGetPath { .. }
+            JsonbGetInt64
+            | JsonbGetInt64Stringify
+            | JsonbGetString
+            | JsonbGetStringStringify
+            | JsonbGetPath
+            | JsonbGetPathStringify
             | JsonbConcat
             | JsonbDeleteInt64
             | JsonbDeleteString
@@ -3184,9 +3269,12 @@ impl BinaryFunc {
             | Gte
             | JsonbConcat
             | JsonbContainsJsonb
-            | JsonbGetInt64 { .. }
-            | JsonbGetString { .. }
-            | JsonbGetPath { .. }
+            | JsonbGetInt64
+            | JsonbGetInt64Stringify
+            | JsonbGetString
+            | JsonbGetStringStringify
+            | JsonbGetPath
+            | JsonbGetPathStringify
             | JsonbContainsString
             | JsonbDeleteInt64
             | JsonbDeleteString
@@ -3330,9 +3418,12 @@ impl BinaryFunc {
             | BinaryFunc::BitShiftRightUInt16
             | BinaryFunc::BitShiftRightUInt32
             | BinaryFunc::BitShiftRightUInt64 => false,
-            BinaryFunc::JsonbGetInt64 { .. }
-            | BinaryFunc::JsonbGetString { .. }
-            | BinaryFunc::JsonbGetPath { .. }
+            BinaryFunc::JsonbGetInt64
+            | BinaryFunc::JsonbGetInt64Stringify
+            | BinaryFunc::JsonbGetString
+            | BinaryFunc::JsonbGetStringStringify
+            | BinaryFunc::JsonbGetPath
+            | BinaryFunc::JsonbGetPathStringify
             | BinaryFunc::JsonbContainsString
             | BinaryFunc::JsonbConcat
             | BinaryFunc::JsonbContainsJsonb
@@ -3493,9 +3584,12 @@ impl BinaryFunc {
             | BinaryFunc::TimezoneIntervalTimestampTz
             | BinaryFunc::TimezoneIntervalTime
             | BinaryFunc::TimezoneOffset => (false, false),
-            BinaryFunc::JsonbGetInt64 { .. }
-            | BinaryFunc::JsonbGetString { .. }
-            | BinaryFunc::JsonbGetPath { .. }
+            BinaryFunc::JsonbGetInt64
+            | BinaryFunc::JsonbGetInt64Stringify
+            | BinaryFunc::JsonbGetString
+            | BinaryFunc::JsonbGetStringStringify
+            | BinaryFunc::JsonbGetPath
+            | BinaryFunc::JsonbGetPathStringify
             | BinaryFunc::JsonbContainsString
             | BinaryFunc::JsonbConcat
             | BinaryFunc::JsonbContainsJsonb
@@ -3697,12 +3791,12 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::TimezoneIntervalTime => f.write_str("timezoneit"),
             BinaryFunc::TimezoneOffset => f.write_str("timezone_offset"),
             BinaryFunc::TextConcat => f.write_str("||"),
-            BinaryFunc::JsonbGetInt64 { stringify: false } => f.write_str("->"),
-            BinaryFunc::JsonbGetInt64 { stringify: true } => f.write_str("->>"),
-            BinaryFunc::JsonbGetString { stringify: false } => f.write_str("->"),
-            BinaryFunc::JsonbGetString { stringify: true } => f.write_str("->>"),
-            BinaryFunc::JsonbGetPath { stringify: false } => f.write_str("#>"),
-            BinaryFunc::JsonbGetPath { stringify: true } => f.write_str("#>>"),
+            BinaryFunc::JsonbGetInt64 => f.write_str("->"),
+            BinaryFunc::JsonbGetInt64Stringify => f.write_str("->>"),
+            BinaryFunc::JsonbGetString => f.write_str("->"),
+            BinaryFunc::JsonbGetStringStringify => f.write_str("->>"),
+            BinaryFunc::JsonbGetPath => f.write_str("#>"),
+            BinaryFunc::JsonbGetPathStringify => f.write_str("#>>"),
             BinaryFunc::JsonbContainsString | BinaryFunc::MapContainsKey => f.write_str("?"),
             BinaryFunc::JsonbConcat => f.write_str("||"),
             BinaryFunc::JsonbContainsJsonb | BinaryFunc::MapContainsMap => f.write_str("@>"),
@@ -3925,15 +4019,12 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::TimezoneIntervalTime).boxed(),
             Just(BinaryFunc::TimezoneOffset).boxed(),
             Just(BinaryFunc::TextConcat).boxed(),
-            bool::arbitrary()
-                .prop_map(|stringify| BinaryFunc::JsonbGetInt64 { stringify })
-                .boxed(),
-            bool::arbitrary()
-                .prop_map(|stringify| BinaryFunc::JsonbGetString { stringify })
-                .boxed(),
-            bool::arbitrary()
-                .prop_map(|stringify| BinaryFunc::JsonbGetPath { stringify })
-                .boxed(),
+            Just(BinaryFunc::JsonbGetInt64).boxed(),
+            Just(BinaryFunc::JsonbGetInt64Stringify).boxed(),
+            Just(BinaryFunc::JsonbGetString).boxed(),
+            Just(BinaryFunc::JsonbGetStringStringify).boxed(),
+            Just(BinaryFunc::JsonbGetPath).boxed(),
+            Just(BinaryFunc::JsonbGetPathStringify).boxed(),
             Just(BinaryFunc::JsonbContainsString).boxed(),
             Just(BinaryFunc::JsonbConcat).boxed(),
             Just(BinaryFunc::JsonbContainsJsonb).boxed(),
@@ -4125,9 +4216,12 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::TimezoneIntervalTime => TimezoneIntervalTime(()),
             BinaryFunc::TimezoneOffset => TimezoneOffset(()),
             BinaryFunc::TextConcat => TextConcat(()),
-            BinaryFunc::JsonbGetInt64 { stringify } => JsonbGetInt64(*stringify),
-            BinaryFunc::JsonbGetString { stringify } => JsonbGetString(*stringify),
-            BinaryFunc::JsonbGetPath { stringify } => JsonbGetPath(*stringify),
+            BinaryFunc::JsonbGetInt64 => JsonbGetInt64(()),
+            BinaryFunc::JsonbGetInt64Stringify => JsonbGetInt64Stringify(()),
+            BinaryFunc::JsonbGetString => JsonbGetString(()),
+            BinaryFunc::JsonbGetStringStringify => JsonbGetStringStringify(()),
+            BinaryFunc::JsonbGetPath => JsonbGetPath(()),
+            BinaryFunc::JsonbGetPathStringify => JsonbGetPathStringify(()),
             BinaryFunc::JsonbContainsString => JsonbContainsString(()),
             BinaryFunc::JsonbConcat => JsonbConcat(()),
             BinaryFunc::JsonbContainsJsonb => JsonbContainsJsonb(()),
@@ -4344,9 +4438,12 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 TimezoneIntervalTime(()) => Ok(BinaryFunc::TimezoneIntervalTime),
                 TimezoneOffset(()) => Ok(BinaryFunc::TimezoneOffset),
                 TextConcat(()) => Ok(BinaryFunc::TextConcat),
-                JsonbGetInt64(stringify) => Ok(BinaryFunc::JsonbGetInt64 { stringify }),
-                JsonbGetString(stringify) => Ok(BinaryFunc::JsonbGetString { stringify }),
-                JsonbGetPath(stringify) => Ok(BinaryFunc::JsonbGetPath { stringify }),
+                JsonbGetInt64(()) => Ok(BinaryFunc::JsonbGetInt64),
+                JsonbGetInt64Stringify(()) => Ok(BinaryFunc::JsonbGetInt64Stringify),
+                JsonbGetString(()) => Ok(BinaryFunc::JsonbGetString),
+                JsonbGetStringStringify(()) => Ok(BinaryFunc::JsonbGetStringStringify),
+                JsonbGetPath(()) => Ok(BinaryFunc::JsonbGetPath),
+                JsonbGetPathStringify(()) => Ok(BinaryFunc::JsonbGetPathStringify),
                 JsonbContainsString(()) => Ok(BinaryFunc::JsonbContainsString),
                 JsonbConcat(()) => Ok(BinaryFunc::JsonbConcat),
                 JsonbContainsJsonb(()) => Ok(BinaryFunc::JsonbContainsJsonb),
@@ -7845,6 +7942,7 @@ pub enum VariadicFunc {
     ArrayFill {
         elem_type: ScalarType,
     },
+    StringToArray,
     TimezoneTime,
     RegexpSplitToArray,
     RegexpReplace,
@@ -7951,6 +8049,11 @@ impl VariadicFunc {
                 regexp_split_to_array(ds[0], ds[1], flags, temp_storage)
             }
             VariadicFunc::RegexpReplace => regexp_replace_dynamic(&ds, temp_storage),
+            VariadicFunc::StringToArray => {
+                let null_string = if ds.len() == 2 { Datum::Null } else { ds[2] };
+
+                string_to_array(ds[0], ds[1], null_string, temp_storage)
+            }
         }
     }
 
@@ -7997,6 +8100,7 @@ impl VariadicFunc {
             | VariadicFunc::ArrayFill { .. }
             | VariadicFunc::TimezoneTime
             | VariadicFunc::RegexpSplitToArray
+            | VariadicFunc::StringToArray
             | VariadicFunc::RegexpReplace => false,
         }
     }
@@ -8102,6 +8206,9 @@ impl VariadicFunc {
                 ScalarType::Array(Box::new(ScalarType::String)).nullable(in_nullable)
             }
             RegexpReplace => ScalarType::String.nullable(in_nullable),
+            StringToArray => {
+                ScalarType::Array(Box::new(ScalarType::String)).nullable(input_types[0].nullable)
+            }
         }
     }
 
@@ -8129,6 +8236,7 @@ impl VariadicFunc {
                 | VariadicFunc::RangeCreate { .. }
                 | VariadicFunc::ArrayPosition
                 | VariadicFunc::ArrayFill { .. }
+                | VariadicFunc::StringToArray
         )
     }
 
@@ -8173,6 +8281,7 @@ impl VariadicFunc {
             | ArrayFill { .. }
             | TimezoneTime
             | RegexpSplitToArray
+            | StringToArray
             | RegexpReplace => false,
             Coalesce
             | Greatest
@@ -8286,6 +8395,7 @@ impl VariadicFunc {
             | VariadicFunc::DateDiffTime
             | VariadicFunc::TimezoneTime
             | VariadicFunc::RegexpSplitToArray
+            | VariadicFunc::StringToArray
             | VariadicFunc::RegexpReplace => false,
         }
     }
@@ -8344,6 +8454,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::TimezoneTime => f.write_str("timezonet"),
             VariadicFunc::RegexpSplitToArray => f.write_str("regexp_split_to_array"),
             VariadicFunc::RegexpReplace => f.write_str("regexp_replace"),
+            VariadicFunc::StringToArray => f.write_str("string_to_array"),
         }
     }
 }
@@ -8466,6 +8577,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
             VariadicFunc::TimezoneTime => TimezoneTime(()),
             VariadicFunc::RegexpSplitToArray => RegexpSplitToArray(()),
             VariadicFunc::RegexpReplace => RegexpReplace(()),
+            VariadicFunc::StringToArray => StringToArray(()),
         };
         ProtoVariadicFunc { kind: Some(kind) }
     }
@@ -8532,6 +8644,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
                 TimezoneTime(()) => Ok(VariadicFunc::TimezoneTime),
                 RegexpSplitToArray(()) => Ok(VariadicFunc::RegexpSplitToArray),
                 RegexpReplace(()) => Ok(VariadicFunc::RegexpReplace),
+                StringToArray(()) => Ok(VariadicFunc::StringToArray),
             }
         } else {
             Err(TryFromProtoError::missing_field(

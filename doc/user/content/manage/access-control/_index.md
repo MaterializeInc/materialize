@@ -61,8 +61,6 @@ To configure SSO for your Materialize organization, follow [this step-by-step gu
 
 ### Configuring network policies
 
-{{< private-preview />}}
-
 By default, Materialize is available on the public internet without any
 network-layer access control. As an **administrator** of a Materialize
 organization, you can configure network policies to restrict access to a

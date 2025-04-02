@@ -295,7 +295,7 @@ For development environments with no downtime considerations, you might prefer
 to use the [slim deployment pattern](#slim-deployments) instead for quicker
 iteration and reduced CI costs.
 
-### RBAC permissions requirements
+#### RBAC permissions requirements
 
 When using blue/green deployments with [role-based access control (RBAC)](/manage/access-control/#role-based-access-control-rbac), ensure that the role executing the deployment operations has sufficient privileges on the target objects:
 

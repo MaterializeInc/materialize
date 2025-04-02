@@ -100,7 +100,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
 use mz_ore::metrics::MetricsFutureExt;
-use mz_repr::Row;
+use mz_repr::{Diff, Row};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition};
 use mz_storage_types::sources::MySqlSourceConnection;
@@ -366,7 +366,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             (
                                 (output.output_index, Err(err.clone().into())),
                                 GtidPartition::minimum(),
-                                1,
+                                Diff::ONE,
                             ),
                         )
                         .await;
@@ -432,7 +432,11 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             raw_handle
                                 .give_fueled(
                                     &data_cap_set[0],
-                                    ((output.output_index, event), GtidPartition::minimum(), 1),
+                                    (
+                                        (output.output_index, event),
+                                        GtidPartition::minimum(),
+                                        Diff::ONE,
+                                    ),
                                 )
                                 .await;
                             count += 1;

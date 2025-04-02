@@ -346,7 +346,7 @@ struct DemuxState {
     schedule_starts: BTreeMap<usize, Duration>,
     /// Maps operator IDs to a vector recording the (count, elapsed_ns) values in each histogram
     /// bucket.
-    schedules_data: BTreeMap<usize, Vec<(isize, i64)>>,
+    schedules_data: BTreeMap<usize, Vec<(isize, Diff)>>,
 }
 
 struct Park {
@@ -362,7 +362,7 @@ struct MessageCount {
     /// The number of batches sent across a channel.
     batches: i64,
     /// The number of records sent across a channel.
-    records: i64,
+    records: Diff,
 }
 
 type Pusher<D> =
@@ -473,10 +473,10 @@ impl DemuxHandler<'_, '_> {
     fn handle_operates(&mut self, event: OperatesEvent) {
         let ts = self.ts();
         let datum = (event.id, event.name.clone());
-        self.output.operates.give((datum, ts, 1));
+        self.output.operates.give((datum, ts, Diff::ONE));
 
         let datum = (event.id, event.addr.clone());
-        self.output.addresses.give((datum, ts, 1));
+        self.output.addresses.give((datum, ts, Diff::ONE));
 
         self.state.operators.insert(event.id, event);
     }
@@ -488,10 +488,10 @@ impl DemuxHandler<'_, '_> {
             source: event.source,
             target: event.target,
         };
-        self.output.channels.give(((datum, ()), ts, 1));
+        self.output.channels.give(((datum, ()), ts, Diff::ONE));
 
         let datum = (event.id, event.scope_addr.clone());
-        self.output.addresses.give((datum, ts, 1));
+        self.output.addresses.give((datum, ts, Diff::ONE));
 
         let dataflow_index = event.scope_addr[0];
         self.state
@@ -515,7 +515,7 @@ impl DemuxHandler<'_, '_> {
         // Retract operator information.
         let ts = self.ts();
         let datum = (operator.id, operator.name);
-        self.output.operates.give((datum, ts, -1));
+        self.output.operates.give((datum, ts, Diff::MINUS_ONE));
 
         // Retract schedules information for the operator
         if let Some(schedules) = self.state.schedules_data.remove(&event.id) {
@@ -525,7 +525,7 @@ impl DemuxHandler<'_, '_> {
             {
                 self.output
                     .schedules_duration
-                    .give(((event.id, ()), ts, -elapsed_ns));
+                    .give(((event.id, ()), ts, Diff::from(-elapsed_ns)));
 
                 let datum = ScheduleHistogramDatum {
                     operator: event.id,
@@ -544,7 +544,7 @@ impl DemuxHandler<'_, '_> {
         }
 
         let datum = (operator.id, operator.addr);
-        self.output.addresses.give((datum, ts, -1));
+        self.output.addresses.give((datum, ts, Diff::MINUS_ONE));
     }
 
     fn handle_dataflow_shutdown(&mut self, dataflow_index: usize) {
@@ -566,10 +566,12 @@ impl DemuxHandler<'_, '_> {
                 source: channel.source,
                 target: channel.target,
             };
-            self.output.channels.give(((datum, ()), ts, -1));
+            self.output
+                .channels
+                .give(((datum, ()), ts, Diff::MINUS_ONE));
 
             let datum = (channel.id, channel.scope_addr);
-            self.output.addresses.give((datum, ts, -1));
+            self.output.addresses.give((datum, ts, Diff::MINUS_ONE));
 
             // Retract messages logged for this channel.
             if let Some(sent) = self.state.messages_sent.remove(&channel.id) {
@@ -580,10 +582,10 @@ impl DemuxHandler<'_, '_> {
                     };
                     self.output
                         .messages_sent
-                        .give(((datum, ()), ts, -count.records));
+                        .give(((datum, ()), ts, Diff::from(-count.records)));
                     self.output
                         .batches_sent
-                        .give(((datum, ()), ts, -count.batches));
+                        .give(((datum, ()), ts, Diff::from(-count.batches)));
                 }
             }
             if let Some(received) = self.state.messages_received.remove(&channel.id) {
@@ -592,12 +594,16 @@ impl DemuxHandler<'_, '_> {
                         channel: channel.id,
                         worker: source_worker,
                     };
-                    self.output
-                        .messages_received
-                        .give(((datum, ()), ts, -count.records));
-                    self.output
-                        .batches_received
-                        .give(((datum, ()), ts, -count.batches));
+                    self.output.messages_received.give((
+                        (datum, ()),
+                        ts,
+                        Diff::from(-count.records),
+                    ));
+                    self.output.batches_received.give((
+                        (datum, ()),
+                        ts,
+                        Diff::from(-count.batches),
+                    ));
                 }
             }
         }
@@ -633,7 +639,7 @@ impl DemuxHandler<'_, '_> {
                     duration_pow,
                     requested_pow,
                 };
-                self.output.parks.give(((datum, ()), ts, 1));
+                self.output.parks.give(((datum, ()), ts, Diff::ONE));
             }
         }
     }
@@ -648,7 +654,7 @@ impl DemuxHandler<'_, '_> {
                 worker: event.target,
             };
             self.output.messages_sent.give(((datum, ()), ts, count));
-            self.output.batches_sent.give(((datum, ()), ts, 1));
+            self.output.batches_sent.give(((datum, ()), ts, Diff::ONE));
 
             let sent_counts = self
                 .state
@@ -663,7 +669,9 @@ impl DemuxHandler<'_, '_> {
                 worker: event.source,
             };
             self.output.messages_received.give(((datum, ()), ts, count));
-            self.output.batches_received.give(((datum, ()), ts, 1));
+            self.output
+                .batches_received
+                .give(((datum, ()), ts, Diff::ONE));
 
             let received_counts = self
                 .state
@@ -690,7 +698,7 @@ impl DemuxHandler<'_, '_> {
                 };
 
                 let elapsed_ns = self.time.saturating_sub(start_time).as_nanos();
-                let elapsed_diff = Diff::try_from(elapsed_ns).expect("must fit");
+                let elapsed_diff = Diff::from(i64::try_from(elapsed_ns).expect("must fit"));
                 let elapsed_pow = u64::try_from(elapsed_ns.next_power_of_two()).expect("must fit");
 
                 let ts = self.ts();
@@ -703,7 +711,9 @@ impl DemuxHandler<'_, '_> {
                     operator: event.id,
                     duration_pow: elapsed_pow,
                 };
-                self.output.schedules_histogram.give(((datum, ()), ts, 1));
+                self.output
+                    .schedules_histogram
+                    .give(((datum, ()), ts, Diff::ONE));
 
                 // Record count and elapsed time for later retraction.
                 let index = usize::cast_from(elapsed_pow.trailing_zeros());

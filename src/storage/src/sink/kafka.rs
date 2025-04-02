@@ -120,6 +120,7 @@ use mz_storage_types::sinks::{
     KafkaSinkConnection, KafkaSinkFormatType, SinkEnvelope, StorageSinkDesc,
 };
 use mz_storage_types::sources::SourceData;
+use mz_storage_types::StorageDiff;
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
@@ -450,7 +451,7 @@ impl TransactionalProducer {
         time: Timestamp,
         diff: Diff,
     ) -> Result<(), KafkaError> {
-        assert_eq!(diff, 1, "invalid sink update");
+        assert_eq!(diff, Diff::ONE, "invalid sink update");
 
         let mut headers = OwnedHeaders::new().insert(Header {
             key: "materialize-timestamp",
@@ -633,7 +634,7 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
     sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
     metrics: KafkaSinkMetrics,
     statistics: SinkStatistics,
-    write_handle: impl Future<Output = anyhow::Result<WriteHandle<SourceData, (), Timestamp, Diff>>>
+    write_handle: impl Future<Output = anyhow::Result<WriteHandle<SourceData, (), Timestamp, StorageDiff>>>
         + 'static,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
 ) -> (Stream<G, HealthStatusMessage>, PressOnDropButton) {
@@ -802,7 +803,7 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                             // the messages we've published, if and when we allow reads to the sink
                             // directly, to allow monitoring the progress of the sink in terms of
                             // the output system.
-                            const EMPTY: &[((SourceData, ()), Timestamp, Diff)] = &[];
+                            const EMPTY: &[((SourceData, ()), Timestamp, StorageDiff)] = &[];
                             match write_handle
                                 .compare_and_append(EMPTY, expect_upper, progress.clone())
                                 .await

@@ -71,6 +71,13 @@ pub const WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL: Config<Duration> = Config::n
     "The interval of time to keep when truncating the wallclock lag history.",
 );
 
+/// The interval of time to keep when truncating the wallclock lag histogram.
+pub const WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL: Config<Duration> = Config::new(
+    "wallclock_global_lag_histogram_retention_interval",
+    Duration::from_secs(60 * 60 * 24 * 30), // 30 days
+    "The interval of time to keep when truncating the wallclock lag histogram.",
+);
+
 // Kafka
 
 /// Rules for enriching the `client.id` property of Kafka clients with
@@ -272,35 +279,44 @@ pub const SINK_ENSURE_TOPIC_CONFIG: Config<&'static str> = Config::new(
     match the expected configs.",
 );
 
+/// Configure mz-ore overflowing type behavior.
+pub const ORE_OVERFLOWING_BEHAVIOR: Config<&'static str> = Config::new(
+    "ore_overflowing_behavior",
+    "ignore",
+    "Overflow behavior for Overflowing types. One of 'ignore', 'panic', 'soft_panic'.",
+);
+
 /// Adds the full set of all storage `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&CLUSTER_SHUTDOWN_GRACE_PERIOD)
         .add(&DELAY_SOURCES_PAST_REHYDRATION)
-        .add(&SUSPENDABLE_SOURCES)
-        .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
-        .add(&REPLICA_METRICS_HISTORY_RETENTION_INTERVAL)
-        .add(&WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL)
-        .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)
-        .add(&KAFKA_POLL_MAX_WAIT)
-        .add(&KAFKA_METADATA_FETCH_INTERVAL)
-        .add(&KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM)
+        .add(&ENFORCE_EXTERNAL_ADDRESSES)
         .add(&KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS)
-        .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
+        .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)
+        .add(&KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM)
+        .add(&KAFKA_METADATA_FETCH_INTERVAL)
+        .add(&KAFKA_POLL_MAX_WAIT)
         .add(&MYSQL_OFFSET_KNOWN_INTERVAL)
+        .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
+        .add(&ORE_OVERFLOWING_BEHAVIOR)
         .add(&PG_FETCH_SLOT_RESUME_LSN_INTERVAL)
         .add(&PG_OFFSET_KNOWN_INTERVAL)
         .add(&PG_SCHEMA_VALIDATION_INTERVAL)
-        .add(&ENFORCE_EXTERNAL_ADDRESSES)
-        .add(&STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING)
-        .add(&STORAGE_ROCKSDB_USE_MERGE_OPERATOR)
-        .add(&STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING)
-        .add(&STORAGE_ROCKSDB_CLEANUP_TRIES)
-        .add(&STORAGE_SUSPEND_AND_RESTART_DELAY)
-        .add(&STORAGE_SINK_SNAPSHOT_FRONTIER)
-        .add(&STORAGE_RECLOCK_TO_LATEST)
-        .add(&STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT)
-        .add(&STORAGE_SERVER_MAINTENANCE_INTERVAL)
-        .add(&SINK_PROGRESS_SEARCH)
+        .add(&REPLICA_METRICS_HISTORY_RETENTION_INTERVAL)
         .add(&SINK_ENSURE_TOPIC_CONFIG)
+        .add(&SINK_PROGRESS_SEARCH)
+        .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
+        .add(&STORAGE_RECLOCK_TO_LATEST)
+        .add(&STORAGE_ROCKSDB_CLEANUP_TRIES)
+        .add(&STORAGE_ROCKSDB_USE_MERGE_OPERATOR)
+        .add(&STORAGE_SERVER_MAINTENANCE_INTERVAL)
+        .add(&STORAGE_SINK_SNAPSHOT_FRONTIER)
+        .add(&STORAGE_SUSPEND_AND_RESTART_DELAY)
+        .add(&STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING)
+        .add(&STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING)
+        .add(&STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT)
+        .add(&SUSPENDABLE_SOURCES)
+        .add(&WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL)
+        .add(&WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL)
 }

@@ -136,7 +136,9 @@ impl FoldConstants {
                     limit.is_none(),
                     limit.as_ref().and_then(|l| l.as_literal_int64()) >= Some(0),
                 ] {
-                    let limit = limit.as_ref().and_then(|l| l.as_literal_int64());
+                    let limit = limit
+                        .as_ref()
+                        .and_then(|l| l.as_literal_int64().map(Into::into));
                     if let Some((rows, ..)) = (**input).as_const_mut() {
                         if let Ok(rows) = rows {
                             Self::fold_topk_constant(group_key, order_key, &limit, offset, rows);
@@ -149,7 +151,7 @@ impl FoldConstants {
                 if let Some((rows, ..)) = (**input).as_const_mut() {
                     if let Ok(rows) = rows {
                         for (_row, diff) in rows {
-                            *diff *= -1;
+                            *diff = -*diff;
                         }
                     }
                     *relation = input.take_dangerous();
@@ -158,7 +160,7 @@ impl FoldConstants {
             MirRelationExpr::Threshold { input } => {
                 if let Some((rows, ..)) = (**input).as_const_mut() {
                     if let Ok(rows) = rows {
-                        rows.retain(|(_, diff)| *diff > 0);
+                        rows.retain(|(_, diff)| diff.is_positive());
                     }
                     *relation = input.take_dangerous();
                 }
@@ -311,7 +313,7 @@ impl FoldConstants {
 
                     // We can fold all constant inputs together, but must apply the constraints to restrict them.
                     // We start with a single 0-ary row.
-                    let mut old_rows = vec![(Row::pack::<_, Datum>(None), 1)];
+                    let mut old_rows = vec![(Row::pack::<_, Datum>(None), Diff::ONE)];
                     let mut row_buf = Row::default();
                     for input in inputs.iter() {
                         if let Some((Ok(rows), ..)) = input.as_const() {
@@ -435,22 +437,23 @@ impl FoldConstants {
         let mut groups = BTreeMap::new();
         let temp_storage2 = RowArena::new();
         let mut row_buf = Row::default();
-        let mut limit_remaining = limit.unwrap_or(usize::MAX);
+        let mut limit_remaining =
+            limit.map_or(Diff::MAX, |limit| Diff::try_from(limit).expect("must fit"));
         for (row, diff) in rows {
             // We currently maintain the invariant that any negative
             // multiplicities will be consolidated away before they
             // arrive at a reduce.
 
-            if *diff <= 0 {
+            if *diff <= Diff::ZERO {
                 return Some(Err(EvalError::InvalidParameterValue(
                     "constant folding encountered reduce on collection with non-positive multiplicities".into()
                 )));
             }
 
-            if limit_remaining < *diff as usize {
+            if limit_remaining < *diff {
                 return None;
             }
-            limit_remaining -= *diff as usize;
+            limit_remaining -= diff;
 
             let datums = row.unpack();
             let temp_storage = RowArena::new();
@@ -476,7 +479,7 @@ impl FoldConstants {
                 Err(e) => return Some(Err(e)),
             };
             let entry = groups.entry(key).or_insert_with(Vec::new);
-            for _ in 0..*diff {
+            for _ in 0..diff.into_inner() {
                 entry.push(val.clone());
             }
         }
@@ -509,7 +512,7 @@ impl FoldConstants {
                             }
                         }),
                     ));
-                    (row_buf.clone(), 1)
+                    (row_buf.clone(), Diff::ONE)
                 }
             })
             .collect();
@@ -519,7 +522,7 @@ impl FoldConstants {
     fn fold_topk_constant<'a>(
         group_key: &[usize],
         order_key: &[ColumnOrder],
-        limit: &Option<i64>,
+        limit: &Option<Diff>,
         offset: &usize,
         rows: &'a mut [(Row, Diff)],
     ) {
@@ -571,9 +574,9 @@ impl FoldConstants {
 
             let mut finger = cursor;
             while finger < rows.len() && same_group_key(&rows[cursor], &rows[finger]) {
-                if rows[finger].1 < 0 {
+                if rows[finger].1.is_negative() {
                     // ignore elements with negative diff
-                    rows[finger].1 = 0;
+                    rows[finger].1 = Diff::ZERO;
                 } else {
                     // determine how many of the leading rows to ignore,
                     // then decrement the diff and remaining offset by that number

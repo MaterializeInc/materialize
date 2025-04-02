@@ -75,13 +75,14 @@ use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
+use mz_repr::{DatumVec, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::oneshot_sources::{
     ContentFilter, ContentFormat, ContentSource, OneshotIngestionRequest,
 };
 use mz_storage_types::sources::SourceData;
+use mz_storage_types::StorageDiff;
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
@@ -543,7 +544,7 @@ where
             handle_purpose: "CopyFrom::stage_batches".to_string(),
         };
         let write_handle = persist_client
-            .open_writer::<SourceData, (), mz_repr::Timestamp, Diff>(
+            .open_writer::<SourceData, (), mz_repr::Timestamp, StorageDiff>(
                 shard_id,
                 Arc::new(collection_desc),
                 Arc::new(UnitSchema),

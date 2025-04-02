@@ -1,0 +1,146 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License in the LICENSE file at the
+// root of this repository, or online at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Dumps Docker resources to files.
+
+use std::fs::{create_dir_all, File};
+use std::io::Write;
+use std::path::PathBuf;
+use std::time::Duration;
+
+use mz_ore::retry::{self, RetryResult};
+use tracing::{error, info};
+
+use crate::utils::format_base_path;
+use crate::Context;
+
+static DOCKER_RESOURCE_DUMP_TIMEOUT: Duration = Duration::from_secs(30);
+
+pub struct DockerResourceDumper {
+    container_id: String,
+    directory_path: PathBuf,
+}
+
+impl DockerResourceDumper {
+    pub fn new(context: &Context, container_id: String) -> Self {
+        Self {
+            directory_path: format_base_path(context.start_time)
+                .join("docker")
+                .join(&container_id),
+            container_id,
+        }
+    }
+
+    /// Execute a Docker command and return (stdout, stderr).
+    async fn execute_docker_command(
+        &self,
+        args: &[String],
+    ) -> Result<(Vec<u8>, Vec<u8>), anyhow::Error> {
+        retry::Retry::default()
+            .max_duration(DOCKER_RESOURCE_DUMP_TIMEOUT)
+            .retry_async(|_| {
+                let args = args.to_vec();
+                async move {
+                    let output = tokio::process::Command::new("docker")
+                        .args(&args)
+                        .output()
+                        .await;
+
+                    match output {
+                        Ok(output) if output.status.success() => {
+                            RetryResult::Ok((output.stdout, output.stderr))
+                        }
+                        Ok(output) => {
+                            let err_msg = format!(
+                                "Docker command failed: {:#}. Retrying...",
+                                String::from_utf8_lossy(&output.stderr)
+                            );
+                            error!("{}", err_msg);
+                            RetryResult::RetryableErr(anyhow::anyhow!(err_msg))
+                        }
+                        Err(err) => {
+                            let err_msg = format!("Failed to execute Docker command: {:#}", err);
+                            error!("{}", err_msg);
+                            RetryResult::RetryableErr(anyhow::anyhow!(err_msg))
+                        }
+                    }
+                }
+            })
+            .await
+    }
+
+    async fn dump_logs(&self) -> Result<(), anyhow::Error> {
+        let (stdout, stderr) = self
+            .execute_docker_command(&["logs".to_string(), self.container_id.to_string()])
+            .await?;
+
+        write_output(stdout, &self.directory_path, "logs-stdout.txt")?;
+        write_output(stderr, &self.directory_path, "logs-stderr.txt")?;
+
+        Ok(())
+    }
+
+    async fn dump_inspect(&self) -> Result<(), anyhow::Error> {
+        let (stdout, _) = self
+            .execute_docker_command(&["inspect".to_string(), self.container_id.to_string()])
+            .await?;
+
+        write_output(stdout, &self.directory_path, "inspect.txt")?;
+
+        Ok(())
+    }
+
+    async fn dump_stats(&self) -> Result<(), anyhow::Error> {
+        let (stdout, _) = self
+            .execute_docker_command(&[
+                "stats".to_string(),
+                "--no-stream".to_string(),
+                self.container_id.to_string(),
+            ])
+            .await?;
+
+        write_output(stdout, &self.directory_path, "stats.txt")?;
+
+        Ok(())
+    }
+}
+
+/// Dump all Docker resources.
+pub async fn dump_all_docker_resources(context: &Context) -> () {
+    let container_id = context
+        .args
+        .docker_container_id
+        .clone()
+        .expect("No container ID provided");
+    let dumper = DockerResourceDumper::new(context, container_id);
+
+    let _ = dumper.dump_logs().await;
+    let _ = dumper.dump_inspect().await;
+    let _ = dumper.dump_stats().await;
+}
+
+/// Helper closure to write output to file
+fn write_output(
+    output: Vec<u8>,
+    directory_path: &PathBuf,
+    file_name: &str,
+) -> Result<(), anyhow::Error> {
+    create_dir_all(&directory_path)?;
+    let file_path = directory_path.join(file_name);
+    let mut file = File::create(&file_path)?;
+    file.write_all(&output)?;
+    info!("Exported {}", file_path.display());
+    Ok(())
+}

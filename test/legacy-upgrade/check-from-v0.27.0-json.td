@@ -8,4 +8,4 @@
 # by the Apache License, Version 2.0.
 
 > SHOW CREATE MATERIALIZED VIEW json_view;
-"materialize.public.json_view" "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"json_view\" IN CLUSTER \"json_compute_cluster\" WITH (REFRESH = ON COMMIT) AS SELECT \"a\" -> 1 AS \"c1\", \"a\" ->> 'b' AS \"c2\", \"a\" #> '{b,1}' AS \"c3\", \"a\" #>> '{b, 1}' AS \"c4\", \"a\" - 'b' AS \"c5\", \"a\" @> '{b, 1}' AS \"c6\", \"a\" <@ '{b, 1}'::\"pg_catalog\".\"jsonb\" AS \"c7\", \"a\" ? 'b' AS \"c8\" FROM \"materialize\".\"public\".\"json_table\""
+materialize.public.json_view "CREATE MATERIALIZED VIEW materialize.public.json_view\n    IN CLUSTER json_compute_cluster\n    WITH (REFRESH = ON COMMIT)\n    AS\n        SELECT\n            a -> 1 AS c1,\n            a ->> 'b' AS c2,\n            a #> '{b,1}' AS c3,\n            a #>> '{b, 1}' AS c4,\n            a - 'b' AS c5,\n            a @> '{b, 1}' AS c6,\n            a <@ '{b, 1}'::pg_catalog.jsonb AS c7,\n            a ? 'b' AS c8\n        FROM materialize.public.json_table;"

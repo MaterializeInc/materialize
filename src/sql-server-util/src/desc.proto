@@ -1,0 +1,45 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+package mz_sql_server_util;
+
+import "google/protobuf/empty.proto";
+import "repr/src/relation_and_scalar.proto";
+
+message ProtoSqlServerTableDesc {
+  string name = 1;
+  string schema_name = 2;
+  repeated ProtoSqlServerColumnDesc columns = 3;
+  bool is_cdc_enabled = 4;
+}
+
+message ProtoSqlServerColumnDesc {
+  string name = 1;
+  mz_repr.relation_and_scalar.ProtoColumnType column_type = 2;
+  oneof decode_type {
+    google.protobuf.Empty bool = 4;
+    google.protobuf.Empty u8 = 5;
+    google.protobuf.Empty i16 = 6;
+    google.protobuf.Empty i32 = 7;
+    google.protobuf.Empty i64 = 8;
+    google.protobuf.Empty f32 = 9;
+    google.protobuf.Empty f64 = 10;
+    google.protobuf.Empty string = 11;
+    google.protobuf.Empty bytes = 12;
+    google.protobuf.Empty uuid = 13;
+    google.protobuf.Empty numeric = 14;
+    google.protobuf.Empty xml = 15;
+    google.protobuf.Empty naive_date = 16;
+    google.protobuf.Empty naive_time = 17;
+    google.protobuf.Empty date_time = 18;
+    google.protobuf.Empty naive_date_time = 19;
+  }
+}

@@ -15,7 +15,7 @@ use std::time::Duration;
 use mz_ore::now::NowFn;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
-use mz_repr::{CatalogItemId, GlobalId, RelationDesc, Row, ScalarType};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, Row, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -766,7 +766,7 @@ pub trait Generator {
         now: NowFn,
         seed: Option<u64>,
         resume_offset: MzOffset,
-    ) -> Box<dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, i64)>)>>;
+    ) -> Box<dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>)>>;
 }
 
 impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnection {

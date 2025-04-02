@@ -1385,7 +1385,7 @@ pub fn fmt_text_constant_rows<'a, I>(
 where
     I: Iterator<Item = (&'a Row, &'a Diff)>,
 {
-    let mut row_count = 0;
+    let mut row_count = Diff::ZERO;
     let mut first_rows = Vec::with_capacity(20);
     for _ in 0..20 {
         if let Some((row, diff)) = rows.next() {
@@ -1394,7 +1394,7 @@ where
         }
     }
     let rest_of_row_count = rows.map(|(_, diff)| diff.abs()).sum::<Diff>();
-    if rest_of_row_count != 0 {
+    if !rest_of_row_count.is_zero() {
         writeln!(
             f,
             "{}total_rows (diffs absed): {}",
@@ -1418,7 +1418,7 @@ fn write_first_rows(
     let mode = HumanizedExplain::new(redacted);
     for (row, diff) in first_rows {
         let row = mode.expr(*row, None);
-        if **diff == 1 {
+        if **diff == Diff::ONE {
             writeln!(f, "{}- {}", ctx, row)?;
         } else {
             writeln!(f, "{}- ({} x {})", ctx, row, diff)?;

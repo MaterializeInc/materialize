@@ -27,7 +27,7 @@ EOF
 query T multiline
 SELECT create_sql FROM (SHOW REDACTED CREATE TABLE t);
 ----
-CREATE TABLE materialize.public.t (i pg_catalog.int4)
+CREATE TABLE materialize.public.t (i pg_catalog.int4);
 EOF
 
 statement ok
@@ -42,7 +42,7 @@ EOF
 query T multiline
 SELECT create_sql FROM (SHOW REDACTED CREATE CONNECTION kafka_conn);
 ----
-CREATE CONNECTION materialize.public.kafka_conn TO KAFKA (BROKER = 'localhost:9092', SECURITY PROTOCOL = plaintext)
+CREATE CONNECTION materialize.public.kafka_conn TO KAFKA (BROKER = 'localhost:9092', SECURITY PROTOCOL = plaintext);
 EOF
 
 query T multiline
@@ -74,7 +74,7 @@ EOF
 query T multiline
 SELECT create_sql FROM (SHOW REDACTED CREATE TABLE redactable_t);
 ----
-CREATE TABLE materialize.public.redactable_t (a pg_catalog.int4) WITH (RETAIN HISTORY = FOR '2s', REDACTED = '<REDACTED>')
+CREATE TABLE materialize.public.redactable_t (a pg_catalog.int4) WITH (RETAIN HISTORY = FOR '2s', REDACTED = '<REDACTED>');
 EOF
 
 query T multiline
@@ -101,7 +101,7 @@ EOF
 query T multiline
 SELECT create_sql FROM (SHOW REDACTED CREATE INDEX t_idx_i);
 ----
-CREATE INDEX t_idx_i IN CLUSTER quickstart ON materialize.public.t (i)
+CREATE INDEX t_idx_i IN CLUSTER quickstart ON materialize.public.t (i);
 EOF
 
 statement ok
@@ -116,7 +116,7 @@ EOF
 query T multiline
 SELECT create_sql FROM (SHOW REDACTED CREATE VIEW v);
 ----
-CREATE VIEW materialize.public.v AS SELECT '<REDACTED>'
+CREATE VIEW materialize.public.v AS SELECT '<REDACTED>';
 EOF
 
 query T multiline
@@ -144,7 +144,10 @@ EOF
 query T multiline
 SELECT regexp_replace(create_sql, 'u[0-9]+', 'uX', 'g') FROM (SHOW REDACTED CREATE SOURCE s);
 ----
-CREATE SOURCE materialize.public.s IN CLUSTER quickstart FROM LOAD GENERATOR COUNTER EXPOSE PROGRESS AS materialize.public.s_progress
+CREATE SOURCE materialize.public.s
+IN CLUSTER quickstart
+FROM LOAD GENERATOR COUNTER
+EXPOSE PROGRESS AS materialize.public.s_progress;
 EOF
 
 query T multiline
@@ -187,7 +190,10 @@ EOF
 query T multiline
 SELECT create_sql FROM (SHOW REDACTED CREATE MATERIALIZED VIEW mv1);
 ----
-CREATE MATERIALIZED VIEW materialize.public.mv1 IN CLUSTER quickstart WITH (REFRESH = ON COMMIT) AS SELECT i + i + '<REDACTED>' FROM materialize.public.t
+CREATE MATERIALIZED VIEW materialize.public.mv1
+    IN CLUSTER quickstart
+    WITH (REFRESH = ON COMMIT)
+    AS SELECT i + i + '<REDACTED>' FROM materialize.public.t;
 EOF
 
 query T multiline

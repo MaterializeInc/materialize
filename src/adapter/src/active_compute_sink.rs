@@ -22,7 +22,7 @@ use mz_expr::compare_columns;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
 use mz_repr::adt::numeric;
-use mz_repr::{CatalogItemId, Datum, GlobalId, IntoRowIterator, Row, Timestamp};
+use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, Row, Timestamp};
 use mz_sql::plan::SubscribeOutput;
 use mz_storage_types::instances::StorageInstanceId;
 use timely::progress::Antichain;
@@ -182,10 +182,10 @@ impl ActiveSubscribe {
                     |(left_time, left_row, left_diff), (right_time, right_row, right_diff)| {
                         left_time.cmp(right_time).then_with(|| {
                             let mut left_datums = left_datum_vec.borrow();
-                            left_datums.extend(&[Datum::Int64(*left_diff)]);
+                            left_datums.extend(&[Datum::Int64(left_diff.into_inner())]);
                             left_datums.extend(left_row.iter());
                             let mut right_datums = right_datum_vec.borrow();
-                            right_datums.extend(&[Datum::Int64(*right_diff)]);
+                            right_datums.extend(&[Datum::Int64(right_diff.into_inner())]);
                             right_datums.extend(right_row.iter());
                             compare_columns(order_by, &left_datums, &right_datums, || {
                                 left_row.cmp(right_row).then(left_diff.cmp(right_diff))
@@ -238,7 +238,7 @@ impl ActiveSubscribe {
                     let value_columns = self.arity - order_by_keys.len();
                     let mut packer = row_buf.packer();
                     new_rows.push(match &group[..] {
-                        [(_, row, 1)] => {
+                        [(_, row, Diff::ONE)] => {
                             packer.push(if debezium {
                                 Datum::String("insert")
                             } else {
@@ -258,9 +258,9 @@ impl ActiveSubscribe {
                                     packer.push(datums[idx]);
                                 }
                             }
-                            (start.0, row_buf.clone(), 0)
+                            (start.0, row_buf.clone(), Diff::ZERO)
                         }
-                        [(_, _, -1)] => {
+                        [(_, _, Diff::MINUS_ONE)] => {
                             packer.push(Datum::String("delete"));
                             let datums = datum_vec.borrow_with(&start.1);
                             for column_order in order_by_keys {
@@ -276,9 +276,9 @@ impl ActiveSubscribe {
                             for _ in 0..self.arity - order_by_keys.len() {
                                 packer.push(Datum::Null);
                             }
-                            (start.0, row_buf.clone(), 0)
+                            (start.0, row_buf.clone(), Diff::ZERO)
                         }
-                        [(_, old_row, -1), (_, row, 1)] => {
+                        [(_, old_row, Diff::MINUS_ONE), (_, row, Diff::ONE)] => {
                             packer.push(Datum::String("upsert"));
                             let datums = datum_vec.borrow_with(row);
                             let old_datums = old_datum_vec.borrow_with(old_row);
@@ -298,7 +298,7 @@ impl ActiveSubscribe {
                                     packer.push(datums[idx]);
                                 }
                             }
-                            (start.0, row_buf.clone(), 0)
+                            (start.0, row_buf.clone(), Diff::ZERO)
                         }
                         _ => {
                             packer.push(Datum::String("key_violation"));
@@ -314,7 +314,7 @@ impl ActiveSubscribe {
                             for _ in 0..(self.arity - order_by_keys.len()) {
                                 packer.push(Datum::Null);
                             }
-                            (start.0, row_buf.clone(), 0)
+                            (start.0, row_buf.clone(), Diff::ZERO)
                         }
                     });
                 }
@@ -342,7 +342,7 @@ impl ActiveSubscribe {
                     SubscribeOutput::EnvelopeUpsert { .. }
                     | SubscribeOutput::EnvelopeDebezium { .. } => {}
                     SubscribeOutput::Diffs | SubscribeOutput::WithinTimestampOrderBy { .. } => {
-                        packer.push(Datum::Int64(diff));
+                        packer.push(Datum::Int64(diff.into_inner()));
                     }
                 }
 

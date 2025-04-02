@@ -777,6 +777,8 @@ mz_storage_usage_by_shard
 mz_subscriptions
 mz_type_pg_metadata
 mz_wallclock_global_lag
+mz_wallclock_global_lag_histogram
+mz_wallclock_global_lag_histogram_raw
 mz_wallclock_global_lag_history
 mz_wallclock_global_lag_recent_history
 mz_wallclock_lag_history

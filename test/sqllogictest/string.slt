@@ -1757,3 +1757,80 @@ select reverse(word) from words;
 !
 dlrow
 olleh
+
+# string_to_array - begin.
+
+statement ok
+create table string_to_array_words (word text);
+
+statement ok
+insert into string_to_array_words values ('hello world');
+
+# string_to_array - NULL delimiter and null_string not set.
+query T
+select string_to_array(word, NULL) from string_to_array_words;
+----
+{h,e,l,l,o," ",w,o,r,l,d}
+
+# string_to_array - empty string delimiter and null_string not set.
+query T
+select string_to_array(word, '') from string_to_array_words;
+----
+{"hello world"}
+
+# string_to_array - white space delimiter and null_string not set.
+query T
+select string_to_array(word, ' ') from string_to_array_words;
+----
+{hello,world}
+
+# string_to_array - white space delimiter and null_string set to first word in results.
+query T
+select string_to_array(word, ' ', 'hello') from string_to_array_words;
+----
+{NULL,world}
+
+# string_to_array - empty string delimiter and null_string set to whole word.
+# expectation: null_string is ignored if no delimiter is passed.
+query T
+select string_to_array(word, '', 'hello world') from string_to_array_words;
+----
+{"hello world"}
+
+# string_to_array - white space delimiter and null_string set to NULL.
+query T
+select string_to_array(word, ' ', NULL) from string_to_array_words;
+----
+{hello,world}
+
+# string_to_array - first word delimiter and null_string not set.
+# expectation: delimiter should convert a full match to empty string.
+query T
+select string_to_array(word, 'hello') from string_to_array_words;
+----
+{""," world"}
+
+# string_to_array - empty string must return an empty array.
+query T
+select string_to_array('', 'hello') from string_to_array_words;
+----
+{}
+
+query T
+select string_to_array('', '') from string_to_array_words;
+----
+{}
+
+# string_to_array - whitespace.
+query T
+select string_to_array(' ', '') from string_to_array_words;
+----
+{" "}
+
+# string_to_array - null input results in null.
+query T
+select string_to_array(null, '') from string_to_array_words;
+----
+NULL
+
+# string_to_array - end.

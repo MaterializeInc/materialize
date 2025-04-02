@@ -834,7 +834,7 @@ impl Coordinator {
             // If all diffs are positive, the number of affected rows is just the
             // sum of all unconsolidated diffs.
             for (_, diff) in plan.updates.iter() {
-                if *diff < 0 {
+                if diff.is_negative() {
                     all_positive_diffs = false;
                     break;
                 }
@@ -848,7 +848,7 @@ impl Coordinator {
                 // affected rows.
                 differential_dataflow::consolidation::consolidate(&mut plan.updates);
 
-                affected_rows = 0;
+                affected_rows = Diff::ZERO;
                 // With retractions, the number of affected rows is not the number
                 // of rows we see, but the sum of the absolute value of their diffs,
                 // e.g. if one row is retracted and another is added, the total
@@ -858,7 +858,7 @@ impl Coordinator {
                 }
             }
 
-            usize::try_from(affected_rows).expect("positive isize must fit")
+            usize::try_from(affected_rows.into_inner()).expect("positive Diff must fit")
         };
         event!(
             Level::TRACE,

@@ -14,7 +14,6 @@ use std::convert::TryInto;
 use std::rc::Rc;
 use std::time::Duration;
 
-use columnar::Index;
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Row, Timestamp};

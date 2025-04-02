@@ -28,13 +28,13 @@ CREATE VIEW v2 AS SELECT * FROM t2;
 query TT
 SHOW CREATE VIEW v1
 ----
-materialize.public.v1  CREATE␠VIEW␠"materialize"."public"."v1"␠AS␠SELECT␠*␠FROM␠"materialize"."public"."t2"
+materialize.public.v1  CREATE␠VIEW␠materialize.public.v1␠AS␠SELECT␠*␠FROM␠materialize.public.t2;
 
 # Note: When the feature is off we should not record versions.
 query TT
 SHOW CREATE VIEW v2
 ----
-materialize.public.v2  CREATE␠VIEW␠"materialize"."public"."v2"␠AS␠SELECT␠*␠FROM␠"materialize"."public"."t2"
+materialize.public.v2  CREATE␠VIEW␠materialize.public.v2␠AS␠SELECT␠*␠FROM␠materialize.public.t2;
 
 statement ok
 DROP VIEW v1 CASCADE;
@@ -82,12 +82,12 @@ b  true  text  (empty)
 query TT
 SHOW CREATE TABLE t1;
 ----
-materialize.public.t1  CREATE␠TABLE␠"materialize"."public"."t1"␠("a"␠"pg_catalog"."int4"␠NOT␠NULL,␠"b"␠"pg_catalog"."text"␠VERSION␠ADDED␠1)
+materialize.public.t1  CREATE␠TABLE␠materialize.public.t1␠(a␠pg_catalog.int4␠NOT␠NULL,␠b␠pg_catalog.text␠VERSION␠ADDED␠1);
 
 query TT
 SHOW CREATE VIEW v1;
 ----
-materialize.public.v1  CREATE␠VIEW␠"materialize"."public"."v1"␠AS␠SELECT␠*␠FROM␠"materialize"."public"."t1"
+materialize.public.v1  CREATE␠VIEW␠materialize.public.v1␠AS␠SELECT␠*␠FROM␠materialize.public.t1;
 
 statement ok
 CREATE VIEW v2 AS SELECT * FROM t1;
@@ -145,7 +145,7 @@ ALTER TABLE t1 ADD COLUMN c timestamp;
 query TT
 SHOW CREATE TABLE t1;
 ----
-materialize.public.t1  CREATE␠TABLE␠"materialize"."public"."t1"␠("a"␠"pg_catalog"."int4"␠NOT␠NULL,␠"b"␠"pg_catalog"."text"␠VERSION␠ADDED␠1,␠"c"␠"pg_catalog"."timestamp"␠VERSION␠ADDED␠2)
+materialize.public.t1  CREATE␠TABLE␠materialize.public.t1␠(a␠pg_catalog.int4␠NOT␠NULL,␠b␠pg_catalog.text␠VERSION␠ADDED␠1,␠c␠pg_catalog.timestamp␠VERSION␠ADDED␠2);
 
 query TTTT
 SHOW COLUMNS FROM t1;
@@ -439,5 +439,5 @@ statement ok
 DROP TABLE t2 CASCADE;
 
 query TTIT
-SELECT * FROM mz_internal.mz_comments;
+SELECT * FROM mz_internal.mz_comments WHERE id = 'u1';
 ----

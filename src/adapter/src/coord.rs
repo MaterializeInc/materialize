@@ -131,7 +131,7 @@ use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId, RelationDesc, Timestamp};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
@@ -1843,10 +1843,13 @@ impl Coordinator {
         for replica_statuses in self.cluster_replica_statuses.0.values() {
             for (replica_id, processes_statuses) in replica_statuses {
                 for (process_id, status) in processes_statuses {
-                    let builtin_table_update = self
-                        .catalog()
-                        .state()
-                        .pack_cluster_replica_status_update(*replica_id, *process_id, status, 1);
+                    let builtin_table_update =
+                        self.catalog().state().pack_cluster_replica_status_update(
+                            *replica_id,
+                            *process_id,
+                            status,
+                            Diff::ONE,
+                        );
                     let builtin_table_update = self
                         .catalog()
                         .state()
@@ -2018,7 +2021,7 @@ impl Coordinator {
                             self.catalog().state().pack_optimizer_notices(
                                 &mut builtin_table_updates,
                                 df_meta.optimizer_notices.iter(),
-                                1,
+                                Diff::ONE,
                             );
                         }
 
@@ -2074,7 +2077,7 @@ impl Coordinator {
                         self.catalog().state().pack_optimizer_notices(
                             &mut builtin_table_updates,
                             df_meta.optimizer_notices.iter(),
-                            1,
+                            Diff::ONE,
                         );
                     }
 
@@ -2125,7 +2128,7 @@ impl Coordinator {
                         self.catalog().state().pack_optimizer_notices(
                             &mut builtin_table_updates,
                             df_meta.optimizer_notices.iter(),
-                            1,
+                            Diff::ONE,
                         );
                     }
 
@@ -3807,7 +3810,7 @@ impl Coordinator {
                     .expect("all collections happen after Jan 1 1970");
                 if collection_timestamp < cutoff_ts {
                     debug!("pruning storage event {row:?}");
-                    let builtin_update = BuiltinTableUpdate::row(item_id, row, -1);
+                    let builtin_update = BuiltinTableUpdate::row(item_id, row, Diff::MINUS_ONE);
                     expired.push(builtin_update);
                 }
             }

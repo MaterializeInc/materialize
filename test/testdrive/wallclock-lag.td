@@ -15,7 +15,8 @@
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
 $ postgres-execute connection=mz_system
-ALTER SYSTEM SET wallclock_lag_refresh_interval = '1s'
+ALTER SYSTEM SET wallclock_lag_history_refresh_interval = '1s'
+ALTER SYSTEM SET wallclock_lag_histogram_refresh_interval = '1s'
 
 > CREATE CLUSTER storage SIZE '1'
 > CREATE CLUSTER compute SIZE '1', REPLICATION FACTOR 2
@@ -109,3 +110,75 @@ snk          true  true
 src          true  true
 src_progress true  true
 tbl          true  true
+
+> SELECT DISTINCT o.name, l.count > 0, l.labels
+  FROM mz_internal.mz_wallclock_global_lag_histogram l
+  JOIN mz_objects o ON o.id = l.object_id
+  WHERE l.object_id LIKE 'u%' AND l.lag_seconds < 10
+idx          true  {}
+idx_const    true  {}
+mv           true  {}
+mv_const     true  {}
+snk          true  {}
+src          true  {}
+src_progress true  {}
+tbl          true  {}
+
+# Test annotation of histogram measurements with labels.
+
+$ postgres-execute connection=mz_system
+ALTER CLUSTER compute SET (WORKLOAD CLASS 'compute')
+ALTER CLUSTER storage SET (WORKLOAD CLASS 'storage')
+
+> SELECT DISTINCT o.name, l.count > 0, l.labels
+  FROM mz_internal.mz_wallclock_global_lag_histogram l
+  JOIN mz_objects o ON o.id = l.object_id
+  WHERE l.object_id LIKE 'u%' AND l.lag_seconds < 10
+idx          true  "{}"
+idx          true  "{\"workload_class\":\"compute\"}"
+idx_const    true  "{}"
+idx_const    true  "{\"workload_class\":\"compute\"}"
+mv           true  "{}"
+mv           true  "{\"workload_class\":\"compute\"}"
+mv_const     true  "{}"
+mv_const     true  "{\"workload_class\":\"compute\"}"
+snk          true  "{}"
+snk          true  "{\"workload_class\":\"storage\"}"
+src          true  "{}"
+src          true  "{\"workload_class\":\"storage\"}"
+src_progress true  "{}"
+tbl          true  "{}"
+
+# Test changing the histogram period interval.
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET wallclock_lag_histogram_period_interval = '1d'
+
+> CREATE TABLE tbl_1day (x int)
+> CREATE INDEX idx_1day ON tbl_1day (x)
+> SELECT DISTINCT
+    o.name,
+    l.period_end - l.period_start,
+    date_trunc('day', l.period_start) = l.period_start,
+    date_trunc('day', l.period_end) = l.period_end
+  FROM mz_internal.mz_wallclock_global_lag_histogram l
+  JOIN mz_objects o ON o.id = l.object_id
+  WHERE o.name LIKE '%_1day'
+idx_1day 24:00:00 true true
+tbl_1day 24:00:00 true true
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET wallclock_lag_histogram_period_interval = '1h'
+
+> CREATE TABLE tbl_1hour (x int)
+> CREATE INDEX idx_1hour ON tbl_1day (x)
+> SELECT DISTINCT
+    o.name,
+    l.period_end - l.period_start,
+    date_trunc('hour', l.period_start) = l.period_start,
+    date_trunc('hour', l.period_end) = l.period_end
+  FROM mz_internal.mz_wallclock_global_lag_histogram l
+  JOIN mz_objects o ON o.id = l.object_id
+  WHERE o.name LIKE '%_1hour'
+idx_1hour 01:00:00 true true
+tbl_1hour 01:00:00 true true

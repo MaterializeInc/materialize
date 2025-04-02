@@ -24,10 +24,11 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::ShardId;
 use mz_persist_types::Codec64;
-use mz_repr::{Diff, GlobalId, TimestampManipulation};
+use mz_repr::{GlobalId, TimestampManipulation};
 use mz_storage_client::client::{TableData, Update};
 use mz_storage_types::controller::{InvalidUpper, TxnsCodecRow};
 use mz_storage_types::sources::SourceData;
+use mz_storage_types::StorageDiff;
 use mz_txn_wal::txns::{Tidy, TxnsHandle};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
@@ -49,7 +50,7 @@ pub struct PersistTableWriteWorker<T: Timestamp + Lattice + Codec64 + TimestampM
 enum PersistTableWriteCmd<T: Timestamp + Lattice + Codec64> {
     Register(
         T,
-        Vec<(GlobalId, WriteHandle<SourceData, (), T, Diff>)>,
+        Vec<(GlobalId, WriteHandle<SourceData, (), T, StorageDiff>)>,
         tokio::sync::oneshot::Sender<()>,
     ),
     Update {
@@ -62,7 +63,7 @@ enum PersistTableWriteCmd<T: Timestamp + Lattice + Codec64> {
         /// Timestamp to register the new handle at.
         register_ts: T,
         /// New write handle to register.
-        handle: WriteHandle<SourceData, (), T, Diff>,
+        handle: WriteHandle<SourceData, (), T, StorageDiff>,
         /// Notifies us when the handle has been updated.
         tx: oneshot::Sender<()>,
     },
@@ -95,7 +96,7 @@ impl<T: Timestamp + Lattice + Codec64> PersistTableWriteCmd<T> {
 }
 
 async fn append_work<T2: Timestamp + Lattice + Codec64 + Sync>(
-    write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), T2, Diff>>,
+    write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), T2, StorageDiff>>,
     mut commands: BTreeMap<
         GlobalId,
         (tracing::Span, Vec<Update<T2>>, Antichain<T2>, Antichain<T2>),
@@ -112,9 +113,13 @@ async fn append_work<T2: Timestamp + Lattice + Codec64 + Sync>(
     // for it. If yes, we send them all in one go.
     for (id, write) in write_handles.iter_mut() {
         if let Some((span, updates, expected_upper, new_upper)) = commands.remove(id) {
-            let updates = updates
-                .into_iter()
-                .map(|u| ((SourceData(Ok(u.row)), ()), u.timestamp, u.diff));
+            let updates = updates.into_iter().map(|u| {
+                (
+                    (SourceData(Ok(u.row)), ()),
+                    u.timestamp,
+                    u.diff.into_inner(),
+                )
+            });
 
             futs.push(async move {
                 write
@@ -152,7 +157,9 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
     /// This takes a [WriteHandle] for the txns shard so that it can follow the
     /// upper and continually bump the upper of registered tables to follow the
     /// upper of the txns shard.
-    pub(crate) fn new_read_only_mode(txns_handle: WriteHandle<SourceData, (), T, Diff>) -> Self {
+    pub(crate) fn new_read_only_mode(
+        txns_handle: WriteHandle<SourceData, (), T, StorageDiff>,
+    ) -> Self {
         let (tx, rx) =
             tokio::sync::mpsc::unbounded_channel::<(tracing::Span, PersistTableWriteCmd<T>)>();
         mz_ore::task::spawn(
@@ -165,7 +172,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
     }
 
     pub(crate) fn new_txns(
-        txns: TxnsHandle<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>,
+        txns: TxnsHandle<SourceData, (), T, StorageDiff, PersistEpoch, TxnsCodecRow>,
     ) -> Self {
         let (tx, rx) =
             tokio::sync::mpsc::unbounded_channel::<(tracing::Span, PersistTableWriteCmd<T>)>();
@@ -185,7 +192,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
     pub(crate) fn register(
         &self,
         register_ts: T,
-        ids_handles: Vec<(GlobalId, WriteHandle<SourceData, (), T, Diff>)>,
+        ids_handles: Vec<(GlobalId, WriteHandle<SourceData, (), T, StorageDiff>)>,
     ) -> tokio::sync::oneshot::Receiver<()> {
         // We expect this to be awaited, so keep the span connected.
         let span = info_span!("PersistTableWriteCmd::Register");
@@ -209,7 +216,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
         new_collection: GlobalId,
         forget_ts: T,
         register_ts: T,
-        handle: WriteHandle<SourceData, (), T, Diff>,
+        handle: WriteHandle<SourceData, (), T, StorageDiff>,
     ) -> oneshot::Receiver<()> {
         let (tx, rx) = oneshot::channel();
         self.send(PersistTableWriteCmd::Update {
@@ -261,7 +268,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
 }
 
 struct TxnsTableWorker<T: Timestamp + Lattice + TotalOrder + Codec64> {
-    txns: TxnsHandle<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>,
+    txns: TxnsHandle<SourceData, (), T, StorageDiff, PersistEpoch, TxnsCodecRow>,
     write_handles: BTreeMap<GlobalId, ShardId>,
     tidy: Tidy,
 }
@@ -327,7 +334,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
     async fn register(
         &mut self,
         register_ts: T,
-        mut ids_handles: Vec<(GlobalId, WriteHandle<SourceData, (), T, i64>)>,
+        mut ids_handles: Vec<(GlobalId, WriteHandle<SourceData, (), T, StorageDiff>)>,
     ) {
         // As tables evolve (e.g. columns are added) we treat the older versions as
         // "views" on the later versions. While it's not required, it's easier to reason
@@ -440,7 +447,9 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                 match update {
                     TableData::Rows(updates) => {
                         for (row, diff) in updates {
-                            let () = txn.write(data_id, SourceData(Ok(row)), (), diff).await;
+                            let () = txn
+                                .write(data_id, SourceData(Ok(row)), (), diff.into_inner())
+                                .await;
                         }
                     }
                     TableData::Batches(batches) => {
