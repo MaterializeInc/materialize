@@ -176,13 +176,13 @@ If you want to use `jq` and do not have `jq` installed, install.
    cd terraform-google-materialize/examples/simple
    ```
 
-1. Optional. You may need to update your fork of the Terraform modules to
+1. Optional. You may need to update your fork of the Terraform module to
    upgrade.
 
    {{< tip >}}
    {{% self-managed/gcp-terraform-upgrade-notes %}}
 
-   See [Materialize on GCP releases](/installation/appendix-terraforms/#materialize-on-gcp-terraform-modules) for notable changes.
+   See [Materialize on GCP releases](/installation/appendix-terraforms/#materialize-on-gcp-terraform-module) for notable changes.
 
    {{</ tip >}}
 
