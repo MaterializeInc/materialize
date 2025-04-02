@@ -32,9 +32,7 @@ count
 1
 
 ? EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS VERBOSE TEXT FOR SELECT * FROM delta_join;
-Optimized Plan
-----
-"Explained Query:
+Explained Query:
   Project (#0, #1, #0, #3)
     Filter (#0{t1.f1}) IS NOT NULL
       Join on=(#0{t1.f1} = #2{t2.f1}) type=differential
@@ -50,10 +48,6 @@ Used Indexes:
   - i2 (differential join)
 
 Target cluster: quickstart
-"
-count
-----
-1
 
 # The purpose of this test is to check that only the first delta path sees updates
 # at start-up time. According to the plan above, only t1's path will see them, so

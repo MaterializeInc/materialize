@@ -82,9 +82,9 @@ SELECT mz_unsafe.mz_sleep(4)
 query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
-ArrangeBy[[Column(0, None), Column(1, None)]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
+ArrangeBy[[Column(0), Column(1)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
 Arranged DistinctBy
 Arranged DistinctBy
 DistinctBy
@@ -121,8 +121,8 @@ SELECT mz_unsafe.mz_sleep(4)
 query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
-ArrangeBy[[Column(0, None), Column(1, None)]]
-ArrangeBy[[Column(0, None), Column(1, None)]]-errors
+ArrangeBy[[Column(0), Column(1)]]
+ArrangeBy[[Column(0), Column(1)]]-errors
 Arranged TopK input
 Arranged TopK input
 Arranged TopK input
@@ -159,8 +159,8 @@ SELECT mz_unsafe.mz_sleep(4)
 query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
-ArrangeBy[[Column(0, None), Column(1, None), Column(2, None), Column(3, None), Column(4, None), Column(5, None), Column(6, None), Column(7, None), Column(8, None), Column(9, None), Column(10, None)]]
-ArrangeBy[[Column(0, None), Column(1, None), Column(2, None), Column(3, None), Column(4, None), Column(5, None), Column(6, None), Column(7, None), Column(8, None), Column(9, None), Column(10, None)]]-errors
+ArrangeBy[[Column(0), Column(1), Column(2), Column(3), Column(4), Column(5), Column(6), Column(7), Column(8), Column(9), Column(10)]]
+ArrangeBy[[Column(0), Column(1), Column(2), Column(3), Column(4), Column(5), Column(6), Column(7), Column(8), Column(9), Column(10)]]-errors
 
 statement ok
 DROP TABLE t3 CASCADE
@@ -380,10 +380,10 @@ Arrange ReduceMinsMaxes
 Arrange ReduceMinsMaxes
 Arrange recursive err
 ArrangeAccumulable [val: empty]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(2, None)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(2)]]
 Arranged DistinctBy
 Arranged MinsMaxesHierarchical input
 Arranged MinsMaxesHierarchical input
@@ -523,8 +523,8 @@ SELECT mz_unsafe.mz_sleep(4)
 query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]-errors
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]-errors
 
 statement ok
 DROP TABLE t1 CASCADE
@@ -565,7 +565,7 @@ SELECT mz_unsafe.mz_sleep(4)
 query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
-ArrangeBy[[Column(0, None)]]
+ArrangeBy[[Column(0)]]
 Threshold local
 
 statement ok
@@ -633,18 +633,18 @@ AccumulableErrorCheck
 AccumulableErrorCheck
 ArrangeAccumulable [val: empty]
 ArrangeAccumulable [val: empty]
-ArrangeBy[[Column(0, None), Column(1, None)]]
-ArrangeBy[[Column(0, None), Column(1, None)]]-errors
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]-errors
-ArrangeBy[[Column(0, None)]]-errors
-ArrangeBy[[Column(0, None)]]-errors
+ArrangeBy[[Column(0), Column(1)]]
+ArrangeBy[[Column(0), Column(1)]]-errors
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]-errors
+ArrangeBy[[Column(0)]]-errors
+ArrangeBy[[Column(0)]]-errors
 ArrangeBy[[]]
 ArrangeBy[[]]
 ReduceAccumulable
@@ -732,24 +732,24 @@ SELECT mz_unsafe.mz_sleep(4)
 query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
 ArrangeBy[[]]
 ArrangeBy[[]]
 ArrangeBy[[]]
@@ -792,8 +792,8 @@ SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_intros
 ----
 AccumulableErrorCheck
 ArrangeAccumulable [val: empty]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]-errors
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]-errors
 ArrangeBy[[]]
 ReduceAccumulable
 
@@ -866,15 +866,15 @@ Arrange ReduceMinsMaxes
 ArrangeAccumulable [val: empty]
 ArrangeAccumulable [val: empty]
 ArrangeAccumulable [val: empty]
-ArrangeBy[[CallBinary { func: ModInt64, expr1: Column(0, None), expr2: Literal(Ok(Row{[Int64(2)]}), ColumnType { scalar_type: Int64, nullable: false }) }]]
-ArrangeBy[[CallUnary { func: CastInt32ToInt64(CastInt32ToInt64), expr: Column(0, None) }]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]
-ArrangeBy[[Column(0, None)]]-errors
-ArrangeBy[[Column(0, None)]]-errors
-ArrangeBy[[Column(0, None)]]-errors
+ArrangeBy[[CallBinary(ModInt64, Column(0), Literal(Ok(Row{[Int64(2)]}), ColumnType { scalar_type: Int64, nullable: false }))]]
+ArrangeBy[[CallUnary(CastInt32ToInt64(CastInt32ToInt64), Column(0))]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]-errors
+ArrangeBy[[Column(0)]]-errors
+ArrangeBy[[Column(0)]]-errors
 Arranged Accumulable Distinct [val: empty]
 Arranged MinsMaxesHierarchical input
 Arranged MinsMaxesHierarchical input
@@ -952,10 +952,10 @@ SELECT mz_unsafe.mz_sleep(4)
 query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
-ArrangeBy[[CallUnary { func: CastStringToVarChar(CastStringToVarChar { length: None, fail_on_len: false }), expr: Column(1, None) }, CallUnary { func: CastInt64ToString(CastInt64ToString), expr: Column(0, None) }]]
-ArrangeBy[[CallUnary { func: CastStringToVarChar(CastStringToVarChar { length: None, fail_on_len: false }), expr: Column(1, None) }, CallUnary { func: CastInt64ToString(CastInt64ToString), expr: Column(0, None) }]]-errors
-ArrangeBy[[Column(0, None), Column(1, None)]]
-ArrangeBy[[Column(0, None), Column(1, None)]]-errors
+ArrangeBy[[CallUnary(CastStringToVarChar(CastStringToVarChar { length: None, fail_on_len: false }), Column(1)), CallUnary(CastInt64ToString(CastInt64ToString), Column(0))]]
+ArrangeBy[[CallUnary(CastStringToVarChar(CastStringToVarChar { length: None, fail_on_len: false }), Column(1)), CallUnary(CastInt64ToString(CastInt64ToString), Column(0))]]-errors
+ArrangeBy[[Column(0), Column(1)]]
+ArrangeBy[[Column(0), Column(1)]]-errors
 
 statement ok
 DROP TABLE t CASCADE
@@ -984,46 +984,46 @@ Arrange␠export␠iterative  2
 Arrange␠export␠iterative␠err  2
 Arrange␠recursive␠err  3
 ArrangeAccumulable␠[val:␠empty]  10
-ArrangeBy[[CallBinary␠{␠func:␠JsonbGetStringStringify,␠expr1:␠Column(1,␠None),␠expr2:␠Literal(Ok(Row{[String("id")]}),␠ColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠})␠}]]  2
-ArrangeBy[[CallBinary␠{␠func:␠JsonbGetStringStringify,␠expr1:␠Column(2,␠None),␠expr2:␠Literal(Ok(Row{[String("id")]}),␠ColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠})␠}]]  1
-ArrangeBy[[CallVariadic␠{␠func:␠Coalesce,␠exprs:␠[Column(2,␠None),␠Column(3,␠None)]␠}]]  2
-ArrangeBy[[Column(0,␠None),␠CallUnary␠{␠func:␠CastInt32ToNumeric(CastInt32ToNumeric(None)),␠expr:␠Column(1,␠None)␠}]]  1
-ArrangeBy[[Column(0,␠None),␠CallUnary␠{␠func:␠CastUint64ToNumeric(CastUint64ToNumeric(None)),␠expr:␠Column(2,␠None)␠}]]  1
-ArrangeBy[[Column(0,␠None),␠CallUnary␠{␠func:␠Lower(Lower),␠expr:␠Column(1,␠None)␠}]]  1
-ArrangeBy[[Column(0,␠None),␠CallUnary␠{␠func:␠Lower(Lower),␠expr:␠Column(2,␠None)␠}]]  1
-ArrangeBy[[Column(0,␠None),␠Column(1,␠None),␠Column(2,␠None),␠Column(3,␠None),␠Column(4,␠None),␠Column(5,␠None),␠Column(6,␠None),␠Column(7,␠None),␠Column(8,␠None),␠Column(9,␠None),␠Column(10,␠None),␠Column(11,␠None),␠Column(12,␠None),␠Column(13,␠None),␠Column(14,␠None),␠Column(15,␠None),␠Column(16,␠None),␠Column(17,␠None),␠Column(18,␠None),␠Column(19,␠None),␠Column(20,␠None),␠Column(21,␠None),␠Column(22,␠None),␠Column(23,␠None),␠Column(24,␠None),␠Column(25,␠None),␠Column(26,␠None),␠Column(27,␠None)]]  2
-ArrangeBy[[Column(0,␠None),␠Column(1,␠None),␠Column(2,␠None),␠Column(3,␠None),␠Column(4,␠None),␠Column(5,␠None),␠Column(6,␠None),␠Column(7,␠None),␠Column(8,␠None),␠Column(9,␠None),␠Column(10,␠None),␠Column(11,␠None),␠Column(12,␠None),␠Column(13,␠None)]]  1
-ArrangeBy[[Column(0,␠None),␠Column(1,␠None),␠Column(2,␠None),␠Column(3,␠None),␠Column(4,␠None),␠Column(5,␠None),␠Column(6,␠None),␠Column(7,␠None),␠Column(8,␠None),␠Column(9,␠None),␠Column(10,␠None),␠Column(11,␠None),␠Column(12,␠None),␠Column(13,␠None)]]-errors  1
-ArrangeBy[[Column(0,␠None),␠Column(1,␠None),␠Column(2,␠None),␠Column(3,␠None),␠Column(4,␠None),␠Column(5,␠None)]]  1
-ArrangeBy[[Column(0,␠None),␠Column(1,␠None),␠Column(2,␠None),␠Column(3,␠None),␠Column(4,␠None),␠Column(5,␠None)]]-errors  1
-ArrangeBy[[Column(0,␠None),␠Column(1,␠None),␠Column(2,␠None),␠Column(3,␠None),␠Column(4,␠None)]]  1
-ArrangeBy[[Column(0,␠None),␠Column(1,␠None),␠Column(2,␠None),␠Column(3,␠None),␠Column(4,␠None)]]-errors  1
-ArrangeBy[[Column(0,␠None),␠Column(1,␠None)]]  2
-ArrangeBy[[Column(0,␠None),␠Column(2,␠None)]]  4
-ArrangeBy[[Column(0,␠None),␠Column(3,␠None)]]  4
-ArrangeBy[[Column(0,␠None),␠Column(4,␠None)]]  1
-ArrangeBy[[Column(0,␠None)]]  155
-ArrangeBy[[Column(0,␠None)]]-errors  44
-ArrangeBy[[Column(1,␠None),␠Column(0,␠None)]]  1
-ArrangeBy[[Column(1,␠None),␠Column(2,␠None)]]  2
-ArrangeBy[[Column(1,␠None),␠Column(3,␠None)]]  1
-ArrangeBy[[Column(1,␠None)]]  26
-ArrangeBy[[Column(1,␠None)]]-errors  7
-ArrangeBy[[Column(13,␠None)]]  1
-ArrangeBy[[Column(15,␠None)]]  1
-ArrangeBy[[Column(15,␠None)]]-errors  1
-ArrangeBy[[Column(2,␠None)]]  20
-ArrangeBy[[Column(2,␠None)]]-errors  7
-ArrangeBy[[Column(21,␠None)]]  1
-ArrangeBy[[Column(21,␠None)]]-errors  1
-ArrangeBy[[Column(3,␠None)]]  6
-ArrangeBy[[Column(3,␠None)]]-errors  2
-ArrangeBy[[Column(4,␠None)]]  5
-ArrangeBy[[Column(4,␠None)]]-errors  2
-ArrangeBy[[Column(5,␠None)]]  2
-ArrangeBy[[Column(6,␠None)]]  3
-ArrangeBy[[Column(6,␠None)]]-errors  2
-ArrangeBy[[Column(9,␠None)]]  1
+ArrangeBy[[CallBinary(JsonbGetStringStringify,␠Column(1),␠Literal(Ok(Row{[String("id")]}),␠ColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠}))]]  2
+ArrangeBy[[CallBinary(JsonbGetStringStringify,␠Column(2),␠Literal(Ok(Row{[String("id")]}),␠ColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠}))]]  1
+ArrangeBy[[CallVariadic(Coalesce,␠[Column(2),␠Column(3)])]]  2
+ArrangeBy[[Column(0),␠CallUnary(CastInt32ToNumeric(CastInt32ToNumeric(None)),␠Column(1))]]  1
+ArrangeBy[[Column(0),␠CallUnary(CastUint64ToNumeric(CastUint64ToNumeric(None)),␠Column(2))]]  1
+ArrangeBy[[Column(0),␠CallUnary(Lower(Lower),␠Column(1))]]  1
+ArrangeBy[[Column(0),␠CallUnary(Lower(Lower),␠Column(2))]]  1
+ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5),␠Column(6),␠Column(7),␠Column(8),␠Column(9),␠Column(10),␠Column(11),␠Column(12),␠Column(13),␠Column(14),␠Column(15),␠Column(16),␠Column(17),␠Column(18),␠Column(19),␠Column(20),␠Column(21),␠Column(22),␠Column(23),␠Column(24),␠Column(25),␠Column(26),␠Column(27)]]  2
+ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5),␠Column(6),␠Column(7),␠Column(8),␠Column(9),␠Column(10),␠Column(11),␠Column(12),␠Column(13)]]  1
+ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5),␠Column(6),␠Column(7),␠Column(8),␠Column(9),␠Column(10),␠Column(11),␠Column(12),␠Column(13)]]-errors  1
+ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5)]]  1
+ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5)]]-errors  1
+ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4)]]  1
+ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4)]]-errors  1
+ArrangeBy[[Column(0),␠Column(1)]]  2
+ArrangeBy[[Column(0),␠Column(2)]]  4
+ArrangeBy[[Column(0),␠Column(3)]]  4
+ArrangeBy[[Column(0),␠Column(4)]]  1
+ArrangeBy[[Column(0)]]  155
+ArrangeBy[[Column(0)]]-errors  44
+ArrangeBy[[Column(1),␠Column(0)]]  1
+ArrangeBy[[Column(1),␠Column(2)]]  2
+ArrangeBy[[Column(1),␠Column(3)]]  1
+ArrangeBy[[Column(1)]]  26
+ArrangeBy[[Column(1)]]-errors  7
+ArrangeBy[[Column(13)]]  1
+ArrangeBy[[Column(15)]]  1
+ArrangeBy[[Column(15)]]-errors  1
+ArrangeBy[[Column(2)]]  20
+ArrangeBy[[Column(2)]]-errors  7
+ArrangeBy[[Column(21)]]  1
+ArrangeBy[[Column(21)]]-errors  1
+ArrangeBy[[Column(3)]]  6
+ArrangeBy[[Column(3)]]-errors  2
+ArrangeBy[[Column(4)]]  5
+ArrangeBy[[Column(4)]]-errors  2
+ArrangeBy[[Column(5)]]  2
+ArrangeBy[[Column(6)]]  3
+ArrangeBy[[Column(6)]]-errors  2
+ArrangeBy[[Column(9)]]  1
 ArrangeBy[[]]  11
 Arranged␠DistinctBy  47
 Arranged␠MinsMaxesHierarchical␠input  14
