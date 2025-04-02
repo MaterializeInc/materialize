@@ -23,7 +23,7 @@ use std::hash::{Hash, Hasher};
 /// Behaves like `T`, but has trivial `Hash`, `Eq`, `MzReflect`, and `Ord`
 /// implementations. Does not appear in `Debug` output.
 #[derive(Clone, Default, Derivative)]
-#[derivative(Debug="transparent")]
+#[derivative(Debug = "transparent")]
 pub struct TreatAsEqual<T>(pub T);
 
 impl<T> Hash for TreatAsEqual<T> {
