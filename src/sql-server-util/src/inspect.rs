@@ -9,6 +9,7 @@
 
 //! Useful queries to inspect the state of a SQL Server instance.
 
+use itertools::Itertools;
 use smallvec::SmallVec;
 use std::sync::Arc;
 
@@ -101,36 +102,60 @@ pub async fn get_changes(
     Ok(results)
 }
 
-/// Returns the `(schema_name, table_name)` for the table that is tracked by
-/// the specified `capture_instance`.
-pub async fn get_table_for_capture_instance(
+/// Returns the `(capture_instance, schema_name, table_name)` for the tables
+/// that are tracked by the specified `capture_instance`s.
+pub async fn get_tables_for_capture_instance<'a>(
     client: &mut Client,
-    capture_instance: &str,
-) -> Result<(Arc<str>, Arc<str>), SqlServerError> {
-    static TABLE_FOR_CAPTURE_INSTANCE_QUERY: &str = "
-SELECT SCHEMA_NAME(o.schema_id) as schema_name, o.name as table_name
+    capture_instances: impl IntoIterator<Item = &str>,
+) -> Result<Vec<(Arc<str>, Arc<str>, Arc<str>)>, SqlServerError> {
+    // SQL Server does not have support for array types, so we need to manually construct
+    // the parameterized query.
+    let params: SmallVec<[_; 1]> = capture_instances.into_iter().collect();
+    // TODO(sql_server3): Remove this redundant collection.
+    #[allow(clippy::as_conversions)]
+    let params_dyn: SmallVec<[_; 1]> = params
+        .iter()
+        .map(|instance| instance as &dyn tiberius::ToSql)
+        .collect();
+    let param_indexes = params
+        .iter()
+        .enumerate()
+        // Params are 1-based indexed.
+        .map(|(idx, _)| format!("@P{}", idx + 1))
+        .join(", ");
+
+    let table_for_capture_instance_query = format!(
+        "
+SELECT c.capture_instance, SCHEMA_NAME(o.schema_id) as schema_name, o.name as obj_name
 FROM sys.objects o
 JOIN cdc.change_tables c
 ON o.object_id = c.source_object_id
-WHERE c.capture_instance = @P1;
-";
-    let result = client
-        .query(TABLE_FOR_CAPTURE_INSTANCE_QUERY, &[&capture_instance])
-        .await?;
+WHERE c.capture_instance IN ({param_indexes});"
+    );
 
-    match &result[..] {
-        [row] => {
+    let result = client
+        .query(&table_for_capture_instance_query, &params_dyn[..])
+        .await?;
+    let tables = result
+        .into_iter()
+        .map(|row| {
+            let capture_instance: &str = row.try_get("capture_instance")?.ok_or_else(|| {
+                SqlServerError::ProgrammingError("missing column 'capture_instance'".to_string())
+            })?;
             let schema_name: &str = row.try_get("schema_name")?.ok_or_else(|| {
                 SqlServerError::ProgrammingError("missing column 'schema_name'".to_string())
             })?;
-            let table_name: &str = row.try_get("table_name")?.ok_or_else(|| {
-                SqlServerError::ProgrammingError("missing column 'table_name'".to_string())
+            let table_name: &str = row.try_get("obj_name")?.ok_or_else(|| {
+                SqlServerError::ProgrammingError("missing column 'schema_name'".to_string())
             })?;
 
-            Ok((schema_name.into(), table_name.into()))
-        }
-        other => Err(SqlServerError::InvariantViolated(format!(
-            "expected one row found {other:?}"
-        ))),
-    }
+            Ok::<_, SqlServerError>((
+                capture_instance.into(),
+                schema_name.into(),
+                table_name.into(),
+            ))
+        })
+        .collect::<Result<_, _>>()?;
+
+    Ok(tables)
 }

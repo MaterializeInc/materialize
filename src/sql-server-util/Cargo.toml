@@ -18,6 +18,7 @@ dec = "0.4.8"
 derivative = "2.2.0"
 futures = "0.3.31"
 hex = "0.4.3"
+itertools = "0.12.1"
 mz-ore = { path = "../ore", features = ["async"] }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
