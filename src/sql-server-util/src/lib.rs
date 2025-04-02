@@ -252,7 +252,7 @@ impl Client {
     }
 
     /// Return a [`CdcStream`] that can be used to track changes for the specified
-    /// `capture_instance`.
+    /// `capture_instances`.
     ///
     /// [`CdcStream`]: crate::cdc::CdcStream
     pub fn cdc<I>(&mut self, capture_instances: I) -> crate::cdc::CdcStream<'_>

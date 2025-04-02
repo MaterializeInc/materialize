@@ -28,7 +28,7 @@ use crate::{Client, SqlServerError, TransactionIsolationLevel};
 pub struct CdcStream<'a> {
     /// Client we use for querying SQL Server.
     client: &'a mut Client,
-    /// Upstream capture instance we'll list changes from.
+    /// Upstream capture instances we'll list changes from.
     capture_instances: BTreeMap<Arc<str>, Option<Lsn>>,
     /// How often we poll the upstream for changes.
     poll_interval: Duration,
@@ -67,8 +67,8 @@ impl<'a> CdcStream<'a> {
         self
     }
 
-    /// Takes a snapshot of the upstream table that the specified `capture_instance` is
-    /// replicating changes from.
+    /// Takes a snapshot of the upstream tables that the specified `capture_instance`s
+    /// are replicating changes from.
     ///
     /// An optional `instances` parameter can be provided to only snapshot the specified instances.
     pub async fn snapshot<'b>(
@@ -109,12 +109,16 @@ impl<'a> CdcStream<'a> {
             // TODO(sql_server3): A stream of streams would be better here than
             // returning the name with each result, but the lifetimes are tricky.
             for (capture_instance, schema_name, table_name) in tables {
+                tracing::trace!(%capture_instance, %schema_name, %table_name, "snapshot start");
+
                 let query = format!("SELECT * FROM {schema_name}.{table_name};");
                 let snapshot = txn.client.query_streaming(&query, &[]);
                 let mut snapshot = std::pin::pin!(snapshot);
                 while let Some(result) = snapshot.next().await {
                     yield (Arc::clone(&capture_instance), result);
                 }
+
+                tracing::trace!(%capture_instance, %schema_name, %table_name, "snapshot end");
             }
 
             // Slightly awkward, but if the commit fails we need to conform to
@@ -211,7 +215,7 @@ impl<'a> CdcStream<'a> {
                     tracing::debug!(?curr_lsn, ?next_lsn, "incrementing LSN");
 
                     // We just listed everything upto next_lsn.
-                    for (_instance, instance_lsn) in &mut self.capture_instances {
+                    for instance_lsn in self.capture_instances.values_mut() {
                         let instance_lsn = instance_lsn.as_mut().expect("should be initialized");
                         // Ensure LSNs don't go backwards.
                         *instance_lsn = std::cmp::max(*instance_lsn, next_lsn);
@@ -230,7 +234,7 @@ impl<'a> CdcStream<'a> {
         let max_lsn = crate::inspect::get_max_lsn(self.client).await?;
         for (_instance, requsted_lsn) in self.capture_instances.iter_mut() {
             if requsted_lsn.is_none() {
-                *requsted_lsn = Some(max_lsn);
+                requsted_lsn.replace(max_lsn);
             }
         }
 

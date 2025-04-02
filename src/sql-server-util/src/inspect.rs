@@ -102,15 +102,14 @@ pub async fn get_changes(
     Ok(results)
 }
 
-/// Returns the `(schema_name, table_name)` for the table that is tracked by
-/// the specified `capture_instance`.
+/// Returns the `(capture_instance, schema_name, table_name)` for the tables
+/// that are tracked by the specified `capture_instance`s.
 pub async fn get_tables_for_capture_instance<'a>(
     client: &mut Client,
     capture_instances: impl IntoIterator<Item = &str>,
 ) -> Result<Vec<(Arc<str>, Arc<str>, Arc<str>)>, SqlServerError> {
     // SQL Server does not have support for array types, so we need to manually construct
     // the parameterized query.
-    // let capture_instances = capture_instances.into_iter();
     let params: SmallVec<[_; 1]> = capture_instances.into_iter().collect();
     // TODO(sql_server3): Remove this redundant collection.
     #[allow(clippy::as_conversions)]
