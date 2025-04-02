@@ -61,7 +61,7 @@ granted the [`mz_monitor` role](/security/appendix/appendix-built-in-roles/#syst
 <!-- RELATION_SPEC mz_internal.mz_recent_activity_log -->
 | Field                      | Type                         | Meaning                                                                                                                                                                                                                                                                       |
 |----------------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `execution_id`             | [`uuid`]                     | An ID that is unique for each executed statement.                                                                                                                                                                                                                             |
+| `execution_id`             | [`uuid`]                     | An ID that is unique for each executed statement.
 | `sample_rate`              | [`double precision`]         | The actual rate at which the statement was sampled.                                                                                                                                                                                                                           |
 | `cluster_id`               | [`text`]                     | The ID of the cluster the statement execution was directed to. Corresponds to [mz_clusters.id](/sql/system-catalog/mz_catalog/#mz_clusters).                                                                                                      |
 | `application_name`         | [`text`]                     | The value of the `application_name` configuration parameter at execution time.                                                                                                                                                                                                |
@@ -139,7 +139,7 @@ the most recent status for each AWS PrivateLink connection in the system.
 | `id` | [`text`] | The ID of the connection. Corresponds to [`mz_catalog.mz_connections.id`](../mz_catalog#mz_sinks). |
 | `name` | [`text`] | The name of the connection.  |
 | `last_status_change_at` | [`timestamp with time zone`] | Wall-clock timestamp of the connection status change.|
-| `status` | [`text`] | | The status of the connection: one of `pending-service-discovery`, `creating-endpoint`, `recreating-endpoint`, `updating-endpoint`, `available`, `deleted`, `deleting`, `expired`, `failed`, `pending`, `pending-acceptance`, `rejected`, or `unknown`. |
+| `status` | [`text`] | The status of the connection: one of `pending-service-discovery`, `creating-endpoint`, `recreating-endpoint`, `updating-endpoint`, `available`, `deleted`, `deleting`, `expired`, `failed`, `pending`, `pending-acceptance`, `rejected`, or `unknown`. |
 
 ## `mz_cluster_deployment_lineage`
 
@@ -303,7 +303,7 @@ The `mz_internal_cluster_replicas` table lists the replicas that are created and
 <!-- RELATION_SPEC mz_internal.mz_internal_cluster_replicas -->
 | Field      | Type     | Meaning                                                                                                     |
 |------------|----------|-------------------------------------------------------------------------------------------------------------|
-| id         | [`text`] | The ID of a cluster replica. Corresponds to [`mz_cluster_replicas.id`](../mz_catalog/#mz_cluster_replicas). |
+| `id`       | [`text`] | The ID of a cluster replica. Corresponds to [`mz_cluster_replicas.id`](../mz_catalog/#mz_cluster_replicas). |
 
 ## `mz_pending_cluster_replicas`
 
@@ -312,7 +312,7 @@ The `mz_pending_cluster_replicas` table lists the replicas that were created dur
 <!-- RELATION_SPEC mz_internal.mz_pending_cluster_replicas -->
 | Field      | Type     | Meaning                                                                                                     |
 |------------|----------|-------------------------------------------------------------------------------------------------------------|
-| id         | [`text`] | The ID of a cluster replica. Corresponds to [`mz_cluster_replicas.id`](../mz_catalog/#mz_cluster_replicas). |
+| `id`       | [`text`] | The ID of a cluster replica. Corresponds to [`mz_cluster_replicas.id`](../mz_catalog/#mz_cluster_replicas). |
 
 ## `mz_comments`
 

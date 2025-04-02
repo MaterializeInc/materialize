@@ -331,15 +331,15 @@ We use the range `[operator_id_start, operator_id_end)` to record this informati
 If an LIR node was implemented without any dataflow operators, `operator_id_start` will be equal to `operator_id_end`.
 
 <!-- RELATION_SPEC mz_introspection.mz_lir_mapping -->
-| Field             | Type      | Meaning
-| ---------         | --------  | -----------
-| global_id         | [`text`]  | The global ID.
-| lir_id            | [`uint8`] | The LIR node ID.
-| operator          | [`text`]  | The LIR operator, in the format `OperatorName INPUTS [OPTIONS]`.
-| parent_lir_id     | [`uint8`] | The parent of this LIR node. May be `NULL`.
-| nesting           | [`uint2`] | The nesting level of this LIR node.
-| operator_id_start | [`uint8`] | The first dataflow operator ID implementing this LIR operator (inclusive).
-| operator_id_end   | [`uint8`] | The first dataflow operator ID _after_ this LIR operator (exclusive).
+| Field               | Type      | Meaning
+| ---------           | --------  | -----------
+| `global_id`         | [`text`]  | The global ID.
+| `lir_id`            | [`uint8`] | The LIR node ID.
+| `operator`          | [`text`]  | The LIR operator, in the format `OperatorName INPUTS [OPTIONS]`.
+| `parent_lir_id`     | [`uint8`] | The parent of this LIR node. May be `NULL`.
+| `nesting`           | [`uint2`] | The nesting level of this LIR node.
+| `operator_id_start` | [`uint8`] | The first dataflow operator ID implementing this LIR operator (inclusive).
+| `operator_id_end`   | [`uint8`] | The first dataflow operator ID _after_ this LIR operator (exclusive).
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_lir_mapping_per_worker -->
 
