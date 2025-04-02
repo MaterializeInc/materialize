@@ -691,6 +691,7 @@ crates_repository(
         "//:test/metabase/smoketest/Cargo.toml",
         "//:test/test-util/Cargo.toml",
         "//:misc/bazel/cargo-gazelle/Cargo.toml",
+        "//:src/auth/Cargo.toml",
     ],
     rust_version = RUST_VERSION,
     # Restricting the set of platform triples we support _greatly_ reduces the
