@@ -3,26 +3,21 @@ columns:
   - column: "Version"
 
 rows:
-  - Component: "Google Kubernetes Engine (GKE) cluster"
+  - Component: "AKS cluster"
     Version: "All"
-  - Component: "Cloud Storage bucket for blob storage"
+  - Component: "Azure Blob Storage for persistence"
     Version: "All"
-  - Component: "Cloud SQL PostgreSQL database for metadata storage"
+  - Component: "Azure Database for PostgreSQL Flexible Server for metadata storage"
     Version: "All"
-  - Component: "Dedicated VPC"
+  - Component: "Required networking and security configurations"
     Version: "All"
-  - Component: "Service accounts with proper IAM permissions"
+  - Component: "Managed identities with proper RBAC permissions"
     Version: "All"
   - Component: "Materialize Operator"
     Version: "All"
   - Component: |
       Materialize instances (Deployed during subsequent runs after the Operator is running)
     Version: "All"
-  - Component: |
-      Load balancers for each Materialize instance
-    Version: |
-      [v0.3.0+](/installation/appendix-terraforms/#materialize-on-gcp-terraform-module)
-
   - Component: |
       `cert-manager` and a self-signed `ClusterIssuer`.
       `ClusterIssuer` is

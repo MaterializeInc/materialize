@@ -109,18 +109,11 @@ If you want to use `jq` and do not have `jq` installed, install.
 
 {{< /warning >}}
 
-Materialize provides the [Materialize on Azure Terraform
-modules](https://github.com/MaterializeInc/terraform-azurerm-materialize) for
-evaluation purposes only. The modules deploy a sample infrastructure on Azure
-with the following components:
+[Materialize on Azure Terraform
+module](https://github.com/MaterializeInc/terraform-azurerm-materialize) for
+deploys a sample infrastructure on Azure with the following components:
 
-- AKS cluster for Materialize workloads
-- Azure Database for PostgreSQL Flexible Server for metadata storage
-- Azure Blob Storage for persistence
-- Required networking and security configurations
-- Managed identities with proper RBAC permissions
-- Materialize Operator
-- Materialize instances (during subsequent runs after the Operator is running)
+{{< yaml-table data="self_managed/azure_terraform_deployed_components" >}}
 
 {{< tip >}}
 
@@ -178,6 +171,12 @@ with the following components:
    location="eastus2"
    ```
 
+   {{< tip >}}
+
+   {{% self-managed/azure-terraform-configs %}}
+
+   {{< /tip >}}
+
 1. Initialize the terraform directory.
 
     ```bash
@@ -201,7 +200,7 @@ with the following components:
    Upon successful completion, various fields and their values are output:
 
    ```bash
-   Apply complete! Resources: 21 added, 0 changed, 0 destroyed.
+   Apply complete! Resources: 24 added, 0 changed, 0 destroyed.
 
    Outputs:
 
@@ -238,8 +237,14 @@ with the following components:
    For help with `kubectl` commands, see [kubectl Quick
    reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
-1. By default, the example Terraform installs the Materialize Operator. Verify
-   the installation and check the status:
+1. By default, the example Terraform installs the Materialize Operator and,
+   starting in v0.3.0, a `cert-manager`. Verify the
+   installation and check the status:
+
+   {{< tabs >}}
+   {{< tab "Materialize Operator" >}}
+
+   Verify the installation and check the status:
 
    ```shell
    kubectl get all -n materialize
@@ -249,14 +254,49 @@ with the following components:
 
    ```none
    NAME                                                              READY       STATUS    RESTARTS   AGE
-   pod/materialize-mydemo-materialize-operator-74d8f549d6-lkjjf   1/1         Running   0          36m
+   pod/materialize-mydemo-materialize-operator-74d8f549d6-lkjjf      1/1         Running   0          36m
 
    NAME                                                         READY       UP-TO-DATE   AVAILABLE   AGE
-   deployment.apps/materialize-mydemo-materialize-operator   1/1         1            1           36m
+   deployment.apps/materialize-mydemo-materialize-operator      1/1         1            1           36m
 
    NAME                                                                        DESIRED   CURRENT   READY   AGE
-   replicaset.apps/materialize-mydemo-materialize-operator-74d8f549d6       1         1         1       36m
-    ```
+   replicaset.apps/materialize-mydemo-materialize-operator-74d8f549d6          1         1         1       36m
+   ```
+
+   {{</ tab >}}
+
+   {{< tab "cert-manager (Starting in version 0.3.0)" >}}
+
+   Verify the installation and check the status:
+
+   ```shell
+   kubectl get all -n cert-manager
+   ```
+   Wait for the components to be in the `Running` state:
+   ```
+   NAME                                           READY   STATUS    RESTARTS   AGE
+   pod/cert-manager-8576d99cc8-xqxbc              1/1     Running   0          4m22s
+   pod/cert-manager-cainjector-664b5878d6-wc4tz   1/1     Running   0          4m22s
+   pod/cert-manager-webhook-6ddb7bd6c5-vrm2p      1/1     Running   0          4m22s
+
+   NAME                              TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)            AGE
+   service/cert-manager              ClusterIP   10.1.227.230   <none>        9402/TCP           4m22s
+   service/cert-manager-cainjector   ClusterIP   10.1.222.156   <none>        9402/TCP           4m22s
+   service/cert-manager-webhook      ClusterIP   10.1.84.207    <none>        443/TCP,9402/TCP   4m22s
+
+   NAME                                      READY   UP-TO-DATE   AVAILABLE   AGE
+   deployment.apps/cert-manager              1/1     1            1           4m23s
+   deployment.apps/cert-manager-cainjector   1/1     1            1           4m23s
+   deployment.apps/cert-manager-webhook      1/1     1            1           4m23s
+
+   NAME                                                 DESIRED   CURRENT   READY   AGE
+   replicaset.apps/cert-manager-8576d99cc8              1         1         1       4m23s
+   replicaset.apps/cert-manager-cainjector-664b5878d6   1         1         1       4m23s
+   replicaset.apps/cert-manager-webhook-6ddb7bd6c5      1         1         1       4m23s
+   ```
+
+   {{</ tab >}}
+   {{</ tabs >}}
 
    If you run into an error during deployment, refer to the
    [Troubleshooting](/installation/troubleshooting/).
@@ -283,6 +323,16 @@ with the following components:
    EOF
    ```
 
+   Starting in v0.3.0, the Materialize on Azure Terraform module also deploys,
+   by default, a self-signed `ClusterIssuer`. The `ClusterIssuer` is deployed
+   after the `cert-manager` is deployed and running.
+
+   {{< tip >}}
+   {{% self-managed/azure-terraform-upgrade-notes %}}
+
+   See [Materialize on Azure releases](/installation/appendix-terraforms/#materialize-on-azure-terraform-module) for notable changes.
+   {{</ tip >}}
+
 1. Run `terraform plan` with both `.tfvars` files and review the changes to be
    made.
 
@@ -294,7 +344,7 @@ with the following components:
    following:
 
    ```
-   Plan: 4 to add, 0 to change, 0 to destroy.
+   Plan: 7 to add, 1 to change, 0 to destroy.
    ```
 
 1. If you are satisfied with the changes, apply.
@@ -308,7 +358,7 @@ with the following components:
    Upon successful completion, you should see output with a summary similar to the following:
 
    ```bash
-   Apply complete! Resources: 4 added, 0 changed, 0 destroyed.
+   Apply complete! Resources: 7 added, 1 changed, 0 destroyed.
 
    Outputs:
 
@@ -369,11 +419,11 @@ with the following components:
 
    {{% self-managed/port-forwarding-handling %}}
 
-      {{< tip >}}
+   {{< tip >}}
 
-      {{% self-managed/troubleshoot-console-mz_catalog_server_blurb %}}
+   {{% self-managed/troubleshoot-console-mz_catalog_server_blurb %}}
 
-      {{< /tip >}}
+   {{< /tip >}}
 
 ## Next steps
 

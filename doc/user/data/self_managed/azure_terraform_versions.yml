@@ -3,6 +3,17 @@ columns:
   - column: "Notable changes"
 
 rows:
+
+- "Terraform version": |
+
+    [v0.3.0](https://github.com/MaterializeInc/terraform-azurerm-materialize/releases/tag/v0.3.0)
+
+  "Notable changes": |
+
+    - By default, deploys [`cert-manager`](https://cert-manager.io/docs/) and a
+    self-signed
+    [`ClusterIssuer`](https://cert-manager.io/docs/concepts/issuer/).
+
 - "Terraform version": |
     [v0.2.0](https://github.com/MaterializeInc/terraform-azurerm-materialize/releases/tag/v0.2.0)
   "Notable changes": |
@@ -20,4 +31,4 @@ rows:
 - "Terraform version": |
     [v0.1.4](https://github.com/MaterializeInc/terraform-azurerm-materialize/releases/tag/v0.1.4)
   "Notable changes": |
-    Initial release of Materialize on Azure.
+    - Initial release of Materialize on Azure.

@@ -29,7 +29,7 @@ your own production deployment, either:
 
 ## Releases
 
-### Materialize on AWS Terraform modules
+### Materialize on AWS Terraform module
 
 {{< yaml-table data="self_managed/aws_terraform_versions" >}}
 
@@ -40,13 +40,13 @@ https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#u
 for release-specific upgrade notes.
 
 
-### Materialize on Azure Terraform modules
+### Materialize on Azure Terraform module
 
 {{< yaml-table data="self_managed/azure_terraform_versions" >}}
 
 {{% self-managed/azure-terraform-upgrade-notes %}}
 
-### Materialize on GCP Terraform modules
+### Materialize on GCP Terraform module
 
 {{< yaml-table data="self_managed/gcp_terraform_versions" >}}
 
