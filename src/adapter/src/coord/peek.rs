@@ -38,7 +38,7 @@ use mz_ore::str::{separated, StrExt};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalars, IndexUsageType, PlanRenderingContext, UsedIndexes};
-use mz_repr::{Diff, GlobalId, IntoRowIterator, RelationType, Row, RowIterator};
+use mz_repr::{preserves_order, Diff, GlobalId, IntoRowIterator, RelationType, Row, RowIterator};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
 use uuid::Uuid;
@@ -119,7 +119,7 @@ pub enum FastPathPlan {
     /// (coll_id, idx_id, values to look up, mfp to apply)
     PeekExisting(GlobalId, GlobalId, Option<Vec<Row>>, mz_expr::SafeMfpPlan),
     /// The view can be read directly out of Persist.
-    PeekPersist(GlobalId, mz_expr::SafeMfpPlan),
+    PeekPersist(GlobalId, Option<Row>, mz_expr::SafeMfpPlan),
 }
 
 impl<'a, T: 'a> DisplayText<PlanRenderingContext<'a, T>> for FastPathPlan {
@@ -208,7 +208,7 @@ impl<'a, T: 'a> DisplayText<PlanRenderingContext<'a, T>> for FastPathPlan {
                 ctx.as_mut().reset();
                 Ok(())
             }
-            FastPathPlan::PeekPersist(gid, mfp) => {
+            FastPathPlan::PeekPersist(gid, literal_constraint, mfp) => {
                 ctx.as_mut().set();
                 let (map, filter, project) = mfp.as_map_filter_project();
 
@@ -248,7 +248,13 @@ impl<'a, T: 'a> DisplayText<PlanRenderingContext<'a, T>> for FastPathPlan {
                     .humanizer
                     .humanize_id(*gid)
                     .unwrap_or_else(|| gid.to_string());
-                writeln!(f, "{}PeekPersist {human_id}", ctx.as_mut())?;
+                write!(f, "{}PeekPersist {human_id}", ctx.as_mut())?;
+                if let Some(literal) = literal_constraint {
+                    let value = mode.expr(literal, None);
+                    writeln!(f, " [value={}]", value)?;
+                } else {
+                    writeln!(f, "")?;
+                }
                 ctx.as_mut().reset();
                 Ok(())
             }
@@ -306,6 +312,7 @@ pub fn create_fast_path_plan<T: Timestamp>(
     view_id: GlobalId,
     finishing: Option<&RowSetFinishing>,
     persist_fast_path_limit: usize,
+    persist_fast_path_order: bool,
 ) -> Result<Option<FastPathPlan>, OptimizerError> {
     // At this point, `dataflow_plan` contains our best optimized dataflow.
     // We will check the plan to see if there is a fast path to escape full dataflow construction.
@@ -362,6 +369,7 @@ pub fn create_fast_path_plan<T: Timestamp>(
             match mir {
                 MirRelationExpr::Get {
                     id: Id::Global(get_id),
+                    typ: relation_typ,
                     ..
                 } => {
                     // Just grab any arrangement if an arrangement exists
@@ -375,10 +383,41 @@ pub fn create_fast_path_plan<T: Timestamp>(
                             )));
                         }
                     }
-                    // If there is no arrangement, consider peeking the persist shard directly
+
+                    // If there is no arrangement, consider peeking the persist shard directly.
+                    // Generally, we consider a persist peek when the query can definitely be satisfied
+                    // by scanning through a small, constant number of Persist key-values.
                     let safe_mfp = mfp_to_safe_plan(mfp)?;
-                    let (_m, filters, _p) = safe_mfp.as_map_filter_project();
-                    let small_finish = match &finishing {
+                    let (_maps, filters, projection) = safe_mfp.as_map_filter_project();
+
+                    let literal_constraint = if persist_fast_path_order {
+                        let mut row = Row::default();
+                        let mut packer = row.packer();
+                        for (idx, col) in relation_typ.column_types.iter().enumerate() {
+                            if !preserves_order(&col.scalar_type) {
+                                break;
+                            }
+                            let col_expr = MirScalarExpr::Column(idx);
+
+                            let Some((literal, _)) = filters
+                                .iter()
+                                .filter_map(|f| f.expr_eq_literal(&col_expr))
+                                .next()
+                            else {
+                                break;
+                            };
+                            packer.extend_by_row(&literal);
+                        }
+                        if row.is_empty() {
+                            None
+                        } else {
+                            Some(row)
+                        }
+                    } else {
+                        None
+                    };
+
+                    let finish_ok = match &finishing {
                         None => false,
                         Some(RowSetFinishing {
                             order_by,
@@ -386,14 +425,50 @@ pub fn create_fast_path_plan<T: Timestamp>(
                             offset,
                             ..
                         }) => {
-                            order_by.is_empty()
-                                && limit.iter().any(|l| {
-                                    usize::cast_from(*l) + *offset < persist_fast_path_limit
+                            let order_ok = if persist_fast_path_order {
+                                order_by.iter().enumerate().all(|(idx, order)| {
+                                    // Map the ordering column back to the column in the source data.
+                                    // (If it's not one of the input columns, we can't make any guarantees.)
+                                    let column_idx = projection[order.column];
+                                    if column_idx >= safe_mfp.input_arity {
+                                        return false;
+                                    }
+                                    let column_type = &relation_typ.column_types[column_idx];
+                                    let index_ok = idx == column_idx;
+                                    let nulls_ok = !column_type.nullable || order.nulls_last;
+                                    let asc_ok = !order.desc;
+                                    let type_ok = preserves_order(&column_type.scalar_type);
+                                    index_ok && nulls_ok && asc_ok && type_ok
                                 })
+                            } else {
+                                order_by.is_empty()
+                            };
+                            let limit_ok = limit.map_or(false, |l| {
+                                usize::cast_from(l) + *offset < persist_fast_path_limit
+                            });
+                            order_ok && limit_ok
                         }
                     };
-                    if filters.is_empty() && small_finish {
-                        return Ok(Some(FastPathPlan::PeekPersist(*get_id, safe_mfp)));
+
+                    let key_constraint = if let Some(literal) = &literal_constraint {
+                        let prefix_len = literal.iter().count();
+                        relation_typ
+                            .keys
+                            .iter()
+                            .any(|k| k.iter().all(|idx| *idx < prefix_len))
+                    } else {
+                        false
+                    };
+
+                    // We can generate a persist peek when:
+                    // - We have a literal constraint that includes an entire key (so we'll return at most one value)
+                    // - We can return the first N key values (no filters, small limit, consistent order)
+                    if key_constraint || (filters.is_empty() && finish_ok) {
+                        return Ok(Some(FastPathPlan::PeekPersist(
+                            *get_id,
+                            literal_constraint,
+                            safe_mfp,
+                        )));
                     }
                 }
                 MirRelationExpr::Join { implementation, .. } => {
@@ -536,8 +611,16 @@ impl crate::coord::Coordinator {
                 PeekTarget::Index { id: idx_id },
                 StatementExecutionStrategy::FastPath,
             ),
-            PeekPlan::FastPath(FastPathPlan::PeekPersist(coll_id, map_filter_project)) => {
-                let peek_command = (None, timestamp, map_filter_project);
+            PeekPlan::FastPath(FastPathPlan::PeekPersist(
+                coll_id,
+                literal_constraint,
+                map_filter_project,
+            )) => {
+                let peek_command = (
+                    literal_constraint.map(|r| vec![r]),
+                    timestamp,
+                    map_filter_project,
+                );
                 let metadata = self
                     .controller
                     .storage

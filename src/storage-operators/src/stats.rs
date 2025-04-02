@@ -9,6 +9,7 @@
 
 //! Types and traits that connect up our mz-repr types with the stats that persist maintains.
 
+use mz_expr::{ResultSpec, SafeMfpPlan};
 use mz_persist_client::metrics::Metrics;
 use mz_persist_client::read::{Cursor, LazyPartStats, ReadHandle, Since};
 use mz_repr::{RelationDesc, Row, Timestamp};
@@ -40,25 +41,30 @@ impl StatsCursor {
         // and we have to go through txn-wal for reads.
         txns_read: Option<&mut TxnsCache<Timestamp, TxnsCodecRow>>,
         metrics: &Metrics,
+        mfp_plan: &SafeMfpPlan,
         desc: &RelationDesc,
         as_of: Antichain<Timestamp>,
     ) -> Result<StatsCursor, Since<Timestamp>> {
-        let should_fetch = |name: &'static str, count: fn(&RelationPartStats) -> Option<usize>| {
+        let should_fetch = |name: &'static str, errors: bool| {
             move |stats: Option<&LazyPartStats>| {
                 let Some(stats) = stats else { return true };
                 let stats = stats.decode();
                 let metrics = &metrics.pushdown.part_stats;
                 let relation_stats = RelationPartStats::new(name, metrics, desc, &stats);
-                count(&relation_stats).map_or(true, |n| n > 0)
+                if errors {
+                    relation_stats.err_count().map_or(true, |e| e > 0)
+                } else {
+                    relation_stats.may_match_mfp(ResultSpec::value_all(), mfp_plan)
+                }
             }
         };
         let (errors, data) = match txns_read {
             None => {
                 let errors = handle
-                    .snapshot_cursor(as_of.clone(), should_fetch("errors", |s| s.err_count()))
+                    .snapshot_cursor(as_of.clone(), should_fetch("errors", true))
                     .await?;
                 let data = handle
-                    .snapshot_cursor(as_of.clone(), should_fetch("data", |s| s.ok_count()))
+                    .snapshot_cursor(as_of.clone(), should_fetch("data", false))
                     .await?;
                 (errors, data)
             }
@@ -70,10 +76,10 @@ impl StatsCursor {
                 let _ = txns_read.update_gt(&as_of).await;
                 let data_snapshot = txns_read.data_snapshot(handle.shard_id(), as_of);
                 let errors: Cursor<SourceData, (), Timestamp, i64> = data_snapshot
-                    .snapshot_cursor(handle, should_fetch("errors", |s| s.err_count()))
+                    .snapshot_cursor(handle, should_fetch("errors", true))
                     .await?;
                 let data = data_snapshot
-                    .snapshot_cursor(handle, should_fetch("data", |s| s.ok_count()))
+                    .snapshot_cursor(handle, should_fetch("data", false))
                     .await?;
                 (errors, data)
             }

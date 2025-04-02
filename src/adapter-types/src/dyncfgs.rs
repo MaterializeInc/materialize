@@ -124,6 +124,12 @@ pub const CONSTRAINT_BASED_TIMESTAMP_SELECTION: Config<&'static str> = Config::n
     "Whether to use the constraint-based timestamp selection, one of: enabled, disabled, verify",
 );
 
+pub const PERSIST_FAST_PATH_ORDER: Config<bool> = Config::new(
+    "persist_fast_path_order",
+    false,
+    "If set, send queries with a compatible literal constraint or ordering clause down the Persist fast path.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -143,4 +149,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_EXPRESSION_CACHE)
         .add(&ENABLE_MULTI_REPLICA_SOURCES)
         .add(&CONSTRAINT_BASED_TIMESTAMP_SELECTION)
+        .add(&PERSIST_FAST_PATH_ORDER)
 }

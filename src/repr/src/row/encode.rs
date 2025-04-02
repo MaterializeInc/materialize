@@ -95,7 +95,6 @@ pub fn preserves_order(scalar_type: &ScalarType) -> bool {
         | ScalarType::UInt16
         | ScalarType::UInt32
         | ScalarType::UInt64
-        | ScalarType::Numeric { .. }
         | ScalarType::Date
         | ScalarType::Time
         | ScalarType::Timestamp { .. }
@@ -114,6 +113,9 @@ pub fn preserves_order(scalar_type: &ScalarType) -> bool {
         // Our floating-point encoding preserves order generally, but differs when comparing
         // -0 and 0. Opt these out for now.
         ScalarType::Float32 | ScalarType::Float64 => false,
+        // Numeric is sensitive to similar ordering issues as floating point numbers, and requires
+        // some special handling we don't have yet.
+        ScalarType::Numeric { .. } => false,
         // For all other types: either the encoding is known to not preserve ordering, or we
         // don't yet care to make strong guarantees one way or the other.
         ScalarType::PgLegacyChar
