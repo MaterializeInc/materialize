@@ -712,15 +712,20 @@ where
                                 // else is a logic bug we can't handle at the metric layer. We also
                                 // assume this addition doesn't overflow.
                                 match (is_value, diff.is_positive()) {
-                                    (true, true) => builder.metrics.inserts += diff.unsigned_abs(),
+                                    (true, true) => {
+                                        builder.metrics.inserts += diff.unsigned_abs().into_inner()
+                                    }
                                     (true, false) => {
-                                        builder.metrics.retractions += diff.unsigned_abs()
+                                        builder.metrics.retractions +=
+                                            diff.unsigned_abs().into_inner()
                                     }
                                     (false, true) => {
-                                        builder.metrics.error_inserts += diff.unsigned_abs()
+                                        builder.metrics.error_inserts +=
+                                            diff.unsigned_abs().into_inner()
                                     }
                                     (false, false) => {
-                                        builder.metrics.error_retractions += diff.unsigned_abs()
+                                        builder.metrics.error_retractions +=
+                                            diff.unsigned_abs().into_inner()
                                     }
                                 }
                             }

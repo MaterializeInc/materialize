@@ -1350,6 +1350,12 @@ impl IndexPeek {
                     cursor.key(&storage),
                 ));
             }
+            if copies.is_overflown() {
+                return Err(format!(
+                    "Overflow detected for row: {}",
+                    cursor.key(&storage),
+                ));
+            }
             if copies.is_positive() {
                 return Err(cursor.key(&storage).to_string());
             }
@@ -1478,6 +1484,8 @@ impl IndexPeek {
                             -copies,
                             &*borrow,
                         ));
+                    } else if copies.is_overflown() {
+                        return Err(format!("Overflow detected for row: {:?}", &*borrow,));
                     } else {
                         copies.into_inner().try_into().unwrap()
                     };
