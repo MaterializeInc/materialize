@@ -353,12 +353,13 @@ impl<'a> Transaction<'a> {
         vars: RoleVars,
         oid: u32,
     ) -> Result<(), CatalogError> {
-        if attributes.has_password() {
+        if let Some(ref password) = attributes.password {
+            let hash = mz_auth::hash::scram256_hash(&password);
+            //TODO(dov): actually set the updated_at field
             match self.role_auth.insert(
                 RoleAuthKey { role_id: id },
                 RoleAuthValue {
-                    //TODO (dov): actually hash the password, actually store the time
-                    password_hash: attributes.password.clone(),
+                    password_hash: Some(hash),
                     updated_at: 0,
                 },
                 self.op_id,
@@ -1443,28 +1444,30 @@ impl<'a> Transaction<'a> {
     /// DO NOT call this function in a loop, implement and use some `Self::update_roles` instead.
     /// You should model it after [`Self::update_items`].
     pub fn update_role(&mut self, id: RoleId, role: Role) -> Result<(), CatalogError> {
-        if role.attributes.has_password() {
-            // TODO(dov): actually hash the password, actually set the time
-            // TODO check if it exists, create it if not
-            if !self.role_auth.update_by_key(
-                RoleAuthKey { role_id: id },
-                RoleAuthValue {
-                    password_hash: role.attributes.password.clone(),
+        let key = RoleKey { id };
+        if self.roles.get(&key).is_some() {
+            if let Some(ref password) = role.attributes.password {
+                let hash = mz_auth::hash::scram256_hash(&password);
+                //TODO: correct updated_at
+                let value = RoleAuthValue {
+                    password_hash: Some(hash),
                     updated_at: 0,
-                },
-                self.op_id,
-            )? {
-                return Err(SqlCatalogError::UnknownRole(id.to_string()).into());
+                };
+
+                let auth_key = RoleAuthKey { role_id: id };
+                if self.role_auth.get(&auth_key).is_some() {
+                    self.role_auth.update_by_key(auth_key, value, self.op_id)?;
+                } else {
+                    self.role_auth.insert(auth_key, value, self.op_id)?;
+                }
             }
-            println!("after update {:?}", self.role_auth);
-        }
-        let updated =
+
             self.roles
-                .update_by_key(RoleKey { id }, role.into_key_value().1, self.op_id)?;
-        if updated {
+                .update_by_key(key, role.into_key_value().1, self.op_id)?;
+
             Ok(())
         } else {
-            Err(SqlCatalogError::UnknownItem(id.to_string()).into())
+            Err(SqlCatalogError::UnknownRole(id.to_string()).into())
         }
     }
 

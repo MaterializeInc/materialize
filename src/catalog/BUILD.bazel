@@ -33,6 +33,7 @@ rust_library(
     deps = [
         "//src/adapter-types:mz_adapter_types",
         "//src/audit-log:mz_audit_log",
+        "//src/auth:mz_auth",
         "//src/build-info:mz_build_info",
         "//src/catalog-protos:mz_catalog_protos",
         "//src/cloud-resources:mz_cloud_resources",

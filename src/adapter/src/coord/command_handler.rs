@@ -14,6 +14,7 @@ use differential_dataflow::lattice::Lattice;
 use mz_adapter_types::dyncfgs::ALLOW_USER_SESSIONS;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
 use mz_sql::session::metadata::SessionMetadata;
+use mz_storage_types::connections::aws::proto_aws_connection::Auth;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -251,14 +252,20 @@ impl Coordinator {
         role_name: String,
         password: Option<String>,
     ) {
-        //TODO(dov): actually implement authentication
+        if !password.is_some() {
+            // The user did not provide a password.
+            let _ = tx.send(Err(AdapterError::AuthenticationError));
+            return;
+        }
+        let password = password.expect("a password, we don't support other auth modes for now");
         if let Some(role) = self.catalog().try_get_role_by_name(role_name.as_str()) {
             if let Some(auth) = self.catalog().try_get_role_auth_by_id(&role.id) {
                 if let Some(hash) = &auth.password_hash {
-                    if password.as_deref() == Some(hash) {
-                        let _ = tx.send(Ok(AuthResponse { role_id: role.id }));
-                        return;
-                    }
+                    let _ = match mz_auth::hash::scram256_verify(&password, &hash) {
+                        Ok(_) => tx.send(Ok(AuthResponse { role_id: role.id })),
+                        Err(_) => tx.send(Err(AdapterError::AuthenticationError)),
+                    };
+                    return;
                 }
             }
             // Authentication failed due to incorrect password or missing password hash.
