@@ -455,11 +455,11 @@ where
         }
     }
 
-    /// Update scheduling decisions for ingestions, that is what replicas should
-    /// be running a given ingestion, if needed.
+    /// Update scheduling decisions, that is what replicas should be running a
+    /// given object, if needed.
     ///
     /// An important property of this scheduling algorithm is that we never
-    /// change the scheduling decision for single-replica ingestions unless we
+    /// change the scheduling decision for single-replica objects unless we
     /// have to, that is unless the replica that they are running on goes away.
     /// We do this, so that we don't send a mix of "run"/"allow
     /// compaction"/"run" messages to replicas, which wouldn't deal well with
@@ -468,11 +468,11 @@ where
     /// order of `ReplicaId`. We do this latter so that the scheduling decision
     /// is stable across restarts of `environmentd`/the controller.
     ///
-    /// For multi-replica ingestions (e.g. Kafka), each active ingestion is
+    /// For multi-replica objects (e.g. Kafka ingestions), each active object is
     /// scheduled on all replicas.
     ///
     /// If `send_commands` is true, will send commands for newly-scheduled
-    /// single-replica ingestions.
+    /// single-replica objects.
     fn update_scheduling(&mut self, send_commands: bool) {
         #[derive(Debug)]
         enum ObjectId {
