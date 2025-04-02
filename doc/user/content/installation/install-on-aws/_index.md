@@ -16,7 +16,7 @@ menu:
 The tutorial deploys Materialize to AWS Elastic Kubernetes Service (EKS) with a
 PostgreSQL RDS database as the metadata database and AWS S3 for blob storage.
 The tutorial uses [Materialize on AWS Terraform
-modules](https://github.com/MaterializeInc/terraform-aws-materialize) to:
+module](https://github.com/MaterializeInc/terraform-aws-materialize) to:
 
 - Set up the AWS Kubernetes environment.
 - Call
@@ -68,10 +68,10 @@ documentation](https://helm.sh/docs/intro/install/).
 
 {{< /warning >}}
 
-Materialize provides [Materialize on AWS Terraform
-modules](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/README.md)
-for evaluation purposes only. The modules deploy a sample infrastructure on AWS
-(region `us-east-1`) with the following components:
+[Materialize on AWS Terraform
+module](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/README.md)
+deploys a sample infrastructure on AWS (region `us-east-1`) with the following
+components:
 
 {{< yaml-table data="self_managed/aws_terraform_deployed_components" >}}
 
@@ -288,7 +288,7 @@ for evaluation purposes only. The modules deploy a sample infrastructure on AWS
    {{< tip >}}
    {{% self-managed/aws-terraform-upgrade-notes %}}
 
-   See [Materialize on AWS releases](/installation/appendix-terraforms/#materialize-on-aws-terraform-modules) for notable changes.
+   See [Materialize on AWS releases](/installation/appendix-terraforms/#materialize-on-aws-terraform-module) for notable changes.
    {{</ tip >}}
 
 1. Run `terraform plan` with both `.tfvars` files and review the changes to be
