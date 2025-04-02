@@ -15,15 +15,15 @@
 
 //! A newtype for values that should be ignored when comparing two values for equality.
 
+use derivative::Derivative;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::cmp::Ordering;
-use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::ops::Deref;
 
 /// Behaves like `T`, but has trivial `Hash`, `Eq`, `MzReflect`, and `Ord`
-/// implementations.
-#[derive(Clone, Default)]
+/// implementations. Does not appear in `Debug` output.
+#[derive(Clone, Default, Derivative)]
+#[derivative(Debug="transparent")]
 pub struct TreatAsEqual<T>(pub T);
 
 impl<T> Hash for TreatAsEqual<T> {
@@ -47,20 +47,6 @@ impl<T> PartialOrd for TreatAsEqual<T> {
 impl<T> Ord for TreatAsEqual<T> {
     fn cmp(&self, _other: &Self) -> Ordering {
         Ordering::Equal
-    }
-}
-
-impl<T> Deref for TreatAsEqual<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<T: std::fmt::Debug> std::fmt::Debug for TreatAsEqual<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self.0)
     }
 }
 

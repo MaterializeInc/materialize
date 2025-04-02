@@ -50,7 +50,7 @@ pub mod like_pattern;
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.scalar.rs"));
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, MzReflect)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, MzReflect)]
 pub enum MirScalarExpr {
     /// A column of the input row
     Column(usize, TreatAsEqual<Option<Arc<str>>>),
@@ -89,6 +89,35 @@ pub enum MirScalarExpr {
         then: Box<MirScalarExpr>,
         els: Box<MirScalarExpr>,
     },
+}
+
+// We need a custom Debug because we don't want to show `None` for name information.
+// Sadly, the `derivative` crate doesn't support this use case.
+impl std::fmt::Debug for MirScalarExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MirScalarExpr::Column(i, TreatAsEqual(Some(name))) => {
+                write!(f, "Column({i}, {name:?})")
+            }
+            MirScalarExpr::Column(i, TreatAsEqual(None)) => write!(f, "Column({i})"),
+            MirScalarExpr::Literal(lit, typ) => write!(f, "Literal({lit:?}, {typ:?})"),
+            MirScalarExpr::CallUnmaterializable(func) => {
+                write!(f, "CallUnmaterializable({func:?})")
+            }
+            MirScalarExpr::CallUnary { func, expr } => {
+                write!(f, "CallUnary({func:?}, {expr:?})")
+            }
+            MirScalarExpr::CallBinary { func, expr1, expr2 } => {
+                write!(f, "CallBinary({func:?}, {expr1:?}, {expr2:?})")
+            }
+            MirScalarExpr::CallVariadic { func, exprs } => {
+                write!(f, "CallVariadic({func:?}, {exprs:?})")
+            }
+            MirScalarExpr::If { cond, then, els } => {
+                write!(f, "If({cond:?}, {then:?}, {els:?})")
+            }
+        }
+    }
 }
 
 impl Arbitrary for MirScalarExpr {
