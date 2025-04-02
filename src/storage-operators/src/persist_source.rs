@@ -11,7 +11,7 @@
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use mz_dyncfg::ConfigSet;
-use mz_persist_client::project::{error_free, ProjectionPushdown};
+use mz_persist_client::project::error_free;
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::Future;
@@ -30,9 +30,9 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::{PersistConfig, RetryParameters};
 use mz_persist_client::fetch::{FetchedBlob, FetchedPart};
 use mz_persist_client::fetch::{SerdeLeasedBatchPart, ShardSourcePart};
-use mz_persist_client::operators::shard_source::{shard_source, SnapshotMode};
+use mz_persist_client::operators::shard_source::{shard_source, FilterResult, SnapshotMode};
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_persist_types::{Codec, Codec64};
+use mz_persist_types::Codec64;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_storage_types::controller::{CollectionMetadata, TxnsCodecRow};
 use mz_storage_types::errors::DataflowError;
@@ -303,18 +303,6 @@ where
 {
     let cfg = persist_clients.cfg().clone();
     let name = source_id.to_string();
-    let ignores_data = map_filter_project
-        .as_ref()
-        .map_or(false, |x| x.ignores_input());
-    let project = if ignores_data {
-        ProjectionPushdown::IgnoreAllNonErr {
-            err_col_name: "err",
-            key_bytes: SourceData(Ok(Row::default())).encode_to_vec(),
-            val_bytes: ().encode_to_vec(),
-        }
-    } else {
-        ProjectionPushdown::FetchAll
-    };
     let filter_plan = map_filter_project.as_ref().map(|p| (*p).clone());
 
     // N.B. `read_schema` may be a subset of the total columns for this shard.
@@ -365,13 +353,13 @@ where
             let Some(lower) = frontier.as_option().copied() else {
                 // If the frontier has advanced to the empty antichain,
                 // we'll never emit any rows from any part.
-                return false;
+                return FilterResult::Discard;
             };
 
             if lower > upper {
                 // The frontier timestamp is larger than the until of the dataflow:
                 // anything from this part will necessarily be filtered out.
-                return false;
+                return FilterResult::Discard;
             }
 
             let time_range =
@@ -379,34 +367,30 @@ where
             if let Some(plan) = &filter_plan {
                 let metrics = &metrics.pushdown.part_stats;
                 let stats = RelationPartStats::new(&filter_name, metrics, &read_desc, stats);
-                filter_may_match(&read_desc, time_range, stats, plan)
+                filter_result(&read_desc, time_range, stats, plan)
             } else {
-                true
+                FilterResult::Keep
             }
         },
         listen_sleep,
         start_signal,
         error_handler,
-        project,
     );
     let rows = decode_and_mfp(cfg, &fetched, &name, until, map_filter_project);
     (rows, token)
 }
 
-fn filter_may_match(
+fn filter_result(
     relation_desc: &RelationDesc,
     time_range: ResultSpec,
     stats: RelationPartStats,
     plan: &MfpPlan,
-) -> bool {
+) -> FilterResult {
     let arena = RowArena::new();
     let mut ranges = ColumnSpecs::new(relation_desc.typ(), &arena);
     ranges.push_unmaterializable(UnmaterializableFunc::MzNow, time_range);
 
-    if stats.err_count().into_iter().any(|count| count > 0) {
-        // If the error collection is nonempty, we always keep the part.
-        return true;
-    }
+    let may_error = stats.err_count().map_or(true, |count| count > 0);
 
     // N.B. We may have pushed down column "demands" into Persist, so this
     // relation desc may have a different set of columns than the stats.
@@ -415,7 +399,19 @@ fn filter_may_match(
         ranges.push_column(pos, result_spec);
     }
     let result = ranges.mfp_plan_filter(plan).range;
-    result.may_contain(Datum::True) || result.may_fail()
+    let may_error = may_error || result.may_fail();
+    let may_keep = result.may_contain(Datum::True);
+    let may_skip = result.may_contain(Datum::False) || result.may_contain(Datum::Null);
+    if relation_desc.len() == 0 && !may_error && !may_skip {
+        FilterResult::ReplaceWith {
+            key: vec![],
+            val: vec![],
+        }
+    } else if may_error || may_keep {
+        FilterResult::Keep
+    } else {
+        FilterResult::Discard
+    }
 }
 
 pub fn decode_and_mfp<G>(

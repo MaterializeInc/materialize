@@ -56,8 +56,6 @@ pub enum ProjectionPushdown {
     /// "persist is independent of mz" story, but it should go away when we
     /// implement full projection pushdown.
     IgnoreAllNonErr {
-        /// The name of the top-level error column.
-        err_col_name: &'static str,
         /// The `Codec` encoded key corresponding to ignored data.
         key_bytes: Vec<u8>,
         /// The `Codec` encoded val corresponding to ignored data.
@@ -100,15 +98,14 @@ impl ProjectionPushdown {
         if !OPTIMIZE_IGNORED_DATA_FETCH.get(cfg) {
             return None;
         }
-        let (err_col_name, key_bytes, val_bytes) = match self {
+        let (key_bytes, val_bytes) = match self {
             ProjectionPushdown::FetchAll => return None,
             ProjectionPushdown::IgnoreAllNonErr {
-                err_col_name,
                 key_bytes,
                 val_bytes,
-            } => (*err_col_name, key_bytes.as_slice(), val_bytes.as_slice()),
+            } => (key_bytes.as_slice(), val_bytes.as_slice()),
         };
-        let (diffs_sum, stats) = match &part {
+        let (diffs_sum, _stats) = match &part {
             BatchPart::Hollow(x) => (x.diffs_sum, x.stats.as_ref()),
             BatchPart::Inline { .. } => return None,
         };
@@ -129,9 +126,6 @@ impl ProjectionPushdown {
             return None;
         }
         let Some(diffs_sum) = diffs_sum else {
-            return None;
-        };
-        let Some(true) = error_free(stats.map(|x| x.decode()), err_col_name) else {
             return None;
         };
 
