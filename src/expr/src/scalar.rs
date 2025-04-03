@@ -1241,10 +1241,16 @@ impl MirScalarExpr {
                                         BinaryFunc::RegexpReplace { regex, limit },
                                     )
                                 }
-                                Err(err) => MirScalarExpr::literal(
-                                    Err(err),
-                                    e.typ(column_types).scalar_type,
-                                ),
+                                Err(err) => {
+                                    let mut exprs = mem::take(exprs);
+                                    let source = exprs.swap_remove(0);
+                                    let scalar_type = e.typ(column_types).scalar_type;
+                                    // We need to return `NULL` on `NULL` input, and error otherwise.
+                                    source.call_is_null().if_then_else(
+                                        MirScalarExpr::literal_null(scalar_type.clone()),
+                                        MirScalarExpr::literal(Err(err), scalar_type),
+                                    )
+                                }
                             };
                         } else if *func == VariadicFunc::RegexpSplitToArray
                             && exprs[1].is_literal()
