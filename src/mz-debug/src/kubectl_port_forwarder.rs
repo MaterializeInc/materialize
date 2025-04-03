@@ -169,3 +169,14 @@ pub async fn create_kubectl_port_forwarder(
 
     Err(anyhow::anyhow!("No SQL port forwarding info found"))
 }
+
+pub fn create_mz_connection_url(
+    local_address: String,
+    local_port: i32,
+    connection_url_override: Option<String>,
+) -> String {
+    if let Some(connection_url_override) = connection_url_override {
+        return connection_url_override;
+    }
+    format!("postgres://{}:{}?sslmode=prefer", local_address, local_port)
+}

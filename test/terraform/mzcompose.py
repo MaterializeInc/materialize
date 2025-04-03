@@ -141,8 +141,6 @@ def mz_debug(env: dict[str, str] | None = None) -> None:
             "--bin",
             "mz-debug",
             "--",
-            "--url",
-            "postgres://localhost:6875/materialize",
             "self-managed",
             "--k8s-namespace",
             "materialize-environment",

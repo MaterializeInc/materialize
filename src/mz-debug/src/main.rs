@@ -67,6 +67,17 @@ pub struct SelfManagedDebugMode {
     /// The port to listen on for the port-forward.
     #[clap(long, default_value = "6875")]
     port_forward_local_port: i32,
+    /// The URL of the Materialize SQL connection used to dump the system catalog.
+    /// An example URL is `postgres://root@127.0.0.1:6875/materialize?sslmode=disable`.
+    /// By default, we will create use the connection URL based on `port_forward_local_address` and `port_forward_local_port`.
+    /// and port_forward_local_port.
+    // TODO(debug_tool3): Allow users to specify the pgconfig via separate variables
+    #[clap(
+        long,
+        env = "MZ_CONNECTION_URL",
+        value_parser = validate_pg_connection_string,
+    )]
+    mz_connection_url: Option<String>,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -77,6 +88,17 @@ pub struct EmulatorDebugMode {
     /// The ID of the docker container to dump.
     #[clap(long, required_if_eq("dump_docker", "true"))]
     docker_container_id: Option<String>,
+    /// The URL of the Materialize SQL connection used to dump the system catalog.
+    /// An example URL is `postgres://root@127.0.0.1:6875/materialize?sslmode=disable`.
+    // TODO(debug_tool3): Allow users to specify the pgconfig via separate variables
+    #[clap(
+        long,
+        env = "MZ_CONNECTION_URL",
+        // We assume that the emulator is running on the default port.
+        default_value = "postgres://127.0.0.1:6875/materialize?sslmode=prefer",
+        value_parser = validate_pg_connection_string,
+    )]
+    mz_connection_url: String,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -95,11 +117,6 @@ pub struct Args {
     /// If true, the tool will dump the system catalog in Materialize.
     #[clap(long, default_value = "true", action = clap::ArgAction::Set)]
     dump_system_catalog: bool,
-    /// The URL of the Materialize SQL connection used to dump the system catalog.
-    /// An example URL is `postgres://root@127.0.0.1:6875/materialize?sslmode=disable`.
-    // TODO(debug_tool3): Allow users to specify the pgconfig via separate variables
-    #[clap(long, required = true, value_parser = validate_pg_connection_string)]
-    mz_connection_url: String,
 }
 
 pub trait ContainerDumper {
@@ -149,7 +166,9 @@ pub struct Context {
 #[tokio::main]
 async fn main() {
     let args: Args = cli::parse_args(CliConfig {
-        env_prefix: Some("MZ_DEBUG_"),
+        // mz_ore::cli::parse_args' env_prefix doesn't apply for subcommand flags. Thus
+        // we manually set each env_prefix to MZ_ for each flag.
+        env_prefix: None,
         enable_version_flag: true,
     });
 
@@ -193,7 +212,7 @@ async fn main() {
 async fn run(context: Context, args: Args) -> Result<(), anyhow::Error> {
     // Depending on if the user is debugging either a k8s environments or docker environment,
     // dump the respective system's resources.
-    let container_system_dumper = match args.debug_mode {
+    let container_system_dumper = match &args.debug_mode {
         DebugMode::SelfManaged(args) => {
             if args.dump_k8s {
                 let client = match create_k8s_client(args.k8s_context.clone()).await {
@@ -205,7 +224,7 @@ async fn run(context: Context, args: Args) -> Result<(), anyhow::Error> {
                 };
 
                 if args.auto_port_forward {
-                    let port_forwarder = create_kubectl_port_forwarder(&client, &args).await?;
+                    let port_forwarder = create_kubectl_port_forwarder(&client, args).await?;
                     task::spawn(|| "port-forwarding", async move {
                         port_forwarder.port_forward().await;
                     });
@@ -217,8 +236,8 @@ async fn run(context: Context, args: Args) -> Result<(), anyhow::Error> {
                 let dumper = ContainerServiceDumper::new_k8s_dumper(
                     &context,
                     client,
-                    args.k8s_namespaces,
-                    args.k8s_context,
+                    args.k8s_namespaces.clone(),
+                    args.k8s_context.clone(),
                     args.k8s_dump_secret_values,
                 );
                 Some(dumper)
@@ -228,14 +247,15 @@ async fn run(context: Context, args: Args) -> Result<(), anyhow::Error> {
         }
         DebugMode::Emulator(args) => {
             if args.dump_docker {
-                None
-            } else {
                 let docker_container_id = args
                     .docker_container_id
+                    .clone()
                     .expect("docker_container_id is required");
                 let dumper =
                     ContainerServiceDumper::new_docker_dumper(&context, docker_container_id);
                 Some(dumper)
+            } else {
+                None
             }
         }
     };
@@ -244,11 +264,19 @@ async fn run(context: Context, args: Args) -> Result<(), anyhow::Error> {
         dumper.dump_container_resources().await;
     }
 
+    let connection_url = match &args.debug_mode {
+        DebugMode::SelfManaged(args) => kubectl_port_forwarder::create_mz_connection_url(
+            args.port_forward_local_address.clone(),
+            args.port_forward_local_port,
+            args.mz_connection_url.clone(),
+        ),
+        DebugMode::Emulator(args) => args.mz_connection_url.clone(),
+    };
     if args.dump_system_catalog {
         // Dump the system catalog.
         let catalog_dumper = match system_catalog_dumper::SystemCatalogDumper::new(
             &context,
-            &args.mz_connection_url,
+            &connection_url,
         )
         .await
         {

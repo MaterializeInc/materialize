@@ -443,7 +443,7 @@ static RELATIONS: &[Relation] = &[
     },
 ];
 
-static PG_CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
+static PG_CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
 /// Timeout for a query.
 // TODO (debug_tool3): Make this configurable.
 static PG_QUERY_TIMEOUT: Duration = Duration::from_secs(20);
