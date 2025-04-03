@@ -21,6 +21,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
+use arrow::array::ArrayRef;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
@@ -60,8 +61,13 @@ pub enum FilterResult {
     /// This dataflow is guaranteed to filter out all records in this part.
     Discard,
     /// This dataflow will keep all the rows, but the values are irrelevant:
-    /// include the given KV data instead.
-    ReplaceWith { key: Vec<u8>, val: Vec<u8> },
+    /// include the given single-row KV data instead.
+    ReplaceWith {
+        /// The single-element key column.
+        key: ArrayRef,
+        /// The single-element val column.
+        val: ArrayRef,
+    },
 }
 
 impl FilterResult {
@@ -521,13 +527,8 @@ where
                             }
                         }
                         FilterResult::ReplaceWith { key, val } => {
-                            part_desc.maybe_optimize(
-                                &cfg,
-                                &ProjectionPushdown::IgnoreAllNonErr {
-                                    key_bytes: key,
-                                    val_bytes: val,
-                                },
-                            );
+                            part_desc
+                                .maybe_optimize(&cfg, &ProjectionPushdown::IgnoreAll { key, val });
                             audit_budget_bytes = audit_budget_bytes
                                 .saturating_add(part_desc.part.encoded_size_bytes());
                             if is_inline {

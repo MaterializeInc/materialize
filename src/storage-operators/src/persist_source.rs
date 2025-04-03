@@ -32,6 +32,7 @@ use mz_persist_client::fetch::{FetchedBlob, FetchedPart};
 use mz_persist_client::fetch::{SerdeLeasedBatchPart, ShardSourcePart};
 use mz_persist_client::operators::shard_source::{shard_source, FilterResult, SnapshotMode};
 use mz_persist_types::codec_impls::UnitSchema;
+use mz_persist_types::columnar::{ColumnEncoder, Schema};
 use mz_persist_types::Codec64;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_storage_types::controller::{CollectionMetadata, TxnsCodecRow};
@@ -403,9 +404,20 @@ fn filter_result(
     let may_keep = result.may_contain(Datum::True);
     let may_skip = result.may_contain(Datum::False) || result.may_contain(Datum::Null);
     if relation_desc.len() == 0 && !may_error && !may_skip {
+        let Ok(mut key) = <RelationDesc as Schema<Row>>::encoder(relation_desc) else {
+            return FilterResult::Keep;
+        };
+        key.append(&Row::default());
+        let key = key.finish();
+        let Ok(mut val) = <UnitSchema as Schema<()>>::encoder(&UnitSchema) else {
+            return FilterResult::Keep;
+        };
+        val.append(&());
+        let val = val.finish();
+
         FilterResult::ReplaceWith {
-            key: vec![],
-            val: vec![],
+            key: Arc::new(key),
+            val: Arc::new(val),
         }
     } else if may_error || may_keep {
         FilterResult::Keep

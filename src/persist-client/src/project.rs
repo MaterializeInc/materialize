@@ -9,14 +9,17 @@
 
 //! Projection pushdown
 
+use arrow::array::ArrayRef;
 use differential_dataflow::trace::Description;
 use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::cast::CastFrom;
-use mz_persist::indexed::columnar::ColumnarRecordsBuilder;
+use mz_persist::indexed::columnar::ColumnarRecordsStructuredExt;
 use mz_persist::indexed::encoding::BlobTraceUpdates;
+use mz_persist_types::part::Codec64Mut;
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
+use std::sync::Arc;
 use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
@@ -46,20 +49,13 @@ pub(crate) const OPTIMIZE_IGNORED_DATA_DECODE: Config<bool> = Config::new(
 pub enum ProjectionPushdown {
     /// Fetch all columns.
     FetchAll,
-    /// For data with a top-level error column in the structured representation,
-    /// ignore all columns except for data in parts that may contain an error.
-    /// This may seem like a peculiar set of requirements, but it enables the
-    /// aggressive [Self::try_optimize_ignored_data_fetch] optimization and it
-    /// corresponds to a common query shape: `SELECT count(*)`.
-    ///
-    /// This error bit is certainly a bit of an abstraction breakage in the
-    /// "persist is independent of mz" story, but it should go away when we
-    /// implement full projection pushdown.
-    IgnoreAllNonErr {
-        /// The `Codec` encoded key corresponding to ignored data.
-        key_bytes: Vec<u8>,
-        /// The `Codec` encoded val corresponding to ignored data.
-        val_bytes: Vec<u8>,
+    /// If the timestamp and diff metadata allow it, replace all data with a single
+    /// equivalent row.
+    IgnoreAll {
+        /// The encoded key corresponding to ignored data.
+        key: ArrayRef,
+        /// The encoded val corresponding to ignored data.
+        val: ArrayRef,
     },
 }
 
@@ -70,7 +66,7 @@ impl Default for ProjectionPushdown {
 }
 
 impl ProjectionPushdown {
-    /// If relevant, applies the [Self::IgnoreAllNonErr] projection to a part
+    /// If relevant, applies the [Self::IgnoreAll] projection to a part
     /// about to be fetched.
     ///
     /// If a part contains data from entirely before a snapshot `as_of`, and the
@@ -98,12 +94,9 @@ impl ProjectionPushdown {
         if !OPTIMIZE_IGNORED_DATA_FETCH.get(cfg) {
             return None;
         }
-        let (key_bytes, val_bytes) = match self {
+        let (key, val) = match self {
             ProjectionPushdown::FetchAll => return None,
-            ProjectionPushdown::IgnoreAllNonErr {
-                key_bytes,
-                val_bytes,
-            } => (key_bytes.as_slice(), val_bytes.as_slice()),
+            ProjectionPushdown::IgnoreAll { key, val } => (key, val),
         };
         let (diffs_sum, _stats) = match &part {
             BatchPart::Hollow(x) => (x.diffs_sum, x.stats.as_ref()),
@@ -141,14 +134,28 @@ impl ProjectionPushdown {
             .pushdown
             .parts_faked_bytes
             .inc_by(u64::cast_from(part.encoded_size_bytes()));
-
-        let mut faked_data = ColumnarRecordsBuilder::default();
-        assert!(faked_data.push(((key_bytes, val_bytes), T::encode(as_of), diffs_sum)));
-        let updates = BlobTraceUpdates::Row(faked_data.finish(&metrics.columnar)).into_proto();
+        let timestamps = {
+            let mut col = Codec64Mut::with_capacity(1);
+            col.push(as_of);
+            col.finish()
+        };
+        let diffs = {
+            let mut col = Codec64Mut::with_capacity(1);
+            col.push_raw(diffs_sum);
+            col.finish()
+        };
+        let updates = BlobTraceUpdates::Structured {
+            key_values: ColumnarRecordsStructuredExt {
+                key: Arc::clone(key),
+                val: Arc::clone(val),
+            },
+            timestamps,
+            diffs,
+        };
         let faked_data = LazyInlineBatchPart::from(&ProtoInlineBatchPart {
             desc: Some(desc.into_proto()),
             index: 0,
-            updates: Some(updates),
+            updates: Some(updates.into_proto()),
         });
         Some(BatchPart::Inline {
             updates: faked_data,
