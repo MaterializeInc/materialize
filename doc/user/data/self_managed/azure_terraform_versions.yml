@@ -6,6 +6,18 @@ rows:
 
 - "Terraform version": |
 
+    [v0.3.1](https://github.com/MaterializeInc/terraform-azurerm-materialize/releases/tag/v0.3.1)
+
+  "Notable changes": |
+
+    - By default, deploys [load balancers](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#input_materialize_instances)
+    for each Materialize instance (i.e., the [`create_load_balancer`](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#input_materialize_instances) flag defaults to `true`).
+    The load balancers, by default, are configured to be internal (i.e., the
+    [`internal_load_balancer`](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#input_materialize_instances)
+    flag defaults to `true`).
+
+- "Terraform version": |
+
     [v0.3.0](https://github.com/MaterializeInc/terraform-azurerm-materialize/releases/tag/v0.3.0)
 
   "Notable changes": |

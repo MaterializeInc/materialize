@@ -200,13 +200,14 @@ deploys a sample infrastructure on Azure with the following components:
    Upon successful completion, various fields and their values are output:
 
    ```bash
-   Apply complete! Resources: 24 added, 0 changed, 0 destroyed.
+   Apply complete! Resources: 25 added, 0 changed, 0 destroyed.
 
    Outputs:
 
    aks_cluster = <sensitive>
    connection_strings = <sensitive>
    kube_config = <sensitive>
+   load_balancer_details = {}
    resource_group_name = "mydemo-rg"
    ```
 
@@ -327,6 +328,16 @@ deploys a sample infrastructure on Azure with the following components:
    by default, a self-signed `ClusterIssuer`. The `ClusterIssuer` is deployed
    after the `cert-manager` is deployed and running.
 
+   Starting in v0.3.1, the Materialize on Azure Terraform module also deploys,
+   by default, [Load
+   balancers](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#input_materialize_instances)
+   for Materialize instances (i.e., the
+   [`create_load_balancer`](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#input_materialize_instances)
+   flag defaults to `true`). The load balancers, by default, are configured to
+   be internal (i.e., the
+   [`internal_load_balancer`](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#input_materialize_instances)
+   flag defaults to `true`).
+
    {{< tip >}}
    {{% self-managed/azure-terraform-upgrade-notes %}}
 
@@ -344,7 +355,7 @@ deploys a sample infrastructure on Azure with the following components:
    following:
 
    ```
-   Plan: 7 to add, 1 to change, 0 to destroy.
+   Plan: 9 to add, 1 to change, 0 to destroy.
    ```
 
 1. If you are satisfied with the changes, apply.
@@ -355,16 +366,24 @@ deploys a sample infrastructure on Azure with the following components:
 
    To approve the changes and apply, enter `yes`.
 
+   <a name="azure-terraform-output"></a>
+
    Upon successful completion, you should see output with a summary similar to the following:
 
    ```bash
-   Apply complete! Resources: 7 added, 1 changed, 0 destroyed.
+   Apply complete! Resources: 9 added, 1 changed, 0 destroyed.
 
    Outputs:
 
    aks_cluster = <sensitive>
    connection_strings = <sensitive>
    kube_config = <sensitive>
+   load_balancer_details = {
+      "demo" = {
+         "balancerd_load_balancer_ip" = "192.0.2.10"
+         "console_load_balancer_ip" = "192.0.2.254"
+      }
+   }
    resource_group_name = "mydemo-rg"
    ```
 
@@ -377,39 +396,42 @@ deploys a sample infrastructure on Azure with the following components:
    Wait for the components to be ready and in the `Running` state.
 
    ```none
-   NAME                                             READY   STATUS      RESTARTS      AGE
-   pod/create-db-demo-db-pw7mj                      0/1     Completed   0             39s
-   pod/mzl88mc8f6if-balancerd-b66f4c485-rnvxj       1/1     Running     0             15s
-   pod/mzl88mc8f6if-cluster-s2-replica-s1-gen-1-0   1/1     Running     0             18s
-   pod/mzl88mc8f6if-cluster-u1-replica-u1-gen-1-0   1/1     Running     0             18s
-   pod/mzl88mc8f6if-console-689565cfcc-4dkzf        1/1     Running     0             7s
-   pod/mzl88mc8f6if-console-689565cfcc-g2bqv        1/1     Running     0             7s
-   pod/mzl88mc8f6if-environmentd-1-0                1/1     Running     0             23s
+   NAME                                             READY   STATUS      RESTARTS   AGE
+   pod/db-demo-db-l6ss8                             0/1     Completed   0          2m21s
+   pod/mz62lr3yltj8-balancerd-6d5dd6d4cf-r9nf4      1/1     Running     0          111s
+   pod/mz62lr3yltj8-cluster-s2-replica-s1-gen-1-0   1/1     Running     0          114s
+   pod/mz62lr3yltj8-cluster-u1-replica-u1-gen-1-0   1/1     Running     0          114s
+   pod/mz62lr3yltj8-console-bfc797745-6nlwv         1/1     Running     0          96s
+   pod/mz62lr3yltj8-console-bfc797745-tk9vm         1/1     Running     0          96s
+   pod/mz62lr3yltj8-environmentd-1-0                1/1     Running     0          2m4s
 
-   NAME                                               TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)                                        AGE
-   service/mzl88mc8f6if-balancerd                     ClusterIP   None            <none>        6876/TCP,6875/TCP                              15s
-   service/mzl88mc8f6if-cluster-s2-replica-s1-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   18s
-   service/mzl88mc8f6if-cluster-u1-replica-u1-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   18s
-   service/mzl88mc8f6if-console                       ClusterIP   None            <none>        8080/TCP                                       7s
-   service/mzl88mc8f6if-environmentd                  ClusterIP   None            <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            15s
-   service/mzl88mc8f6if-environmentd-1                ClusterIP   None            <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            23s
-   service/mzl88mc8f6if-persist-pubsub-1              ClusterIP   None            <none>        6879/TCP                                       23s
+   NAME                                               TYPE           CLUSTER-IP     EXTERNAL-IP       PORT(S)                                        AGE
+   service/mz62lr3yltj8-balancerd                     ClusterIP      None           <none>            6876/TCP,6875/TCP                              111s
+   service/mz62lr3yltj8-balancerd-lb                  LoadBalancer   10.1.201.77    192.0.2.10        6875:30890/TCP,6876:31750/TCP                  2m4s
+   service/mz62lr3yltj8-cluster-s2-replica-s1-gen-1   ClusterIP      None           <none>            2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   114s
+   service/mz62lr3yltj8-cluster-u1-replica-u1-gen-1   ClusterIP      None           <none>            2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   114s
+   service/mz62lr3yltj8-console                       ClusterIP      None           <none>            8080/TCP                                       96s
+   service/mz62lr3yltj8-console-lb                    LoadBalancer   10.1.130.212   192.0.2.254       8080:30379/TCP                                 2m4s
+   service/mz62lr3yltj8-environmentd                  ClusterIP      None           <none>            6875/TCP,6876/TCP,6877/TCP,6878/TCP            111s
+   service/mz62lr3yltj8-environmentd-1                ClusterIP      None           <none>            6875/TCP,6876/TCP,6877/TCP,6878/TCP            2m5s
+   service/mz62lr3yltj8-persist-pubsub-1              ClusterIP      None           <none>            6879/TCP                                       2m4s
 
    NAME                                     READY   UP-TO-DATE   AVAILABLE   AGE
-   deployment.apps/mzl88mc8f6if-balancerd   1/1     1            1           15s
-   deployment.apps/mzl88mc8f6if-console     2/2     2            2           7s
+   deployment.apps/mz62lr3yltj8-balancerd   1/1     1            1           111s
+   deployment.apps/mz62lr3yltj8-console     2/2     2            2           96s
 
-   NAME                                               DESIRED   CURRENT   READY      AGE
-   replicaset.apps/mzl88mc8f6if-balancerd-b66f4c485   1         1         1          16s
-   replicaset.apps/mzl88mc8f6if-console-689565cfcc    2         2         2          8s
+   NAME                                                DESIRED   CURRENT   READY   AGE
+   replicaset.apps/mz62lr3yltj8-balancerd-6d5dd6d4cf   1         1         1       111s
+   replicaset.apps/mz62lr3yltj8-console-bfc797745      2         2         2       96s
 
    NAME                                                        READY   AGE
-   statefulset.apps/mzl88mc8f6if-cluster-s2-replica-s1-gen-1   1/1     19s
-   statefulset.apps/mzl88mc8f6if-cluster-u1-replica-u1-gen-1   1/1     19s
-   statefulset.apps/mzl88mc8f6if-environmentd-1                1/1     24s
+   statefulset.apps/mz62lr3yltj8-cluster-s2-replica-s1-gen-1   1/1     114s
+   statefulset.apps/mz62lr3yltj8-cluster-u1-replica-u1-gen-1   1/1     114s
+   statefulset.apps/mz62lr3yltj8-environmentd-1                1/1     2m4s
 
-   NAME                          STATUS     COMPLETIONS   DURATION   AGE
-   job.batch/create-db-demo-db   Complete   1/1           10s        40s
+   NAME                   STATUS     COMPLETIONS   DURATION   AGE
+   job.batch/db-demo-db   Complete   1/1           10s        2m21s
+
    ```
 
    If you run into an error during deployment, refer to the
@@ -417,7 +439,38 @@ deploys a sample infrastructure on Azure with the following components:
 
 1. Open the Materialize Console in your browser:
 
+
+   {{< tabs >}}
+
+   {{< tab  "Via Network Load Balancer" >}}
+
+   Starting in v0.3.1, for each Materialize instance, Materialize on Azure
+   Terraform module also deploys load balancers (by default, internal) with the
+   following listeners, including a listener on port 8080 for the Materialize
+   Console:
+
+   | Port | Description |
+   | ---- | ------------|
+   | 6875 | For SQL connections to the database |
+   | 6876 | For HTTP(S) connections to the database |
+   | **8080** | **For HTTP(S) connections to Materialize Console** |
+
+   The load balancer details are found in the `load_balancer_details`  in
+   the [Terraform output](#azure-terraform-output).
+
+   The example uses a self-signed ClusterIssuer. As such, you may encounter a
+   warning with regards to the certificate. In production, run with certificates
+   from an official Certificate Authority (CA) rather than self-signed
+   certificates.
+
+   {{</ tab >}}
+
+   {{< tab "Via port forwarding" >}}
+
    {{% self-managed/port-forwarding-handling %}}
+
+   {{</ tab>}}
+   {{</ tabs >}}
 
    {{< tip >}}
 
