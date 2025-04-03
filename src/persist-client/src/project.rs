@@ -16,7 +16,6 @@ use mz_ore::cast::CastFrom;
 use mz_persist::indexed::columnar::ColumnarRecordsStructuredExt;
 use mz_persist::indexed::encoding::BlobTraceUpdates;
 use mz_persist_types::part::Codec64Mut;
-use mz_persist_types::stats::PartStats;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use std::sync::Arc;
@@ -31,12 +30,6 @@ pub(crate) const OPTIMIZE_IGNORED_DATA_FETCH: Config<bool> = Config::new(
     "persist_optimize_ignored_data_fetch",
     true,
     "CYA to allow opt-out of a performance optimization to skip fetching ignored data",
-);
-
-pub(crate) const OPTIMIZE_IGNORED_DATA_DECODE: Config<bool> = Config::new(
-    "persist_optimize_ignored_data_decode",
-    true,
-    "CYA to allow opt-out of a performance optimization to skip decoding ignored data",
 );
 
 /// Information about which columns of persist-stored data may not be needed.
@@ -164,25 +157,4 @@ impl ProjectionPushdown {
             deprecated_schema_id: None,
         })
     }
-}
-
-/// Returns whether the part is provably free of `SourceData(Err(_))`s.
-///
-/// Will return false if the part is known to contain errors or None if it's
-/// unknown.
-pub fn error_free(part_stats: Option<PartStats>, err_col_name: &str) -> Option<bool> {
-    let part_stats = part_stats?;
-    // Counter-intuitive: We can easily calculate the number of errors that
-    // were None from the column stats, but not how many were Some. So, what
-    // we do is count the number of Nones, which is the number of Oks, and
-    // then subtract that from the total.
-    let num_results = part_stats.key.len;
-    // The number of OKs is the number of rows whose error is None.
-    let num_oks = part_stats
-        .key
-        .col(err_col_name)?
-        .try_as_optional_bytes()
-        .expect("err column should be a Option<Vec<u8>>")
-        .none;
-    Some(num_results == num_oks)
 }

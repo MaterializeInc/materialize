@@ -913,7 +913,6 @@ where
         &mut self,
         key: &mut Option<K>,
         val: &mut Option<V>,
-        result_override: Option<(K, V)>,
     ) -> Option<((Result<K, String>, Result<V, String>), T, D)> {
         let mut consolidated = self.peek_stash.take();
         loop {
@@ -931,12 +930,7 @@ where
                 if d.is_zero() {
                     continue;
                 }
-                let kv = if result_override.is_none() {
-                    self.decode_kv(next_idx, key, val)
-                } else {
-                    // This will be overridden immediately below - just leave a placeholder here for now.
-                    (Err("".to_string()), Err("".to_string()))
-                };
+                let kv = self.decode_kv(next_idx, key, val);
                 (kv, t, d)
             } else {
                 break;
@@ -960,11 +954,6 @@ where
         }
 
         let (kv, t, d) = consolidated?;
-
-        // Override the placeholder result we set above with the true value.
-        if let Some((key, val)) = result_override {
-            return Some(((Ok(key), Ok(val)), t, d));
-        }
 
         Some((kv, t, d))
     }
@@ -1088,7 +1077,7 @@ where
     type Item = ((Result<K, String>, Result<V, String>), T, D);
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.next_with_storage(&mut None, &mut None, None)
+        self.next_with_storage(&mut None, &mut None)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {

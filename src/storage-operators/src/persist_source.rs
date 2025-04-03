@@ -11,7 +11,6 @@
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use mz_dyncfg::ConfigSet;
-use mz_persist_client::project::error_free;
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::Future;
@@ -477,7 +476,6 @@ where
             // loading the atomics.
             let yield_fuel = cfg.storage_source_decode_fuel();
             let yield_fn = |_, work| work >= yield_fuel;
-            let optimize_ignored_data_decode = cfg.optimize_ignored_data_decode();
 
             let mut work = 0;
             let start_time = Instant::now();
@@ -486,7 +484,6 @@ where
                 let done = pending_work.front_mut().unwrap().do_work(
                     &mut work,
                     &name,
-                    optimize_ignored_data_decode,
                     start_time,
                     yield_fn,
                     &until,
@@ -520,7 +517,6 @@ enum PendingPart {
     Unparsed(FetchedBlob<SourceData, (), Timestamp, StorageDiff>),
     Parsed {
         part: ShardSourcePart<SourceData, (), Timestamp, StorageDiff>,
-        error_free: bool,
     },
 }
 
@@ -531,23 +527,14 @@ impl PendingPart {
     /// Also returns a bool, which is true if the part is known (from pushdown
     /// stats) to be free of `SourceData(Err(_))`s. It will be false if the part
     /// is known to contain errors or if it's unknown.
-    fn part_mut(
-        &mut self,
-    ) -> (
-        &mut FetchedPart<SourceData, (), Timestamp, StorageDiff>,
-        bool,
-    ) {
+    fn part_mut(&mut self) -> &mut FetchedPart<SourceData, (), Timestamp, StorageDiff> {
         match self {
             PendingPart::Unparsed(x) => {
-                let error_free = error_free(x.stats(), "err").unwrap_or(false);
-                *self = PendingPart::Parsed {
-                    part: x.parse(),
-                    error_free,
-                };
+                *self = PendingPart::Parsed { part: x.parse() };
                 // Won't recurse any further.
                 self.part_mut()
             }
-            PendingPart::Parsed { part, error_free } => (&mut part.part, *error_free),
+            PendingPart::Parsed { part } => &mut part.part,
         }
     }
 }
@@ -559,7 +546,6 @@ impl PendingWork {
         &mut self,
         work: &mut usize,
         name: &str,
-        optimize_ignored_data_decode: bool,
         start_time: Instant,
         yield_fn: YFn,
         until: &Antichain<Timestamp>,
@@ -593,16 +579,11 @@ impl PendingWork {
         YFn: Fn(Instant, usize) -> bool,
     {
         let mut session = output.session_with_builder(&self.capability);
-        let (fetched_part, part_is_error_free) = self.part.part_mut();
+        let fetched_part = self.part.part_mut();
         let is_filter_pushdown_audit = fetched_part.is_filter_pushdown_audit();
         let mut row_buf = None;
-        let row_override = map_filter_project
-            .as_ref()
-            .map(|p| optimize_ignored_data_decode && part_is_error_free && p.ignores_input())
-            .unwrap_or(false)
-            .then(|| (SourceData(Ok(Row::default())), ()));
         while let Some(((key, val), time, diff)) =
-            fetched_part.next_with_storage(&mut row_buf, &mut None, row_override.clone())
+            fetched_part.next_with_storage(&mut row_buf, &mut None)
         {
             if until.less_equal(&time) {
                 continue;
