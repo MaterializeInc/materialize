@@ -26,6 +26,11 @@ module](https://github.com/MaterializeInc/terraform-google-materialize) to:
    module to deploy Materialize Operator and Materialize instances to the GKE
    cluster.
 
+Starting in v0.2.1 of Materialize on GCP Terraform, storage bucket versioning is
+disabled to facilitate cleanup of resources during testing. When running in
+production, versioning should be turned on with a sufficient TTL to meet any
+data-recovery requirements.
+
 {{< warning >}}
 
 {{< self-managed/terraform-disclaimer >}}
