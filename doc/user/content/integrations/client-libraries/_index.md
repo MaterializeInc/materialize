@@ -1,10 +1,10 @@
 ---
-title: "Client Libraries"
-description: ""
+title: "SQL drivers"
+description: "Connect via SQL drivers/client libraries"
 menu:
   main:
     parent: integrations
-    name: "Client libraries"
+    name: "SQL drivers"
     identifier: client-libraries
     weight: 15
 ---
