@@ -2152,6 +2152,7 @@ fn string_to_array<'a>(
     }
 
     let delimiter = delimiter.unwrap_str();
+
     if delimiter.is_empty() {
         let mut row = Row::default();
         let mut packer = row.packer();
@@ -8206,13 +8207,14 @@ impl VariadicFunc {
                 ScalarType::Array(Box::new(ScalarType::String)).nullable(in_nullable)
             }
             RegexpReplace => ScalarType::String.nullable(in_nullable),
-            StringToArray => {
-                ScalarType::Array(Box::new(ScalarType::String)).nullable(input_types[0].nullable)
-            }
+            StringToArray => ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
         }
     }
 
     /// Whether the function output is NULL if any of its inputs are NULL.
+    ///
+    /// NB: if any input is NULL the output will be returned as NULL without
+    /// calling the function.
     pub fn propagates_nulls(&self) -> bool {
         // NOTE: The following is a list of the variadic functions
         // that **DO NOT** propagate nulls.
@@ -8281,13 +8283,13 @@ impl VariadicFunc {
             | ArrayFill { .. }
             | TimezoneTime
             | RegexpSplitToArray
-            | StringToArray
             | RegexpReplace => false,
             Coalesce
             | Greatest
             | Least
             | MakeTimestamp
             | ArrayIndex { .. }
+            | StringToArray
             | ListIndex
             | RegexpMatch => true,
         }

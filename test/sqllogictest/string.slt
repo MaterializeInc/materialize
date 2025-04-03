@@ -1833,4 +1833,8 @@ select string_to_array(null, '') from string_to_array_words;
 ----
 NULL
 
+# string_to_array - non string input results in error.
+query error
+select string_to_array('hello world', 0) from string_to_array_words;
+
 # string_to_array - end.
