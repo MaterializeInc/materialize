@@ -8207,7 +8207,9 @@ impl VariadicFunc {
                 ScalarType::Array(Box::new(ScalarType::String)).nullable(in_nullable)
             }
             RegexpReplace => ScalarType::String.nullable(in_nullable),
-            StringToArray => ScalarType::Array(Box::new(ScalarType::String)).nullable(in_nullable),
+            StringToArray => {
+                ScalarType::Array(Box::new(ScalarType::String)).nullable(input_types[0].nullable)
+            }
         }
     }
 
