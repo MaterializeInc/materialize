@@ -96,6 +96,20 @@ pub(super) async fn real_time_recency_ts<
             )
             .await
         }
+        GenericSourceConnection::SqlServer(sql_server) => {
+            let external_frontier = sql_server
+                .fetch_write_frontier(&config)
+                .await
+                .map_err(StorageError::Generic)?;
+
+            decode_remap_data_until_geq_external_frontier(
+                id,
+                external_frontier,
+                as_of,
+                remap_subscribe,
+            )
+            .await
+        }
         // Load generator sources have no "external system" to reach out to,
         // so it's unclear what RTR would mean for them.
         s @ GenericSourceConnection::LoadGenerator(_) => unreachable!(
