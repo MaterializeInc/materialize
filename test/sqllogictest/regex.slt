@@ -717,6 +717,11 @@ Target cluster: multiprocess
 
 EOF
 
+query T
+SELECT regexp_replace(null, 'b(..', 'X', 'ig');
+----
+NULL
+
 query error invalid regular expression: regex parse error:
 SELECT regexp_replace('foobarbaz', 'b(..', 'X', 'ig');
 
@@ -734,8 +739,8 @@ EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT s, regexp_replace(s, 'b(..', replacement, 'ig') FROM e;
 ----
 Explained Query:
-  Map (error("invalid regular expression: regex parse error:\n    b(..\n     ^\nerror: unclosed group"))
-    Project (#0{s})
+  Project (#0{s}, #3)
+    Map (case when (#0{s}) IS NULL then null else error("invalid regular expression: regex parse error:\n    b(..\n     ^\nerror: unclosed group") end)
       ReadStorage materialize.public.e
 
 Source materialize.public.e
