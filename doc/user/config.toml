@@ -172,6 +172,13 @@ identifier = "releases-previews"
 name = "Releases"
 weight = 65
 
+[[menu.main]]
+identifier = "changelogs"
+name = "Changelog ↗️"
+parent = "releases-previews"
+weight = 20
+url = "https://materialize.com/changelog/"
+
 #
 # About
 #
