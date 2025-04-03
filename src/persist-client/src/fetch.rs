@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::anyhow;
-use arrow::array::{Array, AsArray, BooleanArray, Int64Array};
+use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, Int64Array};
 use arrow::compute::FilterBuilder;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -32,6 +32,7 @@ use mz_persist::location::{Blob, SeqNo};
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::arrow::ArrayOrd;
 use mz_persist_types::columnar::{ColumnDecoder, Schema};
+use mz_persist_types::part::Codec64Mut;
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -39,7 +40,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::{debug_span, trace_span, Instrument};
+use tracing::{debug, debug_span, trace_span, Instrument};
 
 use crate::batch::{
     proto_fetch_batch_filter, ProtoFetchBatchFilter, ProtoFetchBatchFilterListen, ProtoLease,
@@ -51,8 +52,7 @@ use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, S
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{Metrics, MetricsPermits, ReadMetrics, ShardMetrics};
 use crate::internal::paths::BlobKey;
-use crate::internal::state::{BatchPart, HollowBatchPart};
-use crate::project::ProjectionPushdown;
+use crate::internal::state::{BatchPart, HollowBatchPart, ProtoInlineBatchPart};
 use crate::read::LeasedReaderId;
 use crate::schema::{PartMigration, SchemaCache};
 use crate::ShardId;
@@ -84,6 +84,12 @@ pub(crate) const PART_DECODE_FORMAT: Config<&'static str> = Config::new(
     "\
     Format we'll use to decode a Persist Part, either 'row', \
     'row_with_validate', or 'arrow' (Materialize).",
+);
+
+pub(crate) const OPTIMIZE_IGNORED_DATA_FETCH: Config<bool> = Config::new(
+    "persist_optimize_ignored_data_fetch",
+    true,
+    "CYA to allow opt-out of a performance optimization to skip fetching ignored data",
 );
 
 #[derive(Debug, Clone)]
@@ -561,25 +567,80 @@ where
         self.part.stats().map(|x| x.decode())
     }
 
-    /// Apply any relevant projection pushdown optimizations.
-    ///
-    /// NB: Until we implement full projection pushdown, this doesn't guarantee
-    /// any projection.
-    pub fn maybe_optimize(&mut self, cfg: &ConfigSet, project: &ProjectionPushdown) {
+    /// Apply any relevant projection pushdown optimizations, assuming that the data in the part
+    /// is equivalent to the provided key and value.
+    pub fn maybe_optimize(&mut self, cfg: &ConfigSet, key: ArrayRef, val: ArrayRef) {
+        assert_eq!(key.len(), 1, "expect a single-row key array");
+        assert_eq!(val.len(), 1, "expect a single-row val array");
         let as_of = match &self.filter {
             FetchBatchFilter::Snapshot { as_of } => as_of,
             FetchBatchFilter::Listen { .. } | FetchBatchFilter::Compaction { .. } => return,
         };
-        let faked_part = project.try_optimize_ignored_data_fetch(
-            cfg,
-            &self.metrics,
-            as_of,
-            &self.desc,
-            &self.part,
-        );
-        if let Some(faked_part) = faked_part {
-            self.part = faked_part;
+        if !OPTIMIZE_IGNORED_DATA_FETCH.get(cfg) {
+            return;
         }
+        let (diffs_sum, _stats) = match &self.part {
+            BatchPart::Hollow(x) => (x.diffs_sum, x.stats.as_ref()),
+            BatchPart::Inline { .. } => return,
+        };
+        debug!(
+            "try_optimize_ignored_data_fetch diffs_sum={:?} as_of={:?} lower={:?} upper={:?}",
+            // This is only used for debugging, so hack to assume that D is i64.
+            diffs_sum.map(i64::decode),
+            as_of.elements(),
+            self.desc.lower().elements(),
+            self.desc.upper().elements()
+        );
+        let as_of = match &as_of.elements() {
+            &[as_of] => as_of,
+            _ => return,
+        };
+        let eligible = self.desc.upper().less_equal(as_of) && self.desc.since().less_equal(as_of);
+        if !eligible {
+            return;
+        }
+        let Some(diffs_sum) = diffs_sum else {
+            return;
+        };
+
+        debug!(
+            "try_optimize_ignored_data_fetch faked {:?} diffs at ts {:?} skipping fetch of {} bytes",
+            // This is only used for debugging, so hack to assume that D is i64.
+            i64::decode(diffs_sum),
+            as_of,
+            self.part.encoded_size_bytes(),
+        );
+        self.metrics.pushdown.parts_faked_count.inc();
+        self.metrics
+            .pushdown
+            .parts_faked_bytes
+            .inc_by(u64::cast_from(self.part.encoded_size_bytes()));
+        let timestamps = {
+            let mut col = Codec64Mut::with_capacity(1);
+            col.push(as_of);
+            col.finish()
+        };
+        let diffs = {
+            let mut col = Codec64Mut::with_capacity(1);
+            col.push_raw(diffs_sum);
+            col.finish()
+        };
+        let updates = BlobTraceUpdates::Structured {
+            key_values: ColumnarRecordsStructuredExt { key, val },
+            timestamps,
+            diffs,
+        };
+        let faked_data = LazyInlineBatchPart::from(&ProtoInlineBatchPart {
+            desc: Some(self.desc.into_proto()),
+            index: 0,
+            updates: Some(updates.into_proto()),
+        });
+        self.part = BatchPart::Inline {
+            updates: faked_data,
+            ts_rewrite: None,
+            schema_id: None,
+            deprecated_schema_id: None,
+        };
     }
 }
 

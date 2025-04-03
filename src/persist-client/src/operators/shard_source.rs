@@ -48,7 +48,6 @@ use crate::batch::BLOB_TARGET_SIZE;
 use crate::cfg::{RetryParameters, USE_CRITICAL_SINCE_SOURCE};
 use crate::fetch::{FetchedBlob, Lease, SerdeLeasedBatchPart};
 use crate::internal::state::BatchPart;
-use crate::project::ProjectionPushdown;
 use crate::stats::{STATS_AUDIT_PERCENT, STATS_FILTER_ENABLED};
 use crate::{Diagnostics, PersistClient, ShardId};
 
@@ -527,8 +526,7 @@ where
                             }
                         }
                         FilterResult::ReplaceWith { key, val } => {
-                            part_desc
-                                .maybe_optimize(&cfg, &ProjectionPushdown::IgnoreAll { key, val });
+                            part_desc.maybe_optimize(&cfg, key, val);
                             audit_budget_bytes = audit_budget_bytes
                                 .saturating_add(part_desc.part.encoded_size_bytes());
                             if is_inline {
