@@ -502,7 +502,13 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     /// This method is invoked by `ComputeController::maintain`, which we expect to be called once
     /// per second during normal operation.
     fn update_frontier_introspection(&mut self) {
-        for collection in self.collections.values_mut() {
+        for (id, collection) in &mut self.collections {
+            if id.is_user() {
+                tracing::info!(
+                    "[{id}] compute recording frontier: {:?}",
+                    collection.write_frontier().elements(),
+                );
+            }
             collection
                 .introspection
                 .observe_frontiers(&collection.read_frontier(), &collection.write_frontier());
@@ -1891,6 +1897,13 @@ where
         frontiers: FrontiersResponse<T>,
         replica_id: ReplicaId,
     ) {
+        if id.is_user() && frontiers.write_frontier.is_some() {
+            tracing::info!(
+                "[{id}] controller received frontier: {:?}",
+                frontiers.write_frontier.as_ref().unwrap().elements(),
+            );
+        }
+
         if !self.collections.contains_key(&id) {
             soft_panic_or_log!(
                 "frontiers update for an unknown collection \

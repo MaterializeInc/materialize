@@ -794,6 +794,12 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
 
         for (id, frontiers) in responses {
+            if id.is_user() && frontiers.write_frontier.is_some() {
+                tracing::info!(
+                    "[{id}] sending frontier response: {:?}",
+                    frontiers.write_frontier.as_ref().unwrap().elements(),
+                );
+            }
             self.send_compute_response(ComputeResponse::Frontiers(id, frontiers));
         }
     }

@@ -1087,10 +1087,24 @@ where
 
             match type_ {
                 Frontiers
-                | ReplicaFrontiers
                 | ComputeDependencies
                 | ComputeOperatorHydrationStatus
                 | ComputeMaterializedViewRefreshes => {
+                    let op = StorageWriteOp::Append { updates };
+                    storage.update_introspection_collection(type_, op);
+                }
+                ReplicaFrontiers => {
+                    for (row, diff) in &updates {
+                        if *diff == 1.into() {
+                            let mut iter = row.iter();
+                            let id = iter.next().unwrap().unwrap_str();
+                            if id.starts_with('u') {
+                                let _ = iter.next();
+                                let frontier = iter.next().unwrap().unwrap_mz_timestamp();
+                                tracing::info!("[{id}] compute forwarding frontier to storage: [{frontier}]");
+                            }
+                        }
+                    }
                     let op = StorageWriteOp::Append { updates };
                     storage.update_introspection_collection(type_, op);
                 }
