@@ -46,7 +46,8 @@ macro_rules! sqlfunc {
         sqlfunc!(
             #[sqlname = $name]
             #[preserves_uniqueness = false]
-#[is_monotone = $is_monotone]            fn $fn_name $($tail)*
+            #[is_monotone = $is_monotone]
+            fn $fn_name $($tail)*
         );
     };
 

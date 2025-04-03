@@ -37,6 +37,7 @@ hmac = "0.12.1"
 itertools = "0.12.1"
 md-5 = "0.10.5"
 murmur2 = "0.1.0"
+mz-expr-derive = { path = "../expr-derive", features = ["test"] }
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore", features = ["network", "proptest", "id_gen"] }
 mz-persist-types = { path = "../persist-types" }
@@ -72,9 +73,12 @@ smallvec = { version = "1.14.0" }
 [dev-dependencies]
 criterion = { version = "0.5.1" }
 datadriven = "0.8.0"
+insta = "1.42"
+mz-expr-derive-impl = { path = "../expr-derive-impl", features = ["test"] }
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-ore = { path = "../ore" }
 proc-macro2 = "1.0.60"
+quote = "1"
 rand = "0.8.5"
 
 [build-dependencies]

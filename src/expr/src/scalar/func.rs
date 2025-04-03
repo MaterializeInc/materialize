@@ -27,6 +27,7 @@ use fallible_iterator::FallibleIterator;
 use hmac::{Hmac, Mac};
 use itertools::Itertools;
 use md5::{Digest, Md5};
+use mz_expr_derive::sqlfunc;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::{self, CastFrom, ReinterpretCast};
 use mz_ore::fmt::FormatBuffer;
@@ -70,6 +71,7 @@ use crate::{like_pattern, EvalError, MirScalarExpr};
 
 #[macro_use]
 mod macros;
+mod binary;
 mod encoding;
 pub(crate) mod format;
 pub(crate) mod impls;
@@ -310,6 +312,7 @@ pub fn jsonb_stringify<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a
     }
 }
 
+#[sqlfunc(is_monotone = (true, true), output_type = i16, is_infix_op = true, sqlname="+", propagates_nulls = true)]
 fn add_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_int16()
         .checked_add(b.unwrap_int16())
@@ -317,6 +320,7 @@ fn add_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         .map(Datum::from)
 }
 
+#[sqlfunc(is_monotone = (true, true), output_type = i32, is_infix_op = true, sqlname="+", propagates_nulls = true)]
 fn add_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_int32()
         .checked_add(b.unwrap_int32())
@@ -324,6 +328,7 @@ fn add_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         .map(Datum::from)
 }
 
+#[sqlfunc(is_monotone = (true, true), output_type = i64, is_infix_op = true, sqlname="+", propagates_nulls = true)]
 fn add_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_int64()
         .checked_add(b.unwrap_int64())
@@ -331,6 +336,7 @@ fn add_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         .map(Datum::from)
 }
 
+#[sqlfunc(is_monotone = (true, true), output_type = u16, is_infix_op = true, sqlname="+", propagates_nulls = true)]
 fn add_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint16()
         .checked_add(b.unwrap_uint16())
@@ -338,6 +344,7 @@ fn add_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         .map(Datum::from)
 }
 
+#[sqlfunc(is_monotone = (true, true), output_type = u32, is_infix_op = true, sqlname="+", propagates_nulls = true)]
 fn add_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint32()
         .checked_add(b.unwrap_uint32())
@@ -345,6 +352,7 @@ fn add_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         .map(Datum::from)
 }
 
+#[sqlfunc(is_monotone = (true, true), output_type = u64, is_infix_op = true, sqlname="+", propagates_nulls = true)]
 fn add_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint64()
         .checked_add(b.unwrap_uint64())
@@ -352,6 +360,7 @@ fn add_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         .map(Datum::from)
 }
 
+#[sqlfunc(is_monotone = (true, true), output_type = f32, is_infix_op = true, sqlname="+", propagates_nulls = true)]
 fn add_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let a = a.unwrap_float32();
     let b = b.unwrap_float32();
@@ -363,6 +372,7 @@ fn add_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     }
 }
 
+#[sqlfunc(is_monotone = (true, true), output_type = f64, is_infix_op = true, sqlname="+", propagates_nulls = true)]
 fn add_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let a = a.unwrap_float64();
     let b = b.unwrap_float64();
@@ -399,6 +409,7 @@ where
     neg_interval_inner(b).and_then(|i| add_timestamplike_interval(a, i))
 }
 
+#[sqlfunc(is_monotone = (true, true), output_type = "CheckedTimestamp<NaiveDateTime>", is_infix_op = true, sqlname="+", propagates_nulls = true)]
 fn add_date_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let date = a.unwrap_date();
     let time = b.unwrap_time();
@@ -409,6 +420,7 @@ fn add_date_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError>
     Ok(dt.try_into()?)
 }
 
+#[sqlfunc(is_monotone = (true, true), output_type = "CheckedTimestamp<NaiveDateTime>", is_infix_op = true, sqlname="+", propagates_nulls = true)]
 fn add_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let date = a.unwrap_date();
     let interval = b.unwrap_interval();
@@ -421,6 +433,7 @@ fn add_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalEr
     Ok(dt.try_into()?)
 }
 
+#[sqlfunc(is_monotone = (true, true), output_type = "CheckedTimestamp<chrono::DateTime<Utc>>", is_infix_op = true, sqlname="+", propagates_nulls = true)]
 fn add_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let time = a.unwrap_time();
     let interval = b.unwrap_interval();
@@ -428,6 +441,7 @@ fn add_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::Time(t)
 }
 
+#[sqlfunc(is_monotone = (true, false), output_type = "Numeric", is_infix_op = false, sqlname="round", propagates_nulls = true)]
 fn round_numeric_binary<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let mut a = a.unwrap_numeric().0;
     let mut b = b.unwrap_int32();
@@ -3435,6 +3449,7 @@ impl BinaryFunc {
             | BinaryFunc::MapContainsAllKeys
             | BinaryFunc::MapContainsAnyKeys
             | BinaryFunc::MapContainsMap => false,
+            BinaryFunc::AddTimeInterval => false,
             _ => true,
         }
     }

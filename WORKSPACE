@@ -611,6 +611,8 @@ crates_repository(
         "//:src/dyncfg-launchdarkly/Cargo.toml",
         "//:src/dyncfgs/Cargo.toml",
         "//:src/environmentd/Cargo.toml",
+        "//:src/expr-derive/Cargo.toml",
+        "//:src/expr-derive-impl/Cargo.toml",
         "//:src/expr-parser/Cargo.toml",
         "//:src/expr-test-util/Cargo.toml",
         "//:src/expr/Cargo.toml",
