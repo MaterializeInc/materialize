@@ -8214,6 +8214,9 @@ impl VariadicFunc {
     }
 
     /// Whether the function output is NULL if any of its inputs are NULL.
+    ///
+    /// NB: if any input is NULL the output will be returned as NULL without
+    /// calling the function.
     pub fn propagates_nulls(&self) -> bool {
         // NOTE: The following is a list of the variadic functions
         // that **DO NOT** propagate nulls.
@@ -8237,6 +8240,7 @@ impl VariadicFunc {
                 | VariadicFunc::RangeCreate { .. }
                 | VariadicFunc::ArrayPosition
                 | VariadicFunc::ArrayFill { .. }
+                | VariadicFunc::StringToArray
         )
     }
 
@@ -8281,13 +8285,13 @@ impl VariadicFunc {
             | ArrayFill { .. }
             | TimezoneTime
             | RegexpSplitToArray
-            | StringToArray
             | RegexpReplace => false,
             Coalesce
             | Greatest
             | Least
             | MakeTimestamp
             | ArrayIndex { .. }
+            | StringToArray
             | ListIndex
             | RegexpMatch => true,
         }
