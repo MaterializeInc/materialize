@@ -18,12 +18,10 @@ You can ingest data into Materialize from various external systems:
 - [SQL Server](/ingest-data/cdc-sql-server/)
 - [MongoDB](https://github.com/MaterializeIncLabs/materialize-mongodb-debezium)
 - [CockroachDB](/ingest-data/cdc-cockroachdb/)
-- [Other databases](/integrations/#databases)
 {{</ linkbox >}}
 {{< linkbox title="Message Brokers" >}}
 - [Kafka](/ingest-data/kafka/)
 - [Redpanda](/sql/create-source/kafka)
-- [Other message brokers](/integrations/#message-brokers)
 {{</ linkbox >}}
 {{< linkbox title="Webhooks" >}}
 - [Amazon EventBridge](/ingest-data/webhooks/amazon-eventbridge/)

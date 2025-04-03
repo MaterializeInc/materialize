@@ -3,6 +3,7 @@ title: "Ruby cheatsheet"
 description: "Use Ruby to connect, insert, manage, query and stream from Materialize."
 aliases:
   - /guides/ruby/
+  - /integrations/ruby/
 menu:
   main:
     parent: 'client-libraries'

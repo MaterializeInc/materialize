@@ -164,26 +164,6 @@ parent = 'commands'
 url = '/sql/create-sink'
 
 #
-# Tools and integrations
-#
-
-[[menu.main]]
-identifier = "integrations"
-name = "Tools and integrations"
-weight = 25
-
-[[menu.main]]
-identifier = "cli-reference"
-name = "Command reference"
-parent = "cli"
-
-[[menu.main]]
-identifier = "client-libraries"
-name = "SQL drivers"
-parent = "integrations"
-weight = 15
-
-#
 # Releases
 #
 
