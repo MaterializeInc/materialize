@@ -8237,7 +8237,6 @@ impl VariadicFunc {
                 | VariadicFunc::RangeCreate { .. }
                 | VariadicFunc::ArrayPosition
                 | VariadicFunc::ArrayFill { .. }
-                | VariadicFunc::StringToArray
         )
     }
 
