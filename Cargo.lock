@@ -7074,6 +7074,7 @@ dependencies = [
  "mz-ore",
  "mz-proto",
  "mz-repr",
+ "mz-ssh-util",
  "ordered-float 5.0.0",
  "proptest",
  "proptest-derive",
