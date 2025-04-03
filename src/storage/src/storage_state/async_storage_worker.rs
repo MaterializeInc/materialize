@@ -29,7 +29,7 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::{
     GenericSourceConnection, IngestionDescription, KafkaSourceConnection,
     LoadGeneratorSourceConnection, MySqlSourceConnection, PostgresSourceConnection,
-    SourceConnection, SourceData, SourceEnvelope, SourceTimestamp,
+    SourceConnection, SourceData, SourceEnvelope, SourceTimestamp, SqlServerSource,
 };
 use mz_storage_types::StorageDiff;
 use timely::order::PartialOrder;
@@ -357,6 +357,17 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
                             }
                             GenericSourceConnection::MySql(_) => {
                                 let uppers = reclock_resume_uppers::<MySqlSourceConnection, _>(
+                                    &id,
+                                    &persist_clients,
+                                    &ingestion_description,
+                                    as_of.clone(),
+                                    &resume_uppers,
+                                )
+                                .await;
+                                to_vec_row(uppers)
+                            }
+                            GenericSourceConnection::SqlServer(_) => {
+                                let uppers = reclock_resume_uppers::<SqlServerSource, _>(
                                     &id,
                                     &persist_clients,
                                     &ingestion_description,

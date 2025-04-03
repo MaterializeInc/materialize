@@ -1103,8 +1103,9 @@ fn humanize_sql_for_show_create(
                     });
                 }
                 CreateSourceConnection::SqlServer { .. } => {
+                    // TODO(sql_server1): Handle SHOW CREATE CONNECTION for SQL Server.
                     return Err(PlanError::Unsupported {
-                        feature: "SQL SERVER".to_string(),
+                        feature: "SHOW CREATE CONNECTION SQL SERVER".to_string(),
                         discussion_no: None,
                     });
                 }

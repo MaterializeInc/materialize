@@ -442,6 +442,13 @@ pub static MAX_MYSQL_CONNECTIONS: VarDefinition = VarDefinition::new(
     true,
 );
 
+pub static MAX_SQL_SERVER_CONNECTIONS: VarDefinition = VarDefinition::new(
+    "max_sql_server_connections",
+    value!(u32; 1000),
+    "The maximum number of SQL Server connections in the region, across all schemas (Materialize).",
+    true,
+);
+
 pub static MAX_AWS_PRIVATELINK_CONNECTIONS: VarDefinition = VarDefinition::new(
     "max_aws_privatelink_connections",
     value!(u32; 0),

@@ -75,10 +75,10 @@ use mz_sql_parser::ast::{
     PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
     RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
     ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
-    Statement, TableConstraint, TableFromSourceColumns, TableFromSourceOption,
-    TableFromSourceOptionName, TableOption, TableOptionName, UnresolvedDatabaseName,
-    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
-    WithOptionValue,
+    SqlServerConfigOption, SqlServerConfigOptionName, Statement, TableConstraint,
+    TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName, TableOption,
+    TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
@@ -109,10 +109,12 @@ use mz_storage_types::sources::postgres::{
     PostgresSourceConnection, PostgresSourcePublicationDetails,
     ProtoPostgresSourcePublicationDetails,
 };
+use mz_storage_types::sources::sql_server::SqlServerSourceExportDetails;
 use mz_storage_types::sources::{
     GenericSourceConnection, MySqlSourceExportDetails, PostgresSourceExportDetails,
     ProtoSourceExportStatementDetails, SourceConnection, SourceDesc, SourceExportDataConfig,
-    SourceExportDetails, SourceExportStatementDetails, Timeline,
+    SourceExportDetails, SourceExportStatementDetails, SqlServerSource, SqlServerSourceExtras,
+    Timeline,
 };
 use prost::Message;
 
@@ -526,6 +528,8 @@ generate_extracted_config!(
     (TextColumns, Vec::<UnresolvedItemName>, Default(vec![])),
     (ExcludeColumns, Vec::<UnresolvedItemName>, Default(vec![]))
 );
+
+generate_extracted_config!(SqlServerConfigOption, (CaptureInstance, String));
 
 pub fn plan_create_webhook_source(
     scx: &StatementContext,
@@ -952,12 +956,29 @@ pub fn plan_create_source(
 
             connection
         }
-        CreateSourceConnection::SqlServer { .. } => {
-            // TODO(sql_server1)
-            return Err(PlanError::Unsupported {
-                feature: "SQL SERVER".to_string(),
-                discussion_no: None,
-            });
+        CreateSourceConnection::SqlServer {
+            connection,
+            options: _,
+        } => {
+            let connection_item = scx.get_item_by_resolved_name(connection)?;
+            match connection_item.connection()? {
+                Connection::SqlServer(connection) => connection,
+                _ => sql_bail!(
+                    "{} is not a SQL Server connection",
+                    scx.catalog.resolve_full_name(connection_item.name())
+                ),
+            };
+            // TODO(sql_server1): Handle SQL Server connection options.
+
+            let extras = SqlServerSourceExtras {};
+            let connection =
+                GenericSourceConnection::<ReferencedConnection>::from(SqlServerSource {
+                    catalog_id: connection_item.id(),
+                    connection: connection_item.id(),
+                    extras,
+                });
+
+            connection
         }
         CreateSourceConnection::MySql {
             connection,
@@ -1593,6 +1614,19 @@ pub fn plan_create_subsource(
                     .map(|c| c.into_string())
                     .collect(),
             }),
+            SourceExportStatementDetails::SqlServer {
+                table,
+                capture_instance,
+            } => {
+                SourceExportDetails::SqlServer(SqlServerSourceExportDetails {
+                    capture_instance,
+                    table,
+                    // TODO(sql_server1): Support text columns.
+                    text_columns: Vec::default(),
+                    // TODO(sql_server1): Support exclude columns.
+                    exclude_columns: Vec::default(),
+                })
+            }
             SourceExportStatementDetails::LoadGenerator { output } => {
                 SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails { output })
             }
@@ -1733,6 +1767,19 @@ pub fn plan_create_table_from_source(
                 .map(|c| c.into_string())
                 .collect(),
         }),
+        SourceExportStatementDetails::SqlServer {
+            table,
+            capture_instance,
+        } => {
+            SourceExportDetails::SqlServer(SqlServerSourceExportDetails {
+                table,
+                capture_instance,
+                // TODO(sql_server1): Support text columns.
+                text_columns: Vec::default(),
+                // TODO(sql_server1): Support exclude columns.
+                exclude_columns: Vec::default(),
+            })
+        }
         SourceExportStatementDetails::LoadGenerator { output } => {
             SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails { output })
         }
@@ -6713,6 +6760,7 @@ pub fn plan_alter_connection(
         Connection::Postgres(_) => CreateConnectionType::Postgres,
         Connection::Ssh(_) => CreateConnectionType::Ssh,
         Connection::MySql(_) => CreateConnectionType::MySql,
+        Connection::SqlServer(_) => CreateConnectionType::SqlServer,
     };
 
     // Collect all options irrespective of action taken on them.
