@@ -1837,6 +1837,5 @@ NULL
 query error
 select string_to_array('hello world', 0) from string_to_array_words;
 ----
-"Invalid delimiter passed. Must be string or null."
 
 # string_to_array - end.

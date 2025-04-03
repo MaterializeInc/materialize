@@ -2151,11 +2151,7 @@ fn string_to_array<'a>(
         return string_to_array_impl(string, split_all_chars_delimiter, null_string, temp_storage);
     }
 
-    let Datum::String(delimiter) = delimiter else {
-        return Err(EvalError::PrettyError(
-            "Invalid delimiter passed. Must be string or null.".into(),
-        ));
-    };
+    let delimiter = delimiter.unwrap_str();
 
     if delimiter.is_empty() {
         let mut row = Row::default();
