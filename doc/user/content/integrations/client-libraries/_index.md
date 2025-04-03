@@ -1,18 +1,18 @@
 ---
-title: "SQL drivers"
-description: "Connect via SQL drivers/client libraries"
+title: "Client libraries"
+description: "Connect via client libraries/SQL drivers"
 disable_list: true
 menu:
   main:
     parent: integrations
-    name: "SQL drivers"
+    name: "Client libraries"
     identifier: client-libraries
     weight: 15
 ---
 
-Applications can use various common language-specific PostgreSQL drivers to
-interact with Materialize and **create relations**, **execute queries** and
-**stream out results**.
+Applications can use various common language-specific PostgreSQL client
+libraries to interact with Materialize and **create relations**, **execute
+queries** and **stream out results**.
 
 {{< note >}}
 Client libraries tend to run complex introspection queries that may use configuration settings, system tables or features not yet implemented in Materialize. This means that even if PostgreSQL is supported, it's **not guaranteed** that the same integration will work out-of-the-box.
