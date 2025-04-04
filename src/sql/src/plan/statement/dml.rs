@@ -434,7 +434,6 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 enable_join_prioritize_arranged: v.enable_join_prioritize_arranged,
                 enable_projection_pushdown_after_relation_cse: v
                     .enable_projection_pushdown_after_relation_cse,
-                enable_let_prefix_extraction: Default::default(),
                 enable_less_reduce_in_eqprop: Default::default(),
             },
         })
