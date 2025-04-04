@@ -30,6 +30,13 @@ pub const SIGTERM_WAIT: Config<Duration> = Config::new(
     "Duration to wait after SIGTERM for outstanding connections to complete.",
 );
 
+/// Duration to wait after SIGTERM to begin shutdown of servers.
+pub const SIGTERM_LISTEN_WAIT: Config<Duration> = Config::new(
+    "balancerd_sigterm_listen_wait",
+    Duration::from_secs(60),
+    "Duration to wait after SIGTERM to begin shutdown of servers.",
+);
+
 /// Whether to inject tcp proxy protocol headers to downstream http servers.
 pub const INJECT_PROXY_PROTOCOL_HEADER_HTTP: Config<bool> = Config::new(
     "balancerd_inject_proxy_protocol_header_http",
@@ -90,6 +97,7 @@ pub const SENTRY_FILTERS: Config<fn() -> String> = Config::new(
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&SIGTERM_WAIT)
+        .add(&SIGTERM_LISTEN_WAIT)
         .add(&INJECT_PROXY_PROTOCOL_HEADER_HTTP)
         .add(&LOGGING_FILTER)
         .add(&OPENTELEMETRY_FILTER)
