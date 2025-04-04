@@ -46,7 +46,7 @@ Passwords hashed with `scram-sha-256` will be stored in the configured secret st
    a. The coordinator layer will check the password against the stored hash. If the password is correct, the user will be authenticated.
    b. If the password is incorrect, the user will be denied access.
 
-3. **OPTIONAL: Book-Keeping**: Login and failed login requests should be tracked. Metrics should be created to monitor potential security events.
+3. **Audit and Metrics:** Login and failed login requests should be logged. Metrics should be created to monitor potential security events.
 
 **Password Rotation or Expiration**: While not currently in scope, the design should allow for additions in the future, such as password rotation and expiration.
 
@@ -86,6 +86,9 @@ Users should be able to manage their passwords and set passwords for roles they 
         creation_date: Date
     }
     ```
+
+    - Iterations must be >= 200,000... this must be configurable with a system variable.
+    - We must use at least 32 bytes of cryptographically random data for salts.
 
 -   **OPTIONAL: Password Versioning**: Updates to the password hashing mechanisms may be required. 
   - For passwords received in plain text we should be able re-encrypt them with stronger algorithms.
@@ -170,7 +173,11 @@ A minimal viable prototype (MVP) for this solution will include:
 ## Open questions
 
 1. **Where exactly are passwords stored**: While it makes sense to store passwords in the catalog, I have not yet identified exactly where they should be stored. Should it go alongside `mz_roles`, or in a new `mz_auth_id` table. The latter makes sense as it could store password metadata, and might let us store multiple passwords down the road.
+**A:** In the catalog
 
 2. **Audit Logging and Brute Force Detection**: Do we need to log all failed password attempts and the IPs of those attempts? Do we need to take action to lock an IP or User when an attempt threshold is met?
+**A:** yes log attempts and failed attempts along with the password. No mitigation is required, at least not for v1.
 
 3. **Password Strength Validation**: Should Materialize include built-in password strength validation, or should it be handled outside the system (e.g., via Kubernetes or other security tools)?
+**A:** MZ should not have built-in password strength, down the road we may want to consider something like postgres's [passwordcheck](https://www.postgresql.org/docs/current/passwordcheck.html
+).
