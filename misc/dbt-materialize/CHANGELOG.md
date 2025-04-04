@@ -1,5 +1,10 @@
 # dbt-materialize Changelog
 
+## 1.9.4 - 2025-04-04
+
+* Fix copying default privileges in blue/green deployments when the
+  grantee is `PUBLIC`.
+
 ## 1.9.3 - 2025-01-22
 
 * Fix a bug in the `truncate_relation_sql` macro where specifying a cluster for
