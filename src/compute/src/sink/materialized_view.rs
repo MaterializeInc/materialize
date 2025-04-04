@@ -559,6 +559,14 @@ mod mint {
                     writer.wait_for_upper_past(&frontier).await;
                     frontier = writer.upper().clone();
                     shared_frontier.borrow_mut().clone_from(&frontier);
+
+                    if sink_id.is_user() {
+                        tracing::info!(
+                            "[{sink_id}] MV frontier advanced: {:?}",
+                            frontier.elements(),
+                        );
+                    }
+
                     yield frontier.clone();
                 }
             });

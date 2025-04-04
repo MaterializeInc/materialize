@@ -523,6 +523,7 @@ where
     /// update our state of the world, that is update our `to_write` based on
     /// `desired` and the contents of the persist shard.
     current_upper: T,
+    itype: IntrospectionType,
 }
 
 impl<T, R> DifferentialWriteTask<T, R>
@@ -562,6 +563,7 @@ where
             desired: Vec::new(),
             to_write: Vec::new(),
             current_upper,
+            itype: introspection_config.introspection_type,
         };
 
         let handle = mz_ore::task::spawn(
@@ -892,6 +894,20 @@ where
             .max_tries(20)
             .into_retry_stream();
         let mut retries = Box::pin(retries);
+
+        if self.itype == IntrospectionType::ReplicaFrontiers {
+            for (row, diff) in &self.to_write {
+                if *diff == 1.into() {
+                    let mut iter = row.iter();
+                    let id = iter.next().unwrap().unwrap_str();
+                    if id.starts_with('u') {
+                        let _ = iter.next();
+                        let frontier = iter.next().unwrap().unwrap_mz_timestamp();
+                        tracing::info!("[{id}] writing frontier to persist: [{frontier}]");
+                    }
+                }
+            }
+        }
 
         loop {
             // Append updates to persist!

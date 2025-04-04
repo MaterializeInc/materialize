@@ -3373,6 +3373,14 @@ where
         let mut replica_frontiers = BTreeMap::new();
 
         for collection_frontiers in self.storage_collections.active_collection_frontiers() {
+            if collection_frontiers.id.is_user() {
+                tracing::info!(
+                    "[{}] storage recording frontier: {:?}",
+                    collection_frontiers.id,
+                    collection_frontiers.write_frontier.elements(),
+                );
+            }
+
             let id = collection_frontiers.id;
             let since = collection_frontiers.read_capabilities;
             let upper = collection_frontiers.write_frontier;
