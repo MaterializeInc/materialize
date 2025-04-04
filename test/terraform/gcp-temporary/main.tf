@@ -48,7 +48,7 @@ provider "helm" {
 }
 
 module "materialize" {
-  source = "github.com/MaterializeInc/terraform-google-materialize?ref=v0.2.0"
+  source = "github.com/MaterializeInc/terraform-google-materialize?ref=v0.3.0"
 
   project_id = var.project_id
   region     = var.region
@@ -58,6 +58,12 @@ module "materialize" {
     tier     = "db-custom-2-4096"
     version  = "POSTGRES_15"
     password = var.database_password
+  }
+
+  network_config = {
+    subnet_cidr   = "10.0.0.0/20"
+    pods_cidr     = "10.48.0.0/14"
+    services_cidr = "10.52.0.0/20"
   }
 
   labels = {
