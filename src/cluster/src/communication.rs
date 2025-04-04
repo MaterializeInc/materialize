@@ -45,7 +45,7 @@ use std::fmt::Display;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use mz_cluster_client::client::ClusterStartupEpoch;
