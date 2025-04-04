@@ -2370,12 +2370,8 @@ pub enum BinaryFunc {
     Gt,
     Gte,
     LikeEscape,
-    IsLikeMatch {
-        case_insensitive: bool,
-    },
-    IsRegexpMatch {
-        case_insensitive: bool,
-    },
+    IsLikeMatch { case_insensitive: bool },
+    IsRegexpMatch { case_insensitive: bool },
     ToCharTimestamp,
     ToCharTimestampTz,
     DateBinTimestamp,
@@ -2424,13 +2420,9 @@ pub enum BinaryFunc {
     TrimLeading,
     TrimTrailing,
     EncodedBytesCharLength,
-    ListLengthMax {
-        max_layer: usize,
-    },
+    ListLengthMax { max_layer: usize },
     ArrayContains,
-    ArrayContainsArray {
-        rev: bool,
-    },
+    ArrayContainsArray { rev: bool },
     ArrayLength,
     ArrayLower,
     ArrayRemove,
@@ -2440,9 +2432,7 @@ pub enum BinaryFunc {
     ListElementConcat,
     ElementListConcat,
     ListRemove,
-    ListContainsList {
-        rev: bool,
-    },
+    ListContainsList { rev: bool },
     DigestString,
     DigestBytes,
     MzRenderTypmod,
@@ -2455,13 +2445,8 @@ pub enum BinaryFunc {
     GetByte,
     ConstantTimeEqBytes,
     ConstantTimeEqString,
-    RangeContainsElem {
-        elem_type: ScalarType,
-        rev: bool,
-    },
-    RangeContainsRange {
-        rev: bool,
-    },
+    RangeContainsElem { elem_type: ScalarType, rev: bool },
+    RangeContainsRange { rev: bool },
     RangeOverlaps,
     RangeAfter,
     RangeBefore,
@@ -2475,9 +2460,7 @@ pub enum BinaryFunc {
     MzAclItemContainsPrivilege,
     ParseIdent,
     PrettySql,
-    RegexpReplace {
-        regex: Result<(Regex, usize), EvalError>,
-    },
+    RegexpReplace { regex: Regex, limit: usize },
     StartsWith,
 }
 
@@ -2743,10 +2726,9 @@ impl BinaryFunc {
             BinaryFunc::MzAclItemContainsPrivilege => mz_acl_item_contains_privilege(a, b),
             BinaryFunc::ParseIdent => parse_ident(a, b, temp_storage),
             BinaryFunc::PrettySql => pretty_sql(a, b, temp_storage),
-            BinaryFunc::RegexpReplace { regex } => match regex {
-                Ok((regex, limit)) => regexp_replace_static(a, b, regex, *limit, temp_storage),
-                Err(err) => Err(err.clone()),
-            },
+            BinaryFunc::RegexpReplace { regex, limit } => {
+                regexp_replace_static(a, b, regex, *limit, temp_storage)
+            }
             BinaryFunc::StartsWith => Ok(starts_with(a, b)),
         }
     }
@@ -3861,16 +3843,13 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::MzAclItemContainsPrivilege => f.write_str("mz_aclitem_contains_privilege"),
             BinaryFunc::ParseIdent => f.write_str("parse_ident"),
             BinaryFunc::PrettySql => f.write_str("pretty_sql"),
-            BinaryFunc::RegexpReplace { regex } => match regex {
-                Ok((regex, limit)) => write!(
-                    f,
-                    "regexp_replace[{}, case_insensitive={}, limit={}]",
-                    regex.pattern().escaped(),
-                    regex.case_insensitive,
-                    limit
-                ),
-                Err(err) => write!(f, "regexp_replace[EvalError]: {err}"),
-            },
+            BinaryFunc::RegexpReplace { regex, limit } => write!(
+                f,
+                "regexp_replace[{}, case_insensitive={}, limit={}]",
+                regex.pattern().escaped(),
+                regex.case_insensitive,
+                limit
+            ),
             BinaryFunc::StartsWith => f.write_str("starts_with"),
         }
     }
@@ -4287,18 +4266,11 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::ConstantTimeEqBytes => ConstantTimeEqBytes(()),
             BinaryFunc::ConstantTimeEqString => ConstantTimeEqString(()),
             BinaryFunc::PrettySql => PrettySql(()),
-            BinaryFunc::RegexpReplace { regex } => {
+            BinaryFunc::RegexpReplace { regex, limit } => {
                 use crate::scalar::proto_binary_func::*;
-                RegexpReplace(ProtoRegexpReplaceResult {
-                    result: Some(match regex {
-                        Ok((regex, limit)) => {
-                            proto_regexp_replace_result::Result::Ok(ProtoRegexpReplace {
-                                regex: Some(regex.into_proto()),
-                                limit: limit.into_proto(),
-                            })
-                        }
-                        Err(err) => proto_regexp_replace_result::Result::Err(err.into_proto()),
-                    }),
+                RegexpReplace(ProtoRegexpReplace {
+                    regex: Some(regex.into_proto()),
+                    limit: limit.into_proto(),
                 })
             }
             BinaryFunc::StartsWith => StartsWith(()),
@@ -4511,27 +4483,10 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 ConstantTimeEqBytes(()) => Ok(BinaryFunc::ConstantTimeEqBytes),
                 ConstantTimeEqString(()) => Ok(BinaryFunc::ConstantTimeEqString),
                 PrettySql(()) => Ok(BinaryFunc::PrettySql),
-                RegexpReplace(inner) => {
-                    use crate::scalar::proto_binary_func::*;
-                    Ok(BinaryFunc::RegexpReplace {
-                        regex: match inner.result {
-                            Some(proto_regexp_replace_result::Result::Ok(regexp_replace)) => Ok((
-                                regexp_replace
-                                    .regex
-                                    .into_rust_if_some("ProtoRegexReplace::regex")?,
-                                regexp_replace.limit.into_rust()?,
-                            )),
-                            Some(proto_regexp_replace_result::Result::Err(err)) => {
-                                Err(err.into_rust()?)
-                            }
-                            None => {
-                                return Err(TryFromProtoError::missing_field(
-                                    "ProtoRegexpReplaceResult::result",
-                                ))
-                            }
-                        },
-                    })
-                }
+                RegexpReplace(inner) => Ok(BinaryFunc::RegexpReplace {
+                    regex: inner.regex.into_rust_if_some("ProtoRegexReplace::regex")?,
+                    limit: inner.limit.into_rust()?,
+                }),
                 StartsWith(()) => Ok(BinaryFunc::StartsWith),
             }
         } else {
