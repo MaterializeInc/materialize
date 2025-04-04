@@ -73,7 +73,8 @@ use uuid::Uuid;
 
 use crate::codec::{BackendMessage, FramedConn};
 use crate::dyncfgs::{
-    has_tracing_config_update, tracing_config, INJECT_PROXY_PROTOCOL_HEADER_HTTP, SIGTERM_WAIT,
+    has_tracing_config_update, tracing_config, INJECT_PROXY_PROTOCOL_HEADER_HTTP,
+    SIGTERM_CONNECTION_WAIT, SIGTERM_LISTEN_WAIT,
 };
 
 /// Balancer build information.
@@ -302,7 +303,7 @@ impl BalancerService {
                         conns: stream,
                         dyncfg: Some(ServeDyncfg {
                             config_set,
-                            sigterm_wait_config: &SIGTERM_WAIT,
+                            sigterm_wait_config: &SIGTERM_CONNECTION_WAIT,
                         }),
                     })
                     .await;
@@ -335,7 +336,7 @@ impl BalancerService {
                         conns: stream,
                         dyncfg: Some(ServeDyncfg {
                             config_set,
-                            sigterm_wait_config: &SIGTERM_WAIT,
+                            sigterm_wait_config: &SIGTERM_CONNECTION_WAIT,
                         }),
                     })
                     .await;
@@ -377,7 +378,10 @@ impl BalancerService {
                 tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
             set.spawn_named(|| "sigterm_handler", async move {
                 sigterm.recv().await;
-                warn!("received signal TERM");
+                let wait = SIGTERM_LISTEN_WAIT.get(&self.configs);
+                warn!("received signal TERM - delaying for {:?}!", wait);
+                tokio::time::sleep(wait).await;
+                warn!("sigterm delay complete, dropping server handles");
                 drop(server_handles);
             });
         }
