@@ -311,8 +311,6 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 
 {{< tab "AWS IAM">}}
 
-{{< private-preview />}}
-
 ```mzsql
 CREATE CONNECTION aws_msk TO AWS (
     ASSUME ROLE ARN = 'arn:aws:iam::400121260767:role/MaterializeMSK'
