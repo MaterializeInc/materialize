@@ -27,7 +27,7 @@ rust_library(
     data = [],
     disable_pipelining = False,
     lint_config = ":lints",
-    proc_macro_deps = [] + all_crate_deps(proc_macro = True),
+    proc_macro_deps = ["//src/expr-derive:mz_expr_derive"] + all_crate_deps(proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
     version = "0.0.0",
@@ -66,7 +66,7 @@ rust_test(
     data = [],
     env = {},
     lint_config = ":lints",
-    proc_macro_deps = [] + all_crate_deps(
+    proc_macro_deps = ["//src/expr-derive:mz_expr_derive"] + all_crate_deps(
         proc_macro = True,
         proc_macro_dev = True,
     ),
@@ -74,6 +74,7 @@ rust_test(
     rustc_flags = [],
     version = "0.0.0",
     deps = [
+        "//src/expr-derive-impl:mz_expr_derive_impl",
         "//src/expr-test-util:mz_expr_test_util",
         "//src/lowertest:mz_lowertest",
         "//src/ore:mz_ore",
@@ -95,6 +96,7 @@ rust_doc_test(
     name = "mz_expr_doc_test",
     crate = ":mz_expr",
     deps = [
+        "//src/expr-derive-impl:mz_expr_derive_impl",
         "//src/expr-test-util:mz_expr_test_util",
         "//src/lowertest:mz_lowertest",
         "//src/ore:mz_ore",
@@ -135,7 +137,7 @@ cargo_build_script(
     build_script_env = {},
     compile_data = [],
     data = [":all_protos"],
-    proc_macro_deps = [] + all_crate_deps(build_proc_macro = True),
+    proc_macro_deps = ["//src/expr-derive:mz_expr_derive"] + all_crate_deps(build_proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
     deps = ["//src/build-tools:mz_build_tools"] + all_crate_deps(build = True),
@@ -157,7 +159,7 @@ rust_test(
     data = [],
     env = {},
     lint_config = ":lints",
-    proc_macro_deps = [] + all_crate_deps(
+    proc_macro_deps = ["//src/expr-derive:mz_expr_derive"] + all_crate_deps(
         proc_macro = True,
         proc_macro_dev = True,
     ),
@@ -166,6 +168,7 @@ rust_test(
     version = "0.0.0",
     deps = [
         ":mz_expr",
+        "//src/expr-derive-impl:mz_expr_derive_impl",
         "//src/expr-test-util:mz_expr_test_util",
         "//src/lowertest:mz_lowertest",
         "//src/ore:mz_ore",
