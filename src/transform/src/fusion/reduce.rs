@@ -60,7 +60,7 @@ impl Reduce {
                 let mut outer_cols = vec![];
                 for expr in group_key.iter() {
                     expr.visit_pre(|e| {
-                        if let MirScalarExpr::Column(i) = e {
+                        if let MirScalarExpr::Column(i, _) = e {
                             outer_cols.push(*i);
                         }
                     });
@@ -79,7 +79,7 @@ impl Reduce {
 
                     let arity = inner_input.arity();
                     for e in inner_group_key {
-                        if let MirScalarExpr::Column(i) = e {
+                        if let MirScalarExpr::Column(i, _) = e {
                             outputs.push(*i);
                         } else {
                             outputs.push(arity + scalars.len());

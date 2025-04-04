@@ -807,7 +807,7 @@ impl ReducePlan {
     /// that key a single arrangement.
     pub fn keys(&self, key_arity: usize, arity: usize) -> AvailableCollections {
         let key = (0..key_arity)
-            .map(MirScalarExpr::Column)
+            .map(MirScalarExpr::column)
             .collect::<Vec<_>>();
         let (permutation, thinning) = permutation_for_arrangement(&key, arity);
         AvailableCollections::new_arranged(vec![(key, permutation, thinning)], None)

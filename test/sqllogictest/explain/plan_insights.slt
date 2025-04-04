@@ -166,7 +166,8 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
               {
                 "scalar_type": "Bool",
                 "nullable": false
-              }
+              },
+              null
             ]
           },
           "kind": "Inner"
@@ -526,7 +527,8 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
               {
                 "scalar_type": "Bool",
                 "nullable": false
-              }
+              },
+              null
             ]
           },
           "kind": "Inner"
@@ -862,7 +864,8 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT count(*) FROM t
                   {
                     "scalar_type": "Bool",
                     "nullable": false
-                  }
+                  },
+                  null
                 ]
               },
               "distinct": false
@@ -1118,7 +1121,8 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR CREATE VIEW V AS SELECT 1
                 {
                   "scalar_type": "Int32",
                   "nullable": false
-                }
+                },
+                null
               ]
             }
           ]
@@ -1181,7 +1185,8 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT 'abc'
                 {
                   "scalar_type": "String",
                   "nullable": false
-                }
+                },
+                null
               ]
             }
           ]

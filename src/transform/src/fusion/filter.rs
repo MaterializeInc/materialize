@@ -24,9 +24,9 @@
 //!     ScalarType::Bool.nullable(false),
 //! ]));
 //!
-//! let predicate0 = MirScalarExpr::Column(0);
-//! let predicate1 = MirScalarExpr::Column(0);
-//! let predicate2 = MirScalarExpr::Column(0);
+//! let predicate0 = MirScalarExpr::column(0);
+//! let predicate1 = MirScalarExpr::column(0);
+//! let predicate2 = MirScalarExpr::column(0);
 //!
 //! let mut expr = input
 //!     .clone()

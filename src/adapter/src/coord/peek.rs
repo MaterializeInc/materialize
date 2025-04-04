@@ -95,7 +95,7 @@ impl<T> PeekDataflowPlan<T> {
         let key = typ
             .default_key()
             .into_iter()
-            .map(MirScalarExpr::Column)
+            .map(MirScalarExpr::column)
             .collect::<Vec<_>>();
         let (permutation, thinning) = permutation_for_arrangement(&key, arity);
         Self {

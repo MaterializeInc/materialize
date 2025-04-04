@@ -1721,7 +1721,7 @@ impl CatalogState {
                 .variant
                 .index_by()
                 .into_iter()
-                .map(MirScalarExpr::Column)
+                .map(MirScalarExpr::column)
                 .collect(),
             create_sql: index_sql(
                 index_item_name,
