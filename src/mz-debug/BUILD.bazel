@@ -16,7 +16,7 @@ load("@rules_rust//rust:defs.bzl", "rust_binary")
 package(default_visibility = ["//visibility:public"])
 
 rust_binary(
-    name = "mz_self_managed_debug",
+    name = "mz_debug",
     srcs = glob(["src/**/*.rs"]),
     aliases = aliases(
         normal = True,

@@ -1,5 +1,5 @@
 [package]
-name = "mz-self-managed-debug"
+name = "mz-debug"
 description = "Debug tool for self-managed Materialize."
 version = "0.141.0-dev.0"
 edition.workspace = true

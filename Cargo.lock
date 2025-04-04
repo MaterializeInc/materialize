@@ -5428,6 +5428,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-debug"
+version = "0.141.0-dev.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "csv-async",
+ "futures",
+ "k8s-openapi",
+ "kube",
+ "mz-build-info",
+ "mz-cloud-resources",
+ "mz-ore",
+ "mz-tls-util",
+ "postgres-openssl",
+ "serde",
+ "serde_yaml",
+ "tokio",
+ "tokio-postgres",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "walkdir",
+ "workspace-hack",
+ "zip",
+]
+
+[[package]]
 name = "mz-durable-cache"
 version = "0.0.0"
 dependencies = [
@@ -6860,34 +6888,6 @@ dependencies = [
  "tracing",
  "uuid",
  "workspace-hack",
-]
-
-[[package]]
-name = "mz-self-managed-debug"
-version = "0.141.0-dev.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "csv-async",
- "futures",
- "k8s-openapi",
- "kube",
- "mz-build-info",
- "mz-cloud-resources",
- "mz-ore",
- "mz-tls-util",
- "postgres-openssl",
- "serde",
- "serde_yaml",
- "tokio",
- "tokio-postgres",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "walkdir",
- "workspace-hack",
- "zip",
 ]
 
 [[package]]

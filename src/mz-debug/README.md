@@ -1,3 +1,3 @@
-# `self-managed-debug`
+# `mz-debug`
 
 This tool allows us to debug a user's self-managed environment.

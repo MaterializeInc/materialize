@@ -38,7 +38,7 @@ mod utils;
 
 const BUILD_INFO: BuildInfo = build_info!();
 static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
-static ENV_FILTER: &str = "mz_self_managed_debug=info";
+static ENV_FILTER: &str = "mz_debug=info";
 
 #[derive(Parser, Debug, Clone)]
 pub struct SelfManagedDebugMode {
@@ -85,7 +85,7 @@ pub enum DebugMode {
 }
 
 #[derive(Parser, Debug, Clone)]
-#[clap(name = "self-managed-debug", next_line_help = true, version = VERSION.as_str())]
+#[clap(name = "mz-debug", next_line_help = true, version = VERSION.as_str())]
 pub struct Args {
     #[clap(subcommand)]
     debug_mode: DebugMode,
@@ -149,7 +149,7 @@ pub struct Context {
 #[tokio::main]
 async fn main() {
     let args: Args = cli::parse_args(CliConfig {
-        env_prefix: Some("SELF_MANAGED_DEBUG_"),
+        env_prefix: Some("MZ_DEBUG_"),
         enable_version_flag: true,
     });
 
@@ -182,7 +182,7 @@ async fn main() {
 
     if let Err(err) = run(context, args).await {
         error!(
-            "self-managed-debug: fatal: {}\nbacktrace: {}",
+            "mz-debug: fatal: {}\nbacktrace: {}",
             err.display_with_causes(),
             err.backtrace()
         );
