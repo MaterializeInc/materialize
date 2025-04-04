@@ -689,7 +689,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         let license_key_text = std::fs::read_to_string(&license_key_file)
             .context("failed to open license key file")?;
         let license_key = mz_license_keys::validate(
-            &license_key_text,
+            license_key_text.trim(),
             &args.environment_id.organization_id().to_string(),
         )
         .context("failed to validate license key file")?;

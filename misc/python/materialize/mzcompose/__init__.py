@@ -281,7 +281,7 @@ def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
             "disabled": disabled,
             "disk_limit": None,
             "is_cc": is_cc,
-            "memory_limit": memory_limit,
+            "memory_limit": memory_limit or "4Gi",
             "scale": scale,
             "workers": workers,
             # "selectors": {},
