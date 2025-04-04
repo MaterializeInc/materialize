@@ -2423,9 +2423,9 @@ dependencies = [
 
 [[package]]
 name = "differential-dataflow"
-version = "0.14.1"
+version = "0.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0640656ed23155e96560e47109973632d947ab036fdd5952c38d97c264789bfc"
+checksum = "b7aba4beebe3ae1d6a53383759d0281662e988523bb7ddcbff8f7a924444b438"
 dependencies = [
  "columnar",
  "columnation",
