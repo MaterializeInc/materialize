@@ -9,8 +9,8 @@
 
 use columnar::Columnar;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
-use mz_expr::MfpPlan;
 use mz_expr::{MapFilterProject, MirScalarExpr, TableFunc};
+use mz_expr::{MfpPlan, StaticMirScalarExprs};
 use mz_repr::{DatumVec, RowArena, SharedRow};
 use mz_repr::{Diff, Row, Timestamp};
 use mz_timely_util::operator::StreamExt;
@@ -38,6 +38,7 @@ where
         mfp: MapFilterProject,
         input_key: Option<Vec<MirScalarExpr>>,
     ) -> CollectionBundle<G> {
+        let exprs: Vec<_> = exprs.iter().map(StaticMirScalarExprs::from).collect();
         let until = self.until.clone();
         let mfp_plan = mfp.into_plan().expect("MapFilterProject planning failed");
         let (ok_collection, err_collection) =
