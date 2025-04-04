@@ -9,19 +9,6 @@
 
 mode cockroach
 
-# To make ordering deterministic for fast-path peeks, enable the
-# structured part format and set Persist to use that ordering.
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET persist_batch_columnar_format = 'both_v2'
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET persist_batch_structured_order = true
-----
-COMPLETE 0
-
 # Verify that the persist fast path only kicks in when it's expected to do so.
 
 # Generate a table, with multiple batches of data and some partial overlaps

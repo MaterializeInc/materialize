@@ -132,6 +132,7 @@ def get_default_system_parameters(
         ),
         "persist_batch_delete_enabled": "true",
         "persist_batch_structured_order": "true",
+        "persist_batch_builder_structured": "true",
         "persist_batch_structured_key_lower_len": "256",
         "persist_batch_max_run_len": "4",
         "persist_catalog_force_compaction_fuel": "1024",

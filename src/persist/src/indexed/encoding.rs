@@ -13,18 +13,24 @@
 // Ditto for Log* and the Log. The others are used internally in these top-level
 // structs.
 
+use std::fmt::{self, Debug};
+use std::sync::Arc;
+
 use arrow::array::{Array, ArrayRef, AsArray, BinaryArray, Int64Array};
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Int64Type, ToByteSlice};
 use bytes::{BufMut, Bytes};
 use differential_dataflow::trace::Description;
-use itertools::Either;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_panic_or_log;
-use mz_persist_types::columnar::{codec_to_schema, data_type, schema_to_codec};
+use mz_persist_types::arrow::{ArrayBound, ArrayOrd};
+use mz_persist_types::columnar::{
+    codec_to_schema, data_type, schema_to_codec, ColumnEncoder, Schema,
+};
 use mz_persist_types::parquet::EncodingConfig;
+use mz_persist_types::part::Part;
 use mz_persist_types::schema::backward_compatible;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{RustType, TryFromProtoError};
@@ -33,8 +39,6 @@ use proptest::prelude::*;
 use proptest::strategy::{BoxedStrategy, Just};
 use prost::Message;
 use serde::Serialize;
-use std::fmt::{self, Debug};
-use std::sync::Arc;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::error;
@@ -219,6 +223,18 @@ pub enum BlobTraceUpdates {
 }
 
 impl BlobTraceUpdates {
+    /// Convert from a [Part].
+    pub fn from_part(part: Part) -> Self {
+        Self::Structured {
+            key_values: ColumnarRecordsStructuredExt {
+                key: part.key,
+                val: part.val,
+            },
+            timestamps: part.time,
+            diffs: part.diff,
+        }
+    }
+
     /// The number of updates.
     pub fn len(&self) -> usize {
         match self {
@@ -366,6 +382,23 @@ impl BlobTraceUpdates {
         structured
     }
 
+    /// Convert this blob into a structured part, transforming the codec data if necessary.
+    pub fn into_part<K: Codec, V: Codec>(
+        &mut self,
+        key_schema: &K::Schema,
+        val_schema: &V::Schema,
+    ) -> Part {
+        let ext = self
+            .get_or_make_structured::<K, V>(key_schema, val_schema)
+            .clone();
+        Part {
+            key: ext.key,
+            val: ext.val,
+            time: self.timestamps().clone(),
+            diff: self.diffs().clone(),
+        }
+    }
+
     /// Concatenate the given records together, column-by-column.
     ///
     /// If `ensure_codec` is true, then we'll ensure the returned [`BlobTraceUpdates`] includes
@@ -375,10 +408,18 @@ impl BlobTraceUpdates {
         key_schema: &K::Schema,
         val_schema: &V::Schema,
         metrics: &ColumnarMetrics,
-        ensure_codec: bool,
     ) -> anyhow::Result<BlobTraceUpdates> {
         match updates.len() {
-            0 => return Ok(BlobTraceUpdates::Row(ColumnarRecords::default())),
+            0 => {
+                return Ok(BlobTraceUpdates::Structured {
+                    key_values: ColumnarRecordsStructuredExt {
+                        key: Arc::new(key_schema.encoder().expect("valid schema").finish()),
+                        val: Arc::new(val_schema.encoder().expect("valid schema").finish()),
+                    },
+                    timestamps: Int64Array::from_iter_values(vec![]),
+                    diffs: Int64Array::from_iter_values(vec![]),
+                })
+            }
             1 => return Ok(updates.into_iter().into_element()),
             _ => {}
         }
@@ -398,39 +439,26 @@ impl BlobTraceUpdates {
 
         // If necessary, ensure we have `Codec` data, which internally includes
         // timestamps and diffs, otherwise get the timestamps and diffs separately.
-        let records = if ensure_codec {
-            let columnar: Vec<_> = updates
-                .iter_mut()
-                .map(|u| u.get_or_make_codec::<K, V>(key_schema, val_schema).clone())
-                .collect();
-            Either::Left(ColumnarRecords::concat(&columnar, metrics))
-        } else {
-            let mut timestamps: Vec<&dyn Array> = Vec::with_capacity(updates.len());
-            let mut diffs: Vec<&dyn Array> = Vec::with_capacity(updates.len());
+        let mut timestamps: Vec<&dyn Array> = Vec::with_capacity(updates.len());
+        let mut diffs: Vec<&dyn Array> = Vec::with_capacity(updates.len());
 
-            for update in &updates {
-                timestamps.push(update.timestamps());
-                diffs.push(update.diffs());
-            }
-            let timestamps = ::arrow::compute::concat(&timestamps)?
-                .as_primitive_opt::<Int64Type>()
-                .ok_or_else(|| anyhow::anyhow!("timestamps changed Array type"))?
-                .clone();
-            let diffs = ::arrow::compute::concat(&diffs)?
-                .as_primitive_opt::<Int64Type>()
-                .ok_or_else(|| anyhow::anyhow!("diffs changed Array type"))?
-                .clone();
+        for update in &updates {
+            timestamps.push(update.timestamps());
+            diffs.push(update.diffs());
+        }
+        let timestamps = ::arrow::compute::concat(&timestamps)?
+            .as_primitive_opt::<Int64Type>()
+            .ok_or_else(|| anyhow::anyhow!("timestamps changed Array type"))?
+            .clone();
+        let diffs = ::arrow::compute::concat(&diffs)?
+            .as_primitive_opt::<Int64Type>()
+            .ok_or_else(|| anyhow::anyhow!("diffs changed Array type"))?
+            .clone();
 
-            Either::Right((timestamps, diffs))
-        };
-
-        let out = match records {
-            Either::Left(codec) => Self::Both(codec, key_values),
-            Either::Right((timestamps, diffs)) => Self::Structured {
-                key_values,
-                timestamps,
-                diffs,
-            },
+        let out = Self::Structured {
+            key_values,
+            timestamps,
+            diffs,
         };
         metrics
             .arrow
@@ -525,39 +553,18 @@ impl BlobTraceUpdates {
 
     /// Convert these updates into the specified batch format, re-encoding or discarding key-value
     /// data as necessary.
-    pub fn as_format<K: Codec, V: Codec>(
+    pub fn as_structured<K: Codec, V: Codec>(
         &self,
-        format: BatchColumnarFormat,
         key_schema: &K::Schema,
         val_schema: &V::Schema,
     ) -> Self {
-        match format {
-            BatchColumnarFormat::Row => {
-                let mut this = self.clone();
-                Self::Row(
-                    this.get_or_make_codec::<K, V>(key_schema, val_schema)
-                        .clone(),
-                )
-            }
-            BatchColumnarFormat::Both(_) => {
-                let mut this = self.clone();
-                Self::Both(
-                    this.get_or_make_codec::<K, V>(key_schema, val_schema)
-                        .clone(),
-                    this.get_or_make_structured::<K, V>(key_schema, val_schema)
-                        .clone(),
-                )
-            }
-            BatchColumnarFormat::Structured => {
-                let mut this = self.clone();
-                Self::Structured {
-                    key_values: this
-                        .get_or_make_structured::<K, V>(key_schema, val_schema)
-                        .clone(),
-                    timestamps: this.timestamps().clone(),
-                    diffs: this.diffs().clone(),
-                }
-            }
+        let mut this = self.clone();
+        Self::Structured {
+            key_values: this
+                .get_or_make_structured::<K, V>(key_schema, val_schema)
+                .clone(),
+            timestamps: this.timestamps().clone(),
+            diffs: this.diffs().clone(),
         }
     }
 }
@@ -697,6 +704,16 @@ impl<T: Timestamp + Codec64> BlobTraceBatchPart<T> {
             .records()
             .and_then(|r| r.keys().iter().flatten().min())
             .unwrap_or(&[])
+    }
+
+    /// Scans the part and returns a lower bound on the contained keys.
+    pub fn structured_key_lower(&self) -> Option<ArrayBound> {
+        self.updates.structured().and_then(|r| {
+            let ord = ArrayOrd::new(&r.key);
+            (0..r.key.len())
+                .min_by_key(|i| ord.at(*i))
+                .map(|i| ArrayBound::new(Arc::clone(&r.key), i))
+        })
     }
 }
 

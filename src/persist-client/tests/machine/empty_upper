@@ -26,27 +26,27 @@ parts=1 len=1
 
 compare-and-append input=b0 writer_id=w11111111-1111-1111-1111-111111111111
 ----
-v2 [1]
+v3 [1]
 
 compare-and-append input=b1 writer_id=w11111111-1111-1111-1111-111111111111
 ----
-v3 [2]
+v4 [2]
 
 register-leased-reader reader_id=r22222222-2222-2222-2222-222222222222
 ----
-v4 [0]
+v5 [0]
 
 register-critical-reader reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v5 [0]
+v6 [0]
 
 downgrade-since since=1 reader_id=r22222222-2222-2222-2222-222222222222
 ----
-v6 [1]
+v7 [1]
 
 compare-and-downgrade-since expect_opaque=0 opaque=0 since=1 reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v7 0 [1]
+v8 0 [1]
 
 # Now advance the upper to the empty antichain, closing this shard to writes.
 #
@@ -58,7 +58,7 @@ parts=1 len=1
 
 compare-and-append input=b2 writer_id=w11111111-1111-1111-1111-111111111111
 ----
-v8 []
+v9 []
 
 ####### UPPER IS EMPTY BUT SINCE IS NOT
 
@@ -73,16 +73,16 @@ parts=1 len=2
 
 apply-merge-res input=b0_1 writer_id=w11111111-1111-1111-1111-111111111111
 ----
-v9 true
+v10 true
 
 # We can still downgrade since on both reader types.
 downgrade-since since=2 reader_id=r22222222-2222-2222-2222-222222222222
 ----
-v10 [2]
+v11 [2]
 
 compare-and-downgrade-since expect_opaque=0 opaque=0 since=2 reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v11 0 [2]
+v12 0 [2]
 
 # We can still register a new writer and do all the normal things with it.
 compare-and-append input=b2 writer_id=w33333333-3333-3333-3333-333333333333
@@ -91,7 +91,7 @@ error: Upper(Antichain { elements: [] })
 
 expire-writer writer_id=w33333333-3333-3333-3333-333333333333
 ----
-v12 ok
+v13 ok
 
 # We can still read data
 snapshot as_of=2
@@ -110,22 +110,26 @@ k1 2 -1
 # maintenance it needs.
 perform-maintenance
 ----
-v12 ok
-v12 ok
-v12 ok
-v12 ok
-v12 ok
-v12 ok
-v12 ok
-v12 ok
-v12 ok
-v12 ok
-v12 ok
+v13 ok
+v13 ok
+v13 ok
+v13 ok
+v13 ok
+v13 ok
+v13 ok
+v13 ok
+v13 ok
+v13 ok
+v13 ok
+v13 ok
+v13 ok
+v13 ok
+v13 ok
 
 # Explicit finalization should fail when the shard isn't fully advanced.
 is-finalized
 ----
-v12 false
+v13 false
 
 finalize
 ----
@@ -133,16 +137,16 @@ error: finalized without fully advancing since Antichain { elements: [2] } and u
 
 is-finalized
 ----
-v12 false
+v13 false
 
 # Now downgrade_since to empty antichain, closing the shard to reads as well.
 downgrade-since since=() reader_id=r22222222-2222-2222-2222-222222222222
 ----
-v13 []
+v14 []
 
 compare-and-downgrade-since expect_opaque=0 opaque=0 since=() reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v14 0 []
+v15 0 []
 
 shard-desc
 ----
@@ -152,23 +156,23 @@ since=[] upper=[]
 # perform it on demand.
 is-finalized
 ----
-v14 false
+v15 false
 
 finalize
 ----
-v17 ok
+v18 ok
 
 is-finalized
 ----
-v17 true
+v18 true
 
 # Run maintenance a few times to make sure it converges (because maintenance
 # like GC can result in followup maintenance)
 perform-maintenance
 ----
-v17 ok
-v17 ok
 v18 ok
+v18 ok
+v19 ok
 
 perform-maintenance
 ----
@@ -180,8 +184,8 @@ perform-maintenance
 
 consensus-scan from_seqno=v0
 ----
-seqno=v17 batches= rollups=v1
-seqno=v18 batches= rollups=v1,v17
+seqno=v18 batches= rollups=v1
+seqno=v19 batches= rollups=v1,v18
 
 blob-scan-batches
 ----
@@ -206,7 +210,7 @@ error: Upper(Antichain { elements: [] })
 
 expire-writer writer_id=w11111111-1111-1111-1111-111111111111
 ----
-v18 ok
+v19 ok
 
 # Perhaps counter-intuitively, we can "register" a new writer. This doesn't
 # actually register and produce a new SeqNo, but there's (intentionally) no
@@ -218,7 +222,7 @@ error: Upper(Antichain { elements: [] })
 
 expire-writer writer_id=w44444444-4444-4444-4444-444444444444
 ----
-v18 ok
+v19 ok
 
 # Similarly, downgrade_since, as well as all the other reader operations, works
 # for an existing reader. As an odd side effect, CaDS works even when the token
@@ -227,45 +231,45 @@ v18 ok
 # NB: Critically, none of these create a new seqno.
 downgrade-since since=4 reader_id=r22222222-2222-2222-2222-222222222222
 ----
-v18 []
+v19 []
 
 expire-leased-reader reader_id=r22222222-2222-2222-2222-222222222222
 ----
-v18 ok
+v19 ok
 
 compare-and-downgrade-since expect_opaque=0 opaque=0 since=4 reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v18 0 []
+v19 0 []
 
 compare-and-downgrade-since expect_opaque=1 opaque=1 since=5 reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v18 1 []
+v19 1 []
 
 expire-critical-reader reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v18 ok
+v19 ok
 
 # And ditto we can "register" both reader types and do the same ops.
 register-leased-reader reader_id=r55555555-5555-5555-5555-555555555555
 ----
-v18 []
+v19 []
 
 downgrade-since since=4 reader_id=r55555555-5555-5555-5555-555555555555
 ----
-v18 []
+v19 []
 
 expire-leased-reader reader_id=r55555555-5555-5555-5555-555555555555
 ----
-v18 ok
+v19 ok
 
 register-critical-reader reader_id=c55555555-5555-5555-5555-555555555555
 ----
-v18 []
+v19 []
 
 compare-and-downgrade-since expect_opaque=0 opaque=0 since=4 reader_id=c55555555-5555-5555-5555-555555555555
 ----
-v18 0 []
+v19 0 []
 
 expire-critical-reader reader_id=c55555555-5555-5555-5555-555555555555
 ----
-v18 ok
+v19 ok

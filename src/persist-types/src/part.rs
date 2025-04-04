@@ -12,12 +12,16 @@
 use std::mem;
 use std::sync::Arc;
 
-use arrow::array::{Array, Int64Array};
+use arrow::array::{Array, ArrayRef, AsArray, Int64Array};
+use arrow::datatypes::ToByteSlice;
+use mz_ore::result::ResultExt;
 
-use crate::columnar::{ColumnEncoder, Schema};
+use crate::arrow::ArrayOrd;
+use crate::columnar::{ColumnDecoder, ColumnEncoder, Schema};
 use crate::Codec64;
 
 /// A structured columnar representation of one blob's worth of data.
+#[derive(Debug, Clone)]
 pub struct Part {
     /// The 'k' values from a Part, generally `SourceData`.
     pub key: Arc<dyn Array>,
@@ -27,6 +31,103 @@ pub struct Part {
     pub time: Int64Array,
     /// The `diff` values from a Part.
     pub diff: Int64Array,
+}
+
+impl Part {
+    /// The length of each of the arrays in the part.
+    pub fn len(&self) -> usize {
+        self.key.len()
+    }
+
+    /// See [ArrayOrd::goodbytes].
+    pub fn goodbytes(&self) -> usize {
+        ArrayOrd::new(&self.key).goodbytes()
+            + ArrayOrd::new(&self.val).goodbytes()
+            + self.time.values().to_byte_slice().len()
+            + self.diff.values().to_byte_slice().len()
+    }
+
+    fn combine(
+        parts: &[Part],
+        mut combine_fn: impl FnMut(&[&dyn Array]) -> anyhow::Result<ArrayRef>,
+    ) -> anyhow::Result<Self> {
+        let mut field_array = Vec::with_capacity(parts.len());
+        let mut combine = |get: fn(&Part) -> &dyn Array| {
+            field_array.extend(parts.iter().map(get));
+            let res = combine_fn(&field_array);
+            field_array.clear();
+            res
+        };
+
+        Ok(Self {
+            key: combine(|p| &p.key)?,
+            val: combine(|p| &p.val)?,
+            time: combine(|p| &p.time)?.as_primitive().clone(),
+            diff: combine(|p| &p.diff)?.as_primitive().clone(),
+        })
+    }
+
+    /// Executes [::arrow::compute::concat] columnwise, or returns `None` if no parts are given.
+    pub fn concat(parts: &[Part]) -> anyhow::Result<Option<Self>> {
+        match parts.len() {
+            0 => return Ok(None),
+            1 => return Ok(Some(parts[0].clone())),
+            _ => {}
+        }
+        let combined = Part::combine(parts, |cols| ::arrow::compute::concat(cols).err_into())?;
+        Ok(Some(combined))
+    }
+
+    /// Executes [::arrow::compute::interleave] columnwise.
+    pub fn interleave(parts: &[Part], indices: &[(usize, usize)]) -> anyhow::Result<Self> {
+        Part::combine(parts, |cols| {
+            ::arrow::compute::interleave(cols, indices).err_into()
+        })
+    }
+
+    /// Iterate over the contents of this part, decoding as we go.
+    pub fn decode_iter<
+        'a,
+        K: Default + Clone + 'static,
+        V: Default + Clone + 'static,
+        T: Codec64,
+        D: Codec64,
+    >(
+        &'a self,
+        key_schema: &'a impl Schema<K>,
+        val_schema: &'a impl Schema<V>,
+    ) -> anyhow::Result<impl Iterator<Item = ((K, V), T, D)> + 'a> {
+        let key_decoder = key_schema.decoder_any(&*self.key)?;
+        let val_decoder = val_schema.decoder_any(&*self.val)?;
+        let mut key = K::default();
+        let mut val = V::default();
+        let iter = (0..self.len()).map(move |i| {
+            key_decoder.decode(i, &mut key);
+            val_decoder.decode(i, &mut val);
+            let time = T::decode(self.time.value(i).to_le_bytes());
+            let diff = D::decode(self.diff.value(i).to_le_bytes());
+            ((key.clone(), val.clone()), time, diff)
+        });
+        Ok(iter)
+    }
+}
+
+impl PartialEq for Part {
+    fn eq(&self, other: &Self) -> bool {
+        let Part {
+            key,
+            val,
+            time,
+            diff,
+        } = self;
+        let Part {
+            key: other_key,
+            val: other_val,
+            time: other_time,
+            diff: other_diff,
+        } = other;
+        key == other_key && val == other_val && time == other_time && diff == other_diff
+    }
 }
 
 /// A builder for [`Part`].
