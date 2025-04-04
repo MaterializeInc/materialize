@@ -132,15 +132,16 @@ def get_tag(tag: str) -> str:
     return tag or f"v{ci_util.get_mz_version()}--pr.g{git.rev_parse('HEAD')}"
 
 
-def mz_self_managed_debug(env: dict[str, str] | None = None) -> None:
-    print("-- Running self-managed-debug")
+def mz_debug(env: dict[str, str] | None = None) -> None:
+    print("-- Running mz-debug")
     run_ignore_error(
         [
             "cargo",
             "run",
             "--bin",
-            "mz-self-managed-debug",
+            "mz-debug",
             "--",
+            "self-managed",
             "--k8s-namespace",
             "materialize-environment",
             "--k8s-namespace",
@@ -620,7 +621,7 @@ def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
     finally:
         aws.cleanup()
 
-        mz_self_managed_debug()
+        mz_debug()
 
         if args.cleanup:
             aws.destroy()
@@ -1092,7 +1093,7 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
         if balancerd_port_forward_process:
             os.killpg(os.getpgid(balancerd_port_forward_process.pid), signal.SIGTERM)
 
-        mz_self_managed_debug()
+        mz_debug()
 
         if args.cleanup:
             print("--- Cleaning up")
@@ -1518,7 +1519,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
         if balancerd_port_forward_process:
             os.killpg(os.getpgid(balancerd_port_forward_process.pid), signal.SIGTERM)
 
-        mz_self_managed_debug(env=venv_env)
+        mz_debug(env=venv_env)
 
         if args.cleanup:
             print("--- Cleaning up")

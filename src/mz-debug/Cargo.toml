@@ -1,5 +1,5 @@
 [package]
-name = "mz-self-managed-debug"
+name = "mz-debug"
 description = "Debug tool for self-managed Materialize."
 version = "0.141.0-dev.0"
 edition.workspace = true
@@ -29,7 +29,9 @@ tokio-postgres = { version = "0.7.8" }
 tokio-util = { version = "0.7.13", features = ["io"] }
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.19", default-features = false, features = ["env-filter", "fmt"] }
+walkdir = "2.5"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+zip = { version = "2.5", default-features = false, features=["deflate-flate2", "flate2"]}
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

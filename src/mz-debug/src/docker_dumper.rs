@@ -24,16 +24,16 @@ use mz_ore::retry::{self, RetryResult};
 use tracing::{error, info};
 
 use crate::utils::format_base_path;
-use crate::Context;
+use crate::{ContainerDumper, Context};
 
 static DOCKER_RESOURCE_DUMP_TIMEOUT: Duration = Duration::from_secs(30);
 
-pub struct DockerResourceDumper {
+pub struct DockerDumper {
     container_id: String,
     directory_path: PathBuf,
 }
 
-impl DockerResourceDumper {
+impl DockerDumper {
     pub fn new(context: &Context, container_id: String) -> Self {
         Self {
             directory_path: format_base_path(context.start_time)
@@ -115,20 +115,25 @@ impl DockerResourceDumper {
 
         Ok(())
     }
+
+    async fn dump_top(&self) -> Result<(), anyhow::Error> {
+        let (stdout, _) = self
+            .execute_docker_command(&["top".to_string(), self.container_id.to_string()])
+            .await?;
+
+        write_output(stdout, &self.directory_path, "top.txt")?;
+
+        Ok(())
+    }
 }
 
-/// Dump all Docker resources.
-pub async fn dump_all_docker_resources(context: &Context) -> () {
-    let container_id = context
-        .args
-        .docker_container_id
-        .clone()
-        .expect("No container ID provided");
-    let dumper = DockerResourceDumper::new(context, container_id);
-
-    let _ = dumper.dump_logs().await;
-    let _ = dumper.dump_inspect().await;
-    let _ = dumper.dump_stats().await;
+impl ContainerDumper for DockerDumper {
+    async fn dump_container_resources(&self) {
+        let _ = self.dump_logs().await;
+        let _ = self.dump_inspect().await;
+        let _ = self.dump_stats().await;
+        let _ = self.dump_top().await;
+    }
 }
 
 /// Helper closure to write output to file
