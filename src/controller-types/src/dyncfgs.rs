@@ -68,6 +68,12 @@ pub const TIMELY_ZERO_COPY_LIMIT: Config<Option<usize>> = Config::new(
     "Optional limit of the zero copy allocator in allocations (timely dataflow).",
 );
 
+pub const ENABLE_CREATE_SOCKETS_V2: Config<bool> = Config::new(
+    "enable_create_sockets_v2",
+    true,
+    "Whether to use the new version of the `create_sockets` protocol.",
+);
+
 /// Adds the full set of all controller `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -80,4 +86,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_TIMELY_ZERO_COPY)
         .add(&ENABLE_TIMELY_ZERO_COPY_LGALLOC)
         .add(&TIMELY_ZERO_COPY_LIMIT)
+        .add(&ENABLE_CREATE_SOCKETS_V2)
 }
