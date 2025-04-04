@@ -46,7 +46,7 @@ variable "operator_version" {
 }
 
 module "materialize_infrastructure" {
-  source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=v0.4.0"
+  source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=v0.4.1"
 
   providers = {
     aws        = aws
