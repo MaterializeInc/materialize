@@ -11,6 +11,30 @@ provider "aws" {
   region = "us-east-1"
 }
 
+provider "kubernetes" {
+  host                   = module.materialize_infrastructure.eks_cluster_endpoint
+  cluster_ca_certificate = base64decode(module.materialize_infrastructure.cluster_certificate_authority_data)
+
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["eks", "get-token", "--cluster-name", module.materialize_infrastructure.eks_cluster_name]
+  }
+}
+
+provider "helm" {
+  kubernetes {
+    host                   = module.materialize_infrastructure.eks_cluster_endpoint
+    cluster_ca_certificate = base64decode(module.materialize_infrastructure.cluster_certificate_authority_data)
+
+    exec {
+      api_version = "client.authentication.k8s.io/v1beta1"
+      command     = "aws"
+      args        = ["eks", "get-token", "--cluster-name", module.materialize_infrastructure.eks_cluster_name]
+    }
+  }
+}
+
 resource "random_password" "db_password" {
   length  = 32
   special = false
@@ -21,13 +45,14 @@ variable "operator_version" {
   default = "v25.2.0-beta.1.tgz"
 }
 
-variable "orchestratord_version" {
-  type    = string
-  default = "v0.130.3"
-}
-
 module "materialize_infrastructure" {
-  source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=v0.2.7"
+  source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=v0.4.0"
+
+  providers = {
+    aws        = aws
+    kubernetes = kubernetes
+    helm       = helm
+  }
 
   # Basic settings
   # The namespace and environment variables are used to construct the names of the resources
@@ -38,7 +63,6 @@ module "materialize_infrastructure" {
   use_local_chart = true
   helm_chart = "materialize-operator-v25.2.0-beta.1.tgz"
   operator_version = var.operator_version
-  orchestratord_version = var.orchestratord_version
 
   # TODO: Doesn't seem to work yet
   # helm_values = {
@@ -62,8 +86,8 @@ module "materialize_infrastructure" {
   single_nat_gateway   = true
 
   # EKS Configuration
-  cluster_version           = "1.31"
-  node_group_instance_types = ["r8g.2xlarge"]
+  cluster_version           = "1.32"
+  node_group_instance_types = ["r7gd.2xlarge"]
   node_group_desired_size   = 2
   node_group_min_size       = 1
   node_group_max_size       = 3
