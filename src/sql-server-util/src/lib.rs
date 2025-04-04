@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::any::Any;
 use std::borrow::Cow;
 use std::future::IntoFuture;
 use std::pin::Pin;
@@ -25,11 +26,14 @@ use tokio::sync::oneshot;
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 
 pub mod cdc;
+pub mod config;
 pub mod desc;
 pub mod inspect;
 
-// Re-export tiberius' Config type since it's needed by our Client wrapper.
-pub use tiberius::Config;
+pub use config::Config;
+pub use desc::{ProtoSqlServerColumnDesc, ProtoSqlServerTableDesc};
+
+use crate::config::TunnelConfig;
 
 /// Higher level wrapper around a [`tiberius::Client`] that models transaction
 /// management like other database clients.
@@ -48,22 +52,73 @@ pub struct Client {
 static_assertions::assert_not_impl_all!(Client: Clone);
 
 impl Client {
-    pub async fn connect(config: tiberius::Config) -> Result<(Self, Connection), SqlServerError> {
-        let tcp = TcpStream::connect(config.get_addr()).await?;
+    /// Connect to the specified SQL Server instance, returning a [`Client`]
+    /// that can be used to query it and a [`Connection`] that must be polled
+    /// to send and receive results.
+    ///
+    /// TODO(sql_server2): Maybe return a `ClientBuilder` here that implements
+    /// IntoFuture and does the default good thing of moving the `Connection`
+    /// into a tokio task? And a `.raw()` option that will instead return both
+    /// the Client and Connection for manual polling.
+    pub async fn connect(config: Config) -> Result<(Self, Connection), SqlServerError> {
+        // Setup our tunnelling and return any resources that need to be kept
+        // alive for the duration of the connection.
+        let (tcp, resources): (_, Option<Box<dyn Any + Send + Sync>>) = match &config.tunnel {
+            TunnelConfig::Direct => {
+                let tcp = TcpStream::connect(config.inner.get_addr())
+                    .await
+                    .context("direct")?;
+                (tcp, None)
+            }
+            TunnelConfig::Ssh {
+                config: ssh_config,
+                manager,
+                timeout,
+                host,
+                port,
+            } => {
+                // N.B. If this tunnel is dropped it will close so we need to
+                // keep it alive for the duration of the connection.
+                let tunnel = manager
+                    .connect(ssh_config.clone(), host, *port, *timeout, config.in_task)
+                    .await?;
+                let tcp = TcpStream::connect(tunnel.local_addr())
+                    .await
+                    .context("ssh tunnel")?;
+
+                (tcp, Some(Box::new(tunnel)))
+            }
+            TunnelConfig::AwsPrivatelink { connection_id: _ } => {
+                // TODO(sql_server1): Getting this right is tricky because
+                // there is some subtle logic with hostname validation.
+                return Err(SqlServerError::Generic(anyhow::anyhow!(
+                    "TODO(sql_server1): Support PrivateLink connections"
+                )));
+            }
+        };
+
         tcp.set_nodelay(true)?;
-        Self::connect_raw(config, tcp).await
+        Self::connect_raw(config, tcp, resources).await
     }
 
     pub async fn connect_raw(
-        config: tiberius::Config,
+        config: Config,
         tcp: tokio::net::TcpStream,
+        resources: Option<Box<dyn Any + Send + Sync>>,
     ) -> Result<(Self, Connection), SqlServerError> {
-        let client = tiberius::Client::connect(config, tcp.compat_write())
-            .await
-            .context("connecting to SQL Server")?;
+        let client = tiberius::Client::connect(config.inner, tcp.compat_write()).await?;
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
-        Ok((Client { tx }, Connection { rx, client }))
+        // TODO(sql_server2): Add a lot more logging here like the Postgres and MySQL clients have.
+
+        Ok((
+            Client { tx },
+            Connection {
+                rx,
+                client,
+                _resources: resources,
+            },
+        ))
     }
 
     /// Executes SQL statements in SQL Server, returning the number of rows effected.
@@ -93,7 +148,7 @@ impl Client {
             .send(Request { tx, kind })
             .context("sending request")?;
 
-        let response = rx.await.context("channel")?.context("execute")?;
+        let response = rx.await.context("channel")??;
         match response {
             Response::Execute { rows_affected } => Ok(rows_affected),
             other @ Response::Rows(_) | other @ Response::RowStream { .. } => {
@@ -131,7 +186,7 @@ impl Client {
             .send(Request { tx, kind })
             .context("sending request")?;
 
-        let response = rx.await.context("channel")?.context("query")?;
+        let response = rx.await.context("channel")??;
         match response {
             Response::Rows(rows) => Ok(rows),
             other @ Response::Execute { .. } | other @ Response::RowStream { .. } => Err(
@@ -203,7 +258,7 @@ impl Client {
             .send(Request { tx, kind })
             .context("sending request")?;
 
-        let response = rx.await.context("channel")?.context("simple_query")?;
+        let response = rx.await.context("channel")??;
         match response {
             Response::Rows(rows) => Ok(rows),
             other @ Response::Execute { .. } | other @ Response::RowStream { .. } => Err(
@@ -443,14 +498,18 @@ enum RequestKind {
 }
 
 pub struct Connection {
+    /// Other end of the channel that [`Client`] holds.
     rx: UnboundedReceiver<Request>,
+    /// Actual client that we use to send requests.
     client: tiberius::Client<Compat<TcpStream>>,
+    /// Resources (e.g. SSH tunnel) that need to be held open for the life of this connection.
+    _resources: Option<Box<dyn Any + Send + Sync>>,
 }
 
 impl Connection {
     async fn run(mut self) {
         while let Some(Request { tx, kind }) = self.rx.recv().await {
-            tracing::debug!(?kind, "processing SQL Server query");
+            tracing::trace!(?kind, "processing SQL Server query");
             let result = Connection::handle_request(&mut self.client, kind).await;
             let (response, maybe_extra_work) = match result {
                 Ok((response, work)) => (Ok(response), work),

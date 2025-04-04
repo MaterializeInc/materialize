@@ -35,6 +35,7 @@ rust_library(
         "//src/ore:mz_ore",
         "//src/proto:mz_proto",
         "//src/repr:mz_repr",
+        "//src/ssh-util:mz_ssh_util",
     ] + all_crate_deps(normal = True),
 )
 
@@ -69,6 +70,7 @@ rust_test(
         "//src/ore:mz_ore",
         "//src/proto:mz_proto",
         "//src/repr:mz_repr",
+        "//src/ssh-util:mz_ssh_util",
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,
@@ -82,6 +84,7 @@ rust_doc_test(
         "//src/ore:mz_ore",
         "//src/proto:mz_proto",
         "//src/repr:mz_repr",
+        "//src/ssh-util:mz_ssh_util",
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,

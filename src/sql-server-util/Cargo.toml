@@ -9,6 +9,9 @@ publish = false
 [lints]
 workspace = true
 
+[[example]]
+name = "cdc"
+
 [dependencies]
 anyhow = "1.0.66"
 async-stream = "0.3.3"
@@ -22,6 +25,7 @@ itertools = "0.12.1"
 mz-ore = { path = "../ore", features = ["async"] }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
+mz-ssh-util = { path = "../ssh-util" }
 ordered-float = { version = "5.0.0", features = ["serde"] }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
@@ -30,11 +34,7 @@ serde = { version = "1.0.218", features = ["derive"] }
 smallvec = { version = "1.14.0", features = ["union"] }
 static_assertions = "1.1"
 thiserror = "2.0.11"
-tiberius = { version = "0.12", features = [
-    "chrono",
-    "sql-browser-tokio",
-    "tds73",
-], default-features = false }
+tiberius = { version = "0.12", features = [ "chrono", "sql-browser-tokio", "tds73"], default-features = false }
 timely = "0.20.0"
 tokio = { version = "1.44.1", features = ["net"] }
 tokio-stream = "0.1.17"
