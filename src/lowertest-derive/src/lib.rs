@@ -93,7 +93,7 @@ pub fn mzreflect_derive(input: TokenStream) -> TokenStream {
         .map(|typ| quote! { #typ::add_to_reflected_type_info(rti); })
         .collect::<Vec<_>>();
 
-    let gen = quote! {
+    let generated = quote! {
       impl mz_lowertest::MzReflect for #object_name {
         fn add_to_reflected_type_info(
             rti: &mut mz_lowertest::ReflectedTypeInfo
@@ -104,7 +104,7 @@ pub fn mzreflect_derive(input: TokenStream) -> TokenStream {
         }
       }
     };
-    gen.into()
+    generated.into()
 }
 
 /* #region Helper methods */

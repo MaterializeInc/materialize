@@ -1931,7 +1931,7 @@ impl CatalogItem {
         value: Option<Value>,
         window: CompactionWindow,
     ) -> Result<Option<WithOptionValue<Raw>>, ()> {
-        let update = |ast: &mut Statement<Raw>| {
+        let update = |mut ast: &mut Statement<Raw>| {
             // Each statement type has unique option types. This macro handles them commonly.
             macro_rules! update_retain_history {
                 ( $stmt:ident, $opt:ident, $name:ident ) => {{
@@ -1963,17 +1963,17 @@ impl CatalogItem {
                     }
                 }};
             }
-            let previous = match ast {
-                Statement::CreateTable(ref mut stmt) => {
+            let previous = match &mut ast {
+                Statement::CreateTable(stmt) => {
                     update_retain_history!(stmt, TableOption, TableOptionName)
                 }
-                Statement::CreateIndex(ref mut stmt) => {
+                Statement::CreateIndex(stmt) => {
                     update_retain_history!(stmt, IndexOption, IndexOptionName)
                 }
-                Statement::CreateSource(ref mut stmt) => {
+                Statement::CreateSource(stmt) => {
                     update_retain_history!(stmt, CreateSourceOption, CreateSourceOptionName)
                 }
-                Statement::CreateMaterializedView(ref mut stmt) => {
+                Statement::CreateMaterializedView(stmt) => {
                     update_retain_history!(stmt, MaterializedViewOption, MaterializedViewOptionName)
                 }
                 _ => {
@@ -2005,8 +2005,8 @@ impl CatalogItem {
         };
         let next_version = table.desc.add_column(name.clone(), typ);
 
-        let update = |ast: &mut Statement<Raw>| match ast {
-            Statement::CreateTable(ref mut stmt) => {
+        let update = |mut ast: &mut Statement<Raw>| match &mut ast {
+            Statement::CreateTable(stmt) => {
                 let version = ColumnOptionDef {
                     name: None,
                     option: ColumnOption::Versioned {

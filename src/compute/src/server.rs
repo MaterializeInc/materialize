@@ -77,7 +77,7 @@ pub fn serve(
     txns_ctx: TxnsContext,
     tracing_handle: Arc<TracingHandle>,
     context: ComputeInstanceContext,
-) -> Result<impl Fn() -> Box<dyn ComputeClient>, Error> {
+) -> Result<impl Fn() -> Box<dyn ComputeClient> + use<>, Error> {
     let config = Config {
         persist_clients,
         txns_ctx,

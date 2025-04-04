@@ -1896,7 +1896,7 @@ async fn snapshot_binary(
     read_handle: &mut ReadHandle<SourceData, (), Timestamp, StorageDiff>,
     as_of: Timestamp,
     metrics: &Arc<Metrics>,
-) -> impl Iterator<Item = StateUpdate<StateUpdateKindJson>> + DoubleEndedIterator {
+) -> impl Iterator<Item = StateUpdate<StateUpdateKindJson>> + DoubleEndedIterator + use<> {
     metrics.snapshots_taken.inc();
     let counter = metrics.snapshot_latency_seconds.clone();
     snapshot_binary_inner(read_handle, as_of)
@@ -1913,7 +1913,7 @@ async fn snapshot_binary(
 async fn snapshot_binary_inner(
     read_handle: &mut ReadHandle<SourceData, (), Timestamp, StorageDiff>,
     as_of: Timestamp,
-) -> impl Iterator<Item = StateUpdate<StateUpdateKindJson>> + DoubleEndedIterator {
+) -> impl Iterator<Item = StateUpdate<StateUpdateKindJson>> + DoubleEndedIterator + use<> {
     let snapshot = read_handle
         .snapshot_and_fetch(Antichain::from_elem(as_of))
         .await

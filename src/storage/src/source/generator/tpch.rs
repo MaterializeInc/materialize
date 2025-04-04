@@ -159,7 +159,7 @@ impl Generator for Tpch {
                         row.clone()
                     }
                     TpchView::Orders => {
-                        let seed = rng.gen();
+                        let seed = rng.r#gen();
                         let (order, lineitems) = ctx.order_row(seed, key);
                         for row in lineitems {
                             pending.push_back((
@@ -217,7 +217,7 @@ impl Generator for Tpch {
                         Event::Message(MzOffset::from(offset), (row, Diff::MINUS_ONE)),
                     ));
                 }
-                let new_seed = rng.gen();
+                let new_seed = rng.r#gen();
                 let (new_order, new_lineitems) = ctx.order_row(new_seed, key);
                 for row in new_lineitems {
                     pending.push_back((

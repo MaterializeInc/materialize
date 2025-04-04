@@ -31,7 +31,7 @@ use crate::{
     k8s::apply_resource,
 };
 use mz_cloud_resources::crd::{
-    gen::cert_manager::certificates::Certificate, materialize::v1alpha1::Materialize,
+    generated::cert_manager::certificates::Certificate, materialize::v1alpha1::Materialize,
 };
 
 pub struct Resources {

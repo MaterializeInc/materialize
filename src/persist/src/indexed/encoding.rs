@@ -44,8 +44,8 @@ use timely::PartialOrder;
 use tracing::error;
 
 use crate::error::Error;
-use crate::gen::persist::proto_batch_part_inline::FormatMetadata as ProtoFormatMetadata;
-use crate::gen::persist::{
+use crate::generated::persist::proto_batch_part_inline::FormatMetadata as ProtoFormatMetadata;
+use crate::generated::persist::{
     ProtoBatchFormat, ProtoBatchPartInline, ProtoColumnarRecords, ProtoU64Antichain,
     ProtoU64Description,
 };

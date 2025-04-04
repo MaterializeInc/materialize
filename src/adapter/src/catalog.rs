@@ -1045,7 +1045,10 @@ impl Catalog {
         self.state.get_entry_by_global_id(id)
     }
 
-    pub fn get_global_ids(&self, id: &CatalogItemId) -> impl Iterator<Item = GlobalId> + '_ {
+    pub fn get_global_ids<'a>(
+        &'a self,
+        id: &CatalogItemId,
+    ) -> impl Iterator<Item = GlobalId> + use<'a> {
         self.get_entry(id).global_ids()
     }
 

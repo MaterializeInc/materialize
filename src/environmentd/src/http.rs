@@ -708,7 +708,7 @@ async fn http_auth(
     next: Next,
     tls_mode: TlsMode,
     frontegg: Option<&FronteggAuthentication>,
-) -> impl IntoResponse {
+) -> impl IntoResponse + use<> {
     // First, extract the username from the certificate, validating that the
     // connection matches the TLS configuration along the way.
     let conn_protocol = req.extensions().get::<ConnProtocol>().unwrap();

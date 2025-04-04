@@ -1065,7 +1065,7 @@ impl<T: Timestamp + Lattice + Codec64> StateVersionsIter<T> {
         &self.state
     }
 
-    pub fn into_rollup_proto_without_diffs(&self) -> impl serde::Serialize {
+    pub fn into_rollup_proto_without_diffs(&self) -> impl serde::Serialize + use<T> {
         Rollup::from_state_without_diffs(
             State {
                 applier_version: self.state.applier_version.clone(),

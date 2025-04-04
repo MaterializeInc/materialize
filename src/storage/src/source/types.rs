@@ -142,9 +142,9 @@ mod columnation {
 
         unsafe fn copy(&mut self, item: &Self::Item) -> Self::Item {
             SourceMessage {
-                key: self.inner.copy(&item.key),
-                value: self.inner.copy(&item.value),
-                metadata: self.inner.copy(&item.metadata),
+                key: unsafe { self.inner.copy(&item.key) },
+                value: unsafe { self.inner.copy(&item.value) },
+                metadata: unsafe { self.inner.copy(&item.metadata) },
             }
         }
 
