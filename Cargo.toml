@@ -238,6 +238,8 @@ exclude = [
     # All WASM crates are split into their own workspace to avoid needles cache
     #  invalidations for the core Mz crates.
     "misc/wasm/*",
+    # Ignore any Rust dependencies that python packages might pull in.
+    "misc/python/venv/*",
 ]
 
 # Use Cargo's new feature resolver, which can handle target-specific features.

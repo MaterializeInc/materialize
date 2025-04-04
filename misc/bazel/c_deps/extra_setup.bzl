@@ -23,7 +23,7 @@ def protoc_setup():
     they're specific to building `protoc` we split them out to reduce noise in
     that relatively crowded file.
 
-    Note: We could use "@protobuf//:protobuf_deps.bzl", but that pulls in
+    Note: We could use "@com_google_protobuf//:protobuf_deps.bzl", but that pulls in
     unneccessary toolchains that we don't need, like Java, so we manually
     specify dependencies here.
     """
