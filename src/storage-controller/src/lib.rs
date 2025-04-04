@@ -514,9 +514,9 @@ where
         let mut instance = Instance::new(
             self.envd_epoch,
             metrics,
+            Arc::clone(self.config().config_set()),
             self.now.clone(),
             self.instance_response_tx.clone(),
-            dyncfgs::STORAGE_SINK_SNAPSHOT_FRONTIER.handle(self.config().config_set()),
         );
         if self.initialized {
             instance.send(StorageCommand::InitializationComplete);

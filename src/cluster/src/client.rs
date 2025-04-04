@@ -107,7 +107,7 @@ where
 
     async fn build(
         &mut self,
-        config: TimelyConfig,
+        mut config: TimelyConfig,
         epoch: ClusterStartupEpoch,
     ) -> Result<(), Error> {
         let workers = config.workers;
@@ -121,6 +121,10 @@ where
         let mut timely_container = self.timely_container.lock().await;
         match &*timely_container {
             Some(existing) => {
+                // Ignore changes to `enable_create_sockets_v2`. Once the Timely processes are
+                // connected, we don't care which connection protocol was used.
+                config.enable_create_sockets_v2 = existing.config.enable_create_sockets_v2;
+
                 if config != existing.config {
                     info!(new = ?config, old = ?existing.config, "TimelyConfig mismatch");
                     halt!("new timely configuration does not match existing timely configuration");
@@ -262,7 +266,7 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
                 epoch,
                 refill,
                 GenericBuilder::ZeroCopyBinary,
-                true,
+                config.enable_create_sockets_v2,
             )
             .await?
         } else {
@@ -273,7 +277,7 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
                 epoch,
                 refill,
                 GenericBuilder::ZeroCopy,
-                true,
+                config.enable_create_sockets_v2,
             )
             .await?
         };
