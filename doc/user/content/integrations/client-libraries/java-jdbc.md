@@ -3,6 +3,7 @@ title: "Java cheatsheet"
 description: "Use the PostgreSQL JDBC Driver to connect, insert, manage, query and stream from Materialize."
 aliases:
   - /guides/java-jdbc/
+  - /integrations/java-jdbc/
 menu:
   main:
     parent: 'client-libraries'

@@ -13,9 +13,8 @@ menu:
 ---
 
 Materialize is **wire-compatible** with PostgreSQL, which means it integrates
-with many SQL clients that support PostgreSQL (see [Tools and Integrations](/integrations/#sql-clients)).
-In this guide, we’ll cover how to connect to your Materialize region using
-common SQL clients.
+with many SQL clients that support PostgreSQL. In this guide, we’ll cover how to
+connect to your Materialize region using some common SQL clients.
 
 ## Connection parameters
 

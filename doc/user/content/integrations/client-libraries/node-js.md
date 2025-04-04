@@ -3,6 +3,7 @@ title: "Node.js cheatsheet"
 description: "Use Node.js to connect, insert, manage, query and stream from Materialize."
 aliases:
   - /guides/node-js/
+  - /integrations/node-js/
 menu:
   main:
     parent: 'client-libraries'

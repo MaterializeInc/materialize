@@ -887,8 +887,8 @@ trigger **real-time alerts** downstream.
     ```
 
 With continuous testing in place, you can then build alerts off of the test
-materialized views using any common PostgreSQL-compatible [client library](/integrations/#client-libraries-and-orms)
-and [`SUBSCRIBE`](/sql/subscribe/)(see the [Python cheatsheet](/integrations/python/#stream)
+materialized views using any common PostgreSQL-compatible [client library](/integrations/client-libraries/)
+and [`SUBSCRIBE`](/sql/subscribe/)(see the [Python cheatsheet](/integrations/client-libraries/python/#stream)
 for a reference implementation).
 
 ### Generate documentation

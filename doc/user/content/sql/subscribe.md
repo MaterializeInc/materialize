@@ -294,13 +294,13 @@ COPY (SUBSCRIBE (SELECT * FROM counter)) TO STDOUT;
 
 | Additional guides |
 | ---------------------- |
-| [Go](/integrations/golang/#stream)|
-| [Java](/integrations/java-jdbc/#stream)|
-| [Node.js](/integrations/node-js/#stream)|
-| [PHP](/integrations/php/#stream)|
-| [Python](/integrations/python/#stream)|
-| [Ruby](/integrations/ruby/#stream)|
-| [Rust](/integrations/rust/#stream)|
+| [Go](/integrations/client-libraries/golang/#stream)|
+| [Java](/integrations/client-libraries/java-jdbc/#stream)|
+| [Node.js](/integrations/client-libraries/node-js/#stream)|
+| [PHP](/integrations/client-libraries/php/#stream)|
+| [Python](/integrations/client-libraries/python/#stream)|
+| [Ruby](/integrations/client-libraries/ruby/#stream)|
+| [Rust](/integrations/client-libraries/rust/#stream)|
 
 ### Mapping rows to their updates
 

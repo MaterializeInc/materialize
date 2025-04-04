@@ -3,6 +3,7 @@ title: "Rust cheatsheet"
 description: "Use Rust postgres-openssl to connect, insert, manage, query and stream from Materialize."
 aliases:
   - /guides/rust
+  - /integrations/rust/
 menu:
   main:
     parent: 'client-libraries'
