@@ -64,7 +64,7 @@ complex analytical
 workloads using **[any type of join](/sql/select/join/)** (including
 non-windowed joins and joins on arbitrary conditions) as well as leverage new
 SQL patterns enabled by streaming like [**Change Data Capture
-(CDC)**](/integrations/#databases), [**temporal
+(CDC)**](/ingest-data/), [**temporal
 filters**](/sql/patterns/temporal-filters/), and
 [**subscriptions**](/sql/subscribe/).
 
@@ -78,12 +78,13 @@ Materialize provides **native connectors** that allow ingesting data from variou
 {{< linkbox title="Message Brokers" >}}
 - [Kafka](/sql/create-source/kafka)
 - [Redpanda](/sql/create-source/kafka)
-- [Other message brokers](/integrations/#message-brokers)
 {{</ linkbox >}}
 {{< linkbox title="Databases (CDC)" >}}
-- [PostgreSQL](/sql/create-source/postgres)
-- [MySQL](/sql/create-source/mysql)
-- [Other databases](/integrations/#other-databases)
+- [PostgreSQL](/ingest-data/postgres/)
+- [MySQL](/ingest-data/mysql/)
+- [SQL Server](/ingest-data/cdc-sql-server/)
+- [CockroachDB](/ingest-data/cdc-cockroachdb/)
+- [MongoDB](https://github.com/MaterializeIncLabs/materialize-mongodb-debezium)
 {{</ linkbox >}}
 {{< linkbox title="Webhooks" >}}
 - [Amazon EventBridge](/ingest-data/webhooks/amazon-eventbridge/)

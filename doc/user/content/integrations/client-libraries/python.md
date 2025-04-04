@@ -3,6 +3,7 @@ title: "Python cheatsheet"
 description: "Use Python to connect, insert, manage, query and stream from Materialize."
 aliases:
   - /guides/python/
+  - /integrations/python/
 menu:
   main:
     parent: "client-libraries"

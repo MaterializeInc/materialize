@@ -3,6 +3,7 @@ title: "Golang cheatsheet"
 description: "Use Go to connect, insert, manage, query and stream from Materialize."
 aliases:
   - /guides/golang/
+  - /integrations/golang/
 menu:
   main:
     parent: "client-libraries"
