@@ -15,12 +15,13 @@ import random
 
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.services.testdrive import Testdrive
 
-# TODO(sql_server1): Add a SQL Server mzcompose server.
 SERVICES = [
     Materialized(),
     Testdrive(),
+    SqlServer(),
 ]
 
 
@@ -28,12 +29,14 @@ SERVICES = [
 # Test that SQL Server ingestion works
 #
 def workflow_default(c: Composition) -> None:
-    c.up("materialized")
+    c.up("materialized", "sql-server")
     seed = random.getrandbits(16)
     c.run_testdrive_files(
         "--no-reset",
         "--max-errors=1",
         f"--seed={seed}",
         f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
+        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
+        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
         "sql-server-cdc.td",
     )

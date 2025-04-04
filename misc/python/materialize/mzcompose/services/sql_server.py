@@ -14,6 +14,7 @@ from materialize.mzcompose.service import (
 
 
 class SqlServer(Service):
+    DEFAULT_USER = "SA"
     DEFAULT_SA_PASSWORD = "RPSsql12345"
 
     def __init__(
