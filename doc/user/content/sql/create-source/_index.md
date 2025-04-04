@@ -24,12 +24,13 @@ Materialize bundles **native connectors** that allow ingesting data from the fol
 {{< linkbox title="Message Brokers" >}}
 - [Kafka](/sql/create-source/kafka)
 - [Redpanda](/sql/create-source/kafka)
-- [Other message brokers](/integrations/#message-brokers)
 {{</ linkbox >}}
 {{< linkbox title="Databases (CDC)" >}}
-- [PostgreSQL](/sql/create-source/postgres)
-- [MySQL](/sql/create-source/mysql)
-- [Other databases](/integrations/#other-databases)
+- [PostgreSQL](/ingest-data/postgres/)
+- [MySQL](/ingest-data/mysql/)
+- [SQL Server](/ingest-data/cdc-sql-server/)
+- [MongoDB](https://github.com/MaterializeIncLabs/materialize-mongodb-debezium)
+- [CockroachDB](/ingest-data/cdc-cockroachdb/)
 {{</ linkbox >}}
 {{< linkbox title="Webhooks" >}}
 - [Amazon EventBridge](/ingest-data/webhooks/amazon-eventbridge/)

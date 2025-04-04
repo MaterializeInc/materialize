@@ -3,6 +3,7 @@ title: "PHP cheatsheet"
 description: "Use PHP PDO to connect, insert, manage, query and stream from Materialize."
 aliases:
   - /guides/php-pdo/
+  - /integrations/php/
 menu:
   main:
     parent: 'client-libraries'
