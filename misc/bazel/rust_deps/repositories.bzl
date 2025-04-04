@@ -25,8 +25,8 @@ load("@rules_rust//crate_universe:defs.bzl", "crate", "crates_repository")
 def rust_repositories():
     """Download third-party Rust repositories and their dependencies."""
 
-    CXX_VERSION = "1.0.109"
-    CXXBRIDGE_CMD_INTEGRITY = "sha256-2TYASH1CnIvwE+6WcZr05i6AmsV/xMrCTxfPWORSYAk="
+    CXX_VERSION = "1.0.153"
+    CXXBRIDGE_CMD_INTEGRITY = "sha256-fLxBkzdnlV0EwqkBUYBgKbk99f2LaCuiKpZ0MzR0gKk="
     maybe(
         http_archive,
         name = "cxxbridge-cmd",

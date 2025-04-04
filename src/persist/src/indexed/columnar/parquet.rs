@@ -26,8 +26,8 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::warn;
 
 use crate::error::Error;
-use crate::gen::persist::proto_batch_part_inline::FormatMetadata as ProtoFormatMetadata;
-use crate::gen::persist::ProtoBatchFormat;
+use crate::generated::persist::proto_batch_part_inline::FormatMetadata as ProtoFormatMetadata;
+use crate::generated::persist::ProtoBatchFormat;
 use crate::indexed::columnar::arrow::{decode_arrow_batch, encode_arrow_batch};
 use crate::indexed::encoding::{
     decode_trace_inline_meta, encode_trace_inline_meta, BlobTraceBatchPart, BlobTraceUpdates,

@@ -3834,8 +3834,8 @@ pub fn arb_datum() -> BoxedStrategy<PropDatum> {
 }
 
 /// Generates an arbitrary [`PropDatum`] for the provided [`ColumnType`].
-pub fn arb_datum_for_column(column_type: &ColumnType) -> impl Strategy<Value = PropDatum> {
-    let strat = arb_datum_for_scalar(&column_type.scalar_type);
+pub fn arb_datum_for_column(column_type: ColumnType) -> impl Strategy<Value = PropDatum> {
+    let strat = arb_datum_for_scalar(column_type.scalar_type);
 
     if column_type.nullable {
         Union::new_weighted(vec![(1, Just(PropDatum::Null).boxed()), (5, strat.boxed())]).boxed()
@@ -3845,7 +3845,7 @@ pub fn arb_datum_for_column(column_type: &ColumnType) -> impl Strategy<Value = P
 }
 
 /// Generates an arbitrary [`PropDatum`] for the provided [`ScalarType`].
-pub fn arb_datum_for_scalar(scalar_type: &ScalarType) -> impl Strategy<Value = PropDatum> {
+pub fn arb_datum_for_scalar(scalar_type: ScalarType) -> impl Strategy<Value = PropDatum> {
     match scalar_type {
         ScalarType::Bool => any::<bool>().prop_map(PropDatum::Bool).boxed(),
         ScalarType::Int16 => any::<i16>().prop_map(PropDatum::Int16).boxed(),
@@ -3912,27 +3912,30 @@ pub fn arb_datum_for_scalar(scalar_type: &ScalarType) -> impl Strategy<Value = P
         ScalarType::MzAclItem => any::<MzAclItem>().prop_map(PropDatum::MzAclItem).boxed(),
         ScalarType::Range { element_type } => {
             let data_strat = (
-                arb_datum_for_scalar(element_type),
-                arb_datum_for_scalar(element_type),
+                arb_datum_for_scalar(*element_type.clone()),
+                arb_datum_for_scalar(*element_type),
             );
             arb_range(data_strat).prop_map(PropDatum::Range).boxed()
         }
-        ScalarType::List { element_type, .. } => arb_list(arb_datum_for_scalar(element_type))
+        ScalarType::List { element_type, .. } => arb_list(arb_datum_for_scalar(*element_type))
             .prop_map(PropDatum::List)
             .boxed(),
-        ScalarType::Array(element_type) => arb_array(arb_datum_for_scalar(element_type))
+        ScalarType::Array(element_type) => arb_array(arb_datum_for_scalar(*element_type))
             .prop_map(PropDatum::Array)
             .boxed(),
         ScalarType::Int2Vector => arb_array(any::<i16>().prop_map(PropDatum::Int16).boxed())
             .prop_map(PropDatum::Array)
             .boxed(),
-        ScalarType::Map { value_type, .. } => arb_dict(arb_datum_for_scalar(value_type))
+        ScalarType::Map { value_type, .. } => arb_dict(arb_datum_for_scalar(*value_type))
             .prop_map(PropDatum::Map)
             .boxed(),
         ScalarType::Record { fields, .. } => {
-            let field_strats = fields
-                .iter()
-                .map(|(name, ty)| (name.to_string(), arb_datum_for_scalar(&ty.scalar_type)));
+            let field_strats = fields.iter().map(|(name, ty)| {
+                (
+                    name.to_string(),
+                    arb_datum_for_scalar(ty.scalar_type.clone()),
+                )
+            });
             arb_record(field_strats).prop_map(PropDatum::Record).boxed()
         }
         ScalarType::Jsonb => {

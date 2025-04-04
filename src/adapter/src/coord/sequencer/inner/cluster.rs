@@ -295,7 +295,7 @@ impl Coordinator {
                             "AlterClusterPlanStrategy must not be None if NeedsFinalization is Yes"
                                 .into(),
                         )),
-                        AlterClusterPlanStrategy::For(ref duration) => {
+                        AlterClusterPlanStrategy::For(duration) => {
                             let span = Span::current();
                             let plan = plan.clone();
                             let duration = duration.clone().to_owned();

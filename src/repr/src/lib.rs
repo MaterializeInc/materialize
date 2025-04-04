@@ -21,6 +21,8 @@
 //!   corresponds most closely to what is returned from querying our dataflows
 
 #![warn(missing_debug_implementations)]
+// TODO(parkmycar): Remove this allow.
+#![allow(unsafe_op_in_unsafe_fn)]
 
 mod datum_vec;
 mod diff;

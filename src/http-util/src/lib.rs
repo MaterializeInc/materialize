@@ -114,7 +114,7 @@ pub async fn handle_liveness_check() -> impl IntoResponse {
 
 /// Serves metrics from the selected metrics registry variant.
 #[allow(clippy::unused_async)]
-pub async fn handle_prometheus(registry: &MetricsRegistry) -> impl IntoResponse {
+pub async fn handle_prometheus(registry: &MetricsRegistry) -> impl IntoResponse + use<> {
     let mut buffer = Vec::new();
     let encoder = prometheus::TextEncoder::new();
     encoder

@@ -405,7 +405,7 @@ impl ExpressionCacheHandle {
         new_local_expressions: Vec<(GlobalId, LocalExpressions)>,
         new_global_expressions: Vec<(GlobalId, GlobalExpressions)>,
         invalidate_ids: BTreeSet<GlobalId>,
-    ) -> impl Future<Output = ()> {
+    ) -> impl Future<Output = ()> + use<> {
         let (trigger, trigger_rx) = trigger::channel();
         let op = CacheOperation::Update {
             new_local_expressions,

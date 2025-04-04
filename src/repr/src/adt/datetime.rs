@@ -1138,7 +1138,7 @@ fn fill_pdt_date(
 
     // Check for one number that represents YYYYMMDDD.
     match actual.front() {
-        Some(Num(mut val, digits)) if 6 <= *digits && *digits <= 8 => {
+        Some(&Num(mut val, ref digits)) if 6 <= *digits && *digits <= 8 => {
             let unit = i64::try_from(val % 100)
                 .expect("modulo between u64 and constant 100 should fit signed 64-bit integer");
             pdt.day = Some(DateTimeFieldValue::new(unit, 0));

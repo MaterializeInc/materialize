@@ -2605,13 +2605,15 @@ impl Coordinator {
         });
     }
 
-    async fn render_explain_pushdown_prepare(
+    async fn render_explain_pushdown_prepare<
+        I: IntoIterator<Item = (GlobalId, MapFilterProject)>,
+    >(
         &self,
         session: &Session,
         as_of: Antichain<Timestamp>,
         mz_now: ResultSpec<'static>,
-        imports: impl IntoIterator<Item = (GlobalId, MapFilterProject)>,
-    ) -> impl Future<Output = Result<ExecuteResponse, AdapterError>> {
+        imports: I,
+    ) -> impl Future<Output = Result<ExecuteResponse, AdapterError>> + use<I> {
         let explain_timeout = *session.vars().statement_timeout();
         let mut futures = FuturesOrdered::new();
         for (id, mfp) in imports {

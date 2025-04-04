@@ -943,7 +943,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
     ///
     /// If set, the value in the Option is for debugging and should be included
     /// in any error messages.
-    pub fn is_filter_pushdown_audit(&self) -> Option<impl std::fmt::Debug> {
+    pub fn is_filter_pushdown_audit(&self) -> Option<impl std::fmt::Debug + use<K, V, T, D>> {
         self.filter_pushdown_audit.clone()
     }
 }

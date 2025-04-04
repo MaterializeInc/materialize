@@ -271,7 +271,7 @@ where
         host: Option<String>,
         client_builder: F,
         service_builder: Fs,
-    ) -> impl Future<Output = Result<(), anyhow::Error>>
+    ) -> impl Future<Output = Result<(), anyhow::Error>> + use<S, Fs, F, G>
     where
         S: Service<
                 http::Request<BoxBody>,

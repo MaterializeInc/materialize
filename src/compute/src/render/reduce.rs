@@ -869,7 +869,7 @@ where
 
                             // We know that `mfp_after` can error if it exists, so try to evaluate it here.
                             let Some(mfp) = &mfp_after2 else { return };
-                            let iter = source.iter().flat_map(|(mut v, w)| {
+                            let iter = source.iter().flat_map(|&(mut v, ref w)| {
                                 let count = usize::try_from(w.into_inner()).unwrap_or(0);
                                 // This would ideally use `to_datum_iter` but we cannot as it needs to
                                 // borrow `v` and only presents datums with that lifetime, not any longer.
@@ -905,7 +905,7 @@ where
                     .mz_reduce_abelian::<_, _, _, RowErrBuilder<_, _>, RowErrSpine<_, _>>(
                         &format!("{name} Error Check"),
                         move |key, source, target| {
-                            let iter = source.iter().flat_map(|(mut v, w)| {
+                            let iter = source.iter().flat_map(|&(mut v, ref w)| {
                                 let count = usize::try_from(w.into_inner()).unwrap_or(0);
                                 // This would ideally use `to_datum_iter` but we cannot as it needs to
                                 // borrow `v` and only presents datums with that lifetime, not any longer.

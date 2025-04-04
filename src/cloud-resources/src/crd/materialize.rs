@@ -24,7 +24,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::crd::gen::cert_manager::certificates::{
+use crate::crd::generated::cert_manager::certificates::{
     CertificateIssuerRef, CertificateSecretTemplate,
 };
 

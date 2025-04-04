@@ -295,7 +295,7 @@ mod tests {
     fn all_datums_produce_valid_stats() {
         // A strategy that will return a Vec of Datums for an arbitrary ColumnType.
         let datums = any::<ColumnType>().prop_flat_map(|ty| {
-            prop::collection::vec(arb_datum_for_column(&ty), 0..128)
+            prop::collection::vec(arb_datum_for_column(ty.clone()), 0..128)
                 .prop_map(move |datums| (ty.clone(), datums))
         });
 
@@ -349,6 +349,7 @@ mod tests {
                     .typ()
                     .columns()
                     .iter()
+                    .cloned()
                     .map(arb_datum_for_column)
                     .collect::<Vec<_>>()
                     .prop_map(|datums| Row::pack(datums.iter().map(Datum::from)));

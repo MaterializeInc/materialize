@@ -16,7 +16,7 @@
 
 syntax = "proto3";
 
-package mz_persist.gen.persist;
+package mz_persist.generated.persist;
 
 import "persist-types/src/arrow.proto";
 

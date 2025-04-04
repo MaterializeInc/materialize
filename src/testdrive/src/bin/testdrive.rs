@@ -488,7 +488,7 @@ async fn main() {
     }
 
     if args.shuffle_tests {
-        let seed = args.seed.unwrap_or_else(|| rand::thread_rng().gen());
+        let seed = args.seed.unwrap_or_else(|| rand::thread_rng().r#gen());
         let mut rng = StdRng::seed_from_u64(seed.into());
         files.shuffle(&mut rng);
     }

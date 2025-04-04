@@ -14,10 +14,10 @@ fn main() {
         .protoc_executable(mz_build_tools::protoc())
         .btree_map(["."])
         .type_attribute(
-            ".mz_persist.gen.persist.ProtoColumnarRecords",
+            ".mz_persist.generated.persist.ProtoColumnarRecords",
             "#[derive(serde::Serialize)]",
         )
-        .bytes([".mz_persist.gen.persist.ProtoColumnarRecords"])
+        .bytes([".mz_persist.generated.persist.ProtoColumnarRecords"])
         .extern_path(".mz_persist_types.arrow", "::mz_persist_types::arrow")
         .compile_protos(
             &["persist/src/persist.proto"],

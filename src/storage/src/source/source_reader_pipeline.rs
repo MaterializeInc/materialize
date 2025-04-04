@@ -373,12 +373,12 @@ where
 
                 while let Some((cap, data)) = input.next() {
                     for (message, _, _) in data.iter() {
-                        let status = match message {
+                        let status = match &message {
                             Ok(_) => HealthStatusUpdate::running(),
                             // All errors coming into the data stream are definite.
                             // Downstream consumers of this data will preserve this
                             // status.
-                            Err(ref error) => HealthStatusUpdate::stalled(
+                            Err(error) => HealthStatusUpdate::stalled(
                                 error.to_string(),
                                 Some(
                                     "retracting the errored value may resume the source"

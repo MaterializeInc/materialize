@@ -973,7 +973,7 @@ impl AggregatedStatistics {
     ) {
         self.local_source_statistics
             .entry(id)
-            .and_modify(|(ref mut epoch, ref mut stats)| {
+            .and_modify(|(epoch, stats)| {
                 *epoch += 1;
                 stats.reset_gauges();
                 stats.meta = SourceStatisticsMetadata::new(resume_upper);
@@ -991,7 +991,7 @@ impl AggregatedStatistics {
     pub fn initialize_sink<F: FnOnce() -> SinkStatistics>(&mut self, id: GlobalId, stats: F) {
         self.local_sink_statistics
             .entry(id)
-            .and_modify(|(ref mut epoch, ref mut stats)| {
+            .and_modify(|(epoch, stats)| {
                 *epoch += 1;
                 stats.reset_gauges();
             })

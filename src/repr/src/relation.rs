@@ -985,11 +985,12 @@ impl IntoIterator for RelationDesc {
 }
 
 /// Returns a [`Strategy`] that yields arbitrary [`Row`]s for the provided [`RelationDesc`].
-pub fn arb_row_for_relation(desc: &RelationDesc) -> impl Strategy<Value = Row> {
+pub fn arb_row_for_relation(desc: &RelationDesc) -> impl Strategy<Value = Row> + use<> {
     let datums: Vec<_> = desc
         .typ()
         .columns()
         .iter()
+        .cloned()
         .map(arb_datum_for_column)
         .collect();
     datums.prop_map(|x| Row::pack(x.iter().map(Datum::from)))

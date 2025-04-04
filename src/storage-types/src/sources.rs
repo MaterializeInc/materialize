@@ -1429,7 +1429,9 @@ impl Codec for SourceData {
 }
 
 /// Given a [`RelationDesc`] returns an arbitrary [`SourceData`].
-pub fn arb_source_data_for_relation_desc(desc: &RelationDesc) -> impl Strategy<Value = SourceData> {
+pub fn arb_source_data_for_relation_desc(
+    desc: &RelationDesc,
+) -> impl Strategy<Value = SourceData> + use<> {
     let row_strat = arb_row_for_relation(desc).no_shrink();
 
     proptest::strategy::Union::new_weighted(vec![

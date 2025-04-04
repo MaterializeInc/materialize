@@ -85,7 +85,7 @@ impl Header {
             let codec = meta
                 .get("avro.codec")
                 .map(|val| match val {
-                    Value::Bytes(ref bytes) => from_utf8(bytes.as_ref())
+                    Value::Bytes(bytes) => from_utf8(bytes.as_ref())
                         .map_err(|_e| AvroError::Decode(DecodeError::CodecUtf8Error))
                         .and_then(|codec| {
                             Codec::from_str(codec).map_err(|_| {

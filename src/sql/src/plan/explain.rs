@@ -150,7 +150,9 @@ pub fn normalize_subqueries<'a>(expr: &'a mut HirRelationExpr) -> Result<(), Rec
 
 // Create an [`Iterator`] for [`LocalId`] values that are guaranteed to be
 // fresh within the scope of the given [`HirRelationExpr`].
-fn id_gen(expr: &HirRelationExpr) -> Result<impl Iterator<Item = LocalId>, RecursionLimitError> {
+fn id_gen(
+    expr: &HirRelationExpr,
+) -> Result<impl Iterator<Item = LocalId> + use<>, RecursionLimitError> {
     let mut max_id = 0_u64;
 
     expr.visit_pre(&mut |expr| {

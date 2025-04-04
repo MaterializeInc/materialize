@@ -124,7 +124,7 @@ impl AwsCredentials {
         connection_context: &ConnectionContext,
         // Whether or not to do IO in a separate Tokio task.
         in_task: InTask,
-    ) -> Result<impl ProvideCredentials, anyhow::Error> {
+    ) -> Result<impl ProvideCredentials + use<>, anyhow::Error> {
         let secrets_reader = &connection_context.secrets_reader;
         Ok(Credentials::from_keys(
             self.access_key_id
@@ -192,7 +192,7 @@ impl AwsAssumeRole {
         &self,
         connection_context: &ConnectionContext,
         connection_id: CatalogItemId,
-    ) -> Result<impl ProvideCredentials, anyhow::Error> {
+    ) -> Result<impl ProvideCredentials + use<>, anyhow::Error> {
         let external_id = self.external_id(connection_context, connection_id)?;
         // It's okay to use `dangerously_load_credentials_provider` here, as
         // this is the method that provides a safe wrapper by forcing use of the
@@ -216,7 +216,7 @@ impl AwsAssumeRole {
         connection_context: &ConnectionContext,
         connection_id: CatalogItemId,
         external_id: Option<String>,
-    ) -> Result<impl ProvideCredentials, anyhow::Error> {
+    ) -> Result<impl ProvideCredentials + use<>, anyhow::Error> {
         let Some(aws_connection_role_arn) = &connection_context.aws_connection_role_arn else {
             bail!("internal error: no AWS connection role configured");
         };

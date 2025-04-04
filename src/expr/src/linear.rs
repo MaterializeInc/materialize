@@ -1970,8 +1970,9 @@ pub mod plan {
             diff: Diff,
             valid_time: V,
             row_builder: &mut Row,
-        ) -> impl Iterator<Item = Result<(Row, mz_repr::Timestamp, Diff), (E, mz_repr::Timestamp, Diff)>>
-        {
+        ) -> impl Iterator<
+            Item = Result<(Row, mz_repr::Timestamp, Diff), (E, mz_repr::Timestamp, Diff)>,
+        > + use<E, V> {
             match self.mfp.evaluate_inner(datums, arena) {
                 Err(e) => {
                     return Some(Err((e.into(), time, diff))).into_iter().chain(None);

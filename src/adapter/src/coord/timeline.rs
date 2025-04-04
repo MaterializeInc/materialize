@@ -541,7 +541,7 @@ impl Coordinator {
     pub fn partition_ids_by_timeline_context(
         &self,
         id_bundle: &CollectionIdBundle,
-    ) -> impl Iterator<Item = (TimelineContext, CollectionIdBundle)> {
+    ) -> impl Iterator<Item = (TimelineContext, CollectionIdBundle)> + use<> {
         let mut res: BTreeMap<TimelineContext, CollectionIdBundle> = BTreeMap::new();
 
         for gid in &id_bundle.storage_ids {

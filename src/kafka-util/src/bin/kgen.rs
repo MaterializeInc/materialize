@@ -222,7 +222,7 @@ impl<'a> RandomAvroGenerator<'a> {
             SchemaPiece::Fixed { size: _ } => unreachable!(),
         }
     }
-    pub fn gen(&mut self, rng: &mut ThreadRng) -> Value {
+    pub fn generate(&mut self, rng: &mut ThreadRng) -> Value {
         self.gen_inner(self.schema, rng)
     }
     fn new_inner(
@@ -231,12 +231,16 @@ impl<'a> RandomAvroGenerator<'a> {
         annotations: &Map<String, serde_json::Value>,
         field_name: Option<&str>,
     ) {
-        fn bool_dist(json: &serde_json::Value) -> impl FnMut(&mut ThreadRng) -> bool + Clone {
+        fn bool_dist(
+            json: &serde_json::Value,
+        ) -> impl FnMut(&mut ThreadRng) -> bool + Clone + use<> {
             let x = json.as_f64().unwrap();
             let dist = Bernoulli::new(x).unwrap();
             move |rng| dist.sample(rng)
         }
-        fn integral_dist<T>(json: &serde_json::Value) -> impl FnMut(&mut ThreadRng) -> T + Clone
+        fn integral_dist<T>(
+            json: &serde_json::Value,
+        ) -> impl FnMut(&mut ThreadRng) -> T + Clone + use<T>
         where
             T: SampleUniform + TryFrom<i64> + Clone,
             T::Sampler: Clone,
@@ -250,7 +254,9 @@ impl<'a> RandomAvroGenerator<'a> {
             let dist = Uniform::new_inclusive(min, max);
             move |rng| dist.sample(rng)
         }
-        fn float_dist(json: &serde_json::Value) -> impl FnMut(&mut ThreadRng) -> f32 + Clone {
+        fn float_dist(
+            json: &serde_json::Value,
+        ) -> impl FnMut(&mut ThreadRng) -> f32 + Clone + use<> {
             let x = json.as_array().unwrap();
             // TODO(benesch): rewrite to avoid `as`.
             #[allow(clippy::as_conversions)]
@@ -258,13 +264,17 @@ impl<'a> RandomAvroGenerator<'a> {
             let dist = Uniform::new_inclusive(min, max);
             move |rng| dist.sample(rng)
         }
-        fn double_dist(json: &serde_json::Value) -> impl FnMut(&mut ThreadRng) -> f64 + Clone {
+        fn double_dist(
+            json: &serde_json::Value,
+        ) -> impl FnMut(&mut ThreadRng) -> f64 + Clone + use<> {
             let x = json.as_array().unwrap();
             let (min, max) = (x[0].as_f64().unwrap(), x[1].as_f64().unwrap());
             let dist = Uniform::new_inclusive(min, max);
             move |rng| dist.sample(rng)
         }
-        fn string_dist(json: &serde_json::Value) -> impl FnMut(&mut ThreadRng) -> Vec<u8> + Clone {
+        fn string_dist(
+            json: &serde_json::Value,
+        ) -> impl FnMut(&mut ThreadRng) -> Vec<u8> + Clone + use<> {
             let mut len = integral_dist::<usize>(json);
             move |rng| {
                 let len = len(rng);
@@ -272,7 +282,9 @@ impl<'a> RandomAvroGenerator<'a> {
                 iter::repeat_with(|| cd.sample(rng)).take(len).collect()
             }
         }
-        fn bytes_dist(json: &serde_json::Value) -> impl FnMut(&mut ThreadRng) -> Vec<u8> + Clone {
+        fn bytes_dist(
+            json: &serde_json::Value,
+        ) -> impl FnMut(&mut ThreadRng) -> Vec<u8> + Clone + use<> {
             let mut len = integral_dist::<usize>(json);
             move |rng| {
                 let len = len(rng);
@@ -283,7 +295,7 @@ impl<'a> RandomAvroGenerator<'a> {
         fn decimal_dist(
             json: &serde_json::Value,
             precision: usize,
-        ) -> impl FnMut(&mut ThreadRng) -> Vec<u8> + Clone {
+        ) -> impl FnMut(&mut ThreadRng) -> Vec<u8> + Clone + use<> {
             let x = json.as_array().unwrap();
             let (min, max): (i64, i64) = (x[0].as_i64().unwrap(), x[1].as_i64().unwrap());
             // Ensure values fit within precision bounds.
@@ -465,7 +477,7 @@ impl<'a> ValueGenerator<'a> {
                 schema,
                 schema_id,
             } => {
-                let value = inner.gen(rng);
+                let value = inner.generate(rng);
                 out.clear();
                 out.push(0);
                 for b in schema_id.to_be_bytes().iter() {

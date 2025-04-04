@@ -23,6 +23,9 @@ rust_binary(
     compile_data = [
         "src/gen/include/cxx.h",
     ],
+    # TODO(parkmycar): `cxxbridge-cmd` no longer builds under Edition 2024.
+    #
+    # See: <https://github.com/dtolnay/cxx/issues/1460>
     edition = "2021",
     visibility = ["//visibility:public"],
     deps = all_crate_deps(
