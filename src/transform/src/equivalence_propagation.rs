@@ -266,13 +266,6 @@ impl EquivalencePropagation {
                         if changed || !ctx.features.enable_less_reduce_in_eqprop {
                             expr.reduce(&input_types[..(input_arity + index)]);
                         }
-                        // Introduce the fact relating the mapped expression and corresponding column.
-                        // This allows subsequent expressions to be optimized with this information.
-                        input_equivalences.classes.push(vec![
-                            expr.clone(),
-                            MirScalarExpr::column(input_arity + index),
-                        ]);
-                        input_equivalences.minimize(Some(input_types));
                     }
                     let input_arity = *derived
                         .last_child()
