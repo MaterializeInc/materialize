@@ -546,6 +546,11 @@ impl crate::coord::Coordinator {
                         format!("Negative multiplicity in constant result: {}", count).into(),
                     ))?
                 };
+                if count.is_overflown() {
+                    Err(EvalError::InvalidParameterValue(
+                        format!("Overflow in constant result: {}", count).into(),
+                    ))?
+                };
                 if count.is_positive() {
                     let count = usize::cast_from(
                         u64::try_from(count.into_inner())

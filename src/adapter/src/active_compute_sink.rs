@@ -323,6 +323,12 @@ impl ActiveSubscribe {
             SubscribeOutput::Diffs => rows.sort_by_key(|(time, _, _)| *time),
         }
 
+        if let Some((_, row, _)) = rows.iter().find(|(_, _, diff)| diff.is_overflown()) {
+            let err = format!("Overflow in row: {row:?}");
+            self.send(PeekResponseUnary::Error(err));
+            return true;
+        }
+
         let rows: Vec<Row> = rows
             .into_iter()
             .map(|(time, row, diff)| {
