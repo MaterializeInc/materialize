@@ -273,6 +273,10 @@ differential-dataflow = { opt-level = 3 }
 mz-compute = { opt-level = 3 }
 mz-transform = { opt-level = 3 }
 
+# Recommended by insta
+insta = { opt-level = 3 }
+similar = { opt-level = 3 }
+
 [profile.release]
 # Compile time seems similar to "lto = false", runtime ~10% faster
 lto = "thin"

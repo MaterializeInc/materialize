@@ -8,6 +8,10 @@
 // by the Apache License, Version 2.0.
 
 //! Implementations of proc macros to derive SQL function traits.
+//!
+//! This is separate from the actual proc macro to allow exporting the
+//! function defining the proc macro itself. Proc macro crates cannot
+//! export anything but proc macros.
 
 mod sqlfunc;
 

@@ -49,7 +49,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddTimeInterval {
     fn introduces_nulls(&self) -> bool {
         <CheckedTimestamp<
             chrono::DateTime<Utc>,
-        > as mz_repr::DatumType<'_, ()>>::nullable()
+        > as ::mz_repr::DatumType<'_, ()>>::nullable()
     }
     fn is_infix_op(&self) -> bool {
         true

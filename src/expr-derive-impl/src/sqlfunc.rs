@@ -16,7 +16,7 @@ use syn::{Expr, Lifetime};
 /// Modifiers passed as key-value pairs to the `#[sqlfunc]` macro.
 #[derive(Debug, Default, darling::FromMeta)]
 pub(crate) struct Modifiers {
-    /// An optional expression that evaluates to a boolean indicating whether the function i
+    /// An optional expression that evaluates to a boolean indicating whether the function is
     /// monotone with respect to its arguments. Defined for unary and binary functions.
     is_monotone: Option<Expr>,
     /// The SQL name for the function. Applies to all functions.
@@ -37,6 +37,8 @@ pub(crate) struct Modifiers {
     could_error: Option<Expr>,
     /// Whether the function propagates nulls. Applies to binary functions.
     propagates_nulls: Option<Expr>,
+    /// Whether the function introduces nulls. Applies to all functions.
+    introduces_nulls: Option<Expr>,
 }
 
 /// Implementation for the `#[sqlfunc]` macro. The first parameter is the attribute
@@ -54,7 +56,10 @@ pub fn sqlfunc(
     let func = syn::parse2::<syn::ItemFn>(item.clone())?;
 
     let tokens = match determine_parameters_arena(&func) {
-        (1, arena) => unary_func(&func, modifiers, arena),
+        (1, false) => unary_func(&func, modifiers),
+        (1, true) => Err(darling::Error::custom(
+            "Unary functions do not yet support RowArena.",
+        )),
         (2, arena) => binary_func(&func, modifiers, arena),
         (other, _) => Err(darling::Error::custom(format!(
             "Unsupported function: {} parameters",
@@ -171,11 +176,7 @@ fn output_type(arg: &syn::ItemFn) -> Result<&syn::Type, syn::Error> {
 }
 
 /// Produce a `EagerUnaryFunc` implementation.
-fn unary_func(
-    func: &syn::ItemFn,
-    modifiers: Modifiers,
-    arena: bool,
-) -> darling::Result<TokenStream> {
+fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<TokenStream> {
     let fn_name = &func.sig.ident;
     let struct_name = camel_case(&func.sig.ident);
     let input_ty = arg_type(func, 0)?;
@@ -190,16 +191,23 @@ fn unary_func(
         negate,
         could_error,
         propagates_nulls,
+        introduces_nulls,
     } = modifiers;
 
     if is_infix_op.is_some() {
-        return Err(darling::Error::unknown_field("is_infix_op"));
+        return Err(darling::Error::unknown_field(
+            "is_infix_op not supported for unary functions",
+        ));
     }
     if negate.is_some() {
-        return Err(darling::Error::unknown_field("negate"));
+        return Err(darling::Error::unknown_field(
+            "negate not supported for unary functions",
+        ));
     }
     if propagates_nulls.is_some() {
-        return Err(darling::Error::unknown_field("propagates_nulls"));
+        return Err(darling::Error::unknown_field(
+            "propagates_nulls not supported for unary functions",
+        ));
     }
 
     let preserves_uniqueness_fn = preserves_uniqueness.map(|preserves_uniqueness| {
@@ -236,10 +244,10 @@ fn unary_func(
         }
     };
 
-    let (output_type, introduces_nulls_fn) = if let Some(output_type) = output_type {
+    let (output_type, mut introduces_nulls_fn) = if let Some(output_type) = output_type {
         let introduces_nulls_fn = quote! {
             fn introduces_nulls(&self) -> bool {
-                <#output_type as mz_repr::DatumType<'_, ()>>::nullable()
+                <#output_type as ::mz_repr::DatumType<'_, ()>>::nullable()
             }
         };
         let output_type = quote! { <#output_type> };
@@ -248,7 +256,13 @@ fn unary_func(
         (quote! { Self::Output }, None)
     };
 
-    let arena = arena.then(|| quote! { , temp_storage });
+    if let Some(introduces_nulls) = introduces_nulls {
+        introduces_nulls_fn = Some(quote! {
+            fn introduces_nulls(&self) -> bool {
+                #introduces_nulls
+            }
+        });
+    }
 
     let could_error_fn = could_error.map(|could_error| {
         quote! {
@@ -267,7 +281,7 @@ fn unary_func(
             type Output = #output_ty;
 
             fn call(&self, a: Self::Input) -> Self::Output {
-                #fn_name(a #arena)
+                #fn_name(a)
             }
 
             fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
@@ -320,13 +334,18 @@ fn binary_func(
         negate,
         could_error,
         propagates_nulls,
+        introduces_nulls,
     } = modifiers;
 
     if preserves_uniqueness.is_some() {
-        return Err(darling::Error::unknown_field("preserves_uniqueness"));
+        return Err(darling::Error::unknown_field(
+            "preserves_uniqueness not supported for binary functions",
+        ));
     }
     if inverse.is_some() {
-        return Err(darling::Error::unknown_field("inverse"));
+        return Err(darling::Error::unknown_field(
+            "inverse not supported for binary functions",
+        ));
     }
 
     let negate_fn = negate.map(|negate| {
@@ -355,10 +374,10 @@ fn binary_func(
         }
     };
 
-    let (output_type, introduces_nulls_fn) = if let Some(output_type) = output_type {
+    let (output_type, mut introduces_nulls_fn) = if let Some(output_type) = output_type {
         let introduces_nulls_fn = quote! {
             fn introduces_nulls(&self) -> bool {
-                <#output_type as mz_repr::DatumType<'_, ()>>::nullable()
+                <#output_type as ::mz_repr::DatumType<'_, ()>>::nullable()
             }
         };
         let output_type = quote! { <#output_type> };
@@ -366,6 +385,14 @@ fn binary_func(
     } else {
         (quote! { Self::Output }, None)
     };
+
+    if let Some(introduces_nulls) = introduces_nulls {
+        introduces_nulls_fn = Some(quote! {
+            fn introduces_nulls(&self) -> bool {
+                #introduces_nulls
+            }
+        });
+    }
 
     let arena = if arena {
         quote! { , temp_storage }

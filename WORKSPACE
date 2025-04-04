@@ -558,6 +558,8 @@ crates_repository(
         "rustc-demangle": [crate.annotation(rustc_flags = ["-Copt-level=3"])],
         "timely": [crate.annotation(rustc_flags = ["-Copt-level=3"])],
         "differential-dataflow": [crate.annotation(rustc_flags = ["-Copt-level=3"])],
+        "insta": [crate.annotation(rustc_flags = ["-Copt-level=3"])],
+        "similar": [crate.annotation(rustc_flags = ["-Copt-level=3"])],
     },
     cargo_config = "//:.cargo/config.toml",
     cargo_lockfile = "//:Cargo.lock",

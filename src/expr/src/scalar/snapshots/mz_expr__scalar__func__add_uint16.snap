@@ -47,7 +47,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddUint16 {
             )
     }
     fn introduces_nulls(&self) -> bool {
-        <u16 as mz_repr::DatumType<'_, ()>>::nullable()
+        <u16 as ::mz_repr::DatumType<'_, ()>>::nullable()
     }
     fn is_infix_op(&self) -> bool {
         true

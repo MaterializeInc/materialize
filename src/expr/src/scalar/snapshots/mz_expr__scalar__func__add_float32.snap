@@ -47,7 +47,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddFloat32 {
             )
     }
     fn introduces_nulls(&self) -> bool {
-        <f32 as mz_repr::DatumType<'_, ()>>::nullable()
+        <f32 as ::mz_repr::DatumType<'_, ()>>::nullable()
     }
     fn is_infix_op(&self) -> bool {
         true
