@@ -43,14 +43,12 @@ Passwords hashed with `scram-sha-256` will be stored in the configured secret st
 
 1. The user sends a username and password to the Materialize server.
 2. The protocol layer will communicate with the coordinator layer to validate the password. (via the adapter Client)
-   a. The coordinator layer will check the password against the stored hash. If the password is correct, the user will be authenticated.
-   b. If the password is incorrect, the user will be denied access.
+  a. The coordinator layer will check the password against the stored hash. If the password is correct, the user will be authenticated.
+  b. If the password is incorrect, the user will be denied access.
 
-3. **OPTIONAL: Book-Keeping**: Login and failed login requests should be tracked. Metrics should be created to monitor potential security events.
+3. **Audit and Metrics:** Login and failed login requests should be logged. Metrics should be created to monitor potential security events.
 
 **Password Rotation or Expiration**: While not currently in scope, the design should allow for additions in the future, such as password rotation and expiration.
-
-**Abuse Detection**: Action should be taken action when brute force attempts are detected, either by locking the user or blocking the requesting client IP.
 
 ### 2. Password Management Syntax:
 
@@ -87,7 +85,10 @@ Users should be able to manage their passwords and set passwords for roles they 
     }
     ```
 
--   **OPTIONAL: Password Versioning**: Updates to the password hashing mechanisms may be required. 
+    - Iterations must be >= 400,000... this **must be configurable with a system variable.**
+    - We must use at least 32 bytes of cryptographically random data for salts.
+
+-   **OPTIONAL: Password Versioning**: Updates to the password hashing mechanisms may be required.
   - For passwords received in plain text we should be able re-encrypt them with stronger algorithms.
   - For client side challenges we may be able to increase the number of hash iterations.
   We will already be storing the necessary password hashing metadata to perform these actions.
@@ -101,7 +102,7 @@ Passwords for `mz_system`(v1) and `mz_support`(TBD) roles will be configurable v
 
 Environmentd's HTTP endpoint will have added support for session-based authentication. This includes session creation, storage, and deleting/setting cookies. To handle sessions we should use [tower session-store](https://docs.rs/tower-sessions/latest/tower_sessions/). This should explicitly require secure cookies `.with_secure(true)` when running with TLS.
 Required new endpoints:
-  - POST: api/login 
+  - POST: api/login
     - Accepts username, password Authentication Headers
     - imposes strict rate limiting : returning 429
     - returns 401 on auth failure
@@ -120,7 +121,7 @@ ALTER ROLE ... WITH SUPERUSER;
 ALTER ROLE ... WITH NO SUPERUSER;
 ```
 
-A role's superuser state should be stored as a rolsuper along with the user in the catalog. It may make sense to make this an Option<bool>. If the value of rolsuper is not `Some(v)` then we defer to metadata if we're using frontegg auth. 
+A role's superuser state should be stored as a rolsuper along with the user in the catalog. It may make sense to make this an Option<bool>. If the value of rolsuper is not `Some(v)` then we defer to metadata if we're using frontegg auth.
 
 
 ### Note on Configurable Authentication Mechanism
@@ -130,7 +131,7 @@ The authentication mechanism for an environment must be configurable. A new flag
 
 ### Note on Console builds:
 
-Console does currently do not support runtime or startup configuration. Configuration is handled only at build time. To resolve this we should add a `config.json` or `config.js` file which can be mounted directly into the Nginx container assets. This file should come from a materialize-console config map which must be setup by Orchestratord.  We will also need changes to the console to support reading in configuration from this map. The initial config value here should be `authentication_type: password`, in cloud we should use `authentication_type: frontegg` or `authentication_type: jwt`. The console build process can still be used to set default values for this config file. 
+Console does currently do not support runtime or startup configuration. Configuration is handled only at build time. To resolve this we should add a `config.json` or `config.js` file which can be mounted directly into the Nginx container assets. This file should come from a materialize-console config map which must be setup by Orchestratord.  We will also need changes to the console to support reading in configuration from this map. The initial config value here should be `authentication_type: password`, in cloud we should use `authentication_type: frontegg` or `authentication_type: jwt`. The console build process can still be used to set default values for this config file.
 
 
 ### Note on Emulator Auth:
@@ -151,7 +152,7 @@ A minimal viable prototype (MVP) for this solution will include:
 
 1. **Authd Service**: This would involve creating a separate authentication service to handle authentication. This approach is more complex and introduces security concerns, as it would require developing secure endpoints and integrating a user management system that could be prone to additional complexity and security risks.
 
-    - **Reasons Not Chosen**: This solution is more involved, requiring significant additional work to secure, develop, and maintain. Additionally, it does not align with the Postgres.
+    - **Reasons Not Chosen**: This solution is more involved, requiring significant additional work to secure, develop, and maintain. Additionally, it does not align with Postgres.
 
 2. **Password Authentication in Ingress Layer**: Using a front-end proxy like PGbouncer or NGINX to handle password authentication before traffic hits Materialize.
 
@@ -170,7 +171,11 @@ A minimal viable prototype (MVP) for this solution will include:
 ## Open questions
 
 1. **Where exactly are passwords stored**: While it makes sense to store passwords in the catalog, I have not yet identified exactly where they should be stored. Should it go alongside `mz_roles`, or in a new `mz_auth_id` table. The latter makes sense as it could store password metadata, and might let us store multiple passwords down the road.
+**A:** In the catalog
 
 2. **Audit Logging and Brute Force Detection**: Do we need to log all failed password attempts and the IPs of those attempts? Do we need to take action to lock an IP or User when an attempt threshold is met?
+**A:** yes log attempts and failed attempts along with the password. No mitigation is required, at least not for v1.
 
 3. **Password Strength Validation**: Should Materialize include built-in password strength validation, or should it be handled outside the system (e.g., via Kubernetes or other security tools)?
+**A:** MZ should not have built-in password strength, down the road we may want to consider something like postgres's [passwordcheck](https://www.postgresql.org/docs/current/passwordcheck.html
+).
