@@ -20,7 +20,7 @@ rust_binary(
     name = "cxxbridge-cmd",
     srcs = glob(["src/**/*.rs"]),
     aliases = aliases(),
-    data = [
+    compile_data = [
         "src/gen/include/cxx.h",
     ],
     edition = "2021",

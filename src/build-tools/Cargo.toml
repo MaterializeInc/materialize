@@ -26,8 +26,8 @@ normal = ["workspace-hack"]
 features_override = ["default", "bazel"]
 extra_deps = ["@rules_rust//tools/runfiles"]
 data = [
-    "@protobuf//:protoc",
-    "@protobuf//:well_known_type_protos",
+    "@com_google_protobuf//:protoc",
+    "@com_google_protobuf//:well_known_type_protos",
 ]
 rustc_flags = ["--cfg=bazel"]
 

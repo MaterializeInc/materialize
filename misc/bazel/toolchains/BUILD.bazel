@@ -27,7 +27,7 @@ Note: These registrations live here, and not in the `WORKSPACE` file or a
 See: <https://bazel.build/extending/toolchains>
 """
 
-load("@rules_rust//bindgen:defs.bzl", "rust_bindgen_toolchain")
+load("@rules_rust_bindgen//:defs.bzl", "rust_bindgen_toolchain")
 
 # Rust Bindgen Toolchains
 #
@@ -38,7 +38,7 @@ load("@rules_rust//bindgen:defs.bzl", "rust_bindgen_toolchain")
 # Darwin aarch64
 rust_bindgen_toolchain(
     name = "bindgen_toolchain_darwin__aarch64",
-    bindgen = "@rules_rust//bindgen/3rdparty:bindgen",
+    bindgen = "@rules_rust_bindgen//3rdparty:bindgen",
     clang = "@rust_bindgen__darwin_aarch64//:clang",
     libclang = "@rust_bindgen__darwin_aarch64//:libclang",
     libstdcxx = "@rust_bindgen__darwin_aarch64//:libc++",
@@ -50,14 +50,14 @@ toolchain(
         "@platforms//os:macos",
     ],
     toolchain = "bindgen_toolchain_darwin__aarch64",
-    toolchain_type = "@rules_rust//bindgen:toolchain_type",
+    toolchain_type = "@rules_rust_bindgen//:toolchain_type",
     visibility = ["//visibility:public"],
 )
 
 # Darwin x86_64
 rust_bindgen_toolchain(
     name = "bindgen_toolchain_darwin__x86_64",
-    bindgen = "@rules_rust//bindgen/3rdparty:bindgen",
+    bindgen = "@rules_rust_bindgen//3rdparty:bindgen",
     clang = "@rust_bindgen__darwin_x86_64//:clang",
     libclang = "@rust_bindgen__darwin_x86_64//:libclang",
     libstdcxx = "@rust_bindgen__darwin_x86_64//:libc++",
@@ -70,14 +70,14 @@ toolchain(
         "@platforms//cpu:x86_64",
     ],
     toolchain = "bindgen_toolchain_darwin__x86_64",
-    toolchain_type = "@rules_rust//bindgen:toolchain_type",
+    toolchain_type = "@rules_rust_bindgen//:toolchain_type",
     visibility = ["//visibility:public"],
 )
 
 # Linux aarch64
 rust_bindgen_toolchain(
     name = "bindgen_toolchain_linux__aarch64",
-    bindgen = "@rules_rust//bindgen/3rdparty:bindgen",
+    bindgen = "@rules_rust_bindgen//3rdparty:bindgen",
     clang = "@rust_bindgen__linux_aarch64//:clang",
     libclang = "@rust_bindgen__linux_aarch64//:libclang",
     libstdcxx = "@rust_bindgen__linux_aarch64//:libc++",
@@ -90,14 +90,14 @@ toolchain(
         "@platforms//cpu:aarch64",
     ],
     toolchain = "bindgen_toolchain_linux__aarch64",
-    toolchain_type = "@rules_rust//bindgen:toolchain_type",
+    toolchain_type = "@rules_rust_bindgen//:toolchain_type",
     visibility = ["//visibility:public"],
 )
 
 # Linux x86_64
 rust_bindgen_toolchain(
     name = "bindgen_toolchain_linux__x86_64",
-    bindgen = "@rules_rust//bindgen/3rdparty:bindgen",
+    bindgen = "@rules_rust_bindgen//3rdparty:bindgen",
     clang = "@rust_bindgen__linux_x86_64//:clang",
     libclang = "@rust_bindgen__linux_x86_64//:libclang",
     libstdcxx = "@rust_bindgen__linux_x86_64//:libc++",
@@ -110,6 +110,6 @@ toolchain(
         "@platforms//cpu:x86_64",
     ],
     toolchain = "bindgen_toolchain_linux__x86_64",
-    toolchain_type = "@rules_rust//bindgen:toolchain_type",
+    toolchain_type = "@rules_rust_bindgen//:toolchain_type",
     visibility = ["//visibility:public"],
 )

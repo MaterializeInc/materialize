@@ -35,7 +35,7 @@ build_test(
         "@jemalloc//:jemalloc",
         "@lz4//:lz4",
         "@openssl//:openssl",
-        "@protobuf//:protoc",
+        "@com_google_protobuf//:protoc",
         "@zlib//:zlib",
         "@zstd//:zstd",
     ],

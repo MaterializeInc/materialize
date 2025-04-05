@@ -18,7 +18,7 @@
 load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
 load("@bazel_skylib//rules:select_file.bzl", "select_file")
 load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
-load("@rules_rust//bindgen:defs.bzl", "rust_bindgen")
+load("@rules_rust_bindgen//:defs.bzl", "rust_bindgen")
 
 # Derived from <https://github.com/rust-rocksdb/rust-rocksdb/blob/7f9cba4a819e76d8022733b4c82509aec6056938/librocksdb-sys/build.rs>
 

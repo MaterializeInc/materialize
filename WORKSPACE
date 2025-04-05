@@ -31,9 +31,9 @@ included by calling a `*_dependencies()` macro.
 #
 # Note: In an ideal world the two rule sets would be combined into one.
 
-BAZEL_SKYLIB_VERSION = "1.6.1"
+BAZEL_SKYLIB_VERSION = "1.7.1"
 
-BAZEL_SKYLIB_INTEGRITY = "sha256-nziIakBUjG6WwQa3UvJCEw7hGqoGila6flb0UR8z5PI="
+BAZEL_SKYLIB_INTEGRITY = "sha256-vCg8381SalLDIBJ5zaS8KYZS76iYsQtNsIN9xRZSdW8="
 
 maybe(
     http_archive,
@@ -65,15 +65,22 @@ aspect_bazel_lib_dependencies()
 # Register bazel-lib toolchains
 aspect_bazel_lib_register_toolchains()
 
+# C Repositories
+#
+# Loads all of the C dependencies that we rely on.
+load("//misc/bazel/c_deps:repositories.bzl", "c_repositories")
+
+c_repositories()
+
 # `rules_cc`
 #
 # Rules for building C/C++ projects. These are slowly being upstreamed into the
 # Bazel source tree, but some projects (e.g. protobuf) still depend on this
 # rule set.
 
-RULES_CC_VERSION = "0.0.9"
+RULES_CC_VERSION = "0.1.1"
 
-RULES_CC_INTEGRITY = "sha256-IDeHW5pEVtzkp50RKorohbvEqtlo5lh9ym5k86CQDN8="
+RULES_CC_INTEGRITY = "sha256-cS13hosxUt1hjE1k+q3e/MWWX5D13m5t0dXdzQvoLUI="
 
 maybe(
     http_archive,
@@ -300,29 +307,22 @@ load("//misc/bazel/c_deps:extra_setup.bzl", "protoc_setup")
 
 protoc_setup()
 
-# C Repositories
-#
-# Loads all of the C dependencies that we rely on.
-load("//misc/bazel/c_deps:repositories.bzl", "c_repositories")
-
-c_repositories()
-
 # `rules_rust`
 #
 # Rules for building Rust crates, and several convienence macros for building all transitive
 # dependencies.
 
-RULES_RUST_VERSION = "0.54.2"
+RULES_RUST_VERSION = "0.59.3"
 
-RULES_RUST_INTEGRITY = "sha256-6hXbBNIbd6EvuBc/B5RMmAEhxLy5cs8EGuHpjqwjcz4="
+RULES_RUST_INTEGRITY = "sha256-pPPz9Yewxoqs6ZhcQAaI8AeFCy/S/ipQTEkTbZ3syz4="
 
 maybe(
     http_archive,
     name = "rules_rust",
     integrity = RULES_RUST_INTEGRITY,
-    strip_prefix = "rules_rust-v{0}".format(RULES_RUST_VERSION),
+    strip_prefix = "rules_rust-mz-{0}".format(RULES_RUST_VERSION),
     urls = [
-        "https://github.com/MaterializeInc/rules_rust/releases/download/v{0}/rules_rust-v{0}.tar.zst".format(RULES_RUST_VERSION),
+        "https://github.com/MaterializeInc/rules_rust/releases/download/mz-{0}/rules_rust-mz-{0}.tar.zst".format(RULES_RUST_VERSION),
     ],
 )
 
@@ -419,7 +419,17 @@ rust_toolchains(
 # Rules and Toolchains for running [`bindgen`](https://github.com/rust-lang/rust-bindgen)
 # a tool for generating Rust FFI bindings to C.
 
-load("@rules_rust//bindgen:repositories.bzl", "rust_bindgen_dependencies")
+maybe(
+    http_archive,
+    name = "rules_rust_bindgen",
+    integrity = RULES_RUST_INTEGRITY,
+    strip_prefix = "rules_rust-mz-{0}/extensions/bindgen".format(RULES_RUST_VERSION),
+    urls = [
+        "https://github.com/MaterializeInc/rules_rust/releases/download/mz-{0}/rules_rust-mz-{0}.tar.zst".format(RULES_RUST_VERSION),
+    ],
+)
+
+load("@rules_rust_bindgen//:repositories.bzl", "rust_bindgen_dependencies")
 
 rust_bindgen_dependencies()
 
@@ -461,6 +471,7 @@ crates_repository(
             # Note: The below targets are from the additive build file.
             additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.rocksdb.bazel",
             compile_data = [":out_dir"],
+            compile_data_glob_excludes = ["rocksdb/**"],
             gen_build_script = False,
             rustc_env = {
                 "OUT_DIR": "$(execpath :out_dir)",
@@ -564,16 +575,14 @@ crates_repository(
     cargo_config = "//:.cargo/config.toml",
     cargo_lockfile = "//:Cargo.lock",
     generator_sha256s = {
-        "aarch64-apple-darwin": "8204746334a17823bd6a54ce2c3821b0bdca96576700d568e2ca2bd8224dc0ea",
-        "x86_64-apple-darwin": "2ee14b230d32c05415852b7a388b76e700c87c506459e5b31ced19d6c131b6d0",
-        "aarch64-unknown-linux-gnu": "3792feb084bd43b9a7a9cd75be86ee9910b46db59360d6b29c9cca2f8889a0aa",
-        "x86_64-unknown-linux-gnu": "2b9d07f34694f63f0cc704989ad6ec148ff8d126579832f4f4d88edea75875b2",
+        "aarch64-apple-darwin": "c38c9c0efc11fcf9c32b9e0f4f4849df7c823f207c7f5ba5f6ab1e0e2167693d",
+        "aarch64-unknown-linux-gnu": "5bdc9a10ec5f17f5140a81ce7cb0c0ce6e82d4d862d3ce3a301ea23f72f20630",
+        "x86_64-unknown-linux-gnu": "abcd8212d64ea4c0f5e856af663c05ebeb2800a02c251f6eb62061f4e8ca1735",
     },
     generator_urls = {
-        "aarch64-apple-darwin": "https://github.com/MaterializeInc/rules_rust/releases/download/v{0}/cargo-bazel-aarch64-apple-darwin".format(RULES_RUST_VERSION),
-        "x86_64-apple-darwin": "https://github.com/MaterializeInc/rules_rust/releases/download/v{0}/cargo-bazel-x86_64-apple-darwin".format(RULES_RUST_VERSION),
-        "aarch64-unknown-linux-gnu": "https://github.com/MaterializeInc/rules_rust/releases/download/v{0}/cargo-bazel-aarch64-unknown-linux-gnu".format(RULES_RUST_VERSION),
-        "x86_64-unknown-linux-gnu": "https://github.com/MaterializeInc/rules_rust/releases/download/v{0}/cargo-bazel-x86_64-unknown-linux-gnu".format(RULES_RUST_VERSION),
+        "aarch64-apple-darwin": "https://github.com/MaterializeInc/rules_rust/releases/download/mz-{0}/cargo-bazel-aarch64-apple-darwin".format(RULES_RUST_VERSION),
+        "aarch64-unknown-linux-gnu": "https://github.com/MaterializeInc/rules_rust/releases/download/mz-{0}/cargo-bazel-aarch64-unknown-linux-gnu".format(RULES_RUST_VERSION),
+        "x86_64-unknown-linux-gnu": "https://github.com/MaterializeInc/rules_rust/releases/download/mz-{0}/cargo-bazel-x86_64-unknown-linux-gnu".format(RULES_RUST_VERSION),
     },
     # When `isolated` is true, Bazel will create a new `$CARGO_HOME`, i.e. it
     # won't use `~/.cargo`, when re-pinning. This is nice but not totally

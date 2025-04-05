@@ -28,8 +28,8 @@ rust_library(
         "bazel",
     ],
     data = [
-        "@protobuf//:protoc",
-        "@protobuf//:well_known_type_protos",
+        "@com_google_protobuf//:protoc",
+        "@com_google_protobuf//:well_known_type_protos",
     ],
     lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),

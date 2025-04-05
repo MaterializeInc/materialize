@@ -1,5 +1,5 @@
 {
-  "checksum": "b2b75eaba9abbc55071dcf7f2ded98069da446c19b24e7ac327c70bc8edf867e",
+  "checksum": "c17ea32c7611b5b8f4d91ef5bb280e78b142db085fdcc4ec608d3eb5303562a5",
   "crates": {
     "anstyle 1.0.4": {
       "name": "anstyle",
@@ -374,6 +374,9 @@
         "compile_data_glob": [
           "**"
         ],
+        "compile_data_glob_excludes": [
+          "**/*.rs"
+        ],
         "data_glob": [
           "**"
         ]
@@ -742,6 +745,9 @@
         "compile_data_glob": [
           "**"
         ],
+        "compile_data_glob_excludes": [
+          "**/*.rs"
+        ],
         "data_glob": [
           "**"
         ]
@@ -809,6 +815,9 @@
       "build_script_attrs": {
         "compile_data_glob": [
           "**"
+        ],
+        "compile_data_glob_excludes": [
+          "**/*.rs"
         ],
         "data_glob": [
           "**"
@@ -928,6 +937,9 @@
         "compile_data_glob": [
           "**"
         ],
+        "compile_data_glob_excludes": [
+          "**/*.rs"
+        ],
         "data_glob": [
           "**"
         ]
@@ -971,5 +983,6 @@
     "quote 1.0.33",
     "syn 2.0.38"
   ],
-  "direct_dev_deps": []
+  "direct_dev_deps": [],
+  "unused_patches": []
 }
