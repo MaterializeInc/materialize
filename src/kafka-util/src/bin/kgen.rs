@@ -222,7 +222,7 @@ impl<'a> RandomAvroGenerator<'a> {
             SchemaPiece::Fixed { size: _ } => unreachable!(),
         }
     }
-    pub fn gen(&mut self, rng: &mut ThreadRng) -> Value {
+    pub fn generate(&mut self, rng: &mut ThreadRng) -> Value {
         self.gen_inner(self.schema, rng)
     }
     fn new_inner(
@@ -465,7 +465,7 @@ impl<'a> ValueGenerator<'a> {
                 schema,
                 schema_id,
             } => {
-                let value = inner.gen(rng);
+                let value = inner.generate(rng);
                 out.clear();
                 out.push(0);
                 for b in schema_id.to_be_bytes().iter() {

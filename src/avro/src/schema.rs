@@ -2010,7 +2010,7 @@ impl<'a> Serialize for SchemaSerContext<'a> {
                         if self.enclosing_ns != &name.namespace {
                             map.serialize_entry("namespace", &name.namespace)?;
                         }
-                        if let Some(ref docstr) = doc {
+                        if let Some(docstr) = doc {
                             map.serialize_entry("doc", docstr)?;
                         }
                         // TODO (brennan) - serialize aliases

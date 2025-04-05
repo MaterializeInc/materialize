@@ -286,7 +286,7 @@ pub fn enforce_linear_chains(expr: &mut MirRelationExpr) -> Result<(), ExplainEr
 
 // Create an [`Iterator`] for [`LocalId`] values that are guaranteed to be
 // fresh within the scope of the given [`MirRelationExpr`].
-fn id_gen(expr: &MirRelationExpr) -> impl Iterator<Item = LocalId> {
+fn id_gen(expr: &MirRelationExpr) -> impl Iterator<Item = LocalId> + use<> {
     let mut max_id = 0_u64;
 
     expr.visit_pre(|expr| {

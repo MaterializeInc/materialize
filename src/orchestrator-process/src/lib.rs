@@ -782,7 +782,7 @@ impl OrchestratorWorker {
             disk,
             launch_spec,
         }: ServiceProcessConfig,
-    ) -> impl Future<Output = ()> {
+    ) -> impl Future<Output = ()> + use<> {
         let suppress_output = self.config.suppress_output;
         let propagate_crashes = self.config.propagate_crashes;
         let command_wrapper = self.config.command_wrapper.clone();

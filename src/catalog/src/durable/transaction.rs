@@ -197,7 +197,7 @@ impl<'a> Transaction<'a> {
             .map(|v| DurableType::from_key_value(key, v.clone()))
     }
 
-    pub fn get_items(&self) -> impl Iterator<Item = Item> {
+    pub fn get_items(&self) -> impl Iterator<Item = Item> + use<> {
         self.items
             .items()
             .into_iter()

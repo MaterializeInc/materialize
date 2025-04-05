@@ -189,7 +189,7 @@ pub struct MMapRegion<T> {
 impl<T> MMapRegion<T> {
     /// Clear the contents of this region without dropping elements.
     unsafe fn clear(&mut self) {
-        self.inner.set_len(0);
+        unsafe { self.inner.set_len(0) };
     }
 }
 
@@ -277,8 +277,8 @@ impl<T> Region<T> {
     #[inline]
     pub unsafe fn clear(&mut self) {
         match self {
-            Region::Heap(vec) => vec.set_len(0),
-            Region::MMap(inner) => inner.clear(),
+            Region::Heap(vec) => unsafe { vec.set_len(0) },
+            Region::MMap(inner) => unsafe { inner.clear() },
         }
     }
 

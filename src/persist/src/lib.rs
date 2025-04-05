@@ -21,7 +21,7 @@ pub mod azure;
 pub mod cfg;
 pub mod error;
 pub mod file;
-pub mod gen;
+pub mod generated;
 pub mod indexed;
 pub mod intercept;
 pub mod location;

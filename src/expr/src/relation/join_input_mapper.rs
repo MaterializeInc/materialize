@@ -228,7 +228,7 @@ impl JoinInputMapper {
     }
 
     /// Find the sorted, dedupped set of inputs an expression references
-    pub fn lookup_inputs(&self, expr: &MirScalarExpr) -> impl Iterator<Item = usize> {
+    pub fn lookup_inputs(&self, expr: &MirScalarExpr) -> impl Iterator<Item = usize> + use<> {
         expr.support()
             .iter()
             .map(|c| self.input_relation[*c])

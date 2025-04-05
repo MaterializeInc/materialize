@@ -87,14 +87,14 @@ pub struct FlamegraphTemplate<'a> {
 }
 
 #[allow(dropping_copy_types)]
-async fn time_prof(
+async fn time_prof<'a>(
     merge_threads: bool,
-    build_info: &BuildInfo,
+    build_info: &'static BuildInfo,
     // the time in seconds to run the profiler for
     time_secs: u64,
     // the sampling frequency in Hz
     sample_freq: u32,
-) -> impl IntoResponse {
+) -> impl IntoResponse + use<'a> {
     let ctl_lock;
     cfg_if! {
         if #[cfg(any(not(feature = "jemalloc"), miri))] {
@@ -131,13 +131,13 @@ async fn time_prof(
     ))
 }
 
-fn flamegraph(
+fn flamegraph<'a, 'b>(
     stacks: StackProfile,
-    title: &str,
+    title: &'a str,
     display_bytes: bool,
-    extras: &[(&str, &str)],
-    build_info: &BuildInfo,
-) -> impl IntoResponse {
+    extras: &'b [(&'b str, &'b str)],
+    build_info: &'static BuildInfo,
+) -> impl IntoResponse + use<'a> {
     let mut header_extra = vec![];
     if display_bytes {
         header_extra.push(("display_bytes", "1"));

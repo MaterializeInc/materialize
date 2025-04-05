@@ -1108,7 +1108,8 @@ where
     pub async fn snapshot_and_stream(
         &mut self,
         as_of: Antichain<T>,
-    ) -> Result<impl Stream<Item = ((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
+    ) -> Result<impl Stream<Item = ((Result<K, String>, Result<V, String>), T, D)> + use<K, V, T, D>, Since<T>>
+    {
         let snap = self.snapshot(as_of).await?;
 
         let blob = Arc::clone(&self.blob);

@@ -58,7 +58,7 @@ pub fn serve(
     now: NowFn,
     connection_context: ConnectionContext,
     instance_context: StorageInstanceContext,
-) -> Result<impl Fn() -> Box<dyn StorageClient>, anyhow::Error> {
+) -> Result<impl Fn() -> Box<dyn StorageClient> + use<>, anyhow::Error> {
     let config = Config {
         persist_clients,
         txns_ctx,
