@@ -37,6 +37,7 @@ message ProtoConfigVal {
     double f64 = 9;
     string string = 4;
     mz_proto.ProtoDuration duration = 5;
+    ProtoOptionDuration opt_duration = 10;
     // Switch to Protobuf's native JSON representation,
     // google.protobuf.Value, once prost supports it.
     // See: https://github.com/tokio-rs/prost/issues/404
@@ -47,4 +48,8 @@ message ProtoConfigVal {
 
 message ProtoOptionU64 {
   optional uint64 val = 1;
+}
+
+message ProtoOptionDuration {
+  optional mz_proto.ProtoDuration val = 1;
 }
