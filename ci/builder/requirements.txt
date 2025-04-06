@@ -61,7 +61,7 @@ types-Markdown==3.7.0.20250322
 types-prettytable==3.4.2.6
 types-psutil==7.0.0.20250218
 types-PyMYSQL==1.1.0.20241103
-types-PyYAML==6.0.12.20250326
+types-PyYAML==6.0.12.20250402
 types-requests==2.32.0.20250328
 types-setuptools==78.1.0.20250329
 types-toml==0.10.8.20240310
