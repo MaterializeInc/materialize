@@ -875,7 +875,7 @@ impl ParsedDateTime {
     /// * `value` is a SQL-formatted TIMESTAMP string.
     pub fn build_parsed_datetime_timestamp(
         value: &str,
-        was_bc: bool,
+        era: CalendarEra,
     ) -> Result<ParsedDateTime, String> {
         let mut pdt = ParsedDateTime::default();
 
@@ -883,7 +883,7 @@ impl ParsedDateTime {
 
         fill_pdt_date(&mut pdt, &mut ts_actual)?;
 
-        if was_bc {
+        if let CalendarEra::BC = era {
             pdt.year = pdt.year.map(|mut y| {
                 y.unit = y.unit * -1;
                 y
@@ -1868,25 +1868,35 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>, S
     Ok(toks)
 }
 
-const BC: &str = "BC";
+#[derive(Debug, PartialEq, Eq)]
+pub enum CalendarEra {
+    BC,
+    AD,
+}
 
 /// Takes a 'date timezone' 'date time timezone' string and splits it into 'date
 /// {time}' and 'timezone' components with a boolean if true indicates it is BC.
-pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str, bool) {
+pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str, CalendarEra) {
     // First we need to see if the string contains " +" or " -" because
     // timestamps can come in a format YYYY-MM-DD {+|-}<tz> (where the timezone
     // string can have colons)
+    use CalendarEra::{AD, BC};
+
     let cut = value.find(" +").or_else(|| value.find(" -"));
 
     if let Some(cut) = cut {
         let (first, second) = value.split_at(cut);
 
-        let (second, third) = match second.strip_suffix(BC) {
-            Some(remainder) => (remainder, true),
-            None => (second, false),
+        let (second, era) = match (
+            second.strip_suffix(stringify!(BC)),
+            second.strip_suffix(stringify!(AD)),
+        ) {
+            (Some(remainder), None) => (remainder, BC),
+            (None, Some(remainder)) => (remainder, AD),
+            _ => (second, AD),
         };
 
-        return (first.trim(), second.trim(), third);
+        return (first.trim(), second.trim(), era);
     }
 
     // If we have a hh:mm:dd component, we need to go past that to see if we can
@@ -1901,17 +1911,20 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str, bool) {
 
             if let Some(tz) = tz {
                 let (first, second) = value.split_at(colon + tz);
-
-                let (second, third) = match second.strip_suffix(BC) {
-                    Some(remainder) => (remainder, true),
-                    None => (second, false),
+                let (second, era) = match (
+                    second.strip_suffix(stringify!(BC)),
+                    second.strip_suffix(stringify!(AD)),
+                ) {
+                    (Some(remainder), None) => (remainder, BC),
+                    (None, Some(remainder)) => (remainder, AD),
+                    _ => (second, AD),
                 };
 
-                return (first.trim(), second.trim(), third);
+                return (first.trim(), second.trim(), era);
             }
         }
 
-        (value.trim(), "", false)
+        (value.trim(), "", AD)
     } else {
         // We don't have a time, so the only formats available are YYY-mm-dd<tz>
         // or YYYY-MM-dd <tz> Numeric offset timezones need to be separated from
@@ -1921,15 +1934,19 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str, bool) {
         if let Some(cut) = cut {
             let (first, second) = value.split_at(cut);
 
-            let (second, third) = match second.strip_suffix(BC) {
-                Some(remainder) => (remainder, true),
-                None => (second, false),
+            let (second, era) = match (
+                second.strip_suffix(stringify!(BC)),
+                second.strip_suffix(stringify!(AD)),
+            ) {
+                (Some(remainder), None) => (remainder, BC),
+                (None, Some(remainder)) => (remainder, AD),
+                _ => (second, AD),
             };
 
-            return (first.trim(), second.trim(), third);
+            return (first.trim(), second.trim(), era);
         }
 
-        (value.trim(), "", false)
+        (value.trim(), "", AD)
     }
 }
 
@@ -2841,7 +2858,7 @@ mod tests {
 
         fn run_test_build_parsed_datetime_timestamp(test: &str, res: ParsedDateTime) {
             assert_eq!(
-                ParsedDateTime::build_parsed_datetime_timestamp(test, false).unwrap(),
+                ParsedDateTime::build_parsed_datetime_timestamp(test, CalendarEra::AD).unwrap(),
                 res
             );
         }
@@ -3525,11 +3542,11 @@ mod tests {
         ];
 
         for test in test_cases.iter() {
-            let (ts, tz, was_bc) = split_timestamp_string(test.0);
+            let (ts, tz, era) = split_timestamp_string(test.0);
 
             assert_eq!(ts, test.1);
             assert_eq!(tz, test.2);
-            assert_eq!(was_bc, false);
+            assert_eq!(era, CalendarEra::AD);
         }
     }
 
