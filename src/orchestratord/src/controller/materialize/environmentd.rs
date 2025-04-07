@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::{collections::BTreeMap, sync::LazyLock, time::Duration};
+use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::bail;
 use k8s_openapi::{
@@ -15,10 +15,10 @@ use k8s_openapi::{
         apps::v1::{StatefulSet, StatefulSetSpec, StatefulSetUpdateStrategy},
         core::v1::{
             Capabilities, Container, ContainerPort, EnvVar, EnvVarSource, EphemeralVolumeSource,
-            KeyToPath, PersistentVolumeClaimSpec, PersistentVolumeClaimTemplate, Pod,
-            PodSecurityContext, PodSpec, PodTemplateSpec, Probe, SeccompProfile, SecretKeySelector,
-            SecretVolumeSource, SecurityContext, Service, ServiceAccount, ServicePort, ServiceSpec,
-            TCPSocketAction, Toleration, Volume, VolumeMount, VolumeResourceRequirements,
+            PersistentVolumeClaimSpec, PersistentVolumeClaimTemplate, Pod, PodSecurityContext,
+            PodSpec, PodTemplateSpec, Probe, SeccompProfile, SecretKeySelector, SecretVolumeSource,
+            SecurityContext, Service, ServiceAccount, ServicePort, ServiceSpec, TCPSocketAction,
+            Toleration, Volume, VolumeMount, VolumeResourceRequirements,
         },
         networking::v1::{
             IPBlock, NetworkPolicy, NetworkPolicyEgressRule, NetworkPolicyIngressRule,
@@ -31,7 +31,6 @@ use k8s_openapi::{
 use kube::{api::ObjectMeta, runtime::controller::Action, Api, Client, ResourceExt};
 use maplit::btreemap;
 use rand::{thread_rng, Rng};
-use semver::{BuildMetadata, Prerelease, Version};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::trace;
@@ -44,14 +43,6 @@ use mz_cloud_resources::crd::gen::cert_manager::certificates::Certificate;
 use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::instrument;
-
-static V140_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
-    major: 0,
-    minor: 140,
-    patch: 0,
-    pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
-    build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
-});
 
 /// Describes the status of a deployment.
 ///
@@ -1184,34 +1175,6 @@ fn create_environmentd_statefulset_object(
             ..Default::default()
         },
     ];
-
-    if mz.meets_minimum_version(&V140_DEV0) {
-        volume_mounts.push(VolumeMount {
-            name: "license-key".to_string(),
-            mount_path: "/license_key".to_string(),
-            ..Default::default()
-        });
-        volumes.push(Volume {
-            name: "license-key".to_string(),
-            secret: Some(SecretVolumeSource {
-                default_mode: Some(256),
-                optional: Some(false),
-                secret_name: Some(mz.backend_secret_name()),
-                items: Some(vec![KeyToPath {
-                    key: "license_key".to_string(),
-                    path: "license_key".to_string(),
-                    ..Default::default()
-                }]),
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        env.push(EnvVar {
-            name: "MZ_LICENSE_KEY".to_string(),
-            value: Some("/license_key/license_key".to_string()),
-            ..Default::default()
-        });
-    }
 
     let container = Container {
         name: "environmentd".to_owned(),

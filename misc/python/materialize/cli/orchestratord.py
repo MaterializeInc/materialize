@@ -63,7 +63,6 @@ def main():
     )
     parser_environment.add_argument("--postgres-url", default=DEFAULT_POSTGRES)
     parser_environment.add_argument("--s3-bucket", default=DEFAULT_MINIO)
-    parser_environment.add_argument("--license-key-file", required=True)
     parser_environment.set_defaults(func=environment)
 
     parser_portforward = subparsers.add_parser("port-forward")
@@ -216,9 +215,6 @@ def environment(args: argparse.Namespace):
         )
     )
 
-    with open(args.license_key_file) as f:
-        license_key = f.read()
-
     secret_name = f"materialize-backend-{environment_id}"
 
     resources = dedent(
@@ -231,7 +227,6 @@ def environment(args: argparse.Namespace):
         stringData:
           metadata_backend_url: {metadata_backend_url}
           persist_backend_url: {persist_backend_url}
-          license_key: {license_key}
         ---
         apiVersion: materialize.cloud/v1alpha1
         kind: Materialize
