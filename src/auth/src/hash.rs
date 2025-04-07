@@ -11,6 +11,9 @@ use ring::rand::SecureRandom;
 /// https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
 const DEFAULT_ITERATIONS: NonZeroU32 = NonZeroU32::new(600_000).unwrap();
 
+/// The default salt size, not currently configurable
+const DEFAULT_SALT_SIZE: usize = 32;
+
 /// The options for hashing a password
 pub struct HashOpts {
     /// The number of iterations to use for PBKDF2
@@ -18,12 +21,12 @@ pub struct HashOpts {
     /// The salt to use for PBKDF2. It is up to the caller to
     /// ensure that however the salt is generated, it is cryptographically
     /// secure.
-    pub salt: [u8; 16],
+    pub salt: [u8; DEFAULT_SALT_SIZE],
 }
 
 pub struct PasswordHash {
     /// The salt used for hashing
-    pub salt: [u8; 16],
+    pub salt: [u8; DEFAULT_SALT_SIZE],
     /// The number of iterations used for hashing
     pub iterations: NonZeroU32,
     /// The hash of the password.
@@ -40,7 +43,7 @@ pub enum VerifyError {
 /// Hashes a password using PBKDF2 with SHA256
 /// and a random salt.
 pub fn hash_password(password: &String) -> PasswordHash {
-    let mut salt = [0u8; 16];
+    let mut salt = [0u8; 32];
     ring::rand::SystemRandom::new().fill(&mut salt).unwrap();
 
     let hash = hash_password_inner(
@@ -117,9 +120,6 @@ fn scram256_parse_opts(hashed_password: &str) -> Result<HashOpts, VerifyError> {
         .decode(auth_info[1])
         .map_err(|_| VerifyError::MalformedHash)?;
 
-    if salt.len() != 16 {
-        return Err(VerifyError::MalformedHash);
-    }
     let salt = salt.try_into().map_err(|_| VerifyError::MalformedHash)?;
 
     Ok(HashOpts {
@@ -133,7 +133,7 @@ struct ScramSha256Hash {
     /// The number of iterations used for hashing
     iterations: NonZeroU32,
     /// The salt used for hashing
-    salt: [u8; 16],
+    salt: [u8; 32],
     /// The server key
     server_key: [u8; SHA256_OUTPUT_LEN],
     /// The client key
@@ -187,7 +187,7 @@ mod tests {
         let password = "password".to_string();
         let hashed_password = hash_password(&password);
         assert_eq!(hashed_password.iterations, DEFAULT_ITERATIONS);
-        assert_eq!(hashed_password.salt.len(), 16);
+        assert_eq!(hashed_password.salt.len(), DEFAULT_SALT_SIZE);
         assert_eq!(hashed_password.hash.len(), SHA256_OUTPUT_LEN);
     }
 
@@ -204,14 +204,14 @@ mod tests {
 
     #[test]
     fn test_scram256_parse_opts() {
-        let salt = "iveVLtfGEX0XrSDrz8QcRA==";
+        let salt = "9bkIQQjQ7f1OwPsXZGC/YfIkbZsOMDXK0cxxvPBaSfM=";
         let hashed_password = format!("SCRAM-SHA-256$600000:{}$client-key:server-key", salt);
         let opts = scram256_parse_opts(&hashed_password);
 
         assert!(opts.is_ok());
         let opts = opts.unwrap();
         assert_eq!(opts.iterations, DEFAULT_ITERATIONS);
-        assert_eq!(opts.salt.len(), 16);
+        assert_eq!(opts.salt.len(), DEFAULT_SALT_SIZE);
         let decoded_salt = BASE64_STANDARD.decode(salt).expect("Failed to decode salt");
         assert_eq!(opts.salt, decoded_salt.as_ref());
     }
