@@ -739,6 +739,8 @@ pub enum SqlServerError {
     SqlServer(#[from] tiberius::error::Error),
     #[error(transparent)]
     CdcError(#[from] crate::cdc::CdcError),
+    #[error("expected column '{0}' to be present")]
+    MissingColumn(&'static str),
     #[error("'{column_type}' from column '{column_name}' is not supported: {reason}")]
     UnsupportedDataType {
         column_name: String,
@@ -749,6 +751,12 @@ pub enum SqlServerError {
     IO(#[from] tokio::io::Error),
     #[error("found invalid data in the column '{column_name}': {error}")]
     InvalidData { column_name: String, error: String },
+    #[error("invalid SQL Server system setting '{name}'. Expected '{expected}'. Got '{actual}'.")]
+    InvalidSystemSetting {
+        name: String,
+        expected: String,
+        actual: String,
+    },
     #[error("invariant was violated: {0}")]
     InvariantViolated(String),
     #[error(transparent)]
