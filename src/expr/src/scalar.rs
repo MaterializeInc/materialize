@@ -1229,8 +1229,11 @@ impl MirScalarExpr {
                                 .map_or("", |expr| expr.as_literal_str().unwrap());
                             let (limit, flags) = regexp_replace_parse_flags(flags);
 
-                            // Defer errors until evaluation instead of eagerly returning them here
-                            // to match the error behavior of the dynamic function (part of database-issues#4972).
+                            // The behavior of `regexp_replace` is that if the data is `NULL`, the
+                            // function returns `NULL`, independently of whether the pattern or
+                            // flags are correct. We need to check for this case and introduce an
+                            // if-then-else on the error path to only surface the error if the first
+                            // input is non-NULL.
                             *e = match func::build_regex(pattern, &flags) {
                                 Ok(regex) => {
                                     let mut exprs = mem::take(exprs);
