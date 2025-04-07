@@ -885,7 +885,7 @@ impl ParsedDateTime {
 
         if let CalendarEra::BC = era {
             pdt.year = pdt.year.map(|mut y| {
-                y.unit = y.unit * -1;
+                y.unit = -y.unit;
                 y
             });
         }
