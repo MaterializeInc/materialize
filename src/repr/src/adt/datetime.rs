@@ -1874,6 +1874,15 @@ pub enum CalendarEra {
     AD,
 }
 
+impl CalendarEra {
+    fn as_str(&self) -> &'static str {
+        match self {
+            CalendarEra::BC => "BC",
+            CalendarEra::AD => "AD",
+        }
+    }
+}
+
 /// Takes a 'date timezone' 'date time timezone' string and splits it into 'date
 /// {time}' and 'timezone' components with a boolean if true indicates it is BC.
 pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str, CalendarEra) {
@@ -1888,8 +1897,8 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str, CalendarEra) {
         let (first, second) = value.split_at(cut);
 
         let (second, era) = match (
-            second.strip_suffix(stringify!(BC)),
-            second.strip_suffix(stringify!(AD)),
+            second.strip_suffix(BC.as_str()),
+            second.strip_suffix(AD.as_str()),
         ) {
             (Some(remainder), None) => (remainder, BC),
             (None, Some(remainder)) => (remainder, AD),
@@ -1912,8 +1921,8 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str, CalendarEra) {
             if let Some(tz) = tz {
                 let (first, second) = value.split_at(colon + tz);
                 let (second, era) = match (
-                    second.strip_suffix(stringify!(BC)),
-                    second.strip_suffix(stringify!(AD)),
+                    second.strip_suffix(BC.as_str()),
+                    second.strip_suffix(AD.as_str()),
                 ) {
                     (Some(remainder), None) => (remainder, BC),
                     (None, Some(remainder)) => (remainder, AD),
@@ -1935,8 +1944,8 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str, CalendarEra) {
             let (first, second) = value.split_at(cut);
 
             let (second, era) = match (
-                second.strip_suffix(stringify!(BC)),
-                second.strip_suffix(stringify!(AD)),
+                second.strip_suffix(BC.as_str()),
+                second.strip_suffix(AD.as_str()),
             ) {
                 (Some(remainder), None) => (remainder, BC),
                 (None, Some(remainder)) => (remainder, AD),
