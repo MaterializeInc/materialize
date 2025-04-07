@@ -130,8 +130,15 @@ macro_rules! metrics_size_class {
                                 accum.add_assign(file_stat);
                             }
                         }
+                        #[cfg(target_os = "linux")]
                         Err(err) => {
                             return Err(Error::new(ErrorKind::FileStatsFailed(err.to_string())));
+                        }
+                        #[cfg(not(target_os = "linux"))]
+                        Err(err) => {
+                            if err.kind() != std::io::ErrorKind::NotFound {
+                                return Err(Error::new(ErrorKind::FileStatsFailed(err.to_string())));
+                            }
                         }
                     }
                     for (size_class, accum) in accums {
