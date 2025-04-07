@@ -73,18 +73,18 @@ module "materialize" {
 
   install_materialize_operator = true
 
-  install_cert_manager = false
-  use_self_signed_cluster_issuer = false
+  install_cert_manager           = true
+  use_self_signed_cluster_issuer = true
 
   helm_values = {
-      clusters = {
-        defaultReplicationFactor = {
-            system = 1
-            probe = 1
-            support = 1
-            analytics = 1
-        }
+    clusters = {
+      defaultReplicationFactor = {
+        system    = 1
+        probe     = 1
+        support   = 1
+        analytics = 1
       }
+    }
   }
 
   providers = {

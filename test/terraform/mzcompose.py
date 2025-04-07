@@ -112,10 +112,11 @@ def run_ignore_error(
         pass
 
 
-def testdrive(no_reset: bool) -> Testdrive:
+def testdrive(no_reset: bool, tls: bool) -> Testdrive:
+    sslmode = "&sslmode=require" if tls else ""
     return Testdrive(
-        materialize_url="postgres://materialize@127.0.0.1:6875/materialize",
-        materialize_url_internal="postgres://mz_system:materialize@127.0.0.1:6877/materialize",
+        materialize_url="postgres://materialize@127.0.0.1:6875/materialize{sslmode}",
+        materialize_url_internal="postgres://mz_system:materialize@127.0.0.1:6877/materialize{sslmode}",
         materialize_use_https=True,
         no_consistency_checks=True,
         network_mode="host",
@@ -453,7 +454,7 @@ class AWS:
         time.sleep(10)
 
         with psycopg.connect(
-            "postgres://mz_system:materialize@127.0.0.1:6877/materialize",
+            "postgres://mz_system:materialize@127.0.0.1:6877/materialize&sslmode=require",
             autocommit=True,
         ) as conn:
             with conn.cursor() as cur:
@@ -596,11 +597,11 @@ def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
     try:
         aws.setup("aws-test", args.setup, tag)
         print("--- Running tests")
-        with c.override(testdrive(no_reset=False)):
+        with c.override(testdrive(no_reset=False, tls=True)):
             aws.connect(c)
 
             with psycopg.connect(
-                "postgres://materialize@127.0.0.1:6875/materialize"
+                "postgres://materialize@127.0.0.1:6875/materialize?sslmode=require"
             ) as conn:
                 with conn.cursor() as cur:
                     cur.execute("SELECT 1")
@@ -648,7 +649,7 @@ def workflow_aws_persistent_setup(
     aws = AWS(PATH_AWS_PERSISTENT)
     try:
         aws.setup(PREFIX_AWS_PERSISTENT, True, tag)
-        with c.override(testdrive(no_reset=True)):
+        with c.override(testdrive(no_reset=True, tls=False)):
             aws.connect(c)
             c.testdrive(
                 dedent(
@@ -683,7 +684,7 @@ def workflow_aws_persistent_test(
     aws = AWS(PATH_AWS_PERSISTENT)
     try:
         aws.setup(PREFIX_AWS_PERSISTENT, False, tag)
-        with c.override(testdrive(no_reset=True)):
+        with c.override(testdrive(no_reset=True, tls=False)):
             aws.connect(c)
 
             count = 1
@@ -1037,7 +1038,7 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
         time.sleep(10)
 
         with psycopg.connect(
-            "postgres://mz_system:materialize@127.0.0.1:6877/materialize",
+            "postgres://mz_system:materialize@127.0.0.1:6877/materialize&sslmode=require",
             autocommit=True,
         ) as conn:
             with conn.cursor() as cur:
@@ -1046,8 +1047,8 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
 
         with c.override(
             Testdrive(
-                materialize_url="postgres://materialize@127.0.0.1:6875/materialize",
-                materialize_url_internal="postgres://mz_system:materialize@127.0.0.1:6877/materialize",
+                materialize_url="postgres://materialize@127.0.0.1:6875/materialize&sslmode=require",
+                materialize_url_internal="postgres://mz_system:materialize@127.0.0.1:6877/materialize&sslmode=require",
                 materialize_use_https=True,
                 no_consistency_checks=True,
                 network_mode="host",
@@ -1069,7 +1070,7 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
             )
 
             with psycopg.connect(
-                "postgres://materialize@127.0.0.1:6875/materialize"
+                "postgres://materialize@127.0.0.1:6875/materialize&sslmode=require"
             ) as conn:
                 with conn.cursor() as cur:
                     cur.execute("SELECT 1")
@@ -1464,7 +1465,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
         time.sleep(10)
 
         with psycopg.connect(
-            "postgres://mz_system:materialize@127.0.0.1:6877/materialize",
+            "postgres://mz_system:materialize@127.0.0.1:6877/materialize&sslmode=require",
             autocommit=True,
         ) as conn:
             with conn.cursor() as cur:
@@ -1473,8 +1474,8 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
 
         with c.override(
             Testdrive(
-                materialize_url="postgres://materialize@127.0.0.1:6875/materialize",
-                materialize_url_internal="postgres://mz_system:materialize@127.0.0.1:6877/materialize",
+                materialize_url="postgres://materialize@127.0.0.1:6875/materialize&sslmode=require",
+                materialize_url_internal="postgres://mz_system:materialize@127.0.0.1:6877/materialize&sslmode=require",
                 materialize_use_https=True,
                 no_consistency_checks=True,
                 network_mode="host",
@@ -1496,7 +1497,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
             )
 
             with psycopg.connect(
-                "postgres://materialize@127.0.0.1:6875/materialize"
+                "postgres://materialize@127.0.0.1:6875/materialize&sslmode=require"
             ) as conn:
                 with conn.cursor() as cur:
                     cur.execute("SELECT 1")
