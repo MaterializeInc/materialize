@@ -51,8 +51,9 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationVersion, Row, TimestampManipulation};
 use mz_storage_client::client::{
-    ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand, RunOneshotIngestion,
-    RunSinkCommand, Status, StatusUpdate, StorageCommand, StorageResponse, TableData,
+    AppendOnlyUpdate, ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand,
+    RunOneshotIngestion, RunSinkCommand, Status, StatusUpdate, StorageCommand, StorageResponse,
+    TableData,
 };
 use mz_storage_client::controller::{
     BoxFuture, CollectionDescription, DataSource, ExportDescription, ExportState,
@@ -90,8 +91,8 @@ use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
-use tokio::sync::mpsc;
 use tokio::sync::watch::{channel, Sender};
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::error::Elapsed;
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, warn};
@@ -2427,6 +2428,28 @@ where
     fn update_introspection_collection(&mut self, type_: IntrospectionType, op: StorageWriteOp) {
         let id = self.introspection_ids[&type_];
         self.collection_manager.differential_write(id, op);
+    }
+
+    fn append_only_introspection_tx(
+        &self,
+        type_: IntrospectionType,
+    ) -> mpsc::UnboundedSender<(
+        Vec<AppendOnlyUpdate>,
+        oneshot::Sender<Result<(), StorageError<Self::Timestamp>>>,
+    )> {
+        let id = self.introspection_ids[&type_];
+        self.collection_manager.append_only_write_sender(id)
+    }
+
+    fn differential_introspection_tx(
+        &self,
+        type_: IntrospectionType,
+    ) -> mpsc::UnboundedSender<(
+        StorageWriteOp,
+        oneshot::Sender<Result<(), StorageError<Self::Timestamp>>>,
+    )> {
+        let id = self.introspection_ids[&type_];
+        self.collection_manager.differential_write_sender(id)
     }
 
     async fn real_time_recent_timestamp(

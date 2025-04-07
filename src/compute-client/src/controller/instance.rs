@@ -170,7 +170,7 @@ where
         wallclock_lag: WallclockLagFn<T>,
         dyncfg: Arc<ConfigSet>,
         response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
-        introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+        introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
 
@@ -283,7 +283,7 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     /// Sender for responses to be delivered.
     response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
     /// Sender for introspection updates to be recorded.
-    introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+    introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
     /// A number that increases with each restart of `environmentd`.
     envd_epoch: NonZeroI64,
     /// Numbers that increase with each restart of a replica.
@@ -957,7 +957,7 @@ where
         command_rx: mpsc::UnboundedReceiver<Command<T>>,
         response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
         read_hold_tx: read_holds::ChangeTx<T>,
-        introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+        introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
     ) -> Self {
         let mut collections = BTreeMap::new();
         let mut log_sources = BTreeMap::new();
@@ -2306,7 +2306,7 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
         id: GlobalId,
         shared: SharedCollectionState<T>,
         read_hold_tx: read_holds::ChangeTx<T>,
-        introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+        introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
     ) -> Self {
         let since = Antichain::from_elem(T::minimum());
         let introspection =
@@ -2425,7 +2425,7 @@ struct CollectionIntrospection<T: ComputeControllerTimestamp> {
     /// The ID of the compute collection.
     collection_id: GlobalId,
     /// A channel through which introspection updates are delivered.
-    introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+    introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
     /// Introspection state for `IntrospectionType::Frontiers`.
     ///
     /// `Some` if the collection does _not_ sink into a storage collection (i.e. is not an MV). If
@@ -2440,7 +2440,7 @@ struct CollectionIntrospection<T: ComputeControllerTimestamp> {
 impl<T: ComputeControllerTimestamp> CollectionIntrospection<T> {
     fn new(
         collection_id: GlobalId,
-        introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+        introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
         as_of: Antichain<T>,
         storage_sink: bool,
         initial_as_of: Option<Antichain<T>>,
@@ -2744,7 +2744,7 @@ struct ReplicaState<T: ComputeControllerTimestamp> {
     /// Replica metrics.
     metrics: ReplicaMetrics,
     /// A channel through which introspection updates are delivered.
-    introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+    introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
     /// Per-replica collection state.
     collections: BTreeMap<GlobalId, ReplicaCollectionState<T>>,
     /// The epoch of the replica.
@@ -2757,7 +2757,7 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
         client: ReplicaClient<T>,
         config: ReplicaConfig,
         metrics: ReplicaMetrics,
-        introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+        introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
         epoch: ClusterStartupEpoch,
     ) -> Self {
         Self {
@@ -3006,7 +3006,7 @@ struct ReplicaCollectionIntrospection<T: ComputeControllerTimestamp> {
     /// The collection's reported replica write frontier.
     write_frontier: Antichain<T>,
     /// A channel through which introspection updates are delivered.
-    introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+    introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
 }
 
 impl<T: ComputeControllerTimestamp> ReplicaCollectionIntrospection<T> {
@@ -3014,7 +3014,7 @@ impl<T: ComputeControllerTimestamp> ReplicaCollectionIntrospection<T> {
     fn new(
         replica_id: ReplicaId,
         collection_id: GlobalId,
-        introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+        introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
         as_of: Antichain<T>,
     ) -> Self {
         let self_ = Self {
