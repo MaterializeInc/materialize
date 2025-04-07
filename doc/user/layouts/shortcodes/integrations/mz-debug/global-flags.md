@@ -1,5 +1,3 @@
-## Global Options
-
 | Option                      | Description                                                                                     |
 |----------------------------|------------------------------------------------------------------------------------------------|
 | `--dump-system-catalog`    | If true, dump the system catalog from Materialize. Defaults to `true`.                         |

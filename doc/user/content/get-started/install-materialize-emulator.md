@@ -108,7 +108,7 @@ Community on Slack](https://materialize.com/s/chat).
 
 #### `mz-debug`
 
-Materialize provides a command-line debug tool called `mz-debug` that helps collect diagnostic information from your emulator environment. This tool can gather:
+Materialize provides a [`mz-debug`]command-line debug tool called  that helps collect diagnostic information from your emulator environment. This tool can gather:
 - Docker logs and resource information
 - Snapshots of system catalog tables from your Materialize instance
 
