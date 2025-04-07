@@ -9,7 +9,6 @@
 
 
 import json
-import os
 from enum import Enum
 from typing import Any
 
@@ -290,16 +289,6 @@ class Materialized(Service):
             config["platform"] = platform
 
         volumes = []
-
-        if image_version is None or image_version >= "v0.140.0-dev":
-            if "MZ_CI_LICENSE_KEY" in os.environ:
-                with open("license_key", "w") as f:
-                    f.write(os.environ["MZ_CI_LICENSE_KEY"])
-
-                environment += ["MZ_LICENSE_KEY=/license_key/license_key"]
-
-                volumes += [f"{os.getcwd()}/license_key:/license_key/license_key"]
-
         if use_default_volumes:
             volumes += DEFAULT_MZ_VOLUMES
         volumes += volumes_extra

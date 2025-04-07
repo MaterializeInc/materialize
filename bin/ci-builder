@@ -197,7 +197,6 @@ case "$cmd" in
             --env LAUNCHDARKLY_API_TOKEN
             --env LAUNCHDARKLY_SDK_KEY
             --env NIGHTLY_CANARY_APP_PASSWORD
-            --env MZ_CI_LICENSE_KEY
             --env MZ_CLI_APP_PASSWORD
             --env MZ_SOFT_ASSERTIONS
             --env NO_COLOR
