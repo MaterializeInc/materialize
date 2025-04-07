@@ -30,8 +30,8 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT record, (record).f2 FROM (SELECT ROW(a, a) AS record FROM t1);
 ----
 Explained Query:
-  Project (#2, #0{a}) // { arity: 2 }
-    Map (row(#0{a}, #0{a})) // { arity: 3 }
+  Project (#2, #3) // { arity: 2 }
+    Map (row(#0{a}, #0{a}), record_get[1](#2)) // { arity: 4 }
       ReadStorage materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1

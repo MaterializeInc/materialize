@@ -2215,6 +2215,12 @@ feature_flags!(
         default: true,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_dequadratic_eqprop_map,
+        desc: "Skip the quadratic part of EquivalencePropagation's handling of Map.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
@@ -2235,6 +2241,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
                 .enable_projection_pushdown_after_relation_cse(),
             enable_let_prefix_extraction: vars.enable_let_prefix_extraction(),
             enable_less_reduce_in_eqprop: vars.enable_less_reduce_in_eqprop(),
+            enable_dequadratic_eqprop_map: vars.enable_dequadratic_eqprop_map(),
         }
     }
 }
