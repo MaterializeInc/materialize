@@ -16,6 +16,7 @@ use derivative::Derivative;
 use futures::{Stream, StreamExt};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+use timely::progress::Timestamp;
 
 use crate::{Client, SqlServerError, TransactionIsolationLevel};
 
@@ -95,6 +96,30 @@ impl<'a> CdcStream<'a> {
             crate::inspect::get_tables_for_capture_instance(self.client, instances).await?;
         tracing::info!(?tables, "got table for capture instance");
 
+        // Before we start a transaction, ensure SQL Server is reporting an LSN.
+        //
+        // If CDC was very recently enabled (e.g. < 30 seconds ago) then it will
+        // report NULL for an LSN. Before we start a transaction, which prevents
+        // the LSN from progressing, we want to wait a bit for SQL Server to
+        // become ready.
+        let (_client, lsn_result) = mz_ore::retry::Retry::default()
+            .max_duration(std::time::Duration::from_secs(10))
+            .retry_async_with_state(&mut self.client, |_, client| async {
+                use mz_ore::retry::RetryResult;
+                let result = crate::inspect::get_max_lsn(*client).await;
+                let result = match result {
+                    Ok(lsn) => RetryResult::Ok(lsn),
+                    Err(err @ SqlServerError::NullMaxLsn) => RetryResult::RetryableErr(err),
+                    Err(other) => RetryResult::FatalErr(other),
+                };
+                (client, result)
+            })
+            .await;
+        // Timed out waiting for SQL Server to become ready.
+        if let Err(e) = lsn_result {
+            return Err(e);
+        }
+
         self.client
             .set_transaction_isolation(TransactionIsolationLevel::Snapshot)
             .await?;
@@ -136,6 +161,7 @@ impl<'a> CdcStream<'a> {
         async_stream::try_stream! {
             // Initialize all of our start LSNs.
             self.initialize_start_lsns().await?;
+            let mut max_observed_lsn: Lsn = Lsn::minimum();
 
             loop {
                 // Measure the tick before we do any operation so the time it takes
@@ -153,20 +179,20 @@ impl<'a> CdcStream<'a> {
                 };
 
                 // Get the max LSN for the DB.
-                let new_lsn = crate::inspect::get_max_lsn(self.client).await?;
-                tracing::debug!(?new_lsn, ?curr_lsn, "got max LSN");
+                let db_max_lsn = crate::inspect::get_max_lsn(self.client).await?;
+                tracing::debug!(?db_max_lsn, ?curr_lsn, "got max LSN");
 
-                // If the LSN has increased then get all of our changes.
-                if new_lsn > curr_lsn {
+                // If the LSN of the DB has increased then get all of our changes.
+                if db_max_lsn > curr_lsn {
                     for (instance, instance_lsn) in &self.capture_instances {
                         let Some(instance_lsn) = instance_lsn.as_ref() else {
                             tracing::error!(?instance, "found uninitialized LSN!");
                             continue;
                         };
 
-                        // We've already replicated everything up-to new_lsn, so
+                        // We've already replicated everything up-to db_max_lsn, so
                         // nothing to do.
-                        if new_lsn < *instance_lsn {
+                        if db_max_lsn < *instance_lsn {
                             continue;
                         }
 
@@ -175,7 +201,7 @@ impl<'a> CdcStream<'a> {
                             self.client,
                             &*instance,
                             *instance_lsn,
-                            new_lsn,
+                            db_max_lsn,
                             RowFilterOption::AllUpdateOld,
                         )
                         // TODO(sql_server3): Make this chunk size configurable.
@@ -209,7 +235,10 @@ impl<'a> CdcStream<'a> {
                     }
 
                     // Increment our LSN (`get_changes` is inclusive).
-                    let next_lsn = crate::inspect::increment_lsn(self.client, new_lsn).await?;
+                    max_observed_lsn = db_max_lsn;
+                    // TODO(sql_server2): We should occassionally check to see how close the LSN we
+                    // generate is to the LSN returned from incrementing via SQL Server itself.
+                    let next_lsn = db_max_lsn.increment();
                     tracing::debug!(?curr_lsn, ?next_lsn, "incrementing LSN");
 
                     // Notify our listener that we've emitted all changes __less than__ this LSN.
@@ -222,6 +251,16 @@ impl<'a> CdcStream<'a> {
                         let instance_lsn = instance_lsn.as_mut().expect("should be initialized");
                         // Ensure LSNs don't go backwards.
                         *instance_lsn = std::cmp::max(*instance_lsn, next_lsn);
+                    }
+                } else if curr_lsn >= db_max_lsn {
+                    // We've ingested everything the DB currently has. Emit a progress
+                    // event in case we haven't already.
+                    //
+                    // Note: Generally this only ever occurs when starting a stream and the LSN
+                    // we're starting with matches the current max of the DB.
+                    if db_max_lsn > max_observed_lsn {
+                        max_observed_lsn = db_max_lsn;
+                        yield CdcEvent::Progress { next_lsn: db_max_lsn.increment() };
                     }
                 }
 
@@ -253,6 +292,7 @@ impl<'a> CdcStream<'a> {
             // If we cannot start at our desired LSN, we must return an error!.
             if *requested_lsn < available_lsn {
                 return Err(CdcError::LsnNotAvailable {
+                    capture_instance: Arc::clone(instance),
                     requested: *requested_lsn,
                     minimum: available_lsn,
                 }
@@ -286,8 +326,14 @@ pub enum CdcEvent {
 
 #[derive(Debug, thiserror::Error)]
 pub enum CdcError {
-    #[error("the requested LSN '{requested:?}' is less then the minimum '{minimum:?}'")]
-    LsnNotAvailable { requested: Lsn, minimum: Lsn },
+    #[error(
+        "the requested LSN '{requested:?}' is less then the minimum '{minimum:?}' for `{capture_instance}'"
+    )]
+    LsnNotAvailable {
+        capture_instance: Arc<str>,
+        requested: Lsn,
+        minimum: Lsn,
+    },
     #[error("failed to get the required column '{column_name}': {error}")]
     RequiredColumn {
         column_name: &'static str,
@@ -310,43 +356,106 @@ pub enum CdcError {
 /// function.
 ///
 /// [`sys.fn_cdc_increment_lsn`](https://learn.microsoft.com/en-us/sql/relational-databases/system-functions/sys-fn-cdc-increment-lsn-transact-sql?view=sql-server-ver16)
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Arbitrary)]
-pub struct Lsn([u8; 10]);
+///
+/// Note: The derived impl of [`PartialOrd`] and [`Ord`] relies on the field
+/// ordering so do not change it.
+#[derive(
+    Default,
+    Copy,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    Arbitrary,
+)]
+pub struct Lsn {
+    /// Virtual Log File sequence number.
+    vlf_id: u32,
+    /// Log block number.
+    block_id: u32,
+    /// Log record number.
+    record_id: u16,
+}
 
 impl Lsn {
+    const SIZE: usize = 10;
+
     /// Interpret the provided bytes as an [`Lsn`].
-    pub fn interpret(bytes: [u8; 10]) -> Self {
-        Lsn(bytes)
-    }
+    pub fn try_from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        if bytes.len() != Self::SIZE {
+            return Err(format!("incorrect length, expected 10 got {}", bytes.len()));
+        }
 
-    /// Return the underlying byte slice for this [`Lsn`].
-    pub fn as_bytes(&self) -> &[u8] {
-        self.0.as_slice()
-    }
+        let vlf_id: [u8; 4] = bytes[0..4].try_into().expect("known good length");
+        let block_id: [u8; 4] = bytes[4..8].try_into().expect("known good length");
+        let record_id: [u8; 2] = bytes[8..].try_into().expect("known good length");
 
-    /// Returns `self` as a [`StructuredLsn`].
-    pub fn as_structured(&self) -> StructuredLsn {
-        let vlf_id: [u8; 4] = self.0[0..4].try_into().expect("known good length");
-        let block_id: [u8; 4] = self.0[4..8].try_into().expect("known good length");
-        let record_id: [u8; 2] = self.0[8..].try_into().expect("known good length");
-
-        StructuredLsn {
+        Ok(Lsn {
             vlf_id: u32::from_be_bytes(vlf_id),
             block_id: u32::from_be_bytes(block_id),
             record_id: u16::from_be_bytes(record_id),
+        })
+    }
+
+    /// Return the underlying byte slice for this [`Lsn`].
+    pub fn as_bytes(&self) -> [u8; 10] {
+        let mut raw: [u8; Self::SIZE] = [0; 10];
+
+        raw[0..4].copy_from_slice(&self.vlf_id.to_be_bytes());
+        raw[4..8].copy_from_slice(&self.block_id.to_be_bytes());
+        raw[8..].copy_from_slice(&self.record_id.to_be_bytes());
+
+        raw
+    }
+
+    /// Increment this [`Lsn`].
+    ///
+    /// The returned [`Lsn`] may not exist upstream yet, but it's guaranteed to
+    /// sort greater than `self`.
+    pub fn increment(self) -> Lsn {
+        let overflow_record_id = match self.record_id.checked_add(1) {
+            Some(new_record_id) => {
+                return Lsn {
+                    vlf_id: self.vlf_id,
+                    block_id: self.block_id,
+                    record_id: new_record_id,
+                };
+            }
+            None => 0,
+        };
+        let overflow_block_id = match self.block_id.checked_add(1) {
+            Some(new_block_id) => {
+                return Lsn {
+                    vlf_id: self.vlf_id,
+                    block_id: new_block_id,
+                    record_id: overflow_record_id,
+                };
+            }
+            None => 0,
+        };
+        match self.vlf_id.checked_add(1) {
+            Some(new_vlf_id) => Lsn {
+                vlf_id: new_vlf_id,
+                block_id: overflow_block_id,
+                record_id: overflow_record_id,
+            },
+            None => panic!("overflowed Lsn, {self:?}"),
         }
     }
 }
 
-impl Ord for Lsn {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.as_structured().cmp(&other.as_structured())
-    }
-}
-
-impl PartialOrd for Lsn {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
+impl fmt::Display for Lsn {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Lsn")
+            .field("vlf_id", &self.vlf_id)
+            .field("block_id", &self.block_id)
+            .field("record_id", &self.record_id)
+            .finish()
     }
 }
 
@@ -354,16 +463,7 @@ impl TryFrom<&[u8]> for Lsn {
     type Error = String;
 
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-        let value: [u8; 10] = value
-            .try_into()
-            .map_err(|_| format!("incorrect length, expected 10 got {}", value.len()))?;
-        Ok(Lsn(value))
-    }
-}
-
-impl fmt::Display for Lsn {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", hex::encode(&self.0[..]))
+        Lsn::try_from_bytes(value)
     }
 }
 
@@ -376,7 +476,7 @@ impl timely::progress::Timestamp for Lsn {
     type Summary = ();
 
     fn minimum() -> Self {
-        Lsn(Default::default())
+        Lsn::default()
     }
 }
 
@@ -516,6 +616,7 @@ impl Operation {
 #[cfg(test)]
 mod tests {
     use super::Lsn;
+    use proptest::prelude::*;
 
     #[mz_ore::test]
     fn smoketest_lsn_ordering() {
@@ -535,5 +636,46 @@ mod tests {
         assert_eq!(a, a);
         assert_eq!(b, b);
         assert_eq!(c, c);
+    }
+
+    #[mz_ore::test]
+    fn smoketest_lsn_roundtrips() {
+        #[track_caller]
+        fn test_case(hex: &str) {
+            let og = hex::decode(hex).unwrap();
+            let lsn = Lsn::try_from(&og[..]).unwrap();
+            let rnd = lsn.as_bytes();
+            assert_eq!(og[..], rnd[..]);
+        }
+
+        test_case("0000003D000019B80004");
+        test_case("0000003D000019F00011");
+        test_case("0000003D00001A500003");
+    }
+
+    #[mz_ore::test]
+    fn proptest_lsn_roundtrips() {
+        #[track_caller]
+        fn test_case(bytes: [u8; 10]) {
+            let lsn = Lsn::try_from_bytes(&bytes[..]).unwrap();
+            let rnd = lsn.as_bytes();
+            assert_eq!(&bytes[..], &rnd[..]);
+        }
+        proptest!(|(random_bytes in any::<[u8; 10]>())| {
+            test_case(random_bytes)
+        })
+    }
+
+    #[mz_ore::test]
+    fn proptest_lsn_increment() {
+        #[track_caller]
+        fn test_case(bytes: [u8; 10]) {
+            let lsn = Lsn::try_from_bytes(&bytes[..]).unwrap();
+            let new = lsn.increment();
+            assert!(lsn < new);
+        }
+        proptest!(|(random_bytes in any::<[u8; 10]>())| {
+            test_case(random_bytes)
+        })
     }
 }

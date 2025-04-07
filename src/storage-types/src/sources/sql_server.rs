@@ -257,7 +257,7 @@ impl RustType<ProtoSqlServerSourceExportDetails> for SqlServerSourceExportDetail
 
 impl SourceTimestamp for Lsn {
     fn encode_row(&self) -> mz_repr::Row {
-        Row::pack_slice(&[Datum::Bytes(self.as_bytes())])
+        Row::pack_slice(&[Datum::Bytes(&self.as_bytes())])
     }
 
     fn decode_row(row: &mz_repr::Row) -> Self {
@@ -265,7 +265,7 @@ impl SourceTimestamp for Lsn {
         match (datums.next(), datums.next()) {
             (Some(Datum::Bytes(bytes)), None) => {
                 let lsn: [u8; 10] = bytes.try_into().expect("invalid LSN, wrong length");
-                Lsn::interpret(lsn)
+                Lsn::try_from_bytes(&lsn).expect("invalid LSN")
             }
             _ => panic!("invalid row {row:?}"),
         }

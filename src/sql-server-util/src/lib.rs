@@ -757,6 +757,8 @@ pub enum SqlServerError {
     IO(#[from] tokio::io::Error),
     #[error("found invalid data in the column '{column_name}': {error}")]
     InvalidData { column_name: String, error: String },
+    #[error("got back a null value when querying for the max LSN")]
+    NullMaxLsn,
     #[error("invalid SQL Server system setting '{name}'. Expected '{expected}'. Got '{actual}'.")]
     InvalidSystemSetting {
         name: String,

@@ -1,0 +1,337 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+//! Code to render the ingestion dataflow of a [`SqlServerSource`].
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::convert::Infallible;
+use std::rc::Rc;
+use std::sync::Arc;
+
+use differential_dataflow::AsCollection;
+use differential_dataflow::containers::TimelyStack;
+use futures::StreamExt;
+use mz_ore::cast::CastFrom;
+use mz_ore::future::InTask;
+use mz_repr::{Diff, GlobalId, Row};
+use mz_sql_server_util::cdc::{CdcEvent, Lsn, Operation as CdcOperation};
+use mz_storage_types::errors::DataflowError;
+use mz_storage_types::sources::SqlServerSource;
+use mz_timely_util::builder_async::{
+    AsyncOutputHandle, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+};
+use mz_timely_util::containers::stack::AccountedStackBuilder;
+use timely::container::CapacityContainerBuilder;
+use timely::dataflow::channels::pushers::Tee;
+use timely::dataflow::operators::{CapabilitySet, Concat, Map};
+use timely::dataflow::{Scope, Stream as TimelyStream};
+use timely::progress::{Antichain, Timestamp};
+
+use crate::source::RawSourceCreationConfig;
+use crate::source::sql_server::{
+    DefiniteError, ReplicationError, SourceOutputInfo, TransientError,
+};
+use crate::source::types::{SignaledFuture, SourceMessage, StackedCollection};
+
+/// Used as a partition ID to determint the worker that is responsible for
+/// reading data from SQL Server.
+///
+/// TODO(sql_server1): It's possible we could have different workers
+/// replicate different tables, if we're using SQL Server's CDC features.
+static REPL_READER: &str = "reader";
+
+pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
+    scope: G,
+    config: RawSourceCreationConfig,
+    outputs: BTreeMap<GlobalId, SourceOutputInfo>,
+    source: SqlServerSource,
+) -> (
+    StackedCollection<G, (u64, Result<SourceMessage, DataflowError>)>,
+    TimelyStream<G, Infallible>,
+    TimelyStream<G, ReplicationError>,
+    PressOnDropButton,
+) {
+    let op_name = format!("SqlServerReplicationReader({})", config.id);
+    let mut builder = AsyncOperatorBuilder::new(op_name, scope);
+
+    let (data_output, data_stream) = builder.new_output::<AccountedStackBuilder<_>>();
+    let (_upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+
+    // Captures DefiniteErrors that affect the entire source, including all outputs
+    let (definite_error_handle, definite_errors) =
+        builder.new_output::<CapacityContainerBuilder<_>>();
+
+    let (button, transient_errors) = builder.build_fallible(move |caps| {
+        let busy_signal = Arc::clone(&config.busy_signal);
+        Box::pin(SignaledFuture::new(busy_signal, async move {
+            let [data_cap_set, upper_cap_set, definite_error_cap_set]: &mut [_; 3] =
+                caps.try_into().unwrap();
+
+            // TODO(sql_server1): Run ingestions across multiple workers.
+            if !config.responsible_for(REPL_READER) {
+                return Ok::<_, TransientError>(());
+            }
+
+            let connection_config = source
+                .connection
+                .resolve_config(
+                    &config.config.connection_context.secrets_reader,
+                    &config.config,
+                    InTask::Yes,
+                )
+                .await?;
+            let (mut client, connection) =
+                mz_sql_server_util::Client::connect(connection_config).await?;
+            // TODO(sql_server1): Move the connection into its own future.
+            mz_ore::task::spawn(|| "sql_server-connection", async move { connection.await });
+
+            let output_indexes: Vec<_> = outputs
+                .values()
+                .map(|v| usize::cast_from(v.partition_index))
+                .collect();
+
+            // Instances that have already made progress do not need to be snapshotted.
+            let needs_snapshot: BTreeSet<_> = outputs
+                .values()
+                .filter_map(|output| {
+                    if *output.resume_upper == [Lsn::minimum()] {
+                        Some(Arc::clone(&output.capture_instance))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Map from a SQL Server 'capture instance' to Materialize collection.
+            let capture_instances: BTreeMap<_, _> = outputs
+                .values()
+                .map(|output| {
+                    (
+                        Arc::clone(&output.capture_instance),
+                        (output.partition_index, Arc::clone(&output.decoder)),
+                    )
+                })
+                .collect();
+            let mut cdc_handle = client.cdc(capture_instances.keys().cloned());
+
+            // Snapshot any instances that require it.
+            let snapshot_lsn = {
+                tracing::info!(?needs_snapshot, "starting snapshot");
+                let (snapshot_lsn, snapshot_streams) =
+                    cdc_handle.snapshot(Some(needs_snapshot)).await?;
+                let snapshot_cap = data_cap_set.delayed(&snapshot_lsn);
+
+                let mut snapshot_streams = std::pin::pin!(snapshot_streams);
+                while let Some((capture_instance, data)) = snapshot_streams.next().await {
+                    let sql_server_row = data.map_err(TransientError::from)?;
+
+                    // Decode the SQL Server row into an MZ one.
+                    let Some((partition_idx, decoder)) = capture_instances.get(&capture_instance)
+                    else {
+                        let definite_error = DefiniteError::ProgrammingError(format!(
+                            "capture instance didn't exist: '{capture_instance}'"
+                        ));
+                        let () = return_definite_error(
+                            definite_error,
+                            &output_indexes[..],
+                            data_output,
+                            data_cap_set,
+                            definite_error_handle,
+                            definite_error_cap_set,
+                        )
+                        .await;
+                        return Ok(());
+                    };
+
+                    // Failing to decode data is a permanent failure.
+                    let mut mz_row = Row::default();
+                    let decode_result = decoder.decode(&sql_server_row, &mut mz_row);
+                    tracing::info!(?decode_result, ?mz_row, "snapshotted row");
+                    if let Err(err) = decode_result {
+                        let definite_error = DefiniteError::Decoding(err.to_string());
+                        let () = return_definite_error(
+                            definite_error,
+                            &output_indexes[..],
+                            data_output,
+                            data_cap_set,
+                            definite_error_handle,
+                            definite_error_cap_set,
+                        )
+                        .await;
+                        return Ok(());
+                    }
+
+                    let message = SourceMessage {
+                        key: Row::default(),
+                        value: mz_row,
+                        metadata: Row::default(),
+                    };
+                    data_output
+                        .give_fueled(
+                            &snapshot_cap,
+                            ((*partition_idx, Ok(message)), snapshot_lsn, Diff::ONE),
+                        )
+                        .await;
+                }
+
+                snapshot_lsn
+            };
+
+            // Start replicating from the LSN __after__ we took the snapshot.
+            let replication_start_lsn = snapshot_lsn.increment();
+
+            // Set all of the LSNs to start replicating from.
+            for output_info in outputs.values() {
+                // TODO(sql_server1): Better unify this with the check above.
+                match *output_info.resume_upper {
+                    [lsn] => {
+                        // We just snapshotted this instance, so use the snapshot LSN.
+                        let initial_lsn = if lsn == Lsn::minimum() {
+                            replication_start_lsn
+                        } else {
+                            lsn
+                        };
+                        cdc_handle =
+                            cdc_handle.start_lsn(&output_info.capture_instance, initial_lsn);
+                    }
+                    _ => unreachable!(""),
+                }
+            }
+
+            // Off to the races! Replicate data from SQL Server.
+            let cdc_stream = cdc_handle
+                .poll_interval(std::time::Duration::from_millis(500))
+                .into_stream();
+            let mut cdc_stream = std::pin::pin!(cdc_stream);
+
+            while let Some(event) = cdc_stream.next().await {
+                let event = event.map_err(TransientError::from)?;
+                tracing::debug!(?event, "got replication event");
+
+                let (capture_instance, commit_lsn, changes) = match event {
+                    // We've received all of the changes up-to this LSN, so
+                    // downgrade our capability.
+                    CdcEvent::Progress { next_lsn } => {
+                        tracing::debug!(?next_lsn, "got a closed lsn");
+                        data_cap_set.downgrade(Antichain::from_elem(next_lsn));
+                        upper_cap_set.downgrade(Antichain::from_elem(next_lsn));
+                        continue;
+                    }
+                    // We've got new data! Let's process it.
+                    CdcEvent::Data {
+                        capture_instance,
+                        lsn,
+                        changes,
+                    } => (capture_instance, lsn, changes),
+                };
+
+                // Decode the SQL Server row into an MZ one.
+                let Some((partition_idx, decoder)) = capture_instances.get(&capture_instance)
+                else {
+                    let definite_error = DefiniteError::ProgrammingError(format!(
+                        "capture instance didn't exist: '{capture_instance}'"
+                    ));
+                    let () = return_definite_error(
+                        definite_error,
+                        &output_indexes[..],
+                        data_output,
+                        data_cap_set,
+                        definite_error_handle,
+                        definite_error_cap_set,
+                    )
+                    .await;
+                    return Ok(());
+                };
+                let data_cap = data_cap_set.delayed(&commit_lsn);
+
+                for change in changes {
+                    let (sql_server_row, diff): (_, _) = match change {
+                        CdcOperation::Insert(sql_server_row)
+                        | CdcOperation::UpdateNew(sql_server_row) => (sql_server_row, Diff::ONE),
+                        CdcOperation::Delete(sql_server_row)
+                        | CdcOperation::UpdateOld(sql_server_row) => {
+                            (sql_server_row, Diff::MINUS_ONE)
+                        }
+                    };
+
+                    // Failing to decode data is a permanent failure.
+                    let mut mz_row = Row::default();
+                    let decode_result = decoder.decode(&sql_server_row, &mut mz_row);
+                    if let Err(err) = decode_result {
+                        let definite_error = DefiniteError::Decoding(err.to_string());
+                        let () = return_definite_error(
+                            definite_error,
+                            &output_indexes[..],
+                            data_output,
+                            data_cap_set,
+                            definite_error_handle,
+                            definite_error_cap_set,
+                        )
+                        .await;
+                        return Ok(());
+                    }
+
+                    let message = SourceMessage {
+                        key: Row::default(),
+                        value: mz_row,
+                        metadata: Row::default(),
+                    };
+                    data_output
+                        .give_fueled(&data_cap, ((*partition_idx, Ok(message)), commit_lsn, diff))
+                        .await;
+                }
+            }
+
+            Err(TransientError::ReplicationEOF)
+        }))
+    });
+
+    let errors = definite_errors.concat(&transient_errors.map(ReplicationError::Transient));
+
+    (
+        data_stream.as_collection(),
+        upper_stream,
+        errors,
+        button.press_on_drop(),
+    )
+}
+
+type StackedAsyncOutputHandle<T, D> = AsyncOutputHandle<
+    T,
+    AccountedStackBuilder<CapacityContainerBuilder<TimelyStack<(D, T, Diff)>>>,
+    Tee<T, TimelyStack<(D, T, Diff)>>,
+>;
+
+/// Helper method to return a "definite" error upstream.
+async fn return_definite_error(
+    err: DefiniteError,
+    outputs: &[usize],
+    data_handle: StackedAsyncOutputHandle<Lsn, (u64, Result<SourceMessage, DataflowError>)>,
+    data_capset: &CapabilitySet<Lsn>,
+    errs_handle: AsyncOutputHandle<
+        Lsn,
+        CapacityContainerBuilder<Vec<ReplicationError>>,
+        Tee<Lsn, Vec<ReplicationError>>,
+    >,
+    errs_capset: &CapabilitySet<Lsn>,
+) {
+    for output_idx in outputs {
+        let update = (
+            (u64::cast_from(*output_idx), Err(err.clone().into())),
+            // TODO(sql_server1): Provide the correct LSN.
+            Lsn::minimum(),
+            Diff::ONE,
+        );
+        data_handle.give_fueled(&data_capset[0], update).await;
+    }
+    errs_handle.give(
+        &errs_capset[0],
+        ReplicationError::DefiniteError(Rc::new(err)),
+    );
+}

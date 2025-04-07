@@ -51,7 +51,7 @@ pub async fn get_max_lsn(client: &mut Client) -> Result<Lsn, SqlServerError> {
 pub async fn increment_lsn(client: &mut Client, lsn: Lsn) -> Result<Lsn, SqlServerError> {
     static INCREMENT_LSN_QUERY: &str = "SELECT sys.fn_cdc_increment_lsn(@P1);";
     let result = client
-        .query(INCREMENT_LSN_QUERY, &[&lsn.as_bytes()])
+        .query(INCREMENT_LSN_QUERY, &[&lsn.as_bytes().as_slice()])
         .await?;
 
     mz_ore::soft_assert_eq_or_log!(result.len(), 1);
@@ -66,16 +66,16 @@ fn parse_lsn(result: &[tiberius::Row]) -> Result<Lsn, SqlServerError> {
         [row] => {
             let val = row
                 .try_get::<&[u8], _>(0)?
-                .ok_or_else(|| SqlServerError::InvalidData {
+                .ok_or_else(|| SqlServerError::NullMaxLsn)?;
+            if val.is_empty() {
+                Err(SqlServerError::NullMaxLsn)
+            } else {
+                let lsn = Lsn::try_from(val).map_err(|msg| SqlServerError::InvalidData {
                     column_name: "lsn".to_string(),
-                    error: "expected LSN at column 0, but found Null".to_string(),
+                    error: msg,
                 })?;
-            let lsn = Lsn::try_from(val).map_err(|msg| SqlServerError::InvalidData {
-                column_name: "lsn".to_string(),
-                error: msg,
-            })?;
-
-            Ok(lsn)
+                Ok(lsn)
+            }
         }
         other => Err(SqlServerError::InvalidData {
             column_name: "lsn".to_string(),
@@ -101,7 +101,13 @@ pub fn get_changes_asc(
     let query = format!(
         "SELECT * FROM cdc.fn_cdc_get_all_changes_{capture_instance}(@P1, @P2, N'{filter}') ORDER BY {START_LSN_COLUMN} ASC;"
     );
-    client.query_streaming(query, &[&start_lsn.as_bytes(), &end_lsn.as_bytes()])
+    client.query_streaming(
+        query,
+        &[
+            &start_lsn.as_bytes().as_slice(),
+            &end_lsn.as_bytes().as_slice(),
+        ],
+    )
 }
 
 /// Returns the `(capture_instance, schema_name, table_name)` for the tables
