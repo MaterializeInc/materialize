@@ -43,7 +43,7 @@ use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::{Authenticator, FronteggCliArgs};
-use mz_license_keys::{ExpirationBehavior, ValidatedLicenseKey};
+use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator::Orchestrator;
 use mz_orchestrator_kubernetes::{
     KubernetesImagePullPolicy, KubernetesOrchestrator, KubernetesOrchestratorConfig,
@@ -73,7 +73,7 @@ use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::connections::ConnectionContext;
 use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
-use tracing::{error, info, info_span, warn, Instrument};
+use tracing::{error, info, info_span, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
@@ -693,15 +693,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             &args.environment_id.organization_id().to_string(),
         )
         .context("failed to validate license key file")?;
-        if license_key.expired {
-            let message = format!("The license key provided at {license_key_file} is expired! Please contact Materialize for assistance.");
-            match license_key.expiration_behavior {
-                ExpirationBehavior::Warn | ExpirationBehavior::DisableClusterCreation => {
-                    warn!("{message}");
-                }
-                ExpirationBehavior::Disable => bail!("{message}"),
-            }
-        }
         license_key
     } else if matches!(args.orchestrator, OrchestratorKind::Kubernetes) {
         bail!("--license-key is required when running in Kubernetes");
