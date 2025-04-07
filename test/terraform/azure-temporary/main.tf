@@ -56,6 +56,9 @@ module "materialize" {
   prefix              = "mz-tf-test"
   install_materialize_operator = true
 
+  install_cert_manager = false
+  use_self_signed_cluster_issuer = false
+
   materialize_instances = var.materialize_instances
 
   database_config = {

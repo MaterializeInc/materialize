@@ -70,6 +70,9 @@ module "materialize_infrastructure" {
   operator_version = var.operator_version
   orchestratord_version = var.orchestratord_version
 
+  install_cert_manager = false
+  use_self_signed_cluster_issuer = false
+
   # TODO: Doesn't seem to work yet
   # helm_values = {
   #   operator = {
