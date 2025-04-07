@@ -354,3 +354,43 @@ impl MySqlSourcePurificationError {
         }
     }
 }
+
+/// Logical errors detectable during purification for a SQL Server SOURCE.
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum SqlServerSourcePurificationError {
+    #[error("{0} is not a SQL SERVER CONNECTION")]
+    NotSqlServerConnection(FullItemName),
+    #[error("CREATE SOURCE specifies DETAILS option")]
+    UserSpecifiedDetails,
+    #[error("Invalid SQL Server system replication settings")]
+    ReplicationSettingsError(Vec<(String, String, String)>),
+    #[error("missing TABLES specification")]
+    RequiresExternalReferences,
+}
+
+impl SqlServerSourcePurificationError {
+    pub fn detail(&self) -> Option<String> {
+        match self {
+            Self::ReplicationSettingsError(settings) => Some(format!(
+                "Invalid SQL Server system replication settings: {}",
+                itertools::join(
+                    settings.iter().map(|(setting, expected, actual)| format!(
+                        "{}: expected {}, got {}",
+                        setting, expected, actual
+                    )),
+                    "; "
+                )
+            )),
+            _ => None,
+        }
+    }
+
+    pub fn hint(&self) -> Option<String> {
+        match self {
+            Self::RequiresExternalReferences => {
+                Some("provide a FOR TABLES (..), FOR SCHEMAS (..), or FOR ALL TABLES clause".into())
+            }
+            _ => None,
+        }
+    }
+}

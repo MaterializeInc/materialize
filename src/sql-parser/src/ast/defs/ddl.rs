@@ -1185,15 +1185,15 @@ impl_display_t!(MySqlConfigOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SqlServerConfigOptionName {
-    /// The name for the "capture job" that will get spawn in SQL Server to
-    /// populate the change table that we read from.
-    CaptureInstance,
+    /// Hex encoded string of binary serialization of
+    /// `mz_storage_types::sources::sql_server::SqlServerSourceDetails`.
+    Details,
 }
 
 impl AstDisplay for SqlServerConfigOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
-            SqlServerConfigOptionName::CaptureInstance => "CAPTURE INSTANCE",
+            SqlServerConfigOptionName::Details => "DETAILS",
         })
     }
 }
@@ -1207,7 +1207,7 @@ impl WithOptionName for SqlServerConfigOptionName {
     /// on the conservative side and return `true`.
     fn redact_value(&self) -> bool {
         match self {
-            SqlServerConfigOptionName::CaptureInstance => false,
+            SqlServerConfigOptionName::Details => false,
         }
     }
 }

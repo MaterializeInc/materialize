@@ -114,6 +114,8 @@ pub struct SqlServerTableRaw {
     pub schema_name: Arc<str>,
     /// Name of the table.
     pub name: Arc<str>,
+    /// The capture instance replicating changes.
+    pub capture_instance: Arc<str>,
     /// Columns for the table.
     pub columns: Arc<[SqlServerColumnRaw]>,
     /// Whether or not CDC is enabled for this table.
@@ -543,6 +545,7 @@ impl RustType<proto_sql_server_column_desc::DecodeType> for SqlServerColumnDecod
 ///
 /// The goal of this type is to perform any expensive "downcasts" so in the hot
 /// path of decoding rows we do the minimal amount of work.
+#[derive(Debug)]
 pub struct SqlServerRowDecoder {
     decoders: Vec<(Arc<str>, ColumnType, SqlServerColumnDecodeType)>,
 }
@@ -701,6 +704,7 @@ mod tests {
         let sql_server_desc = SqlServerTableRaw {
             schema_name: "my_schema".into(),
             name: "my_table".into(),
+            capture_instance: "my_table_CT".into(),
             columns: sql_server_columns.into(),
             is_cdc_enabled: true,
         };
