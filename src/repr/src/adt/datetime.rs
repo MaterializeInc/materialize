@@ -873,12 +873,22 @@ impl ParsedDateTime {
     /// # Arguments
     ///
     /// * `value` is a SQL-formatted TIMESTAMP string.
-    pub fn build_parsed_datetime_timestamp(value: &str) -> Result<ParsedDateTime, String> {
+    pub fn build_parsed_datetime_timestamp(
+        value: &str,
+        was_bc: bool,
+    ) -> Result<ParsedDateTime, String> {
         let mut pdt = ParsedDateTime::default();
 
         let mut ts_actual = tokenize_time_str(value)?;
 
         fill_pdt_date(&mut pdt, &mut ts_actual)?;
+
+        if was_bc {
+            pdt.year = pdt.year.map(|mut y| {
+                y.unit = y.unit * -1;
+                y
+            });
+        }
 
         if let Some(TimeStrToken::DateTimeDelimiter) = ts_actual.front() {
             ts_actual.pop_front();
@@ -1858,9 +1868,11 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>, S
     Ok(toks)
 }
 
+const BC: &str = "BC";
+
 /// Takes a 'date timezone' 'date time timezone' string and splits it into 'date
-/// {time}' and 'timezone' components
-pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str) {
+/// {time}' and 'timezone' components with a boolean if true indicates it is BC.
+pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str, bool) {
     // First we need to see if the string contains " +" or " -" because
     // timestamps can come in a format YYYY-MM-DD {+|-}<tz> (where the timezone
     // string can have colons)
@@ -1868,7 +1880,13 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str) {
 
     if let Some(cut) = cut {
         let (first, second) = value.split_at(cut);
-        return (first.trim(), second.trim());
+
+        let (second, third) = match second.strip_suffix(BC) {
+            Some(remainder) => (remainder, true),
+            None => (second, false),
+        };
+
+        return (first.trim(), second.trim(), third);
     }
 
     // If we have a hh:mm:dd component, we need to go past that to see if we can
@@ -1883,22 +1901,35 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str) {
 
             if let Some(tz) = tz {
                 let (first, second) = value.split_at(colon + tz);
-                return (first.trim(), second.trim());
+
+                let (second, third) = match second.strip_suffix(BC) {
+                    Some(remainder) => (remainder, true),
+                    None => (second, false),
+                };
+
+                return (first.trim(), second.trim(), third);
             }
         }
-        (value.trim(), "")
+
+        (value.trim(), "", false)
     } else {
         // We don't have a time, so the only formats available are YYY-mm-dd<tz>
         // or YYYY-MM-dd <tz> Numeric offset timezones need to be separated from
-        // the ymd by a space
+        // the ymd by a space.
         let cut = value.find(|c: char| c.is_ascii_alphabetic());
 
         if let Some(cut) = cut {
             let (first, second) = value.split_at(cut);
-            return (first.trim(), second.trim());
+
+            let (second, third) = match second.strip_suffix(BC) {
+                Some(remainder) => (remainder, true),
+                None => (second, false),
+            };
+
+            return (first.trim(), second.trim(), third);
         }
 
-        (value.trim(), "")
+        (value.trim(), "", false)
     }
 }
 
@@ -2810,7 +2841,7 @@ mod tests {
 
         fn run_test_build_parsed_datetime_timestamp(test: &str, res: ParsedDateTime) {
             assert_eq!(
-                ParsedDateTime::build_parsed_datetime_timestamp(test).unwrap(),
+                ParsedDateTime::build_parsed_datetime_timestamp(test, false).unwrap(),
                 res
             );
         }
@@ -3494,10 +3525,11 @@ mod tests {
         ];
 
         for test in test_cases.iter() {
-            let (ts, tz) = split_timestamp_string(test.0);
+            let (ts, tz, was_bc) = split_timestamp_string(test.0);
 
             assert_eq!(ts, test.1);
             assert_eq!(tz, test.2);
+            assert_eq!(was_bc, false);
         }
     }
 
