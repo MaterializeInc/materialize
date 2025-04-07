@@ -67,8 +67,14 @@ impl<'a> CdcStream<'a> {
         self
     }
 
-    /// Bumps the provided [`Lsn`] by one.
-    pub async fn bump_lsn(&mut self, lsn: Lsn) -> Result<Lsn, SqlServerError> {
+    /// Adds "one" to the provided [`Lsn`].
+    ///
+    /// Note: This method calls the upstream SQL Server instance to increment
+    /// the [`Lsn`] for us, but it is an entirely stateless operation, in other
+    /// words it does not modify the server state. While we understand the
+    /// structure of an [`Lsn`], the values are opaque to us so we need to call
+    /// the server to figure out what the logically next [`Lsn`] is.
+    pub async fn increment_lsn(&mut self, lsn: Lsn) -> Result<Lsn, SqlServerError> {
         let new_lsn = crate::inspect::increment_lsn(self.client, lsn).await?;
         Ok(new_lsn)
     }
