@@ -262,7 +262,10 @@ impl Coordinator {
             if let Some(auth) = self.catalog().try_get_role_auth_by_id(&role.id) {
                 if let Some(hash) = &auth.password_hash {
                     let _ = match mz_auth::hash::scram256_verify(&password, &hash) {
-                        Ok(_) => tx.send(Ok(AuthResponse { role_id: role.id })),
+                        Ok(_) => tx.send(Ok(AuthResponse {
+                            role_id: role.id,
+                            superuser: role.attributes.superuser,
+                        })),
                         Err(_) => tx.send(Err(AdapterError::AuthenticationError)),
                     };
                     return;

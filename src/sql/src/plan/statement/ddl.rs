@@ -4144,21 +4144,20 @@ pub enum PlannedAlterRoleOption {
 pub struct PlannedRoleAttributes {
     pub inherit: Option<bool>,
     pub password: Option<String>,
+    pub superuser: Option<bool>,
 }
 
 fn plan_role_attributes(options: Vec<RoleAttribute>) -> Result<PlannedRoleAttributes, PlanError> {
     let mut planned_attributes = PlannedRoleAttributes {
         inherit: None,
         password: None,
+        superuser: None,
     };
 
     for option in options {
         match option {
             RoleAttribute::Login | RoleAttribute::NoLogin => {
                 bail_never_supported!("LOGIN attribute", "sql/create-role/#details");
-            }
-            RoleAttribute::SuperUser | RoleAttribute::NoSuperUser => {
-                bail_never_supported!("SUPERUSER attribute", "sql/create-role/#details");
             }
             RoleAttribute::Inherit | RoleAttribute::NoInherit
                 if planned_attributes.inherit.is_some() =>
@@ -4193,6 +4192,18 @@ fn plan_role_attributes(options: Vec<RoleAttribute>) -> Result<PlannedRoleAttrib
             RoleAttribute::Inherit => planned_attributes.inherit = Some(true),
             RoleAttribute::NoInherit => planned_attributes.inherit = Some(false),
             RoleAttribute::Password(password) => planned_attributes.password = Some(password),
+            RoleAttribute::SuperUser => {
+                if planned_attributes.superuser == Some(false) {
+                    sql_bail!("conflicting or redundant options");
+                }
+                planned_attributes.superuser = Some(true);
+            }
+            RoleAttribute::NoSuperUser => {
+                if planned_attributes.superuser == Some(true) {
+                    sql_bail!("conflicting or redundant options");
+                }
+                planned_attributes.superuser = Some(false);
+            }
         }
     }
     if planned_attributes.inherit == Some(false) {

@@ -35,6 +35,7 @@ use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_pgwire_common::{
     ConnectionCounter, ErrorResponse, Format, FrontendMessage, Severity, VERSIONS, VERSION_3,
 };
+use mz_repr::user::InternalUserMetadata;
 use mz_repr::{
     CatalogItemId, ColumnIndex, Datum, RelationDesc, RelationType, RowArena, RowIterator, RowRef,
     ScalarType,
@@ -164,35 +165,7 @@ where
         return conn.send(err).await;
     }
     //TODO(dov): this is a temp hack for testing purposes, remove it
-    if user != "materialize" {
-        conn.send(BackendMessage::AuthenticationCleartextPassword)
-            .await?;
-        conn.flush().await?;
-        let password = match conn.recv().await? {
-            Some(FrontendMessage::Password { password }) => password,
-            _ => {
-                return conn
-                    .send(ErrorResponse::fatal(
-                        SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
-                        "expected Password message",
-                    ))
-                    .await
-            }
-        };
-        let auth_response = match adapter_client.authenticate(&user, &password).await {
-            Ok(resp) => resp,
-            Err(err) => {
-                warn!(?err, "pgwire connection failed authentication");
-                return conn
-                    .send(ErrorResponse::fatal(
-                        SqlState::INVALID_PASSWORD,
-                        "invalid password",
-                    ))
-                    .await;
-            }
-        };
-        println!("auth_response: {:?}", auth_response);
-    }
+    if user != "materialize" {}
 
     let (mut session, expired) = if let Some(frontegg) = frontegg {
         conn.send(BackendMessage::AuthenticationCleartextPassword)
@@ -226,6 +199,7 @@ where
                     user: auth_session.user().into(),
                     client_ip: conn.peer_addr().clone(),
                     external_metadata_rx: Some(auth_session.external_metadata_rx()),
+                    internal_user_metadata: None,
                     helm_chart_version,
                 });
                 let expired = async move { auth_session.expired().await };
@@ -241,6 +215,47 @@ where
                     .await;
             }
         }
+    } else if user != "materialize" {
+        conn.send(BackendMessage::AuthenticationCleartextPassword)
+            .await?;
+        conn.flush().await?;
+        let password = match conn.recv().await? {
+            Some(FrontendMessage::Password { password }) => password,
+            _ => {
+                return conn
+                    .send(ErrorResponse::fatal(
+                        SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+                        "expected Password message",
+                    ))
+                    .await
+            }
+        };
+        let auth_response = match adapter_client.authenticate(&user, &password).await {
+            Ok(resp) => resp,
+            Err(err) => {
+                warn!(?err, "pgwire connection failed authentication");
+                return conn
+                    .send(ErrorResponse::fatal(
+                        SqlState::INVALID_PASSWORD,
+                        "invalid password",
+                    ))
+                    .await;
+            }
+        };
+        let session = adapter_client.new_session(SessionConfig {
+            conn_id: conn.conn_id().clone(),
+            uuid: conn_uuid,
+            user,
+            client_ip: conn.peer_addr().clone(),
+            external_metadata_rx: None,
+            internal_user_metadata: Some(InternalUserMetadata {
+                superuser: auth_response.superuser,
+            }),
+            helm_chart_version,
+        });
+        // No frontegg check, so auth session lasts indefinitely.
+        let auth_session = pending().right_future();
+        (session, auth_session)
     } else {
         let session = adapter_client.new_session(SessionConfig {
             conn_id: conn.conn_id().clone(),
@@ -248,6 +263,7 @@ where
             user,
             client_ip: conn.peer_addr().clone(),
             external_metadata_rx: None,
+            internal_user_metadata: None,
             helm_chart_version,
         });
         // No frontegg check, so auth session lasts indefinitely.

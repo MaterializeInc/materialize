@@ -207,6 +207,8 @@ pub struct StartupResponse {
 pub struct AuthResponse {
     /// RoleId for the user.
     pub role_id: RoleId,
+    /// If the user is a superuser.
+    pub superuser: bool,
 }
 
 // Facile implementation for `StartupResponse`, which does not use the `allowed`

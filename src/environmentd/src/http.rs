@@ -558,6 +558,8 @@ impl AuthedClient {
             user: user.name,
             client_ip: Some(peer_addr),
             external_metadata_rx: user.external_metadata_rx,
+            //TODO(dov): Add support for internal user metadata when we support auth here
+            internal_user_metadata: None,
             helm_chart_version,
         });
         let connection_guard = active_connection_counter.allocate_connection(session.user())?;

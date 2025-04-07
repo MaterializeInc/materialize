@@ -384,6 +384,7 @@ Issue a SQL query to get started. Need help?
             user: SUPPORT_USER.name.clone(),
             client_ip: None,
             external_metadata_rx: None,
+            internal_user_metadata: None,
             helm_chart_version: None,
         });
         let mut session_client = self.startup(session).await?;
