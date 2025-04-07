@@ -34,7 +34,6 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::{
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_controller::ControllerConfig;
 use mz_dyncfg::ConfigUpdates;
-use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::metrics::MetricsRegistry;
@@ -571,7 +570,6 @@ impl Listeners {
                 internal_console_redirect_url: config.internal_console_redirect_url,
                 tls_reload_certs,
                 helm_chart_version: None,
-                license_key: ValidatedLicenseKey::for_tests(),
             })
             .await?;
 

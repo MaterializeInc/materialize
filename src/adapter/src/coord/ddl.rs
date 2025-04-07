@@ -1771,11 +1771,7 @@ impl Coordinator {
         self.validate_resource_limit_numeric(
             current_credit_consumption_rate,
             new_credit_consumption_rate,
-            |system_vars| {
-                self.license_key
-                    .max_credit_consumption_rate()
-                    .map_or_else(|| system_vars.max_credit_consumption_rate(), Numeric::from)
-            },
+            SystemVars::max_credit_consumption_rate,
             "cluster replica",
             MAX_CREDIT_CONSUMPTION_RATE.name(),
         )?;

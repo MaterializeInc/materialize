@@ -43,7 +43,6 @@ use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::{Authenticator, FronteggCliArgs};
-use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator::Orchestrator;
 use mz_orchestrator_kubernetes::{
     KubernetesImagePullPolicy, KubernetesOrchestrator, KubernetesOrchestratorConfig,
@@ -599,9 +598,6 @@ pub struct Args {
         value_delimiter = ';'
     )]
     system_parameter_default: Vec<KeyValueArg<String, String>>,
-    /// File containing a valid Materialize license key.
-    #[clap(long, env = "LICENSE_KEY")]
-    license_key: Option<String>,
 
     // === AWS options. ===
     /// The AWS account ID, which will be used to generate ARNs for
@@ -684,21 +680,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     // handled to our liking ASAP.
     sys::enable_sigusr2_coverage_dump()?;
     sys::enable_termination_signal_cleanup()?;
-
-    let license_key = if let Some(license_key_file) = args.license_key {
-        let license_key_text = std::fs::read_to_string(&license_key_file)
-            .context("failed to open license key file")?;
-        let license_key = mz_license_keys::validate(
-            license_key_text.trim(),
-            &args.environment_id.organization_id().to_string(),
-        )
-        .context("failed to validate license key file")?;
-        license_key
-    } else if matches!(args.orchestrator, OrchestratorKind::Kubernetes) {
-        bail!("--license-key is required when running in Kubernetes");
-    } else {
-        ValidatedLicenseKey::default()
-    };
 
     // Configure testing options.
     if let Some(fingerprint_whitespace) = args.unsafe_builtin_table_fingerprint_whitespace {
@@ -1045,11 +1026,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         },
     };
 
-    let cluster_replica_sizes = ClusterReplicaSizeMap::parse_from_str(
-        &args.cluster_replica_sizes,
-        !license_key.allow_credit_consumption_override,
-    )
-    .context("parsing replica size map")?;
+    let cluster_replica_sizes: ClusterReplicaSizeMap =
+        serde_json::from_str(&args.cluster_replica_sizes).context("parsing replica size map")?;
 
     emit_boot_diagnostics!(&BUILD_INFO);
     sys::adjust_rlimits();
@@ -1139,7 +1117,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     .map(|kv| (kv.key, kv.value))
                     .collect(),
                 helm_chart_version: args.helm_chart_version.clone(),
-                license_key,
                 // AWS options.
                 aws_account_id: args.aws_account_id,
                 aws_privatelink_availability_zones: args.aws_privatelink_availability_zones,

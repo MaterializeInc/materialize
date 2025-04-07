@@ -9,7 +9,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::bail;
 use bytesize::ByteSize;
 use ipnet::IpNet;
 use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
@@ -20,15 +19,12 @@ use mz_orchestrator::MemoryLimit;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::PersistClient;
-use mz_repr::adt::numeric::Numeric;
 use mz_repr::CatalogItemId;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::catalog::EnvironmentId;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::durable::{CatalogError, DurableCatalogState};
-
-const GIB: u64 = 1024 * 1024 * 1024;
 
 /// Configures a catalog.
 #[derive(Debug)]
@@ -104,26 +100,10 @@ pub struct BuiltinItemMigrationConfig {
     pub read_only: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ClusterReplicaSizeMap(pub BTreeMap<String, ReplicaAllocation>);
 
 impl ClusterReplicaSizeMap {
-    pub fn parse_from_str(s: &str, credit_consumption_from_memory: bool) -> anyhow::Result<Self> {
-        let mut cluster_replica_sizes: BTreeMap<String, ReplicaAllocation> =
-            serde_json::from_str(s)?;
-        if credit_consumption_from_memory {
-            for (name, replica) in cluster_replica_sizes.iter_mut() {
-                let Some(memory_limit) = replica.memory_limit else {
-                    bail!("No memory limit found in cluster definition for {name}");
-                };
-                replica.credits_per_hour = Numeric::from(
-                    (memory_limit.0 * replica.scale * u64::try_from(replica.workers)?).0,
-                ) / Numeric::from(1 * GIB);
-            }
-        }
-        Ok(Self(cluster_replica_sizes))
-    }
-
     /// Iterate all enabled (not disabled) replica allocations, with their name.
     pub fn enabled_allocations(&self) -> impl Iterator<Item = (&String, &ReplicaAllocation)> {
         self.0.iter().filter(|(_, a)| !a.disabled)
