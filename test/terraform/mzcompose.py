@@ -289,6 +289,7 @@ class AWS:
             "stringData": {
                 "metadata_backend_url": metadata_backend_url,
                 "persist_backend_url": persist_backend_url,
+                "license_key": os.environ["MZ_CI_LICENSE_KEY"],
             },
         }
 
@@ -872,6 +873,7 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                 "stringData": {
                     "metadata_backend_url": connection_strings["metadata_backend_url"],
                     "persist_backend_url": connection_strings["persist_backend_url"],
+                    "license_key": os.environ["MZ_CI_LICENSE_KEY"],
                 },
             }
 
@@ -1287,6 +1289,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                 "stringData": {
                     "metadata_backend_url": connection_strings["metadata_backend_url"],
                     "persist_backend_url": connection_strings["persist_backend_url"],
+                    "license_key": os.environ["MZ_CI_LICENSE_KEY"],
                 },
             }
 
