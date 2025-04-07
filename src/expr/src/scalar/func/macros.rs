@@ -143,7 +143,6 @@ macro_rules! sqlfunc {
             $body:block
     ) => {
         paste::paste! {
-            #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
             #[derive(proptest_derive::Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize, Hash, mz_lowertest::MzReflect)]
             pub struct [<$fn_name:camel>];
 

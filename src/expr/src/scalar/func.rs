@@ -312,6 +312,7 @@ pub fn jsonb_stringify<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
 #[sqlfunc(is_monotone = (true, true), output_type = i16, is_infix_op = true, sqlname="+", propagates_nulls = true)]
 fn add_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_int16()
@@ -320,6 +321,7 @@ fn add_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         .map(Datum::from)
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
 #[sqlfunc(is_monotone = (true, true), output_type = i32, is_infix_op = true, sqlname="+", propagates_nulls = true)]
 fn add_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_int32()
@@ -328,6 +330,7 @@ fn add_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         .map(Datum::from)
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
 #[sqlfunc(is_monotone = (true, true), output_type = i64, is_infix_op = true, sqlname="+", propagates_nulls = true)]
 fn add_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_int64()
@@ -336,6 +339,7 @@ fn add_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         .map(Datum::from)
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
 #[sqlfunc(is_monotone = (true, true), output_type = u16, is_infix_op = true, sqlname="+", propagates_nulls = true)]
 fn add_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint16()
@@ -344,6 +348,7 @@ fn add_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         .map(Datum::from)
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
 #[sqlfunc(is_monotone = (true, true), output_type = u32, is_infix_op = true, sqlname="+", propagates_nulls = true)]
 fn add_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint32()
@@ -352,6 +357,7 @@ fn add_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         .map(Datum::from)
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
 #[sqlfunc(is_monotone = (true, true), output_type = u64, is_infix_op = true, sqlname="+", propagates_nulls = true)]
 fn add_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint64()
@@ -360,6 +366,7 @@ fn add_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         .map(Datum::from)
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
 #[sqlfunc(is_monotone = (true, true), output_type = f32, is_infix_op = true, sqlname="+", propagates_nulls = true)]
 fn add_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let a = a.unwrap_float32();
@@ -372,6 +379,7 @@ fn add_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     }
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
 #[sqlfunc(is_monotone = (true, true), output_type = f64, is_infix_op = true, sqlname="+", propagates_nulls = true)]
 fn add_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let a = a.unwrap_float64();
@@ -409,6 +417,7 @@ where
     neg_interval_inner(b).and_then(|i| add_timestamplike_interval(a, i))
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
 #[sqlfunc(is_monotone = (true, true), output_type = "CheckedTimestamp<NaiveDateTime>", is_infix_op = true, sqlname="+", propagates_nulls = true)]
 fn add_date_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let date = a.unwrap_date();
@@ -420,6 +429,7 @@ fn add_date_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError>
     Ok(dt.try_into()?)
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
 #[sqlfunc(is_monotone = (true, true), output_type = "CheckedTimestamp<NaiveDateTime>", is_infix_op = true, sqlname="+", propagates_nulls = true)]
 fn add_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let date = a.unwrap_date();
@@ -433,6 +443,7 @@ fn add_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalEr
     Ok(dt.try_into()?)
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
 #[sqlfunc(is_monotone = (true, true), output_type = "CheckedTimestamp<chrono::DateTime<Utc>>", is_infix_op = true, sqlname="+", propagates_nulls = true)]
 fn add_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let time = a.unwrap_time();
@@ -441,6 +452,7 @@ fn add_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::Time(t)
 }
 
+#[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
 #[sqlfunc(is_monotone = (true, false), output_type = "Numeric", is_infix_op = false, sqlname="round", propagates_nulls = true)]
 fn round_numeric_binary<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let mut a = a.unwrap_numeric().0;
