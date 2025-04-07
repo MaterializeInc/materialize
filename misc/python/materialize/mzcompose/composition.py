@@ -1080,7 +1080,6 @@ class Composition:
     def blob_store(self) -> str:
         for name in ["azurite", "minio"]:
             if name in self.compose["services"]:
-                print(f"BLOB STORE IS: {name}")
                 return name
         raise RuntimeError(f"No external blob store found: {self.compose['services']}")
 
