@@ -92,7 +92,7 @@ class Redpanda:
                 "resource_group_id": self.resource_group_id,
                 "network_id": self.network_id,
                 "region": "us-east-1",
-                "throughput_tier": "tier-1-aws-v2-arm",
+                "throughput_tier": "tier-1-aws-v3-arm",
                 "type": "TYPE_DEDICATED",
                 "zones": ["use1-az2"],
                 "aws_private_link": {
