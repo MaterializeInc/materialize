@@ -20,7 +20,7 @@ use mz_expr::{
 };
 use mz_repr::{Datum, Diff, RelationType, Row, RowArena};
 
-use crate::{any, TransformCtx, TransformError};
+use crate::{TransformCtx, TransformError, any};
 
 /// Replace operators on constant collections with constant collections.
 #[derive(Debug)]

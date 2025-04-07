@@ -15,10 +15,10 @@ use std::sync::Arc;
 use differential_dataflow::trace::Description;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
-use mz_persist_types::parquet::EncodingConfig;
 use mz_persist_types::Codec64;
-use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ParquetRecordBatchReaderBuilder};
+use mz_persist_types::parquet::EncodingConfig;
 use parquet::arrow::ArrowWriter;
+use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ParquetRecordBatchReaderBuilder};
 use parquet::basic::Encoding;
 use parquet::file::metadata::KeyValue;
 use parquet::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
@@ -26,11 +26,11 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::warn;
 
 use crate::error::Error;
-use crate::generated::persist::proto_batch_part_inline::FormatMetadata as ProtoFormatMetadata;
 use crate::generated::persist::ProtoBatchFormat;
+use crate::generated::persist::proto_batch_part_inline::FormatMetadata as ProtoFormatMetadata;
 use crate::indexed::columnar::arrow::{decode_arrow_batch, encode_arrow_batch};
 use crate::indexed::encoding::{
-    decode_trace_inline_meta, encode_trace_inline_meta, BlobTraceBatchPart, BlobTraceUpdates,
+    BlobTraceBatchPart, BlobTraceUpdates, decode_trace_inline_meta, encode_trace_inline_meta,
 };
 use crate::metrics::{ColumnarMetrics, ParquetColumnMetrics};
 
@@ -67,7 +67,7 @@ pub fn decode_trace_parquet<T: Timestamp + Codec64>(
     let updates = match format {
         ProtoBatchFormat::Unknown => return Err("unknown format".into()),
         ProtoBatchFormat::ArrowKvtd => {
-            return Err("ArrowKVTD format not supported in parquet".into())
+            return Err("ArrowKVTD format not supported in parquet".into());
         }
         ProtoBatchFormat::ParquetKvtd => decode_parquet_file_kvtd(buf, None, metrics)?,
         ProtoBatchFormat::ParquetStructured => {

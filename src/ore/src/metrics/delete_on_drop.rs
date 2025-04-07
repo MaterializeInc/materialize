@@ -87,7 +87,7 @@ impl<P: MetricVecBuilder> MetricVec_ for MetricVec<P> {
 pub trait MetricVecExt: MetricVec_ {
     /// Returns a metric that deletes its labels from this metrics vector when dropped.
     fn get_delete_on_drop_metric<L: PromLabelsExt>(&self, labels: L)
-        -> DeleteOnDropMetric<Self, L>;
+    -> DeleteOnDropMetric<Self, L>;
 }
 
 impl<V: MetricVec_ + Clone> MetricVecExt for V {
@@ -265,8 +265,8 @@ where
 
 #[cfg(test)]
 mod test {
-    use prometheus::core::{AtomicI64, AtomicU64};
     use prometheus::IntGaugeVec;
+    use prometheus::core::{AtomicI64, AtomicU64};
 
     use crate::metric;
     use crate::metrics::{IntCounterVec, MetricsRegistry};

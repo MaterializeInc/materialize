@@ -42,7 +42,7 @@ use crate::adt::range::{
     self, InvalidRangeError, Range, RangeBound, RangeInner, RangeLowerBound, RangeUpperBound,
 };
 use crate::adt::timestamp::CheckedTimestamp;
-use crate::scalar::{arb_datum, DatumKind};
+use crate::scalar::{DatumKind, arb_datum};
 use crate::{Datum, RelationDesc, Timestamp};
 
 pub(crate) mod encode;
@@ -2493,7 +2493,10 @@ impl RowPacker<'_> {
                 Some(seen) => {
                     let seen_kind = DatumKind::from(seen);
                     let d_kind = DatumKind::from(d);
-                    assert!(seen_kind == d_kind, "range contains inconsistent data; expected {seen_kind:?} but got {d_kind:?}");
+                    assert!(
+                        seen_kind == d_kind,
+                        "range contains inconsistent data; expected {seen_kind:?} but got {d_kind:?}"
+                    );
 
                     if seen > d {
                         self.row.data.truncate(start);
@@ -2504,7 +2507,10 @@ impl RowPacker<'_> {
             actual_datums += 1;
         }
 
-        assert!(actual_datums == expected_datums, "finite values must each push exactly one value; expected {expected_datums} but got {actual_datums}");
+        assert!(
+            actual_datums == expected_datums,
+            "finite values must each push exactly one value; expected {expected_datums} but got {actual_datums}"
+        );
 
         // Anything that triggers this check is undefined behavior, so
         // unnecessary but also trivial to perform the check in our case.

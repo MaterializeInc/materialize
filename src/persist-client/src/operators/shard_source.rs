@@ -10,13 +10,13 @@
 //! A source that reads from a persist shard.
 
 use std::cell::RefCell;
-use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeMap;
+use std::collections::hash_map::DefaultHasher;
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::{self, Future};
 use std::hash::{Hash, Hasher};
-use std::pin::{pin, Pin};
+use std::pin::{Pin, pin};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
@@ -24,7 +24,6 @@ use std::time::Instant;
 use arrow::array::ArrayRef;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::Hashable;
 use futures_util::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
@@ -33,6 +32,7 @@ use mz_persist_types::{Codec, Codec64};
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
+use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Enter, Feedback, Leave};
@@ -40,8 +40,7 @@ use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use timely::order::TotalOrder;
 use timely::progress::frontier::AntichainRef;
-use timely::progress::{timestamp::Refines, Antichain, Timestamp};
-use timely::PartialOrder;
+use timely::progress::{Antichain, Timestamp, timestamp::Refines};
 use tracing::{debug, trace};
 
 use crate::batch::BLOB_TARGET_SIZE;
@@ -398,19 +397,18 @@ where
         // will block when there is no data yet available in the shard.
         cap_set.downgrade(as_of.clone());
 
-        let mut snapshot_parts = match snapshot_mode {
-            SnapshotMode::Include => match read.snapshot(as_of.clone()).await {
-                Ok(parts) => parts,
-                Err(e) => {
-                    error_handler
+        let mut snapshot_parts =
+            match snapshot_mode {
+                SnapshotMode::Include => match read.snapshot(as_of.clone()).await {
+                    Ok(parts) => parts,
+                    Err(e) => error_handler
                         .report_and_stop(format!(
                             "{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}"
                         ))
-                        .await
-                }
-            },
-            SnapshotMode::Exclude => vec![],
-        };
+                        .await,
+                },
+                SnapshotMode::Exclude => vec![],
+            };
 
         // We're about to start producing parts to be fetched whose leases will be returned by the
         // `shard_source_descs_return` operator above. In order for that operator to successfully
@@ -653,9 +651,9 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
+    use timely::dataflow::Scope;
     use timely::dataflow::operators::Leave;
     use timely::dataflow::operators::Probe;
-    use timely::dataflow::Scope;
     use timely::progress::Antichain;
 
     use crate::operators::shard_source::shard_source;

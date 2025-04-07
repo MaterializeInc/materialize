@@ -14,13 +14,13 @@ use aws_sdk_kms::{
     primitives::Blob,
     types::{MessageType, SigningAlgorithmSpec},
 };
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use jsonwebtoken::{Algorithm, Header};
 use pem::Pem;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::{ExpirationBehavior, Payload, ISSUER};
+use crate::{ExpirationBehavior, ISSUER, Payload};
 
 const VERSION: u64 = 1;
 

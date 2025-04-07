@@ -15,10 +15,10 @@
 
 //! Utilities for working with Timely progress tracking.
 
-use proptest::prelude::{any, Arbitrary};
+use proptest::prelude::{Arbitrary, any};
 use proptest::strategy::Strategy;
-use timely::progress::Antichain;
 use timely::PartialOrder;
+use timely::progress::Antichain;
 
 /// An out-of-crate [`Arbitrary`] implementation for [`Antichain`].
 pub fn any_antichain<T>() -> impl Strategy<Value = Antichain<T>>

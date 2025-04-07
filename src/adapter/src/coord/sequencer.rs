@@ -12,8 +12,8 @@
 
 //! Logic for executing a planned SQL query.
 
-use futures::future::LocalBoxFuture;
 use futures::FutureExt;
+use futures::future::LocalBoxFuture;
 use inner::return_if_err;
 use mz_expr::row::RowCollection;
 use mz_expr::{MirRelationExpr, RowSetFinishing};
@@ -33,20 +33,20 @@ use mz_storage_types::connections::inline::IntoInlineConnection;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use tokio::sync::oneshot;
-use tracing::{event, Instrument, Level, Span};
+use tracing::{Instrument, Level, Span, event};
 
+use crate::ExecuteContext;
 use crate::catalog::Catalog;
 use crate::command::{Command, ExecuteResponse, Response};
 use crate::coord::appends::{DeferredOp, DeferredPlan};
 use crate::coord::validity::PlanValidity;
 use crate::coord::{
-    catalog_serving, Coordinator, DeferredPlanStatement, Message, PlanStatement, TargetCluster,
+    Coordinator, DeferredPlanStatement, Message, PlanStatement, TargetCluster, catalog_serving,
 };
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
 use crate::util::ClientTransmitter;
-use crate::ExecuteContext;
 
 // DO NOT make this visible in any way, i.e. do not add any version of
 // `pub` to this mod. The inner `sequence_X` methods are hidden in this
@@ -795,7 +795,7 @@ impl Coordinator {
                     kind: mz_catalog::memory::error::ErrorKind::Sql(CatalogError::UnknownItem(
                         id.to_string(),
                     )),
-                }))
+                }));
             }
         };
 

@@ -160,16 +160,16 @@ use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, ContinualTaskConnection};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
+use mz_persist_client::Diagnostics;
 use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
-use mz_storage_types::StorageDiff;
 use mz_timely_util::builder_async::{Button, Event, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::probe;
@@ -184,8 +184,8 @@ use timely::{Data, PartialOrder};
 use tracing::debug;
 
 use crate::compute_state::ComputeState;
-use crate::render::sinks::SinkRender;
 use crate::render::StartSignal;
+use crate::render::sinks::SinkRender;
 use crate::sink::ConsolidatingVec;
 
 pub(crate) struct ContinualTaskCtx<G: Scope<Timestamp = Timestamp>> {
@@ -502,8 +502,8 @@ fn continual_task_sink<G: Scope<Timestamp = Timestamp>>(
     append_times: Collection<G, (), Diff>,
     as_of: Antichain<Timestamp>,
     write_handle: impl Future<Output = WriteHandle<SourceData, (), Timestamp, StorageDiff>>
-        + Send
-        + 'static,
+    + Send
+    + 'static,
     start_signal: StartSignal,
     output_frontier: Rc<RefCell<Antichain<Timestamp>>>,
 ) -> Button {
@@ -900,11 +900,11 @@ where
 mod tests {
     use differential_dataflow::AsCollection;
     use mz_repr::Timestamp;
+    use timely::Config;
+    use timely::dataflow::ProbeHandle;
     use timely::dataflow::operators::capture::Extract;
     use timely::dataflow::operators::{Capture, Input, ToStream};
-    use timely::dataflow::ProbeHandle;
     use timely::progress::Antichain;
-    use timely::Config;
 
     use super::*;
 

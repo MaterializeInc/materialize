@@ -120,8 +120,8 @@ pub use statement::ddl::{
     PlannedAlterRoleOption, PlannedRoleVariable,
 };
 pub use statement::{
-    describe, plan, plan_copy_from, resolve_cluster_for_materialized_view, StatementClassification,
-    StatementContext, StatementDesc,
+    StatementClassification, StatementContext, StatementDesc, describe, plan, plan_copy_from,
+    resolve_cluster_for_materialized_view,
 };
 
 use self::statement::ddl::ClusterAlterOptionExtracted;

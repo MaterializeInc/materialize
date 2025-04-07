@@ -10,8 +10,8 @@
 //! Planning of linear joins.
 
 use mz_expr::{
-    join_permutations, permutation_for_arrangement, JoinInputCharacteristics, MapFilterProject,
-    MirScalarExpr,
+    JoinInputCharacteristics, MapFilterProject, MirScalarExpr, join_permutations,
+    permutation_for_arrangement,
 };
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::*;
@@ -19,10 +19,10 @@ use proptest::result::Probability;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use crate::plan::AvailableCollections;
 use crate::plan::join::{
     JoinBuildState, JoinClosure, ProtoLinearJoinPlan, ProtoLinearStagePlan, ProtoMirScalarVec,
 };
-use crate::plan::AvailableCollections;
 
 /// A plan for the execution of a linear join.
 ///

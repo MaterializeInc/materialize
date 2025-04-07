@@ -24,7 +24,7 @@
 //! Null arguments*.
 use std::collections::{BTreeMap, BTreeSet};
 
-use itertools::{zip_eq, Either, Itertools};
+use itertools::{Either, Itertools, zip_eq};
 use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
 use mz_ore::assert_none;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};

@@ -14,7 +14,7 @@ use std::fmt;
 use std::mem::size_of;
 
 use ::arrow::array::{
-    make_array, Array, ArrayRef, AsArray, BinaryArray, BinaryBuilder, Int64Array,
+    Array, ArrayRef, AsArray, BinaryArray, BinaryBuilder, Int64Array, make_array,
 };
 use ::arrow::datatypes::ToByteSlice;
 use mz_persist_types::arrow::{ArrayOrd, ProtoArrayData};

@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_expr_parser::{handle_define, handle_roundtrip, TestCatalog};
+use mz_expr_parser::{TestCatalog, handle_define, handle_roundtrip};
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`

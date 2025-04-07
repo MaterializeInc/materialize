@@ -13,18 +13,18 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::future::Future;
 use std::sync::mpsc::TryRecvError;
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
+use differential_dataflow::Hashable;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::Hashable;
 use futures::StreamExt;
 use mz_dyncfg::{Config, ConfigSet, ConfigUpdates};
 use mz_ore::cast::CastFrom;
 use mz_ore::task::JoinHandleExt;
 use mz_persist_client::cfg::{RetryParameters, USE_GLOBAL_TXN_CACHE_SOURCE};
-use mz_persist_client::operators::shard_source::{shard_source, FilterResult, SnapshotMode};
+use mz_persist_client::operators::shard_source::{FilterResult, SnapshotMode, shard_source};
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 use mz_persist_types::txn::TxnsCodec;
@@ -44,9 +44,9 @@ use timely::worker::Worker;
 use timely::{Data, PartialOrder, WorkerConfig};
 use tracing::debug;
 
+use crate::TxnsCodecDefault;
 use crate::txn_cache::TxnsCache;
 use crate::txn_read::{DataListenNext, DataRemapEntry, TxnsRead};
-use crate::TxnsCodecDefault;
 
 /// An operator for translating physical data shard frontiers into logical ones.
 ///

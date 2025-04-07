@@ -12,17 +12,17 @@ use std::fmt;
 use std::mem::size_of;
 use std::sync::LazyLock;
 
+use mz_repr::ScalarType;
 use mz_repr::adt::char::{CharLength as AdtCharLength, InvalidCharLengthError};
 use mz_repr::adt::mz_acl_item::{AclItem, MzAclItem};
 use mz_repr::adt::numeric::{
-    InvalidNumericMaxScaleError, NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION,
+    InvalidNumericMaxScaleError, NUMERIC_DATUM_MAX_PRECISION, NumericMaxScale,
 };
 use mz_repr::adt::timestamp::{
     InvalidTimestampPrecisionError, TimestampPrecision as AdtTimestampPrecision,
 };
 use mz_repr::adt::varchar::{InvalidVarCharMaxLengthError, VarCharMaxLength};
 use mz_repr::namespaces::MZ_CATALOG_SCHEMA;
-use mz_repr::ScalarType;
 
 use crate::oid;
 

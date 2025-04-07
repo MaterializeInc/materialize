@@ -18,9 +18,9 @@
 use std::hash::Hash;
 
 use columnar::Columnar;
+use differential_dataflow::Hashable;
 use differential_dataflow::containers::TimelyStack;
 use differential_dataflow::trace::implementations::merge_batcher::{ColMerger, MergeBatcher};
-use differential_dataflow::Hashable;
 
 pub mod stack;
 
@@ -61,16 +61,16 @@ mod alloc {
 }
 
 mod container {
-    use columnar::bytes::{EncodeDecode, Sequence};
-    use columnar::common::IterOwn;
     use columnar::Columnar;
     use columnar::Container as _;
+    use columnar::bytes::{EncodeDecode, Sequence};
+    use columnar::common::IterOwn;
     use columnar::{Clear, FromBytes, Index, Len};
     use mz_ore::region::Region;
+    use timely::Container;
     use timely::bytes::arc::Bytes;
     use timely::container::PushInto;
     use timely::dataflow::channels::ContainerBytes;
-    use timely::Container;
 
     /// A container based on a columnar store, encoded in aligned bytes.
     ///
@@ -349,8 +349,8 @@ pub mod batcher {
 
     use columnar::Columnar;
     use differential_dataflow::difference::Semigroup;
-    use timely::container::{ContainerBuilder, PushInto};
     use timely::Container;
+    use timely::container::{ContainerBuilder, PushInto};
 
     use crate::containers::Column;
 
@@ -443,8 +443,8 @@ pub mod batcher {
 }
 
 mod provided_builder {
-    use timely::container::ContainerBuilder;
     use timely::Container;
+    use timely::container::ContainerBuilder;
 
     /// A container builder that doesn't support pushing elements, and is only suitable for pushing
     /// whole containers at Timely sessions. See [`give_container`] for more information.
@@ -480,9 +480,9 @@ mod provided_builder {
 #[cfg(test)]
 mod tests {
     use mz_ore::region::Region;
+    use timely::Container;
     use timely::bytes::arc::BytesMut;
     use timely::dataflow::channels::ContainerBytes;
-    use timely::Container;
 
     use super::*;
 

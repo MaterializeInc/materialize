@@ -17,7 +17,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::jsonb::JsonbPacker;
-use mz_repr::adt::numeric::{get_precision, get_scale, Numeric, NUMERIC_DATUM_MAX_PRECISION};
+use mz_repr::adt::numeric::{NUMERIC_DATUM_MAX_PRECISION, Numeric, get_precision, get_scale};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Row, RowPacker, ScalarType};
 

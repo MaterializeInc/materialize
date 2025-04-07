@@ -16,7 +16,7 @@ use std::rc::{Rc, Weak};
 use columnar::Columnar;
 use differential_dataflow::Collection;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
-use mz_expr::{permutation_for_arrangement, EvalError, MapFilterProject};
+use mz_expr::{EvalError, MapFilterProject, permutation_for_arrangement};
 use mz_ore::soft_assert_or_log;
 use mz_ore::str::StrExt;
 use mz_ore::vec::PartialOrdVecExt;
@@ -26,8 +26,8 @@ use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::probe::Handle;
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
+use timely::dataflow::scopes::Child;
 use timely::progress::Antichain;
 
 use crate::compute_state::SinkToken;

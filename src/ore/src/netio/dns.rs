@@ -25,7 +25,9 @@ const DUMMY_PORT: u16 = 11111;
 #[derive(thiserror::Error, Debug)]
 pub enum DnsResolutionError {
     /// private ip
-    #[error("Address resolved to a private IP. The provided host is not routable on the public internet")]
+    #[error(
+        "Address resolved to a private IP. The provided host is not routable on the public internet"
+    )]
     PrivateAddress,
     /// no addresses
     #[error("Address did not resolve to any IPs")]

@@ -16,8 +16,8 @@ use mz_persist_client::error::UpperMismatch;
 use mz_repr::Diff;
 use mz_storage_client::util::remap_handle::RemapHandle;
 use timely::order::PartialOrder;
-use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::Timestamp;
+use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 
 pub mod compat;
 
@@ -213,10 +213,10 @@ mod tests {
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_repr::{GlobalId, RelationDesc, ScalarType, Timestamp};
     use mz_storage_client::util::remap_handle::RemapHandle;
+    use mz_storage_types::StorageDiff;
     use mz_storage_types::controller::CollectionMetadata;
     use mz_storage_types::sources::kafka::{self, RangeBound as RB};
     use mz_storage_types::sources::{MzOffset, SourceData};
-    use mz_storage_types::StorageDiff;
     use mz_timely_util::order::Partitioned;
     use timely::progress::Timestamp as _;
     use tokio::sync::watch;

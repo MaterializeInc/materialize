@@ -31,7 +31,7 @@ use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::core::Partition;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
-use tokio::time::{interval_at, Instant};
+use tokio::time::{Instant, interval_at};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::types::{

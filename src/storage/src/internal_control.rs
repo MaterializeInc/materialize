@@ -21,7 +21,7 @@ use mz_storage_types::sources::IngestionDescription;
 use serde::{Deserialize, Serialize};
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::generic::{source, OutputHandle};
+use timely::dataflow::operators::generic::{OutputHandle, source};
 use timely::dataflow::operators::{Broadcast, Operator};
 use timely::progress::Antichain;
 use timely::scheduling::{Activator, Scheduler};

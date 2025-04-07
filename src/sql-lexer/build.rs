@@ -16,7 +16,7 @@
 use std::path::PathBuf;
 use std::{env, fs};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use mz_ore_build::codegen::CodegenBuf;
 use uncased::UncasedStr;
 

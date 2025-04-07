@@ -157,14 +157,14 @@ fn flamegraph<'a, 'b>(
 mod disabled {
     use axum::extract::{Form, Query};
     use axum::response::IntoResponse;
-    use http::header::HeaderMap;
     use http::StatusCode;
+    use http::header::HeaderMap;
     use mz_build_info::BuildInfo;
     use serde::Deserialize;
 
     use mz_prof::ever_symbolized;
 
-    use super::{time_prof, MemProfilingStatus, ProfTemplate};
+    use super::{MemProfilingStatus, ProfTemplate, time_prof};
 
     #[derive(Deserialize)]
     pub struct ProfQuery {
@@ -246,19 +246,19 @@ mod enabled {
     use axum_extra::TypedHeader;
     use bytesize::ByteSize;
     use headers::ContentType;
-    use http::header::{HeaderMap, CONTENT_DISPOSITION};
+    use http::header::{CONTENT_DISPOSITION, HeaderMap};
     use http::{HeaderValue, StatusCode};
     use jemalloc_pprof::{JemallocProfCtl, PROF_CTL};
     use mappings::MAPPINGS;
     use mz_build_info::BuildInfo;
     use mz_ore::cast::CastFrom;
     use mz_prof::jemalloc::{JemallocProfCtlExt, JemallocStats};
-    use mz_prof::{ever_symbolized, StackProfileExt};
+    use mz_prof::{StackProfileExt, ever_symbolized};
     use pprof_util::parse_jeheap;
     use serde::Deserialize;
     use tokio::sync::Mutex;
 
-    use super::{flamegraph, time_prof, MemProfilingStatus, ProfTemplate};
+    use super::{MemProfilingStatus, ProfTemplate, flamegraph, time_prof};
 
     #[derive(Deserialize)]
     pub struct ProfForm {

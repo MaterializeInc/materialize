@@ -19,8 +19,8 @@ use mz_ore::num::NonNeg;
 use mz_ore::str::StrExt;
 use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_repr::CatalogItemId;
-use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::ConnectionOptionName::*;
+use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     ConnectionDefaultAwsPrivatelink, ConnectionOption, ConnectionOptionName, CreateConnectionType,
     KafkaBroker, KafkaBrokerAwsPrivatelinkOption, KafkaBrokerAwsPrivatelinkOptionName,
@@ -227,7 +227,9 @@ impl ConnectionOptionExtracted {
                     }
                     (None, None, None) => None,
                     _ => {
-                        sql_bail!("must specify both ACCESS KEY ID and SECRET ACCESS KEY with optional SESSION TOKEN");
+                        sql_bail!(
+                            "must specify both ACCESS KEY ID and SECRET ACCESS KEY with optional SESSION TOKEN"
+                        );
                     }
                 };
 
@@ -242,7 +244,9 @@ impl ConnectionOptionExtracted {
                 };
 
                 let auth = match (credentials, assume_role) {
-                    (None, None) => sql_bail!("must specify either ASSUME ROLE ARN or ACCESS KEY ID and SECRET ACCESS KEY"),
+                    (None, None) => sql_bail!(
+                        "must specify either ASSUME ROLE ARN or ACCESS KEY ID and SECRET ACCESS KEY"
+                    ),
                     (Some(credentials), None) => AwsAuth::Credentials(credentials),
                     (None, Some(assume_role)) => AwsAuth::AssumeRole(assume_role),
                     (Some(_), Some(_)) => {
@@ -355,7 +359,9 @@ impl ConnectionOptionExtracted {
                 // TODO we should move to self.port being unsupported if aws_privatelink is some, see <https://github.com/MaterializeInc/database-issues/issues/7359#issuecomment-1925443977>
                 if let Some(privatelink) = self.aws_privatelink.as_ref() {
                     if privatelink.port.is_some() {
-                        sql_bail!("invalid CONNECTION: PORT in AWS PRIVATELINK is only supported for kafka")
+                        sql_bail!(
+                            "invalid CONNECTION: PORT in AWS PRIVATELINK is only supported for kafka"
+                        )
                     }
                 }
                 let tunnel = scx.build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?;
@@ -399,7 +405,9 @@ impl ConnectionOptionExtracted {
                 // TODO we should move to self.port being unsupported if aws_privatelink is some, see <https://github.com/MaterializeInc/database-issues/issues/7359#issuecomment-1925443977>
                 if let Some(privatelink) = self.aws_privatelink.as_ref() {
                     if privatelink.port.is_some() {
-                        sql_bail!("invalid CONNECTION: PORT in AWS PRIVATELINK is only supported for kafka")
+                        sql_bail!(
+                            "invalid CONNECTION: PORT in AWS PRIVATELINK is only supported for kafka"
+                        )
                     }
                 }
                 let tunnel = scx.build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?;
@@ -484,7 +492,9 @@ impl ConnectionOptionExtracted {
                 {
                     None | Some("DISABLED") => {
                         if aws_connection.is_some() {
-                            sql_bail!("invalid CONNECTION: AWS IAM authentication requires SSL to be enabled")
+                            sql_bail!(
+                                "invalid CONNECTION: AWS IAM authentication requires SSL to be enabled"
+                            )
                         }
                         MySqlSslMode::Disabled
                     }
@@ -501,7 +511,9 @@ impl ConnectionOptionExtracted {
                 // TODO we should move to self.port being unsupported if aws_privatelink is some, see <https://github.com/MaterializeInc/database-issues/issues/7359#issuecomment-1925443977>
                 if let Some(privatelink) = self.aws_privatelink.as_ref() {
                     if privatelink.port.is_some() {
-                        sql_bail!("invalid CONNECTION: PORT in AWS PRIVATELINK is only supported for kafka")
+                        sql_bail!(
+                            "invalid CONNECTION: PORT in AWS PRIVATELINK is only supported for kafka"
+                        )
                     }
                 }
                 let tunnel = scx.build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?;
@@ -617,10 +629,15 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                         Connection::AwsPrivatelink(connection) => {
                             if let Some(az) = &availability_zone {
                                 if !connection.availability_zones.contains(az) {
-                                    sql_bail!("AWS PrivateLink availability zone {} does not match any of the \
+                                    sql_bail!(
+                                        "AWS PrivateLink availability zone {} does not match any of the \
                                       availability zones on the AWS PrivateLink connection {}",
-                                      az.quoted(),
-                                        scx.catalog.resolve_full_name(entry.name()).to_string().quoted())
+                                        az.quoted(),
+                                        scx.catalog
+                                            .resolve_full_name(entry.name())
+                                            .to_string()
+                                            .quoted()
+                                    )
                                 }
                             }
                             Tunnel::AwsPrivatelink(AwsPrivatelink {

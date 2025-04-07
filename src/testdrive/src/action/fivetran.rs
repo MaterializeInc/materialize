@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 
 use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;

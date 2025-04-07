@@ -21,16 +21,16 @@ use mz_sql::catalog::{CatalogError, ObjectType};
 use mz_sql::plan::{self, CreateSecretPlan};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_ssh_util::keys::SshKeyPairSet;
-use tracing::{warn, Instrument, Span};
+use tracing::{Instrument, Span, warn};
 
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{
     AlterSecret, Coordinator, CreateSecretEnsure, CreateSecretFinish, Message, PlanValidity,
     RotateKeysSecretEnsure, RotateKeysSecretFinish, SecretStage, StageResult, Staged,
 };
-use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
+use crate::optimize::dataflows::{EvalTime, ExprPrepStyle, prep_scalar_expr};
 use crate::session::Session;
-use crate::{catalog, AdapterError, AdapterNotice, ExecuteContext, ExecuteResponse};
+use crate::{AdapterError, AdapterNotice, ExecuteContext, ExecuteResponse, catalog};
 
 impl Staged for SecretStage {
     type Ctx = ExecuteContext;

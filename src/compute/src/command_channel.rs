@@ -30,8 +30,8 @@ use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
 use mz_ore::cast::CastFrom;
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::generic::source;
 use timely::dataflow::operators::Operator;
+use timely::dataflow::operators::generic::source;
 use timely::scheduling::{Scheduler, SyncActivator};
 use timely::worker::Worker as TimelyWorker;
 

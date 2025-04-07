@@ -193,10 +193,12 @@ impl MapFilterProject {
             predicate.permute(&self.projection[..]);
 
             // Validate column references.
-            assert!(predicate
-                .support()
-                .into_iter()
-                .all(|c| c < self.input_arity + self.expressions.len()));
+            assert!(
+                predicate
+                    .support()
+                    .into_iter()
+                    .all(|c| c < self.input_arity + self.expressions.len())
+            );
 
             // Insert predicate as eagerly as it can be evaluated:
             // just after the largest column in its support is formed.
@@ -226,10 +228,12 @@ impl MapFilterProject {
             expression.permute(&self.projection[..]);
 
             // Validate column references.
-            assert!(expression
-                .support()
-                .into_iter()
-                .all(|c| c < self.input_arity + self.expressions.len()));
+            assert!(
+                expression
+                    .support()
+                    .into_iter()
+                    .all(|c| c < self.input_arity + self.expressions.len())
+            );
 
             // Introduce expression and produce as output.
             self.expressions.push(expression);
@@ -1623,8 +1627,8 @@ pub mod plan {
     use serde::{Deserialize, Serialize};
 
     use crate::{
-        func, BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, ProtoMfpPlan,
-        ProtoSafeMfpPlan, UnaryFunc, UnmaterializableFunc,
+        BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, ProtoMfpPlan, ProtoSafeMfpPlan,
+        UnaryFunc, UnmaterializableFunc, func,
     };
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
@@ -1861,7 +1865,7 @@ pub mod plan {
                         return Err(format!(
                             "Unsupported temporal predicate. Note: `mz_now()` must be directly compared to a mz_timestamp-castable expression. Expression found: {}",
                             MirScalarExpr::CallBinary { func, expr1, expr2 },
-                            ));
+                        ));
                     }
 
                     // LogicalTimestamp <OP> <EXPR2> for several supported operators.
@@ -1899,7 +1903,7 @@ pub mod plan {
                     return Err(format!(
                         "Unsupported temporal predicate. Note: `mz_now()` must be directly compared to a non-temporal expression of mz_timestamp-castable type. Expression found: {}",
                         predicate,
-                        ));
+                    ));
                 }
             }
 

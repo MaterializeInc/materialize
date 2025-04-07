@@ -232,7 +232,7 @@ where
             }
             Err(error) => {
                 warn!(
-                    topic=new_topic.name,
+                    topic = new_topic.name,
                     "unable to enforce topic config; configs may not match expected values: {error:#}"
                 )
             }

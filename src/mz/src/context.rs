@@ -26,9 +26,9 @@ use crate::config_file::ConfigFile;
 use crate::error::Error;
 use crate::sql_client::{Client as SqlClient, ClientConfig as SqlClientConfig};
 use crate::ui::{OutputFormat, OutputFormatter};
+use mz_cloud_api::client::Client as CloudClient;
 use mz_cloud_api::client::cloud_provider::CloudProvider;
 use mz_cloud_api::client::region::{Region, RegionInfo};
-use mz_cloud_api::client::Client as CloudClient;
 use mz_cloud_api::config::{
     ClientBuilder as CloudClientBuilder, ClientConfig as CloudClientConfig,
 };

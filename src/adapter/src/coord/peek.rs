@@ -24,21 +24,21 @@ use mz_cluster_client::ReplicaId;
 use mz_compute_client::controller::PeekNotification;
 use mz_compute_client::protocol::command::PeekTarget;
 use mz_compute_client::protocol::response::PeekResponse;
-use mz_compute_types::dataflows::{DataflowDescription, IndexImport};
 use mz_compute_types::ComputeInstanceId;
+use mz_compute_types::dataflows::{DataflowDescription, IndexImport};
 use mz_controller_types::ClusterId;
-use mz_expr::explain::{fmt_text_constant_rows, HumanizedExplain, HumanizerMode};
+use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
 use mz_expr::row::RowCollection;
 use mz_expr::{
-    permutation_for_arrangement, EvalError, Id, MirRelationExpr, MirScalarExpr,
-    OptimizedMirRelationExpr, RowSetFinishing,
+    EvalError, Id, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
+    permutation_for_arrangement,
 };
 use mz_ore::cast::CastFrom;
-use mz_ore::str::{separated, StrExt};
+use mz_ore::str::{StrExt, separated};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalars, IndexUsageType, PlanRenderingContext, UsedIndexes};
-use mz_repr::{preserves_order, Diff, GlobalId, IntoRowIterator, RelationType, Row, RowIterator};
+use mz_repr::{Diff, GlobalId, IntoRowIterator, RelationType, Row, RowIterator, preserves_order};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
 use uuid::Uuid;
@@ -408,11 +408,7 @@ pub fn create_fast_path_plan<T: Timestamp>(
                             };
                             packer.extend_by_row(&literal);
                         }
-                        if row.is_empty() {
-                            None
-                        } else {
-                            Some(row)
-                        }
+                        if row.is_empty() { None } else { Some(row) }
                     } else {
                         None
                     };
@@ -927,8 +923,7 @@ mod tests {
         };
 
         let constant_err_exp = "Error \"division by zero\"\n";
-        let no_lookup_exp =
-            "Project (#1, #4)\n  Map ((#0 OR #2))\n    ReadIndex on=u8 [DELETED INDEX]=[*** full scan ***]\n";
+        let no_lookup_exp = "Project (#1, #4)\n  Map ((#0 OR #2))\n    ReadIndex on=u8 [DELETED INDEX]=[*** full scan ***]\n";
         let lookup_exp =
             "Filter (#0) IS NULL\n  ReadIndex on=u9 [DELETED INDEX]=[lookup value=(5)]\n";
 
@@ -952,8 +947,7 @@ mod tests {
         );
         constant_rows
             .extend((0..20).map(|i| (Row::pack(Some(Datum::String(&i.to_string()))), Diff::ONE)));
-        let constant_exp2 =
-            "Constant\n  total_rows (diffs absed): 523\n  first_rows:\n    - (\"hello\")\
+        let constant_exp2 = "Constant\n  total_rows (diffs absed): 523\n  first_rows:\n    - (\"hello\")\
         \n    - ((\"world\") x 2)\n    - ((\"star\") x 500)\n    - (\"0\")\n    - (\"1\")\
         \n    - (\"2\")\n    - (\"3\")\n    - (\"4\")\n    - (\"5\")\n    - (\"6\")\
         \n    - (\"7\")\n    - (\"8\")\n    - (\"9\")\n    - (\"10\")\n    - (\"11\")\

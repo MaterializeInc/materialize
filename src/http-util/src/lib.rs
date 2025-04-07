@@ -10,10 +10,10 @@
 //! HTTP utilities.
 
 use askama::Template;
-use axum::http::status::StatusCode;
-use axum::http::HeaderValue;
-use axum::response::{Html, IntoResponse};
 use axum::Json;
+use axum::http::HeaderValue;
+use axum::http::status::StatusCode;
+use axum::response::{Html, IntoResponse};
 use axum_extra::TypedHeader;
 use headers::ContentType;
 use mz_ore::metrics::MetricsRegistry;

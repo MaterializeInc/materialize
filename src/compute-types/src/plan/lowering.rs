@@ -13,12 +13,12 @@ use std::collections::BTreeMap;
 
 use mz_expr::JoinImplementation::{DeltaQuery, Differential, IndexedFilter, Unimplemented};
 use mz_expr::{
-    permutation_for_arrangement, AggregateExpr, Id, JoinInputMapper, MapFilterProject,
-    MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, TableFunc,
+    AggregateExpr, Id, JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr,
+    OptimizedMirRelationExpr, TableFunc, permutation_for_arrangement,
 };
 use mz_ore::{assert_none, soft_assert_eq_or_log, soft_panic_or_log};
-use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::GlobalId;
+use mz_repr::optimize::OptimizerFeatures;
 use timely::progress::Timestamp;
 
 use crate::dataflows::{BuildDesc, DataflowDescription, IndexImport};

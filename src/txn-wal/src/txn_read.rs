@@ -34,8 +34,8 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
 use uuid::Uuid;
 
-use crate::txn_cache::{TxnsCache, TxnsCacheState};
 use crate::TxnsCodecDefault;
+use crate::txn_cache::{TxnsCache, TxnsCacheState};
 
 /// A token exchangeable for a data shard snapshot.
 ///

@@ -15,10 +15,10 @@ use mz_repr::adt::char;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::{CatalogItemId, ColumnName, ColumnType, Datum, RelationDesc, ScalarType};
-use serde_json::{json, Map};
+use serde_json::{Map, json};
 
 use crate::avro::DocTarget;
-use crate::encode::{column_names_and_types, Encode, TypedDatum};
+use crate::encode::{Encode, TypedDatum, column_names_and_types};
 use crate::envelopes;
 
 const AVRO_NAMESPACE: &str = "com.materialize.sink";

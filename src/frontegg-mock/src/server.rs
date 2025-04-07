@@ -9,7 +9,7 @@
 
 use crate::utils::RefreshTokenTarget;
 use axum::routing::{delete, get, post, put};
-use axum::{middleware, Router};
+use axum::{Router, middleware};
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
@@ -22,7 +22,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::TcpListener;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::handlers::*;
 use crate::middleware::*;

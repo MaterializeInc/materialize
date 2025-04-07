@@ -64,7 +64,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use flate2::read::GzDecoder;
 use hex_literal::hex;
 use sha2::{Digest, Sha256};

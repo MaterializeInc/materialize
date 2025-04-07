@@ -31,8 +31,8 @@ use arrow::datatypes::DataType;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::stats::{DynStats, StructStats};
 use crate::Codec;
+use crate::stats::{DynStats, StructStats};
 
 /// A __stable__ encoding for a type that gets durably persisted in an
 /// [`arrow::array::FixedSizeBinaryArray`].

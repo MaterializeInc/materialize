@@ -34,8 +34,8 @@ use mz_orchestrator::{
 use mz_ore::halt;
 use mz_ore::instrument;
 use mz_ore::task::{self, AbortOnDropHandle};
-use mz_repr::adt::numeric::Numeric;
 use mz_repr::GlobalId;
+use mz_repr::adt::numeric::Numeric;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokio::time;

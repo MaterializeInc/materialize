@@ -82,8 +82,8 @@ pub struct AvailableCollections {
 
 /// A strategy that produces arrangements that are thinner than the default. That is
 /// the number of direct children is limited to a maximum of 3.
-pub(crate) fn any_arranged_thin(
-) -> impl Strategy<Value = (Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)> {
+pub(crate) fn any_arranged_thin()
+-> impl Strategy<Value = (Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)> {
     (
         prop::collection::vec(MirScalarExpr::arbitrary(), 0..3),
         Vec::<usize>::arbitrary(),

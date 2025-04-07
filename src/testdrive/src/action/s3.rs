@@ -12,17 +12,17 @@ use std::str;
 use std::thread;
 use std::time::Duration;
 
-use anyhow::bail;
 use anyhow::Context;
+use anyhow::bail;
 use arrow::util::display::ArrayFormatter;
 use arrow::util::display::FormatOptions;
 use async_compression::tokio::bufread::{BzEncoder, GzipEncoder, XzEncoder, ZstdEncoder};
 use regex::Regex;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
+use crate::action::file::Compression;
 use crate::action::file::build_compression;
 use crate::action::file::build_contents;
-use crate::action::file::Compression;
 use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;
 

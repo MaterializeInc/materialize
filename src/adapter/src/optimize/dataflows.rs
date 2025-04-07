@@ -22,16 +22,16 @@ use tracing::warn;
 
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Index, Source, View};
 use mz_compute_client::controller::error::InstanceMissing;
-use mz_compute_types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
 use mz_compute_types::ComputeInstanceId;
+use mz_compute_types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
 use mz_controller::Controller;
 use mz_expr::visit::Visit;
 use mz_expr::{
     CollectionPlan, Id, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
-    UnmaterializableFunc, RECURSION_LIMIT,
+    RECURSION_LIMIT, UnmaterializableFunc,
 };
 use mz_ore::cast::ReinterpretCast;
-use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimitError};
+use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError, maybe_grow};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::explain::trace_plan;
 use mz_repr::optimize::OptimizerFeatures;
@@ -40,12 +40,12 @@ use mz_repr::{Datum, GlobalId, Row};
 use mz_sql::catalog::CatalogRole;
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
-use mz_transform::analysis::monotonic::Monotonic;
 use mz_transform::analysis::DerivedBuilder;
+use mz_transform::analysis::monotonic::Monotonic;
 
 use crate::catalog::CatalogState;
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::optimize::{view, Optimize, OptimizerCatalog, OptimizerConfig, OptimizerError};
+use crate::optimize::{Optimize, OptimizerCatalog, OptimizerConfig, OptimizerError, view};
 use crate::session::{SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
 use crate::util::viewable_variables;
 

@@ -87,8 +87,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use itertools::Itertools;
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{
-    func, AggregateFunc, Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr,
-    VariadicFunc, RECURSION_LIMIT,
+    AggregateFunc, Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
+    VariadicFunc, func,
 };
 use mz_ore::soft_assert_eq_no_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};

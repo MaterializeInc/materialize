@@ -16,8 +16,8 @@ use std::sync::Arc;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use futures::stream::FuturesUnordered;
 use futures::StreamExt;
+use futures::stream::FuturesUnordered;
 use mz_dyncfg::Config;
 use mz_ore::instrument;
 use mz_ore::task::RuntimeExt;
@@ -28,26 +28,26 @@ use mz_proto::{IntoRustIfSome, ProtoType};
 use proptest_derive::Arbitrary;
 use semver::Version;
 use serde::{Deserialize, Serialize};
-use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
+use timely::progress::{Antichain, Timestamp};
 use tokio::runtime::Handle;
-use tracing::{debug_span, info, warn, Instrument};
+use tracing::{Instrument, debug_span, info, warn};
 use uuid::Uuid;
 
 use crate::batch::{
-    validate_truncate_batch, Added, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
-    BatchParts, ProtoBatch, BATCH_DELETE_ENABLED,
+    Added, BATCH_DELETE_ENABLED, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
+    BatchParts, ProtoBatch, validate_truncate_batch,
 };
 use crate::error::{InvalidUsage, UpperMismatch};
 use crate::fetch::{EncodedPart, FetchBatchFilter, FetchedPart, PartDecodeFormat};
 use crate::internal::compact::{CompactConfig, Compactor};
-use crate::internal::encoding::{check_data_version, Schemas};
+use crate::internal::encoding::{Schemas, check_data_version};
 use crate::internal::machine::{CompareAndAppendRes, ExpireFn, Machine};
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{BatchPart, HandleDebugState, HollowBatch, RunOrder, RunPart};
 use crate::read::ReadHandle;
 use crate::schema::PartMigration;
-use crate::{parse_id, GarbageCollector, IsolatedRuntime, PersistConfig, ShardId};
+use crate::{GarbageCollector, IsolatedRuntime, PersistConfig, ShardId, parse_id};
 
 pub(crate) const COMBINE_INLINE_WRITES: Config<bool> = Config::new(
     "persist_write_combine_inline_writes",
@@ -938,7 +938,10 @@ impl<K: Codec, V: Codec, T, D> Drop for WriteHandle<K, V, T, D> {
         let handle = match Handle::try_current() {
             Ok(x) => x,
             Err(_) => {
-                warn!("WriteHandle {} dropped without being explicitly expired, falling back to lease timeout", self.writer_id);
+                warn!(
+                    "WriteHandle {} dropped without being explicitly expired, falling back to lease timeout",
+                    self.writer_id
+                );
                 return;
             }
         };

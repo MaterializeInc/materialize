@@ -10,7 +10,7 @@
 //! CLI benchmarking tools for persist
 
 use futures_util::stream::StreamExt;
-use futures_util::{stream, TryStreamExt};
+use futures_util::{TryStreamExt, stream};
 use std::sync::Arc;
 use std::time::Instant;
 

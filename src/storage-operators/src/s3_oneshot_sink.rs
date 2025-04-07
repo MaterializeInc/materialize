@@ -10,33 +10,33 @@
 //! Uploads a consolidated collection to S3
 
 use std::any::Any;
-use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 use std::rc::Rc;
 
 use anyhow::anyhow;
 use aws_types::sdk_config::SdkConfig;
-use differential_dataflow::containers::TimelyStack;
 use differential_dataflow::Hashable;
+use differential_dataflow::containers::TimelyStack;
 use futures::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::task::JoinHandleExt;
 use mz_repr::{CatalogItemId, Diff, GlobalId, Row, Timestamp};
-use mz_storage_types::connections::aws::AwsConnection;
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::connections::aws::AwsConnection;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sinks::s3_oneshot_sink::S3KeyManager;
 use mz_storage_types::sinks::{S3SinkFormat, S3UploadInfo};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
+use timely::PartialOrder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::Broadcast;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
-use timely::PartialOrder;
 use tracing::debug;
 
 mod parquet;

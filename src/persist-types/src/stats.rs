@@ -15,8 +15,8 @@ use std::fmt::Debug;
 
 use anyhow::Context;
 use arrow::array::{
-    BinaryArray, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-    Int8Array, StringArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    BinaryArray, BooleanArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
+    Int64Array, StringArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::{IntCounter, MetricsRegistry};
@@ -40,8 +40,8 @@ pub mod structured;
 pub use bytes::{AtomicBytesStats, BytesStats, FixedSizeBytesStats, FixedSizeBytesStatsKind};
 pub use json::{JsonMapElementStats, JsonStats};
 pub use primitive::{
-    truncate_bytes, truncate_string, PrimitiveStats, PrimitiveStatsVariants, TruncateBound,
-    TRUNCATE_LEN,
+    PrimitiveStats, PrimitiveStatsVariants, TRUNCATE_LEN, TruncateBound, truncate_bytes,
+    truncate_string,
 };
 pub use structured::StructStats;
 

@@ -35,7 +35,7 @@ use serde_json::json;
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
-use crate::cli::args::{make_blob, make_consensus, StateArgs, NO_COMMIT, READ_ALL_BUILD_INFO};
+use crate::cli::args::{NO_COMMIT, READ_ALL_BUILD_INFO, StateArgs, make_blob, make_consensus};
 use crate::error::CodecConcreteType;
 use crate::fetch::EncodedPart;
 use crate::internal::encoding::{Rollup, UntypedState};
@@ -508,7 +508,9 @@ pub async fn shard_stats(blob_uri: &SensitiveUrl) -> anyhow::Result<()> {
     })
     .await?;
 
-    println!("shard,bytes,parts,runs,batches,empty_batches,longest_run,byte_width,leased_readers,critical_readers,writers");
+    println!(
+        "shard,bytes,parts,runs,batches,empty_batches,longest_run,byte_width,leased_readers,critical_readers,writers"
+    );
     for (shard, (seqno, rollup)) in rollup_keys {
         let rollup_key = PartialRollupKey::new(seqno, &rollup).complete(&shard);
         // Basic stats about the trace.
@@ -549,7 +551,9 @@ pub async fn shard_stats(blob_uri: &SensitiveUrl) -> anyhow::Result<()> {
                 byte_width += largest_part;
             }
         });
-        println!("{shard},{bytes},{parts},{runs},{batches},{empty_batches},{longest_run},{byte_width},{leased_readers},{critical_readers},{writers}");
+        println!(
+            "{shard},{bytes},{parts},{runs},{batches},{empty_batches},{longest_run},{byte_width},{leased_readers},{critical_readers},{writers}"
+        );
     }
 
     Ok(())

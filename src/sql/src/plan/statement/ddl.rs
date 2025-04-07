@@ -20,7 +20,7 @@ use std::time::Duration;
 use itertools::{Either, Itertools};
 use mz_adapter_types::compaction::{CompactionWindow, DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION};
 use mz_adapter_types::dyncfgs::ENABLE_MULTI_REPLICA_SOURCES;
-use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL};
+use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL, ReplicaId};
 use mz_expr::{CollectionPlan, UnmaterializableFunc};
 use mz_interchange::avro::{AvroSchemaGenerator, DocTarget};
 use mz_ore::cast::{CastFrom, TryCastFrom};
@@ -38,8 +38,9 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    preserves_order, strconv, CatalogItemId, ColumnName, ColumnType, RelationDesc, RelationType,
-    RelationVersion, RelationVersionSelector, ScalarType, Timestamp, VersionedRelationDesc,
+    CatalogItemId, ColumnName, ColumnType, RelationDesc, RelationType, RelationVersion,
+    RelationVersionSelector, ScalarType, Timestamp, VersionedRelationDesc, preserves_order,
+    strconv,
 };
 use mz_sql_parser::ast::{
     self, AlterClusterAction, AlterClusterStatement, AlterConnectionAction, AlterConnectionOption,
@@ -89,18 +90,18 @@ use mz_storage_types::sinks::{
     StorageSinkConnection,
 };
 use mz_storage_types::sources::encoding::{
-    included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, ProtobufEncoding,
-    RegexEncoding, SourceDataEncoding,
+    AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, ProtobufEncoding, RegexEncoding,
+    SourceDataEncoding, included_column_desc,
 };
 use mz_storage_types::sources::envelope::{
     KeyEnvelope, NoneEnvelope, SourceEnvelope, UnplannedSourceEnvelope, UpsertStyle,
 };
 use mz_storage_types::sources::kafka::{
-    kafka_metadata_columns_desc, KafkaMetadataKind, KafkaSourceConnection, KafkaSourceExportDetails,
+    KafkaMetadataKind, KafkaSourceConnection, KafkaSourceExportDetails, kafka_metadata_columns_desc,
 };
 use mz_storage_types::sources::load_generator::{
-    KeyValueLoadGenerator, LoadGenerator, LoadGeneratorSourceConnection,
-    LoadGeneratorSourceExportDetails, LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT,
+    KeyValueLoadGenerator, LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT, LoadGenerator,
+    LoadGeneratorSourceConnection, LoadGeneratorSourceExportDetails,
 };
 use mz_storage_types::sources::mysql::{
     MySqlSourceConnection, MySqlSourceDetails, ProtoMySqlSourceDetails,
@@ -132,32 +133,32 @@ use crate::names::{
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
 use crate::plan::query::{
-    cast_relation, plan_expr, scalar_type_from_catalog, scalar_type_from_sql, CteDesc, ExprContext,
-    QueryLifetime,
+    CteDesc, ExprContext, QueryLifetime, cast_relation, plan_expr, scalar_type_from_catalog,
+    scalar_type_from_sql,
 };
 use crate::plan::scope::Scope;
 use crate::plan::statement::ddl::connection::{INALTERABLE_OPTIONS, MUTUALLY_EXCLUSIVE_SETS};
-use crate::plan::statement::{scl, StatementContext, StatementDesc};
+use crate::plan::statement::{StatementContext, StatementDesc, scl};
 use crate::plan::typeconv::CastContext;
 use crate::plan::with_options::{OptionalDuration, OptionalString, TryFromValue};
 use crate::plan::{
-    literal, plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterPlanStrategy,
-    AlterClusterRenamePlan, AlterClusterReplicaRenamePlan, AlterClusterSwapPlan,
-    AlterConnectionPlan, AlterItemRenamePlan, AlterNetworkPolicyPlan, AlterNoopPlan,
-    AlterOptionParameter, AlterRetainHistoryPlan, AlterRolePlan, AlterSchemaRenamePlan,
-    AlterSchemaSwapPlan, AlterSecretPlan, AlterSetClusterPlan, AlterSinkPlan,
-    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, AlterTablePlan,
-    ClusterSchedule, CommentPlan, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig,
-    ConnectionDetails, CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
-    CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan,
-    CreateContinualTaskPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
-    DropObjectsPlan, DropOwnedPlan, Index, Ingestion, MaterializedView, NetworkPolicyRule,
-    NetworkPolicyRuleAction, NetworkPolicyRuleDirection, Params, Plan, PlanClusterOption,
-    PlanNotice, PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink, Source, Table,
-    TableDataSource, Type, VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters,
-    WebhookHeaders, WebhookValidation,
+    AlterClusterPlan, AlterClusterPlanStrategy, AlterClusterRenamePlan,
+    AlterClusterReplicaRenamePlan, AlterClusterSwapPlan, AlterConnectionPlan, AlterItemRenamePlan,
+    AlterNetworkPolicyPlan, AlterNoopPlan, AlterOptionParameter, AlterRetainHistoryPlan,
+    AlterRolePlan, AlterSchemaRenamePlan, AlterSchemaSwapPlan, AlterSecretPlan,
+    AlterSetClusterPlan, AlterSinkPlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
+    AlterSystemSetPlan, AlterTablePlan, ClusterSchedule, CommentPlan, ComputeReplicaConfig,
+    ComputeReplicaIntrospectionConfig, ConnectionDetails, CreateClusterManagedPlan,
+    CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
+    CreateConnectionPlan, CreateContinualTaskPlan, CreateDatabasePlan, CreateIndexPlan,
+    CreateMaterializedViewPlan, CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, Index, Ingestion,
+    MaterializedView, NetworkPolicyRule, NetworkPolicyRuleAction, NetworkPolicyRuleDirection,
+    Params, Plan, PlanClusterOption, PlanNotice, PolicyAddress, QueryContext, ReplicaConfig,
+    Secret, Sink, Source, Table, TableDataSource, Type, VariableValue, View, WebhookBodyFormat,
+    WebhookHeaderFilters, WebhookHeaders, WebhookValidation, literal, plan_utils, query,
+    transform_ast,
 };
 use crate::session::vars::{
     self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
@@ -186,7 +187,9 @@ fn check_partition_by(desc: &RelationDesc, partition_by: Vec<Ident>) -> Result<(
     {
         let partition_name = normalize::column_name(partition_name);
         if *desc_name != partition_name {
-            sql_bail!("PARTITION BY columns should be a prefix of the relation's columns (expected {desc_name} at index {idx}, got {partition_name})");
+            sql_bail!(
+                "PARTITION BY columns should be a prefix of the relation's columns (expected {desc_name} at index {idx}, got {partition_name})"
+            );
         }
         if !preserves_order(&desc_type.scalar_type) {
             sql_bail!("PARTITION BY column {partition_name} has unsupported type");
@@ -585,7 +588,7 @@ pub fn plan_create_webhook_source(
             return Err(PlanError::Unsupported {
                 feature: format!("{ty} is not a valid BODY FORMAT for a WEBHOOK source"),
                 discussion_no: None,
-            })
+            });
         }
     };
 
@@ -3733,7 +3736,9 @@ fn kafka_sink_builder(
             && (extracted_options.avro_key_fullname.is_some()
                 ^ extracted_options.avro_value_fullname.is_some())
         {
-            sql_bail!("Must specify both AVRO KEY FULLNAME and AVRO VALUE FULLNAME when specifying generated schema names");
+            sql_bail!(
+                "Must specify both AVRO KEY FULLNAME and AVRO VALUE FULLNAME when specifying generated schema names"
+            );
         }
 
         Ok((csr_connection, extracted_options))
@@ -4478,8 +4483,8 @@ pub fn plan_create_cluster(
             Statement::CreateCluster(stmt) => stmt,
             stmt => {
                 return Err(PlanError::Replan(format!(
-                "replan does not match: plan={plan:?}, create_sql={create_sql:?}, stmt={stmt:?}"
-            )))
+                    "replan does not match: plan={plan:?}, create_sql={create_sql:?}, stmt={stmt:?}"
+                )));
             }
         };
         let replan =
@@ -4547,7 +4552,9 @@ pub fn plan_create_cluster_inner(
         // always enable disk.
         if scx.catalog.is_cluster_size_cc(&size) {
             if disk_in == Some(false) {
-                sql_bail!("DISK option disabled is not supported for non-legacy cluster sizes because disk is always enabled");
+                sql_bail!(
+                    "DISK option disabled is not supported for non-legacy cluster sizes because disk is always enabled"
+                );
             }
             disk_default = true;
         }
@@ -4568,7 +4575,9 @@ pub fn plan_create_cluster_inner(
         } else {
             scx.require_feature_flag(&ENABLE_CLUSTER_SCHEDULE_REFRESH)?;
             if replication_factor.is_some() {
-                sql_bail!("REPLICATION FACTOR cannot be given together with any SCHEDULE other than MANUAL");
+                sql_bail!(
+                    "REPLICATION FACTOR cannot be given together with any SCHEDULE other than MANUAL"
+                );
             }
             // If we have a non-trivial schedule, then let's not have any replicas initially,
             // to avoid quickly going back and forth if the schedule doesn't want a replica
@@ -4832,7 +4841,9 @@ fn plan_replica_config(
             // simply always enable disk.
             if scx.catalog.is_cluster_size_cc(&size) {
                 if disk_in.is_some() {
-                    sql_bail!("DISK option not supported for non-legacy cluster sizes because disk is always enabled");
+                    sql_bail!(
+                        "DISK option not supported for non-legacy cluster sizes because disk is always enabled"
+                    );
                 }
                 disk = true;
             }
@@ -5305,7 +5316,9 @@ fn plan_drop_role(
                         let member_role = scx.catalog.get_role(member_id);
                         sql_bail!(
                             "cannot drop role {}: still depended up by membership of role {} in role {}",
-                            name.as_str(), role.name(), member_role.name()
+                            name.as_str(),
+                            role.name(),
+                            member_role.name()
                         );
                     }
                 }
@@ -5957,11 +5970,15 @@ pub fn plan_alter_cluster(
                         if schedule.is_some()
                             && !matches!(schedule, Some(ClusterScheduleOptionValue::Manual))
                         {
-                            sql_bail!("REPLICATION FACTOR cannot be given together with any SCHEDULE other than MANUAL");
+                            sql_bail!(
+                                "REPLICATION FACTOR cannot be given together with any SCHEDULE other than MANUAL"
+                            );
                         }
                         if let Some(current_schedule) = cluster.schedule() {
                             if !matches!(current_schedule, ClusterSchedule::Manual) {
-                                sql_bail!("REPLICATION FACTOR cannot be set if the cluster SCHEDULE is anything other than MANUAL");
+                                sql_bail!(
+                                    "REPLICATION FACTOR cannot be set if the cluster SCHEDULE is anything other than MANUAL"
+                                );
                             }
                         }
 
@@ -6022,7 +6039,9 @@ pub fn plan_alter_cluster(
                     if schedule.is_some()
                         && !matches!(schedule, Some(ClusterScheduleOptionValue::Manual))
                     {
-                        sql_bail!("cluster schedules other than MANUAL are not supported for unmanaged clusters");
+                        sql_bail!(
+                            "cluster schedules other than MANUAL are not supported for unmanaged clusters"
+                        );
                     }
                     if let Some(current_schedule) = cluster.schedule() {
                         if !matches!(current_schedule, ClusterSchedule::Manual)
@@ -6061,7 +6080,9 @@ pub fn plan_alter_cluster(
                 // entirely and simply always enable disk.
                 if scx.catalog.is_cluster_size_cc(size) {
                     if disk.is_some() {
-                        sql_bail!("DISK option not supported for modern cluster sizes because disk is always enabled");
+                        sql_bail!(
+                            "DISK option not supported for modern cluster sizes because disk is always enabled"
+                        );
                     } else {
                         options.disk = AlterOptionParameter::Set(true);
                     }
@@ -6090,7 +6111,9 @@ pub fn plan_alter_cluster(
                     cluster.managed_size().expect("cluster known to be managed")
                 });
                 if scx.catalog.is_cluster_size_cc(size) {
-                    sql_bail!("DISK option not supported for modern cluster sizes because disk is always enabled");
+                    sql_bail!(
+                        "DISK option not supported for modern cluster sizes because disk is always enabled"
+                    );
                 }
 
                 if disk {

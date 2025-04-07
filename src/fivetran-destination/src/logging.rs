@@ -10,7 +10,7 @@
 use serde::Serialize;
 use tracing_core::{Event, Level, Subscriber};
 use tracing_subscriber::fmt::format::Writer;
-use tracing_subscriber::fmt::{format, FmtContext, FormatEvent, FormatFields};
+use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields, format};
 use tracing_subscriber::registry::LookupSpan;
 
 use std::io;

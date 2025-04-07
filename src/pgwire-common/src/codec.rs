@@ -20,13 +20,13 @@ use std::{fmt, str};
 
 use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{BufMut, BytesMut};
-use mz_ore::cast::{u64_to_usize, CastFrom};
+use mz_ore::cast::{CastFrom, u64_to_usize};
 use mz_ore::netio::{self};
 use tokio::io::{self, AsyncRead, AsyncReadExt};
 
+use crate::FrontendMessage;
 use crate::format::Format;
 use crate::message::{FrontendStartupMessage, VERSION_CANCEL, VERSION_GSSENC, VERSION_SSL};
-use crate::FrontendMessage;
 
 pub const REJECT_ENCRYPTION: u8 = b'N';
 pub const ACCEPT_SSL_ENCRYPTION: u8 = b'S';

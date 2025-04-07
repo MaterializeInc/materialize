@@ -12,7 +12,7 @@
 use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use mz_ore::metrics::{register_runtime_metrics, MetricsRegistry};
+use mz_ore::metrics::{MetricsRegistry, register_runtime_metrics};
 use mz_ore::task::{JoinHandle, RuntimeExt};
 use tokio::runtime::{Builder, Runtime};
 

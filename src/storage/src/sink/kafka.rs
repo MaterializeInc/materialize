@@ -84,7 +84,7 @@ use crate::metrics::sink::kafka::KafkaSinkMetrics;
 use crate::render::sinks::SinkRender;
 use crate::statistics::SinkStatistics;
 use crate::storage_state::StorageState;
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::StreamExt;
 use maplit::btreemap;
@@ -96,8 +96,8 @@ use mz_interchange::json::JsonEncoder;
 use mz_interchange::text_binary::{BinaryEncoder, TextEncoder};
 use mz_kafka_util::admin::EnsureTopicConfig;
 use mz_kafka_util::client::{
-    GetPartitionsError, MzClientContext, TimeoutConfig, TunnelingClientContext,
-    DEFAULT_FETCH_METADATA_TIMEOUT,
+    DEFAULT_FETCH_METADATA_TIMEOUT, GetPartitionsError, MzClientContext, TimeoutConfig,
+    TunnelingClientContext,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
@@ -105,11 +105,12 @@ use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::task::{self, AbortOnDropHandle};
 use mz_ore::vec::VecExt;
-use mz_persist_client::write::WriteHandle;
 use mz_persist_client::Diagnostics;
+use mz_persist_client::write::WriteHandle;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_client::sink::progress_key::ProgressKey;
+use mz_storage_types::StorageDiff;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs::{
@@ -120,7 +121,6 @@ use mz_storage_types::sinks::{
     KafkaSinkConnection, KafkaSinkFormatType, SinkEnvelope, StorageSinkDesc,
 };
 use mz_storage_types::sources::SourceData;
-use mz_storage_types::StorageDiff;
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
@@ -132,11 +132,11 @@ use rdkafka::producer::{BaseRecord, Producer, ThreadedProducer};
 use rdkafka::types::RDKafkaErrorCode;
 use rdkafka::{Message, Offset, Statistics, TopicPartitionList};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use timely::PartialOrder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{CapabilitySet, Concatenate, Map, ToStream};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as _};
-use timely::PartialOrder;
 use tokio::sync::watch;
 use tokio::time::{self, MissedTickBehavior};
 use tracing::{debug, error, info, warn};
@@ -634,8 +634,9 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
     sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
     metrics: KafkaSinkMetrics,
     statistics: SinkStatistics,
-    write_handle: impl Future<Output = anyhow::Result<WriteHandle<SourceData, (), Timestamp, StorageDiff>>>
-        + 'static,
+    write_handle: impl Future<
+        Output = anyhow::Result<WriteHandle<SourceData, (), Timestamp, StorageDiff>>,
+    > + 'static,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
 ) -> (Stream<G, HealthStatusMessage>, PressOnDropButton) {
     let scope = input.scope();
@@ -1181,9 +1182,9 @@ fn progress_search<C: ConsumerContext + 'static>(
             Some(Err(e)) => bail!("failed to fetch progress message {e}"),
             None => {
                 bail!(
-                        "timed out while waiting to reach high water mark of non-empty \
+                    "timed out while waiting to reach high water mark of non-empty \
                         topic {progress_topic}:{partition}, lo/hi: {lo}/{hi}, current position: {current_position}"
-                    );
+                );
             }
         };
 

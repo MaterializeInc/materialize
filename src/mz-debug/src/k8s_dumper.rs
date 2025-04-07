@@ -16,7 +16,7 @@
 //! Dumps k8s resources to files.
 
 use std::fmt::Debug;
-use std::fs::{create_dir_all, File};
+use std::fs::{File, create_dir_all};
 use std::future::Future;
 use std::io::Write;
 use std::path::PathBuf;
@@ -24,6 +24,7 @@ use std::pin::Pin;
 
 use chrono::{DateTime, Utc};
 use futures::future::join_all;
+use k8s_openapi::NamespaceResourceScope;
 use k8s_openapi::api::admissionregistration::v1::{
     MutatingWebhookConfiguration, ValidatingWebhookConfiguration,
 };
@@ -36,13 +37,12 @@ use k8s_openapi::api::networking::v1::NetworkPolicy;
 use k8s_openapi::api::rbac::v1::{Role, RoleBinding};
 use k8s_openapi::api::storage::v1::StorageClass;
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
-use k8s_openapi::NamespaceResourceScope;
 use kube::api::{ListParams, LogParams};
 use kube::{Api, Client};
 use mz_cloud_resources::crd::generated::cert_manager::certificates::Certificate;
 use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use tracing::{info, warn};
 
 use crate::utils::format_base_path;

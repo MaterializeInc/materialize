@@ -10,15 +10,15 @@
 use std::collections::VecDeque;
 use std::iter;
 
-use mz_ore::now::{to_datetime, NowFn};
+use mz_ore::now::{NowFn, to_datetime};
 use mz_repr::{Datum, Diff, Row};
+use mz_storage_types::sources::MzOffset;
 use mz_storage_types::sources::load_generator::{
     AuctionView, Event, Generator, LoadGeneratorOutput,
 };
-use mz_storage_types::sources::MzOffset;
+use rand::SeedableRng;
 use rand::prelude::{Rng, SmallRng};
 use rand::seq::SliceRandom;
-use rand::SeedableRng;
 
 /// CREATE TABLE organizations
 ///   (

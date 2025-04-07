@@ -14,12 +14,12 @@ use std::sync::Arc;
 use anyhow::Context;
 use arrow::array::{
     Array, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-    Decimal256Array, FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array, Int16Array,
-    Int32Array, Int64Array, Int8Array, LargeBinaryArray, LargeListArray, LargeStringArray,
+    Decimal256Array, FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array, Int8Array,
+    Int16Array, Int32Array, Int64Array, LargeBinaryArray, LargeListArray, LargeStringArray,
     ListArray, StringArray, StringViewArray, StructArray, Time32MillisecondArray,
     Time32SecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array,
-    UInt8Array,
+    TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array,
+    UInt64Array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::{DataType, TimeUnit};
@@ -450,13 +450,10 @@ enum ColReader {
 impl ColReader {
     fn read(&self, idx: usize, packer: &mut RowPacker) -> Result<(), anyhow::Error> {
         let datum = match self {
-            ColReader::Boolean(array) => array.is_valid(idx).then(|| array.value(idx)).map(|x| {
-                if x {
-                    Datum::True
-                } else {
-                    Datum::False
-                }
-            }),
+            ColReader::Boolean(array) => array
+                .is_valid(idx)
+                .then(|| array.value(idx))
+                .map(|x| if x { Datum::True } else { Datum::False }),
             ColReader::Int8 { array, cast } => {
                 array.is_valid(idx).then(|| array.value(idx)).map(cast)
             }

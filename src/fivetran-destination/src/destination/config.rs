@@ -8,8 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use openssl::ssl::{SslConnector, SslMethod};
-use openssl::x509::store::X509StoreBuilder;
 use openssl::x509::X509;
+use openssl::x509::store::X509StoreBuilder;
 use postgres_openssl::MakeTlsConnector;
 use std::collections::BTreeMap;
 

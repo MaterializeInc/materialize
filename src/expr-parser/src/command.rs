@@ -11,7 +11,7 @@
 
 use mz_repr::explain::ExplainConfig;
 
-use crate::{try_parse_def, try_parse_mir, Def, TestCatalog};
+use crate::{Def, TestCatalog, try_parse_def, try_parse_mir};
 
 pub fn handle_define(catalog: &mut TestCatalog, input: &str) -> String {
     // Parse the relation, returning early on parse error.

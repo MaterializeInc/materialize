@@ -56,8 +56,8 @@ use std::fmt;
 use std::io;
 use std::rc::Rc;
 
-use differential_dataflow::containers::TimelyStack;
 use differential_dataflow::AsCollection;
+use differential_dataflow::containers::TimelyStack;
 use itertools::Itertools;
 use mz_mysql_util::quote_identifier;
 use mz_ore::cast::CastFrom;
@@ -76,12 +76,12 @@ use timely::progress::Antichain;
 use uuid::Uuid;
 
 use mz_mysql_util::{
-    ensure_full_row_binlog_format, ensure_gtid_consistency, ensure_replication_commit_order,
-    MySqlError, MySqlTableDesc,
+    MySqlError, MySqlTableDesc, ensure_full_row_binlog_format, ensure_gtid_consistency,
+    ensure_replication_commit_order,
 };
 use mz_ore::error::ErrorExt;
 use mz_storage_types::errors::SourceErrorDetails;
-use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition, GtidState};
+use mz_storage_types::sources::mysql::{GtidPartition, GtidState, gtid_set_frontier};
 use mz_storage_types::sources::{MySqlSourceConnection, SourceExportDetails, SourceTimestamp};
 use mz_timely_util::builder_async::{AsyncOutputHandle, PressOnDropButton};
 use mz_timely_util::order::Extrema;

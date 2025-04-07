@@ -13,15 +13,15 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use differential_dataflow::Hashable;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::Hashable;
-use futures::stream::FuturesUnordered;
 use futures::StreamExt;
+use futures::stream::FuturesUnordered;
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
-use mz_persist_client::batch::{Batch, ProtoBatch};
 use mz_persist_client::ShardId;
+use mz_persist_client::batch::{Batch, ProtoBatch};
 use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
 use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
 use prost::Message;
@@ -167,16 +167,14 @@ where
 
                 let txn_batches_updates = FuturesUnordered::new();
                 while let Some((data_id, updates)) = self.writes.pop_first() {
-                    let data_write =
-                        handle
-                            .datas
-                            .take_write_for_commit(&data_id)
-                            .unwrap_or_else(|| {
-                                panic!(
+                    let data_write = handle.datas.take_write_for_commit(&data_id).unwrap_or_else(
+                        || {
+                            panic!(
                                 "data shard {} must be registered with this Txn handle to commit",
                                 data_id
                             )
-                            });
+                        },
+                    );
                     let commit_ts = commit_ts.clone();
                     txn_batches_updates.push(async move {
                         let mut batches =
@@ -401,8 +399,8 @@ impl<T> TxnApply<T> {
 mod tests {
     use std::time::{Duration, SystemTime};
 
-    use futures::stream::FuturesUnordered;
     use futures::StreamExt;
+    use futures::stream::FuturesUnordered;
     use mz_ore::assert_err;
     use mz_persist_client::PersistClient;
 

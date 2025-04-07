@@ -13,7 +13,7 @@ use std::fmt::{Debug, Display};
 use std::sync::Mutex;
 
 use mz_sql_parser::ast::NamedPlan;
-use tracing::{span, subscriber, Level};
+use tracing::{Level, span, subscriber};
 use tracing_core::{Interest, Metadata};
 use tracing_subscriber::{field, layer};
 
@@ -392,7 +392,7 @@ mod test {
     use tracing::dispatcher;
     use tracing_subscriber::prelude::*;
 
-    use super::{trace_plan, PlanTrace};
+    use super::{PlanTrace, trace_plan};
 
     #[mz_ore::test]
     fn test_optimizer_trace() {

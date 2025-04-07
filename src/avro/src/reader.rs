@@ -24,20 +24,20 @@
 //! Logic handling reading from Avro format at user level.
 
 use std::collections::BTreeMap;
-use std::str::{from_utf8, FromStr};
+use std::str::{FromStr, from_utf8};
 
 use serde_json::from_slice;
 use sha2::Sha256;
 
-use crate::decode::{decode, AvroRead};
+use crate::decode::{AvroRead, decode};
 use crate::error::{DecodeError, Error as AvroError};
 use crate::schema::{
-    resolve_schemas, FullName, NamedSchemaPiece, ParseSchemaError, RecordField,
-    ResolvedDefaultValueField, ResolvedRecordField, Schema, SchemaNodeOrNamed, SchemaPiece,
-    SchemaPieceOrNamed, SchemaPieceRefOrNamed,
+    FullName, NamedSchemaPiece, ParseSchemaError, RecordField, ResolvedDefaultValueField,
+    ResolvedRecordField, Schema, SchemaNodeOrNamed, SchemaPiece, SchemaPieceOrNamed,
+    SchemaPieceRefOrNamed, resolve_schemas,
 };
 use crate::types::Value;
-use crate::{util, Codec, SchemaResolutionError};
+use crate::{Codec, SchemaResolutionError, util};
 
 #[derive(Debug, Clone)]
 pub(crate) struct Header {
@@ -374,14 +374,12 @@ impl<'a> SchemaResolver<'a> {
                                     order: rf.order.clone(),
                                     position: r_index,
                                 },
-                                None => {
-                                    return Err(SchemaResolutionError::new(format!(
+                                None => return Err(SchemaResolutionError::new(format!(
                                     "Reader field `{}.{}` not found in writer, and has no default",
                                     self.get_current_human_readable_path(),
                                     rf.name
                                 ))
-                                    .into())
-                                }
+                                .into()),
                             };
                             defaults.push(default_field);
                         }
@@ -588,7 +586,7 @@ impl<'a> SchemaResolver<'a> {
                     "Non-matching schemas: writer: {:?}, reader: {:?}",
                     ws.name, rs.name
                 ))
-                .into())
+                .into());
             }
         };
         Ok(typ)
@@ -901,7 +899,7 @@ impl<'a> SchemaResolver<'a> {
                     rs.get_piece_and_name(reader.root).0,
                     self.get_current_human_readable_path(),
                 ))
-                .into())
+                .into());
             }
         };
         if named_node.is_some() {
@@ -935,8 +933,8 @@ mod tests {
 
     use mz_ore::assert_err;
 
-    use crate::types::{Record, ToAvro};
     use crate::Reader;
+    use crate::types::{Record, ToAvro};
 
     use super::*;
 
@@ -1093,7 +1091,10 @@ mod tests {
         // The field name here must NOT contain `com.materialize.foo`,
         // because explicitly named types are all relative to a global
         // namespace (i.e., they don't nest).
-        assert_eq!(&err_str, "Writer schema has type `Double`, but reader schema has type `Int` for field `com.materialize.bar.f1_1`");
+        assert_eq!(
+            &err_str,
+            "Writer schema has type `Double`, but reader schema has type `Int` for field `com.materialize.bar.f1_1`"
+        );
     }
 
     #[mz_ore::test]

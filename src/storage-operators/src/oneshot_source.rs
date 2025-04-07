@@ -71,18 +71,18 @@ use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use mz_expr::SafeMfpPlan;
 use mz_ore::cast::CastFrom;
+use mz_persist_client::Diagnostics;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{DatumVec, GlobalId, Row, RowArena, Timestamp};
+use mz_storage_types::StorageDiff;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::oneshot_sources::{
     ContentFilter, ContentFormat, ContentSource, OneshotIngestionRequest,
 };
 use mz_storage_types::sources::SourceData;
-use mz_storage_types::StorageDiff;
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };

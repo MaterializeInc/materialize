@@ -13,14 +13,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fs::{create_dir_all, remove_dir_all, File};
-use std::io::{copy, BufWriter};
+use std::fs::{File, create_dir_all, remove_dir_all};
+use std::io::{BufWriter, copy};
 use std::path::PathBuf;
 use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
-use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
+use zip::write::SimpleFileOptions;
 
 /// Formats the base path for the output of the debug tool.
 pub fn format_base_path(date_time: DateTime<Utc>) -> PathBuf {

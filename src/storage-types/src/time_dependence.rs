@@ -10,9 +10,9 @@
 //! Description of how a dataflow follows wall-clock time, independent of a specific point in time.
 
 use mz_proto::{RustType, TryFromProtoError};
-use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::Timestamp;
-use proptest::arbitrary::{any, Arbitrary};
+use mz_repr::refresh_schedule::RefreshSchedule;
+use proptest::arbitrary::{Arbitrary, any};
 use proptest::prelude::BoxedStrategy;
 use proptest::strategy::Strategy;
 use serde::{Deserialize, Serialize};

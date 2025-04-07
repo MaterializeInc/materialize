@@ -10,8 +10,8 @@
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_repr::{Datum, Diff, Row};
-use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorOutput};
 use mz_storage_types::sources::MzOffset;
+use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorOutput};
 use std::{iter, mem};
 
 pub struct Clock {

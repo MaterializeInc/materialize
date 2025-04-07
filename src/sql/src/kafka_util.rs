@@ -28,8 +28,8 @@ use crate::ast::Value;
 use crate::catalog::SessionCatalog;
 use crate::names::Aug;
 use crate::normalize::generate_extracted_config;
-use crate::plan::with_options::{ImpliedValue, TryFromValue};
 use crate::plan::PlanError;
+use crate::plan::with_options::{ImpliedValue, TryFromValue};
 
 generate_extracted_config!(
     KafkaSourceConfigOption,

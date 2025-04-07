@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use criterion::measurement::WallTime;
-use criterion::{criterion_group, criterion_main, Bencher, BenchmarkGroup, BenchmarkId, Criterion};
+use criterion::{Bencher, BenchmarkGroup, BenchmarkId, Criterion, criterion_group, criterion_main};
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -20,13 +20,13 @@ use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
 use mz_persist::postgres::{PostgresConsensus, PostgresConsensusConfig};
 use mz_persist::s3::{S3Blob, S3BlobConfig};
 use mz_persist::workload::DataGenerator;
+use mz_persist_client::PersistClient;
 use mz_persist_client::async_runtime::IsolatedRuntime;
 use mz_persist_client::cache::StateCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::metrics::Metrics;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::PersistClient;
 use mz_persist_types::Codec64;
 use tempfile::TempDir;
 use timely::progress::{Antichain, Timestamp};
@@ -124,8 +124,8 @@ fn create_mem_mem_client() -> Result<PersistClient, ExternalError> {
     )
 }
 
-async fn create_file_pg_client(
-) -> Result<Option<(Arc<PostgresConsensus>, PersistClient, TempDir)>, ExternalError> {
+async fn create_file_pg_client()
+-> Result<Option<(Arc<PostgresConsensus>, PersistClient, TempDir)>, ExternalError> {
     let pg = match PostgresConsensusConfig::new_for_test()? {
         Some(x) => x,
         None => return Ok(None),
@@ -157,8 +157,8 @@ async fn create_file_pg_client(
     Ok(Some((postgres_consensus, client, dir)))
 }
 
-async fn create_s3_pg_client(
-) -> Result<Option<(Arc<PostgresConsensus>, PersistClient)>, ExternalError> {
+async fn create_s3_pg_client()
+-> Result<Option<(Arc<PostgresConsensus>, PersistClient)>, ExternalError> {
     let s3 = match S3BlobConfig::new_for_test().await? {
         Some(x) => x,
         None => return Ok(None),

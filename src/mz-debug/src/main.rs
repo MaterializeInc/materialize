@@ -16,14 +16,14 @@ use chrono::{DateTime, Utc};
 use clap::Parser;
 use kube::config::KubeConfigOptions;
 use kube::{Client, Config};
-use mz_build_info::{build_info, BuildInfo};
+use mz_build_info::{BuildInfo, build_info};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::task;
 use tracing::{error, info};
+use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::EnvFilter;
 
 use crate::docker_dumper::DockerDumper;
 use crate::k8s_dumper::K8sDumper;

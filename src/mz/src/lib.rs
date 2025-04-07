@@ -16,7 +16,7 @@
 //! `mz` is the Materialize command-line interface (CLI).
 #![warn(missing_docs)]
 
-use mz_build_info::{build_info, BuildInfo};
+use mz_build_info::{BuildInfo, build_info};
 use std::sync::LazyLock;
 
 /// Build information about MZ

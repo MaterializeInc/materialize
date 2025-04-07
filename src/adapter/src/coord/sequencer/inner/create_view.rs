@@ -34,7 +34,7 @@ use crate::explain::explain_plan;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
-use crate::{catalog, AdapterNotice, ExecuteContext};
+use crate::{AdapterNotice, ExecuteContext, catalog};
 
 impl Staged for CreateViewStage {
     type Ctx = ExecuteContext;

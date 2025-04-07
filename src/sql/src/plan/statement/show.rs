@@ -42,9 +42,9 @@ use crate::names::{
 use crate::parse;
 use crate::plan::scope::Scope;
 use crate::plan::statement::ddl::unplan_create_cluster;
-use crate::plan::statement::{dml, StatementContext, StatementDesc};
+use crate::plan::statement::{StatementContext, StatementDesc, dml};
 use crate::plan::{
-    query, transform_ast, HirRelationExpr, Params, Plan, PlanError, ShowColumnsPlan, ShowCreatePlan,
+    HirRelationExpr, Params, Plan, PlanError, ShowColumnsPlan, ShowCreatePlan, query, transform_ast,
 };
 
 pub fn describe_show_create_view(

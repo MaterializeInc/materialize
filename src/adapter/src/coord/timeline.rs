@@ -22,7 +22,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_expr::CollectionPlan;
 use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
-use mz_ore::now::{to_datetime, EpochMillis, NowFn};
+use mz_ore::now::{EpochMillis, NowFn, to_datetime};
 use mz_ore::vec::VecExt;
 use mz_repr::{CatalogItemId, GlobalId, Timestamp};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
@@ -33,13 +33,13 @@ use mz_timestamp_oracle::postgres_oracle::{
 };
 use mz_timestamp_oracle::{self, TimestampOracle, WriteTimestamp};
 use timely::progress::Timestamp as TimelyTimestamp;
-use tracing::{debug, error, info, Instrument};
+use tracing::{Instrument, debug, error, info};
 
+use crate::AdapterError;
+use crate::coord::Coordinator;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
 use crate::coord::timestamp_selection::TimestampProvider;
-use crate::coord::Coordinator;
-use crate::AdapterError;
 
 /// An enum describing whether or not a query belongs to a timeline and whether the query can be
 /// affected by the timestamp at which it executes.

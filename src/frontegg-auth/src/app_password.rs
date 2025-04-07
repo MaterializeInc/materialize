@@ -130,8 +130,7 @@ mod tests {
                 expected_secret_key: "1947fdce-f540-4adb-84a4-7347e5d30c9f".parse().unwrap(),
             },
             TestCase {
-                input:
-                    "mzp_0445db36-5826-41af-84f6-e09402fc6171:a0c11434-07ba-426a-b83d-cc4f192325a3",
+                input: "mzp_0445db36-5826-41af-84f6-e09402fc6171:a0c11434-07ba-426a-b83d-cc4f192325a3",
                 expected_output: "mzp_BEXbNlgmQa-E9uCUAvxhcaDBFDQHukJquD3MTxkjJaM",
                 expected_client_id: "0445db36-5826-41af-84f6-e09402fc6171".parse().unwrap(),
                 expected_secret_key: "a0c11434-07ba-426a-b83d-cc4f192325a3".parse().unwrap(),

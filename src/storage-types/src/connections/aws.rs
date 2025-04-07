@@ -11,12 +11,12 @@
 
 use anyhow::{anyhow, bail};
 use aws_config::sts::AssumeRoleProvider;
-use aws_credential_types::provider::{ProvideCredentials, SharedCredentialsProvider};
 use aws_credential_types::Credentials;
+use aws_credential_types::provider::{ProvideCredentials, SharedCredentialsProvider};
 use aws_sdk_sts::error::SdkError;
 use aws_sdk_sts::operation::get_caller_identity::GetCallerIdentityError;
-use aws_types::region::Region;
 use aws_types::SdkConfig;
+use aws_types::region::Region;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::{InTask, OreFutureExt};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -25,12 +25,12 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::AlterCompatible;
 use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
 use crate::controller::AlterError;
-use crate::AlterCompatible;
 use crate::{
     configuration::StorageConfiguration,
     connections::{ConnectionContext, StringOrSecret},
@@ -426,10 +426,12 @@ impl AwsConnectionValidationError {
     /// Reports additional details about the error, if any are available.
     pub fn detail(&self) -> Option<String> {
         match self {
-            AwsConnectionValidationError::RoleDoesNotRequireExternalId {
-                role_arn
-            } => Some(format!("The trust policy for the connection's role ({role_arn}) is insecure and allows any Materialize customer to assume the role.")),
-            _ => None
+            AwsConnectionValidationError::RoleDoesNotRequireExternalId { role_arn } => {
+                Some(format!(
+                    "The trust policy for the connection's role ({role_arn}) is insecure and allows any Materialize customer to assume the role."
+                ))
+            }
+            _ => None,
         }
     }
 

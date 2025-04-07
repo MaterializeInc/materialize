@@ -33,11 +33,7 @@ impl Catalog {
 
         // Helper for rendering redacted fields.
         fn some_if_neq<T: Eq>(x: T, y: &T) -> Option<T> {
-            if &x != y {
-                Some(x)
-            } else {
-                None
-            }
+            if &x != y { Some(x) } else { None }
         }
 
         // These notices will be persisted in a system table, so should not be

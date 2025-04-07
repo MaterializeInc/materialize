@@ -16,9 +16,9 @@
 use itertools::Itertools;
 use mz_expr::MirRelationExpr;
 
+use crate::TransformCtx;
 use crate::analysis::{DerivedBuilder, DerivedView};
 use crate::analysis::{RelationType, UniqueKeys};
-use crate::TransformCtx;
 
 /// Removes `Reduce` when the input has as unique keys the keys of the reduce.
 #[derive(Debug)]

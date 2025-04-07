@@ -268,7 +268,7 @@ impl From<deadpool_postgres::tokio_postgres::Error> for ExternalError {
             None => {
                 return ExternalError::Indeterminate(Indeterminate {
                     inner: anyhow::Error::new(e),
-                })
+                });
             }
         };
         match code {
@@ -916,7 +916,9 @@ pub mod tests {
             consensus
                 .compare_and_set(&key, Some(state.seqno), invalid_constant_seqno)
                 .await,
-            Err(ExternalError::from(anyhow!("new seqno must be strictly greater than expected. Got new: SeqNo(5) expected: SeqNo(5)")))
+            Err(ExternalError::from(anyhow!(
+                "new seqno must be strictly greater than expected. Got new: SeqNo(5) expected: SeqNo(5)"
+            )))
         );
 
         let invalid_regressing_seqno = VersionedData {
@@ -930,7 +932,9 @@ pub mod tests {
             consensus
                 .compare_and_set(&key, Some(state.seqno), invalid_regressing_seqno)
                 .await,
-            Err(ExternalError::from(anyhow!("new seqno must be strictly greater than expected. Got new: SeqNo(3) expected: SeqNo(5)")))
+            Err(ExternalError::from(anyhow!(
+                "new seqno must be strictly greater than expected. Got new: SeqNo(3) expected: SeqNo(5)"
+            )))
         );
 
         // Can correctly update to a new state if we provide the right expected seqno

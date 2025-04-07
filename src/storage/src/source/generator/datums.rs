@@ -11,8 +11,8 @@ use std::iter;
 
 use mz_ore::now::NowFn;
 use mz_repr::{Datum, Diff, Row, ScalarType};
-use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorOutput};
 use mz_storage_types::sources::MzOffset;
+use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorOutput};
 
 pub struct Datums {}
 

@@ -21,11 +21,11 @@ mod spines {
     use std::rc::Rc;
 
     use differential_dataflow::containers::{Columnation, TimelyStack};
+    use differential_dataflow::trace::implementations::Layout;
+    use differential_dataflow::trace::implementations::Update;
     use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatch, OrdKeyBuilder};
     use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, OrdValBuilder};
     use differential_dataflow::trace::implementations::spine_fueled::Spine;
-    use differential_dataflow::trace::implementations::Layout;
-    use differential_dataflow::trace::implementations::Update;
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
     use mz_repr::Row;
 
@@ -102,11 +102,11 @@ mod container {
 
     use std::cmp::Ordering;
 
-    use differential_dataflow::trace::implementations::BatchContainer;
     use differential_dataflow::IntoOwned;
+    use differential_dataflow::trace::implementations::BatchContainer;
     use timely::container::PushInto;
 
-    use mz_repr::{read_datum, Datum, Row, RowPacker};
+    use mz_repr::{Datum, Row, RowPacker, read_datum};
 
     use super::bytes_container::BytesContainer;
 

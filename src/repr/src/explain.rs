@@ -39,11 +39,11 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 
 use mz_ore::stack::RecursionLimitError;
-use mz_ore::str::{bracketed, separated, Indent};
+use mz_ore::str::{Indent, bracketed, separated};
 
-use crate::explain::dot::{dot_string, DisplayDot};
-use crate::explain::json::{json_string, DisplayJson};
-use crate::explain::text::{text_string, DisplayText};
+use crate::explain::dot::{DisplayDot, dot_string};
+use crate::explain::json::{DisplayJson, json_string};
+use crate::explain::text::{DisplayText, text_string};
 use crate::optimize::OptimizerFeatureOverrides;
 use crate::{ColumnType, GlobalId, ScalarType};
 

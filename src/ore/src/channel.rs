@@ -20,7 +20,7 @@ use std::task::{Context, Poll};
 
 use futures::{Future, FutureExt};
 use prometheus::core::Atomic;
-use tokio::sync::mpsc::{error, unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, error, unbounded_channel};
 use tokio::sync::oneshot;
 
 use crate::metrics::PromLabelsExt;

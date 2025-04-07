@@ -621,7 +621,7 @@ impl Value {
                 Value::Array { dims, elements }
             }
             Type::Int2Vector { .. } => {
-                return Err("input of Int2Vector types is not implemented".into())
+                return Err("input of Int2Vector types is not implemented".into());
             }
             Type::Bool => Value::Bool(strconv::parse_bool(s)?),
             Type::Bytea => Value::Bytea(strconv::parse_bytes(s)?),
@@ -659,7 +659,7 @@ impl Value {
                 Value::Oid(strconv::parse_oid(s)?)
             }
             Type::Record(_) => {
-                return Err("input of anonymous composite types is not implemented".into())
+                return Err("input of anonymous composite types is not implemented".into());
             }
             Type::Text => Value::Text(s.to_owned()),
             Type::BpChar { .. } => Value::BpChar(s.to_owned()),
@@ -707,7 +707,7 @@ impl Value {
                 }
             }
             Type::Int2Vector { .. } => {
-                return Err("input of Int2Vector types is not implemented".into())
+                return Err("input of Int2Vector types is not implemented".into());
             }
             Type::Bool => packer.push(Datum::from(strconv::parse_bool(s)?)),
             Type::Bytea => packer.push(Datum::Bytes(&strconv::parse_bytes(s)?)),
@@ -763,7 +763,7 @@ impl Value {
                 packer.push(Datum::UInt32(strconv::parse_oid(s)?))
             }
             Type::Record(_) => {
-                return Err("input of anonymous composite types is not implemented".into())
+                return Err("input of anonymous composite types is not implemented".into());
             }
             Type::Text => packer.push(Datum::String(s)),
             Type::BpChar { .. } => packer.push(Datum::String(s.trim_end())),

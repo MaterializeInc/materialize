@@ -17,7 +17,7 @@ use anyhow::{anyhow, bail};
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::{RustType, TryFromProtoError};
 use num_traits::CheckedMul;
-use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
+use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy, any};
 use serde::{Deserialize, Serialize};
 
 use crate::adt::datetime::DateTimeField;
@@ -1260,9 +1260,9 @@ mod test {
 
             if i != j {
                 panic!(
-                "test_interval_value_truncate_low_fields failed on {} \n actual: {:?} \n expected: {:?}",
-                test.0, i, j
-            );
+                    "test_interval_value_truncate_low_fields failed on {} \n actual: {:?} \n expected: {:?}",
+                    test.0, i, j
+                );
             }
         }
     }

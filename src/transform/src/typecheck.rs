@@ -16,8 +16,8 @@ use std::sync::{Arc, Mutex};
 use itertools::Itertools;
 use mz_expr::explain::{HumanizedExplain, HumanizerMode};
 use mz_expr::{
-    non_nullable_columns, AggregateExpr, ColumnOrder, Id, JoinImplementation, LocalId,
-    MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
+    AggregateExpr, ColumnOrder, Id, JoinImplementation, LocalId, MirRelationExpr, MirScalarExpr,
+    RECURSION_LIMIT, non_nullable_columns,
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::explain::{DummyHumanizer, ExprHumanizer};
@@ -1259,7 +1259,9 @@ impl crate::Transform for Typecheck {
                         got,
                         expected: expected.clone(),
                         diffs,
-                        message: format!("a global id {id}'s type changed (was `expected` which should be a subtype of `got`) "),
+                        message: format!(
+                            "a global id {id}'s type changed (was `expected` which should be a subtype of `got`) "
+                        ),
                     };
 
                     type_error!(severity, "TYPE ERROR IN KNOWN GLOBAL ID {id}:\n{err}");
@@ -1573,7 +1575,8 @@ impl<'a> TypeError<'a> {
 
                 writeln!(
                     f,
-                    "TopK ordering {order} references invalid column {col}\nthere {are} {num_cols} column{s}: {input_type}")?
+                    "TopK ordering {order} references invalid column {col}\nthere {are} {num_cols} column{s}: {input_type}"
+                )?
             }
             BadLetRecBindings { source: _ } => {
                 writeln!(f, "LetRec ids and definitions don't line up")?

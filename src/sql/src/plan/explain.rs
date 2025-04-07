@@ -13,8 +13,8 @@ use mz_expr::explain::{ExplainContext, ExplainSinglePlan};
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{Id, LocalId};
 use mz_ore::stack::RecursionLimitError;
-use mz_repr::explain::{AnnotatedPlan, Explain, ExplainError, ScalarOps, UnsupportedFormat};
 use mz_repr::RelationType;
+use mz_repr::explain::{AnnotatedPlan, Explain, ExplainError, ScalarOps, UnsupportedFormat};
 
 use crate::plan::{HirRelationExpr, HirScalarExpr};
 

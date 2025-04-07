@@ -22,8 +22,8 @@ use arrow::array::{Array, Int64Array};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
+use futures_util::stream::FuturesUnordered;
 use itertools::Itertools;
 use mz_ore::task::JoinHandle;
 use mz_persist::indexed::encoding::BlobTraceUpdates;
@@ -34,14 +34,14 @@ use mz_persist_types::part::Part;
 use mz_persist_types::{Codec, Codec64};
 use semver::Version;
 use timely::progress::Timestamp;
-use tracing::{debug_span, Instrument};
+use tracing::{Instrument, debug_span};
 
+use crate::ShardId;
 use crate::fetch::{EncodedPart, FetchBatchFilter};
 use crate::internal::encoding::Schemas;
 use crate::internal::metrics::{ReadMetrics, ShardMetrics};
 use crate::internal::state::{HollowRun, RunMeta, RunOrder, RunPart};
 use crate::metrics::Metrics;
-use crate::ShardId;
 
 /// Versions prior to this had bugs in consolidation, or used a different sort. However,
 /// we can assume that consolidated parts at this version or higher were consolidated
@@ -981,11 +981,11 @@ mod tests {
 
     use std::sync::Arc;
 
+    use crate::ShardId;
     use crate::cfg::PersistConfig;
     use crate::internal::paths::PartialBatchKey;
     use crate::internal::state::{BatchPart, HollowBatchPart};
     use crate::metrics::Metrics;
-    use crate::ShardId;
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::trace::Description;
     use mz_ore::metrics::MetricsRegistry;

@@ -19,19 +19,19 @@ use mz_pgcopy::CopyFormatParams;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::bytes::ByteSize;
 use mz_repr::{CatalogItemId, GlobalId, RelationDesc};
-use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
+use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy, any};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-use timely::progress::frontier::Antichain;
 use timely::PartialOrder;
+use timely::progress::frontier::Antichain;
 
+use crate::AlterCompatible;
 use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
 use crate::connections::{ConnectionContext, KafkaConnection, KafkaTopicOptions};
 use crate::controller::{AlterError, CollectionMetadata};
-use crate::AlterCompatible;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.sinks.rs"));
 
@@ -679,7 +679,7 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
                 None => {
                     return Err(TryFromProtoError::missing_field(
                         "ProtoKafkaSinkConnectionV2::compression_type",
-                    ))
+                    ));
                 }
             },
             progress_group_id: proto

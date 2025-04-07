@@ -58,11 +58,11 @@ use crate::durable::objects::{
     SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
 };
 use crate::durable::{
-    CatalogError, DefaultPrivilege, DurableCatalogError, DurableCatalogState, NetworkPolicy,
-    Snapshot, SystemConfiguration, AUDIT_LOG_ID_ALLOC_KEY, BUILTIN_MIGRATION_SHARD_KEY,
-    CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY, EXPRESSION_CACHE_SHARD_KEY, OID_ALLOC_KEY,
-    SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY,
-    SYSTEM_ITEM_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY,
+    AUDIT_LOG_ID_ALLOC_KEY, BUILTIN_MIGRATION_SHARD_KEY, CATALOG_CONTENT_VERSION_KEY, CatalogError,
+    DATABASE_ID_ALLOC_KEY, DefaultPrivilege, DurableCatalogError, DurableCatalogState,
+    EXPRESSION_CACHE_SHARD_KEY, NetworkPolicy, OID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY,
+    STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY,
+    SYSTEM_REPLICA_ID_ALLOC_KEY, Snapshot, SystemConfiguration, USER_ITEM_ALLOC_KEY,
     USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
@@ -494,16 +494,21 @@ impl<'a> Transaction<'a> {
     ) -> Result<(), CatalogError> {
         let key = ClusterReplicaKey { id: replica_id };
 
-        match self.cluster_replicas.update(|k, v| {
-            if *k == key {
-                let mut value = v.clone();
-                value.name = replica_to_name.to_string();
-                Some(value)
-            } else {
-                None
+        match self.cluster_replicas.update(
+            |k, v| {
+                if *k == key {
+                    let mut value = v.clone();
+                    value.name = replica_to_name.to_string();
+                    Some(value)
+                } else {
+                    None
+                }
+            },
+            self.op_id,
+        )? {
+            Diff::ZERO => {
+                Err(SqlCatalogError::UnknownClusterReplica(replica_name.to_string()).into())
             }
-        }, self.op_id)? {
-            Diff::ZERO => Err(SqlCatalogError::UnknownClusterReplica(replica_name.to_string()).into()),
             Diff::ONE => Ok(()),
             n => panic!(
                 "Expected to update single cluster replica {replica_name} ({replica_id}), updated {n}"
@@ -2463,9 +2468,10 @@ impl<'a> Transaction<'a> {
         // transaction, otherwise the commit was performed with an out of date state.
         // Read-only catalogs can only commit empty transactions, so they don't need to consume all
         // updates before committing.
-        soft_assert_no_log!(durable_storage.is_read_only() || updates.iter().all
-            (|update| update.ts == commit_ts),
-            "unconsumed updates existed before transaction commit: commit_ts={commit_ts:?}, updates:{updates:?}");
+        soft_assert_no_log!(
+            durable_storage.is_read_only() || updates.iter().all(|update| update.ts == commit_ts),
+            "unconsumed updates existed before transaction commit: commit_ts={commit_ts:?}, updates:{updates:?}"
+        );
         Ok(())
     }
 }
@@ -3308,7 +3314,7 @@ mod tests {
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::PersistClient;
 
-    use crate::durable::{test_bootstrap_args, TestCatalogStateBuilder};
+    use crate::durable::{TestCatalogStateBuilder, test_bootstrap_args};
     use crate::memory;
 
     #[mz_ore::test]
@@ -3326,12 +3332,16 @@ mod tests {
         // for DurableCatalogError.
         assert_ok!(table.insert(2i64.to_le_bytes().to_vec(), "b".to_string(), 0));
         assert_ok!(table.insert(3i64.to_le_bytes().to_vec(), "c".to_string(), 0));
-        assert!(table
-            .insert(1i64.to_le_bytes().to_vec(), "c".to_string(), 0)
-            .is_err());
-        assert!(table
-            .insert(4i64.to_le_bytes().to_vec(), "c".to_string(), 0)
-            .is_err());
+        assert!(
+            table
+                .insert(1i64.to_le_bytes().to_vec(), "c".to_string(), 0)
+                .is_err()
+        );
+        assert!(
+            table
+                .insert(4i64.to_le_bytes().to_vec(), "c".to_string(), 0)
+                .is_err()
+        );
     }
 
     #[mz_ore::test]
@@ -3646,12 +3656,16 @@ mod tests {
         table_txn
             .update_by_key(1i64.to_le_bytes().to_vec(), "v7".to_string(), 0)
             .unwrap_err();
-        assert!(table_txn
-            .update_by_key(1i64.to_le_bytes().to_vec(), "v8".to_string(), 1)
-            .unwrap());
-        assert!(!table_txn
-            .update_by_key(5i64.to_le_bytes().to_vec(), "v8".to_string(), 2)
-            .unwrap());
+        assert!(
+            table_txn
+                .update_by_key(1i64.to_le_bytes().to_vec(), "v8".to_string(), 1)
+                .unwrap()
+        );
+        assert!(
+            !table_txn
+                .update_by_key(5i64.to_le_bytes().to_vec(), "v8".to_string(), 2)
+                .unwrap()
+        );
         let pending = table_txn.pending();
         assert_eq!(
             pending,
@@ -3676,9 +3690,11 @@ mod tests {
         // Duplicate `update_by_key`.
         let mut table_txn =
             TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
-        assert!(table_txn
-            .update_by_key(1i64.to_le_bytes().to_vec(), "v8".to_string(), 0)
-            .unwrap());
+        assert!(
+            table_txn
+                .update_by_key(1i64.to_le_bytes().to_vec(), "v8".to_string(), 0)
+                .unwrap()
+        );
         let pending = table_txn.pending::<Vec<u8>, String>();
         assert!(pending.is_empty());
         commit(&mut table, pending);

@@ -40,16 +40,16 @@ use crate::error::{CodecMismatch, CodecMismatchT};
 use crate::internal::metrics::Metrics;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::state::{
-    proto_hollow_batch_part, BatchPart, CriticalReaderState, EncodedSchemas, HandleDebugState,
-    HollowBatch, HollowBatchPart, HollowRollup, HollowRun, HollowRunRef, IdempotencyToken,
-    LeasedReaderState, OpaqueState, ProtoCompaction, ProtoCriticalReaderState, ProtoEncodedSchemas,
-    ProtoHandleDebugState, ProtoHollowBatch, ProtoHollowBatchPart, ProtoHollowRollup,
-    ProtoHollowRun, ProtoHollowRunRef, ProtoIdHollowBatch, ProtoIdMerge, ProtoIdSpineBatch,
-    ProtoInlineBatchPart, ProtoInlinedDiffs, ProtoLeasedReaderState, ProtoMerge, ProtoRollup,
-    ProtoRunMeta, ProtoRunOrder, ProtoSpineBatch, ProtoSpineId, ProtoStateDiff, ProtoStateField,
-    ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoTrace, ProtoU64Antichain,
-    ProtoU64Description, ProtoVersionedData, ProtoWriterState, RunMeta, RunOrder, RunPart, State,
-    StateCollections, TypedState, WriterState,
+    BatchPart, CriticalReaderState, EncodedSchemas, HandleDebugState, HollowBatch, HollowBatchPart,
+    HollowRollup, HollowRun, HollowRunRef, IdempotencyToken, LeasedReaderState, OpaqueState,
+    ProtoCompaction, ProtoCriticalReaderState, ProtoEncodedSchemas, ProtoHandleDebugState,
+    ProtoHollowBatch, ProtoHollowBatchPart, ProtoHollowRollup, ProtoHollowRun, ProtoHollowRunRef,
+    ProtoIdHollowBatch, ProtoIdMerge, ProtoIdSpineBatch, ProtoInlineBatchPart, ProtoInlinedDiffs,
+    ProtoLeasedReaderState, ProtoMerge, ProtoRollup, ProtoRunMeta, ProtoRunOrder, ProtoSpineBatch,
+    ProtoSpineId, ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs,
+    ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoVersionedData, ProtoWriterState,
+    RunMeta, RunOrder, RunPart, State, StateCollections, TypedState, WriterState,
+    proto_hollow_batch_part,
 };
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, ProtoStateFieldDiffsWriter, StateDiff, StateFieldDiff, StateFieldValDiff,
@@ -58,7 +58,7 @@ use crate::internal::trace::{
     ActiveCompaction, FlatTrace, SpineId, ThinMerge, ThinSpineBatch, Trace,
 };
 use crate::read::{LeasedReaderId, READER_LEASE_DURATION};
-use crate::{cfg, PersistConfig, ShardId, WriterId};
+use crate::{PersistConfig, ShardId, WriterId, cfg};
 
 #[derive(Debug)]
 pub struct Schemas<K: Codec, V: Codec> {
@@ -1735,12 +1735,12 @@ mod tests {
     use mz_persist::location::SeqNo;
     use proptest::prelude::*;
 
+    use crate::ShardId;
     use crate::internal::paths::PartialRollupKey;
     use crate::internal::state::tests::any_state;
     use crate::internal::state::{BatchPart, HandleDebugState};
     use crate::internal::state_diff::StateDiff;
     use crate::tests::new_test_client_cache;
-    use crate::ShardId;
 
     use super::*;
 

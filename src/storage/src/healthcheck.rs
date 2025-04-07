@@ -960,9 +960,9 @@ mod tests {
 
     use mz_ore::assert_err;
     use timely::container::CapacityContainerBuilder;
-    use timely::dataflow::operators::exchange::Exchange;
     use timely::dataflow::Scope;
-    use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+    use timely::dataflow::operators::exchange::Exchange;
+    use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
     /// A status to assert.
     #[derive(Debug, Clone, PartialEq, Eq)]

@@ -17,9 +17,9 @@
 //! Frontegg client is used to request and manage the access token.
 use std::sync::Arc;
 
-use reqwest::{header::HeaderMap, Method, RequestBuilder, StatusCode, Url};
-use serde::de::DeserializeOwned;
+use reqwest::{Method, RequestBuilder, StatusCode, Url, header::HeaderMap};
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 
 use crate::config::API_VERSION_HEADER;
 use crate::error::{ApiError, Error};

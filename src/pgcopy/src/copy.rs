@@ -16,7 +16,7 @@ use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{
     ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, RowRef, ScalarType, SharedRow,
 };
-use proptest::prelude::{any, Arbitrary, Just};
+use proptest::prelude::{Arbitrary, Just, any};
 use proptest::strategy::{BoxedStrategy, Strategy, Union};
 use serde::Deserialize;
 use serde::Serialize;
@@ -880,10 +880,12 @@ mod tests {
             .expect_column_delimiter()
             .expect("expected column delimiter");
         // null value
-        assert!(parser
-            .consume_raw_value()
-            .expect("unexpected error")
-            .is_none());
+        assert!(
+            parser
+                .consume_raw_value()
+                .expect("unexpected error")
+                .is_none()
+        );
         parser
             .expect_column_delimiter()
             .expect("expected column delimiter");

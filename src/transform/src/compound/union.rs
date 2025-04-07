@@ -14,8 +14,8 @@
 
 use std::iter;
 
-use mz_expr::visit::Visit;
 use mz_expr::MirRelationExpr;
+use mz_expr::visit::Visit;
 use mz_repr::RelationType;
 
 use crate::TransformCtx;

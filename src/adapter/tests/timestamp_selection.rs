@@ -12,9 +12,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use async_trait::async_trait;
+use mz_adapter::ReadHolds;
 use mz_adapter::catalog::CatalogState;
 use mz_adapter::session::Session;
-use mz_adapter::ReadHolds;
 use mz_adapter::{CollectionIdBundle, TimelineContext, TimestampProvider};
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::MirScalarExpr;

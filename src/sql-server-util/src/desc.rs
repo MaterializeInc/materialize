@@ -300,7 +300,7 @@ fn parse_data_type(
                 column_type: other.to_string(),
                 column_name: raw.name.to_string(),
                 reason: "unimplemented".to_string(),
-            })
+            });
         }
     };
     Ok(scalar)

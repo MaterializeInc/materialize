@@ -416,7 +416,7 @@ mod tests {
     use proptest::prelude::*;
     use proptest::strategy::Union;
 
-    use super::{filter_headers, pack_rows, WebhookError};
+    use super::{WebhookError, filter_headers, pack_rows};
 
     // TODO(parkmycar): Move this strategy to `ore`?
     fn arbitrary_json() -> impl Strategy<Value = serde_json::Value> {

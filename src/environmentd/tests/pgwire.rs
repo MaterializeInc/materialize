@@ -21,10 +21,10 @@ use mz_environmentd::test_util::{self, PostgresErrorExt};
 use mz_ore::retry::Retry;
 use mz_ore::{assert_err, assert_ok};
 use mz_pgrepr::{Numeric, Record};
+use postgres::SimpleQueryMessage;
 use postgres::binary_copy::BinaryCopyOutIter;
 use postgres::error::SqlState;
 use postgres::types::Type;
-use postgres::SimpleQueryMessage;
 use postgres_array::{Array, Dimension};
 use tokio::sync::mpsc;
 
@@ -44,10 +44,12 @@ fn test_bind_params() {
         ),
     }
 
-    assert!(client
-        .query_one("SELECT ROW(1, 2) = ROW(1, $1)", &[&2_i32])
-        .unwrap()
-        .get::<_, bool>(0));
+    assert!(
+        client
+            .query_one("SELECT ROW(1, 2) = ROW(1, $1)", &[&2_i32])
+            .unwrap()
+            .get::<_, bool>(0)
+    );
 
     // Just ensure it does not panic (see database-issues#871).
     client
@@ -76,7 +78,7 @@ fn test_bind_params() {
     // Ensure that the fractional component of a decimal is not lost.
     {
         let mut num = Numeric::from(mz_repr::adt::numeric::Numeric::from(123));
-        num.0 .0.set_exponent(-2);
+        num.0.0.set_exponent(-2);
         let stmt = client
             .prepare_typed("SELECT $1 + 2.34", &[Type::NUMERIC])
             .unwrap();

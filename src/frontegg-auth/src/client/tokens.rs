@@ -96,12 +96,12 @@ pub struct ApiTokenResponse {
 #[cfg(test)]
 mod tests {
     use axum::http::StatusCode;
-    use axum::{routing::post, Router};
+    use axum::{Router, routing::post};
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::{assert_err, assert_ok};
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::net::TcpListener;
     use uuid::Uuid;
 

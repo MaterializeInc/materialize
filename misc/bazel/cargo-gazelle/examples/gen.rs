@@ -10,11 +10,11 @@
 use anyhow::Context;
 use cargo_toml::Manifest;
 
+use cargo_gazelle::BazelBuildFile;
 use cargo_gazelle::config::{CrateConfig, GlobalConfig};
 use cargo_gazelle::context::CrateContext;
 use cargo_gazelle::header::BazelHeader;
 use cargo_gazelle::targets::{CargoBuildScript, RustLibrary, RustTarget};
-use cargo_gazelle::BazelBuildFile;
 
 pub fn main() -> Result<(), anyhow::Error> {
     let path = "../../../src/proto/Cargo.toml";

@@ -8,14 +8,14 @@
 // by the Apache License, Version 2.0.
 
 use mz_ore::now::SYSTEM_TIME;
-use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistLocation;
+use mz_persist_client::cache::PersistClientCache;
 use uuid::Uuid;
 
 use crate::durable::persist::{
-    fetch_catalog_upgrade_shard_version, shard_id, CATALOG_SEED, UPGRADE_SEED,
+    CATALOG_SEED, UPGRADE_SEED, fetch_catalog_upgrade_shard_version, shard_id,
 };
-use crate::durable::{test_bootstrap_args, DurableCatalogError, TestCatalogStateBuilder};
+use crate::durable::{DurableCatalogError, TestCatalogStateBuilder, test_bootstrap_args};
 
 /// Test that the catalog forces users to upgrade one version at a time.
 #[mz_ore::test(tokio::test)]

@@ -14,11 +14,11 @@ use std::time::Duration;
 use futures::future::join_all;
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use kube::api::{Patch, PatchParams};
+use kube::{Api, Client};
 use kube::{
     core::crd::merge_crds,
     runtime::{conditions, wait::await_condition},
 };
-use kube::{Api, Client};
 use tracing::{info, warn};
 
 use mz_ore::retry::Retry;

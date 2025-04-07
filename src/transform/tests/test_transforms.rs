@@ -9,8 +9,8 @@
 
 use std::collections::BTreeSet;
 
-use mz_expr::explain::{enforce_linear_chains, ExplainContext};
-use mz_expr_parser::{handle_define, try_parse_mir, TestCatalog};
+use mz_expr::explain::{ExplainContext, enforce_linear_chains};
+use mz_expr_parser::{TestCatalog, handle_define, try_parse_mir};
 use mz_ore::str::Indent;
 use mz_repr::explain::text::text_string_at;
 use mz_repr::explain::{ExplainConfig, PlanRenderingContext};
@@ -115,7 +115,7 @@ fn handle_typecheck(
     };
 
     // Apply the transformation, returning early on TransformError.
-    use mz_transform::typecheck::{columns_pretty, Typecheck};
+    use mz_transform::typecheck::{Typecheck, columns_pretty};
     let ctx = mz_transform::typecheck::empty_context();
 
     let tc = Typecheck::new(std::sync::Arc::clone(&ctx));

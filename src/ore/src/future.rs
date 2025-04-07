@@ -28,9 +28,9 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use async_trait::async_trait;
+use futures::Stream;
 use futures::future::{CatchUnwind, FutureExt};
 use futures::sink::Sink;
-use futures::Stream;
 use pin_project::pin_project;
 use tokio::task::futures::TaskLocalFuture;
 use tokio::time::{self, Duration, Instant};

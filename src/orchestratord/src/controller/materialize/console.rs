@@ -22,7 +22,7 @@ use k8s_openapi::{
     },
     apimachinery::pkg::{apis::meta::v1::LabelSelector, util::intstr::IntOrString},
 };
-use kube::{api::ObjectMeta, runtime::controller::Action, Api, Client};
+use kube::{Api, Client, api::ObjectMeta, runtime::controller::Action};
 use maplit::btreemap;
 use tracing::trace;
 

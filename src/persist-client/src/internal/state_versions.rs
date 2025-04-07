@@ -22,14 +22,14 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
 use mz_persist::location::{
-    Blob, CaSResult, Consensus, Indeterminate, SeqNo, VersionedData, SCAN_ALL,
+    Blob, CaSResult, Consensus, Indeterminate, SCAN_ALL, SeqNo, VersionedData,
 };
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::RustType;
 use prost::Message;
 use timely::progress::Timestamp;
-use tracing::{debug, debug_span, trace, warn, Instrument};
+use tracing::{Instrument, debug, debug_span, trace, warn};
 
 use crate::cfg::STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT;
 use crate::error::{CodecMismatch, CodecMismatchT};
@@ -284,7 +284,7 @@ impl StateVersions {
                     new_state
                         .seqno
                         .0
-                        .saturating_sub(new_state.latest_rollup().0 .0),
+                        .saturating_sub(new_state.latest_rollup().0.0),
                 );
                 shard_metrics
                     .spine_batch_count
@@ -440,12 +440,15 @@ impl StateVersions {
                         .expect("initialized shard should have at least one diff")
                         .seqno;
                     if earliest_before_refetch >= earliest_after_refetch {
-                        warn!(concat!(
-                            "fetch_current_state refetch expects earliest live diff to advance: {} vs {}. ",
-                            "In dev and testing, this happens when persist's Blob (files in mzdata) ",
-                            "is deleted out from under it or when two processes are talking to ",
-                            "different Blobs (e.g. docker containers without it shared)."),
-                            earliest_before_refetch, earliest_after_refetch)
+                        warn!(
+                            concat!(
+                                "fetch_current_state refetch expects earliest live diff to advance: {} vs {}. ",
+                                "In dev and testing, this happens when persist's Blob (files in mzdata) ",
+                                "is deleted out from under it or when two processes are talking to ",
+                                "different Blobs (e.g. docker containers without it shared)."
+                            ),
+                            earliest_before_refetch, earliest_after_refetch
+                        )
                     }
                     continue;
                 }
@@ -509,12 +512,15 @@ impl StateVersions {
                         .expect("initialized shard should have at least one diff")
                         .seqno;
                     if earliest_before_refetch >= earliest_after_refetch {
-                        warn!(concat!(
-                            "fetch_all_live_states refetch expects earliest live diff to advance: {} vs {}. ",
-                            "In dev and testing, this happens when persist's Blob (files in mzdata) ",
-                            "is deleted out from under it or when two processes are talking to ",
-                            "different Blobs (e.g. docker containers without it shared)."),
-                            earliest_before_refetch, earliest_after_refetch)
+                        warn!(
+                            concat!(
+                                "fetch_all_live_states refetch expects earliest live diff to advance: {} vs {}. ",
+                                "In dev and testing, this happens when persist's Blob (files in mzdata) ",
+                                "is deleted out from under it or when two processes are talking to ",
+                                "different Blobs (e.g. docker containers without it shared)."
+                            ),
+                            earliest_before_refetch, earliest_after_refetch
+                        )
                     }
                     continue;
                 }
@@ -1236,9 +1242,11 @@ mod tests {
             Arc::clone(&client.blob),
             Arc::clone(&client.metrics),
         );
-        assert!(state_versions
-            .fetch_all_live_states::<u64>(ShardId::new())
-            .await
-            .is_none());
+        assert!(
+            state_versions
+                .fetch_all_live_states::<u64>(ShardId::new())
+                .await
+                .is_none()
+        );
     }
 }

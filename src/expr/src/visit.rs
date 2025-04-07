@@ -36,7 +36,7 @@
 
 use std::marker::PhantomData;
 
-use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimitError};
+use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError, maybe_grow};
 
 use crate::RECURSION_LIMIT;
 

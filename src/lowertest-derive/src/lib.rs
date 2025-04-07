@@ -12,8 +12,8 @@
 //! TODO: eliminate macros in favor of using `walkabout`?
 
 use proc_macro::TokenStream;
-use quote::{quote, ToTokens};
-use syn::{parse, Data, DeriveInput, Fields};
+use quote::{ToTokens, quote};
+use syn::{Data, DeriveInput, Fields, parse};
 
 /// Types defined outside of Materialize used to build test objects.
 const EXTERNAL_TYPES: &[&str] = &["String", "FixedOffset", "Tz", "NaiveDateTime", "Regex"];

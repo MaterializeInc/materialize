@@ -19,13 +19,13 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
+use crate::AlterCompatible;
 use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
 use crate::controller::AlterError;
 use crate::sources::{SourceConnection, SourceExportDetails, SourceTimestamp};
-use crate::AlterCompatible;
 
 include!(concat!(
     env!("OUT_DIR"),

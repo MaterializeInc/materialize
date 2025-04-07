@@ -10,8 +10,8 @@
 //! A cache of [PersistClient]s indexed by [PersistLocation]s.
 
 use std::any::Any;
-use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 use std::fmt::Debug;
 use std::future::Future;
 use std::sync::{Arc, RwLock, TryLockError, Weak};
@@ -25,8 +25,8 @@ use mz_ore::task::{AbortOnDropHandle, JoinHandle};
 use mz_ore::url::SensitiveUrl;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{
-    Blob, Consensus, ExternalError, Tasked, VersionedData, BLOB_GET_LIVENESS_KEY,
-    CONSENSUS_HEAD_LIVENESS_KEY,
+    BLOB_GET_LIVENESS_KEY, Blob, CONSENSUS_HEAD_LIVENESS_KEY, Consensus, ExternalError, Tasked,
+    VersionedData,
 };
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
@@ -514,7 +514,7 @@ impl StateCache {
                             Some(CodecConcreteType(std::any::type_name::<(K, V, T, D)>())),
                         ),
                         actual: state.codecs(),
-                    }))
+                    }));
                 }
             }
         }

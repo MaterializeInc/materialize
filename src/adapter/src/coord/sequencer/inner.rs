@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use futures::future::{BoxFuture, FutureExt};
 use futures::stream::FuturesOrdered;
-use futures::{future, Future};
+use futures::{Future, future};
 use itertools::Itertools;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
@@ -33,15 +33,15 @@ use mz_expr::{
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::{CollectionExt, HashSet};
-use mz_ore::task::{self, spawn, JoinHandle};
+use mz_ore::task::{self, JoinHandle, spawn};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
 use mz_ore::{assert_none, instrument};
 use mz_persist_client::stats::SnapshotPartStats;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
-use mz_repr::explain::json::json_string;
 use mz_repr::explain::ExprHumanizer;
+use mz_repr::explain::json::json_string;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
     CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, RelationVersion,
@@ -59,7 +59,7 @@ use mz_sql::names::{
     SchemaSpecifier, SystemObjectId,
 };
 use mz_sql::plan::{ConnectionDetails, NetworkPolicyRule, StatementContext};
-use mz_sql::pure::{generate_subsource_statements, PurifiedSourceExport};
+use mz_sql::pure::{PurifiedSourceExport, generate_subsource_statements};
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::GenericSourceConnection;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
@@ -71,8 +71,8 @@ use mz_sql::plan::{
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::UserKind;
 use mz_sql::session::vars::{
-    self, IsolationLevel, OwnedVarInput, SessionVars, Var, VarError, VarInput, NETWORK_POLICY,
-    SCHEMA_ALIAS, TRANSACTION_ISOLATION_VAR_NAME,
+    self, IsolationLevel, NETWORK_POLICY, OwnedVarInput, SCHEMA_ALIAS, SessionVars,
+    TRANSACTION_ISOLATION_VAR_NAME, Var, VarError, VarInput,
 };
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -83,38 +83,38 @@ use mz_sql_parser::ast::{
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
+use mz_storage_types::AlterCompatible;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
 use mz_storage_types::stats::RelationPartStats;
-use mz_storage_types::AlterCompatible;
+use mz_transform::EmptyStatisticsOracle;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizerNotice};
-use mz_transform::EmptyStatisticsOracle;
 use smallvec::SmallVec;
 use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 use tokio::sync::{oneshot, watch};
-use tracing::{info, warn, Instrument, Span};
+use tracing::{Instrument, Span, info, warn};
 
 use crate::catalog::{self, Catalog, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant};
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{BuiltinTableAppendNotify, DeferredOp, DeferredPlan, PendingWriteTxn};
 use crate::coord::{
-    validate_ip_with_policy_rules, AlterConnectionValidationReady, AlterSinkReadyContext,
-    Coordinator, CreateConnectionValidationReady, DeferredPlanStatement, ExecuteContext,
-    ExplainContext, Message, NetworkPolicyError, PendingRead, PendingReadTxn, PendingTxn,
-    PendingTxnResponse, PlanValidity, StageResult, Staged, StagedContext, TargetCluster,
-    WatchSetResponse,
+    AlterConnectionValidationReady, AlterSinkReadyContext, Coordinator,
+    CreateConnectionValidationReady, DeferredPlanStatement, ExecuteContext, ExplainContext,
+    Message, NetworkPolicyError, PendingRead, PendingReadTxn, PendingTxn, PendingTxnResponse,
+    PlanValidity, StageResult, Staged, StagedContext, TargetCluster, WatchSetResponse,
+    validate_ip_with_policy_rules,
 };
 use crate::error::AdapterError;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
-use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
+use crate::optimize::dataflows::{EvalTime, ExprPrepStyle, prep_scalar_expr};
 use crate::optimize::{self, Optimize};
 use crate::session::{
     EndTransactionAction, RequireLinearization, Session, TransactionOps, TransactionStatus,
     WriteLocks, WriteOp,
 };
-use crate::util::{viewable_variables, ClientTransmitter, ResultExt};
+use crate::util::{ClientTransmitter, ResultExt, viewable_variables};
 use crate::{PeekResponseUnary, ReadHolds};
 
 mod cluster;
@@ -791,7 +791,7 @@ impl Coordinator {
                     None => {
                         return ctx.retire(Err(AdapterError::Unstructured(anyhow!(
                             "the PUBLIC KEY 1 option cannot be explicitly specified"
-                        ))))
+                        ))));
                     }
                 };
 
@@ -800,7 +800,7 @@ impl Coordinator {
                     None => {
                         return ctx.retire(Err(AdapterError::Unstructured(anyhow!(
                             "the PUBLIC KEY 2 option cannot be explicitly specified"
-                        ))))
+                        ))));
                     }
                 };
 
@@ -2196,7 +2196,7 @@ impl Coordinator {
         for mode in plan.modes {
             match mode {
                 TransactionMode::AccessMode(_) => {
-                    return Err(AdapterError::Unsupported("SET TRANSACTION <access-mode>"))
+                    return Err(AdapterError::Unsupported("SET TRANSACTION <access-mode>"));
                 }
                 TransactionMode::IsolationLevel(isolation_level) => {
                     self.validate_set_isolation_level(session)?;
@@ -2908,8 +2908,8 @@ impl Coordinator {
             catalog: &Catalog,
             id: &CatalogItemId,
         ) -> Result<(), AdapterError> {
-            use mz_catalog::memory::objects;
             use CatalogItemType::*;
+            use mz_catalog::memory::objects;
             let mut ids_to_check = Vec::new();
             let valid = match catalog.try_get_entry(id) {
                 Some(entry) => {
@@ -4068,10 +4068,10 @@ impl Coordinator {
                         let column_referenced =
                             |column_qualified_reference: &UnresolvedItemName| {
                                 mz_ore::soft_assert_eq_or_log!(
-                                column_qualified_reference.0.len(),
-                                3,
-                                "all TEXT COLUMNS & EXCLUDE COLUMNS values must be column-qualified references"
-                            );
+                                    column_qualified_reference.0.len(),
+                                    3,
+                                    "all TEXT COLUMNS & EXCLUDE COLUMNS values must be column-qualified references"
+                                );
                                 let mut table = column_qualified_reference.clone();
                                 table.0.truncate(2);
                                 curr_references.contains(&table)
@@ -4953,9 +4953,7 @@ impl CachedStatisticsOracle {
     pub async fn new<T: TimelyTimestamp>(
         ids: &BTreeSet<GlobalId>,
         as_of: &Antichain<T>,
-        storage_collections: &dyn mz_storage_client::storage_collections::StorageCollections<
-            Timestamp = T,
-        >,
+        storage_collections: &dyn mz_storage_client::storage_collections::StorageCollections<Timestamp = T>,
     ) -> Result<Self, StorageError<T>> {
         let mut cache = BTreeMap::new();
 

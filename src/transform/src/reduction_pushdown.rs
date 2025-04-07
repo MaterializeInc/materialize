@@ -53,8 +53,8 @@ use std::iter::FromIterator;
 use mz_expr::visit::Visit;
 use mz_expr::{AggregateExpr, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
-use crate::analysis::equivalences::EquivalenceClasses;
 use crate::TransformCtx;
+use crate::analysis::equivalences::EquivalenceClasses;
 
 /// Pushes Reduce operators toward sources.
 #[derive(Debug)]

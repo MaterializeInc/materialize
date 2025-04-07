@@ -18,8 +18,8 @@ use anyhow::anyhow;
 use async_stream::try_stream;
 use async_trait::async_trait;
 use bytes::Bytes;
-use deadpool_postgres::tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 use deadpool_postgres::tokio_postgres::Config;
+use deadpool_postgres::tokio_postgres::types::{FromSql, IsNull, ToSql, Type, to_sql_checked};
 use deadpool_postgres::{Object, PoolError};
 use futures_util::StreamExt;
 use mz_ore::cast::CastFrom;
@@ -220,14 +220,19 @@ impl PostgresConsensus {
         {
             Ok(()) => true,
             Err(e) if e.code() == Some(&SqlState::INSUFFICIENT_PRIVILEGE) => {
-                warn!("unable to ALTER TABLE consensus, this is expected and OK when connecting with a read-only user");
+                warn!(
+                    "unable to ALTER TABLE consensus, this is expected and OK when connecting with a read-only user"
+                );
                 true
             }
             Err(e)
                 if e.code() == Some(&SqlState::INVALID_PARAMETER_VALUE)
                     || e.code() == Some(&SqlState::SYNTAX_ERROR) =>
             {
-                info!("unable to initiate consensus with CRDB params, this is expected and OK when running against Postgres: {:?}", e);
+                info!(
+                    "unable to initiate consensus with CRDB params, this is expected and OK when running against Postgres: {:?}",
+                    e
+                );
                 false
             }
             Err(e) => return Err(e.into()),
@@ -258,14 +263,19 @@ impl PostgresConsensus {
         {
             Ok(()) => true,
             Err(e) if e.code() == Some(&SqlState::INSUFFICIENT_PRIVILEGE) => {
-                warn!("unable to ALTER TABLE consensus, this is expected and OK when connecting with a read-only user");
+                warn!(
+                    "unable to ALTER TABLE consensus, this is expected and OK when connecting with a read-only user"
+                );
                 true
             }
             Err(e)
                 if e.code() == Some(&SqlState::INVALID_PARAMETER_VALUE)
                     || e.code() == Some(&SqlState::SYNTAX_ERROR) =>
             {
-                info!("unable to initiate consensus with CRDB params, this is expected and OK when running against Postgres: {:?}", e);
+                info!(
+                    "unable to initiate consensus with CRDB params, this is expected and OK when running against Postgres: {:?}",
+                    e
+                );
                 false
             }
             Err(e) => return Err(e.into()),

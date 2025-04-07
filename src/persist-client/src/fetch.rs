@@ -37,14 +37,16 @@ use mz_persist_types::stats::PartStats;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use serde::{Deserialize, Serialize};
+use timely::PartialOrder;
+use timely::PartialOrder;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
-use tracing::{debug, debug_span, trace_span, Instrument};
+use tracing::{Instrument, debug, debug_span, trace_span};
 
+use crate::ShardId;
 use crate::batch::{
-    proto_fetch_batch_filter, ProtoFetchBatchFilter, ProtoFetchBatchFilterListen, ProtoLease,
-    ProtoLeasedBatchPart,
+    ProtoFetchBatchFilter, ProtoFetchBatchFilterListen, ProtoLease, ProtoLeasedBatchPart,
+    proto_fetch_batch_filter,
 };
 use crate::cfg::PersistConfig;
 use crate::error::InvalidUsage;
@@ -55,7 +57,6 @@ use crate::internal::paths::BlobKey;
 use crate::internal::state::{BatchPart, HollowBatchPart, ProtoInlineBatchPart};
 use crate::read::LeasedReaderId;
 use crate::schema::{PartMigration, SchemaCache};
-use crate::ShardId;
 
 pub(crate) const FETCH_SEMAPHORE_COST_ADJUSTMENT: Config<f64> = Config::new(
     "persist_fetch_semaphore_cost_adjustment",

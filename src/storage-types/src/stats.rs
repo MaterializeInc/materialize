@@ -149,7 +149,10 @@ impl RelationPartStats<'_> {
                 (true, Some(_)) => ResultSpec::null(),
                 (col_null, stats_null) => {
                     self.metrics.mismatched_count.inc();
-                    tracing::error!("JSON column nullability mismatch, col {} null: {col_null}, stats: {stats_null:?}", self.name);
+                    tracing::error!(
+                        "JSON column nullability mismatch, col {} null: {col_null}, stats: {stats_null:?}",
+                        self.name
+                    );
                     return None;
                 }
             };
@@ -222,8 +225,8 @@ mod tests {
     use mz_persist_types::columnar::{ColumnDecoder, Schema};
     use mz_persist_types::part::PartBuilder;
     use mz_persist_types::stats::PartStats;
-    use mz_repr::{arb_datum_for_column, RelationType};
     use mz_repr::{ColumnType, Datum, RelationDesc, Row, RowArena, ScalarType};
+    use mz_repr::{RelationType, arb_datum_for_column};
     use proptest::prelude::*;
     use proptest::strategy::ValueTree;
 

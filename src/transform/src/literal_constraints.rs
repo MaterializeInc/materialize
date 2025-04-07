@@ -21,9 +21,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
+use mz_expr::JoinImplementation::IndexedFilter;
 use mz_expr::canonicalize::canonicalize_predicates;
 use mz_expr::visit::{Visit, VisitChildren};
-use mz_expr::JoinImplementation::IndexedFilter;
 use mz_expr::{BinaryFunc, Id, MapFilterProject, MirRelationExpr, MirScalarExpr, VariadicFunc};
 use mz_ore::collections::CollectionExt;
 use mz_ore::iter::IteratorExt;
@@ -31,9 +31,9 @@ use mz_ore::stack::RecursionLimitError;
 use mz_ore::vec::swap_remove_multiple;
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 
+use crate::TransformCtx;
 use crate::canonicalize_mfp::CanonicalizeMfp;
 use crate::notice::IndexTooWideForLiteralConstraints;
-use crate::TransformCtx;
 
 /// Convert literal constraints into `IndexedFilter` joins.
 #[derive(Debug)]

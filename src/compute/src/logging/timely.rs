@@ -20,25 +20,25 @@ use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Timestamp};
 use mz_timely_util::containers::{
-    columnar_exchange, Col2ValBatcher, ColumnBuilder, ProvidedBuilder,
+    Col2ValBatcher, ColumnBuilder, ProvidedBuilder, columnar_exchange,
 };
 use mz_timely_util::replay::MzReplay;
+use timely::Container;
+use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::{Counter, Tee};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::Scope;
 use timely::logging::{
     ChannelsEvent, MessagesEvent, OperatesEvent, ParkEvent, ScheduleEvent, ShutdownEvent,
     TimelyEvent,
 };
-use timely::Container;
 use tracing::error;
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::compute::{ComputeEvent, DataflowShutdown};
-use crate::logging::{consolidate_and_pack, LogCollection, SharedLoggingState};
 use crate::logging::{EventQueue, LogVariant, TimelyLog};
+use crate::logging::{LogCollection, SharedLoggingState, consolidate_and_pack};
 use crate::row_spine::RowRowBuilder;
 use crate::typedefs::{KeyBatcher, KeyValBatcher, RowRowSpine};
 

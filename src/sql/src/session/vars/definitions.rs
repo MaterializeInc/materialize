@@ -36,16 +36,16 @@ use mz_storage_types::parameters::{
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
 use uncased::UncasedStr;
 
-use crate::session::user::{User, SUPPORT_USER, SYSTEM_USER};
+use crate::session::user::{SUPPORT_USER, SYSTEM_USER, User};
 use crate::session::vars::constraints::{
-    DomainConstraint, ValueConstraint, BYTESIZE_AT_LEAST_1MB, NUMERIC_BOUNDED_0_1_INCLUSIVE,
-    NUMERIC_NON_NEGATIVE,
+    BYTESIZE_AT_LEAST_1MB, DomainConstraint, NUMERIC_BOUNDED_0_1_INCLUSIVE, NUMERIC_NON_NEGATIVE,
+    ValueConstraint,
 };
 use crate::session::vars::errors::VarError;
-use crate::session::vars::polyfill::{lazy_value, value, LazyValueFn};
+use crate::session::vars::polyfill::{LazyValueFn, lazy_value, value};
 use crate::session::vars::value::{
-    ClientEncoding, ClientSeverity, Failpoints, IntervalStyle, IsolationLevel, TimeZone, Value,
-    DEFAULT_DATE_STYLE,
+    ClientEncoding, ClientSeverity, DEFAULT_DATE_STYLE, Failpoints, IntervalStyle, IsolationLevel,
+    TimeZone, Value,
 };
 use crate::session::vars::{FeatureFlag, Var, VarInput, VarParseError};
 use crate::{DEFAULT_SCHEMA, WEBHOOK_CONCURRENCY_LIMIT};
@@ -452,7 +452,7 @@ pub static MAX_SQL_SERVER_CONNECTIONS: VarDefinition = VarDefinition::new(
 pub static MAX_AWS_PRIVATELINK_CONNECTIONS: VarDefinition = VarDefinition::new(
     "max_aws_privatelink_connections",
     value!(u32; 0),
-     "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize).",
+    "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize).",
     true,
 );
 
@@ -1598,12 +1598,13 @@ pub mod cluster_scheduling {
         false,
     );
 
-    pub static CLUSTER_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE: VarDefinition = VarDefinition::new(
-        "cluster_topology_spread_ignore_non_singular_scale",
-        value!(bool; DEFAULT_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE),
-        "If true, ignore replicas with more than 1 process when adding topology spread constraints (Materialize).",
-        false,
-    );
+    pub static CLUSTER_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE: VarDefinition =
+        VarDefinition::new(
+            "cluster_topology_spread_ignore_non_singular_scale",
+            value!(bool; DEFAULT_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE),
+            "If true, ignore replicas with more than 1 process when adding topology spread constraints (Materialize).",
+            false,
+        );
 
     pub static CLUSTER_TOPOLOGY_SPREAD_MAX_SKEW: VarDefinition = VarDefinition::new(
         "cluster_topology_spread_max_skew",

@@ -16,8 +16,8 @@
 //!
 //! The proto conversions for this types are in the `client` module, for now.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -621,18 +621,18 @@ impl PackableStats for SourceStatisticsUpdate {
         packer.push(Datum::from(self.updates_staged.0));
         packer.push(Datum::from(self.updates_committed.0));
         // Resetting gauges.
-        packer.push(Datum::from(self.records_indexed.0 .0));
-        packer.push(Datum::from(self.bytes_indexed.0 .0));
+        packer.push(Datum::from(self.records_indexed.0.0));
+        packer.push(Datum::from(self.bytes_indexed.0.0));
         let rehydration_latency = self
             .rehydration_latency_ms
             .0
-             .0
+            .0
             .map(|ms| mz_repr::adt::interval::Interval::new(0, 0, ms * 1000));
         packer.push(Datum::from(rehydration_latency));
-        packer.push(Datum::from(self.snapshot_records_known.0 .0));
-        packer.push(Datum::from(self.snapshot_records_staged.0 .0));
+        packer.push(Datum::from(self.snapshot_records_known.0.0));
+        packer.push(Datum::from(self.snapshot_records_staged.0.0));
         // Gauges
-        packer.push(Datum::from(self.snapshot_committed.0 .0));
+        packer.push(Datum::from(self.snapshot_committed.0.0));
         packer.push(Datum::from(self.offset_known.0.pack()));
         packer.push(Datum::from(self.offset_committed.0.pack()));
     }
@@ -681,13 +681,13 @@ impl RustType<ProtoSourceStatisticsUpdate> for SourceStatisticsUpdate {
             updates_staged: self.updates_staged.0,
             updates_committed: self.updates_committed.0,
 
-            records_indexed: self.records_indexed.0 .0,
-            bytes_indexed: self.bytes_indexed.0 .0,
-            rehydration_latency_ms: self.rehydration_latency_ms.0 .0,
-            snapshot_records_known: self.snapshot_records_known.0 .0,
-            snapshot_records_staged: self.snapshot_records_staged.0 .0,
+            records_indexed: self.records_indexed.0.0,
+            bytes_indexed: self.bytes_indexed.0.0,
+            rehydration_latency_ms: self.rehydration_latency_ms.0.0,
+            snapshot_records_known: self.snapshot_records_known.0.0,
+            snapshot_records_staged: self.snapshot_records_staged.0.0,
 
-            snapshot_committed: self.snapshot_committed.0 .0,
+            snapshot_committed: self.snapshot_committed.0.0,
             offset_known: self.offset_known.0.total,
             offset_committed: self.offset_committed.0.total,
         }

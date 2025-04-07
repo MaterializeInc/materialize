@@ -20,8 +20,8 @@ use mz_dyncfg::ConfigSet;
 use mz_ore::iter::IteratorExt;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_repr::{Diff, Timestamp};
-use timely::progress::Antichain;
 use timely::PartialOrder;
+use timely::progress::Antichain;
 
 use crate::sink::correction_v2::{CorrectionV2, Data};
 

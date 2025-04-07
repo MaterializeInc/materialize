@@ -16,8 +16,8 @@ use anyhow::Context;
 use async_trait::async_trait;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_pgwire_common::{
-    decode_startup, Conn, ConnectionCounter, FrontendStartupMessage, ACCEPT_SSL_ENCRYPTION,
-    CONN_UUID_KEY, MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION,
+    ACCEPT_SSL_ENCRYPTION, CONN_UUID_KEY, Conn, ConnectionCounter, FrontendStartupMessage,
+    MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION, decode_startup,
 };
 use mz_server_core::{Connection, ConnectionHandler, ReloadingTlsConfig};
 use openssl::ssl::Ssl;

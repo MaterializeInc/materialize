@@ -53,35 +53,35 @@ use mysql_async::{BinlogStream, BinlogStreamRequest, GnoInterval, Sid};
 use mz_ore::future::InTask;
 use mz_ssh_util::tunnel_manager::ManagedSshTunnelHandle;
 use mz_timely_util::containers::stack::AccountedStackBuilder;
+use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::Concat;
+use timely::dataflow::operators::core::Map;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
 use tracing::trace;
 use uuid::Uuid;
 
 use mz_mysql_util::{
-    query_sys_var, MySqlConn, MySqlError, ER_SOURCE_FATAL_ERROR_READING_BINLOG_CODE,
+    ER_SOURCE_FATAL_ERROR_READING_BINLOG_CODE, MySqlConn, MySqlError, query_sys_var,
 };
 use mz_ore::cast::CastFrom;
 use mz_repr::GlobalId;
 use mz_storage_types::errors::DataflowError;
-use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition, GtidState};
 use mz_storage_types::sources::MySqlSourceConnection;
+use mz_storage_types::sources::mysql::{GtidPartition, GtidState, gtid_set_frontier};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 
 use crate::metrics::source::mysql::MySqlSourceMetrics;
-use crate::source::types::{SignaledFuture, SourceMessage, StackedCollection};
 use crate::source::RawSourceCreationConfig;
+use crate::source::types::{SignaledFuture, SourceMessage, StackedCollection};
 
 use super::{
-    return_definite_error, validate_mysql_repl_settings, DefiniteError, ReplicationError,
-    RewindRequest, SourceOutputInfo, TransientError,
+    DefiniteError, ReplicationError, RewindRequest, SourceOutputInfo, TransientError,
+    return_definite_error, validate_mysql_repl_settings,
 };
 
 mod context;
@@ -303,7 +303,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             &definite_error_handle,
                             definite_error_cap_set,
                         )
-                        .await)
+                        .await);
                     }
                 };
             let mut stream = pin!(binlog_stream.peekable());

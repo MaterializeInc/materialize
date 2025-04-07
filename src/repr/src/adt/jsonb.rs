@@ -85,7 +85,7 @@ use serde::ser::{Serialize, SerializeMap, SerializeSeq, SerializeStruct, Seriali
 
 use crate::adt::jsonb::vec_stack::VecStack;
 use crate::adt::numeric::Numeric;
-use crate::{strconv, Datum, Row, RowPacker, SharedRow};
+use crate::{Datum, Row, RowPacker, SharedRow, strconv};
 
 /// An owned JSON value backed by a [`Row`].
 ///

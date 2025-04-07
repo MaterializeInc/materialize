@@ -55,7 +55,7 @@ use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::mz_acl_item::{AclItem, MzAclItem};
-use crate::adt::numeric::{self, Numeric, NUMERIC_DATUM_MAX_PRECISION};
+use crate::adt::numeric::{self, NUMERIC_DATUM_MAX_PRECISION, Numeric};
 use crate::adt::pg_legacy_name::NAME_MAX_BYTES;
 use crate::adt::range::{Range, RangeBound, RangeInner};
 use crate::adt::timestamp::CheckedTimestamp;
@@ -683,7 +683,7 @@ pub fn parse_bytes_traditional(s: &str) -> Result<Vec<u8>, ParseError> {
         match bytes.next() {
             None => {
                 return Err(ParseError::invalid_input_syntax("bytea", s)
-                    .with_details("ends with escape character"))
+                    .with_details("ends with escape character"));
             }
             Some(b'\\') => out.push(b'\\'),
             b => match (b, bytes.next(), bytes.next()) {
@@ -692,7 +692,7 @@ pub fn parse_bytes_traditional(s: &str) -> Result<Vec<u8>, ParseError> {
                 }
                 _ => {
                     return Err(ParseError::invalid_input_syntax("bytea", s)
-                        .with_details("invalid escape sequence"))
+                        .with_details("invalid escape sequence"));
                 }
             },
         }
@@ -1780,11 +1780,7 @@ impl ElementEscaper for RecordElementEscaper {
     }
 
     fn escape_char(c: u8) -> u8 {
-        if c == b'"' {
-            b'"'
-        } else {
-            b'\\'
-        }
+        if c == b'"' { b'"' } else { b'\\' }
     }
 }
 
@@ -2030,8 +2026,8 @@ impl Error for ParseError {}
 
 impl RustType<ProtoParseError> for ParseError {
     fn into_proto(&self) -> ProtoParseError {
-        use proto_parse_error::*;
         use Kind::*;
+        use proto_parse_error::*;
         let kind = match self.kind {
             ParseErrorKind::OutOfRange => OutOfRange(()),
             ParseErrorKind::InvalidInputSyntax => InvalidInputSyntax(()),
@@ -2098,8 +2094,8 @@ impl fmt::Display for ParseHexError {
 
 impl RustType<ProtoParseHexError> for ParseHexError {
     fn into_proto(&self) -> ProtoParseHexError {
-        use proto_parse_hex_error::*;
         use Kind::*;
+        use proto_parse_hex_error::*;
         let kind = match self {
             ParseHexError::InvalidHexDigit(v) => InvalidHexDigit(v.into_proto()),
             ParseHexError::OddLength => OddLength(()),

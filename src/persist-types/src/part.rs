@@ -16,9 +16,9 @@ use arrow::array::{Array, ArrayRef, AsArray, Int64Array};
 use arrow::datatypes::ToByteSlice;
 use mz_ore::result::ResultExt;
 
+use crate::Codec64;
 use crate::arrow::ArrayOrd;
 use crate::columnar::{ColumnDecoder, ColumnEncoder, Schema};
-use crate::Codec64;
 
 /// A structured columnar representation of one blob's worth of data.
 #[derive(Debug, Clone)]

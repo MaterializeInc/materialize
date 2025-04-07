@@ -11,11 +11,11 @@
 
 use std::collections::BTreeMap;
 
-use itertools::{zip_eq, Itertools};
-use mz_expr::visit::Visit;
+use itertools::{Itertools, zip_eq};
 use mz_expr::JoinImplementation::IndexedFilter;
+use mz_expr::visit::Visit;
 use mz_expr::{
-    func, EvalError, LetRecLimit, MirRelationExpr, MirScalarExpr, UnaryFunc, RECURSION_LIMIT,
+    EvalError, LetRecLimit, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT, UnaryFunc, func,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};

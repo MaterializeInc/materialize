@@ -116,7 +116,7 @@ impl<T: for<'a> EagerBinaryFunc<'a>> LazyBinaryFunc for T {
             Ok(input) => input,
             // If we can't and we got a non-null datum something went wrong in the planner
             Err(Ok(datum)) if !datum.is_null() => {
-                return Err(EvalError::Internal("invalid input type".into()))
+                return Err(EvalError::Internal("invalid input type".into()));
             }
             // Otherwise we just propagate NULLs and errors
             Err(res) => return res,
@@ -126,7 +126,7 @@ impl<T: for<'a> EagerBinaryFunc<'a>> LazyBinaryFunc for T {
             Ok(input) => input,
             // If we can't and we got a non-null datum something went wrong in the planner
             Err(Ok(datum)) if !datum.is_null() => {
-                return Err(EvalError::Internal("invalid input type".into()))
+                return Err(EvalError::Internal("invalid input type".into()));
             }
             // Otherwise we just propagate NULLs and errors
             Err(res) => return res,
@@ -170,7 +170,7 @@ mod test {
     use mz_repr::ScalarType;
 
     use crate::scalar::func::binary::LazyBinaryFunc;
-    use crate::{func, BinaryFunc, EvalError};
+    use crate::{BinaryFunc, EvalError, func};
 
     #[sqlfunc(sqlname = "INFALLIBLE", is_infix_op = true)]
     fn infallible1(a: f32, b: f32) -> f32 {

@@ -9,8 +9,8 @@
 
 //! gRPC-based implementations of Persist PubSub client and server.
 
-use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 use std::fmt::{Debug, Formatter};
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant, SystemTime};
 
-use anyhow::{anyhow, Error};
+use anyhow::{Error, anyhow};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
@@ -33,26 +33,26 @@ use mz_ore::task::JoinHandle;
 use mz_persist::location::VersionedData;
 use mz_proto::{ProtoType, RustType};
 use prost::Message;
-use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 use tonic::metadata::{AsciiMetadataKey, AsciiMetadataValue, MetadataMap};
 use tonic::transport::Endpoint;
 use tonic::{Extensions, Request, Response, Status, Streaming};
-use tracing::{debug, error, info, info_span, warn, Instrument};
+use tracing::{Instrument, debug, error, info, info_span, warn};
 
+use crate::ShardId;
 use crate::cache::{DynState, StateCache};
 use crate::cfg::PersistConfig;
 use crate::internal::metrics::{PubSubClientCallMetrics, PubSubServerMetrics};
 use crate::internal::service::proto_persist_pub_sub_client::ProtoPersistPubSubClient;
 use crate::internal::service::proto_persist_pub_sub_server::ProtoPersistPubSubServer;
 use crate::internal::service::{
-    proto_persist_pub_sub_server, proto_pub_sub_message, ProtoPubSubMessage, ProtoPushDiff,
-    ProtoSubscribe, ProtoUnsubscribe,
+    ProtoPubSubMessage, ProtoPushDiff, ProtoSubscribe, ProtoUnsubscribe,
+    proto_persist_pub_sub_server, proto_pub_sub_message,
 };
 use crate::metrics::Metrics;
-use crate::ShardId;
 
 /// Determines whether PubSub clients should connect to the PubSub server.
 pub(crate) const PUBSUB_CLIENT_ENABLED: Config<bool> = Config::new(
@@ -624,9 +624,11 @@ impl PubSubSender for SubscriptionTrackingSender {
             sender: pubsub_sender,
         });
 
-        assert!(subscribes
-            .insert(*shard_id, Arc::downgrade(&token))
-            .is_none());
+        assert!(
+            subscribes
+                .insert(*shard_id, Arc::downgrade(&token))
+                .is_none()
+        );
 
         self.delegate.subscribe(shard_id);
 
@@ -1197,14 +1199,14 @@ mod pubsub_state {
     use mz_ore::collections::HashSet;
     use mz_persist::location::{SeqNo, VersionedData};
     use mz_proto::RustType;
-    use tokio::sync::mpsc::error::TryRecvError;
     use tokio::sync::mpsc::Receiver;
+    use tokio::sync::mpsc::error::TryRecvError;
     use tonic::Status;
 
-    use crate::internal::service::proto_pub_sub_message::Message;
-    use crate::internal::service::ProtoPubSubMessage;
-    use crate::rpc::{PubSubSenderInternal, PubSubState};
     use crate::ShardId;
+    use crate::internal::service::ProtoPubSubMessage;
+    use crate::internal::service::proto_pub_sub_message::Message;
+    use crate::rpc::{PubSubSenderInternal, PubSubState};
 
     static SHARD_ID_0: LazyLock<ShardId> =
         LazyLock::new(|| ShardId::from_str("s00000000-0000-0000-0000-000000000000").unwrap());
@@ -1420,18 +1422,18 @@ mod grpc {
     use mz_proto::RustType;
     use std::sync::LazyLock;
     use tokio::net::TcpListener;
-    use tokio_stream::wrappers::TcpListenerStream;
     use tokio_stream::StreamExt;
+    use tokio_stream::wrappers::TcpListenerStream;
 
+    use crate::ShardId;
     use crate::cfg::PersistConfig;
-    use crate::internal::service::proto_pub_sub_message::Message;
     use crate::internal::service::ProtoPubSubMessage;
+    use crate::internal::service::proto_pub_sub_message::Message;
     use crate::metrics::Metrics;
     use crate::rpc::{
-        GrpcPubSubClient, PersistGrpcPubSubServer, PersistPubSubClient, PersistPubSubClientConfig,
-        PubSubState, PUBSUB_CLIENT_ENABLED, PUBSUB_RECONNECT_BACKOFF,
+        GrpcPubSubClient, PUBSUB_CLIENT_ENABLED, PUBSUB_RECONNECT_BACKOFF, PersistGrpcPubSubServer,
+        PersistPubSubClient, PersistPubSubClientConfig, PubSubState,
     };
-    use crate::ShardId;
 
     static SHARD_ID_0: LazyLock<ShardId> =
         LazyLock::new(|| ShardId::from_str("s00000000-0000-0000-0000-000000000000").unwrap());

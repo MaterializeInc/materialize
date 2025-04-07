@@ -17,8 +17,8 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
 use mz_persist_types::ShardId;
 use mz_repr::{CatalogItemId, Diff, Timestamp};
-use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::CreateSinkOptionName;
+use mz_sql::ast::display::AstDisplay;
 use mz_sql::names::FullItemName;
 use mz_sql_parser::ast::{IdentError, Raw, Statement};
 use mz_storage_client::controller::StorageTxn;
@@ -248,8 +248,8 @@ fn ast_rewrite_sources_to_tables(
         UnresolvedItemName, Value, WithOptionValue,
     };
     use mz_storage_client::controller::StorageTxn;
-    use mz_storage_types::sources::load_generator::LoadGeneratorOutput;
     use mz_storage_types::sources::SourceExportStatementDetails;
+    use mz_storage_types::sources::load_generator::LoadGeneratorOutput;
     use prost::Message;
 
     let items_with_statements = tx

@@ -807,7 +807,8 @@ impl ParamType {
     fn name(&self) -> &'static str {
         match self {
             ParamType::Plain(t) => {
-                assert!(!t.is_custom_type(),
+                assert!(
+                    !t.is_custom_type(),
                     "custom types cannot currently be used as parameters; use a polymorphic parameter that accepts the custom type instead"
                 );
                 let t: mz_pgrepr::Type = t.into();
@@ -1384,11 +1385,7 @@ impl PolymorphicSolution {
             r.track_seen(&params[i], scalar_type);
         }
 
-        if !r.determine_key(ecx) {
-            None
-        } else {
-            Some(r)
-        }
+        if !r.determine_key(ecx) { None } else { Some(r) }
     }
 
     /// Determines the desired type of polymorphic compatibility, as well as the

@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 use std::convert::{TryFrom, TryInto};
 use std::fmt::Debug;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use byteorder::{BigEndian, ByteOrder};
 use chrono::NaiveDate;
 // Re-export components from the various other Avro libraries, so that other
@@ -171,7 +171,10 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, anyhow::
             }
             let items = match val {
                 JsonValue::Object(items) => items,
-                _ => bail!("Union schema element must be `null` or a map from type name to value; found {:?}", val),
+                _ => bail!(
+                    "Union schema element must be `null` or a map from type name to value; found {:?}",
+                    val
+                ),
             };
             let (name, val) = if items.len() == 1 {
                 (items.keys().next().unwrap(), items.values().next().unwrap())
@@ -206,7 +209,7 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, anyhow::
                                 inner: Box::new(avro),
                                 n_variants: variants.len(),
                                 null_variant,
-                            })
+                            });
                         }
                         Err(msg) => return Err(msg),
                     }

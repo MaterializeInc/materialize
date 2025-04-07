@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use futures_util::{stream, StreamExt, TryStreamExt};
+use futures_util::{StreamExt, TryStreamExt, stream};
 use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -33,8 +33,8 @@ use tracing::{info, warn};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
-use crate::cfg::{all_dyncfgs, COMPACTION_MEMORY_BOUND_BYTES};
-use crate::cli::args::{make_blob, make_consensus, StateArgs, StoreArgs};
+use crate::cfg::{COMPACTION_MEMORY_BOUND_BYTES, all_dyncfgs};
+use crate::cli::args::{StateArgs, StoreArgs, make_blob, make_consensus};
 use crate::cli::inspect::FAKE_OPAQUE_CODEC;
 use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
 use crate::internal::encoding::Schemas;
@@ -44,7 +44,7 @@ use crate::internal::trace::FueledMergeRes;
 use crate::rpc::{NoopPubSubSender, PubSubSender};
 use crate::write::{WriteHandle, WriterId};
 use crate::{
-    Diagnostics, Metrics, PersistClient, PersistConfig, ShardId, StateVersions, BUILD_INFO,
+    BUILD_INFO, Diagnostics, Metrics, PersistClient, PersistConfig, ShardId, StateVersions,
 };
 
 /// Commands for read-write administration of persist state
@@ -615,7 +615,11 @@ where
         };
         if !safe_version_change {
             // We could add a flag to override this check, if that comes up.
-            return Err(anyhow!("version of this tool {} does not match version of state {} when --commit is {commit}. bailing so we don't corrupt anything", cfg.build_version, state.applier_version));
+            return Err(anyhow!(
+                "version of this tool {} does not match version of state {} when --commit is {commit}. bailing so we don't corrupt anything",
+                cfg.build_version,
+                state.applier_version
+            ));
         }
         break;
     }
@@ -740,7 +744,11 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
                 machine.applier.shard_metrics.shard_id,
                 req.inputs.len(),
                 req.inputs.iter().flat_map(|x| &x.parts).count(),
-                req.inputs.iter().flat_map(|x| &x.parts).map(|x| x.encoded_size_bytes()).sum::<usize>(),
+                req.inputs
+                    .iter()
+                    .flat_map(|x| &x.parts)
+                    .map(|x| x.encoded_size_bytes())
+                    .sum::<usize>(),
                 req.desc.lower().elements(),
                 req.desc.upper().elements(),
                 req.desc.since().elements(),

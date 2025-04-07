@@ -14,10 +14,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use itertools::Itertools;
 use mz_ccsr::tls::{Certificate, Identity};
-use mz_cloud_resources::{vpc_endpoint_host, AwsExternalIdPrefix, CloudResourceReader};
+use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceReader, vpc_endpoint_host};
 use mz_dyncfg::ConfigSet;
 use mz_kafka_util::client::{
     BrokerAddr, BrokerRewrite, MzClientContext, MzKafkaError, TunnelConfig, TunnelingClientContext,
@@ -40,9 +40,9 @@ use mz_tls_util::Pkcs12Archive;
 use mz_tracing::CloneableEnvFilter;
 use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
+use rdkafka::ClientContext;
 use rdkafka::config::FromClientConfigAndContext;
 use rdkafka::consumer::{BaseConsumer, Consumer};
-use rdkafka::ClientContext;
 use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize};
 use tokio::net;
@@ -51,6 +51,7 @@ use tokio_postgres::config::SslMode;
 use tracing::{debug, warn};
 use url::Url;
 
+use crate::AlterCompatible;
 use crate::configuration::StorageConfiguration;
 use crate::connections::aws::{
     AwsConnection, AwsConnectionReference, AwsConnectionValidationError,
@@ -62,7 +63,6 @@ use crate::dyncfgs::{
     KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM,
 };
 use crate::errors::{ContextCreationError, CsrConnectError};
-use crate::AlterCompatible;
 
 pub mod aws;
 pub mod inline;
@@ -1721,7 +1721,7 @@ impl RustType<i32> for MySqlSslMode {
             Err(_) => {
                 return Err(TryFromProtoError::UnknownEnumVariant(
                     "tls_mode".to_string(),
-                ))
+                ));
             }
         })
     }

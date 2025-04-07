@@ -19,22 +19,22 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fmt::Write;
 
-    use anyhow::{anyhow, Error};
+    use anyhow::{Error, anyhow};
     use mz_expr::explain::ExplainContext;
     use mz_expr::{Id, MirRelationExpr};
     use mz_expr_test_util::{
-        build_rel, json_to_spec, MirRelationExprDeserializeContext, TestCatalog,
+        MirRelationExprDeserializeContext, TestCatalog, build_rel, json_to_spec,
     };
     use mz_lowertest::{deserialize, tokenize};
     use mz_ore::collections::HashMap;
     use mz_ore::str::separated;
+    use mz_repr::GlobalId;
     use mz_repr::explain::{Explain, ExplainConfig, ExplainFormat};
     use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
-    use mz_repr::GlobalId;
     use mz_transform::dataflow::{
-        optimize_dataflow_demand_inner, optimize_dataflow_filters_inner, DataflowMetainfo,
+        DataflowMetainfo, optimize_dataflow_demand_inner, optimize_dataflow_filters_inner,
     };
-    use mz_transform::{typecheck, Optimizer, Transform, TransformCtx};
+    use mz_transform::{Optimizer, Transform, TransformCtx, typecheck};
     use proc_macro2::TokenTree;
 
     use crate::explain::Explainable;
@@ -439,8 +439,17 @@ mod tests {
         match transform {
             "filter" => {
                 let mut predicates = BTreeMap::new();
-                match optimize_dataflow_filters_inner(dataflow.iter_mut().map(|(id, rel)| (Id::Global(*id), rel)).rev(), &mut predicates) {
-                    Ok(()) => Ok(format!("Pushed-down predicates:\n{}", log_pushed_outside_of_dataflow(predicates, cat))),
+                match optimize_dataflow_filters_inner(
+                    dataflow
+                        .iter_mut()
+                        .map(|(id, rel)| (Id::Global(*id), rel))
+                        .rev(),
+                    &mut predicates,
+                ) {
+                    Ok(()) => Ok(format!(
+                        "Pushed-down predicates:\n{}",
+                        log_pushed_outside_of_dataflow(predicates, cat)
+                    )),
                     Err(e) => Err(e.to_string()),
                 }
             }
@@ -449,15 +458,24 @@ mod tests {
                 if let Some((id, rel)) = dataflow.last() {
                     demand.insert(Id::Global(*id), (0..rel.arity()).collect());
                 }
-                match optimize_dataflow_demand_inner(dataflow.iter_mut().map(|(id, rel)| (Id::Global(*id), rel)).rev(), &mut demand) {
-                    Ok(()) => Ok(format!("Pushed-down demand:\n{}", log_pushed_outside_of_dataflow(demand, cat))),
+                match optimize_dataflow_demand_inner(
+                    dataflow
+                        .iter_mut()
+                        .map(|(id, rel)| (Id::Global(*id), rel))
+                        .rev(),
+                    &mut demand,
+                ) {
+                    Ok(()) => Ok(format!(
+                        "Pushed-down demand:\n{}",
+                        log_pushed_outside_of_dataflow(demand, cat)
+                    )),
                     Err(e) => Err(e.to_string()),
                 }
             }
             _ => Err(format!(
                 "no cross-view transform named {} (you might have to add it to apply_cross_view_transform)",
                 transform
-            ))
+            )),
         }
     }
 
@@ -550,8 +568,8 @@ mod tests {
 /// [`mz_transform::analysis`] and [`mz_transform::normalize_lets`] to
 /// [`mz_expr`].
 mod explain {
-    use mz_expr::explain::{enforce_linear_chains, ExplainContext, ExplainSinglePlan};
     use mz_expr::MirRelationExpr;
+    use mz_expr::explain::{ExplainContext, ExplainSinglePlan, enforce_linear_chains};
     use mz_repr::explain::{Explain, ExplainError, UnsupportedFormat};
     use mz_transform::analysis::annotate_plan;
     use mz_transform::normalize_lets::normalize_lets;

@@ -98,9 +98,9 @@ use anyhow::{anyhow, bail};
 use bytes::{BufMut, BytesMut};
 use fallible_iterator::FallibleIterator;
 use mz_ore::collections::CollectionExt;
+use postgres_protocol::IsNull;
 use postgres_protocol::message::backend::Message;
 use postgres_protocol::message::frontend;
-use postgres_protocol::IsNull;
 use serde::{Deserialize, Serialize};
 
 struct PgConn {

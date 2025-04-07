@@ -16,7 +16,7 @@ use std::{
 
 use http::HeaderValue;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
-use kube::{api::PostParams, runtime::controller::Action, Api, Client, Resource, ResourceExt};
+use kube::{Api, Client, Resource, ResourceExt, api::PostParams, runtime::controller::Action};
 use serde::Deserialize;
 use tracing::{debug, trace};
 

@@ -197,22 +197,14 @@ where
 ///
 /// If `a` and `b` are not comparable, `b` is returned.
 fn po_min<T: PartialOrd>(a: T, b: T) -> T {
-    if a < b {
-        a
-    } else {
-        b
-    }
+    if a < b { a } else { b }
 }
 
 /// Like `std::cmp::max`, but works with `PartialOrd` values.
 ///
 /// If `a` and `b` are not comparable, `b` is returned.
 fn po_max<T: PartialOrd>(a: T, b: T) -> T {
-    if a > b {
-        a
-    } else {
-        b
-    }
+    if a > b { a } else { b }
 }
 
 #[cfg(test)]

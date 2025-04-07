@@ -19,7 +19,7 @@ use std::str::FromStr;
 use chrono::{
     DateTime, Datelike, Duration, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc,
 };
-use chrono_tz::{Tz, TZ_VARIANTS};
+use chrono_tz::{TZ_VARIANTS, Tz};
 use proptest::prelude::Strategy;
 
 use crate::{RustType, TryFromProtoError};

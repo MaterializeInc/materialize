@@ -19,7 +19,7 @@ use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{GlobalId, RelationType};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::time_dependence::TimeDependence;
-use proptest::prelude::{any, Arbitrary};
+use proptest::prelude::{Arbitrary, any};
 use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -28,8 +28,8 @@ use timely::progress::Antichain;
 use crate::dataflows::proto_dataflow_description::{
     ProtoIndexExport, ProtoIndexImport, ProtoSinkExport, ProtoSourceImport,
 };
-use crate::plan::render_plan::RenderPlan;
 use crate::plan::Plan;
+use crate::plan::render_plan::RenderPlan;
 use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
 

@@ -13,8 +13,8 @@ use std::borrow::Borrow;
 use std::sync::Arc;
 use std::time::Duration;
 
-use mz_cluster_client::metrics::{ControllerMetrics, WallclockLagMetrics};
 use mz_cluster_client::ReplicaId;
+use mz_cluster_client::metrics::{ControllerMetrics, WallclockLagMetrics};
 use mz_compute_types::ComputeInstanceId;
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;

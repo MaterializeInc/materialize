@@ -22,7 +22,7 @@ use mz_controller::clusters::{
     ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaConfig, ReplicaLocation,
     ReplicaLogging,
 };
-use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL};
+use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL, ReplicaId};
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_repr::role_id::RoleId;
@@ -36,8 +36,8 @@ use mz_sql::plan::{
 };
 use mz_sql::plan::{AlterClusterPlan, OnTimeoutAction};
 use mz_sql::session::metadata::SessionMetadata;
-use mz_sql::session::vars::{SystemVars, Var, MAX_REPLICAS_PER_CLUSTER};
-use tracing::{debug, Instrument, Span};
+use mz_sql::session::vars::{MAX_REPLICAS_PER_CLUSTER, SystemVars, Var};
+use tracing::{Instrument, Span, debug};
 
 use super::return_if_err;
 use crate::catalog::{self, Op, ReplicaCreateDropReason};
@@ -45,7 +45,7 @@ use crate::coord::{
     AlterCluster, AlterClusterFinalize, AlterClusterWaitForHydrated, ClusterStage, Coordinator,
     Message, PlanValidity, StageResult, Staged,
 };
-use crate::{session::Session, AdapterError, ExecuteContext, ExecuteResponse};
+use crate::{AdapterError, ExecuteContext, ExecuteResponse, session::Session};
 
 const PENDING_REPLICA_SUFFIX: &str = "-pending";
 
@@ -1341,7 +1341,9 @@ impl Coordinator {
             AlterOptionParameter::Set(_) => {
                 // Validate that the replication factor matches the current length only if specified.
                 if user_replica_count != *new_replication_factor {
-                    coord_bail!("REPLICATION FACTOR {new_replication_factor} does not match number of replicas ({user_replica_count})");
+                    coord_bail!(
+                        "REPLICATION FACTOR {new_replication_factor} does not match number of replicas ({user_replica_count})"
+                    );
                 }
             }
             _ => {

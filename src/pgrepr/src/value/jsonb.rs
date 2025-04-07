@@ -11,7 +11,7 @@ use std::error::Error;
 use std::fmt;
 
 use bytes::{BufMut, BytesMut};
-use postgres_types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
+use postgres_types::{FromSql, IsNull, ToSql, Type, to_sql_checked};
 
 /// A wrapper for the `repr` crate's [`Jsonb`](mz_repr::adt::jsonb::Jsonb) type
 /// that can be serialized to and deserialized from the PostgreSQL binary

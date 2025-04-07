@@ -13,7 +13,7 @@ use std::io::Write as _;
 use std::str::FromStr;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use mz_ore::retry::{Retry, RetryResult};
 use mz_persist_client::{PersistLocation, ShardId};
 use reqwest::StatusCode;

@@ -10,7 +10,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use anyhow::{anyhow, Error};
+use anyhow::{Error, anyhow};
 use mz_lowertest::MzReflect;
 use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;

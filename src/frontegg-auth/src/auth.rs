@@ -16,8 +16,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use derivative::Derivative;
-use futures::future::Shared;
 use futures::FutureExt;
+use futures::future::Shared;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use lru::LruCache;
 use mz_ore::instrument;
@@ -146,7 +146,7 @@ impl Authenticator {
                         return Err(anyhow::anyhow!(
                             "expected exactly one of --frontegg-jwk or --frontegg-jwk-file"
                         )
-                        .into())
+                        .into());
                     }
                 };
                 AuthenticatorConfig {
@@ -805,9 +805,5 @@ fn validate_user(user: &str, expected_user: &str) -> Result<(), Error> {
 }
 
 const fn bool_as_str(x: bool) -> &'static str {
-    if x {
-        "true"
-    } else {
-        "false"
-    }
+    if x { "true" } else { "false" }
 }

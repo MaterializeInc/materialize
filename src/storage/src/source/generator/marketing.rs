@@ -8,17 +8,17 @@
 // by the Apache License, Version 2.0.
 
 use std::{
-    collections::{btree_map::Entry, BTreeMap},
+    collections::{BTreeMap, btree_map::Entry},
     iter,
 };
 
 use mz_ore::now::to_datetime;
 use mz_repr::{Datum, Diff, Row};
+use mz_storage_types::sources::MzOffset;
 use mz_storage_types::sources::load_generator::{
     Event, Generator, LoadGeneratorOutput, MarketingView,
 };
-use mz_storage_types::sources::MzOffset;
-use rand::{distributions::Standard, rngs::SmallRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, distributions::Standard, rngs::SmallRng};
 
 const CONTROL: &str = "control";
 const EXPERIMENT: &str = "experiment";

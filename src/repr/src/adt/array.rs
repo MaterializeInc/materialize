@@ -198,8 +198,8 @@ impl Error for InvalidArrayError {
 
 impl RustType<ProtoInvalidArrayError> for InvalidArrayError {
     fn into_proto(&self) -> ProtoInvalidArrayError {
-        use proto_invalid_array_error::*;
         use Kind::*;
+        use proto_invalid_array_error::*;
         let kind = match self {
             InvalidArrayError::TooManyDimensions(dims) => TooManyDimensions(dims.into_proto()),
             InvalidArrayError::WrongCardinality { actual, expected } => {

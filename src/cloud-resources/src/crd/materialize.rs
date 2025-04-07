@@ -16,9 +16,9 @@ use k8s_openapi::{
         apis::meta::v1::{Condition, OwnerReference, Time},
     },
 };
-use kube::{api::ObjectMeta, CustomResource, Resource, ResourceExt};
-use rand::distributions::Uniform;
+use kube::{CustomResource, Resource, ResourceExt, api::ObjectMeta};
 use rand::Rng;
+use rand::distributions::Uniform;
 use schemars::JsonSchema;
 use semver::Version;
 use serde::{Deserialize, Serialize};

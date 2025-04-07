@@ -9,8 +9,8 @@
 
 use anyhow::bail;
 use mz_ore::collections::HashSet;
-use reqwest::header::CONTENT_TYPE;
 use reqwest::Method;
+use reqwest::header::CONTENT_TYPE;
 
 use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;

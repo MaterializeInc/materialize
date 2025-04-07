@@ -90,10 +90,10 @@ use mz_expr::{EvalError, MirScalarExpr};
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_postgres_util::desc::PostgresTableDesc;
-use mz_postgres_util::{simple_query_opt, Client, PostgresError};
+use mz_postgres_util::{Client, PostgresError, simple_query_opt};
 use mz_repr::{Datum, Diff, GlobalId, Row};
-use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::Ident;
+use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_types::errors::{DataflowError, SourceError, SourceErrorDetails};
 use mz_storage_types::sources::postgres::CastType;
 use mz_storage_types::sources::{
@@ -285,7 +285,9 @@ pub enum ReplicationError {
 pub enum TransientError {
     #[error("replication slot mysteriously missing")]
     MissingReplicationSlot,
-    #[error("slot overcompacted. Requested LSN {requested_lsn} but only LSNs >= {available_lsn} are available")]
+    #[error(
+        "slot overcompacted. Requested LSN {requested_lsn} but only LSNs >= {available_lsn} are available"
+    )]
     OvercompactedReplicationSlot {
         requested_lsn: MzOffset,
         available_lsn: MzOffset,
@@ -333,9 +335,13 @@ pub enum DefiniteError {
     InvalidCopyInput,
     #[error("invalid timeline ID from PostgreSQL server. Expected {expected} but got {actual}")]
     InvalidTimelineId { expected: u64, actual: u64 },
-    #[error("TOASTed value missing from old row. Did you forget to set REPLICA IDENTITY to FULL for your table?")]
+    #[error(
+        "TOASTed value missing from old row. Did you forget to set REPLICA IDENTITY to FULL for your table?"
+    )]
     MissingToast,
-    #[error("old row missing from replication stream. Did you forget to set REPLICA IDENTITY to FULL for your table?")]
+    #[error(
+        "old row missing from replication stream. Did you forget to set REPLICA IDENTITY to FULL for your table?"
+    )]
     DefaultReplicaIdentity,
     #[error("incompatible schema change: {0}")]
     // TODO: proper error variants for all the expected schema violations
@@ -418,7 +424,7 @@ async fn fetch_slot_metadata(
                 return Ok(SlotMetadata {
                     confirmed_flush_lsn: MzOffset::from(lsn),
                     active_pid: row.get("active_pid"),
-                })
+                });
             }
             // It can happen that confirmed_flush_lsn is NULL as the slot initializes
             // This could probably be a `tokio::time::interval`, but its only is called twice,

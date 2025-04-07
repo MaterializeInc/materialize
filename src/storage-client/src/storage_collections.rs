@@ -36,13 +36,14 @@ use mz_persist_client::schema::CaESchema;
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
+use mz_persist_types::Codec64;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::txn::TxnsCodec;
-use mz_persist_types::Codec64;
 use mz_repr::{GlobalId, RelationDesc, RelationVersion, Row, TimestampManipulation};
+use mz_storage_types::StorageDiff;
 use mz_storage_types::configuration::StorageConfiguration;
-use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{CollectionMetadata, StorageError, TxnsCodecRow};
 use mz_storage_types::dyncfgs::STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION;
 use mz_storage_types::parameters::StorageParameters;
@@ -53,14 +54,13 @@ use mz_storage_types::sources::{
     SourceExport, SourceExportDataConfig, Timeline,
 };
 use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
-use mz_storage_types::StorageDiff;
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use mz_txn_wal::txn_read::{DataSnapshot, TxnsRead};
 use mz_txn_wal::txns::TxnsHandle;
+use timely::PartialOrder;
 use timely::order::TotalOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp as TimelyTimestamp};
-use timely::PartialOrder;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, trace, warn};
@@ -367,13 +367,13 @@ impl<T: Codec64 + TimelyTimestamp + Lattice + Sync> SnapshotCursor<T> {
         &mut self,
     ) -> Option<
         impl Iterator<
-                Item = (
-                    (Result<SourceData, String>, Result<(), String>),
-                    T,
-                    StorageDiff,
-                ),
-            > + Sized
-            + '_,
+            Item = (
+                (Result<SourceData, String>, Result<(), String>),
+                T,
+                StorageDiff,
+            ),
+        > + Sized
+        + '_,
     > {
         self.cursor.next().await
     }
@@ -3051,7 +3051,9 @@ where
             let collection = if let Some(c) = self_collections.get_mut(id) {
                 c
             } else {
-                trace!("Reference to absent collection {id}, due to concurrent removal of that collection");
+                trace!(
+                    "Reference to absent collection {id}, due to concurrent removal of that collection"
+                );
                 continue;
             };
 
@@ -3141,7 +3143,9 @@ where
                     .parameters
                     .finalize_shards
                 {
-                    info!("not triggering shard finalization due to dropped storage object because enable_storage_shard_finalization parameter is false");
+                    info!(
+                        "not triggering shard finalization due to dropped storage object because enable_storage_shard_finalization parameter is false"
+                    );
                     return;
                 }
 
@@ -3204,7 +3208,9 @@ async fn finalize_shards_task<T>(
             .parameters
             .finalize_shards
         {
-            debug!("not triggering shard finalization due to dropped storage object because enable_storage_shard_finalization parameter is false");
+            debug!(
+                "not triggering shard finalization due to dropped storage object because enable_storage_shard_finalization parameter is false"
+            );
             continue;
         }
 

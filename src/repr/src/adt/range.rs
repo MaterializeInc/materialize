@@ -23,11 +23,11 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use tokio_postgres::types::{FromSql, Type as PgType};
 
+use crate::Datum;
 use crate::adt::date::Date;
 use crate::adt::numeric::Numeric;
 use crate::adt::timestamp::CheckedTimestamp;
 use crate::scalar::DatumKind;
-use crate::Datum;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.range.rs"));
 
@@ -788,8 +788,8 @@ impl From<InvalidRangeError> for String {
 
 impl RustType<ProtoInvalidRangeError> for InvalidRangeError {
     fn into_proto(&self) -> ProtoInvalidRangeError {
-        use proto_invalid_range_error::*;
         use Kind::*;
+        use proto_invalid_range_error::*;
         let kind = match self {
             InvalidRangeError::MisorderedRangeBounds => MisorderedRangeBounds(()),
             InvalidRangeError::CanonicalizationOverflow(s) => {

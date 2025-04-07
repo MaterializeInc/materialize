@@ -16,9 +16,9 @@ use maplit::btreeset;
 use mz_controller_types::ClusterId;
 use mz_expr::CollectionPlan;
 use mz_ore::str::StrExt;
+use mz_repr::CatalogItemId;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
-use mz_repr::CatalogItemId;
 use mz_sql_parser::ast::{Ident, QualifiedReplica};
 use tracing::debug;
 

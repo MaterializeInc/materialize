@@ -16,11 +16,11 @@ use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable};
+use timely::Container;
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, ScopeParent, StreamCore};
 use timely::progress::Timestamp;
-use timely::Container;
 
 use crate::logging::compute::{
     ArrangementHeapAllocations, ArrangementHeapCapacity, ArrangementHeapSize,
@@ -42,10 +42,10 @@ where
     where
         Ba: Batcher<Input = Self::Input, Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
         Bu: Builder<
-            Time = <Self::Scope as ScopeParent>::Timestamp,
-            Input = Ba::Output,
-            Output = Tr::Batch,
-        >,
+                Time = <Self::Scope as ScopeParent>::Timestamp,
+                Input = Ba::Output,
+                Output = Tr::Batch,
+            >,
         Tr: Trace + TraceReader<Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
         Tr::Batch: Batch,
         Arranged<Self::Scope, TraceAgent<Tr>>: ArrangementSize;
@@ -77,10 +77,10 @@ where
         Ba: Batcher<Input = Self::Input, Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
         // Ba::Input: Container + Clone + 'static,
         Bu: Builder<
-            Time = <Self::Scope as ScopeParent>::Timestamp,
-            Input = Ba::Output,
-            Output = Tr::Batch,
-        >,
+                Time = <Self::Scope as ScopeParent>::Timestamp,
+                Input = Ba::Output,
+                Output = Tr::Batch,
+            >,
         Tr: Trace + TraceReader<Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
         Tr::Batch: Batch,
         Arranged<Self::Scope, TraceAgent<Tr>>: ArrangementSize;
@@ -122,10 +122,10 @@ where
     where
         Ba: Batcher<Input = Self::Input, Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
         Bu: Builder<
-            Time = <Self::Scope as ScopeParent>::Timestamp,
-            Input = Ba::Output,
-            Output = Tr::Batch,
-        >,
+                Time = <Self::Scope as ScopeParent>::Timestamp,
+                Input = Ba::Output,
+                Output = Tr::Batch,
+            >,
         Tr: Trace + TraceReader<Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
         Tr::Batch: Batch,
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
@@ -150,10 +150,10 @@ where
         P: ParallelizationContract<G::Timestamp, Self::Input>,
         Ba: Batcher<Input = Self::Input, Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
         Bu: Builder<
-            Time = <Self::Scope as ScopeParent>::Timestamp,
-            Input = Ba::Output,
-            Output = Tr::Batch,
-        >,
+                Time = <Self::Scope as ScopeParent>::Timestamp,
+                Input = Ba::Output,
+                Output = Tr::Batch,
+            >,
         Tr: Trace + TraceReader<Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
         Tr::Batch: Batch,
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
@@ -184,10 +184,10 @@ where
     where
         Ba: Batcher<Input = Self::Input, Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
         Bu: Builder<
-            Time = <Self::Scope as ScopeParent>::Timestamp,
-            Input = Ba::Output,
-            Output = Tr::Batch,
-        >,
+                Time = <Self::Scope as ScopeParent>::Timestamp,
+                Input = Ba::Output,
+                Output = Tr::Batch,
+            >,
         Tr: Trace + TraceReader<Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
         Tr::Batch: Batch,
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
@@ -211,10 +211,10 @@ where
         P: ParallelizationContract<G::Timestamp, Self::Input>,
         Ba: Batcher<Input = Self::Input, Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
         Bu: Builder<
-            Time = <Self::Scope as ScopeParent>::Timestamp,
-            Input = Ba::Output,
-            Output = Tr::Batch,
-        >,
+                Time = <Self::Scope as ScopeParent>::Timestamp,
+                Input = Ba::Output,
+                Output = Tr::Batch,
+            >,
         Tr: Trace + TraceReader<Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
         Tr::Batch: Batch,
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,

@@ -18,13 +18,13 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 
+use crate::AlterCompatible;
 use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
 use crate::controller::AlterError;
 use crate::sources::{MzOffset, SourceConnection};
-use crate::AlterCompatible;
 
 use super::SourceExportDetails;
 
@@ -207,7 +207,7 @@ impl RustType<ProtoCastType> for CastType {
             None => {
                 return Err(TryFromProtoError::missing_field(
                     "ProtoWindowFrameUnits::kind",
-                ))
+                ));
             }
         })
     }

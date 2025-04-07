@@ -313,8 +313,8 @@ impl std::fmt::Display for CompressionType {
 impl RustType<ProtoRocksDbTuningParameters> for RocksDBTuningParameters {
     fn into_proto(&self) -> ProtoRocksDbTuningParameters {
         use proto_rocks_db_tuning_parameters::{
-            proto_compaction_style, proto_compression_type, ProtoCompactionStyle,
-            ProtoCompressionType,
+            ProtoCompactionStyle, ProtoCompressionType, proto_compaction_style,
+            proto_compression_type,
         };
 
         fn compression_into_proto(compression_type: &CompressionType) -> ProtoCompressionType {
@@ -360,8 +360,8 @@ impl RustType<ProtoRocksDbTuningParameters> for RocksDBTuningParameters {
 
     fn from_proto(proto: ProtoRocksDbTuningParameters) -> Result<Self, TryFromProtoError> {
         use proto_rocks_db_tuning_parameters::{
-            proto_compaction_style, proto_compression_type, ProtoCompactionStyle,
-            ProtoCompressionType,
+            ProtoCompactionStyle, ProtoCompressionType, proto_compaction_style,
+            proto_compression_type,
         };
 
         fn compression_from_proto(
@@ -399,12 +399,12 @@ impl RustType<ProtoRocksDbTuningParameters> for RocksDBTuningParameters {
                 Some(ProtoCompactionStyle { kind: None }) => {
                     return Err(TryFromProtoError::MissingField(
                         "ProtoRocksDbTuningParameters::compaction_style::kind".into(),
-                    ))
+                    ));
                 }
                 None => {
                     return Err(TryFromProtoError::MissingField(
                         "ProtoRocksDbTuningParameters::compaction_style".into(),
-                    ))
+                    ));
                 }
             },
             optimize_compaction_memtable_budget: usize::cast_from(

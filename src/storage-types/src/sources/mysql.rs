@@ -25,17 +25,17 @@ use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
-use timely::progress::timestamp::{PathSummary, Refines, Timestamp};
 use timely::progress::Antichain;
+use timely::progress::timestamp::{PathSummary, Refines, Timestamp};
 use uuid::Uuid;
 
+use crate::AlterCompatible;
 use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
 use crate::controller::AlterError;
 use crate::sources::{SourceConnection, SourceTimestamp};
-use crate::AlterCompatible;
 
 use super::SourceExportDetails;
 
@@ -484,7 +484,7 @@ pub fn gtid_set_frontier(gtid_set_str: &str) -> Result<Antichain<GtidPartition>,
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidData,
                             format!("invalid gtid interval: {}", interval_str),
-                        ))
+                        ));
                     }
                 }
             }
@@ -492,7 +492,7 @@ pub fn gtid_set_frontier(gtid_set_str: &str) -> Result<Antichain<GtidPartition>,
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("gtid with non-consecutive intervals found! {}", gtid_str),
-                ))
+                ));
             }
         };
         // Create a partition representing all the UUIDs in the gap between the previous one and this one
@@ -544,8 +544,7 @@ mod tests {
 
     #[mz_ore::test]
     fn test_gtid_set_frontier_valid() {
-        let gtid_set_str =
-            "14c1b43a-eb64-11eb-8a9a-0242ac130002:1, 2174B383-5441-11E8-B90A-C80AA9429562:1-3, 3E11FA47-71CA-11E1-9E33-C80AA9429562:1-19";
+        let gtid_set_str = "14c1b43a-eb64-11eb-8a9a-0242ac130002:1, 2174B383-5441-11E8-B90A-C80AA9429562:1-3, 3E11FA47-71CA-11E1-9E33-C80AA9429562:1-19";
         let result = gtid_set_frontier(gtid_set_str).unwrap();
         assert_eq!(result.len(), 7);
         assert_eq!(
@@ -597,8 +596,7 @@ mod tests {
 
     #[mz_ore::test]
     fn test_gtid_set_frontier_non_consecutive() {
-        let gtid_set_str =
-            "2174B383-5441-11E8-B90A-C80AA9429562:1-3:5-8, 3E11FA47-71CA-11E1-9E33-C80AA9429562:1-19";
+        let gtid_set_str = "2174B383-5441-11E8-B90A-C80AA9429562:1-3:5-8, 3E11FA47-71CA-11E1-9E33-C80AA9429562:1-19";
         let result = gtid_set_frontier(gtid_set_str);
         assert_err!(result);
     }

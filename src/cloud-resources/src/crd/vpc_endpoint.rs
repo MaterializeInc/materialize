@@ -106,8 +106,8 @@ pub mod v1 {
 mod tests {
     use std::fs;
 
-    use kube::core::crd::merge_crds;
     use kube::CustomResourceExt;
+    use kube::core::crd::merge_crds;
 
     #[mz_ore::test]
     fn test_vpc_endpoint_crd_matches() {

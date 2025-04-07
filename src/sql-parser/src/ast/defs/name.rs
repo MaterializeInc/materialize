@@ -331,7 +331,9 @@ impl_display!(Ident);
 pub enum IdentError {
     #[error("identifier too long (len: {}, max: {}, value: {})", .0.len(), Ident::MAX_LENGTH, .0.quoted())]
     TooLong(String),
-    #[error("failed to generate identifier with prefix '{prefix}' and suffix '{suffix}' after {attempts} attempts")]
+    #[error(
+        "failed to generate identifier with prefix '{prefix}' and suffix '{suffix}' after {attempts} attempts"
+    )]
     FailedToGenerate {
         prefix: String,
         suffix: String,

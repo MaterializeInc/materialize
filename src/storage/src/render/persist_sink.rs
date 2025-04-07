@@ -98,31 +98,31 @@ use std::time::Duration;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
-use futures::{future, StreamExt};
+use futures::{StreamExt, future};
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
+use mz_persist_client::Diagnostics;
 use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::error::UpperMismatch;
-use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec, Codec64};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
-use mz_storage_types::{dyncfgs, StorageDiff};
+use mz_storage_types::{StorageDiff, dyncfgs};
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use serde::{Deserialize, Serialize};
+use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, Inspect};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
 use tokio::sync::Semaphore;
 use tracing::trace;
 
@@ -196,8 +196,7 @@ where
     /// must be at the timestamp specified during creation.
     async fn add(&mut self, k: &K, v: &V, t: &T, d: &D) {
         assert_eq!(
-            self.data_ts,
-            *t,
+            self.data_ts, *t,
             "BatchBuilderAndMetadata::add called with a timestamp {t:?} that does not match creation timestamp {:?}",
             self.data_ts
         );
@@ -637,9 +636,7 @@ where
                                         new_description: {:?}, \
                                         desired_frontier: {:?}, \
                                         batch_descriptions_frontier: {:?}",
-                                    description,
-                                    desired_frontier,
-                                    batch_descriptions_frontier,
+                                    description, desired_frontier, batch_descriptions_frontier,
                                 );
                             }
                             match in_flight_batches.entry(description) {
@@ -757,9 +754,7 @@ where
                         in-flight batches: {:?}, \
                         batch_descriptions_frontier: {:?}, \
                         desired_frontier: {:?}",
-                    in_flight_batches,
-                    batch_descriptions_frontier,
-                    desired_frontier,
+                    in_flight_batches, batch_descriptions_frontier, desired_frontier,
                 );
 
                 // We can write updates for a given batch description when
@@ -788,8 +783,7 @@ where
                         trace!(
                             "persist_sink {collection_id}/{shard_id}: \
                                 emitting done batch: {:?}, cap: {:?}",
-                            batch_description,
-                            cap
+                            batch_description, cap
                         );
                     }
 
@@ -812,10 +806,7 @@ where
                                 "persist_sink {collection_id}/{shard_id}: \
                                     wrote batch from worker {}: ({:?}, {:?}),
                                     containing {:?}",
-                                worker_index,
-                                batch_lower,
-                                batch_upper,
-                                batch_builder.metrics
+                                worker_index, batch_lower, batch_upper, batch_builder.metrics
                             );
                         }
 
@@ -848,9 +839,7 @@ where
                         cannot emit: processed_desired_frontier: {:?}, \
                         processed_descriptions_frontier: {:?}, \
                         desired_frontier: {:?}",
-                    processed_desired_frontier,
-                    processed_descriptions_frontier,
-                    desired_frontier
+                    processed_desired_frontier, processed_descriptions_frontier, desired_frontier
                 );
             }
             drop(permit);

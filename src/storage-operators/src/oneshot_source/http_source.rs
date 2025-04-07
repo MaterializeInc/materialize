@@ -11,8 +11,8 @@
 
 use bytes::Bytes;
 use derivative::Derivative;
-use futures::stream::{BoxStream, StreamExt};
 use futures::TryStreamExt;
+use futures::stream::{BoxStream, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use url::Url;

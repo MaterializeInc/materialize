@@ -23,7 +23,7 @@ use crate::cfg::{PersistConfig, USAGE_STATE_FETCH_CONCURRENCY_LIMIT};
 use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey, WriterKey};
 use crate::internal::state::HollowBlobRef;
 use crate::internal::state_versions::StateVersions;
-use crate::{retry_external, Metrics, PersistClient, ShardId};
+use crate::{Metrics, PersistClient, ShardId, retry_external};
 
 /// A breakdown of the size of various contributions to a shard's blob
 /// usage that is actively referenced by any live state in Consensus.
@@ -189,7 +189,7 @@ impl StorageUsageClient {
                 return ShardUsageReferenced {
                     batches_bytes: 0,
                     rollup_bytes: 0,
-                }
+                };
             }
         };
         let mut states_iter = states_iter
@@ -414,9 +414,10 @@ impl StorageUsageClient {
                 // because it can happen.
                 error!(
                     concat!(
-                    "shard {} existed in blob but not in consensus. This should be quite rare in ",
-                    "prod, but is semi-expected in development if `bin/environmentd --reset` gets ",
-                    "interrupted"),
+                        "shard {} existed in blob but not in consensus. This should be quite rare in ",
+                        "prod, but is semi-expected in development if `bin/environmentd --reset` gets ",
+                        "interrupted"
+                    ),
                     shard_id
                 );
                 return ShardUsageAudit {
@@ -722,13 +723,13 @@ mod tests {
     use semver::Version;
     use timely::progress::Antichain;
 
+    use crate::ShardId;
     use crate::batch::{
-        BatchBuilderConfig, BLOB_TARGET_SIZE, INLINE_WRITES_SINGLE_MAX_BYTES,
+        BLOB_TARGET_SIZE, BatchBuilderConfig, INLINE_WRITES_SINGLE_MAX_BYTES,
         INLINE_WRITES_TOTAL_MAX_BYTES,
     };
     use crate::internal::paths::{PartialRollupKey, RollupId};
     use crate::tests::new_test_client;
-    use crate::ShardId;
 
     use super::*;
 

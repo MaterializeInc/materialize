@@ -9,16 +9,16 @@
 
 //! An Azure Blob Storage implementation of [Blob] storage.
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use async_trait::async_trait;
 use azure_core::{ExponentialRetryOptions, RetryOptions, StatusCode, TransportOptions};
 use azure_identity::create_default_credential;
-use azure_storage::{prelude::*, CloudLocation, EMULATOR_ACCOUNT};
+use azure_storage::{CloudLocation, EMULATOR_ACCOUNT, prelude::*};
 use azure_storage_blobs::blob::operations::GetBlobResponse;
 use azure_storage_blobs::prelude::*;
 use bytes::Bytes;
-use futures_util::stream::FuturesOrdered;
 use futures_util::StreamExt;
+use futures_util::stream::FuturesOrdered;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;

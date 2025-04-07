@@ -39,7 +39,7 @@ use crate::names::{
 };
 use crate::normalize;
 use crate::plan::error::PlanError;
-use crate::plan::{query, with_options, Params, Plan, PlanContext, PlanKind};
+use crate::plan::{Params, Plan, PlanContext, PlanKind, query, with_options};
 use crate::session::vars::FeatureFlag;
 
 mod acl;
@@ -542,7 +542,9 @@ impl<'a> StatementContext<'a> {
                     match self.catalog.active_database_name() {
                         Some(name) => (RawDatabaseSpecifier::Name(name.to_string()), schema),
                         None => {
-                            sql_bail!("no database specified for non-system schema and no active database")
+                            sql_bail!(
+                                "no database specified for non-system schema and no active database"
+                            )
                         }
                     }
                 }
@@ -933,7 +935,9 @@ impl<'a> StatementContext<'a> {
                 if !null_cols.contains(col_idx) {
                     // Note that alternatively we could support NULL values in keys with `NULLS NOT
                     // DISTINCT` semantics, which treats `NULL` as a distinct value.
-                    sql_bail!("[internal error] key columns must be NOT NULL when generating table constraints");
+                    sql_bail!(
+                        "[internal error] key columns must be NOT NULL when generating table constraints"
+                    );
                 }
                 col_names.push(columns[*col_idx].name.clone());
             }

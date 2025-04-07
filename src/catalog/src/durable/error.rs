@@ -15,8 +15,8 @@ use mz_repr::Timestamp;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_storage_types::controller::StorageError;
 
-use crate::durable::persist::antichain_to_timestamp;
 use crate::durable::Epoch;
+use crate::durable::persist::antichain_to_timestamp;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CatalogError {
@@ -56,7 +56,9 @@ pub enum DurableCatalogError {
     },
     /// The applier version in persist is too old for the current catalog. Reading from persist
     /// would cause other readers to be fenced out.
-    #[error("incompatible persist version {found_version}, current: {catalog_version}, make sure to upgrade the catalog one version forward at a time")]
+    #[error(
+        "incompatible persist version {found_version}, current: {catalog_version}, make sure to upgrade the catalog one version forward at a time"
+    )]
     IncompatiblePersistVersion {
         found_version: semver::Version,
         catalog_version: semver::Version,
@@ -114,7 +116,9 @@ pub enum FenceError {
     /// This instance was fenced by another instance with a higher deployment generation. This
     /// necessarily means that the other instance also had a higher epoch. The instance that fenced
     /// us believes that they are from a later generation than us.
-    #[error("current catalog deployment generation {current_generation} fenced by new catalog epoch {fence_generation}")]
+    #[error(
+        "current catalog deployment generation {current_generation} fenced by new catalog epoch {fence_generation}"
+    )]
     DeployGeneration {
         current_generation: u64,
         fence_generation: u64,

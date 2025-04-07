@@ -14,9 +14,9 @@ use std::collections::BTreeSet;
 use mz_expr::MirRelationExpr;
 use mz_repr::GlobalId;
 
-use crate::analysis::monotonic::Monotonic;
-use crate::analysis::DerivedBuilder;
 use crate::TransformCtx;
+use crate::analysis::DerivedBuilder;
+use crate::analysis::monotonic::Monotonic;
 
 /// A struct to apply expression optimizations based on the [`Monotonic`] analysis.
 #[derive(Debug, Default)]

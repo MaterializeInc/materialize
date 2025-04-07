@@ -35,7 +35,7 @@ use crate::schema::{
     SchemaPieceOrNamed,
 };
 use crate::types::{Scalar, Value};
-use crate::util::{safe_len, zag_i32, zag_i64, TsUnit};
+use crate::util::{TsUnit, safe_len, zag_i32, zag_i64};
 use crate::{TrivialDecoder, ValueDecoder};
 
 pub trait StatefulAvroDecodable: Sized {
@@ -74,7 +74,7 @@ fn decode_int_nonneg<R: Read>(reader: &mut R) -> Result<u32, AvroError> {
         i => {
             return Err(AvroError::Decode(DecodeError::ExpectedNonnegInteger(
                 i as i64,
-            )))
+            )));
         }
     };
     Ok(u)
@@ -801,11 +801,11 @@ pub mod public_decoders {
     }
 
     impl<
-            T,
-            InnerOut,
-            Inner: AvroDecode<Out = InnerOut>,
-            Conv: FnMut(InnerOut) -> Result<T, AvroError>,
-        > MappingDecoder<T, InnerOut, Inner, Conv>
+        T,
+        InnerOut,
+        Inner: AvroDecode<Out = InnerOut>,
+        Conv: FnMut(InnerOut) -> Result<T, AvroError>,
+    > MappingDecoder<T, InnerOut, Inner, Conv>
     {
         pub fn new(inner: Inner, conv: Conv) -> Self {
             Self { inner, conv }
@@ -813,11 +813,11 @@ pub mod public_decoders {
     }
 
     impl<
-            T,
-            InnerOut,
-            Inner: AvroDecode<Out = InnerOut>,
-            Conv: FnMut(InnerOut) -> Result<T, AvroError>,
-        > AvroDecode for MappingDecoder<T, InnerOut, Inner, Conv>
+        T,
+        InnerOut,
+        Inner: AvroDecode<Out = InnerOut>,
+        Conv: FnMut(InnerOut) -> Result<T, AvroError>,
+    > AvroDecode for MappingDecoder<T, InnerOut, Inner, Conv>
     {
         type Out = T;
 

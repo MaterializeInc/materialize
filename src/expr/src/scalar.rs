@@ -29,15 +29,15 @@ use mz_repr::adt::range::InvalidRangeError;
 use mz_repr::adt::regex::Regex;
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::strconv::{ParseError, ParseHexError};
-use mz_repr::{arb_datum, ColumnType, Datum, Row, RowArena, ScalarType};
+use mz_repr::{ColumnType, Datum, Row, RowArena, ScalarType, arb_datum};
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::format::DateTimeFormat;
 use crate::scalar::func::{
-    parse_timezone, regexp_replace_parse_flags, BinaryFunc, UnaryFunc, UnmaterializableFunc,
-    VariadicFunc,
+    BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc, parse_timezone,
+    regexp_replace_parse_flags,
 };
 use crate::scalar::proto_eval_error::proto_incompatible_array_dimensions::ProtoDims;
 use crate::scalar::proto_mir_scalar_expr::*;
@@ -2622,7 +2622,11 @@ impl fmt::Display for EvalError {
             } => {
                 write!(f, "{} not yet supported", feature)?;
                 if let Some(discussion_no) = discussion_no {
-                    write!(f, ", see https://github.com/MaterializeInc/materialize/discussions/{} for more details", discussion_no)?;
+                    write!(
+                        f,
+                        ", see https://github.com/MaterializeInc/materialize/discussions/{} for more details",
+                        discussion_no
+                    )?;
                 }
                 Ok(())
             }
@@ -2775,8 +2779,11 @@ impl fmt::Display for EvalError {
                 write!(f, "unrecognized privilege type: {privilege}")
             }
             EvalError::LetRecLimitExceeded(max_iters) => {
-                write!(f, "Recursive query exceeded the recursion limit {}. (Use RETURN AT RECURSION LIMIT to not error, but return the current state as the final result when reaching the limit.)",
-                       max_iters)
+                write!(
+                    f,
+                    "Recursive query exceeded the recursion limit {}. (Use RETURN AT RECURSION LIMIT to not error, but return the current state as the final result when reaching the limit.)",
+                    max_iters
+                )
             }
             EvalError::MultiDimensionalArraySearch => write!(
                 f,
