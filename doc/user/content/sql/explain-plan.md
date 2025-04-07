@@ -12,7 +12,7 @@ menu:
 
 |                             |                       |
 |-----------------------------|-----------------------|
-| <ul><li>`SELECT` statements </li><li>`CREATE VIEW` statements</li><li>`CREATE INDEX` statements</li><li>`CREATE MATERIALIZED VIEW` statements</li></ul>|<ul><li>Views</li><li>Indexes</li><li>Materialized views</li></ul> |
+| <ul><li>`SELECT` statements </li><li>`CREATE VIEW` statements</li><li>`CREATE INDEX` statements</li><li>`CREATE MATERIALIZED VIEW` statements</li></ul>|<ul><li>Existing views</li><li>Existing indexes</li><li>Existing materialized views</li></ul> |
 
 {{< warning >}}
 `EXPLAIN` is not part of Materialize's stable interface and is not subject to
@@ -26,7 +26,7 @@ change arbitrarily in future versions of Materialize.
 {{< tab "FOR SELECT">}}
 ```mzsql
 EXPLAIN [ [ RAW | DECORRELATED | [LOCALLY] OPTIMIZED | PHYSICAL ] PLAN
-    [ WITH <output_modifier> [, <output_modifier> ...] ]
+    [ WITH (<output_modifier> [, <output_modifier> ...])]
     [ AS TEXT | AS JSON ]
 FOR ]       -- The FOR keyword is required if the PLAN keyword is specified
     <SELECT ...>
@@ -37,7 +37,7 @@ FOR ]       -- The FOR keyword is required if the PLAN keyword is specified
 
 ```mzsql
 EXPLAIN <RAW | DECORRELATED | LOCALLY OPTIMIZED> PLAN
-    [ WITH output_modifier [, output_modifier ...] ]
+    [ WITH (<output_modifier> [, <output_modifier> ...]) ]
     [ AS TEXT | AS JSON ]
 FOR
     <CREATE VIEW ...>
@@ -47,7 +47,7 @@ FOR
 {{< tab "FOR CREATE INDEX">}}
 ```mzsql
 EXPLAIN [ [ OPTIMIZED | PHYSICAL ] PLAN
-    [ WITH output_modifier [, output_modifier ...] ]
+    [ WITH (<output_modifier> [, <output_modifier> ...]) ]
     [ AS TEXT | AS JSON ]
 FOR ]  -- The FOR keyword is required if the PLAN keyword is specified
     <CREATE INDEX ...>
@@ -57,7 +57,7 @@ FOR ]  -- The FOR keyword is required if the PLAN keyword is specified
 {{< tab "FOR CREATE MATERIALIZED VIEW">}}
 ```mzsql
 EXPLAIN [ [ RAW | DECORRELATED | [LOCALLY] OPTIMIZED | PHYSICAL ] PLAN
-    [ WITH <output_modifier [, output_modifier ...] ]
+    [ WITH (<output_modifier> [, <output_modifier> ...])]
     [ AS TEXT | AS JSON ]
 FOR ]          -- The FOR keyword is required if the PLAN keyword is specified
     <CREATE MATERIALIZED VIEW ...>
@@ -67,7 +67,7 @@ FOR ]          -- The FOR keyword is required if the PLAN keyword is specified
 {{< tab "FOR VIEW">}}
 ```mzsql
 EXPLAIN <RAW | LOCALLY OPTIMIZED> PLAN
-    [ WITH output_modifier [, output_modifier ...] ]
+    [ WITH (<output_modifier> [, <output_modifier> ...])]
     [ AS TEXT | AS JSON ]
 FOR
   VIEW <name>
@@ -77,7 +77,7 @@ FOR
 {{< tab "FOR INDEX">}}
 ```mzsql
 EXPLAIN [ [ OPTIMIZED | PHYSICAL ] PLAN
-      [ WITH output_modifier [, output_modifier ...] ]
+      [ WITH (<output_modifier> [, <output_modifier> ...]) ]
       [ AS TEXT | AS JSON ]
 FOR ]  -- The FOR keyword is required if the PLAN keyword is specified
   INDEX <name>
@@ -87,7 +87,7 @@ FOR ]  -- The FOR keyword is required if the PLAN keyword is specified
 {{< tab "FOR MATERIALIZED VIEW">}}
 ```mzsql
 EXPLAIN [[ RAW | [LOCALLY] OPTIMIZED | PHYSICAL ] PLAN
-    [ WITH output_modifier [, output_modifier ...] ]
+    [ WITH (<output_modifier> [, <output_modifier> ...]) ]
     [ AS TEXT | AS JSON ]
 FOR ] -- The FOR keyword is required if the PLAN keyword is specified
   MATERIALIZED VIEW <name>
