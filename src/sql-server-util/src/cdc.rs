@@ -67,8 +67,8 @@ impl<'a> CdcStream<'a> {
         self
     }
 
-    /// Takes a snapshot of the upstream tables that the specified `capture_instance`s
-    /// are replicating changes from.
+    /// Takes a snapshot of the upstream table that the specified `capture_instance` is
+    /// replicating changes from.
     ///
     /// An optional `instances` parameter can be provided to only snapshot the specified instances.
     pub async fn snapshot<'b>(
@@ -199,7 +199,7 @@ impl<'a> CdcStream<'a> {
                                 let _capture_isntance = capture_instance;
                                 let _completed_lsn = lsn;
                             });
-                            let event = CdcEvent {
+                            let event = CdcEvent::Data {
                                 capture_instance: Arc::clone(instance),
                                 lsn,
                                 changes,
@@ -213,6 +213,11 @@ impl<'a> CdcStream<'a> {
                     // Increment our LSN (`get_changes` is inclusive).
                     let next_lsn = crate::inspect::increment_lsn(self.client, new_lsn).await?;
                     tracing::debug!(?curr_lsn, ?next_lsn, "incrementing LSN");
+
+                    // Notify our listener that we've emitted all changes __less than__ this LSN.
+                    //
+                    // Note: This aligns well with timely's semantics of progress tracking.
+                    yield CdcEvent::Progress { next_lsn };
 
                     // We just listed everything upto next_lsn.
                     for instance_lsn in self.capture_instances.values_mut() {
@@ -264,16 +269,24 @@ impl<'a> CdcStream<'a> {
 /// A change event from a [`CdcStream`].
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct CdcEvent {
-    /// The capture instance these changes are for.
-    pub capture_instance: Arc<str>,
-    /// The LSN that this change occurred at.
-    pub lsn: Lsn,
-    /// The change itself.
-    pub changes: Vec<Operation>,
-    /// When called marks `lsn` as complete allowing the upstream DB to clean up the record.
-    #[derivative(Debug = "ignore")]
-    pub mark_complete: Box<dyn FnOnce() + Send + Sync>,
+pub enum CdcEvent {
+    /// Changes have occurred upstream.
+    Data {
+        /// The capture instance these changes are for.
+        capture_instance: Arc<str>,
+        /// The LSN that this change occurred at.
+        lsn: Lsn,
+        /// The change itself.
+        changes: Vec<Operation>,
+        /// When called marks `lsn` as complete allowing the upstream DB to clean up the record.
+        #[derivative(Debug = "ignore")]
+        mark_complete: Box<dyn FnOnce() + Send + Sync>,
+    },
+    /// We've made progress and observed all the changes less than `next_lsn`.
+    Progress {
+        /// We've received all of the data for [`Lsn`]s __less than__ this one.
+        next_lsn: Lsn,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
