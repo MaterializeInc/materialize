@@ -685,9 +685,12 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     sys::enable_sigusr2_coverage_dump()?;
     sys::enable_termination_signal_cleanup()?;
 
+    info!("startup: license key: checking for a passed in license key");
     let license_key = if let Some(license_key_file) = args.license_key {
+        info!("startup: license key: reading license key file");
         let license_key_text = std::fs::read_to_string(&license_key_file)
             .context("failed to open license key file")?;
+        info!("startup: license key: validating license key file");
         let license_key = mz_license_keys::validate(
             license_key_text.trim(),
             &args.environment_id.organization_id().to_string(),
@@ -708,6 +711,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     } else {
         ValidatedLicenseKey::default()
     };
+    info!("startup: license key: got license key {:?}", license_key);
 
     // Configure testing options.
     if let Some(fingerprint_whitespace) = args.unsafe_builtin_table_fingerprint_whitespace {
