@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use dec::OrderedDecimal;
+use differential_dataflow::IntoOwned;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::containers::{Columnation, CopyRegion};
@@ -23,11 +24,10 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::{Batch, Builder, Trace, TraceReader};
-use differential_dataflow::IntoOwned;
 use differential_dataflow::{Collection, Diff as _};
 use mz_compute_types::plan::reduce::{
-    reduction_type, AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan,
-    MonotonicPlan, ReducePlan, ReductionType, SingleBasicPlan,
+    AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan,
+    ReducePlan, ReductionType, SingleBasicPlan, reduction_type,
 };
 use mz_expr::{
     AggregateExpr, AggregateFunc, EvalError, MapFilterProject, MirScalarExpr, SafeMfpPlan,
@@ -38,18 +38,18 @@ use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use serde::{Deserialize, Serialize};
+use timely::Container;
 use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::Scope;
-use timely::progress::timestamp::Refines;
 use timely::progress::Timestamp;
-use timely::Container;
+use timely::progress::timestamp::Refines;
 use tracing::warn;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{MzReduce, ReduceExt};
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
-use crate::render::reduce::monoids::{get_monoid, ReductionMonoid};
+use crate::render::reduce::monoids::{ReductionMonoid, get_monoid};
 use crate::render::{ArrangementFlavor, Pairer};
 use crate::row_spine::{
     DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBatcher, RowValBuilder,
@@ -2426,8 +2426,8 @@ mod monoids {
         unsafe fn copy(&mut self, item: &Self::Item) -> Self::Item {
             use ReductionMonoid::*;
             match item {
-                Min(row) => Min(self.inner.copy(row)),
-                Max(row) => Max(self.inner.copy(row)),
+                Min(row) => Min(unsafe { self.inner.copy(row) }),
+                Max(row) => Max(unsafe { self.inner.copy(row) }),
             }
         }
 

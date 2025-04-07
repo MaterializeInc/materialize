@@ -38,7 +38,7 @@ fn bench_parse_jsonb(c: &mut Criterion) {
 
 fn bench_format_list_simple(c: &mut Criterion) {
     let mut rng = StdRng::from_seed([0; 32]);
-    let list: Vec<i32> = (0..(1 << 12)).map(|_| rng.gen()).collect();
+    let list: Vec<i32> = (0..(1 << 12)).map(|_| rng.r#gen()).collect();
     c.bench_function("format_list simple", |b| {
         b.iter(|| {
             let mut buf = String::new();

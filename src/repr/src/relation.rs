@@ -30,7 +30,7 @@ pub use crate::relation_and_scalar::{
     ProtoColumnMetadata, ProtoColumnName, ProtoColumnType, ProtoRelationDesc, ProtoRelationType,
     ProtoRelationVersion,
 };
-use crate::{arb_datum_for_column, Datum, Row, ScalarType};
+use crate::{Datum, Row, ScalarType, arb_datum_for_column};
 
 /// The type of a [`Datum`].
 ///
@@ -1412,7 +1412,7 @@ impl PropRelationDescDiff {
 /// Generates a set of [`PropRelationDescDiff`]s based on some source [`RelationDesc`].
 pub fn arb_relation_desc_diff(
     source: &RelationDesc,
-) -> impl Strategy<Value = Vec<PropRelationDescDiff>> {
+) -> impl Strategy<Value = Vec<PropRelationDescDiff>> + use<> {
     let source = Rc::new(source.clone());
     let num_source_columns = source.typ.columns().len();
 

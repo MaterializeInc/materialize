@@ -19,9 +19,9 @@ use dec::OrderedDecimal;
 use enum_kinds::EnumKind;
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
+use mz_ore::Overflowing;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
-use mz_ore::Overflowing;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
@@ -40,11 +40,11 @@ use crate::adt::pg_legacy_name::PgLegacyName;
 use crate::adt::range::{Range, RangeLowerBound, RangeUpperBound};
 use crate::adt::system::{Oid, PgLegacyChar, RegClass, RegProc, RegType};
 use crate::adt::timestamp::{
-    CheckedTimestamp, TimestampError, TimestampPrecision, HIGH_DATE, LOW_DATE,
+    CheckedTimestamp, HIGH_DATE, LOW_DATE, TimestampError, TimestampPrecision,
 };
 use crate::adt::varchar::{VarChar, VarCharMaxLength};
-pub use crate::relation_and_scalar::proto_scalar_type::ProtoRecordField;
 pub use crate::relation_and_scalar::ProtoScalarType;
+pub use crate::relation_and_scalar::proto_scalar_type::ProtoRecordField;
 use crate::role_id::RoleId;
 use crate::row::DatumNested;
 use crate::{CatalogItemId, ColumnName, ColumnType, DatumList, DatumMap, Row, RowArena};
@@ -1082,11 +1082,7 @@ impl<'a> Datum<'a> {
 impl<'a> From<bool> for Datum<'a> {
     #[inline]
     fn from(b: bool) -> Datum<'a> {
-        if b {
-            Datum::True
-        } else {
-            Datum::False
-        }
+        if b { Datum::True } else { Datum::False }
     }
 }
 
@@ -3783,6 +3779,20 @@ pub enum PropDatum {
     JsonNull,
     Uuid(Uuid),
     Dummy,
+}
+
+impl std::cmp::Eq for PropDatum {}
+
+impl PartialOrd for PropDatum {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PropDatum {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        Datum::from(self).cmp(&Datum::from(other))
+    }
 }
 
 /// Generate an arbitrary [`PropDatum`].

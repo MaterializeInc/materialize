@@ -450,7 +450,7 @@ impl LanguageServer for Backend {
                         None
                     }
                 })
-                .last();
+                .next_back();
 
             if let Some(keyword) = last_keyword {
                 return match keyword {

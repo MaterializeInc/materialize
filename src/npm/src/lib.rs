@@ -211,7 +211,7 @@ pub fn ensure(out_dir: Option<PathBuf>) -> Result<(), anyhow::Error> {
         let url = format!(
             "https://registry.npmjs.org/{}/-/{}-{}.tgz",
             pkg.name,
-            pkg.name.split('/').last().unwrap(),
+            pkg.name.split('/').next_back().unwrap(),
             pkg.version,
         );
         let res = client

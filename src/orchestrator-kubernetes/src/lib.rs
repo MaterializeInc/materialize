@@ -13,13 +13,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{env, fmt};
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use async_trait::async_trait;
 use chrono::Utc;
 use clap::ValueEnum;
 use cloud_resource_controller::KubernetesResourceReader;
-use futures::stream::{BoxStream, StreamExt};
 use futures::TryFutureExt;
+use futures::stream::{BoxStream, StreamExt};
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Affinity, Capabilities, Container, ContainerPort, EnvVar, EnvVarSource, EphemeralVolumeSource,
@@ -35,18 +35,18 @@ use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{
     LabelSelector, LabelSelectorRequirement, OwnerReference,
 };
+use kube::ResourceExt;
 use kube::api::{Api, DeleteParams, ObjectMeta, Patch, PatchParams};
 use kube::client::Client;
 use kube::error::Error as K8sError;
-use kube::runtime::{watcher, WatchStreamExt};
-use kube::ResourceExt;
+use kube::runtime::{WatchStreamExt, watcher};
 use maplit::btreemap;
-use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpoint;
 use mz_cloud_resources::AwsExternalIdPrefix;
+use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpoint;
 use mz_orchestrator::{
-    scheduling_config::*, DiskLimit, LabelSelectionLogic, LabelSelector as MzLabelSelector,
-    NamespacedOrchestrator, OfflineReason, Orchestrator, Service, ServiceConfig, ServiceEvent,
-    ServiceProcessMetrics, ServiceStatus,
+    DiskLimit, LabelSelectionLogic, LabelSelector as MzLabelSelector, NamespacedOrchestrator,
+    OfflineReason, Orchestrator, Service, ServiceConfig, ServiceEvent, ServiceProcessMetrics,
+    ServiceStatus, scheduling_config::*,
 };
 use mz_ore::retry::Retry;
 use mz_ore::task::AbortOnDropHandle;
@@ -1261,7 +1261,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
         fn into_service_event(pod: Pod) -> Result<ServiceEvent, anyhow::Error> {
-            let process_id = pod.name_any().split('-').last().unwrap().parse()?;
+            let process_id = pod.name_any().split('-').next_back().unwrap().parse()?;
             let service_id_label = "environmentd.materialize.cloud/service-id";
             let service_id = pod
                 .labels()
@@ -1503,7 +1503,9 @@ impl OrchestratorWorker {
                     let disk_capacity = match disk_capacity {
                         Some(Ok(disk_capacity)) => Some(disk_capacity),
                         Some(Err(e)) if !matches!(&e, K8sError::Api(e) if e.code == 404) => {
-                            warn!("Failed to fetch `kubelet_volume_stats_capacity_bytes` for {name}: {e}");
+                            warn!(
+                                "Failed to fetch `kubelet_volume_stats_capacity_bytes` for {name}: {e}"
+                            );
                             None
                         }
                         _ => None,

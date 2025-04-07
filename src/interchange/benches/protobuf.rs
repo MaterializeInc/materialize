@@ -12,9 +12,9 @@ use mz_interchange::protobuf::{DecodedDescriptors, Decoder};
 use mz_ore::cast::CastFrom;
 use prost::Message;
 
-use self::gen::benchmark::{Connector, Record, Value};
+use self::generated::benchmark::{Connector, Record, Value};
 
-mod gen {
+mod generated {
     include!(concat!(env!("OUT_DIR"), "/benchproto.rs"));
 }
 

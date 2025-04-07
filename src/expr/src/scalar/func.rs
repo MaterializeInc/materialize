@@ -18,8 +18,8 @@ use std::ops::Deref;
 use std::str::FromStr;
 use std::{fmt, iter, str};
 
-use ::encoding::label::encoding_from_whatwg_label;
 use ::encoding::DecoderTrap;
+use ::encoding::label::encoding_from_whatwg_label;
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc};
 use chrono_tz::{OffsetComponents, OffsetName, Tz};
 use dec::OrderedDecimal;
@@ -47,13 +47,13 @@ use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::mz_acl_item::{AclItem, AclMode, MzAclItem};
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric, NumericMaxScale};
 use mz_repr::adt::range::{self, Range, RangeBound, RangeOps};
-use mz_repr::adt::regex::{any_regex, Regex};
+use mz_repr::adt::regex::{Regex, any_regex};
 use mz_repr::adt::system::Oid;
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use mz_repr::role_id::RoleId;
-use mz_repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
+use mz_repr::{ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType, strconv};
 use mz_sql_parser::ast::display::FormatMode;
-use mz_sql_pretty::{pretty_str, PrettyConfig};
+use mz_sql_pretty::{PrettyConfig, pretty_str};
 use num::traits::CheckedNeg;
 use proptest::prelude::*;
 use proptest::strategy::*;
@@ -67,7 +67,7 @@ use crate::scalar::func::format::DateTimeFormat;
 use crate::scalar::{
     ProtoBinaryFunc, ProtoUnaryFunc, ProtoUnmaterializableFunc, ProtoVariadicFunc,
 };
-use crate::{like_pattern, EvalError, MirScalarExpr};
+use crate::{EvalError, MirScalarExpr, like_pattern};
 
 #[macro_use]
 mod macros;
@@ -559,7 +559,7 @@ fn encoded_bytes_char_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>
             return Err(EvalError::InvalidByteSequence {
                 byte_sequence: e.into(),
                 encoding_name,
-            })
+            });
         }
     };
 
@@ -2123,7 +2123,7 @@ fn parse_ident<'a>(
                 return Err(EvalError::InvalidIdentifier {
                     ident: ident.into(),
                     detail: None,
-                })
+                });
             }
             _ => break,
         }
@@ -6391,7 +6391,7 @@ fn error_if_null<'a>(
                 Datum::Null => {
                     return Err(EvalError::Internal(
                         "unexpected NULL in error side of error_if_null".into(),
-                    ))
+                    ));
                 }
                 o => o.unwrap_str(),
             };
@@ -6446,7 +6446,7 @@ fn pad_leading<'a>(
         Err(_) => {
             return Err(EvalError::InvalidParameterValue(
                 "length must be nonnegative".into(),
-            ))
+            ));
         }
     };
     if len > MAX_STRING_BYTES {
@@ -6488,7 +6488,7 @@ fn substr<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
                     raw_start_idx
                 )
                 .into(),
-            ))
+            ));
         }
     };
 
@@ -6503,7 +6503,7 @@ fn substr<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
             e if e < 0 => {
                 return Err(EvalError::InvalidParameterValue(
                     "negative substring length not allowed".into(),
-                ))
+                ));
             }
             e if e == 0 || e + raw_start_idx < 1 => return Ok(Datum::String("")),
             e => {
@@ -6513,7 +6513,7 @@ fn substr<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
                     Err(_) => {
                         return Err(EvalError::InvalidParameterValue(
                             format!("substring length ({}) exceeds max position", e).into(),
-                        ))
+                        ));
                     }
                 }
             }
@@ -6537,7 +6537,7 @@ fn split_part<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
         Err(_) => {
             return Err(EvalError::InvalidParameterValue(
                 "field position must be greater than zero".into(),
-            ))
+            ));
         }
     };
 
@@ -8631,6 +8631,7 @@ mod test {
     use chrono::prelude::*;
     use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
+    use mz_repr::PropDatum;
     use proptest::prelude::*;
 
     use super::*;
@@ -8771,7 +8772,7 @@ mod test {
         fn proptest_unary<'a>(
             func: UnaryFunc,
             arena: &'a RowArena,
-            arg: impl Strategy<Value = Datum<'a>>,
+            arg: impl Strategy<Value = PropDatum>,
         ) {
             let is_monotone = func.is_monotone();
             let expr = MirScalarExpr::CallUnary {
@@ -8783,7 +8784,7 @@ mod test {
                     mut arg in proptest::array::uniform3(arg),
                 )| {
                     arg.sort();
-                    let args = arg.map(|a| [a]);
+                    let args: Vec<_> = arg.iter().map(|a| [Datum::from(a)]).collect();
                     assert_monotone(&expr, arena, &args);
                 });
             }
@@ -8792,8 +8793,8 @@ mod test {
         fn proptest_binary<'a>(
             func: BinaryFunc,
             arena: &'a RowArena,
-            left: impl Strategy<Value = Datum<'a>>,
-            right: impl Strategy<Value = Datum<'a>>,
+            left: impl Strategy<Value = PropDatum>,
+            right: impl Strategy<Value = PropDatum>,
         ) {
             let (left_monotone, right_monotone) = func.is_monotone();
             let expr = MirScalarExpr::CallBinary {
@@ -8808,40 +8809,58 @@ mod test {
                 left.sort();
                 right.sort();
                 if left_monotone {
-                    for r in right {
-                        let args = left.map(|l| [l, r]);
+                    for r in &right {
+                        let args: Vec<[_; 2]> = left
+                            .iter()
+                            .map(|l| [Datum::from(l), Datum::from(r)])
+                            .collect();
                         assert_monotone(&expr, arena, &args);
                     }
                 }
                 if right_monotone {
-                    for l in left {
-                        let args = right.map(|r| [l, r]);
+                    for l in &left {
+                        let args: Vec<[_; 2]> = right
+                            .iter()
+                            .map(|r| [Datum::from(l), Datum::from(r)])
+                            .collect();
                         assert_monotone(&expr, arena, &args);
                     }
                 }
             });
         }
 
-        let arena = RowArena::new();
-
-        let interesting_strs: Vec<Datum<'static>> =
-            ScalarType::String.interesting_datums().collect();
-        #[allow(clippy::disallowed_macros)]
-        let str_datums = prop_oneof![
+        let interesting_strs: Vec<_> = ScalarType::String.interesting_datums().collect();
+        let str_datums = proptest::strategy::Union::new([
             proptest::string::string_regex("[A-Z]{0,10}")
                 .expect("valid regex")
-                .prop_map(|s| Datum::from(arena.push_string(s))),
-            (0..interesting_strs.len()).prop_map(|i| interesting_strs[i]),
-        ];
+                .prop_map(|s| PropDatum::String(s.to_string()))
+                .boxed(),
+            (0..interesting_strs.len())
+                .prop_map(move |i| {
+                    let Datum::String(val) = interesting_strs[i] else {
+                        unreachable!("interesting strings has non-strings")
+                    };
+                    PropDatum::String(val.to_string())
+                })
+                .boxed(),
+        ]);
 
         let interesting_i32s: Vec<Datum<'static>> =
             ScalarType::Int32.interesting_datums().collect();
-        #[allow(clippy::disallowed_macros)]
-        let i32_datums = prop_oneof![
-            any::<i32>().prop_map(Datum::from),
-            (0..interesting_i32s.len()).prop_map(|i| interesting_i32s[i]),
-            (-10i32..10).prop_map(Datum::from)
-        ];
+        let i32_datums = proptest::strategy::Union::new([
+            any::<i32>().prop_map(PropDatum::Int32).boxed(),
+            (0..interesting_i32s.len())
+                .prop_map(move |i| {
+                    let Datum::Int32(val) = interesting_i32s[i] else {
+                        unreachable!("interesting int32 has non-i32s")
+                    };
+                    PropDatum::Int32(val)
+                })
+                .boxed(),
+            (-10i32..10).prop_map(PropDatum::Int32).boxed(),
+        ]);
+
+        let arena = RowArena::new();
 
         // It would be interesting to test all funcs here, but we currently need to hardcode
         // the generators for the argument types, which makes this tedious. Choose an interesting
