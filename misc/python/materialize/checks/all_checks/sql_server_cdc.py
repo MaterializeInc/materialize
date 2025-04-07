@@ -34,20 +34,21 @@ class SqlServerCdcBase:
         super().__init__(**kwargs)  # forward unused args to Check
 
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.140.0-dev")
+        return self.base_version >= MzVersion.parse_mz("v0.141.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(
             dedent(
                 f"""
-                $postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+                $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
                 ALTER SYSTEM SET enable_sql_server_source = true;
 
                 $ sql-server-connect name=sql-server
                 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
 
                 $ sql-server-execute name=sql-server
-                CREATE DATABASE test IF NOT EXISTS;
+                DROP DATABASE IF EXISTS test;
+                CREATE DATABASE test;
                 USE test;
 
                 > CREATE SECRET sql_server_password_{self.suffix} AS '{SqlServer.DEFAULT_SA_PASSWORD}';
@@ -67,13 +68,13 @@ class SqlServerCdcBase:
             Testdrive(dedent(s))
             for s in [
                 f"""
-                $postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+                $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
                 ALTER SYSTEM SET enable_sql_server_source = true;
 
                 > VALIDATE CONNECTION sql_server_password_{self.suffix};
                 """,
                 f"""
-                $postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+                $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
                 ALTER SYSTEM SET enable_sql_server_source = true;
 
                 > DROP CONNECTION sql_server_password_{self.suffix};
@@ -90,7 +91,7 @@ class SqlServerCdcBase:
     def validate(self) -> Testdrive:
         sql = dedent(
             f"""
-            $postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+            $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
             ALTER SYSTEM SET enable_sql_server_source = true;
 
             > VALIDATE CONNECTION sql_server_connection2_{self.suffix};
