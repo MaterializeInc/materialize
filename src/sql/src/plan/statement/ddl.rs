@@ -4651,6 +4651,7 @@ pub fn unplan_create_cluster(
                 enable_join_prioritize_arranged,
                 enable_projection_pushdown_after_relation_cse,
                 enable_less_reduce_in_eqprop: _,
+                enable_dequadratic_eqprop_map: _,
             } = optimizer_feature_overrides;
             // The ones from above that don't occur below are not wired up to cluster features.
             let features_extracted = ClusterFeatureExtracted {
