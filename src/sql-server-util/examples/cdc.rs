@@ -36,7 +36,9 @@
 //!   4. Watch CDC events come streaming in as you change the table!
 
 use futures::StreamExt;
-use mz_sql_server_util::Client;
+use mz_ore::future::InTask;
+use mz_sql_server_util::config::TunnelConfig;
+use mz_sql_server_util::{Client, Config};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -53,6 +55,7 @@ async fn main() -> Result<(), anyhow::Error> {
     config.authentication(tiberius::AuthMethod::sql_server("SA", "password123?"));
     config.trust_cert();
 
+    let config = Config::new(config, TunnelConfig::Direct, InTask::No);
     let (mut client, connection) = Client::connect(config).await?;
     mz_ore::task::spawn(|| "sql-server connection", async move { connection.await });
     tracing::info!("connection successful!");
@@ -74,7 +77,7 @@ async fn main() -> Result<(), anyhow::Error> {
     for instance in capture_instances {
         cdc_handle = cdc_handle.start_lsn(instance, lsn);
     }
-    // Get a stream of changes from the table with the provided LSN.
+    // Get a stream of changes from the table.
     let changes = cdc_handle.into_stream();
     let mut changes = std::pin::pin!(changes);
     while let Some(change) = changes.next().await {
