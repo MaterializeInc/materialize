@@ -165,7 +165,6 @@ def setup(c: Composition) -> None:
         "schema-registry",
         "postgres",
         "mysql",
-        "sql-server",
         "debezium",
         "ssh-bastion-host",
     )

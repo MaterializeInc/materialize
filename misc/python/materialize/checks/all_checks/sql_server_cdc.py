@@ -34,7 +34,9 @@ class SqlServerCdcBase:
         super().__init__(**kwargs)  # forward unused args to Check
 
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.141.0-dev")
+        # TODO(sql_server1): The SQL Server Docker image only runs on x86, figure out how we can
+        # reasonably support running this check without switching all of Platform Checks.
+        return False
 
     def initialize(self) -> Testdrive:
         return Testdrive(
