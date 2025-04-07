@@ -52,19 +52,50 @@ moves forward:
 
 ## Requirements
 
-You can only use `mz_now()` to establish a temporal filter under the following conditions:
+When creating a temporal filter using `mz_now()`in a `WHERE` or `HAVING` clause,
+the clause has the following shape:
 
-- `mz_now()` appears in a `WHERE` or `HAVING` clause.
-- The clause must compare `mz_now()` to a [`numeric`](/sql/types/numeric) or [`timestamp`](/sql/types/timestamp) expression not containing `mz_now()`
-- The comparison must be one of `=`, `<`, `<=`, `>`, or `>=`, or operators that desugar to them or a conjunction of them (for example, `BETWEEN...AND...`).
-    At the moment, you can't use the `!=` operator with `mz_now()`.
+```mzsql
+mz_now() <comparison_operator> <numeric_expr | timestamp_expr>
+```
 
-You cannot use temporal filters in the `WHERE` clause of an [aggregate `FILTER` expression](/sql/functions/filters).
+- The `mz_now()` must be used with a comparison operator.
+
+- The comparison operator must be one of `=`, `<`, `<=`, `>`, or `>=`, or
+  operators that desugar to them or a conjunction of them (for example,
+  `BETWEEN...AND...`).
+
+- The clause can only compare `mz_now()` to either a
+  [`numeric`](/sql/types/numeric) expression or a
+  [`timestamp`](/sql/types/timestamp) expression not containing `mz_now()`.
+
+### Restrictions
+
+- If part of a  `WHERE` clause, the `WHERE` clause cannot be an [aggregate
+ `FILTER` expression](/sql/functions/filters).
+
+- The `mz_now()` only accepts comparison operators `=`, `<`, `<=`, `>`, or `>=`,
+  or operators that desugar to them or a conjunction of them (for example,
+  `BETWEEN...AND...`); i.e., you cannot use `mz_now()` with date/time operators.
+
+{{< tip >}}
+
+When possible, prefer materialized views (instead of indexed views) when using
+temporal filter to take advantage of custom consolidation.
+
+{{</ tip >}}
 
 ## Examples
 
 These examples create real objects.
 After you have tried the examples, make sure to drop these objects and spin down any resources you may have created.
+
+{{< tip >}}
+
+When possible, prefer materialized views when using temporal filter to take
+advantage of custom consolidation.
+
+{{</ tip >}}
 
 ### Sliding window
 
@@ -107,7 +138,12 @@ In this case, we will filter a table to only include only records from the last 
     ```
     Press `Ctrl+C` to quit the `SUBSCRIBE` when you are ready.
 
-You can materialize the `last_30_sec` view by [creating an index](/sql/create-index/) on it (results stored in memory) or by [recreating it as a `MATERIALIZED VIEW`](/sql/create-materialized-view/) (results persisted to storage). When you do so, Materialize will keep the results up to date with records expiring automatically according to the temporal filter.
+You can materialize the `last_30_sec` view by [recreating it as a `MATERIALIZED
+VIEW`](/sql/create-materialized-view/) (results persisted to storage). When
+you do so, Materialize will keep the results up to date with records expiring
+automatically according to the temporal filter.
+
+
 
 ### Time-to-Live (TTL)
 
