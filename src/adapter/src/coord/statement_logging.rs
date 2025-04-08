@@ -106,6 +106,17 @@ impl PreparedStatementLoggingInfo {
     }
 }
 
+fn epoch_to_uuid(epoch: &EpochMillis) -> Uuid {
+    let remainder: u32 = (*epoch % 1000)
+        .try_into()
+        .expect("modulo 1000 of prepared at millis is always within a 32bit unsigned integer.");
+    Uuid::new_v7(uuid::Timestamp::from_unix(
+        NoContext,
+        *epoch / 1000,
+        remainder * 1_000_000,
+    ))
+}
+
 #[derive(Copy, Clone, Debug, Ord, Eq, PartialOrd, PartialEq)]
 pub struct StatementLoggingId(Uuid);
 
@@ -321,14 +332,7 @@ impl Coordinator {
                     *accounted,
                     "accounting for logging should be done in `begin_statement_execution`"
                 );
-                let remainder: u32 = (*prepared_at % 1000).try_into().expect(
-                    "modulo 1000 of prepared at millis is always within a 32bit unsigned integer.",
-                );
-                let uuid = Uuid::new_v7(uuid::Timestamp::from_unix(
-                    NoContext,
-                    *prepared_at / 1000,
-                    remainder * 1_000_000,
-                ));
+                let uuid = epoch_to_uuid(prepared_at);
                 let sql = std::mem::take(sql);
                 let redacted_sql = std::mem::take(redacted_sql);
                 let sql_hash: [u8; 32] = Sha256::digest(sql.as_bytes()).into();
@@ -729,14 +733,7 @@ impl Coordinator {
         let uuid = match session.qcell_rw(logging) {
             PreparedStatementLoggingInfo::AlreadyLogged { uuid } => *uuid,
             PreparedStatementLoggingInfo::StillToLog { prepared_at, .. } => {
-                let remainder: u32 = (*prepared_at % 1000).try_into().expect(
-                    "modulo 1000 of prepared at millis is always within a 32bit unsigned integer.",
-                );
-                Uuid::new_v7(uuid::Timestamp::from_unix(
-                    NoContext,
-                    *prepared_at / 1000,
-                    remainder * 1_000_000,
-                ))
+                epoch_to_uuid(prepared_at)
             }
         };
 
