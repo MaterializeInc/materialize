@@ -87,14 +87,14 @@ pub struct FlamegraphTemplate<'a> {
 }
 
 #[allow(dropping_copy_types)]
-async fn time_prof<'a>(
+async fn time_prof(
     merge_threads: bool,
     build_info: &'static BuildInfo,
     // the time in seconds to run the profiler for
     time_secs: u64,
     // the sampling frequency in Hz
     sample_freq: u32,
-) -> impl IntoResponse + use<'a> {
+) -> impl IntoResponse + use<> {
     let ctl_lock;
     cfg_if! {
         if #[cfg(any(not(feature = "jemalloc"), miri))] {

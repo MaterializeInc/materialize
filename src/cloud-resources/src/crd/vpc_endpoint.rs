@@ -113,7 +113,7 @@ mod tests {
     fn test_vpc_endpoint_crd_matches() {
         let crd = merge_crds(vec![super::v1::VpcEndpoint::crd()], "v1").unwrap();
         let crd_json = serde_json::to_string(&serde_json::json!(&crd)).unwrap();
-        let exported_crd_json = fs::read_to_string("src/crd/gen/vpcendpoints.json").unwrap();
+        let exported_crd_json = fs::read_to_string("src/crd/generated/vpcendpoints.json").unwrap();
         let exported_crd_json = exported_crd_json.trim();
         assert_eq!(
             &crd_json, exported_crd_json,
