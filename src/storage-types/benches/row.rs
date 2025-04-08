@@ -74,8 +74,8 @@ fn benches_roundtrip(c: &mut Criterion) {
         let data = (0..num_rows)
             .map(|_| {
                 let row = Row::pack(vec![
-                    Datum::from(rng.gen::<u64>()),
-                    Datum::from(rng.gen::<Option<u64>>()),
+                    Datum::from(rng.r#gen::<u64>()),
+                    Datum::from(rng.r#gen::<Option<u64>>()),
                 ]);
                 SourceData(Ok(row))
             })
@@ -107,7 +107,7 @@ fn benches_roundtrip(c: &mut Criterion) {
                     Datum::from(Alphanumeric.sample_string(&mut rng, str_len).as_bytes()),
                     Datum::from(
                         Some(Alphanumeric.sample_string(&mut rng, str_len).as_bytes())
-                            .filter(|_| rng.gen::<bool>()),
+                            .filter(|_| rng.r#gen::<bool>()),
                     ),
                 ]);
                 SourceData(Ok(row))
@@ -140,7 +140,7 @@ fn benches_roundtrip(c: &mut Criterion) {
                     Datum::from(Alphanumeric.sample_string(&mut rng, str_len).as_str()),
                     Datum::from(
                         Some(Alphanumeric.sample_string(&mut rng, str_len).as_str())
-                            .filter(|_| rng.gen::<bool>()),
+                            .filter(|_| rng.r#gen::<bool>()),
                     ),
                 ]);
                 SourceData(Ok(row))
