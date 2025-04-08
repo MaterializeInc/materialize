@@ -38,7 +38,6 @@ use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
-use timely::PartialOrder;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
 use tracing::{Instrument, debug, debug_span, trace_span};

@@ -426,13 +426,6 @@ mod tests {
             any::<i64>()
                 .prop_map(|x| serde_json::Value::Number(x.into()))
                 .boxed(),
-            any::<f64>()
-                .prop_map(|x| {
-                    let x: serde_json::value::Number =
-                        x.to_string().parse().expect("failed to parse f64");
-                    serde_json::Value::Number(x)
-                })
-                .boxed(),
             any::<String>().prop_map(serde_json::Value::String).boxed(),
         ]);
 

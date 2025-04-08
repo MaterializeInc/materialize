@@ -286,12 +286,12 @@ fn bench_roundtrip(c: &mut Criterion) {
         .map(|_| {
             let str_len = rng.gen_range(0..10);
             Row::pack(vec![
-                Datum::from(rng.gen::<bool>()),
-                Datum::from(rng.gen::<Option<bool>>()),
+                Datum::from(rng.r#gen::<bool>()),
+                Datum::from(rng.r#gen::<Option<bool>>()),
                 Datum::from(Alphanumeric.sample_string(&mut rng, str_len).as_str()),
                 Datum::from(
                     Some(Alphanumeric.sample_string(&mut rng, str_len).as_str())
-                        .filter(|_| rng.gen::<bool>()),
+                        .filter(|_| rng.r#gen::<bool>()),
                 ),
             ])
         })

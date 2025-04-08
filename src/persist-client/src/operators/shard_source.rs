@@ -22,6 +22,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use arrow::array::ArrayRef;
+use differential_dataflow::Hashable;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures_util::StreamExt;
