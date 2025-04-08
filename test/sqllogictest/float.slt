@@ -147,16 +147,12 @@ SELECT f1+f2 FROM t1
 19999999999999999271792589930496.000
 19999999999999999271792589930496.000
 
-query T
+query error Overflow detected
 SELECT SUM(f1) FROM t1
-----
--282409603651671152154661355520.000
 
 # This *should* be zero, known issue https://github.com/MaterializeInc/database-issues/issues/4341
-query T
+query error Overflow detected
 SELECT MIN(f1+f2)-SUM(f1) FROM t1
-----
-20282409603651670423947251286016.000
 
 query error invalid input syntax
 SELECT ''::float::text

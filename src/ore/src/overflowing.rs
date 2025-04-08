@@ -46,6 +46,8 @@ pub enum OverflowingBehavior {
     SoftPanic,
     /// Ignore overflow. Corresponds to the `ignore` string.
     Ignore,
+    /// Saturate on overflow. Corresponds to the `saturate` string.
+    Saturate,
 }
 
 impl std::str::FromStr for OverflowingBehavior {
@@ -56,6 +58,7 @@ impl std::str::FromStr for OverflowingBehavior {
             _ if s.eq_ignore_ascii_case("panic") => Ok(OverflowingBehavior::Panic),
             _ if s.eq_ignore_ascii_case("soft_panic") => Ok(OverflowingBehavior::SoftPanic),
             _ if s.eq_ignore_ascii_case("ignore") => Ok(OverflowingBehavior::Ignore),
+            _ if s.eq_ignore_ascii_case("saturate") => Ok(OverflowingBehavior::Saturate),
             _ => Err(format!("Invalid OverflowingBehavior: {s}")),
         }
     }
@@ -72,9 +75,14 @@ pub fn set_behavior(behavior: OverflowingBehavior) {
 
 impl<T> Overflowing<T> {
     /// Returns the inner value.
+    #[inline(always)]
     pub fn into_inner(self) -> T {
         self.0
     }
+}
+
+trait AsOverflow {
+    const OVERFLOW: Self;
 }
 
 impl<T: std::fmt::Display> std::fmt::Display for Overflowing<T> {
@@ -194,32 +202,51 @@ macro_rules! impl_overflowing {
             /// The value one.
             pub const ONE: Self = Self(1);
             /// The minimum value.
-            pub const MIN: Self = Self(<$t>::MIN);
+            pub const MIN: Self = Self(<$t>::MIN + 1);
             /// The maximum value.
-            pub const MAX: Self = Self(<$t>::MAX);
+            pub const MAX: Self = Self(<$t>::MAX - 1);
+
+            /// Overflow constant.
+            pub const OVERFLOW: Self = Self(<$t>::MAX);
+
+            /// Returns `true` if the number is an overflow.
+            #[inline(always)]
+            pub fn is_overflown(self) -> bool {
+                self == Self::OVERFLOW
+            }
+
+            /// Returns the inner value, or `None` if the value is an overflow.
+            #[inline(always)]
+            pub fn into_inner_if_valid(self) -> Option<$t> {
+                if self.is_overflown() {
+                    None
+                } else {
+                    Some(self.0)
+                }
+            }
 
             /// Checked addition. Returns `None` if overflow occurred.
             #[inline(always)]
             pub fn checked_add(self, rhs: Self) -> Option<Self> {
-                self.0.checked_add(rhs.0).map(Self)
-            }
-
-            /// Wrapping addition.
-            #[inline(always)]
-            pub fn wrapping_add(self, rhs: Self) -> Self {
-                Self(self.0.wrapping_add(rhs.0))
+                if self.is_overflown() || rhs.is_overflown() {
+                    return None;
+                }
+                match self.0.checked_add(rhs.0) {
+                    Some(v) if v == Self::OVERFLOW.0 => None,
+                    other => other.map(Self),
+                }
             }
 
             /// Checked multiplication. Returns `None` if overflow occurred.
             #[inline(always)]
             pub fn checked_mul(self, rhs: Self) -> Option<Self> {
-                self.0.checked_mul(rhs.0).map(Self)
-            }
-
-            /// Wrapping multiplication.
-            #[inline(always)]
-            pub fn wrapping_mul(self, rhs: Self) -> Self {
-                Self(self.0.wrapping_mul(rhs.0))
+                if self.is_overflown() || rhs.is_overflown() {
+                    return None;
+                }
+                match self.0.checked_mul(rhs.0) {
+                    Some(v) if v == Self::OVERFLOW.0 => None,
+                    other => other.map(Self),
+                }
             }
 
             /// Returns `true` if the number is zero.
@@ -228,11 +255,18 @@ macro_rules! impl_overflowing {
             }
         }
 
+        impl AsOverflow for Overflowing<$t> {
+            const OVERFLOW: Self = Self::OVERFLOW;
+        }
+
         impl Add<Self> for Overflowing<$t> {
             type Output = Self;
 
             #[inline(always)]
             fn add(self, rhs: Self) -> Self::Output {
+                if self.is_overflown() || rhs.is_overflown() {
+                    return Self::OVERFLOW;
+                }
                 match self.0.overflowing_add(rhs.0) {
                     (result, true) => {
                         overflowing_support::handle_overflow(result, format_args!("{self} + {rhs}"))
@@ -247,6 +281,9 @@ macro_rules! impl_overflowing {
 
             #[inline(always)]
             fn add(self, rhs: &'a Self) -> Self::Output {
+                if self.is_overflown() || rhs.is_overflown() {
+                    return Self::OVERFLOW;
+                }
                 match self.0.overflowing_add(rhs.0) {
                     (result, true) => {
                         overflowing_support::handle_overflow(result, format_args!("{self} + {rhs}"))
@@ -275,6 +312,9 @@ macro_rules! impl_overflowing {
 
             #[inline(always)]
             fn div(self, rhs: Self) -> Self::Output {
+                if self == Self::OVERFLOW || rhs == Self::OVERFLOW {
+                    return Self::OVERFLOW;
+                }
                 match self.0.overflowing_div(rhs.0) {
                     (result, true) => {
                         overflowing_support::handle_overflow(result, format_args!("{self} / {rhs}"))
@@ -289,6 +329,9 @@ macro_rules! impl_overflowing {
 
             #[inline(always)]
             fn rem(self, rhs: Self) -> Self::Output {
+                if self == Self::OVERFLOW || rhs == Self::OVERFLOW {
+                    return Self::OVERFLOW;
+                }
                 match self.0.overflowing_rem(rhs.0) {
                     (result, true) => {
                         overflowing_support::handle_overflow(result, format_args!("{self} % {rhs}"))
@@ -303,6 +346,9 @@ macro_rules! impl_overflowing {
 
             #[inline(always)]
             fn sub(self, rhs: Self) -> Self::Output {
+                if self == Self::OVERFLOW || rhs == Self::OVERFLOW {
+                    return Self::OVERFLOW;
+                }
                 match self.0.overflowing_sub(rhs.0) {
                     (result, true) => {
                         overflowing_support::handle_overflow(result, format_args!("{self} - {rhs}"))
@@ -317,6 +363,9 @@ macro_rules! impl_overflowing {
 
             #[inline(always)]
             fn sub(self, rhs: &'a Self) -> Self::Output {
+                if self.is_overflown() || rhs.is_overflown() {
+                    return Self::OVERFLOW;
+                }
                 match self.0.overflowing_sub(rhs.0) {
                     (result, true) => {
                         overflowing_support::handle_overflow(result, format_args!("{self} - {rhs}"))
@@ -359,6 +408,9 @@ macro_rules! impl_overflowing {
 
             #[inline(always)]
             fn mul(self, rhs: Self) -> Self::Output {
+                if self == Self::OVERFLOW || rhs == Self::OVERFLOW {
+                    return Self::OVERFLOW;
+                }
                 match self.0.overflowing_mul(rhs.0) {
                     (result, true) => {
                         overflowing_support::handle_overflow(result, format_args!("{self} * {rhs}"))
@@ -465,7 +517,13 @@ macro_rules! impl_overflowing {
 }
 
 macro_rules! impl_overflowing_from {
-    ($t:ty, $($f:ty)+) => {
+    ($t:ty, $($f:ty)*) => {
+        impl From<bool> for Overflowing<$t> {
+            #[inline(always)]
+            fn from(value: bool) -> Self {
+                Self(value.into())
+            }
+        }
         $(
             impl From<$f> for Overflowing<$t> {
                 #[inline(always)]
@@ -478,15 +536,18 @@ macro_rules! impl_overflowing_from {
 }
 
 macro_rules! impl_overflowing_from_overflowing {
-    ($t:ty, $($f:ty)+) => {
+    ($t:ty, $($f:ty)*) => {
         $(
-            impl From<Overflowing<$f>> for Overflowing<$t> {
+            impl From<Overflowing<$f>> for Overflowing<$t> where Overflowing<$f>: AsOverflow {
                 #[inline(always)]
                 fn from(value: Overflowing<$f>) -> Self {
+                    if value.is_overflown() {
+                        return Self::OVERFLOW;
+                    }
                     Self(value.0.into())
                 }
             }
-        )+
+        )*
     };
 }
 
@@ -505,6 +566,9 @@ macro_rules! impl_overflowing_try_from {
                 type Error = <$t as TryFrom<$f>>::Error;
                 #[inline(always)]
                 fn try_from(value: Overflowing<$f>) -> Result<Self, Self::Error> {
+                    if value.is_overflown() {
+                        return Ok(Self::OVERFLOW);
+                    }
                     <$t>::try_from(value.0).map(Self)
                 }
             }
@@ -526,8 +590,12 @@ macro_rules! impl_overflowing_signed {
 
             /// Returns the absolute value of the number as an unsigned integer.
             #[inline(always)]
-            pub fn unsigned_abs(self) -> $u {
-                self.0.unsigned_abs()
+            pub fn unsigned_abs(self) -> Overflowing<$u> {
+                if self == Self::OVERFLOW {
+                    Overflowing::<$u>::OVERFLOW
+                } else {
+                    self.0.unsigned_abs().into()
+                }
             }
 
             /// Returns `true` if the number is positive and `false` if the number is zero
@@ -541,7 +609,7 @@ macro_rules! impl_overflowing_signed {
             /// assert!(Overflowing::<i64>::from(10i32).is_positive());
             /// ```
             pub fn is_positive(self) -> bool {
-                self > Self::ZERO
+                !self.is_overflown() && self > Self::ZERO
             }
 
             /// Returns `true` if the number is negative and `false` if the number is zero
@@ -555,7 +623,7 @@ macro_rules! impl_overflowing_signed {
             /// assert!(!Overflowing::<i64>::from(10i32).is_negative());
             /// ```
             pub fn is_negative(self) -> bool {
-                self < Self::ZERO
+                !self.is_overflown() && self < Self::ZERO
             }
         }
 
@@ -564,6 +632,9 @@ macro_rules! impl_overflowing_signed {
 
             #[inline(always)]
             fn neg(self) -> Self::Output {
+                if self.is_overflown() {
+                    return self;
+                }
                 match self.0.overflowing_neg() {
                     (result, true) => {
                         overflowing_support::handle_overflow(result, format_args!("-{self}"))
@@ -578,12 +649,7 @@ macro_rules! impl_overflowing_signed {
 
             #[inline(always)]
             fn neg(self) -> Self::Output {
-                match self.0.overflowing_neg() {
-                    (result, true) => {
-                        overflowing_support::handle_overflow(result, format_args!("-{self}"))
-                    }
-                    (result, false) => Overflowing(result),
-                }
+                (*self).neg()
             }
         }
 
@@ -599,55 +665,66 @@ macro_rules! impl_overflowing_signed {
         impl num_traits::sign::Signed for Overflowing<$t> {
             #[inline(always)]
             fn abs(&self) -> Self {
+                if self.is_overflown() {
+                    return *self;
+                }
                 Self(self.0.abs())
             }
             #[inline(always)]
             fn abs_sub(&self, other: &Self) -> Self {
+                if self.is_overflown() || other.is_overflown() {
+                    return *self;
+                }
                 Self(self.0.abs_sub(&other.0))
             }
             #[inline(always)]
             fn signum(&self) -> Self {
+                if self.is_overflown() {
+                    return *self;
+                }
                 Self(self.0.signum())
             }
             #[inline(always)]
             fn is_positive(&self) -> bool {
-                self.0.is_positive()
+                !self.is_overflown() && self.0.is_positive()
             }
             #[inline(always)]
             fn is_negative(&self) -> bool {
-                self.0.is_negative()
+                !self.is_overflown() && self.0.is_negative()
             }
         }
     };
 }
 
 macro_rules! overflowing {
-    ($t:ty, $($fit:ty)+, $($may_fit:ty)+ $(, $unsigned:ty)?) => {
+    ($t:ty, $($fit:ty)*, $($may_fit:ty)+ $(, $unsigned:ty)?) => {
         impl_overflowing!($t);
-        impl_overflowing_from!($t, $($fit)+ $t);
-        impl_overflowing_from_overflowing!($t, $($fit)+);
+        impl_overflowing_from!($t, $($fit)* $t);
+        impl_overflowing_from_overflowing!($t, $($fit)*);
         impl_overflowing_try_from!($t, $($may_fit)+);
         $( impl_overflowing_signed!($t, $unsigned); )?
     };
 }
 
 // type, types that certainly fit, types that may fit, optional corresponding unsigned type
-overflowing!(u8, bool, u16 u32 u64 u128 i8 i16 i32 i64 i128 isize usize);
-overflowing!(u16, bool u8, u32 u64 u128 i8 i16 i32 i64 i128 isize usize);
-overflowing!(u32, bool u8 u16, u64 u128 i8 i16 i32 i64 i128 isize usize);
-overflowing!(u64, bool u8 u16 u32, u128 i8 i16 i32 i64 i128 isize usize);
-overflowing!(u128, bool u8 u16 u32 u64, i8 i16 i32 i64 i128 isize usize);
+overflowing!(u8, , u16 u32 u64 u128 i8 i16 i32 i64 i128 isize usize);
+overflowing!(u16, u8, u32 u64 u128 i8 i16 i32 i64 i128 isize usize);
+overflowing!(u32, u8 u16, u64 u128 i8 i16 i32 i64 i128 isize usize);
+overflowing!(u64, u8 u16 u32, u128 i8 i16 i32 i64 i128 isize usize);
+overflowing!(u128, u8 u16 u32 u64, i8 i16 i32 i64 i128 isize usize);
+overflowing!(usize, u8 u16, u32 u128 i8 i16 i32 i64 i128 isize);
 
-overflowing!(i8, bool, u8 i16 u16 i32 u32 i64 u64 i128 u128 isize usize, u8);
-overflowing!(i16, bool i8 u8, u16 i32 u32 i64 u64 i128 u128 isize usize, u16);
-overflowing!(i32, bool i8 u8 i16 u16, u32 i64 u64 i128 u128 isize usize, u32);
-overflowing!(i64, bool i8 u8 i16 u16 i32 u32, u64 i128 u128 isize usize, u64);
-overflowing!(i128, bool i8 u8 i16 u16 i32 u32 i64 u64, u128 isize usize, u128);
+overflowing!(i8, , u8 i16 u16 i32 u32 i64 u64 i128 u128 isize usize, u8);
+overflowing!(i16, i8 u8, u16 i32 u32 i64 u64 i128 u128 isize usize, u16);
+overflowing!(i32, i8 u8 i16 u16, u32 i64 u64 i128 u128 isize usize, u32);
+overflowing!(i64, i8 u8 i16 u16 i32 u32, u64 i128 u128 isize usize, u64);
+overflowing!(i128, i8 u8 i16 u16 i32 u32 i64 u64, u128 isize usize, u128);
+overflowing!(isize, i8 u8 i16, u16 i32 u32 u64 i128 u128 usize, usize);
 
 mod overflowing_support {
     use std::sync::atomic::AtomicUsize;
 
-    use crate::overflowing::OverflowingBehavior;
+    use crate::overflowing::{AsOverflow, OverflowingBehavior};
 
     /// Ignore overflow.
     const MODE_IGNORE: usize = 0;
@@ -655,13 +732,18 @@ mod overflowing_support {
     const MODE_SOFT_PANIC: usize = 1;
     /// Panic on overflow.
     const MODE_PANIC: usize = 2;
+    /// Saturate on overflow.
+    const MODE_SATURATE: usize = 3;
 
     static OVERFLOWING_MODE: AtomicUsize = AtomicUsize::new(MODE_IGNORE);
 
     /// Handles overflow for [`Overflowing`](super::Overflowing) numbers.
     #[track_caller]
     #[cold]
-    pub(super) fn handle_overflow<T: Into<O>, O>(result: T, description: std::fmt::Arguments) -> O {
+    pub(super) fn handle_overflow<T: Into<O>, O: AsOverflow>(
+        result: T,
+        description: std::fmt::Arguments,
+    ) -> O {
         let mode = OVERFLOWING_MODE.load(std::sync::atomic::Ordering::Relaxed);
         match mode {
             #[cfg(not(target_arch = "wasm32"))]
@@ -671,6 +753,7 @@ mod overflowing_support {
             #[cfg(target_arch = "wasm32")]
             MODE_SOFT_PANIC => panic!("Overflow: {description}"),
             MODE_PANIC => panic!("Overflow: {description}"),
+            MODE_SATURATE => return O::OVERFLOW,
             // MODE_IGNORE and all other (impossible) values
             _ => {}
         }
@@ -683,6 +766,7 @@ mod overflowing_support {
             OverflowingBehavior::Panic => MODE_PANIC,
             OverflowingBehavior::SoftPanic => MODE_SOFT_PANIC,
             OverflowingBehavior::Ignore => MODE_IGNORE,
+            OverflowingBehavior::Saturate => MODE_SATURATE,
         };
         OVERFLOWING_MODE.store(value, std::sync::atomic::Ordering::Relaxed);
     }
@@ -702,7 +786,7 @@ mod test {
 
     #[crate::test]
     fn test_wrapping_add() {
-        let result = Overflowing::<i8>::MAX.wrapping_add(Overflowing::<i8>::ONE);
+        let result = Overflowing::<i8>::MAX.add(Overflowing::<i8>::ONE);
         assert_eq!(result, Overflowing::<i8>::MIN);
     }
 
