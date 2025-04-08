@@ -1,19 +1,16 @@
 ---
 title: "mz-debug emulator"
-description: Debug emulator environments running in Docker.
+description: Use mz-debug to debug Materialize Emulator environments running in Docker.
 menu:
   main:
     parent: mz-debug
     weight: 20
 ---
 
-The **emulator** subcommand debugs Docker-based Materialize deployments. It collects:
-- Docker logs and resource information
-- Snapshots of system catalog tables from your Materialize instance
+`mz-debug emulator` debugs Docker-based Materialize deployments. It collects:
 
-```console
-$ mz-debug emulator [OPTIONS]
-```
+- Docker logs and resource information.
+- Snapshots of system catalog tables from your Materialize instance.
 
 ### Requirements
 
@@ -21,36 +18,48 @@ $ mz-debug emulator [OPTIONS]
 [official documentation](https://docs.docker.com/get-docker/) to install
 - A valid Materialize SQL connection URL for your local emulator.
 
-### Flags
+## Syntax
 
-| Option                           | Description                                                                                     |
-|----------------------------------|-------------------------------------------------------------------------------------------------|
-| `--dump-docker`                  | If true, dump debug information from the Docker container. Defaults to `true`.                  |
-| `--docker-container-id <ID>`     | The Docker container to dump. Required if `--dump-docker` is true.                             |
-| `--mz-connection-url <URL>`      | The URL of the Materialize SQL connection. Defaults to `postgres://127.0.0.1:6875/materialize?sslmode=prefer`. |
+```shell
+mz-debug [--dump-system-catalog <boolean>] emulator [OPTIONS]
+```
 
-### Examples
+## Options
+
+### `mz-debug` option
+
+The following option is available at the `mz-debug` level; i.e., if you decide
+to specify the option, the option comes **before** the `emulator` keyword.
+
+{{< yaml-table data="mz-debug/mz_debug_option" >}}
+
+### `mz-debug emulator` options
+
+{{< yaml-table data="mz-debug/emulator_options" >}}
+
+## Output
+
+The `mz-debug` outputs its log file (`tracing.log`) and the generated debug
+files into a directory named `mz_debug_YYYY-MM-DD-HH-TMM-SSZ/` as well as zips
+the directory and its contents `mz_debug_YYYY-MM-DD-HH-TMM-SSZ.zip`.
+
+The generated debug files are in two main categories: [Docker resource
+files](#docker-resource-files) and [system catalog
+files](#system-catalog-files).
+
+### Docker resource files
+
+In `mz_debug_YYYY-MM-DD-HH-TMM-SSZ/`, under the `docker/<CONTAINER-ID>`
+sub-directory,  the following Docker resource debug files are generated:
+
+{{< yaml-table data="mz-debug/docker_resource_files" >}}
+
+{{% integrations/mz-debug/system-catalog-files %}}
+
+## Examples
 
 **Debug a running local emulator container:**
 ```console
 mz-debug emulator \
     --docker-container-id 123abc456def
 ```
-
-## Files
-
-The debug tool generates files in two main categories: Docker resources and System Catalog. Files are stored under a timestamped directory: `debug-YYYY-MM-DD-HH-TMM-SSZ/` and "zipped" as the directory name.
-
-### Docker Resource Files
-Stored under the `docker/<CONTAINER-ID>` sub-directory
-
-| Resource Type | Output File |
-|--------------|-------------|
-| Container Logs | `logs-stdout.txt` and `logs-stderr.txt` |
-| Container Inspection | `inspect.txt` |
-| Container Stats | `stats.txt` |
-| Container Processes | `top.txt` |
-
-All files are saved in a directory structure: `<base_path>/docker/<container_id>/`.
-
-{{% integrations/mz-debug/global-flags %}}

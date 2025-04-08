@@ -1,6 +1,6 @@
 ---
 title: "mz-debug self-managed"
-description: Debug self-managed Kubernetes environments.
+description: Use mz-debug to debug Materialize self-managed Materialize Kubernetes environments.
 menu:
   main:
     parent: mz-debug
@@ -19,42 +19,45 @@ By default, the tool will automatically port-forward to collect system catalog i
 
 ## Requirements
 
-`mz-debug` requires `kubectl` (Kubernetes command-line tool) v1.32.3+. Install
-[kubectl](https://kubernetes.io/docs/tasks/tools/) , the official Kubernetes
-command-line tool.
+`mz-debug` requires [`kubectl`](https://kubernetes.io/docs/tasks/tools/)
+v1.32.3+. Install [kubectl](https://kubernetes.io/docs/tasks/tools/) if you do
+not have it installed.
 
 ## Syntax
 
 ```console
-$ mz-debug self-managed [OPTIONS]
+mz-debug [--dump-system-catalog <boolean>] self-managed [OPTIONS]
 ```
 
 ## Options
 
-### General Options
+## `mz-debug` option
 
-{{% integrations/mz-debug/global-flags %}}
+The following option is available at the `mz-debug` level; i.e., if you decide
+to specify the option, the option comes **before** the `self-managed` keyword.
 
-### `self-managed` options
+{{< yaml-table data="mz-debug/mz_debug_option" >}}
 
-| Option                           | Description                                                                                     |
-|----------------------------------|-------------------------------------------------------------------------------------------------|
-| `--dump-k8s`                     | If true, dump debug information from the Kubernetes cluster. Defaults to `true`.                |
-| `--k8s-namespace <NAMESPACE>`     | One or more namespaces to dump. Required if `--dump-k8s` is true.                             |
-| `--k8s-context <CONTEXT>`        | The Kubernetes context to use. Defaults to the `KUBERNETES_CONTEXT` environment variable.       |
-| `--k8s-dump-secret-values`       | Include secrets in the dump. Use with caution. Defaults to `false`.                            |
-| `--auto-port-forward`            | Automatically port-forward the external SQL port. Defaults to `true`.                           |
-| `--port-forward-local-address`   | The address to listen on for port-forwarding. Defaults to `127.0.0.1`.                         |
-| `--port-forward-local-port`      | The port to listen on for port-forwarding. Defaults to `6875`.                                 |
-| `--mz-connection-url <URL>`      | A [PostgreSQL connection URL](https://www.postgresql.org/docs/14/libpq-connect.html#LIBPQ-CONNSTRING) of the Materialize SQL connection. Will be constructed from port-forward settings if not provided. |
+## `mz-debug self-managed` options
 
-## Output files
+{{< yaml-table data="mz-debug/self_managed_options" >}}
 
-The debug tool generates files in two main categories: Kubernetes resources and System Catalog. Files are stored under a timestamped directory: `debug-YYYY-MM-DD-HH-TMM-SSZ/` and "zipped" as the directory name.
+## Output
 
-### Kubernetes Resource Files
+The `mz-debug` outputs its log file (`tracing.log`) and the generated debug
+files into a directory named `mz_debug_YYYY-MM-DD-HH-TMM-SSZ/` as well as zips
+the directory and its contents `mz_debug_YYYY-MM-DD-HH-TMM-SSZ.zip`.
 
-{{< yaml-table data="mz_debug/kubernetes_resource_files" >}}
+The generated debug files are in two main categories: [Kubernetes resource
+files](#kubernetes-resource-files) and [system catalog
+files](#system-catalog-files).
+
+### Kubernetes resource files
+
+Under `mz_debug_YYYY-MM-DD-HH-TMM-SSZ/`, the following Kubernetes resource debug
+files are generated:
+
+{{< yaml-table data="mz-debug/kubernetes_resource_files" >}}
 
 Each resource type directory also contains a `describe.txt` file with the output of `kubectl describe` for that resource type.
 
@@ -62,21 +65,27 @@ Each resource type directory also contains a `describe.txt` file with the output
 
 ## Examples
 
-**Generate a debug zip file:**
-```console
-mz-debug self-managed --k8s-namespace materialize --k8s-namespace materialize-environment
+### Debug the `materialize-environment` namespace
+
+```shell
+mz-debug self-managed --k8s-namespace materialize-environment
 ```
 
-**Include secret values (use with caution):**
-```console
-mz-debug self-managed --k8s-namespace materialize --k8s-dump-secret-values
+### Debug the `materialize` namespace
+
+```shell
+mz-debug --dump-system-catalog=false self-managed --k8s-namespace materialize --auto-port-forward false
 ```
 
-**Debug a namespace without automatic port-forwarding:**
-```console
+### Debug namespaces without automatic port-forwarding
+
+```shell
 mz-debug self-managed \
     --k8s-namespace materialize \
     --k8s-namespace materialize-environment \
     --auto-port-forward false \
     --mz-connection-url 'postgres://root@127.0.0.1:6875/materialize?sslmode=disable'
 ```
+
+Because the `materialize` namespace does not contain Materialize instances, the
+debug tool will be unable to dump the system catalog.

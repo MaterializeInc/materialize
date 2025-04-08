@@ -19,35 +19,41 @@ disable_list: true
 {{< tab "macOS" >}}
 
 ```shell
-# On macOS:
 ARCH=$(uname -m)
+sudo echo "Preparing to extract mz-debug..."
 curl -L "https://binaries.materialize.com/mz-debug-latest-$ARCH-apple-darwin.tar.gz" \
 | sudo tar -xzC /usr/local --strip-components=1
 ```
 {{</ tab >}}
 {{< tab "Ubuntu/Debian" >}}
 ```shell
-# On Ubuntu/Debian:
 curl -fsSL https://dev.materialize.com/apt/materialize.sources | sudo tee /etc/apt/sources.list.d/materialize.sources
 sudo apt update
 sudo apt install materialize-cli
 {{</ tab >}}
 {{< tab "Docker" >}}
 ```shell
-# Docker
 docker run materialize/mz-debug
 ```
 {{</ tab >}}
 {{</ tabs >}}
 
-## Install `kubectl`
+### Get version and help
 
-`mz-debug` requires `kubectl` (Kubernetes command-line tool) v1.32.3+. Install
-[kubectl](https://kubernetes.io/docs/tasks/tools/) , the official Kubernetes
-command-line tool.
+To see the version of `mz-debug`, specify the `--version` flag:
+
+```shell
+mz-debug --version
+```
+
+To see the options for running `mz-debug`,
+
+```shell
+mz-debug --help
+```
 
 ## Next steps
 
-To run `mz-debug`, see 
+To run `mz-debug`, see
 - [`mz-debug self-managed`](./self-managed)
 - [`mz-debug emulator`](./emulator)
