@@ -5,6 +5,15 @@ columns:
 rows:
 
 - "Terraform version": |
+    [v0.3.4](https://github.com/MaterializeInc/terraform-azurerm-materialize/releases/tag/v0.3.4)
+  "Notable changes": |
+    - Defaults to using Materialize Operator v25.1.7 (via
+    `terraform-helm-materialize` v0.1.12).
+
+      Version v0.3.1 defaulted to Materialize Operator v25.1.6 which
+      used an incorrect version of the `orchestratord`).
+
+- "Terraform version": |
 
     [v0.3.1](https://github.com/MaterializeInc/terraform-azurerm-materialize/releases/tag/v0.3.1)
 

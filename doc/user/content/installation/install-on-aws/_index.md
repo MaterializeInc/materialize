@@ -319,20 +319,21 @@ components:
    <a name="aws-terrafrom-output"></a>
 
    ```bash
-   Apply complete! Resources: 14 added, 0 changed, 0 destroyed.
+   Apply complete! Resources: 17 added, 1 changed, 0 destroyed.
 
    Outputs:
 
+   cluster_certificate_authority_data = <sensitive>
    database_endpoint = "my-demo-dev-db.abcdefg8dsto.us-east-1.rds.amazonaws.com:5432"
    eks_cluster_endpoint = "https://0123456789A00BCD000E11BE12345A01.gr7.us-east-1.eks.amazonaws.com"
    eks_cluster_name = "my-demo-dev-eks"
    materialize_s3_role_arn = "arn:aws:iam::000111222333:role/my-demo-dev-mz-role"
    metadata_backend_url = <sensitive>
    nlb_details = [
-     {
+     "demo" = {
        "arn" = "arn:aws:elasticloadbalancing:us-east-1:000111222333:loadbalancer/net/demo/aeae3d936afebcfe"
        "dns_name" = "demo-aeae3d936afebcfe.elb.us-east-1.amazonaws.com"
-     },
+     }
    ]
    oidc_provider_arn = "arn:aws:iam::000111222333:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/7D14BCA3A7AA896A836782D96A24F958"
    persist_backend_url = "s3://my-demo-dev-storage-f2def2a9/dev:serviceaccount:materialize-environment:12345678-1234-1234-1234-12345678912"
