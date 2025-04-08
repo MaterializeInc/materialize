@@ -218,27 +218,6 @@ class AWS:
         )
 
         spawn.runv(["kubectl", "get", "nodes"])
-        # Not working yet?
-        # spawn.runv(
-        #     ["helm", "repo", "add", "openebs", "https://openebs.github.io/openebs"]
-        # )
-        # spawn.runv(["helm", "repo", "update"])
-        # spawn.runv(
-        #     [
-        #         "helm",
-        #         "install",
-        #         "openebs",
-        #         "--namespace",
-        #         "openebs",
-        #         "openebs/openebs",
-        #         "--set",
-        #         "engines.replicated.mayastor.enabled=false",
-        #         "--create-namespace",
-        #     ]
-        # )
-        # spawn.runv(
-        #     ["kubectl", "get", "pods", "-n", "openebs", "-l", "role=openebs-lvm"]
-        # )
 
         spawn.capture(
             [
@@ -289,7 +268,7 @@ class AWS:
             "stringData": {
                 "metadata_backend_url": metadata_backend_url,
                 "persist_backend_url": persist_backend_url,
-                "license_key": os.environ["MZ_CI_LICENSE_KEY"],
+                "license_key": os.getenv("MZ_CI_LICENSE_KEY"),
             },
         }
 
@@ -873,7 +852,7 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                 "stringData": {
                     "metadata_backend_url": connection_strings["metadata_backend_url"],
                     "persist_backend_url": connection_strings["persist_backend_url"],
-                    "license_key": os.environ["MZ_CI_LICENSE_KEY"],
+                    "license_key": os.getenv("MZ_CI_LICENSE_KEY"),
                 },
             }
 
@@ -1289,7 +1268,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                 "stringData": {
                     "metadata_backend_url": connection_strings["metadata_backend_url"],
                     "persist_backend_url": connection_strings["persist_backend_url"],
-                    "license_key": os.environ["MZ_CI_LICENSE_KEY"],
+                    "license_key": os.getenv("MZ_CI_LICENSE_KEY"),
                 },
             }
 
