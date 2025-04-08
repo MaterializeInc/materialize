@@ -1,6 +1,6 @@
 ---
 title: "EXPLAIN PLAN"
-description: "`EXPLAIN PLAN` is used to inspect the plans of `SELECT` statements, indexes, and materialized views."
+description: "Reference page for `EXPLAIN PLAN`. `EXPLAIN PLAN` is used to inspect the plans of `SELECT` statements, indexes, and materialized views."
 aliases:
   - /sql/explain/
 menu:
@@ -8,7 +8,11 @@ menu:
     parent: commands
 ---
 
-`EXPLAIN PLAN` displays the plans used for `SELECT` statements, indexes, and materialized views.
+`EXPLAIN PLAN` displays the plans used for:
+
+|                             |                       |
+|-----------------------------|-----------------------|
+| <ul><li>`SELECT` statements </li><li>`CREATE VIEW` statements</li><li>`CREATE INDEX` statements</li><li>`CREATE MATERIALIZED VIEW` statements</li></ul>|<ul><li>Existing views</li><li>Existing indexes</li><li>Existing materialized views</li></ul> |
 
 {{< warning >}}
 `EXPLAIN` is not part of Materialize's stable interface and is not subject to
@@ -18,7 +22,79 @@ change arbitrarily in future versions of Materialize.
 
 ## Syntax
 
-{{< diagram "explain-plan.svg" >}}
+{{< tabs >}}
+{{< tab "FOR SELECT">}}
+```mzsql
+EXPLAIN [ [ RAW | DECORRELATED | [LOCALLY] OPTIMIZED | PHYSICAL ] PLAN
+    [ WITH (<output_modifier> [, <output_modifier> ...])]
+    [ AS TEXT | AS JSON ]
+FOR ]       -- The FOR keyword is required if the PLAN keyword is specified
+    <SELECT ...>
+;
+```
+{{</tab>}}
+{{< tab "FOR CREATE VIEW">}}
+
+```mzsql
+EXPLAIN <RAW | DECORRELATED | LOCALLY OPTIMIZED> PLAN
+    [ WITH (<output_modifier> [, <output_modifier> ...]) ]
+    [ AS TEXT | AS JSON ]
+FOR
+    <CREATE VIEW ...>
+;
+```
+{{</tab>}}
+{{< tab "FOR CREATE INDEX">}}
+```mzsql
+EXPLAIN [ [ OPTIMIZED | PHYSICAL ] PLAN
+    [ WITH (<output_modifier> [, <output_modifier> ...]) ]
+    [ AS TEXT | AS JSON ]
+FOR ]  -- The FOR keyword is required if the PLAN keyword is specified
+    <CREATE INDEX ...>
+;
+```
+{{</tab>}}
+{{< tab "FOR CREATE MATERIALIZED VIEW">}}
+```mzsql
+EXPLAIN [ [ RAW | DECORRELATED | [LOCALLY] OPTIMIZED | PHYSICAL ] PLAN
+    [ WITH (<output_modifier> [, <output_modifier> ...])]
+    [ AS TEXT | AS JSON ]
+FOR ]          -- The FOR keyword is required if the PLAN keyword is specified
+    <CREATE MATERIALIZED VIEW ...>
+;
+```
+{{</tab>}}
+{{< tab "FOR VIEW">}}
+```mzsql
+EXPLAIN <RAW | LOCALLY OPTIMIZED> PLAN
+    [ WITH (<output_modifier> [, <output_modifier> ...])]
+    [ AS TEXT | AS JSON ]
+FOR
+  VIEW <name>
+;
+```
+{{</tab>}}
+{{< tab "FOR INDEX">}}
+```mzsql
+EXPLAIN [ [ OPTIMIZED | PHYSICAL ] PLAN
+      [ WITH (<output_modifier> [, <output_modifier> ...]) ]
+      [ AS TEXT | AS JSON ]
+FOR ]  -- The FOR keyword is required if the PLAN keyword is specified
+  INDEX <name>
+;
+```
+{{</tab>}}
+{{< tab "FOR MATERIALIZED VIEW">}}
+```mzsql
+EXPLAIN [[ RAW | [LOCALLY] OPTIMIZED | PHYSICAL ] PLAN
+    [ WITH (<output_modifier> [, <output_modifier> ...]) ]
+    [ AS TEXT | AS JSON ]
+FOR ] -- The FOR keyword is required if the PLAN keyword is specified
+  MATERIALIZED VIEW <name>
+;
+```
+{{</tab>}}
+{{</tabs>}}
 
 Note that the `FOR` keyword is required if the `PLAN` keyword is present. In other words, the following three statements are equivalent:
 

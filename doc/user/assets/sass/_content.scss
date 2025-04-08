@@ -773,17 +773,17 @@ p+p {
             a {
                 color: var(--body);
                 display: block;
-                padding: rem(0.8) rem(3.2);
-                font-size: rem(1.6);
+                padding: rem(0.8) rem(1.6);
+                font-size: rem(1.4);
                 text-decoration: none;
                 font-weight: 500;
 
                 @media(max-width: 850px) {
-                    padding: rem(0.8) rem(2.5);
+                    padding: rem(0.8) rem(1.6);
                 }
 
                 @media(max-width: 380px) {
-                    padding: rem(0.8) rem(1.5);
+                    padding: rem(0.8) rem(0.8);
                 }
 
                 &:hover {
