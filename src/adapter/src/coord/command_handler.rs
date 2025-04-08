@@ -14,7 +14,6 @@ use differential_dataflow::lattice::Lattice;
 use mz_adapter_types::dyncfgs::ALLOW_USER_SESSIONS;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
 use mz_sql::session::metadata::SessionMetadata;
-use mz_storage_types::connections::aws::proto_aws_connection::Auth;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use std::sync::Arc;

@@ -117,6 +117,7 @@ regex-automata = { version = "0.4.7", default-features = false, features = ["dfa
 regex-syntax = { version = "0.8.3" }
 reqwest-5ef9efb8ec2df382 = { package = "reqwest", version = "0.12.4", default-features = false, features = ["blocking", "charset", "http2", "json", "native-tls-vendored", "stream"] }
 reqwest-a6292c17cd707f01 = { package = "reqwest", version = "0.11.24", features = ["blocking", "json", "multipart", "native-tls-vendored", "stream"] }
+ring = { version = "0.17.14", features = ["std"] }
 schemars = { version = "0.8.22", features = ["uuid1"] }
 scopeguard = { version = "1.2.0" }
 semver = { version = "1.0.23", features = ["serde"] }
@@ -256,6 +257,7 @@ regex-automata = { version = "0.4.7", default-features = false, features = ["dfa
 regex-syntax = { version = "0.8.3" }
 reqwest-5ef9efb8ec2df382 = { package = "reqwest", version = "0.12.4", default-features = false, features = ["blocking", "charset", "http2", "json", "native-tls-vendored", "stream"] }
 reqwest-a6292c17cd707f01 = { package = "reqwest", version = "0.11.24", features = ["blocking", "json", "multipart", "native-tls-vendored", "stream"] }
+ring = { version = "0.17.14", features = ["std"] }
 schemars = { version = "0.8.22", features = ["uuid1"] }
 scopeguard = { version = "1.2.0" }
 semver = { version = "1.0.23", features = ["serde"] }
@@ -300,7 +302,6 @@ hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-featu
 linux-raw-sys = { version = "0.4.14", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
-ring = { version = "0.17.14", features = ["std"] }
 rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
@@ -310,7 +311,6 @@ hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-featu
 linux-raw-sys = { version = "0.4.14", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
-ring = { version = "0.17.14", features = ["std"] }
 rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
 
 [target.x86_64-apple-darwin.dependencies]
@@ -319,7 +319,6 @@ getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3.1", default
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-features = false, features = ["runtime"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
-ring = { version = "0.17.14", features = ["std"] }
 rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
 security-framework = { version = "2.10.0", features = ["alpn"] }
 
@@ -329,7 +328,6 @@ getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3.1", default
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-features = false, features = ["runtime"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
-ring = { version = "0.17.14", features = ["std"] }
 rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
 security-framework = { version = "2.10.0", features = ["alpn"] }
 

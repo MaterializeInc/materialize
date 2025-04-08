@@ -1,3 +1,12 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
 use std::fmt::Display;
 use std::num::NonZeroU32;
 
@@ -182,7 +191,7 @@ fn hash_password_inner(opts: &HashOpts, password: &[u8]) -> [u8; SHA256_OUTPUT_L
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_hash_password() {
         let password = "password".to_string();
         let hashed_password = hash_password(&password);
@@ -191,7 +200,7 @@ mod tests {
         assert_eq!(hashed_password.hash.len(), SHA256_OUTPUT_LEN);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_scram256_hash() {
         let password = "password".to_string();
         let scram_hash = scram256_hash(&password);
@@ -202,7 +211,7 @@ mod tests {
         assert!(res.is_err());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_scram256_parse_opts() {
         let salt = "9bkIQQjQ7f1OwPsXZGC/YfIkbZsOMDXK0cxxvPBaSfM=";
         let hashed_password = format!("SCRAM-SHA-256$600000:{}$client-key:server-key", salt);

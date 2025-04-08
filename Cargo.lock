@@ -4867,7 +4867,9 @@ name = "mz-auth"
 version = "0.0.0"
 dependencies = [
  "base64 0.22.1",
+ "mz-ore",
  "ring",
+ "workspace-hack",
 ]
 
 [[package]]

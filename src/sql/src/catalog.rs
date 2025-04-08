@@ -542,7 +542,7 @@ impl From<PlannedRoleAttributes> for RoleAttributes {
         let default_attributes = RoleAttributes::new();
         RoleAttributes {
             inherit: inherit.unwrap_or(default_attributes.inherit),
-            password: password,
+            password,
             superuser: superuser.unwrap_or(default_attributes.superuser),
             _private: (),
         }
