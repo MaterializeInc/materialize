@@ -108,6 +108,8 @@ pub struct Config {
     pub internal_console_redirect_url: Option<String>,
     /// Whether to enable self hosted auth
     pub self_hosted_auth: bool,
+    /// Whether to enable self hosted auth on the internal pg port
+    pub self_hosted_auth_internal: bool,
 
     // === Controller options. ===
     /// Storage and compute controller configuration.
@@ -760,8 +762,7 @@ impl Listeners {
                 }),
                 adapter_client: adapter_client.clone(),
                 frontegg: None,
-                //TODO(dov): is this what we want?
-                use_self_hosted_auth: false,
+                use_self_hosted_auth: config.self_hosted_auth_internal,
                 metrics: metrics.clone(),
                 internal: true,
                 active_connection_counter: active_connection_counter.clone(),

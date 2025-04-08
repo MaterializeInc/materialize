@@ -538,6 +538,7 @@ impl Listeners {
                 tls: config.tls,
                 frontegg: config.frontegg,
                 self_hosted_auth: false,
+                self_hosted_auth_internal: false,
                 unsafe_mode: config.unsafe_mode,
                 all_features: false,
                 metrics_registry: metrics_registry.clone(),

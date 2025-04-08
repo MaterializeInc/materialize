@@ -1072,6 +1072,7 @@ impl<'a> RunnerInner<'a> {
             tls: None,
             frontegg: None,
             self_hosted_auth: false,
+            self_hosted_auth_internal: false,
             cors_allowed_origin: AllowOrigin::list([]),
             unsafe_mode: true,
             all_features: false,
