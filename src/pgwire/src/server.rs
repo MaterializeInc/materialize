@@ -48,6 +48,8 @@ pub struct Config {
     /// a valid Frontegg API token as a password to authenticate. Otherwise,
     /// password authentication is disabled.
     pub frontegg: Option<FronteggAuthentication>,
+    /// Whether to use self-hosted authentication.
+    pub use_self_hosted_auth: bool,
     /// The registry entries that the pgwire server uses to report metrics.
     pub metrics: MetricsConfig,
     /// Whether this is an internal server that permits access to restricted
@@ -68,6 +70,7 @@ pub struct Server {
     internal: bool,
     active_connection_counter: ConnectionCounter,
     helm_chart_version: Option<String>,
+    use_self_hosted_auth: bool,
 }
 
 #[async_trait]
@@ -89,6 +92,7 @@ impl Server {
             tls: config.tls,
             adapter_client: config.adapter_client,
             frontegg: config.frontegg,
+            use_self_hosted_auth: config.use_self_hosted_auth,
             metrics: Metrics::new(config.metrics, config.label),
             internal: config.internal,
             active_connection_counter: config.active_connection_counter,
@@ -103,6 +107,7 @@ impl Server {
     ) -> impl Future<Output = Result<(), anyhow::Error>> + 'static + Send {
         let adapter_client = self.adapter_client.clone();
         let frontegg = self.frontegg.clone();
+        let use_self_hosted_auth = self.use_self_hosted_auth;
         let tls = self.tls.clone();
         let internal = self.internal;
         let metrics = self.metrics.clone();
@@ -176,6 +181,7 @@ impl Server {
                                     version,
                                     params,
                                     frontegg: frontegg.as_ref(),
+                                    use_self_hosted_auth,
                                     internal,
                                     active_connection_counter,
                                     helm_chart_version,

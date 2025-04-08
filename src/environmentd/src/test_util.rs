@@ -537,6 +537,7 @@ impl Listeners {
                 cloud_resource_controller: None,
                 tls: config.tls,
                 frontegg: config.frontegg,
+                self_hosted_auth: false,
                 unsafe_mode: config.unsafe_mode,
                 all_features: false,
                 metrics_registry: metrics_registry.clone(),

@@ -208,7 +208,9 @@ pub struct Args {
     /// Frontegg arguments.
     #[clap(flatten)]
     frontegg: FronteggCliArgs,
-
+    /// Self hosted auth args
+    #[clap(long, env = "ENABLE_SELF_HOSTED_AUTH")]
+    enable_self_hosted_auth: bool,
     // === Orchestrator options. ===
     /// The service orchestrator implementation to use.
     #[structopt(long, value_enum, env = "ORCHESTRATOR")]
@@ -1064,6 +1066,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 egress_addresses: args.announce_egress_address,
                 http_host_name: args.http_host_name,
                 internal_console_redirect_url: args.internal_console_redirect_url,
+                self_hosted_auth: args.enable_self_hosted_auth,
                 // Controller options.
                 controller,
                 secrets_controller,

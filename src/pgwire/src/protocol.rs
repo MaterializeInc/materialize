@@ -96,6 +96,8 @@ pub struct RunParams<'a, A> {
     pub params: BTreeMap<String, String>,
     /// Frontegg authentication.
     pub frontegg: Option<&'a FronteggAuthentication>,
+    /// Whether to use self hosted auth.
+    pub use_self_hosted_auth: bool,
     /// Whether this is an internal server that permits access to restricted
     /// system resources.
     pub internal: bool,
@@ -124,6 +126,7 @@ pub async fn run<'a, A>(
         version,
         mut params,
         frontegg,
+        use_self_hosted_auth,
         internal,
         active_connection_counter,
         helm_chart_version,
@@ -164,8 +167,6 @@ where
     if let Err(err) = conn.inner().ensure_tls_compatibility(&tls_mode) {
         return conn.send(err).await;
     }
-    //TODO(dov): this is a temp hack for testing purposes, remove it
-    if user != "materialize" {}
 
     let (mut session, expired) = if let Some(frontegg) = frontegg {
         conn.send(BackendMessage::AuthenticationCleartextPassword)
@@ -215,7 +216,7 @@ where
                     .await;
             }
         }
-    } else if user != "materialize" {
+    } else if use_self_hosted_auth {
         conn.send(BackendMessage::AuthenticationCleartextPassword)
             .await?;
         conn.flush().await?;
