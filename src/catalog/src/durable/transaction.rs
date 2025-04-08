@@ -354,7 +354,7 @@ impl<'a> Transaction<'a> {
         oid: u32,
     ) -> Result<(), CatalogError> {
         if let Some(ref password) = attributes.password {
-            let hash = mz_auth::hash::scram256_hash(&password);
+            let hash = mz_auth::hash::scram256_hash(password);
             //TODO(dov): actually set the updated_at field
             match self.role_auth.insert(
                 RoleAuthKey { role_id: id },
