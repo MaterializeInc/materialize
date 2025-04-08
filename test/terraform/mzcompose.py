@@ -1042,6 +1042,34 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                     ],
                     cwd=path,
                 )
+                pod_names = spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        "pods",
+                        "-n",
+                        "materialize-environment",
+                        "-o",
+                        "name",
+                    ],
+                    cwd=path,
+                ).strip().split("\n")
+                print("Logging all pods in materialize-environment:")
+                for pod_name in pod_names:
+                    try:
+                        spawn.runv(
+                            [
+                                "kubectl",
+                                "logs",
+                                pod_name,
+                                "-n",
+                                "materialize-environment",
+                                "--all-containers=true",
+                            ],
+                            cwd=path,
+                        )
+                    except subprocess.CalledProcessError:
+                        print(f"Failed to get logs for {pod_name}")
                 raise ValueError("Never completed")
 
         print("--- Running tests")
