@@ -19,6 +19,7 @@ use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, Timely
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::cast::{u64_to_usize, usize_to_u64};
 use mz_ore::collections::{CollectionExt, HashSet};
+use mz_ore::now::SYSTEM_TIME;
 use mz_ore::vec::VecExt;
 use mz_ore::{soft_assert_no_log, soft_assert_or_log};
 use mz_persist_types::ShardId;
@@ -355,12 +356,11 @@ impl<'a> Transaction<'a> {
     ) -> Result<(), CatalogError> {
         if let Some(ref password) = attributes.password {
             let hash = mz_auth::hash::scram256_hash(password);
-            //TODO(dov): actually set the updated_at field
             match self.role_auth.insert(
                 RoleAuthKey { role_id: id },
                 RoleAuthValue {
                     password_hash: Some(hash),
-                    updated_at: 0,
+                    updated_at: SYSTEM_TIME(),
                 },
                 self.op_id,
             ) {
@@ -1448,10 +1448,9 @@ impl<'a> Transaction<'a> {
         if self.roles.get(&key).is_some() {
             if let Some(ref password) = role.attributes.password {
                 let hash = mz_auth::hash::scram256_hash(&password);
-                //TODO: correct updated_at
                 let value = RoleAuthValue {
                     password_hash: Some(hash),
-                    updated_at: 0,
+                    updated_at: SYSTEM_TIME(),
                 };
 
                 let auth_key = RoleAuthKey { role_id: id };
