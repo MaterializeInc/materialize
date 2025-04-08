@@ -70,7 +70,7 @@ message ProtoHollowBatchPart {
 message ProtoInlineBatchPart {
   ProtoU64Description desc = 1;
   uint64 index = 2;
-  mz_persist.generated.persist.ProtoColumnarRecords updates = 3;
+  mz_persist.gen.persist.ProtoColumnarRecords updates = 3;
 }
 
 enum ProtoRunOrder {
