@@ -47,7 +47,7 @@ pub fn to_datetime(millis: EpochMillis) -> DateTime<Utc> {
     }
 }
 
-/// A function that converts an epoch timestamp to a UUID v7
+/// A function that converts an epoch timestamp to a UUID v7.
 #[cfg(feature = "id_gen")]
 pub fn epoch_to_uuid_v7(epoch: &EpochMillis) -> Uuid {
     let remainder: u32 = (*epoch % 1000)
