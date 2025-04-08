@@ -215,7 +215,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             additional_system_parameter_defaults,
         ),
     ):
-        c.up("materialized")
+        while True:
+            c.up("materialized")
+            c.kill("materialized")
 
         c.sql(
             "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",

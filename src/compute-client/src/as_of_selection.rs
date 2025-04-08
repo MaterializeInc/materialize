@@ -892,11 +892,14 @@ mod tests {
             unimplemented!()
         }
 
-        async fn snapshot_cursor(
-            &mut self,
+        fn snapshot_cursor(
+            &self,
             _id: GlobalId,
             _as_of: Self::Timestamp,
-        ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError<Self::Timestamp>>
+        ) -> BoxFuture<
+            'static,
+            Result<SnapshotCursor<Self::Timestamp>, StorageError<Self::Timestamp>>,
+        >
         where
             Self::Timestamp: TimelyTimestamp + Lattice + Codec64,
         {

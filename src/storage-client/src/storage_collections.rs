@@ -184,11 +184,11 @@ pub trait StorageCollections: Debug {
     ) -> Result<Vec<Row>, StorageError<Self::Timestamp>>;
 
     /// Returns a snapshot of the contents of collection `id` at `as_of`.
-    async fn snapshot_cursor(
-        &mut self,
+    fn snapshot_cursor(
+        &self,
         id: GlobalId,
         as_of: Self::Timestamp,
-    ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError<Self::Timestamp>>
+    ) -> BoxFuture<'static, Result<SnapshotCursor<Self::Timestamp>, StorageError<Self::Timestamp>>>
     where
         Self::Timestamp: Codec64 + TimelyTimestamp + Lattice;
 
@@ -1605,51 +1605,59 @@ where
         Ok(res)
     }
 
-    async fn snapshot_cursor(
-        &mut self,
+    fn snapshot_cursor(
+        &self,
         id: GlobalId,
         as_of: Self::Timestamp,
-    ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError<Self::Timestamp>>
+    ) -> BoxFuture<'static, Result<SnapshotCursor<Self::Timestamp>, StorageError<Self::Timestamp>>>
     where
         Self::Timestamp: TimelyTimestamp + Lattice + Codec64,
     {
-        let metadata = &self.collection_metadata(id)?;
+        let metadata = match self.collection_metadata(id) {
+            Ok(metadata) => metadata.clone(),
+            Err(e) => return async { Err(e) }.boxed(),
+        };
+        let txns_read = metadata.txns_shard.as_ref().map(|txns_id| {
+            // Ensure the txn's shard the controller has is the same that this
+            // collection is registered to.
+            assert_eq!(txns_id, self.txns_read.txns_id());
+            self.txns_read.clone()
+        });
+        let persist = Arc::clone(&self.persist);
 
         // See the comments in Self::snapshot for what's going on here.
-        let cursor = match metadata.txns_shard.as_ref() {
-            None => {
-                let persist = Arc::clone(&self.persist);
-                let mut handle = Self::read_handle_for_snapshot(persist, metadata, id).await?;
-                let cursor = handle
-                    .snapshot_cursor(Antichain::from_elem(as_of), |_| true)
-                    .await
-                    .map_err(|_| StorageError::ReadBeforeSince(id))?;
-                SnapshotCursor {
-                    _read_handle: handle,
-                    cursor,
+        async move {
+            let mut handle = Self::read_handle_for_snapshot(persist, &metadata, id).await?;
+            let cursor = match txns_read {
+                None => {
+                    let cursor = handle
+                        .snapshot_cursor(Antichain::from_elem(as_of), |_| true)
+                        .await
+                        .map_err(|_| StorageError::ReadBeforeSince(id))?;
+                    SnapshotCursor {
+                        _read_handle: handle,
+                        cursor,
+                    }
                 }
-            }
-            Some(txns_id) => {
-                assert_eq!(txns_id, self.txns_read.txns_id());
-                self.txns_read.update_gt(as_of.clone()).await;
-                let data_snapshot = self
-                    .txns_read
-                    .data_snapshot(metadata.data_shard, as_of.clone())
-                    .await;
-                let persist = Arc::clone(&self.persist);
-                let mut handle = Self::read_handle_for_snapshot(persist, metadata, id).await?;
-                let cursor = data_snapshot
-                    .snapshot_cursor(&mut handle, |_| true)
-                    .await
-                    .map_err(|_| StorageError::ReadBeforeSince(id))?;
-                SnapshotCursor {
-                    _read_handle: handle,
-                    cursor,
+                Some(txns_read) => {
+                    txns_read.update_gt(as_of.clone()).await;
+                    let data_snapshot = txns_read
+                        .data_snapshot(metadata.data_shard, as_of.clone())
+                        .await;
+                    let cursor = data_snapshot
+                        .snapshot_cursor(&mut handle, |_| true)
+                        .await
+                        .map_err(|_| StorageError::ReadBeforeSince(id))?;
+                    SnapshotCursor {
+                        _read_handle: handle,
+                        cursor,
+                    }
                 }
-            }
-        };
+            };
 
-        Ok(cursor)
+            Ok(cursor)
+        }
+        .boxed()
     }
 
     fn snapshot_and_stream(
