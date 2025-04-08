@@ -359,6 +359,17 @@ class AWS:
                 ],
                 cwd=self.path,
             )
+            print("Getting all pods:")
+            spawn.runv(
+                [
+                    "kubectl",
+                    "get",
+                    "pods",
+                    "-n",
+                    "materialize-environment",
+                ],
+                cwd=self.path,
+            )
             raise ValueError("Never completed")
 
         # Can take a while for balancerd to come up
@@ -391,6 +402,17 @@ class AWS:
                     "pods",
                     "-l",
                     "app=balancerd",
+                    "-n",
+                    "materialize-environment",
+                ],
+                cwd=self.path,
+            )
+            print("Getting all pods:")
+            spawn.runv(
+                [
+                    "kubectl",
+                    "get",
+                    "pods",
                     "-n",
                     "materialize-environment",
                 ],
@@ -969,6 +991,17 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                     ],
                     cwd=path,
                 )
+                print("Getting all pods:")
+                spawn.runv(
+                    [
+                        "kubectl",
+                        "get",
+                        "pods",
+                        "-n",
+                        "materialize-environment",
+                    ],
+                    cwd=path,
+                )
                 raise ValueError("Never completed")
 
             # Can take a while for balancerd to come up
@@ -1001,6 +1034,17 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                         "pods",
                         "-l",
                         "app=balancerd",
+                        "-n",
+                        "materialize-environment",
+                    ],
+                    cwd=path,
+                )
+                print("Getting all pods:")
+                spawn.runv(
+                    [
+                        "kubectl",
+                        "get",
+                        "pods",
                         "-n",
                         "materialize-environment",
                     ],
@@ -1417,6 +1461,18 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                     cwd=path,
                     env=venv_env,
                 )
+                print("Getting all pods:")
+                spawn.runv(
+                    [
+                        "kubectl",
+                        "get",
+                        "pods",
+                        "-n",
+                        "materialize-environment",
+                    ],
+                    cwd=path,
+                    env=venv_env,
+                )
                 raise ValueError("Never completed")
 
             # Can take a while for balancerd to come up
@@ -1450,6 +1506,18 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                         "pods",
                         "-l",
                         "app=balancerd",
+                        "-n",
+                        "materialize-environment",
+                    ],
+                    cwd=path,
+                    env=venv_env,
+                )
+                print("Getting all pods:")
+                spawn.runv(
+                    [
+                        "kubectl",
+                        "get",
+                        "pods",
                         "-n",
                         "materialize-environment",
                     ],
