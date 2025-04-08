@@ -23,6 +23,7 @@ from materialize.mz_version import TypedVersionBase
 
 BINARIES_BUCKET = "materialize-binaries"
 
+
 class TarballUploader:
     def __init__(self, package_name: str, version: TypedVersionBase):
         self.package_name = package_name

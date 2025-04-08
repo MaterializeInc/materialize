@@ -10,6 +10,7 @@
 import os
 from pathlib import Path
 
+from ci import tarball_uploader
 from materialize import mzbuild, spawn, ui
 from materialize.mz_version import MzCliVersion
 from materialize.rustc_flags import Sanitizer
@@ -61,7 +62,11 @@ def main() -> None:
     mzbuild.chmod_x(mz)
 
     print(f"--- Uploading {target} binary tarball")
-    deploy_util.deploy_tarball(target, mz)
+    uploader = tarball_uploader.TarballUploader(
+        package_name="mz",
+        version=deploy_util.MZ_CLI_VERSION,
+    )
+    uploader.deploy_tarball(target, mz)
 
     print("--- Publishing Debian package")
     filename = f"mz_{MZ_CLI_VERSION.str_without_prefix()}_{repo.rd.arch.go_str()}.deb"

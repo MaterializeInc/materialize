@@ -12,7 +12,6 @@ from pathlib import Path
 
 from ci.tarball_uploader import TarballUploader
 from materialize import spawn
-from materialize.mz_version import MzDebugVersion
 from materialize.xcompile import Arch
 
 from ..deploy.deploy_util import rust_version

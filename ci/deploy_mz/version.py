@@ -9,7 +9,9 @@
 
 import boto3
 
-from .deploy_util import BINARIES_BUCKET, MZ_CLI_VERSION
+from ci.tarball_uploader import BINARIES_BUCKET
+
+from .deploy_util import MZ_CLI_VERSION
 
 
 def main() -> None:
