@@ -31,26 +31,9 @@ fi
 
 date +"%Y-%m-%d %H:%M:%S" > step_start_timestamp
 
-# Sometimes build cancellations prevent us from properly cleaning up the last
-# Docker Compose run, which can leave old containers or volumes around that will
-# interfere with this build.
-ci_collapsed_heading ":docker: Purging containers and volumes from previous builds"
-sudo systemctl restart docker
-# First time we are using ci-builder, allow retrying a few times in case dockerhub has network problems
-mzcompose --mz-quiet kill || mzcompose --mz-quiet kill || mzcompose --mz-quiet kill
-mzcompose --mz-quiet rm --force -v
-mzcompose --mz-quiet down --volumes
-killall -9 clusterd || true # There might be remaining processes from a previous cargo-test run
-if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
-  find . -name '*.profraw' -delete # Remove remaining profraw files from coverage runs
-fi
-
-ci_collapsed_heading ":docker: Purging all existing docker containers and volumes, regardless of origin"
-docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
-rm -f services.log
-
 ci_collapsed_heading ":docker: Rebuilding non-mzbuild containers"
-mzcompose --mz-quiet build
+# First time we are using ci-builder, allow retrying a few times in case dockerhub has network problems
+mzcompose --mz-quiet build || mzcompose --mz-quiet build || mzcompose --mz-quiet build
 
 # Clean up cores here so that just killed processes' core files are ignored
 cores="$HOME"/cores

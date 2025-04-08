@@ -103,3 +103,7 @@ if [ "$CI_ANNOTATE_ERRORS_RESULT" -ne 0 ]; then
 fi
 ci_unimportant_heading "cloudtest: Resetting..."
 bin/ci-builder run stable test/cloudtest/reset
+
+ci_collapsed_heading ":docker: Purging all existing docker containers and volumes, regardless of origin"
+sudo systemctl restart docker
+docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
