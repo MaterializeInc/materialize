@@ -48,7 +48,7 @@ provider "helm" {
 }
 
 module "materialize" {
-  source = "github.com/MaterializeInc/terraform-google-materialize?ref=v0.2.0"
+  source = "github.com/MaterializeInc/terraform-google-materialize?ref=v0.3.2"
 
   project_id = var.project_id
   region     = var.region
@@ -60,6 +60,12 @@ module "materialize" {
     password = var.database_password
   }
 
+  network_config = {
+    subnet_cidr   = "10.0.0.0/20"
+    pods_cidr     = "10.48.0.0/14"
+    services_cidr = "10.52.0.0/20"
+  }
+
   labels = {
     environment = "simple"
     example     = "true"
@@ -67,15 +73,18 @@ module "materialize" {
 
   install_materialize_operator = true
 
+  install_cert_manager           = true
+  use_self_signed_cluster_issuer = true
+
   helm_values = {
-      clusters = {
-        defaultReplicationFactor = {
-            system = 1
-            probe = 1
-            support = 1
-            analytics = 1
-        }
+    clusters = {
+      defaultReplicationFactor = {
+        system    = 1
+        probe     = 1
+        support   = 1
+        analytics = 1
       }
+    }
   }
 
   providers = {
