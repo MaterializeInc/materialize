@@ -2227,7 +2227,7 @@ impl<C: ConnectionAccess> AlterCompatible for SqlServerConnectionDetails<C> {
         for (compatible, field) in compatibility_checks {
             if !compatible {
                 tracing::warn!(
-                    "MySqlConnection incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    "SqlServerConnectionDetails incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
                     self,
                     other
                 );
