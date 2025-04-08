@@ -346,6 +346,19 @@ class AWS:
             except subprocess.CalledProcessError:
                 time.sleep(1)
         else:
+            print("Environment pod never completed, describing pod:")
+            spawn.runv(
+                [
+                    "kubectl",
+                    "describe",
+                    "pods",
+                    "-l",
+                    "app=environmentd",
+                    "-n",
+                    "materialize-environment",
+                ],
+                cwd=self.path,
+            )
             raise ValueError("Never completed")
 
         # Can take a while for balancerd to come up
@@ -370,6 +383,19 @@ class AWS:
             except subprocess.CalledProcessError:
                 time.sleep(1)
         else:
+            print("Balancerd pod never completed, describing pod:")
+            spawn.runv(
+                [
+                    "kubectl",
+                    "describe",
+                    "pods",
+                    "-l",
+                    "app=balancerd",
+                    "-n",
+                    "materialize-environment",
+                ],
+                cwd=self.path,
+            )
             raise ValueError("Never completed")
 
     def connect(self, c: Composition) -> None:
@@ -930,6 +956,19 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                 except subprocess.CalledProcessError:
                     time.sleep(1)
             else:
+                print("Environment pod never completed, describing pod:")
+                spawn.runv(
+                    [
+                        "kubectl",
+                        "describe",
+                        "pods",
+                        "-l",
+                        "app=environmentd",
+                        "-n",
+                        "materialize-environment",
+                    ],
+                    cwd=path,
+                )
                 raise ValueError("Never completed")
 
             # Can take a while for balancerd to come up
@@ -954,6 +993,19 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                 except subprocess.CalledProcessError:
                     time.sleep(1)
             else:
+                print("Balancerd pod never completed, describing pod:")
+                spawn.runv(
+                    [
+                        "kubectl",
+                        "describe",
+                        "pods",
+                        "-l",
+                        "app=balancerd",
+                        "-n",
+                        "materialize-environment",
+                    ],
+                    cwd=path,
+                )
                 raise ValueError("Never completed")
 
         print("--- Running tests")
@@ -1351,6 +1403,20 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                 except subprocess.CalledProcessError:
                     time.sleep(1)
             else:
+                print("Environment pod never completed, describing pod:")
+                spawn.runv(
+                    [
+                        "kubectl",
+                        "describe",
+                        "pods",
+                        "-l",
+                        "app=environmentd",
+                        "-n",
+                        "materialize-environment",
+                    ],
+                    cwd=path,
+                    env=venv_env,
+                )
                 raise ValueError("Never completed")
 
             # Can take a while for balancerd to come up
@@ -1376,6 +1442,20 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                 except subprocess.CalledProcessError:
                     time.sleep(1)
             else:
+                print("Balancerd pod never completed, describing pod:")
+                spawn.runv(
+                    [
+                        "kubectl",
+                        "describe",
+                        "pods",
+                        "-l",
+                        "app=balancerd",
+                        "-n",
+                        "materialize-environment",
+                    ],
+                    cwd=path,
+                    env=venv_env,
+                )
                 raise ValueError("Never completed")
 
         print("--- Running tests")
