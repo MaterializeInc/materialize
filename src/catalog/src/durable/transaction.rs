@@ -1447,7 +1447,7 @@ impl<'a> Transaction<'a> {
         let key = RoleKey { id };
         if self.roles.get(&key).is_some() {
             if let Some(ref password) = role.attributes.password {
-                let hash = mz_auth::hash::scram256_hash(&password);
+                let hash = mz_auth::hash::scram256_hash(password);
                 let value = RoleAuthValue {
                     password_hash: Some(hash),
                     updated_at: SYSTEM_TIME(),
