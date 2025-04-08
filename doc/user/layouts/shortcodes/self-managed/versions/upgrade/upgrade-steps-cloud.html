@@ -15,8 +15,7 @@
    ```sh
    ##... Existing content not shown for brevity
    ##... Leave the existing variables unchanged
-   operator_version="v25.1.2"  # Set to the desired operator version
-   orchestratord_version="v0.130.4"  # Set to the desired orchestratord version
+   operator_version="v25.1.7"  # Set to the desired operator version
    ```
 
 1. Initialize the terraform directory.
@@ -85,7 +84,7 @@
 
    - a `create_database` of `false`,
    - an `inPlaceRollout` of `true`,
-   - an `environmentd_version` of `"v0.130.4"`, and
+   - an `environmentd_version` of `"v0.130.8"`, and
    - a `request_rollout` of `"12345678-1305-1304-1304-123456781304"`.
 
    ```sh
@@ -99,7 +98,7 @@
          memory_limit   = "2Gi"
          create_database = false
          inPlaceRollout = true
-         environmentd_version = "v0.130.4"
+         environmentd_version = "v0.130.8"
          request_rollout="12345678-1305-1304-1304-123456781304"
        }
    ]

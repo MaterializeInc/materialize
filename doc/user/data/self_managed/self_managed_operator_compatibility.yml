@@ -2,8 +2,38 @@ columns:
   - column: "Materialize Operator"
   - column: "orchestratord version"
   - column: "environmentd version"
+  - column: "Release date"
+  - column: "Notes"
 
 rows:
+  - "Materialize Operator": "v25.1.7"
+    "orchestratord version": "v0.138.0"
+    "environmentd version": "v0.130.8"
+    "Release date": "2025-04-08"
+    "Notes": ""
+
+  - "Materialize Operator": "v25.1.6"
+    "orchestratord version": "v0.130.8"
+    "environmentd version": "v0.130.8"
+    "Release date": "2025-03-26"
+    "Notes": |-
+
+      This release uses an incorrect version of `orchestratord` as its
+      default (v0.130.8 instead of v0.138.0). This has been fixed in
+      v25.1.7.
+
+  - "Materialize Operator": "v25.1.5"
+    "orchestratord version": "v0.138.0"
+    "environmentd version": "v0.130.7"
+    "Release date": "2025-03-25"
+    "Notes": ""
+  - "Materialize Operator": "v25.1.4"
+    "orchestratord version": "v0.138.0"
+    "environmentd version": "v0.130.7"
+    "Release date": "2025-03-25"
+    "Notes": ""
   - "Materialize Operator": "v25.1.2"
     "orchestratord version": "v0.130.4"
     "environmentd version": "v0.130.4"
+    "Release date": "2025-03-11"
+    "Notes": ""
