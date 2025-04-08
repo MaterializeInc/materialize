@@ -3123,13 +3123,10 @@ impl Coordinator {
             };
             let mut returning_rows = Vec::new();
             let mut diff_err: Option<AdapterError> = None;
-            if !returning.is_empty() && diffs.is_ok() {
+            if let (false, Ok(diffs)) = (returning.is_empty(), &diffs) {
                 let arena = RowArena::new();
-                for (row, diff) in diffs
-                    .as_ref()
-                    .expect("known to be `Ok` from `is_ok()` call above")
-                {
-                    if diff.is_negative() {
+                for (row, diff) in diffs {
+                    if !diff.is_positive() {
                         continue;
                     }
                     let mut returning_row = Row::with_capacity(returning.len());
