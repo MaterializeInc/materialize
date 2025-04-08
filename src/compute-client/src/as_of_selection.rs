@@ -778,7 +778,7 @@ mod tests {
     use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
     use mz_persist_types::{Codec64, ShardId};
     use mz_repr::Timestamp;
-    use mz_repr::{Diff, RelationDesc, RelationType, RelationVersion, Row};
+    use mz_repr::{RelationDesc, RelationType, RelationVersion, Row};
     use mz_storage_client::client::TimestamplessUpdateBuilder;
     use mz_storage_client::controller::{CollectionDescription, StorageMetadata, StorageTxn};
     use mz_storage_client::storage_collections::{CollectionFrontiers, SnapshotCursor};
@@ -789,6 +789,7 @@ mod tests {
     use mz_storage_types::sources::{GenericSourceConnection, SourceDesc};
     use mz_storage_types::sources::{SourceData, SourceExportDataConfig};
     use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
+    use mz_storage_types::StorageDiff;
     use timely::progress::Timestamp as TimelyTimestamp;
 
     use super::*;
@@ -879,7 +880,8 @@ mod tests {
             &self,
             _id: GlobalId,
             _as_of: Self::Timestamp,
-        ) -> BoxFuture<'static, Result<Vec<(Row, Diff)>, StorageError<Self::Timestamp>>> {
+        ) -> BoxFuture<'static, Result<Vec<(Row, StorageDiff)>, StorageError<Self::Timestamp>>>
+        {
             unimplemented!()
         }
 
@@ -908,7 +910,7 @@ mod tests {
         ) -> BoxFuture<
             'static,
             Result<
-                BoxStream<'static, (SourceData, Self::Timestamp, Diff)>,
+                BoxStream<'static, (SourceData, Self::Timestamp, StorageDiff)>,
                 StorageError<Self::Timestamp>,
             >,
         > {
@@ -923,7 +925,7 @@ mod tests {
         ) -> BoxFuture<
             'static,
             Result<
-                TimestamplessUpdateBuilder<SourceData, (), Self::Timestamp, Diff>,
+                TimestamplessUpdateBuilder<SourceData, (), Self::Timestamp, StorageDiff>,
                 StorageError<Self::Timestamp>,
             >,
         >

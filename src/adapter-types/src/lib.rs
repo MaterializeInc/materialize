@@ -14,3 +14,4 @@ pub mod compaction;
 pub mod connection;
 pub mod dyncfgs;
 pub mod timestamp_oracle;
+pub mod timestamp_selection;

@@ -39,6 +39,7 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::{Diff, RelationDesc, ScalarType};
 use mz_storage_types::sources::SourceData;
+use mz_storage_types::StorageDiff;
 use sha2::Digest;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use timely::Container;
@@ -263,7 +264,10 @@ impl FenceableToken {
         let mut fence_updates = Vec::with_capacity(2);
 
         if let Some(durable_token) = &durable_token {
-            fence_updates.push((StateUpdateKind::FenceToken(durable_token.clone()), -1));
+            fence_updates.push((
+                StateUpdateKind::FenceToken(durable_token.clone()),
+                Diff::MINUS_ONE,
+            ));
         }
 
         let current_deploy_generation = current_deploy_generation
@@ -284,7 +288,10 @@ impl FenceableToken {
             epoch: current_epoch,
         };
 
-        fence_updates.push((StateUpdateKind::FenceToken(current_token.clone()), 1));
+        fence_updates.push((
+            StateUpdateKind::FenceToken(current_token.clone()),
+            Diff::ONE,
+        ));
 
         let current_fenceable_token = FenceableToken::Unfenced { current_token };
 
@@ -358,11 +365,11 @@ pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
     /// The [`Mode`] that this catalog was opened in.
     pub(crate) mode: Mode,
     /// Since handle to control compaction.
-    since_handle: SinceHandle<SourceData, (), Timestamp, Diff, i64>,
+    since_handle: SinceHandle<SourceData, (), Timestamp, StorageDiff, i64>,
     /// Write handle to persist.
-    write_handle: WriteHandle<SourceData, (), Timestamp, Diff>,
+    write_handle: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
     /// Listener to catalog changes.
-    listen: Listen<SourceData, (), Timestamp, Diff>,
+    listen: Listen<SourceData, (), Timestamp, StorageDiff>,
     /// Handle for connecting to persist.
     persist_client: PersistClient,
     /// Catalog shard ID.
@@ -389,7 +396,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     /// Increment the version in the catalog upgrade shard to the code's current version.
     async fn increment_catalog_upgrade_shard_version(&self, organization_id: Uuid) {
         let upgrade_shard_id = shard_id(organization_id, UPGRADE_SEED);
-        let mut write_handle: WriteHandle<(), (), Timestamp, Diff> = self
+        let mut write_handle: WriteHandle<(), (), Timestamp, StorageDiff> = self
             .persist_client
             .open_writer(
                 upgrade_shard_id,
@@ -402,7 +409,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             )
             .await
             .expect("invalid usage");
-        const EMPTY_UPDATES: &[(((), ()), Timestamp, Diff)] = &[];
+        const EMPTY_UPDATES: &[(((), ()), Timestamp, StorageDiff)] = &[];
         let mut upper = write_handle.fetch_recent_upper().await.clone();
         loop {
             let next_upper = upper
@@ -469,10 +476,10 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                 })
                 .collect();
             let contains_retraction = parsed_updates.iter().any(|(update, diff)| {
-                matches!(update, StateUpdateKind::FenceToken(..)) && *diff == -1
+                matches!(update, StateUpdateKind::FenceToken(..)) && *diff == Diff::MINUS_ONE
             });
             let contains_addition = parsed_updates.iter().any(|(update, diff)| {
-                matches!(update, StateUpdateKind::FenceToken(..)) && *diff == 1
+                matches!(update, StateUpdateKind::FenceToken(..)) && *diff == Diff::ONE
             });
             let contains_fence = contains_retraction && contains_addition;
             Some((contains_fence, updates))
@@ -482,7 +489,11 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
 
         let updates = updates.into_iter().map(|(kind, diff)| {
             let kind: StateUpdateKindJson = kind.into();
-            ((Into::<SourceData>::into(kind), ()), commit_ts, diff)
+            (
+                (Into::<SourceData>::into(kind), ()),
+                commit_ts,
+                diff.into_inner(),
+            )
         });
         let next_upper = commit_ts.step_forward();
         let res = self
@@ -659,7 +670,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         let mut errors = Vec::new();
 
         for (kind, ts, diff) in updates {
-            if diff != 1 && diff != -1 {
+            if diff != Diff::ONE && diff != Diff::MINUS_ONE {
                 panic!("invalid update in consolidated trace: ({kind:?}, {ts:?}, {diff:?})");
             }
 
@@ -719,7 +730,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     }
 
     /// Open a read handle to the catalog.
-    async fn read_handle(&self) -> ReadHandle<SourceData, (), Timestamp, Diff> {
+    async fn read_handle(&self) -> ReadHandle<SourceData, (), Timestamp, StorageDiff> {
         self.persist_client
             .open_leased_reader(
                 self.shard_id,
@@ -757,13 +768,13 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
         {
             let key = key.clone();
             let value = value.clone();
-            if diff == 1 {
+            if diff == Diff::ONE {
                 let prev = map.insert(key, value);
                 assert_eq!(
                     prev, None,
                     "values must be explicitly retracted before inserting a new value"
                 );
-            } else if diff == -1 {
+            } else if diff == Diff::MINUS_ONE {
                 let prev = map.remove(&key);
                 assert_eq!(
                     prev,
@@ -777,7 +788,7 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
             let mut snapshot = Snapshot::empty();
             for (kind, ts, diff) in trace {
                 let diff = *diff;
-                if diff != 1 && diff != -1 {
+                if diff != Diff::ONE && diff != Diff::MINUS_ONE {
                     panic!("invalid update in consolidated trace: ({kind:?}, {ts:?}, {diff:?})");
                 }
 
@@ -909,14 +920,14 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
         if !update.kind.is_audit_log() && update.kind.is_always_deserializable() {
             let kind = TryInto::try_into(&update.kind).expect("kind is known to be deserializable");
             match (kind, update.diff) {
-                (StateUpdateKind::Config(key, value), 1) => {
+                (StateUpdateKind::Config(key, value), Diff::ONE) => {
                     let prev = self.configs.insert(key.key, value.value);
                     assert_eq!(
                         prev, None,
                         "values must be explicitly retracted before inserting a new value"
                     );
                 }
-                (StateUpdateKind::Config(key, value), -1) => {
+                (StateUpdateKind::Config(key, value), Diff::MINUS_ONE) => {
                     let prev = self.configs.remove(&key.key);
                     assert_eq!(
                         prev,
@@ -924,14 +935,14 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
                         "retraction does not match existing value"
                     );
                 }
-                (StateUpdateKind::Setting(key, value), 1) => {
+                (StateUpdateKind::Setting(key, value), Diff::ONE) => {
                     let prev = self.settings.insert(key.name, value.value);
                     assert_eq!(
                         prev, None,
                         "values must be explicitly retracted before inserting a new value"
                     );
                 }
-                (StateUpdateKind::Setting(key, value), -1) => {
+                (StateUpdateKind::Setting(key, value), Diff::MINUS_ONE) => {
                     let prev = self.settings.remove(&key.name);
                     assert_eq!(
                         prev,
@@ -939,7 +950,7 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
                         "retraction does not match existing value"
                     );
                 }
-                (StateUpdateKind::FenceToken(fence_token), 1) => {
+                (StateUpdateKind::FenceToken(fence_token), Diff::ONE) => {
                     current_fence_token.maybe_fence(fence_token)?;
                 }
                 _ => {}
@@ -1040,7 +1051,7 @@ impl UnopenedPersistCatalogState {
 
         // Commit an empty write at the minimum timestamp so the catalog is always readable.
         let upper = {
-            const EMPTY_UPDATES: &[((SourceData, ()), Timestamp, Diff)] = &[];
+            const EMPTY_UPDATES: &[((SourceData, ()), Timestamp, StorageDiff)] = &[];
             let upper = Antichain::from_elem(Timestamp::minimum());
             let next_upper = Timestamp::minimum().step_forward();
             match write_handle
@@ -1089,7 +1100,7 @@ impl UnopenedPersistCatalogState {
         // If the snapshot is not consolidated, and we see multiple epoch values while applying the
         // updates, then we might accidentally fence ourselves out.
         soft_assert_no_log!(
-            snapshot.iter().all(|(_, _, diff)| *diff == 1),
+            snapshot.iter().all(|(_, _, diff)| *diff == Diff::ONE),
             "snapshot should be consolidated: {snapshot:#?}"
         );
 
@@ -1213,7 +1224,7 @@ impl UnopenedPersistCatalogState {
             .into_iter()
             .partition(|(update, _, _)| update.is_audit_log());
         self.snapshot = snapshot;
-        let audit_log_count = audit_logs.iter().map(|(_, _, diff)| diff).sum();
+        let audit_log_count = audit_logs.iter().map(|(_, _, diff)| diff).sum::<Diff>();
         let audit_log_handle = AuditLogIterator::new(audit_logs);
 
         // Perform data migrations.
@@ -1249,7 +1260,7 @@ impl UnopenedPersistCatalogState {
             .metrics
             .collection_entries
             .with_label_values(&[&CollectionType::AuditLog.to_string()])
-            .add(audit_log_count);
+            .add(audit_log_count.into_inner());
         let updates = self.snapshot.into_iter().map(|(kind, ts, diff)| {
             let kind = TryIntoStateUpdateKind::try_into(kind).expect("kind decoding error");
             StateUpdate { kind, ts, diff }
@@ -1570,7 +1581,7 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
             metrics
                 .collection_entries
                 .with_label_values(&[&collection_type.to_string()])
-                .add(update.diff);
+                .add(update.diff.into_inner());
         }
 
         {
@@ -1585,8 +1596,8 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
         match (update.kind, update.diff) {
             (StateUpdateKind::AuditLog(_, ()), _) => Ok(None),
             // Nothing to due for fence token retractions but wait for the next insertion.
-            (StateUpdateKind::FenceToken(_), -1) => Ok(None),
-            (StateUpdateKind::FenceToken(token), 1) => {
+            (StateUpdateKind::FenceToken(_), Diff::MINUS_ONE) => Ok(None),
+            (StateUpdateKind::FenceToken(token), Diff::ONE) => {
                 current_fence_token.maybe_fence(token)?;
                 Ok(None)
             }
@@ -1838,7 +1849,10 @@ fn desc() -> RelationDesc {
 
 /// Generates a timestamp for reading from `read_handle` that is as fresh as possible, given
 /// `upper`.
-fn as_of(read_handle: &ReadHandle<SourceData, (), Timestamp, Diff>, upper: Timestamp) -> Timestamp {
+fn as_of(
+    read_handle: &ReadHandle<SourceData, (), Timestamp, StorageDiff>,
+    upper: Timestamp,
+) -> Timestamp {
     let since = read_handle.since().clone();
     let mut as_of = upper.checked_sub(1).unwrap_or_else(|| {
         panic!("catalog persist shard should be initialize, found upper: {upper:?}")
@@ -1881,7 +1895,7 @@ async fn fetch_catalog_upgrade_shard_version(
 /// The output is consolidated and sorted by timestamp in ascending order.
 #[mz_ore::instrument(level = "debug")]
 async fn snapshot_binary(
-    read_handle: &mut ReadHandle<SourceData, (), Timestamp, Diff>,
+    read_handle: &mut ReadHandle<SourceData, (), Timestamp, StorageDiff>,
     as_of: Timestamp,
     metrics: &Arc<Metrics>,
 ) -> impl Iterator<Item = StateUpdate<StateUpdateKindJson>> + DoubleEndedIterator {
@@ -1899,7 +1913,7 @@ async fn snapshot_binary(
 /// The output is consolidated and sorted by timestamp in ascending order.
 #[mz_ore::instrument(level = "debug")]
 async fn snapshot_binary_inner(
-    read_handle: &mut ReadHandle<SourceData, (), Timestamp, Diff>,
+    read_handle: &mut ReadHandle<SourceData, (), Timestamp, StorageDiff>,
     as_of: Timestamp,
 ) -> impl Iterator<Item = StateUpdate<StateUpdateKindJson>> + DoubleEndedIterator {
     let snapshot = read_handle
@@ -2012,7 +2026,7 @@ impl UnopenedPersistCatalogState {
                 .values
                 .into_iter()
                 .filter(|((k, _), _, diff)| {
-                    soft_assert_eq_or_log!(*diff, 1, "trace is consolidated");
+                    soft_assert_eq_or_log!(*diff, Diff::ONE, "trace is consolidated");
                     &key == k
                 })
                 .collect();
@@ -2025,9 +2039,9 @@ impl UnopenedPersistCatalogState {
 
             let mut updates: Vec<_> = prev_values
                 .into_iter()
-                .map(|((k, v), _, _)| (T::update(k, v), -1))
+                .map(|((k, v), _, _)| (T::update(k, v), Diff::MINUS_ONE))
                 .collect();
-            updates.push((T::update(key, value), 1));
+            updates.push((T::update(key, value), Diff::ONE));
             // We must fence out all other catalogs, if we haven't already, since we are writing.
             match self.fenceable_token.generate_unfenced_token(self.mode)? {
                 Some((fence_updates, current_fenceable_token)) => {
@@ -2074,10 +2088,10 @@ impl UnopenedPersistCatalogState {
                 .values
                 .into_iter()
                 .filter(|((k, _), _, diff)| {
-                    soft_assert_eq_or_log!(*diff, 1, "trace is consolidated");
+                    soft_assert_eq_or_log!(*diff, Diff::ONE, "trace is consolidated");
                     &key == k
                 })
-                .map(|((k, v), _, _)| (T::update(k, v), -1))
+                .map(|((k, v), _, _)| (T::update(k, v), Diff::MINUS_ONE))
                 .collect();
 
             // We must fence out all other catalogs, if we haven't already, since we are writing.

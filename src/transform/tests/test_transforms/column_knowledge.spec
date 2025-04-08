@@ -205,7 +205,7 @@ With
         Get t3
 Return
   Project (#0, #1, #3..=#6)
-    Map ((#0) IS NULL, #4, (#2) IS NULL)
+    Map ((#0) IS NULL, (#0) IS NULL, (#2) IS NULL)
       Union
         Map (null, null)
           Union

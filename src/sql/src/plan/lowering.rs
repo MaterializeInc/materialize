@@ -178,7 +178,7 @@ impl HirRelationExpr {
             // without having to re-learn the fact that it is just a constant,
             // as it would if the constant were wrapped in a Let-Get pair.
             HirRelationExpr::Constant { rows, typ } => {
-                let rows: Vec<_> = rows.into_iter().map(|row| (row, 1)).collect();
+                let rows: Vec<_> = rows.into_iter().map(|row| (row, Diff::ONE)).collect();
                 MirRelationExpr::Constant {
                     rows: Ok(rows),
                     typ,
@@ -246,7 +246,7 @@ impl HirRelationExpr {
                 Constant { rows, typ } => {
                     // Constant expressions are not correlated with `get_outer`, and should be cross-products.
                     get_outer.product(SR::Constant {
-                        rows: Ok(rows.into_iter().map(|row| (row, 1)).collect()),
+                        rows: Ok(rows.into_iter().map(|row| (row, Diff::ONE)).collect()),
                         typ,
                     })
                 }

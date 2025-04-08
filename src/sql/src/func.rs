@@ -3161,6 +3161,10 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             }) => String, 3538;
             params!(Bytes, Bytes) => Operation::binary(|_ecx, _l, _r| bail_unsupported!("string_agg on BYTEA")) => Bytes, 3545;
         },
+        "string_to_array" => Scalar {
+            params!(String, String) => VariadicFunc::StringToArray => ScalarType::Array(Box::new(ScalarType::String)), 376;
+            params!(String, String, String) => VariadicFunc::StringToArray => ScalarType::Array(Box::new(ScalarType::String)), 394;
+        },
         "sum" => Aggregate {
             params!(Int16) => AggregateFunc::SumInt16 => Int64, 2109;
             params!(Int32) => AggregateFunc::SumInt32 => Int64, 2108;
@@ -3838,7 +3842,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         "pretty_sql" => Scalar {
             params!(String, Int32) => BinaryFunc::PrettySql => String, oid::FUNC_PRETTY_SQL;
             params!(String) => Operation::unary(|_ecx, s| {
-                let width = HirScalarExpr::literal(Datum::Int32(100), ScalarType::Int32);
+                let width = HirScalarExpr::literal(Datum::Int32(mz_sql_pretty::DEFAULT_WIDTH.try_into().expect("must fit")), ScalarType::Int32);
                 Ok(s.call_binary(width, BinaryFunc::PrettySql))
             }) => String, oid::FUNC_PRETTY_SQL_NOWIDTH;
         },
@@ -4765,19 +4769,19 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
 
         // JSON, MAP, RANGE, LIST, ARRAY
         "->" => Scalar {
-            params!(Jsonb, Int64) => JsonbGetInt64 { stringify: false } => Jsonb, 3212;
-            params!(Jsonb, String) => JsonbGetString { stringify: false } => Jsonb, 3211;
+            params!(Jsonb, Int64) => JsonbGetInt64 => Jsonb, 3212;
+            params!(Jsonb, String) => JsonbGetString => Jsonb, 3211;
             params!(MapAny, String) => MapGetValue => Any, oid::OP_GET_VALUE_MAP_OID;
         },
         "->>" => Scalar {
-            params!(Jsonb, Int64) => JsonbGetInt64 { stringify: true } => String, 3481;
-            params!(Jsonb, String) => JsonbGetString { stringify: true } => String, 3477;
+            params!(Jsonb, Int64) => JsonbGetInt64Stringify => String, 3481;
+            params!(Jsonb, String) => JsonbGetStringStringify => String, 3477;
         },
         "#>" => Scalar {
-            params!(Jsonb, ScalarType::Array(Box::new(ScalarType::String))) => JsonbGetPath { stringify: false } => Jsonb, 3213;
+            params!(Jsonb, ScalarType::Array(Box::new(ScalarType::String))) => JsonbGetPath => Jsonb, 3213;
         },
         "#>>" => Scalar {
-            params!(Jsonb, ScalarType::Array(Box::new(ScalarType::String))) => JsonbGetPath { stringify: true } => String, 3206;
+            params!(Jsonb, ScalarType::Array(Box::new(ScalarType::String))) => JsonbGetPathStringify => String, 3206;
         },
         "@>" => Scalar {
             params!(Jsonb, Jsonb) => JsonbContainsJsonb => Bool, 3246;

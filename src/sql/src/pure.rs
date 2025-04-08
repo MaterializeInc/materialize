@@ -439,7 +439,7 @@ async fn purify_create_sink(
     {
         sql_bail!(
             "CREATE SINK...WITH ({}..) is not allowed",
-            op.name.to_ast_string(),
+            op.name.to_ast_string_simple(),
         )
     }
 

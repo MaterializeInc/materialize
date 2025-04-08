@@ -33,7 +33,6 @@ use crate::internal::machine::{
 };
 use crate::internal::state::ROLLUP_THRESHOLD;
 use crate::operators::STORAGE_SOURCE_DECODE_FUEL;
-use crate::project::OPTIMIZE_IGNORED_DATA_DECODE;
 use crate::read::READER_LEASE_DURATION;
 
 const LTS_VERSIONS: &[Version] = &[
@@ -221,12 +220,6 @@ impl PersistConfig {
         STORAGE_SOURCE_DECODE_FUEL.get(self)
     }
 
-    /// CYA to allow opt-out of a performance optimization to skip decoding
-    /// ignored data.
-    pub fn optimize_ignored_data_decode(&self) -> bool {
-        OPTIMIZE_IGNORED_DATA_DECODE.get(self)
-    }
-
     /// Overrides the value for "persist_reader_lease_duration".
     pub fn set_reader_lease_duration(&self, val: Duration) {
         self.set_config(&READER_LEASE_DURATION, val);
@@ -282,15 +275,11 @@ pub(crate) const MiB: usize = 1024 * 1024;
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     mz_persist::cfg::all_dyn_configs(configs)
         .add(&crate::batch::BATCH_DELETE_ENABLED)
-        .add(&crate::batch::BATCH_COLUMNAR_FORMAT)
         .add(&crate::batch::BLOB_TARGET_SIZE)
-        .add(&crate::batch::BUILDER_STRUCTURED)
         .add(&crate::batch::INLINE_WRITES_TOTAL_MAX_BYTES)
         .add(&crate::batch::INLINE_WRITES_SINGLE_MAX_BYTES)
         .add(&crate::batch::ENCODING_ENABLE_DICTIONARY)
         .add(&crate::batch::ENCODING_COMPRESSION_FORMAT)
-        .add(&crate::batch::STRUCTURED_ORDER)
-        .add(&crate::batch::STRUCTURED_ORDER_UNTIL_SHARD)
         .add(&crate::batch::STRUCTURED_KEY_LOWER_LEN)
         .add(&crate::batch::MAX_RUN_LEN)
         .add(&crate::batch::MAX_RUNS)
@@ -323,13 +312,13 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::cli::admin::EXPRESSION_CACHE_FORCE_COMPACTION_WAIT)
         .add(&crate::fetch::FETCH_SEMAPHORE_COST_ADJUSTMENT)
         .add(&crate::fetch::FETCH_SEMAPHORE_PERMIT_ADJUSTMENT)
+        .add(&crate::fetch::OPTIMIZE_IGNORED_DATA_FETCH)
         .add(&crate::internal::cache::BLOB_CACHE_MEM_LIMIT_BYTES)
         .add(&crate::internal::cache::BLOB_CACHE_SCALE_WITH_THREADS)
         .add(&crate::internal::cache::BLOB_CACHE_SCALE_FACTOR_BYTES)
         .add(&crate::internal::compact::COMPACTION_MINIMUM_TIMEOUT)
         .add(&crate::internal::compact::COMPACTION_USE_MOST_RECENT_SCHEMA)
         .add(&crate::internal::compact::COMPACTION_CHECK_PROCESS_FLAG)
-        .add(&crate::internal::compact::COMPACTION_OUTPUT_STRUCTURED_ONLY)
         .add(&crate::internal::machine::CLAIM_UNCLAIMED_COMPACTIONS)
         .add(&crate::internal::machine::CLAIM_COMPACTION_PERCENT)
         .add(&crate::internal::machine::CLAIM_COMPACTION_MIN_VERSION)
@@ -340,8 +329,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::internal::machine::RECORD_COMPACTIONS)
         .add(&crate::internal::state::ROLLUP_THRESHOLD)
         .add(&crate::operators::STORAGE_SOURCE_DECODE_FUEL)
-        .add(&crate::project::OPTIMIZE_IGNORED_DATA_DECODE)
-        .add(&crate::project::OPTIMIZE_IGNORED_DATA_FETCH)
         .add(&crate::read::READER_LEASE_DURATION)
         .add(&crate::rpc::PUBSUB_CLIENT_ENABLED)
         .add(&crate::rpc::PUBSUB_PUSH_DIFF_ENABLED)

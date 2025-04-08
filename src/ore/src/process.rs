@@ -18,7 +18,7 @@
 /// Halts the process.
 ///
 /// `halt` forwards the provided arguments to the [`tracing::warn`] macro, then
-/// terminates the process with exit code 2.
+/// terminates the process with exit code 166.
 ///
 /// Halting a process is a middle ground between a graceful shutdown and a
 /// panic. Use halts for errors that are severe enough to require shutting down
@@ -42,7 +42,7 @@
 macro_rules! halt {
     ($($arg:expr),* $(,)?) => {{
         $crate::__private::tracing::warn!("halting process: {}", format!($($arg),*));
-        $crate::process::exit_thread_safe(2);
+        $crate::process::exit_thread_safe(166);
     }}
 }
 

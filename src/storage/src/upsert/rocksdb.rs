@@ -85,7 +85,7 @@ where
         m_stats.written_merge_operands += stats.processed_updates;
         m_stats.size_written += stats.size_written;
         if let Some(diff) = stats.size_diff {
-            m_stats.size_diff += diff;
+            m_stats.size_diff += diff.into_inner();
         }
         Ok(m_stats)
     }

@@ -72,7 +72,7 @@ pub fn datadriven_testcase(tc: &datadriven::TestCase) -> String {
         match parser::parse_statements(input) {
             Ok(s) => {
                 let stmt = s.into_element().ast;
-                for printed in [stmt.to_ast_string(), stmt.to_ast_string_stable()] {
+                for printed in [stmt.to_ast_string_simple(), stmt.to_ast_string_stable()] {
                     let mut parsed = match parser::parse_statements(&printed) {
                         Ok(parsed) => parsed.into_element().ast,
                         Err(err) => panic!("reparse failed: {}: {}\n", stmt, err),
@@ -121,7 +121,7 @@ pub fn datadriven_testcase(tc: &datadriven::TestCase) -> String {
         let input = tc.input.trim();
         match parser::parse_expr(input) {
             Ok(s) => {
-                for printed in [s.to_ast_string(), s.to_ast_string_stable()] {
+                for printed in [s.to_ast_string_simple(), s.to_ast_string_stable()] {
                     match parser::parse_expr(&printed) {
                         Ok(parsed) => {
                             // TODO: We always coerce the double colon operator into a Cast expr instead

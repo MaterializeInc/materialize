@@ -28,7 +28,7 @@ use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{instrument, soft_panic_or_log};
 use mz_repr::role_id::RoleId;
-use mz_repr::{ScalarType, Timestamp};
+use mz_repr::{Diff, ScalarType, Timestamp};
 use mz_sql::ast::{
     AlterConnectionAction, AlterConnectionStatement, AlterSourceAction, AstInfo, ConstantVisitor,
     CopyRelation, CopyStatement, CreateSourceOptionName, Raw, Statement, SubscribeStatement,
@@ -313,7 +313,7 @@ impl Coordinator {
                     authenticated_role: role_id,
                     deferred_lock: None,
                 };
-                let update = self.catalog().state().pack_session_update(&conn, 1);
+                let update = self.catalog().state().pack_session_update(&conn, Diff::ONE);
                 let update = self.catalog().state().resolve_builtin_table_update(update);
                 self.begin_session_for_statement_logging(&conn);
                 self.active_conns.insert(conn_id.clone(), conn);
@@ -1351,7 +1351,10 @@ impl Coordinator {
         // Queue the builtin table update, but do not wait for it to complete. We explicitly do
         // this to prevent blocking the Coordinator in the case that a lot of connections are
         // closed at once, which occurs regularly in some workflows.
-        let update = self.catalog().state().pack_session_update(&conn, -1);
+        let update = self
+            .catalog()
+            .state()
+            .pack_session_update(&conn, Diff::MINUS_ONE);
         let update = self.catalog().state().resolve_builtin_table_update(update);
 
         let _builtin_update_notify = self.builtin_table_update().defer(vec![update]);

@@ -38,6 +38,7 @@ use mz_catalog::durable::BootstrapArgs;
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
+use mz_license_keys::ValidatedLicenseKey;
 use mz_ore::future::OreFutureExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -173,6 +174,8 @@ pub struct Config {
     pub system_parameter_defaults: BTreeMap<String, String>,
     /// Helm chart version
     pub helm_chart_version: Option<String>,
+    /// Configuration managed by license keys
+    pub license_key: ValidatedLicenseKey,
 
     // === AWS options. ===
     /// The AWS account ID, which will be used to generate ARNs for
@@ -706,6 +709,7 @@ impl Listeners {
             enable_0dt_deployment,
             caught_up_trigger,
             helm_chart_version: config.helm_chart_version.clone(),
+            license_key: config.license_key,
         })
         .instrument(info_span!("adapter::serve"))
         .await?;

@@ -27,11 +27,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
+use mz_controller_types::dyncfgs::WALLCLOCK_LAG_HISTOGRAM_PERIOD_INTERVAL;
+use mz_dyncfg::ConfigSet;
+use mz_ore::soft_panic_or_log;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_types::{Codec64, Opaque, ShardId};
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Diff, GlobalId, RelationDesc, RelationVersion, Row};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::InlinedConnection;
@@ -69,6 +74,7 @@ pub enum IntrospectionType {
     ReplicaStatusHistory,
     ReplicaMetricsHistory,
     WallclockLagHistory,
+    WallclockLagHistogram,
 
     // Note that this single-shard introspection source will be changed to per-replica,
     // once we allow multiplexing multiple sources/sinks on a single cluster.
@@ -376,6 +382,13 @@ pub trait StorageController: Debug {
     ///
     /// Panics if a storage instance with the given ID does not exist.
     fn drop_instance(&mut self, id: StorageInstanceId);
+
+    /// Updates a storage instance's workload class.
+    fn update_instance_workload_class(
+        &mut self,
+        id: StorageInstanceId,
+        workload_class: Option<String>,
+    );
 
     /// Connects the storage instance to the specified replica.
     ///
@@ -833,6 +846,36 @@ impl<T> MonotonicAppender<T> {
             .map_err(|_| StorageError::ShuttingDown("collection manager"))?;
 
         result
+    }
+}
+
+/// The period covered by a wallclock lag histogram, represented as a `[start, end)` range.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct WallclockLagHistogramPeriod {
+    pub start: CheckedTimestamp<DateTime<Utc>>,
+    pub end: CheckedTimestamp<DateTime<Utc>>,
+}
+
+impl WallclockLagHistogramPeriod {
+    /// Construct a `WallclockLagHistogramPeriod` from the given epoch timestamp and dyncfg.
+    pub fn from_epoch_millis(epoch_ms: u64, dyncfg: &ConfigSet) -> Self {
+        let interval = WALLCLOCK_LAG_HISTOGRAM_PERIOD_INTERVAL.get(dyncfg);
+        let interval_ms = u64::try_from(interval.as_millis()).unwrap_or_else(|_| {
+            soft_panic_or_log!("excessive wallclock lag histogram period interval: {interval:?}");
+            let default = WALLCLOCK_LAG_HISTOGRAM_PERIOD_INTERVAL.default();
+            u64::try_from(default.as_millis()).unwrap()
+        });
+        let interval_ms = std::cmp::max(interval_ms, 1);
+
+        let start_ms = epoch_ms - (epoch_ms % interval_ms);
+        let start_dt = mz_ore::now::to_datetime(start_ms);
+        let start = start_dt.try_into().expect("must fit");
+
+        let end_ms = start_ms + interval_ms;
+        let end_dt = mz_ore::now::to_datetime(end_ms);
+        let end = end_dt.try_into().expect("must fit");
+
+        Self { start, end }
     }
 }
 

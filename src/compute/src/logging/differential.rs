@@ -250,7 +250,7 @@ impl DemuxHandler<'_, '_> {
     fn handle_batch(&mut self, event: BatchEvent) {
         let ts = self.ts();
         let operator_id = event.operator;
-        self.output.batches.give(((operator_id, ()), ts, 1));
+        self.output.batches.give(((operator_id, ()), ts, Diff::ONE));
 
         let diff = Diff::try_from(event.length).expect("must fit");
         self.output.records.give(((operator_id, ()), ts, diff));
@@ -262,11 +262,13 @@ impl DemuxHandler<'_, '_> {
 
         let ts = self.ts();
         let operator_id = event.operator;
-        self.output.batches.give(((operator_id, ()), ts, -1));
+        self.output
+            .batches
+            .give(((operator_id, ()), ts, Diff::MINUS_ONE));
 
         let diff = Diff::try_from(done).expect("must fit")
             - Diff::try_from(event.length1 + event.length2).expect("must fit");
-        if diff != 0 {
+        if diff != Diff::ZERO {
             self.output.records.give(((operator_id, ()), ts, diff));
         }
         self.notify_arrangement_size(operator_id);
@@ -275,10 +277,12 @@ impl DemuxHandler<'_, '_> {
     fn handle_drop(&mut self, event: DropEvent) {
         let ts = self.ts();
         let operator_id = event.operator;
-        self.output.batches.give(((operator_id, ()), ts, -1));
+        self.output
+            .batches
+            .give(((operator_id, ()), ts, Diff::MINUS_ONE));
 
         let diff = -Diff::try_from(event.length).expect("must fit");
-        if diff != 0 {
+        if diff != Diff::ZERO {
             self.output.records.give(((operator_id, ()), ts, diff));
         }
         self.notify_arrangement_size(operator_id);
@@ -288,11 +292,12 @@ impl DemuxHandler<'_, '_> {
         let ts = self.ts();
         let operator_id = event.operator;
         let diff = Diff::cast_from(event.diff);
-        debug_assert_ne!(diff, 0);
+        debug_assert_ne!(diff, Diff::ZERO);
         self.output.sharing.give(((operator_id, ()), ts, diff));
 
         let sharing = self.state.sharing.entry(operator_id).or_default();
-        *sharing = (i64::try_from(*sharing).expect("must fit") + diff)
+        *sharing = (Diff::try_from(*sharing).expect("must fit") + diff)
+            .into_inner()
             .try_into()
             .expect("under/overflow");
         if *sharing == 0 {

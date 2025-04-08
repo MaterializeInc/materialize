@@ -111,6 +111,7 @@ use mz_controller::clusters::{ClusterConfig, ClusterEvent, ClusterStatus, Proces
 use mz_controller::ControllerConfig;
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
 use mz_expr::{MapFilterProject, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator::{OfflineReason, ServiceProcessMetrics};
 use mz_ore::cast::{CastFrom, CastInto, CastLossy};
 use mz_ore::channel::trigger::Trigger;
@@ -131,7 +132,7 @@ use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId, RelationDesc, Timestamp};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
@@ -1033,6 +1034,7 @@ pub struct Config {
     pub caught_up_trigger: Option<Trigger>,
 
     pub helm_chart_version: Option<String>,
+    pub license_key: ValidatedLicenseKey,
 }
 
 /// Soft-state metadata about a compute replica
@@ -1790,6 +1792,8 @@ pub struct Coordinator {
     /// `None` when we transition out of read-only mode and write out any
     /// buffered updates.
     buffered_builtin_table_updates: Option<Vec<BuiltinTableUpdate>>,
+
+    license_key: ValidatedLicenseKey,
 }
 
 impl Coordinator {
@@ -1844,10 +1848,13 @@ impl Coordinator {
         for replica_statuses in self.cluster_replica_statuses.0.values() {
             for (replica_id, processes_statuses) in replica_statuses {
                 for (process_id, status) in processes_statuses {
-                    let builtin_table_update = self
-                        .catalog()
-                        .state()
-                        .pack_cluster_replica_status_update(*replica_id, *process_id, status, 1);
+                    let builtin_table_update =
+                        self.catalog().state().pack_cluster_replica_status_update(
+                            *replica_id,
+                            *process_id,
+                            status,
+                            Diff::ONE,
+                        );
                     let builtin_table_update = self
                         .catalog()
                         .state()
@@ -2019,7 +2026,7 @@ impl Coordinator {
                             self.catalog().state().pack_optimizer_notices(
                                 &mut builtin_table_updates,
                                 df_meta.optimizer_notices.iter(),
-                                1,
+                                Diff::ONE,
                             );
                         }
 
@@ -2075,7 +2082,7 @@ impl Coordinator {
                         self.catalog().state().pack_optimizer_notices(
                             &mut builtin_table_updates,
                             df_meta.optimizer_notices.iter(),
-                            1,
+                            Diff::ONE,
                         );
                     }
 
@@ -2126,7 +2133,7 @@ impl Coordinator {
                         self.catalog().state().pack_optimizer_notices(
                             &mut builtin_table_updates,
                             df_meta.optimizer_notices.iter(),
-                            1,
+                            Diff::ONE,
                         );
                     }
 
@@ -3808,7 +3815,7 @@ impl Coordinator {
                     .expect("all collections happen after Jan 1 1970");
                 if collection_timestamp < cutoff_ts {
                     debug!("pruning storage event {row:?}");
-                    let builtin_update = BuiltinTableUpdate::row(item_id, row, -1);
+                    let builtin_update = BuiltinTableUpdate::row(item_id, row, Diff::MINUS_ONE);
                     expired.push(builtin_update);
                 }
             }
@@ -3922,6 +3929,7 @@ pub fn serve(
         enable_0dt_deployment,
         caught_up_trigger: clusters_caught_up_trigger,
         helm_chart_version,
+        license_key,
     }: Config,
 ) -> BoxFuture<'static, Result<(Handle, Client), AdapterError>> {
     async move {
@@ -4262,6 +4270,7 @@ pub fn serve(
                     cluster_replica_statuses: ClusterReplicaStatuses::new(),
                     read_only_controllers,
                     buffered_builtin_table_updates: Some(Vec::new()),
+                    license_key,
                 };
                 let bootstrap = handle.block_on(async {
                     coord

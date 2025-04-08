@@ -1391,7 +1391,7 @@ where
 pub mod datadriven {
     use std::collections::BTreeMap;
     use std::pin::pin;
-    use std::sync::Arc;
+    use std::sync::{Arc, LazyLock};
 
     use anyhow::anyhow;
     use differential_dataflow::consolidation::consolidate_updates;
@@ -1403,7 +1403,7 @@ pub mod datadriven {
 
     use crate::batch::{
         validate_truncate_batch, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
-        BatchParts, BLOB_TARGET_SIZE, BUILDER_STRUCTURED, STRUCTURED_ORDER,
+        BatchParts, BLOB_TARGET_SIZE,
     };
     use crate::cfg::COMPACTION_MEMORY_BOUND_BYTES;
     use crate::fetch::EncodedPart;
@@ -1421,6 +1421,12 @@ pub mod datadriven {
     use crate::{GarbageCollector, PersistClient};
 
     use super::*;
+
+    static SCHEMAS: LazyLock<Schemas<String, ()>> = LazyLock::new(|| Schemas {
+        id: Some(SchemaId(0)),
+        key: Arc::new(StringSchema),
+        val: Arc::new(UnitSchema),
+    });
 
     /// Shared state for a single [crate::internal::machine] [datadriven::TestFile].
     #[derive(Debug)]
@@ -1448,10 +1454,6 @@ pub mod datadriven {
             // Our structured compaction code uses slightly different estimates
             // for array size than the old path, which can affect the results of
             // some compaction tests.
-            client
-                .cfg
-                .set_config(&STRUCTURED_ORDER, *STRUCTURED_ORDER.default());
-            client.cfg.set_config(&BUILDER_STRUCTURED, true);
             client.cfg.set_config(&COMBINE_INLINE_WRITES, false);
             let state_versions = Arc::new(StateVersions::new(
                 client.cfg.clone(),
@@ -1749,11 +1751,6 @@ pub mod datadriven {
         if let Some(target_size) = target_size {
             cfg.blob_target_size = target_size;
         };
-        let schemas = Schemas {
-            id: None,
-            key: Arc::new(StringSchema),
-            val: Arc::new(UnitSchema),
-        };
         if consolidate {
             consolidate_updates(&mut updates);
         }
@@ -1776,16 +1773,12 @@ pub mod datadriven {
             cfg.clone(),
             parts,
             Arc::clone(&datadriven.client.metrics),
-            schemas.clone(),
+            SCHEMAS.clone(),
             Arc::clone(&datadriven.client.blob),
             datadriven.shard_id.clone(),
             datadriven.client.cfg.build_version.clone(),
         );
-        let mut builder = BatchBuilder::new(
-            builder,
-            Description::new(lower, upper.clone(), since),
-            Arc::clone(&datadriven.client.metrics),
-        );
+        let mut builder = BatchBuilder::new(builder, Description::new(lower, upper.clone(), since));
         for ((k, ()), t, d) in updates {
             builder.add(&k, &(), &t, &d).await.expect("invalid batch");
         }
@@ -1798,7 +1791,7 @@ pub mod datadriven {
                     &cfg,
                     &datadriven.client.metrics.user,
                     &datadriven.client.isolated_runtime,
-                    &schemas,
+                    &SCHEMAS,
                 )
                 .await;
         }
@@ -1839,17 +1832,22 @@ pub mod datadriven {
         while let Some((idx, part)) = stream.next().await {
             let part = &*part?;
             write!(s, "<part {idx}>\n");
-            let key_lower = match part {
-                BatchPart::Hollow(x) => x.key_lower.clone(),
+
+            let lower = match part {
                 BatchPart::Inline { updates, .. } => {
                     let updates: BlobTraceBatchPart<u64> =
-                        updates.decode(&datadriven.client.metrics.columnar).unwrap();
-                    updates.key_lower().to_vec()
+                        updates.decode(&datadriven.client.metrics.columnar)?;
+                    updates.structured_key_lower()
                 }
+                other => other.structured_key_lower(),
             };
-            if stats == Some("lower") && !key_lower.is_empty() {
-                writeln!(s, "<key lower={}>", std::str::from_utf8(&key_lower)?)
+
+            if let Some(lower) = lower {
+                if stats == Some("lower") {
+                    writeln!(s, "<key lower={}>", lower.get())
+                }
             }
+
             match part {
                 BatchPart::Hollow(part) => {
                     let blob_batch = datadriven
@@ -1880,11 +1878,15 @@ pub mod datadriven {
             )
             .await
             .expect("invalid batch part");
-            let part = part.normalize(&datadriven.client.metrics.columnar);
-            for ((k, _v), t, d) in part.records().expect("codec records").iter() {
-                let (k, d) = (String::decode(k, &StringSchema).unwrap(), i64::decode(d));
-                let t = u64::from_le_bytes(t);
-                write!(s, "{k} {t} {d}\n");
+            let part = part
+                .normalize(&datadriven.client.metrics.columnar)
+                .into_part::<String, ()>(&*SCHEMAS.key, &*SCHEMAS.val);
+
+            for ((k, _v), t, d) in part
+                .decode_iter::<_, _, u64, i64>(&*SCHEMAS.key, &*SCHEMAS.val)
+                .expect("valid schemas")
+            {
+                writeln!(s, "{k} {t} {d}");
             }
         }
         if !s.is_empty() {
@@ -1978,11 +1980,6 @@ pub mod datadriven {
             desc: Description::new(lower, upper, since),
             inputs,
         };
-        let schemas = Schemas {
-            id: None,
-            key: Arc::new(StringSchema),
-            val: Arc::new(UnitSchema),
-        };
         let res = Compactor::<String, (), u64, i64>::compact(
             CompactConfig::new(&cfg, datadriven.shard_id),
             Arc::clone(&datadriven.client.blob),
@@ -1990,7 +1987,7 @@ pub mod datadriven {
             Arc::clone(&datadriven.machine.applier.shard_metrics),
             Arc::clone(&datadriven.client.isolated_runtime),
             req,
-            schemas,
+            SCHEMAS.clone(),
         )
         .await?;
 
@@ -2120,6 +2117,7 @@ pub mod datadriven {
                         &*datadriven.state_versions.metrics
                     ))
                     .enumerate());
+
                 while let Some((idx, part)) = stream.next().await {
                     let part = &*part?;
                     writeln!(result, "<part {idx}>");
@@ -2135,17 +2133,18 @@ pub mod datadriven {
                     )
                     .await
                     .expect("invalid batch part");
-                    let part = part.normalize(&datadriven.client.metrics.columnar);
+                    let part = part
+                        .normalize(&datadriven.client.metrics.columnar)
+                        .into_part::<String, ()>(&*SCHEMAS.key, &*SCHEMAS.val);
 
                     let mut updates = Vec::new();
-                    for ((k, _v), t, d) in part.records().expect("codec data").iter() {
-                        let mut t = u64::decode(t);
+
+                    for ((k, _v), mut t, d) in part
+                        .decode_iter::<_, _, u64, i64>(&*SCHEMAS.key, &*SCHEMAS.val)
+                        .expect("valid schemas")
+                    {
                         t.advance_by(as_of.borrow());
-                        updates.push((
-                            String::decode(k, &StringSchema).unwrap(),
-                            t,
-                            i64::decode(d),
-                        ));
+                        updates.push((k, t, d));
                     }
 
                     consolidate_updates(&mut updates);
@@ -2370,6 +2369,13 @@ pub mod datadriven {
             .clone();
         let token = args.optional("token").unwrap_or_else(IdempotencyToken::new);
         let now = (datadriven.client.cfg.now)();
+
+        let (id, maintenance) = datadriven
+            .machine
+            .register_schema(&*SCHEMAS.key, &*SCHEMAS.val)
+            .await;
+        assert_eq!(id, SCHEMAS.id);
+        datadriven.routine.push(maintenance);
         let maintenance = loop {
             let indeterminate = args
                 .optional::<String>("prev_indeterminate")
@@ -2393,16 +2399,11 @@ pub mod datadriven {
                 CompareAndAppendRes::InlineBackpressure => {
                     let mut b = datadriven.to_batch(batch.clone());
                     let cfg = BatchBuilderConfig::new(&datadriven.client.cfg, datadriven.shard_id);
-                    let schemas = Schemas::<String, ()> {
-                        id: None,
-                        key: Arc::new(StringSchema),
-                        val: Arc::new(UnitSchema),
-                    };
                     b.flush_to_blob(
                         &cfg,
                         &datadriven.client.metrics.user,
                         &datadriven.client.isolated_runtime,
-                        &schemas,
+                        &*SCHEMAS,
                     )
                     .await;
                     batch = b.into_hollow_batch();

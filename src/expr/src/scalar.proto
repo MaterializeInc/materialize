@@ -9,6 +9,8 @@
 
 // See https://developers.google.com/protocol-buffers for what's going on here.
 
+// buf breaking: ignore (Ignore because plans are currently not persisted.)
+
 syntax = "proto3";
 
 package mz_expr.scalar;
@@ -469,12 +471,6 @@ message ProtoBinaryFunc {
     mz_repr.adt.regex.ProtoRegex regex = 1;
     uint64 limit = 2;
   }
-  message ProtoRegexpReplaceResult {
-    oneof result {
-      ProtoRegexpReplace ok = 1;
-      ProtoEvalError err = 2;
-    }
-  }
 
   reserved 93; // timezone_time
   reserved 108; // map_get_values
@@ -574,9 +570,12 @@ message ProtoBinaryFunc {
     google.protobuf.Empty timezone_interval_timestamp_tz = 95;
     google.protobuf.Empty timezone_interval_time = 96;
     google.protobuf.Empty text_concat = 97;
-    bool jsonb_get_int64 = 98;
-    bool jsonb_get_string = 99;
-    bool jsonb_get_path = 100;
+    google.protobuf.Empty jsonb_get_int64 = 98;
+    google.protobuf.Empty jsonb_get_int64_stringify = 197;
+    google.protobuf.Empty jsonb_get_string = 99;
+    google.protobuf.Empty jsonb_get_string_stringify = 198;
+    google.protobuf.Empty jsonb_get_path = 100;
+    google.protobuf.Empty jsonb_get_path_stringify = 199;
     google.protobuf.Empty jsonb_contains_string = 101;
     google.protobuf.Empty jsonb_concat = 102;
     google.protobuf.Empty jsonb_contains_jsonb = 103;
@@ -666,7 +665,7 @@ message ProtoBinaryFunc {
     google.protobuf.Empty constant_time_eq_bytes = 189;
     google.protobuf.Empty timezone_offset = 190;
     google.protobuf.Empty pretty_sql = 191;
-    ProtoRegexpReplaceResult regexp_replace = 192;
+    ProtoRegexpReplace regexp_replace = 192;
     bool list_contains_list = 193;
     bool array_contains_array = 194;
     google.protobuf.Empty starts_with = 195;
@@ -720,6 +719,7 @@ message ProtoVariadicFunc {
     google.protobuf.Empty regexp_split_to_array = 39;
     google.protobuf.Empty regexp_replace = 40;
     mz_repr.relation_and_scalar.ProtoScalarType map_build = 41;
+    google.protobuf.Empty string_to_array = 42;
   }
 }
 

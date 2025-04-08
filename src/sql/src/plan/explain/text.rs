@@ -27,6 +27,7 @@ use mz_expr::{Id, WindowFrame};
 use mz_ore::str::{separated, IndentLike};
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalarSeq, Indices, PlanRenderingContext};
+use mz_repr::Diff;
 
 use crate::plan::{AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType};
 
@@ -85,7 +86,7 @@ impl HirRelationExpr {
                     ctx.indented(|ctx| {
                         fmt_text_constant_rows(
                             f,
-                            rows.iter().map(|row| (row, &1)),
+                            rows.iter().map(|row| (row, &Diff::ONE)),
                             &mut ctx.indent,
                             ctx.config.redacted,
                         )

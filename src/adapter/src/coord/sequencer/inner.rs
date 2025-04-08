@@ -1324,14 +1324,6 @@ impl Coordinator {
         let (item_id, global_id) =
             return_if_err!(self.catalog_mut().allocate_user_id(id_ts).await, ctx);
 
-        if let Some(cluster) = self.catalog().try_get_cluster(in_cluster) {
-            mz_ore::soft_assert_or_log!(
-                cluster.replica_ids().len() <= 1,
-                "cannot create sink in cluster {}; has >1 replicas",
-                cluster.id()
-            );
-        }
-
         let catalog_sink = Sink {
             create_sql: sink.create_sql,
             global_id,
@@ -3087,20 +3079,20 @@ impl Coordinator {
                                 datums[idx] = new_value;
                             }
                             let updated = Row::pack_slice(&datums);
-                            diffs.push((updated, 1));
+                            diffs.push((updated, Diff::ONE));
                         }
                         match kind {
                             // Updates and deletes always remove the
                             // current row. Updates will also add an
                             // updated value.
                             MutationKind::Update | MutationKind::Delete => {
-                                diffs.push((row.to_owned(), -1))
+                                diffs.push((row.to_owned(), Diff::MINUS_ONE))
                             }
-                            MutationKind::Insert => diffs.push((row.to_owned(), 1)),
+                            MutationKind::Insert => diffs.push((row.to_owned(), Diff::ONE)),
                         }
                     }
                     for (row, diff) in &diffs {
-                        if *diff > 0 {
+                        if diff.is_positive() {
                             for (idx, datum) in row.iter().enumerate() {
                                 desc.constraints_met(idx, &datum)?;
                             }
@@ -3144,13 +3136,10 @@ impl Coordinator {
             };
             let mut returning_rows = Vec::new();
             let mut diff_err: Option<AdapterError> = None;
-            if !returning.is_empty() && diffs.is_ok() {
+            if let (false, Ok(diffs)) = (returning.is_empty(), &diffs) {
                 let arena = RowArena::new();
-                for (row, diff) in diffs
-                    .as_ref()
-                    .expect("known to be `Ok` from `is_ok()` call above")
-                {
-                    if diff < &1 {
+                for (row, diff) in diffs {
+                    if !diff.is_positive() {
                         continue;
                     }
                     let mut returning_row = Row::with_capacity(returning.len());
@@ -3167,7 +3156,7 @@ impl Coordinator {
                             }
                         }
                     }
-                    let diff = NonZeroI64::try_from(*diff).expect("known to be >= 1");
+                    let diff = NonZeroI64::try_from(diff.into_inner()).expect("known to be >= 1");
                     let diff = match NonZeroUsize::try_from(diff) {
                         Ok(diff) => diff,
                         Err(err) => {
@@ -5181,7 +5170,7 @@ impl Coordinator {
             self.catalog().state().pack_optimizer_notices(
                 &mut builtin_table_updates,
                 df_meta.optimizer_notices.iter(),
-                1,
+                Diff::ONE,
             );
 
             // Save the metainfo.

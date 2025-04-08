@@ -28,7 +28,10 @@ use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::metrics::{ControllerMetrics, WallclockLagMetrics};
 use mz_cluster_client::{ReplicaId, WallclockLagFn};
-use mz_controller_types::dyncfgs::{ENABLE_0DT_DEPLOYMENT_SOURCES, WALLCLOCK_LAG_REFRESH_INTERVAL};
+use mz_controller_types::dyncfgs::{
+    ENABLE_0DT_DEPLOYMENT_SOURCES, ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION,
+    WALLCLOCK_LAG_HISTOGRAM_REFRESH_INTERVAL, WALLCLOCK_LAG_HISTORY_REFRESH_INTERVAL,
+};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
@@ -54,7 +57,7 @@ use mz_storage_client::client::{
 use mz_storage_client::controller::{
     BoxFuture, CollectionDescription, DataSource, ExportDescription, ExportState,
     IntrospectionType, MonotonicAppender, PersistEpoch, Response, StorageController,
-    StorageMetadata, StorageTxn, StorageWriteOp,
+    StorageMetadata, StorageTxn, StorageWriteOp, WallclockLagHistogramPeriod,
 };
 use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC,
@@ -79,7 +82,7 @@ use mz_storage_types::sources::{
     GenericSourceConnection, IngestionDescription, SourceConnection, SourceData, SourceDesc,
     SourceExport, SourceExportDataConfig,
 };
-use mz_storage_types::{dyncfgs, AlterCompatible};
+use mz_storage_types::{dyncfgs, AlterCompatible, StorageDiff};
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use mz_txn_wal::txn_read::TxnsRead;
 use mz_txn_wal::txns::TxnsHandle;
@@ -220,8 +223,10 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// A function that computes the lag between the given time and wallclock time.
     #[derivative(Debug = "ignore")]
     wallclock_lag: WallclockLagFn<T>,
-    /// The last time wallclock lag introspection was refreshed.
-    wallclock_lag_last_refresh: Instant,
+    /// The last time `WallclockLagHistory` introspection was refreshed.
+    wallclock_lag_history_last_refresh: Instant,
+    /// The last time `WallclockLagHistogram` introspection was refreshed.
+    wallclock_lag_histogram_last_refresh: Instant,
 
     /// Handle to a [StorageCollections].
     storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
@@ -258,7 +263,7 @@ fn warm_persist_state_in_background(
                 let client = client.clone();
                 async move {
                     client
-                        .create_batch_fetcher::<SourceData, (), mz_repr::Timestamp, Diff>(
+                        .create_batch_fetcher::<SourceData, (), mz_repr::Timestamp, StorageDiff>(
                             shard_id,
                             Arc::new(RelationDesc::empty()),
                             Arc::new(UnitSchema),
@@ -530,6 +535,19 @@ where
         assert!(instance.is_some(), "storage instance {id} does not exist");
     }
 
+    fn update_instance_workload_class(
+        &mut self,
+        id: StorageInstanceId,
+        workload_class: Option<String>,
+    ) {
+        let instance = self
+            .instances
+            .get_mut(&id)
+            .unwrap_or_else(|| panic!("instance {id} does not exist"));
+
+        instance.workload_class = workload_class;
+    }
+
     fn connect_replica(
         &mut self,
         instance_id: StorageInstanceId,
@@ -656,7 +674,7 @@ where
                 handle_purpose: "evolve nullability for bootstrap".to_string(),
             };
             let latest_schema = persist_client
-                .latest_schema::<SourceData, (), T, Diff>(shard_id, diagnostics)
+                .latest_schema::<SourceData, (), T, StorageDiff>(shard_id, diagnostics)
                 .await
                 .expect("invalid persist usage");
             let Some((schema_id, current_schema, _)) = latest_schema else {
@@ -670,7 +688,7 @@ where
                 handle_purpose: "evolve nullability for bootstrap".to_string(),
             };
             let evolve_result = persist_client
-                .compare_and_evolve_schema::<SourceData, (), T, Diff>(
+                .compare_and_evolve_schema::<SourceData, (), T, StorageDiff>(
                     shard_id,
                     schema_id,
                     &relation_desc,
@@ -1123,13 +1141,8 @@ where
             }
 
             let wallclock_lag_metrics = self.metrics.wallclock_lag_metrics(id, maybe_instance_id);
-            let collection_state = CollectionState {
-                data_source,
-                collection_metadata: metadata,
-                extra_state,
-                wallclock_lag_max: Default::default(),
-                wallclock_lag_metrics,
-            };
+            let collection_state =
+                CollectionState::new(data_source, metadata, extra_state, wallclock_lag_metrics);
 
             self.collections.insert(id, collection_state);
         }
@@ -1189,7 +1202,7 @@ where
             }
         }
 
-        self.append_shard_mappings(new_collections.into_iter(), 1);
+        self.append_shard_mappings(new_collections.into_iter(), Diff::ONE);
 
         // TODO(guswynn): perform the io in this final section concurrently.
         for id in to_execute {
@@ -1455,13 +1468,12 @@ where
         };
         // TODO(alter_table): Support schema evolution on sources.
         let wallclock_lag_metrics = self.metrics.wallclock_lag_metrics(new_collection, None);
-        let collection_state = CollectionState::<T> {
-            data_source: collection_desc.data_source.clone(),
-            collection_metadata: collection_meta,
-            extra_state: CollectionStateExtra::None,
-            wallclock_lag_max: Default::default(),
+        let collection_state = CollectionState::new(
+            collection_desc.data_source.clone(),
+            collection_meta,
+            CollectionStateExtra::None,
             wallclock_lag_metrics,
-        };
+        );
 
         // Great! We have successfully evolved the schema of our Table, now we need to update our
         // in-memory data structures.
@@ -1948,7 +1960,7 @@ where
             .chain(collections_to_drop.iter())
             .cloned()
             .collect();
-        self.append_shard_mappings(shards_to_update.into_iter(), -1);
+        self.append_shard_mappings(shards_to_update.into_iter(), Diff::MINUS_ONE);
 
         let status_now = mz_ore::now::to_datetime((self.now)());
         let mut status_updates = vec![];
@@ -2675,7 +2687,8 @@ where
             recorded_frontiers: BTreeMap::new(),
             recorded_replica_frontiers: BTreeMap::new(),
             wallclock_lag,
-            wallclock_lag_last_refresh: Instant::now(),
+            wallclock_lag_history_last_refresh: Instant::now(),
+            wallclock_lag_histogram_last_refresh: Instant::now(),
             storage_collections,
             migrated_storage_collections: BTreeSet::new(),
             maintenance_ticker,
@@ -2931,7 +2944,7 @@ where
         shard: ShardId,
         relation_desc: RelationDesc,
         persist_client: &PersistClient,
-    ) -> WriteHandle<SourceData, (), T, Diff> {
+    ) -> WriteHandle<SourceData, (), T, StorageDiff> {
         let diagnostics = Diagnostics {
             shard_name: id.to_string(),
             handle_purpose: format!("controller data for {}", id),
@@ -2968,7 +2981,7 @@ where
         &mut self,
         id: GlobalId,
         introspection_type: IntrospectionType,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
+        write_handle: WriteHandle<SourceData, (), T, StorageDiff>,
         persist_client: PersistClient,
     ) -> Result<(), StorageError<T>> {
         tracing::info!(%id, ?introspection_type, "registering introspection collection");
@@ -2996,7 +3009,7 @@ where
 
             let fut = async move {
                 let read_handle = persist_client
-                    .open_leased_reader::<SourceData, (), T, Diff>(
+                    .open_leased_reader::<SourceData, (), T, StorageDiff>(
                         metadata.data_shard,
                         Arc::new(metadata.relation_desc.clone()),
                         Arc::new(UnitSchema),
@@ -3094,11 +3107,14 @@ where
     ///   a managed collection.
     /// - If diff is any value other than `1` or `-1`.
     #[instrument(level = "debug")]
-    fn append_shard_mappings<I>(&self, global_ids: I, diff: i64)
+    fn append_shard_mappings<I>(&self, global_ids: I, diff: Diff)
     where
         I: Iterator<Item = GlobalId>,
     {
-        mz_ore::soft_assert_or_log!(diff == -1 || diff == 1, "use 1 for insert or -1 for delete");
+        mz_ore::soft_assert_or_log!(
+            diff == Diff::MINUS_ONE || diff == Diff::ONE,
+            "use 1 for insert or -1 for delete"
+        );
 
         let id = *self
             .introspection_ids
@@ -3178,7 +3194,7 @@ where
     async fn read_handle_for_snapshot(
         &self,
         id: GlobalId,
-    ) -> Result<ReadHandle<SourceData, (), T, Diff>, StorageError<T>> {
+    ) -> Result<ReadHandle<SourceData, (), T, StorageDiff>, StorageError<T>> {
         let metadata = self.storage_collections.collection_metadata(id)?;
         read_handle_for_snapshot(&self.persist, id, &metadata).await
     }
@@ -3411,15 +3427,15 @@ where
         for (&id, new) in &self.recorded_frontiers {
             match old_global_frontiers.remove(&id) {
                 Some(old) if &old != new => {
-                    push_global_update(id, new.clone(), 1);
-                    push_global_update(id, old, -1);
+                    push_global_update(id, new.clone(), Diff::ONE);
+                    push_global_update(id, old, Diff::MINUS_ONE);
                 }
                 Some(_) => (),
-                None => push_global_update(id, new.clone(), 1),
+                None => push_global_update(id, new.clone(), Diff::ONE),
             }
         }
         for (id, old) in old_global_frontiers {
-            push_global_update(id, old, -1);
+            push_global_update(id, old, Diff::MINUS_ONE);
         }
 
         let mut old_replica_frontiers =
@@ -3427,15 +3443,15 @@ where
         for (&key, new) in &self.recorded_replica_frontiers {
             match old_replica_frontiers.remove(&key) {
                 Some(old) if &old != new => {
-                    push_replica_update(key, new.clone(), 1);
-                    push_replica_update(key, old, -1);
+                    push_replica_update(key, new.clone(), Diff::ONE);
+                    push_replica_update(key, old, Diff::MINUS_ONE);
                 }
                 Some(_) => (),
-                None => push_replica_update(key, new.clone(), 1),
+                None => push_replica_update(key, new.clone(), Diff::ONE),
             }
         }
         for (key, old) in old_replica_frontiers {
-            push_replica_update(key, old, -1);
+            push_replica_update(key, old, Diff::MINUS_ONE);
         }
 
         let id = self.introspection_ids[&IntrospectionType::Frontiers];
@@ -3447,8 +3463,7 @@ where
             .differential_append(id, replica_updates);
     }
 
-    /// Refresh the `WallclockLagHistory` introspection and the `wallclock_lag_*_seconds` metrics
-    /// with the current lag values.
+    /// Refresh the wallclock lag introspection and metrics with the current lag values.
     ///
     /// We measure the lag of write frontiers behind the wallclock time every second and track the
     /// maximum over 60 measurements (i.e., one minute). Every minute, we emit a new lag event to
@@ -3457,48 +3472,105 @@ where
     /// This method is invoked by `ComputeController::maintain`, which we expect to be called once
     /// per second during normal operation.
     fn refresh_wallclock_lag(&mut self) {
-        let refresh_introspection = !self.read_only
-            && self.wallclock_lag_last_refresh.elapsed()
-                >= WALLCLOCK_LAG_REFRESH_INTERVAL.get(self.config.config_set());
-        let mut introspection_updates = refresh_introspection.then(Vec::new);
+        let refresh_history = !self.read_only
+            && self.wallclock_lag_history_last_refresh.elapsed()
+                >= WALLCLOCK_LAG_HISTORY_REFRESH_INTERVAL.get(self.config.config_set());
+        let refresh_histogram = !self.read_only
+            && self.wallclock_lag_histogram_last_refresh.elapsed()
+                >= WALLCLOCK_LAG_HISTOGRAM_REFRESH_INTERVAL.get(self.config.config_set());
 
-        let now = mz_ore::now::to_datetime((self.now)());
-        let now_tz = now.try_into().expect("must fit");
+        let now_ms = (self.now)();
+        let now_dt = mz_ore::now::to_datetime(now_ms);
+        let now_ts: CheckedTimestamp<_> = now_dt.try_into().expect("must fit");
+
+        let histogram_period =
+            WallclockLagHistogramPeriod::from_epoch_millis(now_ms, self.config.config_set());
 
         let frontier_lag = |frontier: &Antichain<_>| match frontier.as_option() {
             Some(ts) => (self.wallclock_lag)(ts),
             None => Duration::ZERO,
         };
-        let pack_row = |id: GlobalId, lag: Duration| {
-            let lag_us = i64::try_from(lag.as_micros()).expect("must fit");
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::Null,
-                Datum::Interval(Interval::new(0, 0, lag_us)),
-                Datum::TimestampTz(now_tz),
-            ])
-        };
 
+        let mut history_updates = Vec::new();
+        let mut histogram_updates = Vec::new();
+        let mut row_buf = Row::default();
         for frontiers in self.storage_collections.active_collection_frontiers() {
             let id = frontiers.id;
             let Some(collection) = self.collections.get_mut(&id) else {
                 continue;
             };
+
             let lag = frontier_lag(&frontiers.write_frontier);
             collection.wallclock_lag_max = std::cmp::max(collection.wallclock_lag_max, lag);
 
-            if let Some(updates) = &mut introspection_updates {
-                let lag = std::mem::take(&mut collection.wallclock_lag_max);
-                let row = pack_row(id, lag);
-                updates.push((row, 1));
+            if refresh_history {
+                let max_lag = std::mem::take(&mut collection.wallclock_lag_max);
+                let max_lag_us = i64::try_from(max_lag.as_micros()).expect("must fit");
+                let row = Row::pack_slice(&[
+                    Datum::String(&id.to_string()),
+                    Datum::Null,
+                    Datum::Interval(Interval::new(0, 0, max_lag_us)),
+                    Datum::TimestampTz(now_ts),
+                ]);
+                history_updates.push((row, Diff::ONE));
             }
 
             collection.wallclock_lag_metrics.observe(lag);
+
+            if !ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION.get(self.config.config_set()) {
+                continue;
+            }
+
+            if let Some(stash) = &mut collection.wallclock_lag_histogram_stash {
+                let bucket = lag.as_secs().next_power_of_two();
+
+                let instance_id = match &collection.extra_state {
+                    CollectionStateExtra::Ingestion(i) => Some(i.instance_id),
+                    CollectionStateExtra::Export(e) => Some(e.cluster_id()),
+                    CollectionStateExtra::None => None,
+                };
+                let workload_class = instance_id
+                    .and_then(|id| self.instances.get(&id))
+                    .and_then(|i| i.workload_class.clone());
+                let labels = match workload_class {
+                    Some(wc) => [("workload_class", wc.clone())].into(),
+                    None => BTreeMap::new(),
+                };
+
+                let key = (histogram_period, bucket, labels);
+                *stash.entry(key).or_default() += Diff::ONE;
+
+                if refresh_histogram {
+                    for ((period, lag, labels), count) in std::mem::take(stash) {
+                        let mut packer = row_buf.packer();
+                        packer.extend([
+                            Datum::TimestampTz(period.start),
+                            Datum::TimestampTz(period.end),
+                            Datum::String(&id.to_string()),
+                            Datum::UInt64(lag),
+                        ]);
+                        let labels = labels.iter().map(|(k, v)| (*k, Datum::String(v)));
+                        packer.push_dict(labels);
+
+                        histogram_updates.push((row_buf.clone(), count));
+                    }
+                }
+            }
         }
 
-        if let Some(updates) = introspection_updates {
-            self.append_introspection_updates(IntrospectionType::WallclockLagHistory, updates);
-            self.wallclock_lag_last_refresh = Instant::now();
+        if !history_updates.is_empty() {
+            self.append_introspection_updates(
+                IntrospectionType::WallclockLagHistory,
+                history_updates,
+            );
+            self.wallclock_lag_history_last_refresh = Instant::now();
+        }
+        if !histogram_updates.is_empty() {
+            self.append_introspection_updates(
+                IntrospectionType::WallclockLagHistogram,
+                histogram_updates,
+            );
+            self.wallclock_lag_histogram_last_refresh = Instant::now();
         }
     }
 
@@ -3537,6 +3609,7 @@ impl From<&IntrospectionType> for CollectionManagerKind {
             | IntrospectionType::ReplicaStatusHistory
             | IntrospectionType::ReplicaMetricsHistory
             | IntrospectionType::WallclockLagHistory
+            | IntrospectionType::WallclockLagHistogram
             | IntrospectionType::PreparedStatementHistory
             | IntrospectionType::StatementExecutionHistory
             | IntrospectionType::SessionHistory
@@ -3582,7 +3655,7 @@ async fn read_handle_for_snapshot<T>(
     persist: &PersistClientCache,
     id: GlobalId,
     metadata: &CollectionMetadata,
-) -> Result<ReadHandle<SourceData, (), T, Diff>, StorageError<T>>
+) -> Result<ReadHandle<SourceData, (), T, StorageDiff>, StorageError<T>>
 where
     T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
 {
@@ -3621,10 +3694,52 @@ struct CollectionState<T: TimelyTimestamp> {
 
     pub extra_state: CollectionStateExtra<T>,
 
-    /// Maximum frontier wallclock lag since the last introspection update.
+    /// Maximum frontier wallclock lag since the last `WallclockLagHistory` introspection update.
     wallclock_lag_max: Duration,
+    /// Frontier wallclock lag measurements stashed until the next `WallclockLagHistogram`
+    /// introspection update.
+    ///
+    /// Keys are `(period, lag, labels)` triples, values are counts.
+    ///
+    /// If this is `None`, wallclock lag is not tracked for this collection.
+    wallclock_lag_histogram_stash: Option<
+        BTreeMap<
+            (
+                WallclockLagHistogramPeriod,
+                u64,
+                BTreeMap<&'static str, String>,
+            ),
+            Diff,
+        >,
+    >,
     /// Frontier wallclock lag metrics tracked for this collection.
     wallclock_lag_metrics: WallclockLagMetrics,
+}
+
+impl<T: TimelyTimestamp> CollectionState<T> {
+    fn new(
+        data_source: DataSource<T>,
+        collection_metadata: CollectionMetadata,
+        extra_state: CollectionStateExtra<T>,
+        wallclock_lag_metrics: WallclockLagMetrics,
+    ) -> Self {
+        // Only collect wallclock lag histogram data for collections written by storage, to avoid
+        // duplicate measurements. Collections written by other components (e.g. compute) have
+        // their wallclock lags recorded by these components.
+        let wallclock_lag_histogram_stash = match &data_source {
+            DataSource::Other => None,
+            _ => Some(Default::default()),
+        };
+
+        Self {
+            data_source,
+            collection_metadata,
+            extra_state,
+            wallclock_lag_max: Default::default(),
+            wallclock_lag_histogram_stash,
+            wallclock_lag_metrics,
+        }
+    }
 }
 
 /// Additional state that the controller maintains for select collection types.

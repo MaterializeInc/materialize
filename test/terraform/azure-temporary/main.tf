@@ -44,7 +44,7 @@ resource "random_password" "pass" {
 }
 
 resource "azurerm_resource_group" "materialize" {
-  name     = "tf-test-rg"
+  name     = "mz-tf-test-rg"
   location = "eastus2"
   tags     = {}
 }
@@ -53,7 +53,7 @@ module "materialize" {
   source = "git::https://github.com/MaterializeInc/terraform-azurerm-materialize.git?ref=v0.2.0"
   resource_group_name = azurerm_resource_group.materialize.name
   location            = "eastus2"
-  prefix              = "tf-test"
+  prefix              = "mz-tf-test"
   install_materialize_operator = true
 
   materialize_instances = var.materialize_instances

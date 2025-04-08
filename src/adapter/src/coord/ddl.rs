@@ -34,7 +34,7 @@ use mz_ore::str::StrExt;
 use mz_ore::task;
 use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_repr::adt::numeric::Numeric;
-use mz_repr::{CatalogItemId, GlobalId, Timestamp};
+use mz_repr::{CatalogItemId, Diff, GlobalId, Timestamp};
 use mz_sql::catalog::{CatalogCluster, CatalogClusterReplica, CatalogSchema};
 use mz_sql::names::ResolvedDatabaseSpecifier;
 use mz_sql::plan::ConnectionDetails;
@@ -561,7 +561,7 @@ impl Coordinator {
                     *replica_id,
                     process_id,
                     &status,
-                    -1,
+                    Diff::MINUS_ONE,
                 );
                 let builtin_table_update = catalog
                     .state()
@@ -573,9 +573,12 @@ impl Coordinator {
             let cluster_statuses = cluster_replica_statuses.remove_cluster_statuses(cluster_id);
             for (replica_id, replica_statuses) in cluster_statuses {
                 for (process_id, status) in replica_statuses {
-                    let builtin_table_update = catalog
-                        .state()
-                        .pack_cluster_replica_status_update(replica_id, process_id, &status, -1);
+                    let builtin_table_update = catalog.state().pack_cluster_replica_status_update(
+                        replica_id,
+                        process_id,
+                        &status,
+                        Diff::MINUS_ONE,
+                    );
                     let builtin_table_update = catalog
                         .state()
                         .resolve_builtin_table_update(builtin_table_update);
@@ -593,7 +596,7 @@ impl Coordinator {
                         *replica_id,
                         *process_id,
                         status,
-                        1,
+                        Diff::ONE,
                     );
                     let builtin_table_update = catalog
                         .state()
@@ -621,7 +624,7 @@ impl Coordinator {
                     replica_id,
                     *process_id,
                     status,
-                    1,
+                    Diff::ONE,
                 );
                 let builtin_table_update = catalog
                     .state()
@@ -867,10 +870,11 @@ impl Coordinator {
         {
             let mut updates = vec![];
             if let Some(metrics) = metrics {
-                let retractions = self
-                    .catalog()
-                    .state()
-                    .pack_replica_metric_updates(replica_id, &metrics, -1);
+                let retractions = self.catalog().state().pack_replica_metric_updates(
+                    replica_id,
+                    &metrics,
+                    Diff::MINUS_ONE,
+                );
                 let retractions = self
                     .catalog()
                     .state()
@@ -1767,7 +1771,11 @@ impl Coordinator {
         self.validate_resource_limit_numeric(
             current_credit_consumption_rate,
             new_credit_consumption_rate,
-            SystemVars::max_credit_consumption_rate,
+            |system_vars| {
+                self.license_key
+                    .max_credit_consumption_rate()
+                    .map_or_else(|| system_vars.max_credit_consumption_rate(), Numeric::from)
+            },
             "cluster replica",
             MAX_CREDIT_CONSUMPTION_RATE.name(),
         )?;

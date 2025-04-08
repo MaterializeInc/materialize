@@ -31,10 +31,11 @@ use mz_repr::GlobalId;
 use mz_service::client::{GenericClient, Partitioned};
 use mz_service::params::GrpcClientParameters;
 use mz_storage_client::client::{
-    RunIngestionCommand, Status, StatusUpdate, StorageClient, StorageCommand, StorageGrpcClient,
-    StorageResponse,
+    RunIngestionCommand, RunSinkCommand, Status, StatusUpdate, StorageClient, StorageCommand,
+    StorageGrpcClient, StorageResponse,
 };
 use mz_storage_client::metrics::{InstanceMetrics, ReplicaMetrics};
+use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::{IngestionDescription, SourceConnection};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
@@ -55,6 +56,10 @@ use crate::history::CommandHistory;
 /// lead to panics.
 #[derive(Debug)]
 pub(crate) struct Instance<T> {
+    /// The workload class of this instance.
+    ///
+    /// This is currently only used to annotate metrics.
+    pub workload_class: Option<String>,
     /// The replicas connected to this storage instance.
     replicas: BTreeMap<ReplicaId, Replica<T>>,
     /// The ingestions currently running on this instance.
@@ -70,7 +75,7 @@ pub(crate) struct Instance<T> {
     /// While this is derivable from `history` on demand, keeping a denormalized
     /// list of running exports is quite a bit more convenient for the
     /// controller.
-    active_exports: BTreeSet<GlobalId>,
+    active_exports: BTreeMap<GlobalId, ActiveExport>,
     /// The command history, used to replay past commands when introducing new replicas or
     /// reconnecting to existing replicas.
     history: CommandHistory<T>,
@@ -97,6 +102,12 @@ struct ActiveIngestion {
     active_replicas: BTreeSet<ReplicaId>,
 }
 
+#[derive(Debug)]
+struct ActiveExport {
+    /// The set of replicas that this export is currently running on.
+    active_replicas: BTreeSet<ReplicaId>,
+}
+
 impl<T> Instance<T>
 where
     T: Timestamp + Lattice + TotalOrder,
@@ -114,10 +125,11 @@ where
         let epoch = ClusterStartupEpoch::new(envd_epoch, 0);
 
         let mut instance = Self {
+            workload_class: None,
             replicas: Default::default(),
             active_ingestions: Default::default(),
             ingestion_exports: Default::default(),
-            active_exports: BTreeSet::new(),
+            active_exports: BTreeMap::new(),
             history,
             epoch,
             metrics,
@@ -150,7 +162,7 @@ where
 
         self.replicas.insert(id, replica);
 
-        self.update_ingestion_scheduling(false);
+        self.update_scheduling(false);
 
         self.replay_commands(id);
     }
@@ -165,6 +177,14 @@ where
                     cmds.retain(|cmd| self.is_active_replica(&cmd.id, &replica_id));
                     if cmds.len() > 0 {
                         Some(StorageCommand::RunIngestions(cmds))
+                    } else {
+                        None
+                    }
+                }
+                StorageCommand::RunSinks(mut cmds) => {
+                    cmds.retain(|cmd| self.is_active_replica(&cmd.id, &replica_id));
+                    if cmds.len() > 0 {
+                        Some(StorageCommand::RunSinks(cmds))
                     } else {
                         None
                     }
@@ -208,11 +228,22 @@ where
                 needs_rescheduling = true;
             }
         }
+        for (export_id, export) in self.active_exports.iter_mut() {
+            let was_running = export.active_replicas.remove(&id);
+            if was_running {
+                tracing::debug!(
+                    %export_id,
+                    replica_id = %id,
+                    "export was running on dropped replica, updating scheduling decisions"
+                );
+                needs_rescheduling = true;
+            }
+        }
 
         tracing::info!(%id, %needs_rescheduling, "dropped replica");
 
         if needs_rescheduling {
-            self.update_ingestion_scheduling(true);
+            self.update_scheduling(true);
         }
 
         if replica.is_some() && self.replicas.is_empty() {
@@ -239,8 +270,8 @@ where
     }
 
     /// Returns the exports running on this instance.
-    pub fn active_exports(&self) -> &BTreeSet<GlobalId> {
-        &self.active_exports
+    pub fn active_exports(&self) -> impl Iterator<Item = &GlobalId> {
+        self.active_exports.keys()
     }
 
     /// Sets the status to paused for all sources/sinks in the history.
@@ -313,17 +344,22 @@ where
                 self.absorb_ingestions(ingestions.clone());
 
                 for cmd in ingestions.iter() {
+                    tracing::debug!("getting active replicas for {cmd:?}");
                     for replica in self.active_replicas(&cmd.id) {
                         replica.send(StorageCommand::RunIngestions(vec![cmd.clone()]));
                     }
                 }
             }
             StorageCommand::RunSinks(sinks) => {
-                for sink in sinks.iter() {
-                    self.active_exports.insert(sink.id);
-                }
-                for replica in self.replicas.values_mut() {
-                    replica.send(command.clone());
+                // First absorb into our state, because this might change
+                // scheduling decisions, which need to be respected just below
+                // when sending commands.
+                self.absorb_exports(sinks.clone());
+
+                for cmd in sinks.iter() {
+                    for replica in self.active_replicas(&cmd.id) {
+                        replica.send(StorageCommand::RunSinks(vec![cmd.clone()]));
+                    }
                 }
             }
             StorageCommand::AllowCompaction(cmds) => {
@@ -383,16 +419,47 @@ where
                 self.active_ingestions.insert(ingestion.id, ingestion_state);
 
                 // Maybe update scheduling decisions.
-                self.update_ingestion_scheduling(false);
+                self.update_scheduling(false);
             }
         }
     }
 
-    /// Update scheduling decisions for ingestions, that is what replicas should
-    /// be running a given ingestion, if needed.
+    /// Updates internal state based on incoming export commands.
+    ///
+    /// This does _not_ send commands to replicas, we only record the export
+    /// in state and potentially update scheduling decisions.
+    fn absorb_exports(&mut self, exports: Vec<RunSinkCommand<T>>) {
+        for export in exports {
+            let existing_export_state = self.active_exports.get_mut(&export.id);
+
+            if let Some(export_state) = existing_export_state {
+                // It's an update for an existing export. We don't need to
+                // change anything about our scheduling decisions, no need to
+                // update active_exports.
+
+                tracing::debug!(
+                    export_id = %export.id,
+                    active_replicas = %export_state.active_replicas.iter().map(|id| id.to_string()).join(", "),
+                    "updating export"
+                );
+            } else {
+                // We create a new export state for this export.
+                let export_state = ActiveExport {
+                    active_replicas: BTreeSet::new(),
+                };
+                self.active_exports.insert(export.id, export_state);
+
+                // Maybe update scheduling decisions.
+                self.update_scheduling(false);
+            }
+        }
+    }
+
+    /// Update scheduling decisions, that is what replicas should be running a
+    /// given object, if needed.
     ///
     /// An important property of this scheduling algorithm is that we never
-    /// change the scheduling decision for single-replica ingestions unless we
+    /// change the scheduling decision for single-replica objects unless we
     /// have to, that is unless the replica that they are running on goes away.
     /// We do this, so that we don't send a mix of "run"/"allow
     /// compaction"/"run" messages to replicas, which wouldn't deal well with
@@ -401,17 +468,22 @@ where
     /// order of `ReplicaId`. We do this latter so that the scheduling decision
     /// is stable across restarts of `environmentd`/the controller.
     ///
-    /// For multi-replica ingestions (e.g. Kafka), each active ingestion is
+    /// For multi-replica objects (e.g. Kafka ingestions), each active object is
     /// scheduled on all replicas.
     ///
     /// If `send_commands` is true, will send commands for newly-scheduled
-    /// single-replica ingestions.
-    fn update_ingestion_scheduling(&mut self, send_commands: bool) {
+    /// single-replica objects.
+    fn update_scheduling(&mut self, send_commands: bool) {
+        #[derive(Debug)]
+        enum ObjectId {
+            Ingestion(GlobalId),
+            Export(GlobalId),
+        }
         // We first collect scheduling preferences and then schedule below.
         // Applying the decision needs a mutable borrow but we also need to
         // borrow for determining `prefers_single_replica`, so we split this
         // into two loops.
-        let mut scheduling_preferences: Vec<(GlobalId, bool)> = Vec::new();
+        let mut scheduling_preferences: Vec<(ObjectId, bool)> = Vec::new();
 
         for ingestion_id in self.active_ingestions.keys() {
             let ingestion_description = self
@@ -423,74 +495,109 @@ where
                 .connection
                 .prefers_single_replica();
 
-            scheduling_preferences.push((*ingestion_id, prefers_single_replica));
+            scheduling_preferences
+                .push((ObjectId::Ingestion(*ingestion_id), prefers_single_replica));
+        }
+
+        for export_id in self.active_exports.keys() {
+            // All sinks prefer single replica
+            scheduling_preferences.push((ObjectId::Export(*export_id), true));
         }
 
         // Collect all commands per replica and send them in one go.
-        let mut commands_by_replica: BTreeMap<ReplicaId, Vec<GlobalId>> = BTreeMap::new();
+        let mut commands_by_replica: BTreeMap<ReplicaId, Vec<ObjectId>> = BTreeMap::new();
 
-        for (ingestion_id, prefers_single_replica) in scheduling_preferences {
-            let ingestion_state = self
-                .active_ingestions
-                .get_mut(&ingestion_id)
-                .expect("missing ingestion state");
+        for (object_id, prefers_single_replica) in scheduling_preferences {
+            let active_replicas = match object_id {
+                ObjectId::Ingestion(ingestion_id) => {
+                    &mut self
+                        .active_ingestions
+                        .get_mut(&ingestion_id)
+                        .expect("missing ingestion state")
+                        .active_replicas
+                }
+                ObjectId::Export(export_id) => {
+                    &mut self
+                        .active_exports
+                        .get_mut(&export_id)
+                        .expect("missing ingestion state")
+                        .active_replicas
+                }
+            };
 
             if prefers_single_replica {
                 // For single-replica ingestion, schedule only if it's not already running.
-                if ingestion_state.active_replicas.is_empty() {
+                if active_replicas.is_empty() {
                     let target_replica = self.replicas.keys().min().copied();
                     if let Some(first_replica_id) = target_replica {
                         tracing::info!(
-                            ingestion_id = %ingestion_id,
+                            object_id = ?object_id,
                             replica_id = %first_replica_id,
-                            "scheduling single-replica ingestion");
-                        ingestion_state.active_replicas.insert(first_replica_id);
+                            "scheduling single-replica object");
+                        active_replicas.insert(first_replica_id);
 
                         commands_by_replica
                             .entry(first_replica_id)
                             .or_default()
-                            .push(ingestion_id);
+                            .push(object_id);
                     }
                 } else {
                     tracing::info!(
-                        %ingestion_id,
-                        active_replicas = %ingestion_state.active_replicas.iter().map(|id| id.to_string()).join(", "),
-                        "single-replica ingestion already running, not scheduling again",
+                        ?object_id,
+                        active_replicas = %active_replicas.iter().map(|id| id.to_string()).join(", "),
+                        "single-replica object already running, not scheduling again",
                     );
                 }
             } else {
                 let current_replica_ids: BTreeSet<_> = self.replicas.keys().copied().collect();
                 let unscheduled_replicas: Vec<_> = current_replica_ids
-                    .difference(&ingestion_state.active_replicas)
+                    .difference(active_replicas)
                     .copied()
                     .collect();
                 for replica_id in unscheduled_replicas {
                     tracing::info!(
-                        %ingestion_id,
+                        ?object_id,
                         %replica_id,
-                        "scheduling multi-replica ingestion"
+                        "scheduling multi-replica object"
                     );
-                    ingestion_state.active_replicas.insert(replica_id);
+                    active_replicas.insert(replica_id);
                 }
             }
         }
 
         if send_commands {
-            for (replica_id, ingestion_ids) in commands_by_replica {
-                let commands: Vec<RunIngestionCommand> = ingestion_ids
-                    .into_iter()
-                    .map(|id| RunIngestionCommand {
-                        id,
-                        description: self
-                            .get_ingestion_description(&id)
-                            .expect("missing ingestion description")
-                            .clone(),
-                    })
-                    .collect();
-
-                if !commands.is_empty() {
+            for (replica_id, object_ids) in commands_by_replica {
+                let mut ingestion_commands = vec![];
+                let mut export_commands = vec![];
+                for object_id in object_ids {
+                    match object_id {
+                        ObjectId::Ingestion(id) => {
+                            ingestion_commands.push(RunIngestionCommand {
+                                id,
+                                description: self
+                                    .get_ingestion_description(&id)
+                                    .expect("missing ingestion description")
+                                    .clone(),
+                            });
+                        }
+                        ObjectId::Export(id) => {
+                            export_commands.push(RunSinkCommand {
+                                id,
+                                description: self
+                                    .get_export_description(&id)
+                                    .expect("missing export description")
+                                    .clone(),
+                            });
+                        }
+                    }
+                }
+                if !ingestion_commands.is_empty() {
                     let replica = self.replicas.get_mut(&replica_id).expect("missing replica");
-                    replica.send(StorageCommand::RunIngestions(commands));
+                    replica.send(StorageCommand::RunIngestions(ingestion_commands));
+                }
+                if !export_commands.is_empty() {
+                    let replica = self.replicas.get_mut(&replica_id).expect("missing replica");
+                    replica.send(StorageCommand::RunSinks(export_commands));
                 }
             }
         }
@@ -522,6 +629,32 @@ where
         })
     }
 
+    /// Returns the export description for the given export ID, if it
+    /// exists.
+    ///
+    /// This function searches through the command history to find the most
+    /// recent RunSinkCommand for the specified export ID and returns
+    /// its description.  Returns None if no ingestion with the given ID is
+    /// found.
+    pub fn get_export_description(
+        &self,
+        id: &GlobalId,
+    ) -> Option<StorageSinkDesc<CollectionMetadata, T>> {
+        if !self.active_exports.contains_key(id) {
+            return None;
+        }
+
+        self.history.iter().rev().find_map(|command| {
+            if let StorageCommand::RunSinks(cmds) = command {
+                cmds.iter()
+                    .find(|cmd| &cmd.id == id)
+                    .map(|cmd| cmd.description.clone())
+            } else {
+                None
+            }
+        })
+    }
+
     /// Updates internal state based on incoming compaction commands.
     fn absorb_compactions(&mut self, cmds: Vec<(GlobalId, Antichain<T>)>) {
         tracing::debug!(?self.active_ingestions, ?cmds, "allow_compaction");
@@ -538,28 +671,33 @@ where
     /// Returns the replicas that are actively running the given object (ingestion or export).
     fn active_replicas(&mut self, id: &GlobalId) -> Box<dyn Iterator<Item = &mut Replica<T>> + '_> {
         if let Some(ingestion_id) = self.ingestion_exports.get(id) {
-            // Right now, only ingestions can have per-replica scheduling
-            // decisions.
             match self.active_ingestions.get(ingestion_id) {
-                Some(ingestion) => {
-                    let active_replicas = ingestion.active_replicas.clone();
-                    Box::new(
-                        self.replicas
-                            .iter_mut()
-                            .filter_map(move |(replica_id, replica)| {
-                                if active_replicas.contains(replica_id) {
-                                    Some(replica)
-                                } else {
-                                    None
-                                }
-                            }),
-                    )
-                }
+                Some(ingestion) => Box::new(self.replicas.iter_mut().filter_map(
+                    move |(replica_id, replica)| {
+                        if ingestion.active_replicas.contains(replica_id) {
+                            Some(replica)
+                        } else {
+                            None
+                        }
+                    },
+                )),
                 None => {
                     // The ingestion has already been compacted away (aka. stopped).
                     Box::new(std::iter::empty())
                 }
             }
+        } else if let Some(export) = self.active_exports.get(id) {
+            Box::new(
+                self.replicas
+                    .iter_mut()
+                    .filter_map(move |(replica_id, replica)| {
+                        if export.active_replicas.contains(replica_id) {
+                            Some(replica)
+                        } else {
+                            None
+                        }
+                    }),
+            )
         } else {
             Box::new(self.replicas.values_mut())
         }
@@ -568,8 +706,6 @@ where
     /// Returns whether the given replica is actively running the given object (ingestion or export).
     fn is_active_replica(&self, id: &GlobalId, replica_id: &ReplicaId) -> bool {
         if let Some(ingestion_id) = self.ingestion_exports.get(id) {
-            // Right now, only ingestions can have per-replica scheduling
-            // decisions.
             match self.active_ingestions.get(ingestion_id) {
                 Some(ingestion) => ingestion.active_replicas.contains(replica_id),
                 None => {
@@ -577,6 +713,8 @@ where
                     false
                 }
             }
+        } else if let Some(export) = self.active_exports.get(id) {
+            export.active_replicas.contains(replica_id)
         } else {
             // For non-ingestion objects, all replicas are active
             true

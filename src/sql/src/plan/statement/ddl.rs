@@ -3416,9 +3416,6 @@ fn plan_sink(
     // `in_cluster` value we plan to normalize when we canonicalize the create
     // statement.
     let in_cluster = source_sink_cluster_config(scx, &mut stmt.in_cluster)?;
-    if in_cluster.replica_ids().len() > 1 {
-        sql_bail!("cannot create sink in cluster with more than one replica")
-    }
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt))?;
 
     Ok(Plan::CreateSink(CreateSinkPlan {
@@ -3484,9 +3481,9 @@ impl std::convert::TryFrom<Vec<CsrConfigOption<Aug>>> for CsrConfigOptionExtract
                 }));
             }
             let option_name = option.name.clone();
-            let option_name_str = option_name.to_ast_string();
+            let option_name_str = option_name.to_ast_string_simple();
             let better_error = |e: PlanError| PlanError::InvalidOptionValue {
-                option_name: option_name.to_ast_string(),
+                option_name: option_name.to_ast_string_simple(),
                 err: e.into(),
             };
             let to_compatibility_level = |val: Option<WithOptionValue<Aug>>| {
@@ -4672,8 +4669,8 @@ pub fn unplan_create_cluster(
                 enable_reduce_reduction: _,
                 enable_join_prioritize_arranged,
                 enable_projection_pushdown_after_relation_cse,
-                enable_let_prefix_extraction: _,
                 enable_less_reduce_in_eqprop: _,
+                enable_dequadratic_eqprop_map: _,
             } = optimizer_feature_overrides;
             // The ones from above that don't occur below are not wired up to cluster features.
             let features_extracted = ClusterFeatureExtracted {
@@ -5219,7 +5216,7 @@ pub fn plan_drop_objects(
         match id {
             Some(id) => referenced_ids.push(id),
             None => scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_ast_string(),
+                name: name.to_ast_string_simple(),
                 object_type,
             }),
         }
@@ -5336,23 +5333,19 @@ fn plan_drop_network_policy(
 /// Returns `true` if the cluster has any object that requires a single replica.
 /// Returns `false` if the cluster has no objects.
 fn contains_single_replica_objects(scx: &StatementContext, cluster: &dyn CatalogCluster) -> bool {
-    cluster.bound_objects().iter().any(|id| {
-        let item = scx.catalog.get_item(id);
-        let single_replica_source = match item.source_desc() {
-            Ok(Some(desc)) => match desc.connection {
-                GenericSourceConnection::Kafka(_)
-                | GenericSourceConnection::LoadGenerator(_)
-                | GenericSourceConnection::MySql(_)
-                | GenericSourceConnection::Postgres(_) => {
-                    let enable_multi_replica_sources =
-                        ENABLE_MULTI_REPLICA_SOURCES.get(scx.catalog.system_vars().dyncfgs());
-                    !enable_multi_replica_sources
-                }
-            },
-            _ => false,
-        };
-        single_replica_source || matches!(item.item_type(), CatalogItemType::Sink)
-    })
+    // If this feature is enabled then all objects support multiple-replicas
+    if ENABLE_MULTI_REPLICA_SOURCES.get(scx.catalog.system_vars().dyncfgs()) {
+        false
+    } else {
+        // Othewise we check for the existence of sources or sinks
+        cluster.bound_objects().iter().any(|id| {
+            let item = scx.catalog.get_item(id);
+            matches!(
+                item.item_type(),
+                CatalogItemType::Sink | CatalogItemType::Source
+            )
+        })
+    }
 }
 
 fn plan_drop_cluster_replica(
@@ -5870,7 +5863,7 @@ pub fn plan_alter_cluster(
         Some(entry) => entry,
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_ast_string(),
+                name: name.to_ast_string_simple(),
                 object_type: ObjectType::Cluster,
             });
 
@@ -6176,7 +6169,7 @@ pub fn plan_alter_item_set_cluster(
         }
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_ast_string(),
+                name: name.to_ast_string_simple(),
                 object_type,
             });
 
@@ -6238,7 +6231,7 @@ pub fn plan_alter_schema_rename(
     let Some((db_spec, schema_spec)) = resolve_schema(scx, name.clone(), if_exists)? else {
         let object_type = ObjectType::Schema;
         scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-            name: name.to_ast_string(),
+            name: name.to_ast_string_simple(),
             object_type,
         });
         return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
@@ -6369,7 +6362,7 @@ pub fn plan_alter_item_rename(
         }
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_ast_string(),
+                name: name.to_ast_string_simple(),
                 object_type,
             });
 
@@ -6393,7 +6386,7 @@ pub fn plan_alter_cluster_rename(
         })),
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_ast_string(),
+                name: name.to_ast_string_simple(),
                 object_type,
             });
 
@@ -6460,7 +6453,7 @@ pub fn plan_alter_cluster_replica_rename(
         }
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_ast_string(),
+                name: name.to_ast_string_simple(),
                 object_type,
             });
 
@@ -6605,7 +6598,7 @@ fn alter_retain_history(
         }
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_ast_string(),
+                name: name.to_ast_string_simple(),
                 object_type,
             });
 
@@ -6696,7 +6689,10 @@ pub fn plan_alter_connection(
         if !with_options.is_empty() {
             sql_bail!(
                 "ALTER CONNECTION...ROTATE KEYS does not support WITH ({})",
-                with_options.iter().map(|o| o.to_ast_string()).join(", ")
+                with_options
+                    .iter()
+                    .map(|o| o.to_ast_string_simple())
+                    .join(", ")
             );
         }
 
@@ -6970,7 +6966,7 @@ pub fn plan_alter_source(
             // planned directly.
             sql_bail!(
                 "Cannot modify the {} of a SOURCE.",
-                option.name.to_ast_string()
+                option.name.to_ast_string_simple()
             );
         }
         AlterSourceAction::ResetOptions(reset) => {
@@ -6988,7 +6984,10 @@ pub fn plan_alter_source(
                     None,
                 );
             }
-            sql_bail!("Cannot modify the {} of a SOURCE.", option.to_ast_string());
+            sql_bail!(
+                "Cannot modify the {} of a SOURCE.",
+                option.to_ast_string_simple()
+            );
         }
         AlterSourceAction::DropSubsources { .. } => {
             sql_bail!("ALTER SOURCE...DROP SUBSOURCE no longer supported; use DROP SOURCE")
@@ -7111,7 +7110,7 @@ pub fn plan_alter_table_add_column(
             }
             None => {
                 scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                    name: name.to_ast_string(),
+                    name: name.to_ast_string_simple(),
                     object_type,
                 });
                 return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));

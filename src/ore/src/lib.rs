@@ -65,6 +65,7 @@ pub mod netio;
 pub mod now;
 pub mod num;
 pub mod option;
+pub mod overflowing;
 #[cfg(not(target_family = "wasm"))]
 pub mod panic;
 pub mod path;
@@ -99,6 +100,8 @@ pub mod url;
 pub mod vec;
 
 pub use mz_ore_proc::{instrument, static_list, test};
+
+pub use overflowing::Overflowing;
 
 #[doc(hidden)]
 pub mod __private {

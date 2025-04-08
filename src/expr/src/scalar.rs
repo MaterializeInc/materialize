@@ -1229,17 +1229,32 @@ impl MirScalarExpr {
                                 .map_or("", |expr| expr.as_literal_str().unwrap());
                             let (limit, flags) = regexp_replace_parse_flags(flags);
 
-                            // Defer errors until evaluation instead of eagerly returning them here
-                            // to match the error behavior of the dynamic function (part of database-issues#4972).
-                            let regex = match func::build_regex(pattern, &flags) {
-                                Ok(regex) => Ok((regex, limit)),
-                                Err(err) => Err(err),
+                            // The behavior of `regexp_replace` is that if the data is `NULL`, the
+                            // function returns `NULL`, independently of whether the pattern or
+                            // flags are correct. We need to check for this case and introduce an
+                            // if-then-else on the error path to only surface the error if the first
+                            // input is non-NULL.
+                            *e = match func::build_regex(pattern, &flags) {
+                                Ok(regex) => {
+                                    let mut exprs = mem::take(exprs);
+                                    let replacement = exprs.swap_remove(2);
+                                    let source = exprs.swap_remove(0);
+                                    source.call_binary(
+                                        replacement,
+                                        BinaryFunc::RegexpReplace { regex, limit },
+                                    )
+                                }
+                                Err(err) => {
+                                    let mut exprs = mem::take(exprs);
+                                    let source = exprs.swap_remove(0);
+                                    let scalar_type = e.typ(column_types).scalar_type;
+                                    // We need to return `NULL` on `NULL` input, and error otherwise.
+                                    source.call_is_null().if_then_else(
+                                        MirScalarExpr::literal_null(scalar_type.clone()),
+                                        MirScalarExpr::literal(Err(err), scalar_type),
+                                    )
+                                }
                             };
-                            let mut exprs = mem::take(exprs);
-                            let replacement = exprs.swap_remove(2);
-                            let source = exprs.swap_remove(0);
-                            *e = source
-                                .call_binary(replacement, BinaryFunc::RegexpReplace { regex });
                         } else if *func == VariadicFunc::RegexpSplitToArray
                             && exprs[1].is_literal()
                             && exprs.get(2).map_or(true, |e| e.is_literal())

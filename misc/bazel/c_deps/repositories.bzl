@@ -81,11 +81,11 @@ def c_repositories():
         ],
     )
 
-    PROTOC_VERSION = "26.1"
-    PROTOC_INTEGRITY = "sha256-T8X/Gywzn7hs06JfC1MRR4qwgeZa0ljGeJNZzYTUIfg="
+    PROTOC_VERSION = "27.0"
+    PROTOC_INTEGRITY = "sha256-2iiL8dqmwE0DqQUXgcqlKs65FjWGv/mqbPsS9puTlao="
     maybe(
         http_archive,
-        name = "protobuf",
+        name = "com_google_protobuf",
         integrity = PROTOC_INTEGRITY,
         strip_prefix = "protobuf-{}".format(PROTOC_VERSION),
         urls = [

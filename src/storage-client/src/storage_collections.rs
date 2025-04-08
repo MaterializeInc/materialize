@@ -39,7 +39,7 @@ use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::txn::TxnsCodec;
 use mz_persist_types::Codec64;
-use mz_repr::{Diff, GlobalId, RelationDesc, RelationVersion, Row, TimestampManipulation};
+use mz_repr::{GlobalId, RelationDesc, RelationVersion, Row, TimestampManipulation};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::connections::ConnectionContext;
@@ -53,6 +53,7 @@ use mz_storage_types::sources::{
     SourceExport, SourceExportDataConfig, Timeline,
 };
 use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
+use mz_storage_types::StorageDiff;
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use mz_txn_wal::txn_read::{DataSnapshot, TxnsRead};
 use mz_txn_wal::txns::TxnsHandle;
@@ -173,7 +174,7 @@ pub trait StorageCollections: Debug {
         &self,
         id: GlobalId,
         as_of: Self::Timestamp,
-    ) -> BoxFuture<'static, Result<Vec<(Row, Diff)>, StorageError<Self::Timestamp>>>;
+    ) -> BoxFuture<'static, Result<Vec<(Row, StorageDiff)>, StorageError<Self::Timestamp>>>;
 
     /// Returns a snapshot of the contents of collection `id` at the largest
     /// readable `as_of`.
@@ -202,7 +203,7 @@ pub trait StorageCollections: Debug {
     ) -> BoxFuture<
         'static,
         Result<
-            BoxStream<'static, (SourceData, Self::Timestamp, Diff)>,
+            BoxStream<'static, (SourceData, Self::Timestamp, StorageDiff)>,
             StorageError<Self::Timestamp>,
         >,
     >;
@@ -215,7 +216,7 @@ pub trait StorageCollections: Debug {
     ) -> BoxFuture<
         'static,
         Result<
-            TimestamplessUpdateBuilder<SourceData, (), Self::Timestamp, Diff>,
+            TimestamplessUpdateBuilder<SourceData, (), Self::Timestamp, StorageDiff>,
             StorageError<Self::Timestamp>,
         >,
     >
@@ -357,15 +358,22 @@ pub trait StorageCollections: Debug {
 pub struct SnapshotCursor<T: Codec64 + TimelyTimestamp + Lattice> {
     // We allocate a temporary read handle for each snapshot, and that handle needs to live at
     // least as long as the cursor itself, which holds part leases. Bundling them together!
-    pub _read_handle: ReadHandle<SourceData, (), T, Diff>,
-    pub cursor: Cursor<SourceData, (), T, Diff>,
+    pub _read_handle: ReadHandle<SourceData, (), T, StorageDiff>,
+    pub cursor: Cursor<SourceData, (), T, StorageDiff>,
 }
 
 impl<T: Codec64 + TimelyTimestamp + Lattice + Sync> SnapshotCursor<T> {
     pub async fn next(
         &mut self,
     ) -> Option<
-        impl Iterator<Item = ((Result<SourceData, String>, Result<(), String>), T, Diff)> + Sized + '_,
+        impl Iterator<
+                Item = (
+                    (Result<SourceData, String>, Result<(), String>),
+                    T,
+                    StorageDiff,
+                ),
+            > + Sized
+            + '_,
     > {
         self.cursor.next().await
     }
@@ -509,7 +517,7 @@ where
 
         // We have to initialize, so that TxnsRead::start() below does not
         // block.
-        let _txns_handle: TxnsHandle<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow> =
+        let _txns_handle: TxnsHandle<SourceData, (), T, StorageDiff, PersistEpoch, TxnsCodecRow> =
             TxnsHandle::open(
                 T::minimum(),
                 txns_client.clone(),
@@ -614,7 +622,10 @@ where
         since: Option<&Antichain<T>>,
         relation_desc: RelationDesc,
         persist_client: &PersistClient,
-    ) -> (WriteHandle<SourceData, (), T, Diff>, SinceHandleWrapper<T>) {
+    ) -> (
+        WriteHandle<SourceData, (), T, StorageDiff>,
+        SinceHandleWrapper<T>,
+    ) {
         let since_handle = if self.read_only {
             let read_handle = self
                 .open_leased_handle(id, shard, relation_desc.clone(), since, persist_client)
@@ -654,7 +665,7 @@ where
         shard: ShardId,
         relation_desc: RelationDesc,
         persist_client: &PersistClient,
-    ) -> WriteHandle<SourceData, (), T, Diff> {
+    ) -> WriteHandle<SourceData, (), T, StorageDiff> {
         let diagnostics = Diagnostics {
             shard_name: id.to_string(),
             handle_purpose: format!("controller data for {}", id),
@@ -686,7 +697,7 @@ where
         shard: ShardId,
         since: Option<&Antichain<T>>,
         persist_client: &PersistClient,
-    ) -> SinceHandle<SourceData, (), T, Diff, PersistEpoch> {
+    ) -> SinceHandle<SourceData, (), T, StorageDiff, PersistEpoch> {
         tracing::debug!(%id, ?since, "opening critical handle");
 
         assert!(
@@ -762,7 +773,7 @@ where
         relation_desc: RelationDesc,
         since: Option<&Antichain<T>>,
         persist_client: &PersistClient,
-    ) -> ReadHandle<SourceData, (), T, Diff> {
+    ) -> ReadHandle<SourceData, (), T, StorageDiff> {
         tracing::debug!(%id, ?since, "opening leased handle");
 
         let diagnostics = Diagnostics {
@@ -799,7 +810,7 @@ where
         id: GlobalId,
         is_in_txns: bool,
         since_handle: SinceHandleWrapper<T>,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
+        write_handle: WriteHandle<SourceData, (), T, StorageDiff>,
     ) {
         self.send(BackgroundCmd::Register {
             id,
@@ -1000,7 +1011,7 @@ where
         // NB: Opening a WriteHandle is cheap if it's never used in a
         // compare_and_append operation.
         let write = persist_client
-            .open_writer::<SourceData, (), T, Diff>(
+            .open_writer::<SourceData, (), T, StorageDiff>(
                 metadata.data_shard,
                 Arc::new(metadata.relation_desc.clone()),
                 Arc::new(UnitSchema),
@@ -1015,7 +1026,7 @@ where
         persist: Arc<PersistClientCache>,
         metadata: &CollectionMetadata,
         id: GlobalId,
-    ) -> Result<ReadHandle<SourceData, (), T, Diff>, StorageError<T>> {
+    ) -> Result<ReadHandle<SourceData, (), T, StorageDiff>, StorageError<T>> {
         let persist_client = persist
             .open(metadata.persist_location.clone())
             .await
@@ -1052,7 +1063,7 @@ where
         id: GlobalId,
         as_of: T,
         txns_read: &TxnsRead<T>,
-    ) -> BoxFuture<'static, Result<Vec<(Row, Diff)>, StorageError<T>>>
+    ) -> BoxFuture<'static, Result<Vec<(Row, StorageDiff)>, StorageError<T>>>
     where
         T: Codec64 + From<EpochMillis> + TimestampManipulation,
     {
@@ -1117,7 +1128,7 @@ where
         id: GlobalId,
         as_of: T,
         txns_read: &TxnsRead<T>,
-    ) -> BoxFuture<'static, Result<BoxStream<'static, (SourceData, T, Diff)>, StorageError<T>>>
+    ) -> BoxFuture<'static, Result<BoxStream<'static, (SourceData, T, StorageDiff)>, StorageError<T>>>
     {
         use futures::stream::StreamExt;
 
@@ -1555,7 +1566,7 @@ where
         &self,
         id: GlobalId,
         as_of: Self::Timestamp,
-    ) -> BoxFuture<'static, Result<Vec<(Row, Diff)>, StorageError<Self::Timestamp>>> {
+    ) -> BoxFuture<'static, Result<Vec<(Row, StorageDiff)>, StorageError<Self::Timestamp>>> {
         self.snapshot(id, as_of, &self.txns_read)
     }
 
@@ -1648,7 +1659,7 @@ where
     ) -> BoxFuture<
         'static,
         Result<
-            BoxStream<'static, (SourceData, Self::Timestamp, Diff)>,
+            BoxStream<'static, (SourceData, Self::Timestamp, StorageDiff)>,
             StorageError<Self::Timestamp>,
         >,
     >
@@ -1664,7 +1675,7 @@ where
     ) -> BoxFuture<
         'static,
         Result<
-            TimestamplessUpdateBuilder<SourceData, (), Self::Timestamp, Diff>,
+            TimestamplessUpdateBuilder<SourceData, (), Self::Timestamp, StorageDiff>,
             StorageError<Self::Timestamp>,
         >,
     > {
@@ -1680,7 +1691,7 @@ where
                 .await
                 .expect("invalid persist usage");
             let write_handle = persist_client
-                .open_writer::<SourceData, (), Self::Timestamp, Diff>(
+                .open_writer::<SourceData, (), Self::Timestamp, StorageDiff>(
                     metadata.data_shard,
                     Arc::new(metadata.relation_desc.clone()),
                     Arc::new(UnitSchema),
@@ -2267,7 +2278,7 @@ where
         // We map the Adapter's RelationVersion 1:1 with SchemaId.
         let expected_schema = expected_version.into();
         let schema_result = persist_client
-            .compare_and_evolve_schema::<SourceData, (), T, Diff>(
+            .compare_and_evolve_schema::<SourceData, (), T, StorageDiff>(
                 data_shard,
                 expected_schema,
                 &new_desc,
@@ -2616,8 +2627,8 @@ enum SinceHandleWrapper<T>
 where
     T: TimelyTimestamp + Lattice + Codec64,
 {
-    Critical(SinceHandle<SourceData, (), T, Diff, PersistEpoch>),
-    Leased(ReadHandle<SourceData, (), T, Diff>),
+    Critical(SinceHandle<SourceData, (), T, StorageDiff, PersistEpoch>),
+    Leased(ReadHandle<SourceData, (), T, StorageDiff>),
 }
 
 impl<T> SinceHandleWrapper<T>
@@ -2803,7 +2814,7 @@ struct BackgroundTask<T: TimelyTimestamp + Lattice + Codec64> {
     // when re-enqueing futures for determining the next upper update.
     shard_by_id: BTreeMap<GlobalId, ShardId>,
     since_handles: BTreeMap<GlobalId, SinceHandleWrapper<T>>,
-    txns_handle: Option<WriteHandle<SourceData, (), T, Diff>>,
+    txns_handle: Option<WriteHandle<SourceData, (), T, StorageDiff>>,
     txns_shards: BTreeSet<GlobalId>,
 }
 
@@ -2812,7 +2823,7 @@ enum BackgroundCmd<T: TimelyTimestamp + Lattice + Codec64> {
     Register {
         id: GlobalId,
         is_in_txns: bool,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
+        write_handle: WriteHandle<SourceData, (), T, StorageDiff>,
         since_handle: SinceHandleWrapper<T>,
     },
     DowngradeSince(Vec<(GlobalId, Antichain<T>)>),
@@ -2848,7 +2859,11 @@ where
             std::pin::Pin<
                 Box<
                     dyn Future<
-                            Output = (GlobalId, WriteHandle<SourceData, (), T, i64>, Antichain<T>),
+                            Output = (
+                                GlobalId,
+                                WriteHandle<SourceData, (), T, StorageDiff>,
+                                Antichain<T>,
+                            ),
                         > + Send,
                 >,
             >,
@@ -3220,7 +3235,7 @@ async fn finalize_shards_task<T>(
                 metrics.finalization_started.inc();
 
                 let is_finalized = persist_client
-                    .is_finalized::<SourceData, (), T, Diff>(shard_id, diagnostics)
+                    .is_finalized::<SourceData, (), T, StorageDiff>(shard_id, diagnostics)
                     .await
                     .expect("invalid persist usage");
 
@@ -3233,14 +3248,14 @@ async fn finalize_shards_task<T>(
                         // TODO: thread the global ID into the shard finalization WAL
                         let diagnostics = Diagnostics::from_purpose("finalizing shards");
 
-                        let schemas = persist_client.latest_schema::<SourceData, (), T, Diff>(shard_id, diagnostics.clone()).await.expect("codecs have not changed");
+                        let schemas = persist_client.latest_schema::<SourceData, (), T, StorageDiff>(shard_id, diagnostics.clone()).await.expect("codecs have not changed");
                         let (key_schema, val_schema) = match schemas {
                             Some((_, key_schema, val_schema)) => (key_schema, val_schema),
                             None => (RelationDesc::empty(), UnitSchema),
                         };
 
-                        let empty_batch: Vec<((SourceData, ()), T, Diff)> = vec![];
-                        let mut write_handle: WriteHandle<SourceData, (), T, Diff> =
+                        let empty_batch: Vec<((SourceData, ()), T, StorageDiff)> = vec![];
+                        let mut write_handle: WriteHandle<SourceData, (), T, StorageDiff> =
                             persist_client
                                 .open_writer(
                                     shard_id,
@@ -3270,7 +3285,7 @@ async fn finalize_shards_task<T>(
                                 SourceData,
                                 (),
                                 T,
-                                Diff,
+                                StorageDiff,
                                 PersistEpoch,
                             > = persist_client
                                 .open_critical_since(
@@ -3308,7 +3323,7 @@ async fn finalize_shards_task<T>(
                         }
 
                         persist_client
-                            .finalize_shard::<SourceData, (), T, Diff>(
+                            .finalize_shard::<SourceData, (), T, StorageDiff>(
                                 shard_id,
                                 Diagnostics::from_purpose("finalizing shards"),
                             )
@@ -3428,7 +3443,7 @@ mod tests {
             .await
             .unwrap();
         let write_handle = persist
-            .open_writer::<SourceData, (), mz_repr::Timestamp, i64>(
+            .open_writer::<SourceData, (), mz_repr::Timestamp, StorageDiff>(
                 shard_id,
                 Arc::new(RelationDesc::empty()),
                 Arc::new(UnitSchema),
@@ -3447,7 +3462,7 @@ mod tests {
             .unwrap();
 
         let mut write_handle = persist
-            .open_writer::<SourceData, (), mz_repr::Timestamp, i64>(
+            .open_writer::<SourceData, (), mz_repr::Timestamp, StorageDiff>(
                 shard_id,
                 Arc::new(RelationDesc::empty()),
                 Arc::new(UnitSchema),

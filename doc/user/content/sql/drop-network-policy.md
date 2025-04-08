@@ -6,8 +6,6 @@ menu:
     parent: commands
 ---
 
-{{< private-preview />}}
-
 `DROP NETWORK POLICY` removes an existing network policy from Materialize.
 Network policies are part of Materialize's framework for [access control](/manage/access-control/).
 

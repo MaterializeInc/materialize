@@ -1286,14 +1286,14 @@ SELECT name FROM mz_columns WHERE name = 'foobar';
 query TTTT
 SHOW COLUMNS IN mz_columns
 ----
-id  false  text  (empty)
-name  false  text  (empty)
-position  false  uint8  (empty)
-nullable  false  boolean  (empty)
-type  false  text  (empty)
-default  true  text  (empty)
-type_oid  false  oid  (empty)
-type_mod  false  integer  (empty)
+id       false  text    The␠unique␠ID␠of␠the␠table,␠source,␠or␠view␠containing␠the␠column.
+name     false  text    The␠name␠of␠the␠column.
+position false  uint8   The␠1-indexed␠position␠of␠the␠column␠in␠its␠containing␠table,␠source,␠or␠view.
+nullable false  boolean Can␠the␠column␠contain␠a␠`NULL`␠value?
+type     false  text    The␠data␠type␠of␠the␠column.
+default  true   text    The␠default␠expression␠of␠the␠column.
+type_oid false  oid     The␠OID␠of␠the␠type␠of␠the␠column␠(references␠`mz_types`).
+type_mod false  integer The␠packed␠type␠identifier␠of␠the␠column.
 
 statement ok
 COMMIT;

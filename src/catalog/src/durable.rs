@@ -399,7 +399,8 @@ impl AuditLogIterator {
             .into_iter()
             .map(|(kind, ts, diff)| {
                 assert_eq!(
-                    diff, 1,
+                    diff,
+                    Diff::ONE,
                     "audit log is append only: ({kind:?}, {ts:?}, {diff:?})"
                 );
                 assert!(

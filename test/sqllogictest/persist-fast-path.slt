@@ -9,19 +9,6 @@
 
 mode cockroach
 
-# To make ordering deterministic for fast-path peeks, enable the
-# structured part format and set Persist to use that ordering.
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET persist_batch_columnar_format = 'both_v2'
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET persist_batch_structured_order = true
-----
-COMPLETE 0
-
 # Verify that the persist fast path only kicks in when it's expected to do so.
 
 # Generate a table, with multiple batches of data and some partial overlaps
@@ -150,11 +137,24 @@ Target cluster: quickstart
 
 EOF
 
+# ORDER BY is only okay when the ordering matches the shard ordering exactly
+
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * from numbers ORDER BY value LIMIT 10;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * from numbers ORDER BY value ASC LIMIT 10;
+----
+Explained Query (fast path):
+  Finish order_by=[#0 asc nulls_last] limit=10 output=[#0]
+    PeekPersist materialize.public.numbers
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * from numbers ORDER BY value DESC LIMIT 10;
 ----
 Explained Query:
-  Finish order_by=[#0{value} asc nulls_last] limit=10 output=[#0]
+  Finish order_by=[#0{value} desc nulls_first] limit=10 output=[#0]
     ReadStorage materialize.public.numbers
 
 Source materialize.public.numbers
@@ -162,6 +162,37 @@ Source materialize.public.numbers
 Target cluster: quickstart
 
 EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT value % 2 from numbers ORDER BY value % 2 LIMIT 10;
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last] limit=10 output=[#0]
+    Project (#1)
+      Map ((#0{value} % 2))
+        ReadStorage materialize.public.numbers
+
+Source materialize.public.numbers
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * from numbers ORDER BY value NULLS FIRST LIMIT 10;
+----
+Explained Query:
+  Finish order_by=[#0{value} asc nulls_first] limit=10 output=[#0]
+    ReadStorage materialize.public.numbers
+
+Source materialize.public.numbers
+
+Target cluster: quickstart
+
+EOF
+
+# Arbitrary filters can't be pushed down... we may need to scan
+# an arbitrary number of records to find one that matches.
 
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * from numbers WHERE value > mz_now() LIMIT 10;

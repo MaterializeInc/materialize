@@ -96,10 +96,9 @@ impl<T> Interpreter<T> for SingleTimeMonotonic<'_, T> {
     ) -> Self::Domain {
         // A constant is physically monotonic iff the constant is an `EvalError`
         // or all its rows have `Diff` values greater than zero.
-        PhysicallyMonotonic(
-            rows.as_ref()
-                .map_or(true, |rows| rows.iter().all(|(_, _, diff)| *diff > 0)),
-        )
+        PhysicallyMonotonic(rows.as_ref().map_or(true, |rows| {
+            rows.iter().all(|(_, _, diff)| *diff > Diff::ZERO)
+        }))
     }
 
     fn get(

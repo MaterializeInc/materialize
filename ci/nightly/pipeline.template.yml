@@ -1219,7 +1219,6 @@ steps:
             composition: terraform
             run: azure-temporary
       branches: "main v*.* lts-v* *azure* *tf* *terraform* *helm* *self-managed*"
-      skip: "Keeps failing because of internal errors at Azure"
 
   - group: "Output consistency"
     key: output-consistency
@@ -1860,6 +1859,65 @@ steps:
           args: ["--azurite"]
     agents:
       queue: hetzner-aarch64-8cpu-16gb
+
+  - group: "Race Condition"
+    key: race-condition
+    steps:
+       - id: race-condition-subsequent
+         label: "Race Condition Test (subsequent)"
+         depends_on: build-aarch64
+         timeout_in_minutes: 360
+         agents:
+           queue: hetzner-aarch64-16cpu-32gb
+         plugins:
+           - ./ci/plugins/mzcompose:
+               composition: race-condition
+               args: [--runtime=10800, --scenario=subsequent]
+
+       - id: race-condition-subsequent-100
+         label: "Race Condition Test (subsequent, 100 objects)"
+         depends_on: build-aarch64
+         timeout_in_minutes: 360
+         agents:
+           queue: hetzner-aarch64-16cpu-32gb
+         plugins:
+           - ./ci/plugins/mzcompose:
+               composition: race-condition
+               args: [--runtime=10800, --scenario=subsequent, --num-objects=100]
+
+       - id: race-condition-subsequent-chain
+         label: "Race Condition Test (subsequent chain)"
+         depends_on: build-aarch64
+         timeout_in_minutes: 360
+         agents:
+           queue: hetzner-aarch64-16cpu-32gb
+         plugins:
+           - ./ci/plugins/mzcompose:
+               composition: race-condition
+               args: [--runtime=10800, --scenario=subsequent-chain]
+
+       - id: race-condition-subsequent-chain-100
+         label: "Race Condition Test (subsequent chain, 100 objects)"
+         depends_on: build-aarch64
+         timeout_in_minutes: 360
+         agents:
+           queue: hetzner-aarch64-16cpu-32gb
+         plugins:
+           - ./ci/plugins/mzcompose:
+               composition: race-condition
+               args: [--runtime=10800, --scenario=subsequent-chain, --num-objects=100]
+
+       - id: race-condition-concurrent
+         label: "Race Condition Test (concurrent)"
+         depends_on: build-aarch64
+         timeout_in_minutes: 360
+         agents:
+           queue: hetzner-aarch64-16cpu-32gb
+         plugins:
+           - ./ci/plugins/mzcompose:
+               composition: race-condition
+               args: [--runtime=10800, --scenario=concurrent]
+         skip: "Not stable yet, not clear if this is a product issue"
 
   - group: "Language tests"
     key: language-tests

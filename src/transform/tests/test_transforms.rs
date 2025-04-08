@@ -260,7 +260,7 @@ fn apply_transform<T: mz_transform::Transform>(
     let mut features = mz_repr::optimize::OptimizerFeatures::default();
     // Apply a non-default feature flag to test the right implementation.
     features.enable_letrec_fixpoint_analysis = true;
-    features.enable_let_prefix_extraction = true;
+    features.enable_dequadratic_eqprop_map = true;
     let typecheck_ctx = mz_transform::typecheck::empty_context();
     let mut df_meta = DataflowMetainfo::default();
     let mut transform_ctx =

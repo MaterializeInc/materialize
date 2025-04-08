@@ -7,8 +7,6 @@ menu:
     weight: 17
 ---
 
-{{< private-preview />}}
-
 {{< tip >}}
 We recommend using [Terraform](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs/resources/network_policy)
 to configure and manage network policies.

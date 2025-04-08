@@ -234,13 +234,13 @@ pub(super) fn map_column_refs<'a>(
                 .insert(name.0[2].as_str());
             if !new {
                 return Err(PlanError::InvalidOptionValue {
-                    option_name: option_type.to_ast_string(),
+                    option_name: option_type.to_ast_string_simple(),
                     err: Box::new(PlanError::UnexpectedDuplicateReference { name: name.clone() }),
                 });
             }
         } else {
             return Err(PlanError::InvalidOptionValue {
-                option_name: option_type.to_ast_string(),
+                option_name: option_type.to_ast_string_simple(),
                 err: Box::new(PlanError::UnderqualifiedColumnName(name.to_string())),
             });
         }
@@ -379,7 +379,10 @@ pub(super) async fn purify_source_exports(
     if requested_exports.is_empty() {
         sql_bail!(
             "MySQL source must ingest at least one table, but {} matched none",
-            requested_references.as_ref().unwrap().to_ast_string()
+            requested_references
+                .as_ref()
+                .unwrap()
+                .to_ast_string_simple()
         );
     }
 

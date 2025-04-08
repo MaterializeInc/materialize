@@ -1,26 +1,29 @@
 [workspace]
 members = [
+    "misc/bazel/cargo-gazelle",
     "src/adapter",
     "src/adapter-types",
     "src/alloc",
     "src/alloc-default",
     "src/arrow-util",
     "src/audit-log",
+    "src/auth",
     "src/avro",
-    "src/aws-util",
     "src/aws-secrets-controller",
+    "src/aws-util",
     "src/balancerd",
     "src/build-info",
     "src/build-tools",
-    "src/ccsr",
     "src/catalog",
     "src/catalog-debug",
     "src/catalog-protos",
+    "src/ccsr",
     "src/cloud-api",
     "src/cloud-provider",
+    "src/cloud-resources",
     "src/cluster",
-    "src/clusterd",
     "src/cluster-client",
+    "src/clusterd",
     "src/compute",
     "src/compute-client",
     "src/compute-types",
@@ -32,6 +35,8 @@ members = [
     "src/dyncfgs",
     "src/environmentd",
     "src/expr",
+    "src/expr-derive",
+    "src/expr-derive-impl",
     "src/expr-parser",
     "src/expr-test-util",
     "src/fivetran-destination",
@@ -44,13 +49,14 @@ members = [
     "src/license-keys",
     "src/lowertest",
     "src/lowertest-derive",
-    "src/materialized",
-    "src/metabase",
-    "src/mysql-util",
-    "src/mz",
     "src/lsp-server",
     "src/materialized",
+    "src/materialized",
+    "src/metabase",
     "src/metrics",
+    "src/mysql-util",
+    "src/mz",
+    "src/mz-debug",
     "src/npm",
     "src/orchestrator",
     "src/orchestrator-kubernetes",
@@ -64,7 +70,6 @@ members = [
     "src/persist-cli",
     "src/persist-client",
     "src/persist-proc",
-    "src/txn-wal",
     "src/persist-types",
     "src/pgcopy",
     "src/pgrepr",
@@ -78,6 +83,7 @@ members = [
     "src/prof",
     "src/prof-http",
     "src/proto",
+    "src/regexp",
     "src/repr",
     "src/repr-test-util",
     "src/rocksdb",
@@ -85,16 +91,15 @@ members = [
     "src/s3-datagen",
     "src/secrets",
     "src/segment",
-    "src/self-managed-debug",
     "src/server-core",
     "src/service",
-    "src/ssh-util",
     "src/sql",
     "src/sql-lexer",
     "src/sql-parser",
     "src/sql-pretty",
     "src/sql-server-util",
     "src/sqllogictest",
+    "src/ssh-util",
     "src/storage",
     "src/storage-client",
     "src/storage-controller",
@@ -106,14 +111,11 @@ members = [
     "src/tls-util",
     "src/tracing",
     "src/transform",
-    "src/cloud-resources",
+    "src/txn-wal",
     "src/walkabout",
     "src/workspace-hack",
     "test/metabase/smoketest",
     "test/test-util",
-    "src/regexp",
-    "misc/bazel/cargo-gazelle",
-    "src/auth",
 ]
 
 # We make all members of the workspace default members, *except* for a few
@@ -156,6 +158,8 @@ default-members = [
     "src/dyncfgs",
     "src/environmentd",
     "src/expr",
+    "src/expr-derive",
+    "src/expr-derive-impl",
     "src/expr-parser",
     "src/expr-test-util",
     "src/frontegg-auth",
@@ -173,6 +177,7 @@ default-members = [
     "src/metrics",
     "src/mysql-util",
     "src/mz",
+    "src/mz-debug",
     "src/npm",
     "src/orchestrator",
     "src/orchestrator-kubernetes",
@@ -207,7 +212,6 @@ default-members = [
     "src/s3-datagen",
     "src/secrets",
     "src/segment",
-    "src/self-managed-debug",
     "src/server-core",
     "src/service",
     "src/sql",
@@ -240,6 +244,8 @@ exclude = [
     # All WASM crates are split into their own workspace to avoid needles cache
     #  invalidations for the core Mz crates.
     "misc/wasm/*",
+    # Ignore any Rust dependencies that python packages might pull in.
+    "misc/python/venv/*",
 ]
 
 # Use Cargo's new feature resolver, which can handle target-specific features.
@@ -270,6 +276,10 @@ timely = { opt-level = 3 }
 differential-dataflow = { opt-level = 3 }
 mz-compute = { opt-level = 3 }
 mz-transform = { opt-level = 3 }
+
+# Recommended by insta
+insta = { opt-level = 3 }
+similar = { opt-level = 3 }
 
 [profile.release]
 # Compile time seems similar to "lto = false", runtime ~10% faster
@@ -313,11 +323,8 @@ serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
 # upstream.
 tracing-opentelemetry = { git = "https://github.com/MaterializeInc/tracing-opentelemetry.git" }
 
-# Waiting on https://github.com/launchdarkly/rust-server-sdk/pull/20 to make
-# it into a release.
-# Also bumps lru to 0.12.0
-# Needs a more complex update to 2.0.0, with a custom TLS connector.
-launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server-sdk", rev = "87c0f67aa51fa936d3a6a49605e8e3f565d15281" }
+# Waiting for resolution of https://github.com/launchdarkly/rust-server-sdk/issues/116
+launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server-sdk", rev = "23666d095c39adc53a151969c1aa1e1ec484f3e6" }
 
 # Waiting on https://github.com/edenhill/librdkafka/pull/4051.
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
@@ -326,6 +333,11 @@ rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
 # Removes dependencies required for WASM support that create duplicated deps.
 reqwest-middleware = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
 reqwest-retry = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
+
+# Need to upstream a few PRs related to test builders.
+#
+# Note: All changes in our fork of tiberius should be pushed to the `mz_changes` branch.
+tiberius = { git = "https://github.com/MaterializeInc/tiberius", rev = "06423ac498a78ba2a1df8fd595208e6bdf0d5939" }
 
 # BEGIN LINT CONFIG
 # DO NOT EDIT. Automatically generated by bin/gen-lints.

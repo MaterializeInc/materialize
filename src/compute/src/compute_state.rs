@@ -7,6 +7,7 @@
 
 use std::any::Any;
 use std::cell::RefCell;
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 use std::ops::DerefMut;
@@ -35,6 +36,7 @@ use mz_dyncfg::ConfigSet;
 use mz_expr::row::RowCollection;
 use mz_expr::SafeMfpPlan;
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::UIntGauge;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::AbortOnDropHandle;
@@ -48,8 +50,10 @@ use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_operators::stats::StatsCursor;
 use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::dyncfgs::ORE_OVERFLOWING_BEHAVIOR;
 use mz_storage_types::sources::SourceData;
 use mz_storage_types::time_dependence::TimeDependence;
+use mz_storage_types::StorageDiff;
 use mz_txn_wal::operator::TxnsContext;
 use mz_txn_wal::txn_cache::TxnsCache;
 use timely::communication::Allocate;
@@ -307,6 +311,17 @@ impl ComputeState {
         // Remember the maintenance interval locally to avoid reading it from the config set on
         // every server iteration.
         self.server_maintenance_interval = COMPUTE_SERVER_MAINTENANCE_INTERVAL.get(config);
+
+        let overflowing_behavior = ORE_OVERFLOWING_BEHAVIOR.get(config);
+        match overflowing_behavior.parse() {
+            Ok(behavior) => mz_ore::overflowing::set_behavior(behavior),
+            Err(err) => {
+                error!(
+                    err,
+                    overflowing_behavior, "Invalid value for ore_overflowing_behavior"
+                );
+            }
+        }
     }
 
     /// Apply the provided replica expiration `offset` by converting it to a frontier relative to
@@ -1090,6 +1105,12 @@ impl PendingPeek {
             + peek.finishing.offset;
         let order_by = peek.finishing.order_by.clone();
 
+        // Persist peeks can include at most one literal constraint.
+        let literal_constraint = peek
+            .literal_constraints
+            .clone()
+            .map(|rows| rows.into_element());
+
         let task_handle = mz_ore::task::spawn(|| "persist::peek", async move {
             let start = Instant::now();
             let result = if active_worker {
@@ -1097,6 +1118,7 @@ impl PendingPeek {
                     &persist_clients,
                     metadata,
                     timestamp,
+                    literal_constraint,
                     mfp_plan,
                     max_result_size,
                     max_results_needed,
@@ -1165,6 +1187,7 @@ impl PersistPeek {
         persist_clients: &PersistClientCache,
         metadata: CollectionMetadata,
         as_of: Timestamp,
+        literal_constraint: Option<Row>,
         mfp_plan: SafeMfpPlan,
         max_result_size: usize,
         mut limit_remaining: usize,
@@ -1174,7 +1197,7 @@ impl PersistPeek {
             .await
             .map_err(|e| e.to_string())?;
 
-        let mut reader: ReadHandle<SourceData, (), Timestamp, Diff> = client
+        let mut reader: ReadHandle<SourceData, (), Timestamp, StorageDiff> = client
             .open_leased_reader(
                 metadata.data_shard,
                 Arc::new(metadata.relation_desc.clone()),
@@ -1203,6 +1226,7 @@ impl PersistPeek {
             &mut reader,
             txns_read.as_mut(),
             metrics,
+            &mfp_plan,
             &metadata.relation_desc,
             Antichain::from_elem(as_of),
         )
@@ -1218,16 +1242,30 @@ impl PersistPeek {
         let arena = RowArena::new();
         let mut total_size = 0usize;
 
-        while limit_remaining > 0 {
+        let literal_len = match &literal_constraint {
+            None => 0,
+            Some(row) => row.iter().count(),
+        };
+
+        'collect: while limit_remaining > 0 {
             let Some(batch) = cursor.next().await else {
                 break;
             };
             for (data, _, d) in batch {
                 let row = data.map_err(|e| e.to_string())?;
+
+                if let Some(literal) = &literal_constraint {
+                    match row.iter().take(literal_len).cmp(literal.iter()) {
+                        Ordering::Less => continue,
+                        Ordering::Equal => {}
+                        Ordering::Greater => break 'collect,
+                    }
+                }
+
                 let count: usize = d.try_into().map_err(|_| {
                     format!(
                         "Invalid data in source, saw retractions ({}) for row that does not exist: {:?}",
-                        d * -1,
+                        -d,
                         row,
                     )
                 })?;
@@ -1324,20 +1362,20 @@ impl IndexPeek {
         // find first.
         let (mut cursor, storage) = self.trace_bundle.errs_mut().cursor();
         while cursor.key_valid(&storage) {
-            let mut copies = 0;
+            let mut copies = Diff::ZERO;
             cursor.map_times(&storage, |time, diff| {
                 if time.less_equal(&self.peek.timestamp) {
                     copies += diff;
                 }
             });
-            if copies < 0 {
+            if copies.is_negative() {
                 return Err(format!(
                     "Invalid data in source errors, saw retractions ({}) for row that does not exist: {}",
-                    copies * -1,
+                    -copies,
                     cursor.key(&storage),
                 ));
             }
-            if copies > 0 {
+            if copies.is_positive() {
                 return Err(cursor.key(&storage).to_string());
             }
             cursor.step_key(&storage);
@@ -1453,20 +1491,20 @@ impl IndexPeek {
                     .map(|row| row.cloned())
                     .map_err_to_string_with_causes()?
                 {
-                    let mut copies = 0;
+                    let mut copies = Diff::ZERO;
                     cursor.map_times(&storage, |time, diff| {
                         if time.less_equal(&peek.timestamp) {
                             copies += diff;
                         }
                     });
-                    let copies: usize = if copies < 0 {
+                    let copies: usize = if copies.is_negative() {
                         return Err(format!(
                             "Invalid data in source, saw retractions ({}) for row that does not exist: {:?}",
-                            copies * -1,
+                            -copies,
                             &*borrow,
                         ));
                     } else {
-                        copies.try_into().unwrap()
+                        copies.into_inner().try_into().unwrap()
                     };
                     // if copies > 0 ... otherwise skip
                     if let Some(copies) = NonZeroUsize::new(copies) {

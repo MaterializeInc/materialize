@@ -90,19 +90,21 @@ use mz_storage_client::client::{AppendOnlyUpdate, Status, TimestamplessUpdate};
 use mz_storage_client::controller::{IntrospectionType, MonotonicAppender, StorageWriteOp};
 use mz_storage_client::healthcheck::{
     MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC, REPLICA_METRICS_HISTORY_DESC,
-    WALLCLOCK_LAG_HISTORY_DESC,
+    WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RAW_DESC, WALLCLOCK_LAG_HISTORY_DESC,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_client::statistics::{SinkStatisticsUpdate, SourceStatisticsUpdate};
 use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::controller::InvalidUpper;
 use mz_storage_types::dyncfgs::{
-    REPLICA_METRICS_HISTORY_RETENTION_INTERVAL, WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL,
+    REPLICA_METRICS_HISTORY_RETENTION_INTERVAL, WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL,
+    WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL,
 };
 use mz_storage_types::parameters::{
     StorageParameters, STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT,
 };
 use mz_storage_types::sources::SourceData;
+use mz_storage_types::StorageDiff;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{Duration, Instant};
@@ -222,13 +224,14 @@ where
     pub(super) fn register_differential_collection<R>(
         &self,
         id: GlobalId,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
+        write_handle: WriteHandle<SourceData, (), T, StorageDiff>,
         read_handle_fn: R,
         force_writable: bool,
         introspection_config: DifferentialIntrospectionConfig<T>,
     ) where
-        R: FnMut() -> Pin<Box<dyn Future<Output = ReadHandle<SourceData, (), T, Diff>> + Send>>
-            + Send
+        R: FnMut() -> Pin<
+                Box<dyn Future<Output = ReadHandle<SourceData, (), T, StorageDiff>> + Send>,
+            > + Send
             + Sync
             + 'static,
     {
@@ -276,7 +279,7 @@ where
     pub(super) fn register_append_only_collection(
         &self,
         id: GlobalId,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
+        write_handle: WriteHandle<SourceData, (), T, StorageDiff>,
         force_writable: bool,
         introspection_config: Option<AppendOnlyIntrospectionConfig<T>>,
     ) {
@@ -471,14 +474,14 @@ where
 struct DifferentialWriteTask<T, R>
 where
     T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
-    R: FnMut() -> Pin<Box<dyn Future<Output = ReadHandle<SourceData, (), T, Diff>> + Send>>
+    R: FnMut() -> Pin<Box<dyn Future<Output = ReadHandle<SourceData, (), T, StorageDiff>> + Send>>
         + Send
         + 'static,
 {
     /// The collection that we are writing to.
     id: GlobalId,
 
-    write_handle: WriteHandle<SourceData, (), T, Diff>,
+    write_handle: WriteHandle<SourceData, (), T, StorageDiff>,
 
     /// For getting a [`ReadHandle`] to sync our state to persist contents.
     read_handle_fn: R,
@@ -509,11 +512,11 @@ where
     // We can optimize for a multi-writer case by keeping an open
     // ReadHandle and continually reading updates from persist, updating
     // a desired in place. Similar to the self-correcting persist_sink.
-    desired: Vec<(Row, i64)>,
+    desired: Vec<(Row, Diff)>,
 
     /// Updates that we have to write when next writing to persist. This is
     /// determined by looking at what is desired and what is in persist.
-    to_write: Vec<(Row, i64)>,
+    to_write: Vec<(Row, Diff)>,
 
     /// Current upper of the persist shard. We keep track of this so that we
     /// realize when someone else writes to the shard, in which case we have to
@@ -525,7 +528,7 @@ where
 impl<T, R> DifferentialWriteTask<T, R>
 where
     T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
-    R: FnMut() -> Pin<Box<dyn Future<Output = ReadHandle<SourceData, (), T, Diff>> + Send>>
+    R: FnMut() -> Pin<Box<dyn Future<Output = ReadHandle<SourceData, (), T, StorageDiff>> + Send>>
         + Send
         + Sync
         + 'static,
@@ -534,7 +537,7 @@ where
     /// handles for interacting with it.
     fn spawn(
         id: GlobalId,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
+        write_handle: WriteHandle<SourceData, (), T, StorageDiff>,
         read_handle_fn: R,
         read_only: bool,
         now: NowFn,
@@ -677,6 +680,7 @@ where
 
             introspection_type @ IntrospectionType::ReplicaMetricsHistory
             | introspection_type @ IntrospectionType::WallclockLagHistory
+            | introspection_type @ IntrospectionType::WallclockLagHistogram
             | introspection_type @ IntrospectionType::PreparedStatementHistory
             | introspection_type @ IntrospectionType::StatementExecutionHistory
             | introspection_type @ IntrospectionType::SessionHistory
@@ -904,7 +908,7 @@ where
                     (
                         (SourceData(Ok(row.clone())), ()),
                         self.current_upper.clone(),
-                        diff.clone(),
+                        diff.into_inner(),
                     )
                 })
                 .collect::<Vec<_>>();
@@ -999,7 +1003,7 @@ where
                 let mut snapshot = Vec::with_capacity(contents.len());
                 for ((data, _), _, diff) in contents {
                     let row = data.expect("invalid protobuf data").0.unwrap();
-                    snapshot.push((row, -diff));
+                    snapshot.push((row, -Diff::from(diff)));
                 }
                 snapshot
             }
@@ -1033,7 +1037,7 @@ where
 {
     /// The collection that we are writing to.
     id: GlobalId,
-    write_handle: WriteHandle<SourceData, (), T, Diff>,
+    write_handle: WriteHandle<SourceData, (), T, StorageDiff>,
     read_only: bool,
     now: NowFn,
     user_batch_duration_ms: Arc<AtomicU64>,
@@ -1062,7 +1066,7 @@ where
     /// TODO(parkmycar): Maybe add prometheus metrics for each collection?
     fn spawn(
         id: GlobalId,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
+        write_handle: WriteHandle<SourceData, (), T, StorageDiff>,
         read_only: bool,
         now: NowFn,
         user_batch_duration_ms: Arc<AtomicU64>,
@@ -1081,6 +1085,7 @@ where
 
                 Some(IntrospectionType::ReplicaMetricsHistory)
                 | Some(IntrospectionType::WallclockLagHistory)
+                | Some(IntrospectionType::WallclockLagHistogram)
                 | Some(IntrospectionType::PrivatelinkConnectionStatusHistory)
                 | Some(IntrospectionType::ReplicaStatusHistory)
                 | Some(IntrospectionType::PreparedStatementHistory)
@@ -1143,7 +1148,9 @@ where
             return;
         };
         let initial_statuses = match introspection_type {
-            IntrospectionType::ReplicaMetricsHistory | IntrospectionType::WallclockLagHistory => {
+            IntrospectionType::ReplicaMetricsHistory
+            | IntrospectionType::WallclockLagHistory
+            | IntrospectionType::WallclockLagHistogram => {
                 let result = partially_truncate_metrics_history(
                     self.id,
                     introspection_type,
@@ -1458,7 +1465,7 @@ where
 async fn partially_truncate_metrics_history<T>(
     id: GlobalId,
     introspection_type: IntrospectionType,
-    write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
+    write_handle: &mut WriteHandle<SourceData, (), T, StorageDiff>,
     config_set: Arc<ConfigSet>,
     now: NowFn,
     storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
@@ -1478,6 +1485,13 @@ where
             WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL.get(&config_set),
             WALLCLOCK_LAG_HISTORY_DESC
                 .get_by_name(&ColumnName::from("occurred_at"))
+                .expect("schema has not changed")
+                .0,
+        ),
+        IntrospectionType::WallclockLagHistogram => (
+            WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL.get(&config_set),
+            WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RAW_DESC
+                .get_by_name(&ColumnName::from("period_start"))
                 .expect("schema has not changed")
                 .0,
         ),
@@ -1550,7 +1564,7 @@ where
 pub(crate) async fn partially_truncate_status_history<T, K>(
     id: GlobalId,
     introspection_type: IntrospectionType,
-    write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
+    write_handle: &mut WriteHandle<SourceData, (), T, StorageDiff>,
     status_history_desc: StatusHistoryDesc<K>,
     now: NowFn,
     storage_collections: &Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
@@ -1708,7 +1722,7 @@ where
 }
 
 async fn monotonic_append<T: Timestamp + Lattice + Codec64 + TimestampManipulation>(
-    write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
+    write_handle: &mut WriteHandle<SourceData, (), T, StorageDiff>,
     updates: Vec<TimestamplessUpdate>,
     at_least: T,
 ) {
@@ -1735,7 +1749,11 @@ async fn monotonic_append<T: Timestamp + Lattice + Codec64 + TimestampManipulati
         let updates = updates
             .iter()
             .map(|TimestamplessUpdate { row, diff }| {
-                ((SourceData(Ok(row.clone())), ()), lower.clone(), diff)
+                (
+                    (SourceData(Ok(row.clone())), ()),
+                    lower.clone(),
+                    diff.into_inner(),
+                )
             })
             .collect::<Vec<_>>();
         let res = write_handle

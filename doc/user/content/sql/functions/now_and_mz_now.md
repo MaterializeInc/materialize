@@ -51,6 +51,7 @@ In this scenario, both `now()` and `mz_now()` would return 9pm.
 
 ### Limitations
 
+#### Materialization
   * Queries that use `now()` cannot be materialized. In other words, you cannot
     create an index or a materialized view on a query that calls `now()`.
 
@@ -60,6 +61,13 @@ In this scenario, both `now()` and `mz_now()` would return 9pm.
 These limitations are in place because `now()` changes every microsecond and
 `mz_now()` changes every millisecond. Allowing these functions to be
 materialized would be resource prohibitive.
+
+#### Comparison operators
+
+  * `mz_now()` only accepts comparison operators `=`, `<`, `<=`, `>`, or
+  `>=`, or operators that desugar to them or a conjunction of them (for example,
+  `BETWEEN...AND...`). You cannot use `mz_now()` with date/time operators (for
+  example, `mz_now() - INTERVAL '5min'`).
 
 ## Examples
 

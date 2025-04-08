@@ -21,6 +21,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
+use arrow::array::ArrayRef;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
@@ -47,9 +48,33 @@ use crate::batch::BLOB_TARGET_SIZE;
 use crate::cfg::{RetryParameters, USE_CRITICAL_SINCE_SOURCE};
 use crate::fetch::{FetchedBlob, Lease, SerdeLeasedBatchPart};
 use crate::internal::state::BatchPart;
-use crate::project::ProjectionPushdown;
 use crate::stats::{STATS_AUDIT_PERCENT, STATS_FILTER_ENABLED};
 use crate::{Diagnostics, PersistClient, ShardId};
+
+/// The result of applying an MFP to a part, if we know it.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum FilterResult {
+    /// This dataflow may or may not filter out any row in this part.
+    #[default]
+    Keep,
+    /// This dataflow is guaranteed to filter out all records in this part.
+    Discard,
+    /// This dataflow will keep all the rows, but the values are irrelevant:
+    /// include the given single-row KV data instead.
+    ReplaceWith {
+        /// The single-element key column.
+        key: ArrayRef,
+        /// The single-element val column.
+        val: ArrayRef,
+    },
+}
+
+impl FilterResult {
+    /// The noop filtering function: return the default value for all parts.
+    pub fn keep_all<T>(_stats: &PartStats, _frontier: AntichainRef<T>) -> FilterResult {
+        Self::Keep
+    }
+}
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
@@ -64,7 +89,7 @@ use crate::{Diagnostics, PersistClient, ShardId};
 /// usages for details.
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn shard_source<'g, K, V, T, D, F, DT, G, C>(
+pub fn shard_source<'g, K, V, T, D, DT, G, C>(
     scope: &mut Child<'g, G, T>,
     name: &str,
     client: impl Fn() -> C,
@@ -75,12 +100,11 @@ pub fn shard_source<'g, K, V, T, D, F, DT, G, C>(
     desc_transformer: Option<DT>,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
-    should_fetch_part: F,
+    filter_fn: impl FnMut(&PartStats, AntichainRef<G::Timestamp>) -> FilterResult + 'static,
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
     error_handler: impl FnOnce(String) -> Pin<Box<dyn Future<Output = ()>>> + 'static,
-    project: ProjectionPushdown,
 ) -> (
     Stream<Child<'g, G, T>, FetchedBlob<K, V, G::Timestamp, D>>,
     Vec<PressOnDropButton>,
@@ -89,7 +113,6 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
-    F: FnMut(&PartStats, AntichainRef<G::Timestamp>) -> bool + 'static,
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
     G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
@@ -133,7 +156,7 @@ where
     // metrics.
     let is_transient = !until.is_empty();
 
-    let (descs, descs_token) = shard_source_descs::<K, V, D, _, G>(
+    let (descs, descs_token) = shard_source_descs::<K, V, D, G>(
         &scope.parent,
         name,
         client(),
@@ -145,11 +168,10 @@ where
         chosen_worker,
         Arc::clone(&key_schema),
         Arc::clone(&val_schema),
-        should_fetch_part,
+        filter_fn,
         listen_sleep,
         start_signal,
         error_handler,
-        project,
     );
     tokens.push(descs_token);
 
@@ -219,7 +241,7 @@ impl<T: Timestamp + Codec64> LeaseManager<T> {
     }
 }
 
-pub(crate) fn shard_source_descs<K, V, D, F, G>(
+pub(crate) fn shard_source_descs<K, V, D, G>(
     scope: &G,
     name: &str,
     client: impl Future<Output = PersistClient> + Send + 'static,
@@ -231,18 +253,16 @@ pub(crate) fn shard_source_descs<K, V, D, F, G>(
     chosen_worker: usize,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
-    mut should_fetch_part: F,
+    mut filter_fn: impl FnMut(&PartStats, AntichainRef<G::Timestamp>) -> FilterResult + 'static,
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
     error_handler: impl FnOnce(String) -> Pin<Box<dyn Future<Output = ()>>> + 'static,
-    project: ProjectionPushdown,
 ) -> (Stream<G, (usize, SerdeLeasedBatchPart)>, PressOnDropButton)
 where
     K: Debug + Codec,
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
-    F: FnMut(&PartStats, AntichainRef<G::Timestamp>) -> bool + 'static,
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
     G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
@@ -452,53 +472,70 @@ where
             let session_cap = cap_set.delayed(current_ts);
 
             for mut part_desc in parts {
-                part_desc.maybe_optimize(&cfg, &project);
                 // TODO: Push more of this logic into LeasedBatchPart like we've
                 // done for project?
                 if STATS_FILTER_ENABLED.get(&cfg) {
-                    let (should_fetch, is_inline) = match &part_desc.part {
+                    let (filter_result, is_inline) = match &part_desc.part {
                         BatchPart::Hollow(x) => {
-                            let should_fetch = x.stats.as_ref().map_or(true, |stats| {
-                                should_fetch_part(&stats.decode(), current_frontier.borrow())
-                            });
+                            let should_fetch =
+                                x.stats.as_ref().map_or(FilterResult::Keep, |stats| {
+                                    filter_fn(&stats.decode(), current_frontier.borrow())
+                                });
                             (should_fetch, false)
                         }
-                        BatchPart::Inline { .. } => (true, true),
+                        BatchPart::Inline { .. } => (FilterResult::Keep, true),
                     };
                     let bytes = u64::cast_from(part_desc.encoded_size_bytes());
-                    if should_fetch {
-                        audit_budget_bytes =
-                            audit_budget_bytes.saturating_add(part_desc.part.encoded_size_bytes());
-                        if is_inline {
-                            metrics.pushdown.parts_inline_count.inc();
-                            metrics.pushdown.parts_inline_bytes.inc_by(bytes);
-                        } else {
-                            metrics.pushdown.parts_fetched_count.inc();
-                            metrics.pushdown.parts_fetched_bytes.inc_by(bytes);
-                        }
-                    } else {
-                        metrics.pushdown.parts_filtered_count.inc();
-                        metrics.pushdown.parts_filtered_bytes.inc_by(bytes);
-                        let should_audit = match &part_desc.part {
-                            BatchPart::Hollow(x) => {
-                                let mut h = DefaultHasher::new();
-                                x.key.hash(&mut h);
-                                usize::cast_from(h.finish()) % 100 < STATS_AUDIT_PERCENT.get(&cfg)
+                    match filter_result {
+                        FilterResult::Keep => {
+                            audit_budget_bytes = audit_budget_bytes
+                                .saturating_add(part_desc.part.encoded_size_bytes());
+                            if is_inline {
+                                metrics.pushdown.parts_inline_count.inc();
+                                metrics.pushdown.parts_inline_bytes.inc_by(bytes);
+                            } else {
+                                metrics.pushdown.parts_fetched_count.inc();
+                                metrics.pushdown.parts_fetched_bytes.inc_by(bytes);
                             }
-                            BatchPart::Inline { .. } => false,
-                        };
-                        if should_audit && part_desc.part.encoded_size_bytes() < audit_budget_bytes
-                        {
-                            audit_budget_bytes -= part_desc.part.encoded_size_bytes();
-                            metrics.pushdown.parts_audited_count.inc();
-                            metrics.pushdown.parts_audited_bytes.inc_by(bytes);
-                            part_desc.request_filter_pushdown_audit();
-                        } else {
-                            debug!(
-                                "skipping part because of stats filter {:?}",
-                                part_desc.part.stats()
-                            );
-                            continue;
+                        }
+                        FilterResult::Discard => {
+                            metrics.pushdown.parts_filtered_count.inc();
+                            metrics.pushdown.parts_filtered_bytes.inc_by(bytes);
+                            let should_audit = match &part_desc.part {
+                                BatchPart::Hollow(x) => {
+                                    let mut h = DefaultHasher::new();
+                                    x.key.hash(&mut h);
+                                    usize::cast_from(h.finish()) % 100
+                                        < STATS_AUDIT_PERCENT.get(&cfg)
+                                }
+                                BatchPart::Inline { .. } => false,
+                            };
+                            if should_audit
+                                && part_desc.part.encoded_size_bytes() < audit_budget_bytes
+                            {
+                                audit_budget_bytes -= part_desc.part.encoded_size_bytes();
+                                metrics.pushdown.parts_audited_count.inc();
+                                metrics.pushdown.parts_audited_bytes.inc_by(bytes);
+                                part_desc.request_filter_pushdown_audit();
+                            } else {
+                                debug!(
+                                    "skipping part because of stats filter {:?}",
+                                    part_desc.part.stats()
+                                );
+                                continue;
+                            }
+                        }
+                        FilterResult::ReplaceWith { key, val } => {
+                            part_desc.maybe_optimize(&cfg, key, val);
+                            audit_budget_bytes = audit_budget_bytes
+                                .saturating_add(part_desc.part.encoded_size_bytes());
+                            if is_inline {
+                                metrics.pushdown.parts_inline_count.inc();
+                                metrics.pushdown.parts_inline_bytes.inc_by(bytes);
+                            } else {
+                                metrics.pushdown.parts_fetched_count.inc();
+                                metrics.pushdown.parts_fetched_bytes.inc_by(bytes);
+                            }
                         }
                     }
                 }
@@ -670,7 +707,7 @@ mod tests {
             let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
                 let (stream, token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
                     let transformer = move |_, descs: &Stream<_, _>, _| (descs.clone(), vec![]);
-                    let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _, _>(
+                    let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
                         scope,
                         "test_source",
                         move || std::future::ready(persist_client.clone()),
@@ -685,11 +722,10 @@ mod tests {
                         Arc::new(
                             <std::string::String as mz_persist_types::Codec>::Schema::default(),
                         ),
-                        |_fetch, _frontier| true,
+                        FilterResult::keep_all,
                         false.then_some(|| unreachable!()),
                         async {},
                         |error| panic!("test: {error}"),
-                        ProjectionPushdown::FetchAll,
                     );
                     (stream.leave(), tokens)
                 });
@@ -740,7 +776,7 @@ mod tests {
             let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
                 let (stream, token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
                     let transformer = move |_, descs: &Stream<_, _>, _| (descs.clone(), vec![]);
-                    let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _, _>(
+                    let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
                         scope,
                         "test_source",
                         move || std::future::ready(persist_client.clone()),
@@ -755,11 +791,10 @@ mod tests {
                         Arc::new(
                             <std::string::String as mz_persist_types::Codec>::Schema::default(),
                         ),
-                        |_fetch, _frontier| true,
+                        FilterResult::keep_all,
                         false.then_some(|| unreachable!()),
                         async {},
                         |error| panic!("test: {error}"),
-                        ProjectionPushdown::FetchAll,
                     );
                     (stream.leave(), tokens)
                 });

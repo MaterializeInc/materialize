@@ -60,7 +60,9 @@ use mz_repr::{Diff, Timestamp};
 use mz_service::secrets::SecretsReaderCliArgs;
 use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::controller::StorageError;
 use mz_storage_types::sources::SourceData;
+use mz_storage_types::StorageDiff;
 use serde::{Deserialize, Serialize};
 use tracing::{error, Instrument};
 
@@ -256,8 +258,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             secrets,
             cluster_replica_sizes,
         } => {
-            let cluster_replica_sizes: ClusterReplicaSizeMap =
-                serde_json::from_str(&cluster_replica_sizes).context("parsing replica size map")?;
+            let cluster_replica_sizes =
+                ClusterReplicaSizeMap::parse_from_str(&cluster_replica_sizes, false)
+                    .context("parsing replica size map")?;
             upgrade_check(
                 args,
                 openable_state,
@@ -393,8 +396,14 @@ async fn dump(
             .collect();
 
         let total_count = entries.len();
-        let addition_count = entries.iter().filter(|entry| entry.diff == 1).count();
-        let retraction_count = entries.iter().filter(|entry| entry.diff == -1).count();
+        let addition_count = entries
+            .iter()
+            .filter(|entry| entry.diff == Diff::ONE)
+            .count();
+        let retraction_count = entries
+            .iter()
+            .filter(|entry| entry.diff == Diff::MINUS_ONE)
+            .count();
         let entries = if stats_only { None } else { Some(entries) };
         let dumped_col = DumpedCollection {
             total_count,
@@ -674,11 +683,26 @@ async fn upgrade_check(
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_) => None,
         });
+
+    let mut storage_errors = BTreeMap::default();
     for (gid, item_desc) in storage_entries {
-        let shard_id = state
+        // If a new version adds a BuiltinTable or BuiltinSource, we won't have created the shard
+        // yet so there isn't anything to check.
+        let maybe_shard_id = state
             .storage_metadata()
-            .get_collection_shard::<Timestamp>(gid)
-            .context("getting shard_id")?;
+            .get_collection_shard::<Timestamp>(gid);
+        let shard_id = match maybe_shard_id {
+            Ok(shard_id) => shard_id,
+            Err(StorageError::IdentifierMissing(_)) => {
+                println!("no shard_id found for {gid}, continuing...");
+                continue;
+            }
+            Err(err) => {
+                // Collect errors instead of bailing on the first one.
+                storage_errors.insert(gid, err.to_string());
+                continue;
+            }
+        };
         println!("checking Persist schema info for {gid}: {shard_id}");
 
         let diagnostics = Diagnostics {
@@ -686,13 +710,15 @@ async fn upgrade_check(
             handle_purpose: "catalog upgrade check".to_string(),
         };
         let persisted_schema = persist_client
-            .latest_schema::<SourceData, (), Timestamp, Diff>(shard_id, diagnostics)
+            .latest_schema::<SourceData, (), Timestamp, StorageDiff>(shard_id, diagnostics)
             .await
             .expect("invalid persist usage");
-        // We should always have schemas registered for Shards, unless their environment happened
-        // to crash after running DDL and hasn't come back up yet.
+        // If in the new version a BuiltinTable or BuiltinSource is changed (e.g. a new
+        // column is added) then we'll potentially have a new shard, but no writes will
+        // have occurred so no schema will be registered.
         let Some((_schema_id, persisted_relation_desc, _)) = persisted_schema else {
-            anyhow::bail!("no schema found for {gid}: {shard_id}, did their environment crash?");
+            println!("no schema found for {gid} '{shard_id}', continuing...");
+            continue;
         };
 
         let persisted_data_type =
@@ -702,17 +728,19 @@ async fn upgrade_check(
         let migration =
             mz_persist_types::schema::backward_compatible(&persisted_data_type, &new_data_type);
         if migration.is_none() {
-            anyhow::bail!(
-                "invalid Persist schema migration!\npersisted: {:?}\n{:?}\nnew: {:?}\n{:?}",
-                persisted_relation_desc,
-                persisted_data_type,
-                item_desc,
-                new_data_type,
+            let msg = format!(
+                "invalid Persist schema migration!\nshard_id: {}\npersisted: {:?}\n{:?}\nnew: {:?}\n{:?}",
+                shard_id, persisted_relation_desc, persisted_data_type, item_desc, new_data_type,
             );
+            storage_errors.insert(gid, msg);
         }
     }
 
-    Ok(())
+    if !storage_errors.is_empty() {
+        anyhow::bail!("validation of storage objects failed! errors: {storage_errors:?}")
+    } else {
+        Ok(())
+    }
 }
 
 struct DumpedCollection {

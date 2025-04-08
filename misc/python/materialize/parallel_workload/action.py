@@ -1047,20 +1047,10 @@ class FlipFlagsAction(Action):
         self.flags_with_values["persist_optimize_ignored_data_fetch"] = (
             BOOLEAN_FLAG_VALUES
         )
-        self.flags_with_values["persist_optimize_ignored_data_decode"] = (
-            BOOLEAN_FLAG_VALUES
-        )
         self.flags_with_values["enable_variadic_left_join_lowering"] = (
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["enable_eager_delta_joins"] = BOOLEAN_FLAG_VALUES
-        self.flags_with_values["persist_batch_columnar_format"] = [
-            "row",
-            "both_v2",
-            "structured",
-        ]
-        self.flags_with_values["persist_batch_structured_order"] = BOOLEAN_FLAG_VALUES
-        self.flags_with_values["persist_batch_builder_structured"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_batch_structured_key_lower_len"] = [
             "0",
             "1",

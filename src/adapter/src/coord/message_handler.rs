@@ -24,7 +24,7 @@ use mz_ore::option::OptionExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{soft_assert_or_log, task};
 use mz_persist_client::usage::ShardsUsageReferenced;
-use mz_repr::{Datum, Row};
+use mz_repr::{Datum, Diff, Row};
 use mz_sql::ast::Statement;
 use mz_sql::pure::PurifiedStatement;
 use mz_storage_client::controller::IntrospectionType;
@@ -188,7 +188,7 @@ impl Coordinator {
                                 mz_storage_client::controller::IntrospectionType::PrivatelinkConnectionStatusHistory,
                                 events
                                     .into_iter()
-                                    .map(|e| (mz_repr::Row::from(e), 1))
+                                    .map(|e| (mz_repr::Row::from(e), Diff::ONE))
                                     .collect(),
                             );
                 }
@@ -419,14 +419,17 @@ impl Coordinator {
                 let old = std::mem::replace(m, Some(new.clone()));
                 if old.as_ref() != Some(&new) {
                     let retractions = old.map(|old| {
-                        self.catalog()
-                            .state()
-                            .pack_replica_metric_updates(replica_id, &old, -1)
+                        self.catalog().state().pack_replica_metric_updates(
+                            replica_id,
+                            &old,
+                            Diff::MINUS_ONE,
+                        )
                     });
-                    let insertions = self
-                        .catalog()
-                        .state()
-                        .pack_replica_metric_updates(replica_id, &new, 1);
+                    let insertions = self.catalog().state().pack_replica_metric_updates(
+                        replica_id,
+                        &new,
+                        Diff::ONE,
+                    );
                     let updates = if let Some(retractions) = retractions {
                         retractions
                             .into_iter()
@@ -721,7 +724,7 @@ impl Coordinator {
                 ]);
                 self.controller.storage.append_introspection_updates(
                     IntrospectionType::ReplicaStatusHistory,
-                    vec![(row, 1)],
+                    vec![(row, Diff::ONE)],
                 );
             }
 
@@ -735,7 +738,7 @@ impl Coordinator {
                     event.replica_id,
                     event.process_id,
                     old_process_status,
-                    -1,
+                    Diff::MINUS_ONE,
                 );
             let builtin_table_retraction = self
                 .catalog()
@@ -750,7 +753,7 @@ impl Coordinator {
                 event.replica_id,
                 event.process_id,
                 &new_process_status,
-                1,
+                Diff::ONE,
             );
             let builtin_table_addition = self
                 .catalog()

@@ -49,6 +49,7 @@ use mz_sql::catalog::{
     BuiltinsConfig, CatalogError as SqlCatalogError, CatalogItemType, RoleMembership, RoleVars,
 };
 use mz_sql::func::OP_IMPLS;
+use mz_sql::names::CommentObjectId;
 use mz_sql::rbac;
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SYSTEM_USER};
 use mz_sql::session::vars::{SessionVars, SystemVars, VarError, VarInput};
@@ -254,7 +255,7 @@ impl Catalog {
         let mut updates = into_consolidatable_updates_startup(updates, config.boot_ts);
         differential_dataflow::consolidation::consolidate_updates(&mut updates);
         soft_assert_no_log!(
-            updates.iter().all(|(_, _, diff)| *diff == 1),
+            updates.iter().all(|(_, _, diff)| *diff == Diff::ONE),
             "consolidated updates should be positive during startup: {updates:?}"
         );
 
@@ -532,7 +533,7 @@ impl Catalog {
                     mz_sql::func::Func::Scalar(impls) => {
                         for imp in impls {
                             builtin_table_updates.push(catalog.state.resolve_builtin_table_update(
-                                catalog.state.pack_op_update(op, imp.details(), 1),
+                                catalog.state.pack_op_update(op, imp.details(), Diff::ONE),
                             ));
                         }
                     }
@@ -729,10 +730,13 @@ fn add_new_remove_old_builtin_items_migration(
             }
         });
     let new_builtin_ids = txn.allocate_system_item_ids(usize_to_u64(new_builtins.len()))?;
-    let new_builtins = new_builtins.into_iter().zip(new_builtin_ids.clone());
+    let new_builtins: Vec<_> = new_builtins
+        .into_iter()
+        .zip(new_builtin_ids.clone())
+        .collect();
 
     // Look for migrated builtins.
-    for (builtin, system_object_mapping, fingerprint) in existing_builtins {
+    for (builtin, system_object_mapping, fingerprint) in existing_builtins.iter().cloned() {
         if system_object_mapping.unique_identifier.fingerprint != fingerprint {
             // `mz_storage_usage_by_shard` cannot be migrated for multiple reasons. Firstly,
             // it was cause the table to be truncated because the contents are not also
@@ -762,7 +766,7 @@ fn add_new_remove_old_builtin_items_migration(
     }
 
     // Add new builtin items to catalog.
-    for ((builtin, fingerprint), (catalog_id, global_id)) in new_builtins {
+    for ((builtin, fingerprint), (catalog_id, global_id)) in new_builtins.iter().cloned() {
         new_builtin_mappings.push(SystemObjectMapping {
             description: SystemObjectDescription {
                 schema_name: builtin.schema().to_string(),
@@ -813,6 +817,43 @@ fn add_new_remove_old_builtin_items_migration(
         );
     }
     txn.set_system_object_mappings(new_builtin_mappings)?;
+
+    // Update comments of all builtin objects
+    let builtins_with_catalog_ids = existing_builtins
+        .iter()
+        .map(|(b, m, _)| (*b, m.unique_identifier.catalog_id))
+        .chain(
+            new_builtins
+                .into_iter()
+                .map(|((b, _), (catalog_id, _))| (b, catalog_id)),
+        );
+
+    for (builtin, id) in builtins_with_catalog_ids {
+        let (comment_id, desc, comments) = match builtin {
+            Builtin::Source(s) => (CommentObjectId::Source(id), &s.desc, &s.column_comments),
+            Builtin::View(v) => (CommentObjectId::View(id), &v.desc, &v.column_comments),
+            Builtin::Table(t) => (CommentObjectId::Table(id), &t.desc, &t.column_comments),
+            Builtin::Log(_)
+            | Builtin::Type(_)
+            | Builtin::Func(_)
+            | Builtin::ContinualTask(_)
+            | Builtin::Index(_)
+            | Builtin::Connection(_) => continue,
+        };
+        txn.drop_comments(&BTreeSet::from_iter([comment_id]))?;
+
+        let mut comments = comments.clone();
+        for (col_idx, name) in desc.iter_names().enumerate() {
+            if let Some(comment) = comments.remove(name.as_str()) {
+                // Comment column indices are 1 based
+                txn.update_comment(comment_id, Some(col_idx + 1), Some(comment.to_owned()))?;
+            }
+        }
+        assert!(
+            comments.is_empty(),
+            "builtin object contains dangling comments that don't correspond to columns {comments:?}"
+        );
+    }
 
     // Anything left in `system_object_mappings` must have been deleted and should be removed from
     // the catalog.

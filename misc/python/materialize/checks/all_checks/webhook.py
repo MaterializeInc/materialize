@@ -110,13 +110,22 @@ class Webhook(Check):
                 \\\\x01
                 \\\\x01\\x02\\x03\\x04
 
-                > SHOW CREATE SOURCE webhook_text
+                >[version>=14000] SHOW CREATE SOURCE webhook_text
+                materialize.public.webhook_text "CREATE SOURCE materialize.public.webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT TEXT;"
+
+                >[version>=14000] SHOW CREATE SOURCE webhook_json
+                materialize.public.webhook_json "CREATE SOURCE materialize.public.webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON INCLUDE HEADERS;"
+
+                >[version>=14000] SHOW CREATE SOURCE webhook_bytes
+                materialize.public.webhook_bytes "CREATE SOURCE materialize.public.webhook_bytes IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT BYTES;"
+
+                >[version<14000] SHOW CREATE SOURCE webhook_text
                 materialize.public.webhook_text "CREATE SOURCE \\"materialize\\".\\"public\\".\\"webhook_text\\" IN CLUSTER \\"webhook_cluster\\" FROM WEBHOOK BODY FORMAT TEXT"
 
-                > SHOW CREATE SOURCE webhook_json
+                >[version<14000] SHOW CREATE SOURCE webhook_json
                 materialize.public.webhook_json "CREATE SOURCE \\"materialize\\".\\"public\\".\\"webhook_json\\" IN CLUSTER \\"webhook_cluster\\" FROM WEBHOOK BODY FORMAT JSON INCLUDE HEADERS"
 
-                > SHOW CREATE SOURCE webhook_bytes
+                >[version<14000] SHOW CREATE SOURCE webhook_bytes
                 materialize.public.webhook_bytes "CREATE SOURCE \\"materialize\\".\\"public\\".\\"webhook_bytes\\" IN CLUSTER \\"webhook_cluster\\" FROM WEBHOOK BODY FORMAT BYTES"
            """
             )
@@ -158,14 +167,17 @@ class WebhookTable(Check):
     def validate(self) -> Testdrive:
         return Testdrive(
             dedent(
-                """
+                r"""
                 > SELECT * FROM webhook_table_text
                 hello_world
                 anotha_one!
                 threeeeeee
 
-                > SHOW CREATE TABLE webhook_table_text
-                materialize.public.webhook_table_text "CREATE TABLE \\"materialize\\".\\"public\\".\\"webhook_table_text\\" FROM WEBHOOK BODY FORMAT TEXT"
+                >[version>=14000] SHOW CREATE TABLE webhook_table_text
+                materialize.public.webhook_table_text "CREATE TABLE materialize.public.webhook_table_text FROM WEBHOOK BODY FORMAT TEXT;"
+
+                >[version<14000] SHOW CREATE TABLE webhook_table_text
+                materialize.public.webhook_table_text "CREATE TABLE \"materialize\".\"public\".\"webhook_table_text\" FROM WEBHOOK BODY FORMAT TEXT"
            """
             )
         )

@@ -23,9 +23,8 @@ use futures_util::{StreamExt, TryFutureExt};
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
-use mz_persist::indexed::columnar::ColumnarRecords;
-use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceUpdates};
 use mz_persist::location::Blob;
+use mz_persist_types::part::Part;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -48,7 +47,7 @@ use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::ShardMetrics;
 use crate::internal::state::{HollowBatch, RunMeta, RunOrder, RunPart};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
-use crate::iter::{CodecSort, Consolidator, StructuredSort};
+use crate::iter::{Consolidator, StructuredSort};
 use crate::{Metrics, PersistConfig, ShardId};
 
 /// A request for compaction.
@@ -80,7 +79,6 @@ pub struct CompactRes<T> {
 pub struct CompactConfig {
     pub(crate) compaction_memory_bound_bytes: usize,
     pub(crate) compaction_yield_after_n_updates: usize,
-    pub(crate) compaction_output_structured_only: bool,
     pub(crate) version: semver::Version,
     pub(crate) batch: BatchBuilderConfig,
 }
@@ -91,7 +89,6 @@ impl CompactConfig {
         CompactConfig {
             compaction_memory_bound_bytes: COMPACTION_MEMORY_BOUND_BYTES.get(value),
             compaction_yield_after_n_updates: value.compaction_yield_after_n_updates,
-            compaction_output_structured_only: COMPACTION_OUTPUT_STRUCTURED_ONLY.get(value),
             version: value.build_version.clone(),
             batch: BatchBuilderConfig::new(value, shard_id),
         }
@@ -152,15 +149,6 @@ pub(crate) const COMPACTION_CHECK_PROCESS_FLAG: Config<bool> = Config::new(
     true,
     "Whether Compactor will obey the process_requests flag in PersistConfig, \
         which allows dynamically disabling compaction. If false, all compaction requests will be processed.",
-);
-
-pub(crate) const COMPACTION_OUTPUT_STRUCTURED_ONLY: Config<bool> = Config::new(
-    "persist_compaction_output_structured_only",
-    true,
-    "\
-    If our columnar batch format is structured only, then during compaction \
-    don't generate Codec data and just output the structured data.
-    ",
 );
 
 impl<K, V, T, D> Compactor<K, V, T, D>
@@ -807,151 +795,64 @@ where
             cfg.version.clone(),
         );
 
-        // Duplicating a large codepath here during the migration.
-        // TODO(database-issues#7188): dedup once the migration is complete.
-        if cfg.batch.preferred_order == RunOrder::Structured {
-            // If we're not writing down the record metadata, we must always use the old compaction
-            // order. (Since that's the default when the metadata's not present.)
-            let mut consolidator = Consolidator::new(
-                format!(
-                    "{}[lower={:?},upper={:?}]",
-                    shard_id,
-                    desc.lower().elements(),
-                    desc.upper().elements()
-                ),
-                *shard_id,
-                StructuredSort::<K, V, T, D>::new(write_schemas.clone()),
-                blob,
-                Arc::clone(&metrics),
-                shard_metrics,
-                metrics.read.compaction.clone(),
-                FetchBatchFilter::Compaction {
-                    since: desc.since().clone(),
-                },
-                prefetch_budget_bytes,
-            );
+        let mut consolidator = Consolidator::new(
+            format!(
+                "{}[lower={:?},upper={:?}]",
+                shard_id,
+                desc.lower().elements(),
+                desc.upper().elements()
+            ),
+            *shard_id,
+            StructuredSort::<K, V, T, D>::new(write_schemas.clone()),
+            blob,
+            Arc::clone(&metrics),
+            shard_metrics,
+            metrics.read.compaction.clone(),
+            FetchBatchFilter::Compaction {
+                since: desc.since().clone(),
+            },
+            prefetch_budget_bytes,
+        );
 
-            for (desc, meta, parts) in runs {
-                consolidator.enqueue_run(desc, meta, parts.iter().cloned());
-            }
+        for (desc, meta, parts) in runs {
+            consolidator.enqueue_run(desc, meta, parts.iter().cloned());
+        }
 
-            let remaining_budget = consolidator.start_prefetches();
-            if remaining_budget.is_none() {
-                metrics.compaction.not_all_prefetched.inc();
-            }
+        let remaining_budget = consolidator.start_prefetches();
+        if remaining_budget.is_none() {
+            metrics.compaction.not_all_prefetched.inc();
+        }
 
-            loop {
-                let mut chunks = vec![];
-                let mut total_bytes = 0;
-                // We attempt to pull chunks out of the consolidator that match our target size,
-                // but it's possible that we may get smaller chunks... for example, if not all
-                // parts have been fetched yet. Loop until we've got enough data to justify flushing
-                // it out to blob (or we run out of data.)
-                while total_bytes < cfg.batch.blob_target_size {
-                    let fetch_start = Instant::now();
-                    let Some(chunk) = consolidator
-                        .next_chunk(
-                            cfg.compaction_yield_after_n_updates,
-                            cfg.batch.blob_target_size - total_bytes,
-                        )
-                        .await?
-                    else {
-                        break;
-                    };
-                    timings.part_fetching += fetch_start.elapsed();
-                    total_bytes += chunk.goodbytes();
-                    chunks.push(chunk);
-                    tokio::task::yield_now().await;
-                }
-
-                if chunks.is_empty() {
+        loop {
+            let mut chunks = vec![];
+            let mut total_bytes = 0;
+            // We attempt to pull chunks out of the consolidator that match our target size,
+            // but it's possible that we may get smaller chunks... for example, if not all
+            // parts have been fetched yet. Loop until we've got enough data to justify flushing
+            // it out to blob (or we run out of data.)
+            while total_bytes < cfg.batch.blob_target_size {
+                let fetch_start = Instant::now();
+                let Some(chunk) = consolidator
+                    .next_chunk(
+                        cfg.compaction_yield_after_n_updates,
+                        cfg.batch.blob_target_size - total_bytes,
+                    )
+                    .await?
+                else {
                     break;
-                }
-
-                // If we're going to write this Batch in a structured format, and our CYA
-                // dyncfg is enabled, then don't worry about making sure Codec data exists.
-                let ensure_codec = !(cfg.compaction_output_structured_only
-                    && cfg.batch.batch_columnar_format == BatchColumnarFormat::Structured);
-                // In the hopefully-common case of a single chunk, this will not copy.
-                let updates = BlobTraceUpdates::concat::<K, V>(
-                    chunks,
-                    write_schemas.key.as_ref(),
-                    write_schemas.val.as_ref(),
-                    &metrics.columnar,
-                    ensure_codec,
-                )?;
-                batch.flush_part(desc.clone(), updates).await;
-            }
-        } else {
-            let mut consolidator = Consolidator::<T, D, CodecSort<K, V, T, D>>::new(
-                format!(
-                    "{}[lower={:?},upper={:?}]",
-                    shard_id,
-                    desc.lower().elements(),
-                    desc.upper().elements()
-                ),
-                *shard_id,
-                CodecSort::new(write_schemas.clone()),
-                blob,
-                Arc::clone(&metrics),
-                shard_metrics,
-                metrics.read.compaction.clone(),
-                FetchBatchFilter::Compaction {
-                    since: desc.since().clone(),
-                },
-                prefetch_budget_bytes,
-            );
-
-            for (desc, meta, parts) in runs {
-                consolidator.enqueue_run(desc, meta, parts.iter().cloned());
+                };
+                timings.part_fetching += fetch_start.elapsed();
+                total_bytes += chunk.goodbytes();
+                chunks.push(chunk);
+                tokio::task::yield_now().await;
             }
 
-            let remaining_budget = consolidator.start_prefetches();
-            if remaining_budget.is_none() {
-                metrics.compaction.not_all_prefetched.inc();
-            }
-
-            loop {
-                let mut chunks = vec![];
-                let mut total_bytes = 0;
-                // We attempt to pull chunks out of the consolidator that match our target size,
-                // but it's possible that we may get smaller chunks... for example, if not all
-                // parts have been fetched yet. Loop until we've got enough data to justify flushing
-                // it out to blob (or we run out of data.)
-                while total_bytes < cfg.batch.blob_target_size {
-                    let fetch_start = Instant::now();
-                    let Some(mut chunk) = consolidator
-                        .next_chunk(
-                            cfg.compaction_yield_after_n_updates,
-                            cfg.batch.blob_target_size - total_bytes,
-                        )
-                        .await?
-                    else {
-                        break;
-                    };
-                    timings.part_fetching += fetch_start.elapsed();
-                    total_bytes += chunk.goodbytes();
-                    chunks.push(
-                        chunk
-                            .get_or_make_codec::<K, V>(
-                                write_schemas.key.as_ref(),
-                                write_schemas.val.as_ref(),
-                            )
-                            .clone(),
-                    );
-                    tokio::task::yield_now().await;
-                }
-
-                if chunks.is_empty() {
-                    break;
-                }
-
-                // In the hopefully-common case of a single chunk, this will not copy.
-                let updates = ColumnarRecords::concat(&chunks, &metrics.columnar);
-                batch
-                    .flush_part(desc.clone(), BlobTraceUpdates::Row(updates))
-                    .await;
-            }
+            // In the hopefully-common case of a single chunk, this will not copy.
+            let Some(updates) = Part::concat(&chunks).expect("compaction produces well-typed data")
+            else {
+                break;
+            };
+            batch.flush_part(desc.clone(), updates).await;
         }
         let mut batch = batch.finish(desc.clone()).await?;
 

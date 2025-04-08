@@ -83,7 +83,9 @@ impl crate::Transform for EquivalencePropagation {
             let ck = crate::ColumnKnowledge::default();
             ck.transform(relation, ctx)?;
             if prior != *relation {
-                tracing::error!(
+                // This used to be tracing::error, but it became too common with
+                // dequadratic_eqprop_map.
+                tracing::warn!(
                     ?ctx.global_id,
                     "ColumnKnowledge performed work after EquivalencePropagation",
                 );
@@ -250,9 +252,15 @@ impl EquivalencePropagation {
                     .value::<Equivalences>()
                     .expect("Equivalences required");
 
-                if let Some(input_equivalences) = input_equivalences {
-                    // Clone the equivalences in case of variadic map, which will need to mutate them.
-                    let mut input_equivalences = input_equivalences.clone();
+                if let Some(input_equivalences_orig) = input_equivalences {
+                    // We clone `input_equivalences` only if we want to modify it, which is when
+                    // `enable_dequadratic_eqprop_map` is off. Otherwise, we work with the original
+                    // `input_equivalences`.
+                    let mut input_equivalences_cloned = None;
+                    if !ctx.features.enable_dequadratic_eqprop_map {
+                        // We mutate them for variadic Maps if the feature flag is not set.
+                        input_equivalences_cloned = Some(input_equivalences_orig.clone());
+                    }
                     // Get all output types, to reveal a prefix to each scaler expr.
                     let input_types = derived
                         .value::<RelationType>()
@@ -261,18 +269,40 @@ impl EquivalencePropagation {
                         .unwrap();
                     let input_arity = input_types.len() - scalars.len();
                     for (index, expr) in scalars.iter_mut().enumerate() {
-                        let reducer = input_equivalences.reducer();
+                        let reducer = if !ctx.features.enable_dequadratic_eqprop_map {
+                            input_equivalences_cloned
+                                .as_ref()
+                                .expect("always filled if feature flag is not set")
+                                .reducer()
+                        } else {
+                            input_equivalences_orig.reducer()
+                        };
                         let changed = reducer.reduce_expr(expr);
                         if changed || !ctx.features.enable_less_reduce_in_eqprop {
                             expr.reduce(&input_types[..(input_arity + index)]);
                         }
-                        // Introduce the fact relating the mapped expression and corresponding column.
-                        // This allows subsequent expressions to be optimized with this information.
-                        input_equivalences.classes.push(vec![
-                            expr.clone(),
-                            MirScalarExpr::column(input_arity + index),
-                        ]);
-                        input_equivalences.minimize(Some(input_types));
+                        if !ctx.features.enable_dequadratic_eqprop_map {
+                            // Unfortunately, we had to stop doing the following, because it
+                            // was making the `Map` handling quadratic.
+                            // TODO: Get back to this when we have e-graphs.
+                            // https://github.com/MaterializeInc/database-issues/issues/9157
+                            //
+                            // Introduce the fact relating the mapped expression and corresponding
+                            // column. This allows subsequent expressions to be optimized with this
+                            // information.
+                            input_equivalences_cloned
+                                .as_mut()
+                                .expect("always filled if feature flag is not set")
+                                .classes
+                                .push(vec![
+                                    expr.clone(),
+                                    MirScalarExpr::column(input_arity + index),
+                                ]);
+                            input_equivalences_cloned
+                                .as_mut()
+                                .expect("always filled if feature flag is not set")
+                                .minimize(Some(input_types));
+                        }
                     }
                     let input_arity = *derived
                         .last_child()

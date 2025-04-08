@@ -22,6 +22,7 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::sources::{
     GenericSourceConnection, SourceConnection, SourceData, SourceTimestamp,
 };
+use mz_storage_types::StorageDiff;
 use mz_timely_util::antichain::AntichainExt;
 use timely::order::TotalOrder;
 use timely::progress::frontier::MutableAntichain;
@@ -50,7 +51,7 @@ pub(super) async fn real_time_recency_ts<
     id: GlobalId,
     config: StorageConfiguration,
     as_of: Antichain<T>,
-    remap_subscribe: Subscribe<SourceData, (), T, mz_repr::Diff>,
+    remap_subscribe: Subscribe<SourceData, (), T, StorageDiff>,
 ) -> Result<T, StorageError<T>> {
     match connection {
         GenericSourceConnection::Kafka(kafka) => {
@@ -111,7 +112,7 @@ async fn decode_remap_data_until_geq_external_frontier<
     id: GlobalId,
     external_frontier: timely::progress::Antichain<FromTime>,
     as_of: Antichain<T>,
-    mut remap_subscribe: Subscribe<SourceData, (), T, mz_repr::Diff>,
+    mut remap_subscribe: Subscribe<SourceData, (), T, StorageDiff>,
 ) -> Result<T, StorageError<T>> {
     tracing::debug!(
         ?id,

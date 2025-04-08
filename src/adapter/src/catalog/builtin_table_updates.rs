@@ -559,8 +559,8 @@ impl CatalogState {
                                     // information is redundant because each
                                     // Postgres connection connects to only one
                                     // database.
-                                    let schema_name = external_reference[1].to_ast_string();
-                                    let table_name = external_reference[2].to_ast_string();
+                                    let schema_name = external_reference[1].to_ast_string_simple();
+                                    let table_name = external_reference[2].to_ast_string_simple();
 
                                     self.pack_postgres_source_tables_update(
                                         id,
@@ -571,8 +571,8 @@ impl CatalogState {
                                 }
                                 "mysql" => {
                                     mz_ore::soft_assert_eq_no_log!(external_reference.len(), 2);
-                                    let schema_name = external_reference[0].to_ast_string();
-                                    let table_name = external_reference[1].to_ast_string();
+                                    let schema_name = external_reference[0].to_ast_string_simple();
+                                    let table_name = external_reference[1].to_ast_string_simple();
 
                                     self.pack_mysql_source_tables_update(
                                         id,
@@ -586,7 +586,7 @@ impl CatalogState {
                                 "load-generator" => vec![],
                                 "kafka" => {
                                     mz_ore::soft_assert_eq_no_log!(external_reference.len(), 1);
-                                    let topic = external_reference[0].to_ast_string();
+                                    let topic = external_reference[0].to_ast_string_simple();
                                     let envelope = data_source.envelope();
                                     let (key_format, value_format) = data_source.formats();
 
@@ -674,8 +674,8 @@ impl CatalogState {
                                 // information is redundant because each
                                 // Postgres connection connects to only one
                                 // database.
-                                let schema_name = external_reference[1].to_ast_string();
-                                let table_name = external_reference[2].to_ast_string();
+                                let schema_name = external_reference[1].to_ast_string_simple();
+                                let table_name = external_reference[2].to_ast_string_simple();
 
                                 self.pack_postgres_source_tables_update(
                                     id,
@@ -686,8 +686,8 @@ impl CatalogState {
                             }
                             "mysql" => {
                                 mz_ore::soft_assert_eq_no_log!(external_reference.len(), 2);
-                                let schema_name = external_reference[0].to_ast_string();
-                                let table_name = external_reference[1].to_ast_string();
+                                let schema_name = external_reference[0].to_ast_string_simple();
+                                let table_name = external_reference[1].to_ast_string_simple();
 
                                 self.pack_mysql_source_tables_update(
                                     id,
@@ -1606,7 +1606,7 @@ impl CatalogState {
             let key_sql = key_sqls
                 .get(i)
                 .expect("missing sql information for index key")
-                .to_ast_string();
+                .to_ast_string_simple();
             let (field_number, expression) = match key {
                 MirScalarExpr::Column(col) => {
                     (Datum::UInt64(u64::cast_from(*col + 1)), Datum::Null)
@@ -1960,7 +1960,7 @@ impl CatalogState {
             Datum::Int32(ip.prefix_len().into()),
             Datum::String(&format!("{}/{}", addr, ip.prefix_len())),
         ]);
-        Ok(BuiltinTableUpdate::row(id, row, 1))
+        Ok(BuiltinTableUpdate::row(id, row, Diff::ONE))
     }
 
     pub fn pack_replica_metric_updates(
@@ -2034,7 +2034,7 @@ impl CatalogState {
                         disk_bytes.into(),
                         (*credits_per_hour).into(),
                     ]);
-                    BuiltinTableUpdate::row(id, row, 1)
+                    BuiltinTableUpdate::row(id, row, Diff::ONE)
                 },
             )
             .collect();
