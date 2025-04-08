@@ -346,24 +346,22 @@ class AWS:
             except subprocess.CalledProcessError:
                 time.sleep(1)
         else:
-            print("Environment pod never completed, describing pod:")
-            spawn.runv(
-                [
-                    "kubectl",
-                    "describe",
-                    "pods",
-                    "-l",
-                    "app=environmentd",
-                    "-n",
-                    "materialize-environment",
-                ],
-                cwd=self.path,
-            )
             print("Getting all pods:")
             spawn.runv(
                 [
                     "kubectl",
                     "get",
+                    "pods",
+                    "-n",
+                    "materialize-environment",
+                ],
+                cwd=self.path,
+            )
+            print("Describing all pods in materialize-environment:")
+            spawn.runv(
+                [
+                    "kubectl",
+                    "describe",
                     "pods",
                     "-n",
                     "materialize-environment",
@@ -394,24 +392,22 @@ class AWS:
             except subprocess.CalledProcessError:
                 time.sleep(1)
         else:
-            print("Balancerd pod never completed, describing pod:")
-            spawn.runv(
-                [
-                    "kubectl",
-                    "describe",
-                    "pods",
-                    "-l",
-                    "app=balancerd",
-                    "-n",
-                    "materialize-environment",
-                ],
-                cwd=self.path,
-            )
             print("Getting all pods:")
             spawn.runv(
                 [
                     "kubectl",
                     "get",
+                    "pods",
+                    "-n",
+                    "materialize-environment",
+                ],
+                cwd=self.path,
+            )
+            print("Describing all pods in materialize-environment:")
+            spawn.runv(
+                [
+                    "kubectl",
+                    "describe",
                     "pods",
                     "-n",
                     "materialize-environment",
@@ -978,24 +974,22 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                 except subprocess.CalledProcessError:
                     time.sleep(1)
             else:
-                print("Environment pod never completed, describing pod:")
-                spawn.runv(
-                    [
-                        "kubectl",
-                        "describe",
-                        "pods",
-                        "-l",
-                        "app=environmentd",
-                        "-n",
-                        "materialize-environment",
-                    ],
-                    cwd=path,
-                )
                 print("Getting all pods:")
                 spawn.runv(
                     [
                         "kubectl",
                         "get",
+                        "pods",
+                        "-n",
+                        "materialize-environment",
+                    ],
+                    cwd=path,
+                )
+                print("Describing all pods in materialize-environment:")
+                spawn.runv(
+                    [
+                        "kubectl",
+                        "describe",
                         "pods",
                         "-n",
                         "materialize-environment",
@@ -1026,24 +1020,22 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                 except subprocess.CalledProcessError:
                     time.sleep(1)
             else:
-                print("Balancerd pod never completed, describing pod:")
-                spawn.runv(
-                    [
-                        "kubectl",
-                        "describe",
-                        "pods",
-                        "-l",
-                        "app=balancerd",
-                        "-n",
-                        "materialize-environment",
-                    ],
-                    cwd=path,
-                )
                 print("Getting all pods:")
                 spawn.runv(
                     [
                         "kubectl",
                         "get",
+                        "pods",
+                        "-n",
+                        "materialize-environment",
+                    ],
+                    cwd=path,
+                )
+                print("Describing all pods in materialize-environment:")
+                spawn.runv(
+                    [
+                        "kubectl",
+                        "describe",
                         "pods",
                         "-n",
                         "materialize-environment",
@@ -1447,25 +1439,23 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                 except subprocess.CalledProcessError:
                     time.sleep(1)
             else:
-                print("Environment pod never completed, describing pod:")
+                print("Getting all pods:")
                 spawn.runv(
                     [
                         "kubectl",
-                        "describe",
+                        "get",
                         "pods",
-                        "-l",
-                        "app=environmentd",
                         "-n",
                         "materialize-environment",
                     ],
                     cwd=path,
                     env=venv_env,
                 )
-                print("Getting all pods:")
+                print("Describing all pods in materialize-environment:")
                 spawn.runv(
                     [
                         "kubectl",
-                        "get",
+                        "describe",
                         "pods",
                         "-n",
                         "materialize-environment",
@@ -1498,25 +1488,23 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                 except subprocess.CalledProcessError:
                     time.sleep(1)
             else:
-                print("Balancerd pod never completed, describing pod:")
+                print("Getting all pods:")
                 spawn.runv(
                     [
                         "kubectl",
-                        "describe",
+                        "get",
                         "pods",
-                        "-l",
-                        "app=balancerd",
                         "-n",
                         "materialize-environment",
                     ],
                     cwd=path,
                     env=venv_env,
                 )
-                print("Getting all pods:")
+                print("Describing all pods in materialize-environment:")
                 spawn.runv(
                     [
                         "kubectl",
-                        "get",
+                        "describe",
                         "pods",
                         "-n",
                         "materialize-environment",
