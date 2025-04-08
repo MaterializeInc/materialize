@@ -22,7 +22,7 @@ use itertools::Itertools;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_adapter_types::dyncfgs::ENABLE_MULTI_REPLICA_SOURCES;
+use mz_adapter_types::dyncfgs::{ENABLE_MULTI_REPLICA_SOURCES, ENABLE_SELF_MANAGED_AUTH};
 use mz_catalog::memory::objects::{
     CatalogItem, Cluster, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
 };
@@ -52,7 +52,7 @@ use mz_sql::ast::{CreateSubsourceStatement, MySqlConfigOptionName, UnresolvedIte
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails,
-    ErrorMessageObjectDescription, ObjectType, RoleVars, SessionCatalog,
+    ErrorMessageObjectDescription, ObjectType, RoleAttributes, RoleVars, SessionCatalog,
 };
 use mz_sql::names::{
     Aug, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
@@ -985,12 +985,25 @@ impl Coordinator {
         }
     }
 
+    /// Validates the role attributes for a `CREATE ROLE` statement.
+    fn validate_role_attributes(&self, attributes: &RoleAttributes) -> Result<(), AdapterError> {
+        if !ENABLE_SELF_MANAGED_AUTH.get(self.catalog().system_config().dyncfgs()) {
+            if attributes.superuser || attributes.password.is_some() {
+                return Err(AdapterError::Unsupported(
+                    "self-managed auth is not enabled, setting password or superuser is not allowed",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     #[instrument]
     pub(super) async fn sequence_create_role(
         &mut self,
         conn_id: Option<&ConnectionId>,
         plan::CreateRolePlan { name, attributes }: plan::CreateRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        self.validate_role_attributes(&attributes.clone())?;
         let op = catalog::Op::CreateRole { name, attributes };
         self.catalog_transact_conn(conn_id, vec![op])
             .await
@@ -3391,6 +3404,8 @@ impl Coordinator {
         // Apply our updates.
         match option {
             PlannedAlterRoleOption::Attributes(attrs) => {
+                self.validate_role_attributes(&attrs.clone().into())?;
+
                 if let Some(inherit) = attrs.inherit {
                     attributes.inherit = inherit;
                 }

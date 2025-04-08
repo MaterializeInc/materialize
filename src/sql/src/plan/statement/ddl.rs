@@ -4140,7 +4140,7 @@ pub enum PlannedAlterRoleOption {
     Variable(PlannedRoleVariable),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PlannedRoleAttributes {
     pub inherit: Option<bool>,
     pub password: Option<String>,

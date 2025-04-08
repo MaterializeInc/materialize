@@ -116,6 +116,13 @@ pub const ENABLE_MULTI_REPLICA_SOURCES: Config<bool> = Config::new(
     "Enable multi-replica sources.",
 );
 
+/// Whether to enable self-managed authentication.
+pub const ENABLE_SELF_MANAGED_AUTH: Config<bool> = Config::new(
+    "enable_self_managed_auth",
+    false,
+    "Enable self-managed authentication.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -134,4 +141,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_CONTINUAL_TASK_BUILTINS)
         .add(&ENABLE_EXPRESSION_CACHE)
         .add(&ENABLE_MULTI_REPLICA_SOURCES)
+        .add(&ENABLE_SELF_MANAGED_AUTH)
 }
