@@ -30,7 +30,7 @@ use rand::{distributions::Bernoulli, prelude::Distribution, thread_rng};
 use sha2::{Digest, Sha256};
 use tokio::time::MissedTickBehavior;
 use tracing::debug;
-use uuid::Uuid;
+use uuid::{NoContext, Uuid};
 
 use crate::coord::{ConnMeta, Coordinator};
 use crate::session::Session;
@@ -321,7 +321,14 @@ impl Coordinator {
                     *accounted,
                     "accounting for logging should be done in `begin_statement_execution`"
                 );
-                let uuid = Uuid::new_v4();
+                let remainder: u32 = (*prepared_at % 1000).try_into().expect(
+                    "modulo 1000 of prepared at millis is always within a 32bit unsigned integer.",
+                );
+                let uuid = Uuid::new_v7(uuid::Timestamp::from_unix(
+                    NoContext,
+                    *prepared_at / 1000,
+                    remainder * 1_000_000,
+                ));
                 let sql = std::mem::take(sql);
                 let redacted_sql = std::mem::take(redacted_sql);
                 let sql_hash: [u8; 32] = Sha256::digest(sql.as_bytes()).into();
@@ -719,10 +726,23 @@ impl Coordinator {
         }
         let (ps_record, ps_uuid) = self.log_prepared_statement(session, logging)?;
 
-        let ev_id = Uuid::new_v4();
+        let uuid = match session.qcell_rw(logging) {
+            PreparedStatementLoggingInfo::AlreadyLogged { uuid } => *uuid,
+            PreparedStatementLoggingInfo::StillToLog { prepared_at, .. } => {
+                let remainder: u32 = (*prepared_at % 1000).try_into().expect(
+                    "modulo 1000 of prepared at millis is always within a 32bit unsigned integer.",
+                );
+                Uuid::new_v7(uuid::Timestamp::from_unix(
+                    NoContext,
+                    *prepared_at / 1000,
+                    remainder * 1_000_000,
+                ))
+            }
+        };
+
         let now = self.now();
         self.record_statement_lifecycle_event(
-            &StatementLoggingId(ev_id),
+            &StatementLoggingId(uuid),
             &StatementLifecycleEvent::ExecutionBegan,
             now,
         );
@@ -738,7 +758,7 @@ impl Coordinator {
             })
             .collect();
         let record = StatementBeganExecutionRecord {
-            id: ev_id,
+            id: uuid,
             prepared_statement_id: ps_uuid,
             sample_rate,
             params,
@@ -773,9 +793,7 @@ impl Coordinator {
         self.statement_logging
             .pending_statement_execution_events
             .push((mseh_update, Diff::ONE));
-        self.statement_logging
-            .executions_begun
-            .insert(ev_id, record);
+        self.statement_logging.executions_begun.insert(uuid, record);
         if let Some((ps_record, ps_update)) = ps_record {
             self.statement_logging
                 .pending_prepared_statement_events
@@ -791,7 +809,7 @@ impl Coordinator {
                     .push(sh_update);
             }
         }
-        Some(StatementLoggingId(ev_id))
+        Some(StatementLoggingId(uuid))
     }
 
     /// Record a new connection event
