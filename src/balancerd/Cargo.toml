@@ -33,7 +33,7 @@ mz-dyncfg = { path = "../dyncfg" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
-mz-ore = { path = "../ore", default-features = false }
+mz-ore = { path = "../ore", default-features = false, features = ["id_gen"]}
 mz-server-core = { path = "../server-core" }
 mz-tracing = { path = "../tracing" }
 mz-pgwire-common = { path = "../pgwire-common" }

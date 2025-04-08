@@ -24,6 +24,9 @@ use std::time::SystemTime;
 #[cfg(feature = "chrono")]
 use chrono::{DateTime, TimeZone, Utc};
 
+#[cfg(feature = "id_gen")]
+use uuid::{NoContext, Uuid};
+
 /// A type representing the number of milliseconds since the Unix epoch.
 pub type EpochMillis = u64;
 
@@ -42,6 +45,19 @@ pub fn to_datetime(millis: EpochMillis) -> DateTime<Utc> {
             panic!("Ambiguous timestamp: {millis} millis")
         }
     }
+}
+
+/// A function that converts an epoch timestamp to a UUID v7
+#[cfg(feature = "id_gen")]
+pub fn epoch_to_uuid_v7(epoch: &EpochMillis) -> Uuid {
+    let remainder: u32 = (*epoch % 1000)
+        .try_into()
+        .expect("modulo 1000 of prepared at millis is always within a 32bit unsigned integer.");
+    Uuid::new_v7(uuid::Timestamp::from_unix(
+        NoContext,
+        *epoch / 1000,
+        remainder * 1_000_000,
+    ))
 }
 
 /// A function that returns system or mocked time.

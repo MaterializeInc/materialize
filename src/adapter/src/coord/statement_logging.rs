@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use bytes::BytesMut;
 use mz_controller_types::ClusterId;
-use mz_ore::now::{NowFn, to_datetime};
+use mz_ore::now::{NowFn, epoch_to_uuid_v7, to_datetime};
 use mz_ore::task::spawn;
 use mz_ore::{cast::CastFrom, cast::CastInto, now::EpochMillis};
 use mz_repr::adt::array::ArrayDimension;
@@ -30,7 +30,7 @@ use rand::{distributions::Bernoulli, prelude::Distribution, thread_rng};
 use sha2::{Digest, Sha256};
 use tokio::time::MissedTickBehavior;
 use tracing::debug;
-use uuid::{NoContext, Uuid};
+use uuid::Uuid;
 
 use crate::coord::{ConnMeta, Coordinator};
 use crate::session::Session;
@@ -104,17 +104,6 @@ impl PreparedStatementLoggingInfo {
             _sealed: sealed::Private,
         }
     }
-}
-
-fn epoch_to_uuid(epoch: &EpochMillis) -> Uuid {
-    let remainder: u32 = (*epoch % 1000)
-        .try_into()
-        .expect("modulo 1000 of prepared at millis is always within a 32bit unsigned integer.");
-    Uuid::new_v7(uuid::Timestamp::from_unix(
-        NoContext,
-        *epoch / 1000,
-        remainder * 1_000_000,
-    ))
 }
 
 #[derive(Copy, Clone, Debug, Ord, Eq, PartialOrd, PartialEq)]
@@ -332,7 +321,7 @@ impl Coordinator {
                     *accounted,
                     "accounting for logging should be done in `begin_statement_execution`"
                 );
-                let uuid = epoch_to_uuid(prepared_at);
+                let uuid = epoch_to_uuid_v7(prepared_at);
                 let sql = std::mem::take(sql);
                 let redacted_sql = std::mem::take(redacted_sql);
                 let sql_hash: [u8; 32] = Sha256::digest(sql.as_bytes()).into();
@@ -733,7 +722,7 @@ impl Coordinator {
         let uuid = match session.qcell_rw(logging) {
             PreparedStatementLoggingInfo::AlreadyLogged { uuid } => *uuid,
             PreparedStatementLoggingInfo::StillToLog { prepared_at, .. } => {
-                epoch_to_uuid(prepared_at)
+                epoch_to_uuid_v7(prepared_at)
             }
         };
 
