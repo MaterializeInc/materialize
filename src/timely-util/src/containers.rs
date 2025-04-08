@@ -126,12 +126,13 @@ mod container {
                 Column::Bytes(b) => {
                     assert_eq!(b.len() % 8, 0);
                     let mut alloc: Region<u64> = super::alloc_aligned_zeroed(b.len() / 8);
-                    bytemuck::cast_slice_mut(&mut alloc[..]).copy_from_slice(&b[..]);
+                    let alloc_bytes = bytemuck::cast_slice_mut(&mut alloc);
+                    alloc_bytes[..b.len()].copy_from_slice(b);
                     Self::Align(alloc)
                 }
                 Column::Align(a) => {
                     let mut alloc = super::alloc_aligned_zeroed(a.len());
-                    alloc.extend_from_slice(&a[..]);
+                    alloc[..a.len()].copy_from_slice(a);
                     Column::Align(alloc)
                 }
             }
@@ -198,7 +199,8 @@ mod container {
             } else {
                 // We failed to cast the slice, so we'll reallocate.
                 let mut alloc: Region<u64> = super::alloc_aligned_zeroed(bytes.len() / 8);
-                bytemuck::cast_slice_mut(&mut alloc[..]).copy_from_slice(&bytes[..]);
+                let alloc_bytes = bytemuck::cast_slice_mut(&mut alloc);
+                alloc_bytes[..bytes.len()].copy_from_slice(&bytes);
                 Self::Align(alloc)
             }
         }
@@ -472,5 +474,77 @@ mod provided_builder {
         fn finish(&mut self) -> Option<&mut Self::Container> {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_ore::region::Region;
+    use timely::bytes::arc::BytesMut;
+    use timely::dataflow::channels::ContainerBytes;
+    use timely::Container;
+
+    use super::*;
+
+    /// Produce some bytes that are in columnar format.
+    fn raw_columnar_bytes() -> Vec<u8> {
+        let mut raw = Vec::new();
+        raw.extend(12_u64.to_le_bytes()); // length
+        raw.extend(1_i32.to_le_bytes());
+        raw.extend(2_i32.to_le_bytes());
+        raw.extend(3_i32.to_le_bytes());
+        raw.extend([0, 0, 0, 0]); // padding
+        raw
+    }
+
+    #[mz_ore::test]
+    fn test_column_clone() {
+        let columns = Columnar::as_columns([1, 2, 3].iter());
+        let column_typed: Column<i32> = Column::Typed(columns);
+        let column_typed2 = column_typed.clone();
+
+        assert_eq!(column_typed2.iter().collect::<Vec<_>>(), vec![&1, &2, &3]);
+
+        let bytes = BytesMut::from(raw_columnar_bytes()).freeze();
+        let column_bytes: Column<i32> = Column::Bytes(bytes);
+        let column_bytes2 = column_bytes.clone();
+
+        assert_eq!(column_bytes2.iter().collect::<Vec<_>>(), vec![&1, &2, &3]);
+
+        let raw = raw_columnar_bytes();
+        let mut region: Region<u64> = alloc_aligned_zeroed(raw.len() / 8);
+        let region_bytes = bytemuck::cast_slice_mut(&mut region);
+        region_bytes[..raw.len()].copy_from_slice(&raw);
+        let column_align: Column<i32> = Column::Align(region);
+        let column_align2 = column_align.clone();
+
+        assert_eq!(column_align2.iter().collect::<Vec<_>>(), vec![&1, &2, &3]);
+    }
+
+    #[mz_ore::test]
+    fn test_column_from_bytes() {
+        let raw = raw_columnar_bytes();
+
+        let buf = vec![0; raw.len() + 8];
+        let align = buf.as_ptr().align_offset(std::mem::size_of::<u64>());
+        let mut bytes_mut = BytesMut::from(buf);
+        let _ = bytes_mut.extract_to(align);
+        bytes_mut[..raw.len()].copy_from_slice(&raw);
+        let aligned_bytes = bytes_mut.extract_to(raw.len());
+
+        let column: Column<i32> = Column::from_bytes(aligned_bytes);
+        assert!(matches!(column, Column::Bytes(_)));
+        assert_eq!(column.iter().collect::<Vec<_>>(), vec![&1, &2, &3]);
+
+        let buf = vec![0; raw.len() + 8];
+        let align = buf.as_ptr().align_offset(std::mem::size_of::<u64>());
+        let mut bytes_mut = BytesMut::from(buf);
+        let _ = bytes_mut.extract_to(align + 1);
+        bytes_mut[..raw.len()].copy_from_slice(&raw);
+        let unaligned_bytes = bytes_mut.extract_to(raw.len());
+
+        let column: Column<i32> = Column::from_bytes(unaligned_bytes);
+        assert!(matches!(column, Column::Align(_)));
+        assert_eq!(column.iter().collect::<Vec<_>>(), vec![&1, &2, &3]);
     }
 }
