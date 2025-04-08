@@ -251,7 +251,7 @@ impl fmt::Display for Consolidating {
         f.debug_struct("Consolidating")
             .field("len_sum", &self.len_sum)
             .field("checksum_sum", &self.checksum_sum)
-            .field("diff_sum", &self.checksum_sum)
+            .field("diff_sum", &self.diff_sum)
             .finish_non_exhaustive()
     }
 }
