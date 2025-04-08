@@ -34,8 +34,8 @@ use mz_catalog::durable::debug::{
     AuditLogCollection, ClusterCollection, ClusterIntrospectionSourceIndexCollection,
     ClusterReplicaCollection, Collection, CollectionTrace, CollectionType, CommentCollection,
     ConfigCollection, DatabaseCollection, DebugCatalogState, DefaultPrivilegeCollection,
-    IdAllocatorCollection, ItemCollection, NetworkPolicyCollection, RoleCollection,
-    SchemaCollection, SettingCollection, SourceReferencesCollection,
+    IdAllocatorCollection, ItemCollection, NetworkPolicyCollection, RoleAuthCollection,
+    RoleCollection, SchemaCollection, SettingCollection, SourceReferencesCollection,
     StorageCollectionMetadataCollection, SystemConfigurationCollection,
     SystemItemMappingCollection, SystemPrivilegeCollection, Trace, TxnWalShardCollection,
     UnfinalizedShardsCollection,
@@ -291,6 +291,7 @@ macro_rules! for_collection {
             CollectionType::Item => $fn::<ItemCollection>($($arg),*).await?,
             CollectionType::NetworkPolicy => $fn::<NetworkPolicyCollection>($($arg),*).await?,
             CollectionType::Role => $fn::<RoleCollection>($($arg),*).await?,
+            CollectionType::RoleAuth => $fn::<RoleAuthCollection>($($arg),*).await?,
             CollectionType::Schema => $fn::<SchemaCollection>($($arg),*).await?,
             CollectionType::Setting => $fn::<SettingCollection>($($arg),*).await?,
             CollectionType::SourceReferences => $fn::<SourceReferencesCollection>($($arg),*).await?,
@@ -434,6 +435,7 @@ async fn dump(
         items,
         network_policies,
         roles,
+        role_auth,
         schemas,
         settings,
         source_references,
@@ -487,6 +489,7 @@ async fn dump(
         consolidate,
     );
     dump_col(&mut data, roles, &ignore, stats_only, consolidate);
+    dump_col(&mut data, role_auth, &ignore, stats_only, consolidate);
     dump_col(&mut data, schemas, &ignore, stats_only, consolidate);
     dump_col(&mut data, settings, &ignore, stats_only, consolidate);
     dump_col(
