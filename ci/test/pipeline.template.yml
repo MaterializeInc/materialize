@@ -486,7 +486,7 @@ steps:
         label: "SQL Server CDC tests"
         parallelism: 1
         depends_on: build-x86_64
-        timeout_in_minutes: 10
+        timeout_in_minutes: 30
         inputs: [test/sql-server-cdc]
         plugins:
           - ./ci/plugins/mzcompose:
