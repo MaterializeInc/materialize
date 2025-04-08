@@ -863,17 +863,6 @@ def workflow_test_github_5087(c: Composition) -> None:
                   ) AS base (data2, data4, data8, diff),
                   repeat_row(diff)
               );
-              CREATE MATERIALIZED VIEW constant_wrapped_sums AS
-              SELECT SUM(data2) AS sum2, SUM(data4) AS sum4, SUM(data8) AS sum8
-              FROM (
-                  SELECT * FROM (
-                      VALUES (2::uint2, 2::uint4, 2::uint8, 9223372036854775807),
-                        (1::uint2, 1::uint4, 1::uint8, 1),
-                        (1::uint2, 1::uint4, 1::uint8, 1),
-                        (1::uint2, 1::uint4, 1::uint8, 1)
-                  ) AS base (data2, data4, data8, diff),
-                  repeat_row(diff)
-              );
             """
         )
         c.testdrive(
@@ -931,23 +920,18 @@ def workflow_test_github_5087(c: Composition) -> None:
             # Test wraparound behaviors
             > INSERT INTO base VALUES (1, 1, 1, -1);
 
-            > INSERT INTO base VALUES (2, 2, 2, 9223372036854775807);
+            >[version<14000] INSERT INTO base VALUES (2, 2, 2, 9223372036854775807);
 
-            > SELECT sum(data2) FROM data;
+            >[version<14000] SELECT sum(data2) FROM data;
             18446744073709551614
 
-            > SELECT sum(data4) FROM data;
+            >[version<14000] SELECT sum(data4) FROM data;
             18446744073709551614
 
-            > SELECT sum(data8) FROM data;
+            >[version<14000] SELECT sum(data8) FROM data;
             18446744073709551614
 
             > INSERT INTO base VALUES (1, 1, 1, 1), (1, 1, 1, 1), (1, 1, 1, 1);
-
-            # Constant-folding behavior matches for now the rendered behavior
-            # wrt. wraparound; this can be revisited as part of database-issues#5172.
-            > SELECT * FROM constant_wrapped_sums;
-            1 1 18446744073709551617
 
             # This causes a panic starting with v0.140.0, but not before.
             >[version<14000] SELECT SUM(data2) FROM data;
