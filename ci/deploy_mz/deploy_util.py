@@ -8,93 +8,9 @@
 # by the Apache License, Version 2.0.
 
 import os
-import tarfile
-import tempfile
-import time
-from pathlib import Path
 
-import boto3
-import humanize
-
-from materialize import git
 from materialize.mz_version import MzCliVersion
 
 APT_BUCKET = "materialize-apt"
-BINARIES_BUCKET = "materialize-binaries"
 TAG = os.environ["BUILDKITE_TAG"]
 MZ_CLI_VERSION = MzCliVersion.parse(TAG)
-
-
-def _tardir(name: str) -> tarfile.TarInfo:
-    d = tarfile.TarInfo(name)
-    d.mtime = int(time.time())
-    d.mode = 0o40755
-    d.type = tarfile.DIRTYPE
-    return d
-
-
-def _sanitize_tarinfo(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo:
-    tarinfo.uid = tarinfo.gid = 0
-    tarinfo.uname = tarinfo.gname = "root"
-    return tarinfo
-
-
-def upload_tarball(tarball: Path, platform: str, version: str) -> None:
-    s3_object = f"mz-{version}-{platform}.tar.gz"
-    boto3.client("s3").upload_file(
-        Filename=str(tarball),
-        Bucket=BINARIES_BUCKET,
-        Key=s3_object,
-    )
-    if "aarch64" in platform:
-        upload_redirect(
-            f"mz-{version}-{platform.replace('aarch64', 'arm64')}.tar.gz",
-            f"/{s3_object}",
-        )
-
-
-def upload_redirect(key: str, to: str) -> None:
-    with tempfile.NamedTemporaryFile() as empty:
-        boto3.client("s3").upload_fileobj(
-            Fileobj=empty,
-            Bucket=BINARIES_BUCKET,
-            Key=key,
-            ExtraArgs={"WebsiteRedirectLocation": to},
-        )
-
-
-def upload_latest_redirect(platform: str, version: str) -> None:
-    upload_redirect(
-        f"mz-latest-{platform}.tar.gz",
-        f"/mz-{version}-{platform}.tar.gz",
-    )
-    if "aarch64" in platform:
-        upload_latest_redirect(platform.replace("aarch64", "arm64"), version)
-
-
-def deploy_tarball(platform: str, mz: Path) -> None:
-    tar_path = Path(f"mz-{platform}.tar.gz")
-    with tarfile.open(str(tar_path), "x:gz") as f:
-        f.addfile(_tardir("mz"))
-        f.addfile(_tardir("mz/bin"))
-        f.add(
-            str(mz),
-            arcname="mz/bin/mz",
-            filter=_sanitize_tarinfo,
-        )
-
-    size = humanize.naturalsize(os.lstat(tar_path).st_size)
-    print(f"Tarball size: {size}")
-
-    upload_tarball(tar_path, platform, f"v{MZ_CLI_VERSION.str_without_prefix()}")
-    if is_latest_version():
-        upload_latest_redirect(platform, f"v{MZ_CLI_VERSION.str_without_prefix()}")
-
-
-def is_latest_version() -> bool:
-    latest_version = max(
-        t
-        for t in git.get_version_tags(version_type=MzCliVersion)
-        if t.prerelease is None
-    )
-    return MZ_CLI_VERSION == latest_version

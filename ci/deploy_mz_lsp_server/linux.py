@@ -10,6 +10,7 @@
 import os
 from pathlib import Path
 
+from ci import tarball_uploader
 from ci.deploy.deploy_util import rust_version
 from materialize import mzbuild, spawn, ui
 from materialize.mz_version import MzLspServerVersion
@@ -51,7 +52,11 @@ def main() -> None:
     mzbuild.chmod_x(path)
 
     print(f"--- Uploading {target} binary tarball")
-    deploy_util.deploy_tarball(target, path)
+    uploader = tarball_uploader.TarballUploader(
+        package_name="mz-lsp-server",
+        version=deploy_util.MZ_LSP_SERVER_VERSION,
+    )
+    uploader.deploy_tarball(target, path)
 
 
 if __name__ == "__main__":
