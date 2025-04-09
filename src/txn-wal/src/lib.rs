@@ -205,15 +205,15 @@
 use std::fmt::Debug;
 use std::fmt::Write;
 
+use differential_dataflow::Hashable;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::Hashable;
 use mz_dyncfg::ConfigSet;
 use mz_ore::instrument;
+use mz_persist_client::ShardId;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::ShardId;
 use mz_persist_types::codec_impls::{ShardIdSchema, VecU8Schema};
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::txn::{TxnsCodec, TxnsEntry};

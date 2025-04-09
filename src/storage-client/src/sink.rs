@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use mz_ccsr::GetSubjectConfigError;
 use mz_kafka_util::admin::EnsureTopicConfig;
 use mz_kafka_util::client::MzClientContext;
@@ -20,8 +20,8 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::KafkaTopicOptions;
 use mz_storage_types::errors::ContextCreationErrorExt;
 use mz_storage_types::sinks::KafkaSinkConnection;
-use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
 use rdkafka::ClientContext;
+use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
 use tracing::warn;
 
 pub mod progress_key {
@@ -97,11 +97,11 @@ async fn discover_topic_configs<C: ClientContext>(
 
     if configs.len() != 1 {
         Err(anyhow!(
-                "error creating topic {} for sink: broker {} returned {} config results, but one was expected",
-                topic,
-                broker,
-                configs.len()
-            ))?;
+            "error creating topic {} for sink: broker {} returned {} config results, but one was expected",
+            topic,
+            broker,
+            configs.len()
+        ))?;
     }
 
     let config = configs.into_element().map_err(|e| {

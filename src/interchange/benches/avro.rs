@@ -7,9 +7,9 @@
 // by the Apache License, Version 2.0.
 
 use byteorder::{NetworkEndian, WriteBytesExt};
-use criterion::{black_box, Criterion, Throughput};
+use criterion::{Criterion, Throughput, black_box};
 use mz_avro::types::Value as AvroValue;
-use mz_interchange::avro::{parse_schema, Decoder};
+use mz_interchange::avro::{Decoder, parse_schema};
 use mz_ore::cast::CastFrom;
 use mz_repr::adt::date::Date;
 use tokio::runtime::Runtime;

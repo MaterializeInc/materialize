@@ -22,7 +22,7 @@
 use std::time::{Duration, SystemTime};
 
 use jsonwebtoken::jwk::JwkSet;
-use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
 use mz_frontegg_auth::{AppPassword, Claims};
 use reqwest::{Method, RequestBuilder};
 use serde::de::DeserializeOwned;

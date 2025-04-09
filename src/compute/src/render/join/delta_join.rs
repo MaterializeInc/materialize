@@ -16,27 +16,27 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use columnar::Columnar;
+use differential_dataflow::IntoOwned;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
-use differential_dataflow::IntoOwned;
 use differential_dataflow::{AsCollection, Collection};
-use mz_compute_types::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, DeltaStagePlan};
 use mz_compute_types::plan::join::JoinClosure;
+use mz_compute_types::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, DeltaStagePlan};
 use mz_expr::MirScalarExpr;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::container::CapacityContainerBuilder;
+use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::{Map, OkErr};
-use timely::dataflow::Scope;
-use timely::progress::timestamp::Refines;
 use timely::progress::Antichain;
+use timely::progress::timestamp::Refines;
 
-use crate::render::context::{ArrangementFlavor, CollectionBundle, Context, ShutdownToken};
 use crate::render::RenderTimestamp;
+use crate::render::context::{ArrangementFlavor, CollectionBundle, Context, ShutdownToken};
 use crate::typedefs::{RowRowAgent, RowRowEnter};
 
 impl<G> Context<G>

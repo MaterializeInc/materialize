@@ -18,11 +18,11 @@ use differential_dataflow::trace::Description;
 use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
 use mz_persist::location::{SeqNo, VersionedData};
-use mz_persist_types::schema::SchemaId;
 use mz_persist_types::Codec64;
+use mz_persist_types::schema::SchemaId;
 use mz_proto::TryFromProtoError;
-use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
+use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
 use crate::critical::CriticalReaderId;
@@ -287,7 +287,10 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
         if &roundtrip_state != to_state {
             // The weird spacing in this format string is so they all line up
             // when printed out.
-            return Err(format!("state didn't roundtrip\n  from_state {:?}\n  to_state   {:?}\n  rt_state   {:?}\n  diff       {:?}\n", from_state, to_state, roundtrip_state, diff));
+            return Err(format!(
+                "state didn't roundtrip\n  from_state {:?}\n  to_state   {:?}\n  rt_state   {:?}\n  diff       {:?}\n",
+                from_state, to_state, roundtrip_state, diff
+            ));
         }
 
         let encoded_diff = diff.into_proto().encode_to_vec();
@@ -748,13 +751,16 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
         // Fast-path: batch insert with both new and most recent batch empty.
         // Spine will happily merge these empty batches together without a call
         // out to compaction.
-        [StateFieldDiff {
-            key: del,
-            val: StateFieldValDiff::Delete(()),
-        }, StateFieldDiff {
-            key: ins,
-            val: StateFieldValDiff::Insert(()),
-        }] => {
+        [
+            StateFieldDiff {
+                key: del,
+                val: StateFieldValDiff::Delete(()),
+            },
+            StateFieldDiff {
+                key: ins,
+                val: StateFieldValDiff::Insert(()),
+            },
+        ] => {
             if del.is_empty()
                 && ins.is_empty()
                 && del.desc.lower() == ins.desc.lower()
@@ -820,7 +826,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
                 return Err(format!(
                     "lenient compaction result apply unexpectedly failed: {}",
                     err
-                ))
+                ));
             }
         }
     }
@@ -1219,7 +1225,7 @@ impl<'a> Iterator for ProtoStateFieldDiffsIter<'a> {
                 return Some(Err(TryFromProtoError::unknown_enum_variant(format!(
                     "ProtoStateField({})",
                     self.diffs.fields[self.diff_idx]
-                ))))
+                ))));
             }
         };
         let diff_type =
@@ -1229,7 +1235,7 @@ impl<'a> Iterator for ProtoStateFieldDiffsIter<'a> {
                     return Some(Err(TryFromProtoError::unknown_enum_variant(format!(
                         "ProtoStateFieldDiffType({})",
                         self.diffs.diff_types[self.diff_idx]
-                    ))))
+                    ))));
                 }
             };
         let key = next_data();
@@ -1257,8 +1263,8 @@ mod tests {
     use crate::internal::paths::{PartId, PartialBatchKey, RollupId, WriterKey};
     use mz_ore::metrics::MetricsRegistry;
 
-    use crate::internal::state::TypedState;
     use crate::ShardId;
+    use crate::internal::state::TypedState;
 
     use super::*;
 
@@ -1534,7 +1540,9 @@ mod tests {
         testcase(
             (2, 4, 0, 100),
             &[(0, 3, 0, 1), (3, 4, 0, 0)],
-            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([0], [3], [0]), parts: [], len: 1, runs: [], run_meta: [] }")
+            Err(
+                "overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([0], [3], [0]), parts: [], len: 1, runs: [], run_meta: [] }",
+            ),
         );
 
         // Split batch at replacement lower (untouched batch before the split one)
@@ -1562,7 +1570,9 @@ mod tests {
         testcase(
             (0, 2, 0, 100),
             &[(0, 1, 0, 0), (1, 4, 0, 1)],
-            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([1], [4], [0]), parts: [], len: 1, runs: [], run_meta: [] }")
+            Err(
+                "overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([1], [4], [0]), parts: [], len: 1, runs: [], run_meta: [] }",
+            ),
         );
 
         // Split batch at replacement upper (untouched batch after the split one)

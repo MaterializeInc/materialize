@@ -326,10 +326,11 @@ mod lru {
                 .0
                 .checked_add(weight.0)
                 .expect("weight overflow");
-            assert!(self
-                .entries
-                .insert(key.clone(), (val, weight, time.clone()))
-                .is_none());
+            assert!(
+                self.entries
+                    .insert(key.clone(), (val, weight, time.clone()))
+                    .is_none()
+            );
             assert!(self.by_time.insert(time, key).is_none());
             self.resize();
         }

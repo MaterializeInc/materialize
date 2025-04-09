@@ -50,7 +50,7 @@ use crate::optimizer_metrics::OptimizerMetrics;
 use crate::plan::hir::{
     AggregateExpr, ColumnOrder, ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType,
 };
-use crate::plan::{transform_hir, PlanError};
+use crate::plan::{PlanError, transform_hir};
 use crate::session::vars::SystemVars;
 
 mod variadic_left;
@@ -456,7 +456,12 @@ impl HirRelationExpr {
                                 requires_nonexistent_column
                             })
                             .unwrap_or(scalars.len());
-                        assert!(end_idx > 0, "a Map expression references itself or a later column; lowered_arity: {}, expressions: {:?}", lowered_arity, scalars);
+                        assert!(
+                            end_idx > 0,
+                            "a Map expression references itself or a later column; lowered_arity: {}, expressions: {:?}",
+                            lowered_arity,
+                            scalars
+                        );
 
                         lowered_arity = lowered_arity + end_idx;
                         let scalars = scalars.drain(0..end_idx).collect_vec();

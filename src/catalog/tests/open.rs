@@ -15,9 +15,9 @@ use mz_catalog::durable::initialize::USER_VERSION_KEY;
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::objects::{DurableType, Snapshot};
 use mz_catalog::durable::{
-    test_bootstrap_args, CatalogError, Database, DurableCatalogError, DurableCatalogState, Epoch,
-    FenceError, Schema, TestCatalogStateBuilder, BUILTIN_MIGRATION_SHARD_KEY, CATALOG_VERSION,
-    EXPRESSION_CACHE_SHARD_KEY,
+    BUILTIN_MIGRATION_SHARD_KEY, CATALOG_VERSION, CatalogError, Database, DurableCatalogError,
+    DurableCatalogState, EXPRESSION_CACHE_SHARD_KEY, Epoch, FenceError, Schema,
+    TestCatalogStateBuilder, test_bootstrap_args,
 };
 use mz_ore::cast::usize_to_u64;
 use mz_ore::collections::HashSet;

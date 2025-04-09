@@ -20,7 +20,7 @@ use aws_types::region::Region;
 use clap::ArgAction;
 use globset::GlobBuilder;
 use itertools::Itertools;
-use mz_build_info::{build_info, BuildInfo};
+use mz_build_info::{BuildInfo, build_info};
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::path::PathExt;
@@ -488,7 +488,7 @@ async fn main() {
     }
 
     if args.shuffle_tests {
-        let seed = args.seed.unwrap_or_else(|| rand::thread_rng().gen());
+        let seed = args.seed.unwrap_or_else(|| rand::thread_rng().r#gen());
         let mut rng = StdRng::seed_from_u64(seed.into());
         files.shuffle(&mut rng);
     }

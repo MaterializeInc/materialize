@@ -20,8 +20,8 @@ use maplit::{btreemap, btreeset};
 use mz_adapter_types::compaction::SINCE_GRANULARITY;
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::VersionedEvent;
-use mz_catalog::memory::objects::{CatalogItem, Connection, DataSourceDesc, Sink};
 use mz_catalog::SYSTEM_CONN_ID;
+use mz_catalog::memory::objects::{CatalogItem, Connection, DataSourceDesc, Sink};
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -40,20 +40,20 @@ use mz_sql::names::ResolvedDatabaseSpecifier;
 use mz_sql::plan::ConnectionDetails;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::{
-    self, SystemVars, Var, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS, MAX_CONTINUAL_TASKS,
+    self, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS, MAX_CONTINUAL_TASKS,
     MAX_CREDIT_CONSUMPTION_RATE, MAX_DATABASES, MAX_KAFKA_CONNECTIONS, MAX_MATERIALIZED_VIEWS,
     MAX_MYSQL_CONNECTIONS, MAX_NETWORK_POLICIES, MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS,
     MAX_REPLICAS_PER_CLUSTER, MAX_ROLES, MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS,
-    MAX_SOURCES, MAX_SQL_SERVER_CONNECTIONS, MAX_TABLES,
+    MAX_SOURCES, MAX_SQL_SERVER_CONNECTIONS, MAX_TABLES, SystemVars, Var,
 };
 use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
-use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::PostgresConnection;
+use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::read_policy::ReadPolicy;
-use mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC;
 use mz_storage_types::sources::GenericSourceConnection;
+use mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC;
 use serde_json::json;
-use tracing::{event, info_span, warn, Instrument, Level};
+use tracing::{Instrument, Level, event, info_span, warn};
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
 use crate::catalog::{DropObjectInfo, Op, ReplicaCreateDropReason, TransactionResult};
@@ -64,7 +64,7 @@ use crate::session::{Session, Transaction, TransactionOps};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::telemetry::{EventDetails, SegmentClientExt};
 use crate::util::ResultExt;
-use crate::{catalog, flags, AdapterError, TimestampProvider};
+use crate::{AdapterError, TimestampProvider, catalog, flags};
 
 impl Coordinator {
     /// Same as [`Self::catalog_transact_conn`] but takes a [`Session`].

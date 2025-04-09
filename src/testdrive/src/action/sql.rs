@@ -13,7 +13,7 @@ use std::fmt::{self, Display, Formatter, Write as _};
 use std::io::{self, Write};
 use std::time::SystemTime;
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use md5::{Digest, Md5};
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
@@ -520,7 +520,9 @@ async fn try_run_fail_sql(
 pub fn print_query(query: &str, stmt: Option<&Statement<Raw>>) {
     use Statement::*;
     if let Some(CreateSecret(_)) = stmt {
-        println!("> CREATE SECRET [query truncated on purpose so as to not reveal the secret in the log]");
+        println!(
+            "> CREATE SECRET [query truncated on purpose so as to not reveal the secret in the log]"
+        );
     } else {
         println!("> {}", query)
     }
@@ -576,7 +578,7 @@ pub fn decode_row(
 
     impl fmt::Display for NumericStandardNotation {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            write!(f, "{}", self.0 .0 .0.to_standard_notation_string())
+            write!(f, "{}", self.0.0.0.to_standard_notation_string())
         }
     }
 

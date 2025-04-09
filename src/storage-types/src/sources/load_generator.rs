@@ -20,9 +20,9 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+use crate::AlterCompatible;
 use crate::sources::AlterError;
 use crate::sources::{MzOffset, SourceConnection};
-use crate::AlterCompatible;
 
 use super::SourceExportDetails;
 
@@ -717,7 +717,7 @@ impl RustType<ProtoLoadGeneratorOutput> for LoadGeneratorOutput {
             None => {
                 return Err(TryFromProtoError::missing_field(
                     "ProtoLoadGeneratorOutput::kind",
-                ))
+                ));
             }
         })
     }

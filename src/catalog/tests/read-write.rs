@@ -15,8 +15,8 @@ use mz_audit_log::{EventDetails, EventType, EventV1, IdNameV1, VersionedEvent};
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::objects::{DurableType, IdAlloc};
 use mz_catalog::durable::{
-    test_bootstrap_args, CatalogError, DurableCatalogError, FenceError, Item,
-    TestCatalogStateBuilder, USER_ITEM_ALLOC_KEY,
+    CatalogError, DurableCatalogError, FenceError, Item, TestCatalogStateBuilder,
+    USER_ITEM_ALLOC_KEY, test_bootstrap_args,
 };
 use mz_ore::assert_ok;
 use mz_ore::collections::HashSet;

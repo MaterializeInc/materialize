@@ -31,14 +31,14 @@ use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::{CmdMetrics, Metrics, ShardMetrics};
 use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::{
-    EncodedSchemas, ExpiryMetrics, HollowBatch, Since, SnapshotErr, StateCollections, TypedState,
-    Upper, ROLLUP_THRESHOLD,
+    EncodedSchemas, ExpiryMetrics, HollowBatch, ROLLUP_THRESHOLD, Since, SnapshotErr,
+    StateCollections, TypedState, Upper,
 };
 use crate::internal::state_diff::StateDiff;
 use crate::internal::state_versions::{EncodedRollup, StateVersions};
 use crate::internal::trace::FueledMergeReq;
 use crate::internal::watch::StateWatch;
-use crate::rpc::{PubSubSender, PUBSUB_PUSH_DIFF_ENABLED};
+use crate::rpc::{PUBSUB_PUSH_DIFF_ENABLED, PubSubSender};
 use crate::schema::SchemaCache;
 use crate::{Diagnostics, PersistConfig, ShardId};
 
@@ -403,7 +403,7 @@ where
                     seqno,
                     err,
                     RoutineMaintenance::default(),
-                ))
+                ));
             }
         };
 

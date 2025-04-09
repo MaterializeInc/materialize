@@ -85,11 +85,11 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashSet;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
-use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_postgres_util::PostgresError;
-use mz_postgres_util::{simple_query_opt, Client};
+use mz_postgres_util::tunnel::PostgresFlavor;
+use mz_postgres_util::{Client, simple_query_opt};
 use mz_repr::{Datum, DatumVec, Diff, Row};
-use mz_sql_parser::ast::{display::AstDisplay, Ident};
+use mz_sql_parser::ast::{Ident, display::AstDisplay};
 use mz_storage_types::dyncfgs::{PG_OFFSET_KNOWN_INTERVAL, PG_SCHEMA_VALIDATION_INTERVAL};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceTimestamp;
@@ -99,15 +99,15 @@ use mz_timely_util::builder_async::{
     PressOnDropButton,
 };
 use mz_timely_util::operator::StreamExt as TimelyStreamExt;
-use postgres_replication::protocol::{LogicalReplicationMessage, ReplicationMessage, TupleData};
 use postgres_replication::LogicalReplicationStream;
+use postgres_replication::protocol::{LogicalReplicationMessage, ReplicationMessage, TupleData};
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
-use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::Concat;
+use timely::dataflow::operators::core::Map;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use tokio::sync::{mpsc, watch};
@@ -116,13 +116,13 @@ use tokio_postgres::types::PgLsn;
 use tracing::{error, trace};
 
 use crate::metrics::source::postgres::PgSourceMetrics;
+use crate::source::RawSourceCreationConfig;
 use crate::source::postgres::verify_schema;
 use crate::source::postgres::{DefiniteError, ReplicationError, SourceOutputInfo, TransientError};
 use crate::source::probe;
 use crate::source::types::{
     Probe, ProgressStatisticsUpdate, SignaledFuture, SourceMessage, StackedCollection,
 };
-use crate::source::RawSourceCreationConfig;
 
 /// Postgres epoch is 2000-01-01T00:00:00Z
 static PG_EPOCH: LazyLock<SystemTime> =
@@ -200,8 +200,13 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         let busy_signal = Arc::clone(&config.busy_signal);
         Box::pin(SignaledFuture::new(busy_signal, async move {
             let (id, worker_id) = (config.id, config.worker_id);
-            let [data_cap_set, upper_cap_set, definite_error_cap_set, stats_cap, probe_cap]: &mut [_; 5] =
-                caps.try_into().unwrap();
+            let [
+                data_cap_set,
+                upper_cap_set,
+                definite_error_cap_set,
+                stats_cap,
+                probe_cap,
+            ]: &mut [_; 5] = caps.try_into().unwrap();
 
             if !config.responsible_for("slot") {
                 // Emit 0, to mark this worker as having started up correctly.
@@ -304,23 +309,27 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
             // The overall resumption point for this source is the minimum of the resumption points
             // contributed by each of the outputs.
-            let resume_lsn = output_uppers.iter().flat_map(|f| f.elements()).map(|&lsn| {
-                // An output is either an output that has never had data committed to it or one
-                // that has and needs to resume. We differentiate between the two by checking
-                // whether an output wishes to "resume" from the minimum timestamp. In that case
-                // its contribution to the overal resumption point is the earliest point available
-                // in the slot. This information would normally be something that the storage
-                // controller figures out in the form of an as-of frontier, but at the moment the
-                // storage controller does not have visibility into what the replication slot is
-                // doing.
-                if lsn == MzOffset::from(0) {
-                    slot_metadata.confirmed_flush_lsn
-                } else {
-                    lsn
-                }
-            }).min();
+            let resume_lsn = output_uppers
+                .iter()
+                .flat_map(|f| f.elements())
+                .map(|&lsn| {
+                    // An output is either an output that has never had data committed to it or one
+                    // that has and needs to resume. We differentiate between the two by checking
+                    // whether an output wishes to "resume" from the minimum timestamp. In that case
+                    // its contribution to the overal resumption point is the earliest point available
+                    // in the slot. This information would normally be something that the storage
+                    // controller figures out in the form of an as-of frontier, but at the moment the
+                    // storage controller does not have visibility into what the replication slot is
+                    // doing.
+                    if lsn == MzOffset::from(0) {
+                        slot_metadata.confirmed_flush_lsn
+                    } else {
+                        lsn
+                    }
+                })
+                .min();
             let Some(resume_lsn) = resume_lsn else {
-                return Ok(())
+                return Ok(());
             };
             upper_cap_set.downgrade([&resume_lsn]);
             trace!(%id, "timely-{worker_id} replication reader started lsn={resume_lsn}");
@@ -334,7 +343,10 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             // slot, to make sure the fetched LSN will be included in the replication stream.
             let probe_ts = (config.now_fn)().into();
             let max_lsn = super::fetch_max_lsn(&*metadata_client).await?;
-            let probe = Probe { probe_ts, upstream_frontier: Antichain::from_elem(max_lsn) };
+            let probe = Probe {
+                probe_ts,
+                upstream_frontier: Antichain::from_elem(max_lsn),
+            };
             probe_output.give(&probe_cap[0], probe);
 
             let mut rewinds = BTreeMap::new();
@@ -424,7 +436,9 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             // Run the periodic schema validation on a separate task using a separate client,
             // to prevent it from blocking the replication reading progress.
             let ssh_tunnel_manager = &config.config.connection_context.ssh_tunnel_manager;
-            let client = connection_config.connect("schema validation", ssh_tunnel_manager).await?;
+            let client = connection_config
+                .connect("schema validation", ssh_tunnel_manager)
+                .await?;
             let mut schema_errors = spawn_schema_validator(
                 client,
                 &config,
@@ -525,7 +539,11 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                     return Ok(());
                                 }
                                 Postgres(pg_error) => Err(TransientError::from(pg_error))?,
-                                Schema { oid, output_index, error } => {
+                                Schema {
+                                    oid,
+                                    output_index,
+                                    error,
+                                } => {
                                     if errored.contains(&output_index) {
                                         continue;
                                     }
@@ -628,9 +646,8 @@ async fn raw_stream<'a>(
     probe_cap: &'a Capability<MzOffset>,
 ) -> Result<
     Result<
-        impl AsyncStream<
-                Item = Result<ReplicationMessage<LogicalReplicationMessage>, TransientError>,
-            > + 'a,
+        impl AsyncStream<Item = Result<ReplicationMessage<LogicalReplicationMessage>, TransientError>>
+        + 'a,
         DefiniteError,
     >,
     TransientError,
@@ -835,8 +852,9 @@ async fn raw_stream<'a>(
 /// message. The BEGIN message must have already been consumed from the stream before calling this
 /// function.
 fn extract_transaction<'a>(
-    stream: impl AsyncStream<Item = Result<ReplicationMessage<LogicalReplicationMessage>, TransientError>>
-        + 'a,
+    stream: impl AsyncStream<
+        Item = Result<ReplicationMessage<LogicalReplicationMessage>, TransientError>,
+    > + 'a,
     metadata_client: &'a Client,
     commit_lsn: MzOffset,
     table_info: &'a BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,

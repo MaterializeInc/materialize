@@ -13,7 +13,7 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 
 use anyhow::anyhow;
-use arrow::array::{make_array, Array, ArrayData, ArrayRef, BinaryArray, Int64Array, RecordBatch};
+use arrow::array::{Array, ArrayData, ArrayRef, BinaryArray, Int64Array, RecordBatch, make_array};
 use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer};
 use arrow::datatypes::ToByteSlice;
 use mz_dyncfg::Config;

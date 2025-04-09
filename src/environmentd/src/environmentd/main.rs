@@ -15,13 +15,13 @@
 use std::ffi::CStr;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use std::{cmp, env, iter, thread};
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use clap::{ArgAction, Parser, ValueEnum};
 use fail::FailScenario;
 use http::header::HeaderValue;
@@ -29,15 +29,15 @@ use ipnet::IpNet;
 use itertools::Itertools;
 use mz_adapter::ResultExt;
 use mz_adapter_types::bootstrap_builtin_cluster_config::{
-    BootstrapBuiltinClusterConfig, ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR, BootstrapBuiltinClusterConfig,
     CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
     SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
 };
 use mz_aws_secrets_controller::AwsSecretsController;
 use mz_build_info::BuildInfo;
 use mz_catalog::builtin::{
-    UnsafeBuiltinTableFingerprintWhitespace,
     UNSAFE_DO_NOT_CALL_THIS_IN_PRODUCTION_BUILTIN_TABLE_FINGERPRINT_WHITESPACE,
+    UnsafeBuiltinTableFingerprintWhitespace,
 };
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
@@ -55,16 +55,16 @@ use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs, TracingOrches
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::error::ErrorExt;
 use mz_ore::metric;
-use mz_ore::metrics::{register_runtime_metrics, MetricsRegistry};
+use mz_ore::metrics::{MetricsRegistry, register_runtime_metrics};
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task::RuntimeExt;
 use mz_ore::url::SensitiveUrl;
+use mz_persist_client::PersistLocation;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::{
     MetricsSameProcessPubSubSender, PersistGrpcPubSubServer, PubSubClientConnection, PubSubSender,
 };
-use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
 use mz_server_core::TlsCliArgs;
 use mz_service::emit_boot_diagnostics;
@@ -73,12 +73,12 @@ use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::connections::ConnectionContext;
 use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
-use tracing::{error, info, info_span, warn, Instrument};
+use tracing::{Instrument, error, info, info_span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
 use crate::environmentd::sys;
-use crate::{CatalogConfig, Listeners, ListenersConfig, BUILD_INFO};
+use crate::{BUILD_INFO, CatalogConfig, Listeners, ListenersConfig};
 
 static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
 static LONG_VERSION: LazyLock<String> = LazyLock::new(|| {
@@ -694,7 +694,9 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         )
         .context("failed to validate license key file")?;
         if license_key.expired {
-            let message = format!("The license key provided at {license_key_file} is expired! Please contact Materialize for assistance.");
+            let message = format!(
+                "The license key provided at {license_key_file} is expired! Please contact Materialize for assistance."
+            );
             match license_key.expiration_behavior {
                 ExpirationBehavior::Warn | ExpirationBehavior::DisableClusterCreation => {
                     warn!("{message}");
@@ -913,18 +915,16 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 SecretsControllerKind::Kubernetes => bail!(
                     "SecretsControllerKind::Kubernetes is not compatible with Orchestrator::Process."
                 ),
-                SecretsControllerKind::AwsSecretsManager => {
-                    Arc::new(
-                        runtime.block_on(AwsSecretsController::new(
-                            &aws_secrets_controller_prefix(&args.environment_id),
-                            &aws_secrets_controller_key_alias(&args.environment_id),
-                            args.aws_secrets_controller_tags
-                                .into_iter()
-                                .map(|tag| (tag.key, tag.value))
-                                .collect(),
-                        )),
-                    )
-                }
+                SecretsControllerKind::AwsSecretsManager => Arc::new(
+                    runtime.block_on(AwsSecretsController::new(
+                        &aws_secrets_controller_prefix(&args.environment_id),
+                        &aws_secrets_controller_key_alias(&args.environment_id),
+                        args.aws_secrets_controller_tags
+                            .into_iter()
+                            .map(|tag| (tag.key, tag.value))
+                            .collect(),
+                    )),
+                ),
                 SecretsControllerKind::LocalFile => {
                     let sc = Arc::clone(&orchestrator);
                     let sc: Arc<dyn SecretsController> = sc;

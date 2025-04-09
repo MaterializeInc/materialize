@@ -666,11 +666,7 @@ pub fn get_precision<const N: usize>(n: &Decimal<N>) -> u32 {
 /// Returns `n`'s scale, i.e. the number of digits used after the decimal point.
 pub fn get_scale(n: &Numeric) -> u32 {
     let exp = n.exponent();
-    if exp >= 0 {
-        0
-    } else {
-        exp.unsigned_abs()
-    }
+    if exp >= 0 { 0 } else { exp.unsigned_abs() }
 }
 
 /// Ensures [`Numeric`] values are:

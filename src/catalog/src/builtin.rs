@@ -382,7 +382,7 @@ impl Fingerprint for &BuiltinTable {
             }
             Some((UnsafeBuiltinTableFingerprintWhitespace::Half, whitespace)) => {
                 let mut rng = rand::thread_rng();
-                let migrate: bool = rng.gen();
+                let migrate: bool = rng.r#gen();
                 if migrate {
                     format!("{}{}", self.desc.fingerprint(), whitespace)
                 } else {
@@ -2072,8 +2072,7 @@ pub static MZ_KAFKA_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTabl
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
-pub static MZ_KAFKA_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
+pub static MZ_KAFKA_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_kafka_connections",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_KAFKA_CONNECTIONS_OID,
@@ -2087,12 +2086,17 @@ pub static MZ_KAFKA_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| {
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "The ID of the connection."),
-        ("brokers", "The addresses of the Kafka brokers to connect to."),
-        ("sink_progress_topic", "The name of the Kafka topic where any sinks associated with this connection will track their progress information and other metadata. The contents of this topic are unspecified."),
+        (
+            "brokers",
+            "The addresses of the Kafka brokers to connect to.",
+        ),
+        (
+            "sink_progress_topic",
+            "The name of the Kafka topic where any sinks associated with this connection will track their progress information and other metadata. The contents of this topic are unspecified.",
+        ),
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
-}
 });
 pub static MZ_KAFKA_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_kafka_sources",
@@ -2120,8 +2124,7 @@ pub static MZ_KAFKA_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTa
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
-pub static MZ_POSTGRES_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
+pub static MZ_POSTGRES_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_postgres_sources",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_POSTGRES_SOURCES_OID,
@@ -2131,16 +2134,23 @@ pub static MZ_POSTGRES_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| {
         .with_column("timeline_id", ScalarType::UInt64.nullable(true))
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("id", "The ID of the source. Corresponds to `mz_catalog.mz_sources.id`."),
-        ("replication_slot", "The name of the replication slot in the PostgreSQL database that Materialize will create and stream data from."),
-        ("timeline_id", "The PostgreSQL timeline ID determined on source creation."),
+        (
+            "id",
+            "The ID of the source. Corresponds to `mz_catalog.mz_sources.id`.",
+        ),
+        (
+            "replication_slot",
+            "The name of the replication slot in the PostgreSQL database that Materialize will create and stream data from.",
+        ),
+        (
+            "timeline_id",
+            "The PostgreSQL timeline ID determined on source creation.",
+        ),
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
-}
 });
-pub static MZ_POSTGRES_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
+pub static MZ_POSTGRES_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_postgres_source_tables",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_POSTGRES_SOURCE_TABLES_OID,
@@ -2150,16 +2160,23 @@ pub static MZ_POSTGRES_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| 
         .with_column("table_name", ScalarType::String.nullable(false))
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("id", "The ID of the subsource or table. Corresponds to `mz_catalog.mz_sources.id` or `mz_catalog.mz_tables.id`."),
-        ("schema_name", "The schema of the upstream table being ingested."),
-        ("table_name", "The name of the upstream table being ingested."),
+        (
+            "id",
+            "The ID of the subsource or table. Corresponds to `mz_catalog.mz_sources.id` or `mz_catalog.mz_tables.id`.",
+        ),
+        (
+            "schema_name",
+            "The schema of the upstream table being ingested.",
+        ),
+        (
+            "table_name",
+            "The name of the upstream table being ingested.",
+        ),
     ]),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
-}
 });
-pub static MZ_MYSQL_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
+pub static MZ_MYSQL_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_mysql_source_tables",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_MYSQL_SOURCE_TABLES_OID,
@@ -2169,16 +2186,23 @@ pub static MZ_MYSQL_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| {
         .with_column("table_name", ScalarType::String.nullable(false))
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("id", "The ID of the subsource or table. Corresponds to `mz_catalog.mz_sources.id` or `mz_catalog.mz_tables.id`."),
-        ("schema_name", "The schema (or, database) of the upstream table being ingested."),
-        ("table_name", "The name of the upstream table being ingested."),
+        (
+            "id",
+            "The ID of the subsource or table. Corresponds to `mz_catalog.mz_sources.id` or `mz_catalog.mz_tables.id`.",
+        ),
+        (
+            "schema_name",
+            "The schema (or, database) of the upstream table being ingested.",
+        ),
+        (
+            "table_name",
+            "The name of the upstream table being ingested.",
+        ),
     ]),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
-}
 });
-pub static MZ_KAFKA_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
+pub static MZ_KAFKA_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_kafka_source_tables",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_KAFKA_SOURCE_TABLES_OID,
@@ -2190,15 +2214,26 @@ pub static MZ_KAFKA_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| {
         .with_column("value_format", ScalarType::String.nullable(true))
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("id", "The ID of the table. Corresponds to `mz_catalog.mz_tables.id`."),
+        (
+            "id",
+            "The ID of the table. Corresponds to `mz_catalog.mz_tables.id`.",
+        ),
         ("topic", "The topic being ingested."),
-        ("envelope_type", "The envelope type: `none`, `upsert`, or `debezium`. `NULL` for other source types."),
-        ("key_format", "The format of the Kafka message key: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`."),
-        ("value_format", "The format of the Kafka message value: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`. `NULL` for other source types."),
+        (
+            "envelope_type",
+            "The envelope type: `none`, `upsert`, or `debezium`. `NULL` for other source types.",
+        ),
+        (
+            "key_format",
+            "The format of the Kafka message key: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`.",
+        ),
+        (
+            "value_format",
+            "The format of the Kafka message value: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`. `NULL` for other source types.",
+        ),
     ]),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
-}
 });
 pub static MZ_OBJECT_DEPENDENCIES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_object_dependencies",
@@ -2221,8 +2256,7 @@ pub static MZ_OBJECT_DEPENDENCIES: LazyLock<BuiltinTable> = LazyLock::new(|| Bui
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
-pub static MZ_COMPUTE_DEPENDENCIES: LazyLock<BuiltinSource> = LazyLock::new(|| {
-    BuiltinSource {
+pub static MZ_COMPUTE_DEPENDENCIES: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
     name: "mz_compute_dependencies",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_COMPUTE_DEPENDENCIES_OID,
@@ -2232,12 +2266,17 @@ pub static MZ_COMPUTE_DEPENDENCIES: LazyLock<BuiltinSource> = LazyLock::new(|| {
         .with_column("dependency_id", ScalarType::String.nullable(false))
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("object_id", "The ID of a compute object. Corresponds to `mz_catalog.mz_indexes.id`, `mz_catalog.mz_materialized_views.id`, or `mz_internal.mz_subscriptions`."),
-        ("dependency_id", "The ID of a compute dependency. Corresponds to `mz_catalog.mz_indexes.id`, `mz_catalog.mz_materialized_views.id`, `mz_catalog.mz_sources.id`, or `mz_catalog.mz_tables.id`."),
+        (
+            "object_id",
+            "The ID of a compute object. Corresponds to `mz_catalog.mz_indexes.id`, `mz_catalog.mz_materialized_views.id`, or `mz_internal.mz_subscriptions`.",
+        ),
+        (
+            "dependency_id",
+            "The ID of a compute dependency. Corresponds to `mz_catalog.mz_indexes.id`, `mz_catalog.mz_materialized_views.id`, `mz_catalog.mz_sources.id`, or `mz_catalog.mz_tables.id`.",
+        ),
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
-}
 });
 pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER: LazyLock<BuiltinSource> =
     LazyLock::new(|| BuiltinSource {
@@ -2403,8 +2442,7 @@ pub static MZ_INDEXES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
-pub static MZ_INDEX_COLUMNS: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
+pub static MZ_INDEX_COLUMNS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_index_columns",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_INDEX_COLUMNS_OID,
@@ -2416,18 +2454,31 @@ pub static MZ_INDEX_COLUMNS: LazyLock<BuiltinTable> = LazyLock::new(|| {
         .with_column("nullable", ScalarType::Bool.nullable(false))
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("index_id", "The ID of the index which contains this column. Corresponds to `mz_indexes.id`."),
-        ("index_position", "The 1-indexed position of this column within the index. (The order of columns in an index does not necessarily match the order of columns in the relation on which the index is built.)"),
-        ("on_position", "If not `NULL`, specifies the 1-indexed position of a column in the relation on which this index is built that determines the value of this index column."),
-        ("on_expression", "If not `NULL`, specifies a SQL expression that is evaluated to compute the value of this index column. The expression may contain references to any of the columns of the relation."),
-        ("nullable", "Can this column of the index evaluate to `NULL`?"),
+        (
+            "index_id",
+            "The ID of the index which contains this column. Corresponds to `mz_indexes.id`.",
+        ),
+        (
+            "index_position",
+            "The 1-indexed position of this column within the index. (The order of columns in an index does not necessarily match the order of columns in the relation on which the index is built.)",
+        ),
+        (
+            "on_position",
+            "If not `NULL`, specifies the 1-indexed position of a column in the relation on which this index is built that determines the value of this index column.",
+        ),
+        (
+            "on_expression",
+            "If not `NULL`, specifies a SQL expression that is evaluated to compute the value of this index column. The expression may contain references to any of the columns of the relation.",
+        ),
+        (
+            "nullable",
+            "Can this column of the index evaluate to `NULL`?",
+        ),
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
-}
 });
-pub static MZ_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
+pub static MZ_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_tables",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_TABLES_OID,
@@ -2450,20 +2501,30 @@ pub static MZ_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| {
     column_comments: BTreeMap::from_iter([
         ("id", "Materialize's unique ID for the table."),
         ("oid", "A [PostgreSQL-compatible OID][`oid`] for the table."),
-        ("schema_id", "The ID of the schema to which the table belongs. Corresponds to `mz_schemas.id`."),
+        (
+            "schema_id",
+            "The ID of the schema to which the table belongs. Corresponds to `mz_schemas.id`.",
+        ),
         ("name", "The name of the table."),
-        ("owner_id", "The role ID of the owner of the table. Corresponds to `mz_roles.id`."),
+        (
+            "owner_id",
+            "The role ID of the owner of the table. Corresponds to `mz_roles.id`.",
+        ),
         ("privileges", "The privileges belonging to the table."),
         ("create_sql", "The `CREATE` SQL statement for the table."),
-        ("redacted_create_sql", "The redacted `CREATE` SQL statement for the table."),
-        ("source_id", "The ID of the source associated with the table, if any. Corresponds to `mz_sources.id`."),
+        (
+            "redacted_create_sql",
+            "The redacted `CREATE` SQL statement for the table.",
+        ),
+        (
+            "source_id",
+            "The ID of the source associated with the table, if any. Corresponds to `mz_sources.id`.",
+        ),
     ]),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
-}
 });
-pub static MZ_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
+pub static MZ_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_connections",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_CONNECTIONS_OID,
@@ -2485,18 +2546,35 @@ pub static MZ_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| {
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "The unique ID of the connection."),
-        ("oid", "A [PostgreSQL-compatible OID][`oid`] for the connection."),
-        ("schema_id", "The ID of the schema to which the connection belongs. Corresponds to `mz_schemas.id`."),
+        (
+            "oid",
+            "A [PostgreSQL-compatible OID][`oid`] for the connection.",
+        ),
+        (
+            "schema_id",
+            "The ID of the schema to which the connection belongs. Corresponds to `mz_schemas.id`.",
+        ),
         ("name", "The name of the connection."),
-        ("type", "The type of the connection: `confluent-schema-registry`, `kafka`, `postgres`, or `ssh-tunnel`."),
-        ("owner_id", "The role ID of the owner of the connection. Corresponds to `mz_roles.id`."),
+        (
+            "type",
+            "The type of the connection: `confluent-schema-registry`, `kafka`, `postgres`, or `ssh-tunnel`.",
+        ),
+        (
+            "owner_id",
+            "The role ID of the owner of the connection. Corresponds to `mz_roles.id`.",
+        ),
         ("privileges", "The privileges belonging to the connection."),
-        ("create_sql", "The `CREATE` SQL statement for the connection."),
-        ("redacted_create_sql", "The redacted `CREATE` SQL statement for the connection."),
+        (
+            "create_sql",
+            "The `CREATE` SQL statement for the connection.",
+        ),
+        (
+            "redacted_create_sql",
+            "The redacted `CREATE` SQL statement for the connection.",
+        ),
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
-}
 });
 pub static MZ_SSH_TUNNEL_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_ssh_tunnel_connections",
@@ -2521,8 +2599,7 @@ pub static MZ_SSH_TUNNEL_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| 
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
-pub static MZ_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
+pub static MZ_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_sources",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_SOURCES_OID,
@@ -2550,71 +2627,127 @@ pub static MZ_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| {
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "Materialize's unique ID for the source."),
-        ("oid", "A [PostgreSQL-compatible OID][`oid`] for the source."),
-        ("schema_id", "The ID of the schema to which the source belongs. Corresponds to `mz_schemas.id`."),
+        (
+            "oid",
+            "A [PostgreSQL-compatible OID][`oid`] for the source.",
+        ),
+        (
+            "schema_id",
+            "The ID of the schema to which the source belongs. Corresponds to `mz_schemas.id`.",
+        ),
         ("name", "The name of the source."),
-        ("type", "The type of the source: `kafka`, `mysql`, `postgres`, `load-generator`, `progress`, or `subsource`."),
-        ("connection_id", "The ID of the connection associated with the source, if any. Corresponds to `mz_connections.id`."),
+        (
+            "type",
+            "The type of the source: `kafka`, `mysql`, `postgres`, `load-generator`, `progress`, or `subsource`.",
+        ),
+        (
+            "connection_id",
+            "The ID of the connection associated with the source, if any. Corresponds to `mz_connections.id`.",
+        ),
         ("size", "Deprecated The size of the source."),
-        ("envelope_type", "For Kafka sources, the envelope type: `none`, `upsert`, or `debezium`. `NULL` for other source types."),
-        ("key_format", "For Kafka sources, the format of the Kafka message key: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`."),
-        ("value_format", "For Kafka sources, the format of the Kafka message value: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`. `NULL` for other source types."),
-        ("cluster_id", "The ID of the cluster maintaining the source. Corresponds to `mz_clusters.id`."),
-        ("owner_id", "The role ID of the owner of the source. Corresponds to `mz_roles.id`."),
+        (
+            "envelope_type",
+            "For Kafka sources, the envelope type: `none`, `upsert`, or `debezium`. `NULL` for other source types.",
+        ),
+        (
+            "key_format",
+            "For Kafka sources, the format of the Kafka message key: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`.",
+        ),
+        (
+            "value_format",
+            "For Kafka sources, the format of the Kafka message value: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`. `NULL` for other source types.",
+        ),
+        (
+            "cluster_id",
+            "The ID of the cluster maintaining the source. Corresponds to `mz_clusters.id`.",
+        ),
+        (
+            "owner_id",
+            "The role ID of the owner of the source. Corresponds to `mz_roles.id`.",
+        ),
         ("privileges", "The privileges granted on the source."),
         ("create_sql", "The `CREATE` SQL statement for the source."),
-        ("redacted_create_sql", "The redacted `CREATE` SQL statement for the source."),
+        (
+            "redacted_create_sql",
+            "The redacted `CREATE` SQL statement for the source.",
+        ),
     ]),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
-}
 });
 pub static MZ_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| {
     BuiltinTable {
-    name: "mz_sinks",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_SINKS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::String.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false))
-        .with_column("type", ScalarType::String.nullable(false))
-        .with_column("connection_id", ScalarType::String.nullable(true))
-        .with_column("size", ScalarType::String.nullable(true))
-        .with_column("envelope_type", ScalarType::String.nullable(true))
-        // This `format` column is deprecated and replaced by the `key_format` and `value_format` columns
-        // below. This should be removed in the future.
-        .with_column("format", ScalarType::String.nullable(false))
-        .with_column("key_format", ScalarType::String.nullable(true))
-        .with_column("value_format", ScalarType::String.nullable(false))
-        .with_column("cluster_id", ScalarType::String.nullable(false))
-        .with_column("owner_id", ScalarType::String.nullable(false))
-        .with_column("create_sql", ScalarType::String.nullable(false))
-        .with_column("redacted_create_sql", ScalarType::String.nullable(false))
-        .with_key(vec![0])
-        .with_key(vec![1])
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "Materialize's unique ID for the sink."),
-        ("oid", "A [PostgreSQL-compatible OID][`oid`] for the sink."),
-        ("schema_id", "The ID of the schema to which the sink belongs. Corresponds to `mz_schemas.id`."),
-        ("name", "The name of the sink."),
-        ("type", "The type of the sink: `kafka`."),
-        ("connection_id", "The ID of the connection associated with the sink, if any. Corresponds to `mz_connections.id`."),
-        ("size", "The size of the sink."),
-        ("envelope_type", "The envelope of the sink: `upsert`, or `debezium`."),
-        ("format", "Deprecated The format of the Kafka messages produced by the sink: `avro`, `json`, `text`, or `bytes`."),
-        ("key_format", "The format of the Kafka message key for messages produced by the sink: `avro`, `json`, `bytes`, `text`, or `NULL`."),
-        ("value_format", "The format of the Kafka message value for messages produced by the sink: `avro`, `json`, `text`, or `bytes`."),
-        ("cluster_id", "The ID of the cluster maintaining the sink. Corresponds to `mz_clusters.id`."),
-        ("owner_id", "The role ID of the owner of the sink. Corresponds to `mz_roles.id`."),
-        ("create_sql", "The `CREATE` SQL statement for the sink."),
-        ("redacted_create_sql", "The redacted `CREATE` SQL statement for the sink."),
-    ]),
-    is_retained_metrics_object: true,
-    access: vec![PUBLIC_SELECT],
-}
+        name: "mz_sinks",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::TABLE_MZ_SINKS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", ScalarType::String.nullable(false))
+            .with_column("oid", ScalarType::Oid.nullable(false))
+            .with_column("schema_id", ScalarType::String.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("type", ScalarType::String.nullable(false))
+            .with_column("connection_id", ScalarType::String.nullable(true))
+            .with_column("size", ScalarType::String.nullable(true))
+            .with_column("envelope_type", ScalarType::String.nullable(true))
+            // This `format` column is deprecated and replaced by the `key_format` and `value_format` columns
+            // below. This should be removed in the future.
+            .with_column("format", ScalarType::String.nullable(false))
+            .with_column("key_format", ScalarType::String.nullable(true))
+            .with_column("value_format", ScalarType::String.nullable(false))
+            .with_column("cluster_id", ScalarType::String.nullable(false))
+            .with_column("owner_id", ScalarType::String.nullable(false))
+            .with_column("create_sql", ScalarType::String.nullable(false))
+            .with_column("redacted_create_sql", ScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .with_key(vec![1])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "Materialize's unique ID for the sink."),
+            ("oid", "A [PostgreSQL-compatible OID][`oid`] for the sink."),
+            (
+                "schema_id",
+                "The ID of the schema to which the sink belongs. Corresponds to `mz_schemas.id`.",
+            ),
+            ("name", "The name of the sink."),
+            ("type", "The type of the sink: `kafka`."),
+            (
+                "connection_id",
+                "The ID of the connection associated with the sink, if any. Corresponds to `mz_connections.id`.",
+            ),
+            ("size", "The size of the sink."),
+            (
+                "envelope_type",
+                "The envelope of the sink: `upsert`, or `debezium`.",
+            ),
+            (
+                "format",
+                "Deprecated The format of the Kafka messages produced by the sink: `avro`, `json`, `text`, or `bytes`.",
+            ),
+            (
+                "key_format",
+                "The format of the Kafka message key for messages produced by the sink: `avro`, `json`, `bytes`, `text`, or `NULL`.",
+            ),
+            (
+                "value_format",
+                "The format of the Kafka message value for messages produced by the sink: `avro`, `json`, `text`, or `bytes`.",
+            ),
+            (
+                "cluster_id",
+                "The ID of the cluster maintaining the sink. Corresponds to `mz_clusters.id`.",
+            ),
+            (
+                "owner_id",
+                "The role ID of the owner of the sink. Corresponds to `mz_roles.id`.",
+            ),
+            ("create_sql", "The `CREATE` SQL statement for the sink."),
+            (
+                "redacted_create_sql",
+                "The redacted `CREATE` SQL statement for the sink.",
+            ),
+        ]),
+        is_retained_metrics_object: true,
+        access: vec![PUBLIC_SELECT],
+    }
 });
 pub static MZ_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_views",
@@ -2659,8 +2792,7 @@ pub static MZ_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
-pub static MZ_MATERIALIZED_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
+pub static MZ_MATERIALIZED_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_materialized_views",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_MATERIALIZED_VIEWS_OID,
@@ -2683,19 +2815,42 @@ pub static MZ_MATERIALIZED_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| {
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "Materialize's unique ID for the materialized view."),
-        ("oid", "A [PostgreSQL-compatible OID][`oid`] for the materialized view."),
-        ("schema_id", "The ID of the schema to which the materialized view belongs. Corresponds to `mz_schemas.id`."),
+        (
+            "oid",
+            "A [PostgreSQL-compatible OID][`oid`] for the materialized view.",
+        ),
+        (
+            "schema_id",
+            "The ID of the schema to which the materialized view belongs. Corresponds to `mz_schemas.id`.",
+        ),
         ("name", "The name of the materialized view."),
-        ("cluster_id", "The ID of the cluster maintaining the materialized view. Corresponds to `mz_clusters.id`."),
-        ("definition", "The materialized view definition (a `SELECT` query)."),
-        ("owner_id", "The role ID of the owner of the materialized view. Corresponds to `mz_roles.id`."),
-        ("privileges", "The privileges belonging to the materialized view."),
-        ("create_sql", "The `CREATE` SQL statement for the materialized view."),
-        ("redacted_create_sql", "The redacted `CREATE` SQL statement for the materialized view."),
+        (
+            "cluster_id",
+            "The ID of the cluster maintaining the materialized view. Corresponds to `mz_clusters.id`.",
+        ),
+        (
+            "definition",
+            "The materialized view definition (a `SELECT` query).",
+        ),
+        (
+            "owner_id",
+            "The role ID of the owner of the materialized view. Corresponds to `mz_roles.id`.",
+        ),
+        (
+            "privileges",
+            "The privileges belonging to the materialized view.",
+        ),
+        (
+            "create_sql",
+            "The `CREATE` SQL statement for the materialized view.",
+        ),
+        (
+            "redacted_create_sql",
+            "The redacted `CREATE` SQL statement for the materialized view.",
+        ),
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
-}
 });
 pub static MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES: LazyLock<BuiltinTable> = LazyLock::new(|| {
     BuiltinTable {
@@ -2716,11 +2871,26 @@ pub static MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES: LazyLock<BuiltinTable> = Laz
             )
             .finish(),
         column_comments: BTreeMap::from_iter([
-            ("materialized_view_id", "The ID of the materialized view. Corresponds to `mz_catalog.mz_materialized_views.id`"),
-            ("type", "`at`, `every`, or `on-commit`. Default: `on-commit`"),
-            ("interval", "The refresh interval of a `REFRESH EVERY` option, or `NULL` if the `type` is not `every`."),
-            ("aligned_to", "The `ALIGNED TO` option of a `REFRESH EVERY` option, or `NULL` if the `type` is not `every`."),
-            ("at", "The time of a `REFRESH AT`, or `NULL` if the `type` is not `at`."),
+            (
+                "materialized_view_id",
+                "The ID of the materialized view. Corresponds to `mz_catalog.mz_materialized_views.id`",
+            ),
+            (
+                "type",
+                "`at`, `every`, or `on-commit`. Default: `on-commit`",
+            ),
+            (
+                "interval",
+                "The refresh interval of a `REFRESH EVERY` option, or `NULL` if the `type` is not `every`.",
+            ),
+            (
+                "aligned_to",
+                "The `ALIGNED TO` option of a `REFRESH EVERY` option, or `NULL` if the `type` is not `every`.",
+            ),
+            (
+                "at",
+                "The time of a `REFRESH AT`, or `NULL` if the `type` is not `at`.",
+            ),
         ]),
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
@@ -2794,8 +2964,7 @@ pub static MZ_CONTINUAL_TASKS: LazyLock<BuiltinTable> = LazyLock::new(|| Builtin
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
-pub static MZ_NETWORK_POLICIES: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
+pub static MZ_NETWORK_POLICIES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_network_policies",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_NETWORK_POLICIES_OID,
@@ -2812,16 +2981,23 @@ pub static MZ_NETWORK_POLICIES: LazyLock<BuiltinTable> = LazyLock::new(|| {
     column_comments: BTreeMap::from_iter([
         ("id", "The ID of the network policy."),
         ("name", "The name of the network policy."),
-        ("owner_id", "The role ID of the owner of the network policy. Corresponds to `mz_catalog.mz_roles.id`."),
-        ("privileges", "The privileges belonging to the network policy."),
-        ("oid", "A [PostgreSQL-compatible OID][`oid`] for the network policy."),
+        (
+            "owner_id",
+            "The role ID of the owner of the network policy. Corresponds to `mz_catalog.mz_roles.id`.",
+        ),
+        (
+            "privileges",
+            "The privileges belonging to the network policy.",
+        ),
+        (
+            "oid",
+            "A [PostgreSQL-compatible OID][`oid`] for the network policy.",
+        ),
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
-}
 });
-pub static MZ_NETWORK_POLICY_RULES: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
+pub static MZ_NETWORK_POLICY_RULES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_network_policy_rules",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_NETWORK_POLICY_RULES_OID,
@@ -2833,15 +3009,26 @@ pub static MZ_NETWORK_POLICY_RULES: LazyLock<BuiltinTable> = LazyLock::new(|| {
         .with_column("direction", ScalarType::String.nullable(false))
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("name", "The name of the network policy rule. Can be combined with `policy_id` to form a unique identifier."),
-        ("policy_id", "The ID the network policy the rule is part of. Corresponds to `mz_network_policy_rules.id`."),
-        ("action", "The action of the rule. `allow` is the only supported action."),
+        (
+            "name",
+            "The name of the network policy rule. Can be combined with `policy_id` to form a unique identifier.",
+        ),
+        (
+            "policy_id",
+            "The ID the network policy the rule is part of. Corresponds to `mz_network_policy_rules.id`.",
+        ),
+        (
+            "action",
+            "The action of the rule. `allow` is the only supported action.",
+        ),
         ("address", "The address the rule will take action on."),
-        ("direction", "The direction of traffic the rule applies to. `ingress` is the only supported direction."),
+        (
+            "direction",
+            "The direction of traffic the rule applies to. `ingress` is the only supported direction.",
+        ),
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
-}
 });
 /// PostgreSQL-specific metadata about types that doesn't make sense to expose
 /// in the `mz_types` table as part of our public, stable API.
@@ -2976,8 +3163,7 @@ pub static MZ_ROLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
-pub static MZ_ROLE_MEMBERS: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
+pub static MZ_ROLE_MEMBERS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_role_members",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_ROLE_MEMBERS_OID,
@@ -2987,16 +3173,23 @@ pub static MZ_ROLE_MEMBERS: LazyLock<BuiltinTable> = LazyLock::new(|| {
         .with_column("grantor", ScalarType::String.nullable(false))
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("role_id", "The ID of the role the `member` is a member of. Corresponds to `mz_roles.id`."),
-        ("member", "The ID of the role that is a member of `role_id`. Corresponds to `mz_roles.id`."),
-        ("grantor", "The ID of the role that granted membership of `member` to `role_id`. Corresponds to `mz_roles.id`."),
+        (
+            "role_id",
+            "The ID of the role the `member` is a member of. Corresponds to `mz_roles.id`.",
+        ),
+        (
+            "member",
+            "The ID of the role that is a member of `role_id`. Corresponds to `mz_roles.id`.",
+        ),
+        (
+            "grantor",
+            "The ID of the role that granted membership of `member` to `role_id`. Corresponds to `mz_roles.id`.",
+        ),
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
-}
 });
-pub static MZ_ROLE_PARAMETERS: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
+pub static MZ_ROLE_PARAMETERS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_role_parameters",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_ROLE_PARAMETERS_OID,
@@ -3006,13 +3199,21 @@ pub static MZ_ROLE_PARAMETERS: LazyLock<BuiltinTable> = LazyLock::new(|| {
         .with_column("parameter_value", ScalarType::String.nullable(false))
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("role_id", "The ID of the role whose configuration parameter default is set. Corresponds to `mz_roles.id`."),
-        ("parameter_name", "The configuration parameter name. One of the supported configuration parameters."),
-        ("parameter_value", "The default value of the parameter for the given role. Can be either a single value, or a comma-separated list of values for configuration parameters that accept a list."),
+        (
+            "role_id",
+            "The ID of the role whose configuration parameter default is set. Corresponds to `mz_roles.id`.",
+        ),
+        (
+            "parameter_name",
+            "The configuration parameter name. One of the supported configuration parameters.",
+        ),
+        (
+            "parameter_value",
+            "The default value of the parameter for the given role. Can be either a single value, or a comma-separated list of values for configuration parameters that accept a list.",
+        ),
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
-}
 });
 pub static MZ_PSEUDO_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_pseudo_types",
@@ -3027,40 +3228,61 @@ pub static MZ_PSEUDO_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTab
 });
 pub static MZ_FUNCTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| {
     BuiltinTable {
-    name: "mz_functions",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_FUNCTIONS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", ScalarType::String.nullable(false)) // not a key!
-        .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::String.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false))
-        .with_column(
-            "argument_type_ids",
-            ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
-        )
-        .with_column(
-            "variadic_argument_type_id",
-            ScalarType::String.nullable(true),
-        )
-        .with_column("return_type_id", ScalarType::String.nullable(true))
-        .with_column("returns_set", ScalarType::Bool.nullable(false))
-        .with_column("owner_id", ScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "Materialize's unique ID for the function."),
-        ("oid", "A [PostgreSQL-compatible OID][`oid`] for the function."),
-        ("schema_id", "The ID of the schema to which the function belongs. Corresponds to `mz_schemas.id`."),
-        ("name", "The name of the function."),
-        ("argument_type_ids", "The ID of each argument's type. Each entry refers to `mz_types.id`."),
-        ("variadic_argument_type_id", "The ID of the variadic argument's type, or `NULL` if the function does not have a variadic argument. Refers to `mz_types.id`."),
-        ("return_type_id", "The returned value's type, or `NULL` if the function does not return a value. Refers to `mz_types.id`. Note that for table functions with > 1 column, this type corresponds to [`record`]."),
-        ("returns_set", "Whether the function returns a set, i.e. the function is a table function."),
-        ("owner_id", "The role ID of the owner of the function. Corresponds to `mz_roles.id`."),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-}
+        name: "mz_functions",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::TABLE_MZ_FUNCTIONS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", ScalarType::String.nullable(false)) // not a key!
+            .with_column("oid", ScalarType::Oid.nullable(false))
+            .with_column("schema_id", ScalarType::String.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column(
+                "argument_type_ids",
+                ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
+            )
+            .with_column(
+                "variadic_argument_type_id",
+                ScalarType::String.nullable(true),
+            )
+            .with_column("return_type_id", ScalarType::String.nullable(true))
+            .with_column("returns_set", ScalarType::Bool.nullable(false))
+            .with_column("owner_id", ScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "Materialize's unique ID for the function."),
+            (
+                "oid",
+                "A [PostgreSQL-compatible OID][`oid`] for the function.",
+            ),
+            (
+                "schema_id",
+                "The ID of the schema to which the function belongs. Corresponds to `mz_schemas.id`.",
+            ),
+            ("name", "The name of the function."),
+            (
+                "argument_type_ids",
+                "The ID of each argument's type. Each entry refers to `mz_types.id`.",
+            ),
+            (
+                "variadic_argument_type_id",
+                "The ID of the variadic argument's type, or `NULL` if the function does not have a variadic argument. Refers to `mz_types.id`.",
+            ),
+            (
+                "return_type_id",
+                "The returned value's type, or `NULL` if the function does not return a value. Refers to `mz_types.id`. Note that for table functions with > 1 column, this type corresponds to [`record`].",
+            ),
+            (
+                "returns_set",
+                "Whether the function returns a set, i.e. the function is a table function.",
+            ),
+            (
+                "owner_id",
+                "The role ID of the owner of the function. Corresponds to `mz_roles.id`.",
+            ),
+        ]),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+    }
 });
 pub static MZ_OPERATORS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_operators",
@@ -3093,8 +3315,7 @@ pub static MZ_AGGREGATES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_CLUSTERS: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
+pub static MZ_CLUSTERS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_clusters",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_CLUSTERS_OID,
@@ -3128,19 +3349,42 @@ pub static MZ_CLUSTERS: LazyLock<BuiltinTable> = LazyLock::new(|| {
     column_comments: BTreeMap::from_iter([
         ("id", "Materialize's unique ID for the cluster."),
         ("name", "The name of the cluster."),
-        ("owner_id", "The role ID of the owner of the cluster. Corresponds to `mz_roles.id`."),
+        (
+            "owner_id",
+            "The role ID of the owner of the cluster. Corresponds to `mz_roles.id`.",
+        ),
         ("privileges", "The privileges belonging to the cluster."),
-        ("managed", "Whether the cluster is a managed cluster with automatically managed replicas."),
-        ("size", "If the cluster is managed, the desired size of the cluster's replicas. `NULL` for unmanaged clusters."),
-        ("replication_factor", "If the cluster is managed, the desired number of replicas of the cluster. `NULL` for unmanaged clusters."),
-        ("disk", "Unstable If the cluster is managed, `true` if the replicas have the `DISK` option . `NULL` for unmanaged clusters."),
-        ("availability_zones", "Unstable If the cluster is managed, the list of availability zones specified in `AVAILABILITY ZONES`. `NULL` for unmanaged clusters."),
-        ("introspection_debugging", "Whether introspection of the gathering of the introspection data is enabled."),
-        ("introspection_interval", "The interval at which to collect introspection data."),
+        (
+            "managed",
+            "Whether the cluster is a managed cluster with automatically managed replicas.",
+        ),
+        (
+            "size",
+            "If the cluster is managed, the desired size of the cluster's replicas. `NULL` for unmanaged clusters.",
+        ),
+        (
+            "replication_factor",
+            "If the cluster is managed, the desired number of replicas of the cluster. `NULL` for unmanaged clusters.",
+        ),
+        (
+            "disk",
+            "Unstable If the cluster is managed, `true` if the replicas have the `DISK` option . `NULL` for unmanaged clusters.",
+        ),
+        (
+            "availability_zones",
+            "Unstable If the cluster is managed, the list of availability zones specified in `AVAILABILITY ZONES`. `NULL` for unmanaged clusters.",
+        ),
+        (
+            "introspection_debugging",
+            "Whether introspection of the gathering of the introspection data is enabled.",
+        ),
+        (
+            "introspection_interval",
+            "The interval at which to collect introspection data.",
+        ),
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
-}
 });
 
 pub static MZ_CLUSTER_WORKLOAD_CLASSES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -3301,8 +3545,7 @@ pub static MZ_PENDING_CLUSTER_REPLICAS: LazyLock<BuiltinTable> = LazyLock::new(|
 
 // TODO(teskje) Remove this table in favor of `MZ_CLUSTER_REPLICA_STATUS_HISTORY`, once internal
 //              clients have been migrated.
-pub static MZ_CLUSTER_REPLICA_STATUSES: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
+pub static MZ_CLUSTER_REPLICA_STATUSES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_cluster_replica_statuses",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_CLUSTER_REPLICA_STATUSES_OID,
@@ -3317,15 +3560,29 @@ pub static MZ_CLUSTER_REPLICA_STATUSES: LazyLock<BuiltinTable> = LazyLock::new(|
         )
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("replica_id", "Materialize's unique ID for the cluster replica."),
-        ("process_id", "The ID of the process within the cluster replica."),
-        ("status", "The status of the cluster replica: `online` or `offline`."),
-        ("reason", "If the cluster replica is in a `offline` state, the reason (if available). For example, `oom-killed`."),
-        ("updated_at", "The time at which the status was last updated."),
+        (
+            "replica_id",
+            "Materialize's unique ID for the cluster replica.",
+        ),
+        (
+            "process_id",
+            "The ID of the process within the cluster replica.",
+        ),
+        (
+            "status",
+            "The status of the cluster replica: `online` or `offline`.",
+        ),
+        (
+            "reason",
+            "If the cluster replica is in a `offline` state, the reason (if available). For example, `oom-killed`.",
+        ),
+        (
+            "updated_at",
+            "The time at which the status was last updated.",
+        ),
     ]),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
-}
 });
 
 pub static MZ_CLUSTER_REPLICA_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| {
@@ -3338,9 +3595,18 @@ pub static MZ_CLUSTER_REPLICA_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock
         column_comments: BTreeMap::from_iter([
             ("replica_id", "The ID of a cluster replica."),
             ("process_id", "The ID of a process within the replica."),
-            ("status", "The status of the cluster replica: `online` or `offline`."),
-            ("reason", "If the cluster replica is in an `offline` state, the reason (if available). For example, `oom-killed`."),
-            ("occurred_at", "Wall-clock timestamp at which the event occurred."),
+            (
+                "status",
+                "The status of the cluster replica: `online` or `offline`.",
+            ),
+            (
+                "reason",
+                "If the cluster replica is in an `offline` state, the reason (if available). For example, `oom-killed`.",
+            ),
+            (
+                "occurred_at",
+                "Wall-clock timestamp at which the event occurred.",
+            ),
         ]),
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
@@ -3406,8 +3672,7 @@ pub static MZ_CLUSTER_REPLICA_SIZES: LazyLock<BuiltinTable> = LazyLock::new(|| B
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_AUDIT_EVENTS: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
+pub static MZ_AUDIT_EVENTS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_audit_events",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_AUDIT_EVENTS_OID,
@@ -3424,41 +3689,73 @@ pub static MZ_AUDIT_EVENTS: LazyLock<BuiltinTable> = LazyLock::new(|| {
         .with_key(vec![0])
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("id", "Materialize's unique, monotonically increasing ID for the event."),
-        ("event_type", "The type of the event: `create`, `drop`, or `alter`."),
-        ("object_type", "The type of the affected object: `cluster`, `cluster-replica`, `connection`, `database`, `function`, `index`, `materialized-view`, `role`, `schema`, `secret`, `sink`, `source`, `table`, `type`, or `view`."),
-        ("details", "Additional details about the event. The shape of the details varies based on `event_type` and `object_type`."),
-        ("user", "The user who triggered the event, or `NULL` if triggered by the system."),
-        ("occurred_at", "The time at which the event occurred. Guaranteed to be in order of event creation. Events created in the same transaction will have identical values."),
+        (
+            "id",
+            "Materialize's unique, monotonically increasing ID for the event.",
+        ),
+        (
+            "event_type",
+            "The type of the event: `create`, `drop`, or `alter`.",
+        ),
+        (
+            "object_type",
+            "The type of the affected object: `cluster`, `cluster-replica`, `connection`, `database`, `function`, `index`, `materialized-view`, `role`, `schema`, `secret`, `sink`, `source`, `table`, `type`, or `view`.",
+        ),
+        (
+            "details",
+            "Additional details about the event. The shape of the details varies based on `event_type` and `object_type`.",
+        ),
+        (
+            "user",
+            "The user who triggered the event, or `NULL` if triggered by the system.",
+        ),
+        (
+            "occurred_at",
+            "The time at which the event occurred. Guaranteed to be in order of event creation. Events created in the same transaction will have identical values.",
+        ),
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
-}
 });
 
-pub static MZ_SOURCE_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| {
-    BuiltinSource {
+pub static MZ_SOURCE_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
     name: "mz_source_status_history",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_SOURCE_STATUS_HISTORY_OID,
     data_source: IntrospectionType::SourceStatusHistory,
     desc: MZ_SOURCE_STATUS_HISTORY_DESC.clone(),
     column_comments: BTreeMap::from_iter([
-        ("occurred_at", "Wall-clock timestamp of the source status change."),
-        ("source_id", "The ID of the source. Corresponds to `mz_catalog.mz_sources.id`."),
-        ("status", "The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, `failed`, or `dropped`."),
-        ("error", "If the source is in an error state, the error message."),
-        ("details", "Additional metadata provided by the source. In case of error, may contain a `hint` field with helpful suggestions."),
-        ("replica_id", "The ID of the replica that an instance of a source is running on."),
+        (
+            "occurred_at",
+            "Wall-clock timestamp of the source status change.",
+        ),
+        (
+            "source_id",
+            "The ID of the source. Corresponds to `mz_catalog.mz_sources.id`.",
+        ),
+        (
+            "status",
+            "The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, `failed`, or `dropped`.",
+        ),
+        (
+            "error",
+            "If the source is in an error state, the error message.",
+        ),
+        (
+            "details",
+            "Additional metadata provided by the source. In case of error, may contain a `hint` field with helpful suggestions.",
+        ),
+        (
+            "replica_id",
+            "The ID of the replica that an instance of a source is running on.",
+        ),
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
-}
 });
 
 pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(
-    || {
-        BuiltinSource {
+    || BuiltinSource {
         name: "mz_aws_privatelink_connection_status_history",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::SOURCE_MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_OID,
@@ -3466,12 +3763,17 @@ pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY: LazyLock<BuiltinSource>
         desc: MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC.clone(),
         column_comments: BTreeMap::from_iter([
             ("occurred_at", "Wall-clock timestamp of the status change."),
-            ("connection_id", "The unique identifier of the AWS PrivateLink connection. Corresponds to `mz_catalog.mz_connections.id`."),
-            ("status", "The status of the connection: one of `pending-service-discovery`, `creating-endpoint`, `recreating-endpoint`, `updating-endpoint`, `available`, `deleted`, `deleting`, `expired`, `failed`, `pending`, `pending-acceptance`, `rejected`, or `unknown`."),
+            (
+                "connection_id",
+                "The unique identifier of the AWS PrivateLink connection. Corresponds to `mz_catalog.mz_connections.id`.",
+            ),
+            (
+                "status",
+                "The status of the connection: one of `pending-service-discovery`, `creating-endpoint`, `recreating-endpoint`, `updating-endpoint`, `available`, `deleted`, `deleting`, `expired`, `failed`, `pending`, `pending-acceptance`, `rejected`, or `unknown`.",
+            ),
         ]),
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
-    }
     },
 );
 
@@ -3781,8 +4083,7 @@ AND began_at + INTERVAL '1 day' > mz_now()",
     }
 });
 
-pub static MZ_RECENT_ACTIVITY_LOG: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_RECENT_ACTIVITY_LOG: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_recent_activity_log",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_RECENT_ACTIVITY_LOG_OID,
@@ -3844,35 +4145,122 @@ pub static MZ_RECENT_ACTIVITY_LOG: LazyLock<BuiltinView> = LazyLock::new(|| {
         .with_column("sql", ScalarType::String.nullable(false))
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("execution_id", "An ID that is unique for each executed statement."),
-        ("sample_rate", "The actual rate at which the statement was sampled."),
-        ("cluster_id", "The ID of the cluster the statement execution was directed to. Corresponds to mz_clusters.id."),
-        ("application_name", "The value of the `application_name` configuration parameter at execution time."),
-        ("cluster_name", "The name of the cluster with ID `cluster_id` at execution time."),
-        ("database_name", "The value of the `database` configuration parameter at execution time."),
-        ("search_path", "The value of the `search_path` configuration parameter at execution time."),
-        ("transaction_isolation", "The value of the `transaction_isolation` configuration parameter at execution time."),
-        ("execution_timestamp", "The logical timestamp at which execution was scheduled."),
-        ("transient_index_id", "The internal index of the compute dataflow created for the query, if any."),
-        ("params", "The parameters with which the statement was executed."),
-        ("mz_version", "The version of Materialize that was running when the statement was executed."),
-        ("began_at", "The wall-clock time at which the statement began executing."),
-        ("finished_at", "The wall-clock time at which the statement finished executing."),
-        ("finished_status", "The final status of the statement (e.g., `success`, `canceled`, `error`, or `aborted`). `aborted` means that Materialize exited before the statement finished executing."),
-        ("error_message", "The error message, if the statement failed."),
-        ("result_size", "The size in bytes of the result, for statements that return rows."),
-        ("rows_returned", "The number of rows returned, for statements that return rows."),
-        ("execution_strategy", "For `SELECT` queries, the strategy for executing the query. `constant` means computed in the control plane without the involvement of a cluster, `fast-path` means read by a cluster directly from an in-memory index, and `standard` means computed by a temporary dataflow."),
-        ("transaction_id", "The ID of the transaction that the statement was part of. Note that transaction IDs are only unique per session."),
-        ("prepared_statement_id", "An ID that is unique for each prepared statement. For example, if a statement is prepared once and then executed multiple times, all executions will have the same value for this column (but different values for `execution_id`)."),
-        ("sql_hash", "An opaque value uniquely identifying the text of the query."),
-        ("prepared_statement_name", "The name given by the client library to the prepared statement."),
-        ("session_id", "An ID that is unique for each session. Corresponds to mz_sessions.id."),
-        ("prepared_at", "The time at which the statement was prepared."),
-        ("statement_type", "The type of the statement, e.g. `select` for a `SELECT` query, or `NULL` if the statement was empty."),
-        ("throttled_count", "The number of statements that were dropped due to throttling before the current one was seen. If you have a very high volume of queries and need to log them without throttling, contact our team."),
-        ("initial_application_name", "The initial value of `application_name` at the beginning of the session."),
-        ("authenticated_user", "The name of the user for which the session was established."),
+        (
+            "execution_id",
+            "An ID that is unique for each executed statement.",
+        ),
+        (
+            "sample_rate",
+            "The actual rate at which the statement was sampled.",
+        ),
+        (
+            "cluster_id",
+            "The ID of the cluster the statement execution was directed to. Corresponds to mz_clusters.id.",
+        ),
+        (
+            "application_name",
+            "The value of the `application_name` configuration parameter at execution time.",
+        ),
+        (
+            "cluster_name",
+            "The name of the cluster with ID `cluster_id` at execution time.",
+        ),
+        (
+            "database_name",
+            "The value of the `database` configuration parameter at execution time.",
+        ),
+        (
+            "search_path",
+            "The value of the `search_path` configuration parameter at execution time.",
+        ),
+        (
+            "transaction_isolation",
+            "The value of the `transaction_isolation` configuration parameter at execution time.",
+        ),
+        (
+            "execution_timestamp",
+            "The logical timestamp at which execution was scheduled.",
+        ),
+        (
+            "transient_index_id",
+            "The internal index of the compute dataflow created for the query, if any.",
+        ),
+        (
+            "params",
+            "The parameters with which the statement was executed.",
+        ),
+        (
+            "mz_version",
+            "The version of Materialize that was running when the statement was executed.",
+        ),
+        (
+            "began_at",
+            "The wall-clock time at which the statement began executing.",
+        ),
+        (
+            "finished_at",
+            "The wall-clock time at which the statement finished executing.",
+        ),
+        (
+            "finished_status",
+            "The final status of the statement (e.g., `success`, `canceled`, `error`, or `aborted`). `aborted` means that Materialize exited before the statement finished executing.",
+        ),
+        (
+            "error_message",
+            "The error message, if the statement failed.",
+        ),
+        (
+            "result_size",
+            "The size in bytes of the result, for statements that return rows.",
+        ),
+        (
+            "rows_returned",
+            "The number of rows returned, for statements that return rows.",
+        ),
+        (
+            "execution_strategy",
+            "For `SELECT` queries, the strategy for executing the query. `constant` means computed in the control plane without the involvement of a cluster, `fast-path` means read by a cluster directly from an in-memory index, and `standard` means computed by a temporary dataflow.",
+        ),
+        (
+            "transaction_id",
+            "The ID of the transaction that the statement was part of. Note that transaction IDs are only unique per session.",
+        ),
+        (
+            "prepared_statement_id",
+            "An ID that is unique for each prepared statement. For example, if a statement is prepared once and then executed multiple times, all executions will have the same value for this column (but different values for `execution_id`).",
+        ),
+        (
+            "sql_hash",
+            "An opaque value uniquely identifying the text of the query.",
+        ),
+        (
+            "prepared_statement_name",
+            "The name given by the client library to the prepared statement.",
+        ),
+        (
+            "session_id",
+            "An ID that is unique for each session. Corresponds to mz_sessions.id.",
+        ),
+        (
+            "prepared_at",
+            "The time at which the statement was prepared.",
+        ),
+        (
+            "statement_type",
+            "The type of the statement, e.g. `select` for a `SELECT` query, or `NULL` if the statement was empty.",
+        ),
+        (
+            "throttled_count",
+            "The number of statements that were dropped due to throttling before the current one was seen. If you have a very high volume of queries and need to log them without throttling, contact our team.",
+        ),
+        (
+            "initial_application_name",
+            "The initial value of `application_name` at the beginning of the session.",
+        ),
+        (
+            "authenticated_user",
+            "The name of the user for which the session was established.",
+        ),
         ("sql", "The SQL text of the statement."),
     ]),
     sql: "SELECT mralt.*, mrst.sql
@@ -3880,7 +4268,6 @@ FROM mz_internal.mz_recent_activity_log_thinned mralt,
      mz_internal.mz_recent_sql_text mrst
 WHERE mralt.sql_hash = mrst.sql_hash",
     access: vec![MONITOR_SELECT],
-}
 });
 
 pub static MZ_RECENT_ACTIVITY_LOG_REDACTED: LazyLock<BuiltinView> = LazyLock::new(|| {
@@ -3951,8 +4338,14 @@ pub static MZ_STATEMENT_LIFECYCLE_HISTORY: LazyLock<BuiltinSource> = LazyLock::n
             .finish(),
         data_source: IntrospectionType::StatementLifecycleHistory,
         column_comments: BTreeMap::from_iter([
-            ("statement_id", "The ID of the execution event. Corresponds to `mz_recent_activity_log.execution_id`"),
-            ("event_type", "The type of lifecycle event, e.g. `'execution-began'`, `'storage-dependencies-finished'`, `'compute-dependencies-finished'`, or `'execution-finished'`"),
+            (
+                "statement_id",
+                "The ID of the execution event. Corresponds to `mz_recent_activity_log.execution_id`",
+            ),
+            (
+                "event_type",
+                "The type of lifecycle event, e.g. `'execution-began'`, `'storage-dependencies-finished'`, `'compute-dependencies-finished'`, or `'execution-finished'`",
+            ),
             ("occurred_at", "The time at which the event took place."),
         ]),
         is_retained_metrics_object: false,
@@ -3968,8 +4361,7 @@ pub static MZ_STATEMENT_LIFECYCLE_HISTORY: LazyLock<BuiltinSource> = LazyLock::n
     }
 });
 
-pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_source_statuses",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SOURCE_STATUSES_OID,
@@ -3986,13 +4378,28 @@ pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| {
         .with_column("details", ScalarType::Jsonb.nullable(true))
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("id", "The ID of the source. Corresponds to `mz_catalog.mz_sources.id`."),
+        (
+            "id",
+            "The ID of the source. Corresponds to `mz_catalog.mz_sources.id`.",
+        ),
         ("name", "The name of the source."),
         ("type", "The type of the source."),
-        ("last_status_change_at", "Wall-clock timestamp of the source status change."),
-        ("status", "The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, `failed`, or `dropped`."),
-        ("error", "If the source is in an error state, the error message."),
-        ("details", "Additional metadata provided by the source. In case of error, may contain a `hint` field with helpful suggestions."),
+        (
+            "last_status_change_at",
+            "Wall-clock timestamp of the source status change.",
+        ),
+        (
+            "status",
+            "The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, `failed`, or `dropped`.",
+        ),
+        (
+            "error",
+            "If the source is in an error state, the error message.",
+        ),
+        (
+            "details",
+            "Additional metadata provided by the source. In case of error, may contain a `hint` field with helpful suggestions.",
+        ),
     ]),
     sql: "
     WITH
@@ -4144,31 +4551,45 @@ SELECT
 FROM combined
 WHERE id NOT LIKE 's%';",
     access: vec![PUBLIC_SELECT],
-}
 });
 
-pub static MZ_SINK_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| {
-    BuiltinSource {
+pub static MZ_SINK_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
     name: "mz_sink_status_history",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_SINK_STATUS_HISTORY_OID,
     data_source: IntrospectionType::SinkStatusHistory,
     desc: MZ_SINK_STATUS_HISTORY_DESC.clone(),
     column_comments: BTreeMap::from_iter([
-        ("occurred_at", "Wall-clock timestamp of the sink status change."),
-        ("sink_id", "The ID of the sink. Corresponds to `mz_catalog.mz_sinks.id`."),
-        ("status", "The status of the sink: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`."),
-        ("error", "If the sink is in an error state, the error message."),
-        ("details", "Additional metadata provided by the sink. In case of error, may contain a `hint` field with helpful suggestions."),
-        ("replica_id", "The ID of the replica that an instance of a sink is running on."),
+        (
+            "occurred_at",
+            "Wall-clock timestamp of the sink status change.",
+        ),
+        (
+            "sink_id",
+            "The ID of the sink. Corresponds to `mz_catalog.mz_sinks.id`.",
+        ),
+        (
+            "status",
+            "The status of the sink: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.",
+        ),
+        (
+            "error",
+            "If the sink is in an error state, the error message.",
+        ),
+        (
+            "details",
+            "Additional metadata provided by the sink. In case of error, may contain a `hint` field with helpful suggestions.",
+        ),
+        (
+            "replica_id",
+            "The ID of the replica that an instance of a sink is running on.",
+        ),
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
-}
 });
 
-pub static MZ_SINK_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_SINK_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_sink_statuses",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SINK_STATUSES_OID,
@@ -4185,13 +4606,28 @@ pub static MZ_SINK_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| {
         .with_column("details", ScalarType::Jsonb.nullable(true))
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("id", "The ID of the sink. Corresponds to `mz_catalog.mz_sinks.id`."),
+        (
+            "id",
+            "The ID of the sink. Corresponds to `mz_catalog.mz_sinks.id`.",
+        ),
         ("name", "The name of the sink."),
         ("type", "The type of the sink."),
-        ("last_status_change_at", "Wall-clock timestamp of the sink status change."),
-        ("status", "The status of the sink: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`."),
-        ("error", "If the sink is in an error state, the error message."),
-        ("details", "Additional metadata provided by the sink. In case of error, may contain a `hint` field with helpful suggestions."),
+        (
+            "last_status_change_at",
+            "Wall-clock timestamp of the sink status change.",
+        ),
+        (
+            "status",
+            "The status of the sink: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.",
+        ),
+        (
+            "error",
+            "If the sink is in an error state, the error message.",
+        ),
+        (
+            "details",
+            "Additional metadata provided by the sink. In case of error, may contain a `hint` field with helpful suggestions.",
+        ),
     ]),
     sql: "
 WITH
@@ -4256,7 +4692,6 @@ WHERE
     -- This is a convenient way to filter out system sinks, like the status_history table itself.
     mz_sinks.id NOT LIKE 's%'",
     access: vec![PUBLIC_SELECT],
-}
 });
 
 pub static MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION: LazyLock<SystemObjectDescription> =
@@ -4325,8 +4760,7 @@ pub static MZ_AWS_PRIVATELINK_CONNECTIONS: LazyLock<BuiltinTable> =
         access: vec![PUBLIC_SELECT],
     });
 
-pub static MZ_AWS_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
+pub static MZ_AWS_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_aws_connections",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_AWS_CONNECTIONS_OID,
@@ -4355,20 +4789,49 @@ pub static MZ_AWS_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| {
         ("id", "The ID of the connection."),
         ("endpoint", "The value of the `ENDPOINT` option, if set."),
         ("region", "The value of the `REGION` option, if set."),
-        ("access_key_id", "The value of the `ACCESS KEY ID` option, if provided in line."),
-        ("access_key_id_secret_id", "The ID of the secret referenced by the `ACCESS KEY ID` option, if provided via a secret."),
-        ("secret_access_key_secret_id", "The ID of the secret referenced by the `SECRET ACCESS KEY` option, if set."),
-        ("session_token", "The value of the `SESSION TOKEN` option, if provided in line."),
-        ("session_token_secret_id", "The ID of the secret referenced by the `SESSION TOKEN` option, if provided via a secret."),
-        ("assume_role_arn", "The value of the `ASSUME ROLE ARN` option, if set."),
-        ("assume_role_session_name", "The value of the `ASSUME ROLE SESSION NAME` option, if set."),
-        ("principal", "The ARN of the AWS principal Materialize will use when assuming the provided role, if the connection is configured to use role assumption."),
-        ("external_id", "The external ID Materialize will use when assuming the provided role, if the connection is configured to use role assumption."),
-        ("example_trust_policy", "An example of an IAM role trust policy that allows this connection's principal and external ID to assume the role."),
+        (
+            "access_key_id",
+            "The value of the `ACCESS KEY ID` option, if provided in line.",
+        ),
+        (
+            "access_key_id_secret_id",
+            "The ID of the secret referenced by the `ACCESS KEY ID` option, if provided via a secret.",
+        ),
+        (
+            "secret_access_key_secret_id",
+            "The ID of the secret referenced by the `SECRET ACCESS KEY` option, if set.",
+        ),
+        (
+            "session_token",
+            "The value of the `SESSION TOKEN` option, if provided in line.",
+        ),
+        (
+            "session_token_secret_id",
+            "The ID of the secret referenced by the `SESSION TOKEN` option, if provided via a secret.",
+        ),
+        (
+            "assume_role_arn",
+            "The value of the `ASSUME ROLE ARN` option, if set.",
+        ),
+        (
+            "assume_role_session_name",
+            "The value of the `ASSUME ROLE SESSION NAME` option, if set.",
+        ),
+        (
+            "principal",
+            "The ARN of the AWS principal Materialize will use when assuming the provided role, if the connection is configured to use role assumption.",
+        ),
+        (
+            "external_id",
+            "The external ID Materialize will use when assuming the provided role, if the connection is configured to use role assumption.",
+        ),
+        (
+            "example_trust_policy",
+            "An example of an IAM role trust policy that allows this connection's principal and external ID to assume the role.",
+        ),
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
-}
 });
 
 // TODO(teskje) Remove this table in favor of `MZ_CLUSTER_REPLICA_METRICS_HISTORY`, once the latter
@@ -4521,22 +4984,32 @@ WHERE write_frontier IS NOT NULL",
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_WALLCLOCK_LAG_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| {
-    BuiltinSource {
+pub static MZ_WALLCLOCK_LAG_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
     name: "mz_wallclock_lag_history",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_WALLCLOCK_LAG_HISTORY_OID,
     desc: WALLCLOCK_LAG_HISTORY_DESC.clone(),
     data_source: IntrospectionType::WallclockLagHistory,
     column_comments: BTreeMap::from_iter([
-        ("object_id", "The ID of the table, source, materialized view, index, or sink. Corresponds to `mz_objects.id`."),
-        ("replica_id", "The ID of a replica computing the object, or `NULL` for persistent objects. Corresponds to `mz_cluster_replicas.id`."),
-        ("lag", "The amount of time the object's write frontier lags behind wallclock time."),
-        ("occurred_at", "Wall-clock timestamp at which the event occurred."),
+        (
+            "object_id",
+            "The ID of the table, source, materialized view, index, or sink. Corresponds to `mz_objects.id`.",
+        ),
+        (
+            "replica_id",
+            "The ID of a replica computing the object, or `NULL` for persistent objects. Corresponds to `mz_cluster_replicas.id`.",
+        ),
+        (
+            "lag",
+            "The amount of time the object's write frontier lags behind wallclock time.",
+        ),
+        (
+            "occurred_at",
+            "Wall-clock timestamp at which the event occurred.",
+        ),
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
-}
 });
 
 pub static MZ_WALLCLOCK_LAG_HISTORY_CT: LazyLock<BuiltinContinualTask> = LazyLock::new(|| {
@@ -4609,8 +5082,7 @@ WHERE occurred_at + '1 day' > mz_now()",
         access: vec![PUBLIC_SELECT],
     });
 
-pub static MZ_WALLCLOCK_GLOBAL_LAG: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_WALLCLOCK_GLOBAL_LAG: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_wallclock_global_lag",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_WALLCLOCK_GLOBAL_LAG_OID,
@@ -4620,8 +5092,14 @@ pub static MZ_WALLCLOCK_GLOBAL_LAG: LazyLock<BuiltinView> = LazyLock::new(|| {
         .with_key(vec![0])
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("object_id", "The ID of the table, source, materialized view, index, or sink. Corresponds to `mz_objects.id`."),
-        ("lag", "The amount of time the object's write frontier lags behind wallclock time."),
+        (
+            "object_id",
+            "The ID of the table, source, materialized view, index, or sink. Corresponds to `mz_objects.id`.",
+        ),
+        (
+            "lag",
+            "The amount of time the object's write frontier lags behind wallclock time.",
+        ),
     ]),
     sql: "
 SELECT DISTINCT ON (object_id) object_id, lag
@@ -4629,7 +5107,6 @@ FROM mz_internal.mz_wallclock_global_lag_recent_history
 WHERE occurred_at + '5 minutes' > mz_now()
 ORDER BY object_id, occurred_at DESC",
     access: vec![PUBLIC_SELECT],
-}
 });
 
 pub static MZ_WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RAW: LazyLock<BuiltinSource> =
@@ -4687,17 +5164,25 @@ pub static MZ_MATERIALIZED_VIEW_REFRESHES: LazyLock<BuiltinSource> = LazyLock::n
             .with_column("next_refresh", ScalarType::MzTimestamp.nullable(true))
             .finish(),
         column_comments: BTreeMap::from_iter([
-            ("materialized_view_id", "The ID of the materialized view. Corresponds to `mz_catalog.mz_materialized_views.id`"),
-            ("last_completed_refresh", "The time of the last successfully completed refresh. `NULL` if the materialized view hasn't completed any refreshes yet."),
-            ("next_refresh", "The time of the next scheduled refresh. `NULL` if the materialized view has no future scheduled refreshes."),
+            (
+                "materialized_view_id",
+                "The ID of the materialized view. Corresponds to `mz_catalog.mz_materialized_views.id`",
+            ),
+            (
+                "last_completed_refresh",
+                "The time of the last successfully completed refresh. `NULL` if the materialized view hasn't completed any refreshes yet.",
+            ),
+            (
+                "next_refresh",
+                "The time of the next scheduled refresh. `NULL` if the materialized view has no future scheduled refreshes.",
+            ),
         ]),
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
     }
 });
 
-pub static MZ_SUBSCRIPTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
+pub static MZ_SUBSCRIPTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_subscriptions",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_SUBSCRIPTIONS_OID,
@@ -4720,18 +5205,28 @@ pub static MZ_SUBSCRIPTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| {
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "The ID of the subscription."),
-        ("session_id", "The ID of the session that runs the subscription. Corresponds to `mz_sessions.id`."),
-        ("cluster_id", "The ID of the cluster on which the subscription is running. Corresponds to `mz_clusters.id`."),
-        ("created_at", "The time at which the subscription was created."),
-        ("referenced_object_ids", "The IDs of objects referenced by the subscription. Corresponds to `mz_objects.id`"),
+        (
+            "session_id",
+            "The ID of the session that runs the subscription. Corresponds to `mz_sessions.id`.",
+        ),
+        (
+            "cluster_id",
+            "The ID of the cluster on which the subscription is running. Corresponds to `mz_clusters.id`.",
+        ),
+        (
+            "created_at",
+            "The time at which the subscription was created.",
+        ),
+        (
+            "referenced_object_ids",
+            "The IDs of objects referenced by the subscription. Corresponds to `mz_objects.id`",
+        ),
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
-}
 });
 
-pub static MZ_SESSIONS: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
+pub static MZ_SESSIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_sessions",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_SESSIONS_OID,
@@ -4747,18 +5242,28 @@ pub static MZ_SESSIONS: LazyLock<BuiltinTable> = LazyLock::new(|| {
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "The globally unique ID of the session."),
-        ("connection_id", "The connection ID of the session. Unique only for active sessions and can be recycled. Corresponds to `pg_backend_pid()`."),
-        ("role_id", "The role ID of the role that the session is logged in as. Corresponds to `mz_catalog.mz_roles`."),
-        ("client_ip", "The IP address of the client that initiated the session."),
-        ("connected_at", "The time at which the session connected to the system."),
+        (
+            "connection_id",
+            "The connection ID of the session. Unique only for active sessions and can be recycled. Corresponds to `pg_backend_pid()`.",
+        ),
+        (
+            "role_id",
+            "The role ID of the role that the session is logged in as. Corresponds to `mz_catalog.mz_roles`.",
+        ),
+        (
+            "client_ip",
+            "The IP address of the client that initiated the session.",
+        ),
+        (
+            "connected_at",
+            "The time at which the session connected to the system.",
+        ),
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
-}
 });
 
-pub static MZ_DEFAULT_PRIVILEGES: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
+pub static MZ_DEFAULT_PRIVILEGES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_default_privileges",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_DEFAULT_PRIVILEGES_OID,
@@ -4771,16 +5276,30 @@ pub static MZ_DEFAULT_PRIVILEGES: LazyLock<BuiltinTable> = LazyLock::new(|| {
         .with_column("privileges", ScalarType::String.nullable(false))
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("role_id", "Privileges described in this row will be granted on objects created by `role_id`. The role ID `p` stands for the `PUBLIC` pseudo-role and applies to all roles."),
-        ("database_id", "Privileges described in this row will be granted only on objects in the database identified by `database_id` if non-null."),
-        ("schema_id", "Privileges described in this row will be granted only on objects in the schema identified by `schema_id` if non-null."),
-        ("object_type", "Privileges described in this row will be granted only on objects of type `object_type`."),
-        ("grantee", "Privileges described in this row will be granted to `grantee`. The role ID `p` stands for the `PUBLIC` pseudo-role and applies to all roles."),
+        (
+            "role_id",
+            "Privileges described in this row will be granted on objects created by `role_id`. The role ID `p` stands for the `PUBLIC` pseudo-role and applies to all roles.",
+        ),
+        (
+            "database_id",
+            "Privileges described in this row will be granted only on objects in the database identified by `database_id` if non-null.",
+        ),
+        (
+            "schema_id",
+            "Privileges described in this row will be granted only on objects in the schema identified by `schema_id` if non-null.",
+        ),
+        (
+            "object_type",
+            "Privileges described in this row will be granted only on objects of type `object_type`.",
+        ),
+        (
+            "grantee",
+            "Privileges described in this row will be granted to `grantee`. The role ID `p` stands for the `PUBLIC` pseudo-role and applies to all roles.",
+        ),
         ("privileges", "The set of privileges that will be granted."),
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
-}
 });
 
 pub static MZ_SYSTEM_PRIVILEGES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -4798,8 +5317,7 @@ pub static MZ_SYSTEM_PRIVILEGES: LazyLock<BuiltinTable> = LazyLock::new(|| Built
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_COMMENTS: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
+pub static MZ_COMMENTS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_comments",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_COMMENTS_OID,
@@ -4810,14 +5328,22 @@ pub static MZ_COMMENTS: LazyLock<BuiltinTable> = LazyLock::new(|| {
         .with_column("comment", ScalarType::String.nullable(false))
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("id", "The ID of the object. Corresponds to `mz_objects.id`."),
-        ("object_type", "The type of object the comment is associated with."),
-        ("object_sub_id", "For a comment on a column of a relation, the column number. `NULL` for other object types."),
+        (
+            "id",
+            "The ID of the object. Corresponds to `mz_objects.id`.",
+        ),
+        (
+            "object_type",
+            "The type of object the comment is associated with.",
+        ),
+        (
+            "object_sub_id",
+            "For a comment on a column of a relation, the column number. `NULL` for other object types.",
+        ),
         ("comment", "The comment itself."),
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
-}
 });
 
 pub static MZ_SOURCE_REFERENCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -4878,8 +5404,14 @@ pub static MZ_HISTORY_RETENTION_STRATEGIES: LazyLock<BuiltinTable> = LazyLock::n
             .finish(),
         column_comments: BTreeMap::from_iter([
             ("id", "The ID of the object."),
-            ("strategy", "The strategy. `FOR` is the only strategy, and means the object's compaction window is the duration of the `value` field."),
-            ("value", "The value of the strategy. For `FOR`, is a number of milliseconds."),
+            (
+                "strategy",
+                "The strategy. `FOR` is the only strategy, and means the object's compaction window is the duration of the `value` field.",
+            ),
+            (
+                "value",
+                "The value of the strategy. For `FOR`, is a number of milliseconds.",
+            ),
         ]),
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
@@ -5150,8 +5682,7 @@ UNION ALL
     }
 });
 
-pub static MZ_OBJECT_FULLY_QUALIFIED_NAMES: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_OBJECT_FULLY_QUALIFIED_NAMES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_object_fully_qualified_names",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_OBJECT_FULLY_QUALIFIED_NAMES_OID,
@@ -5168,12 +5699,30 @@ pub static MZ_OBJECT_FULLY_QUALIFIED_NAMES: LazyLock<BuiltinView> = LazyLock::ne
     column_comments: BTreeMap::from_iter([
         ("id", "Materialize's unique ID for the object."),
         ("name", "The name of the object."),
-        ("object_type", "The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`."),
-        ("schema_id", "The ID of the schema to which the object belongs. Corresponds to `mz_schemas.id`."),
-        ("schema_name", "The name of the schema to which the object belongs. Corresponds to `mz_schemas.name`."),
-        ("database_id", "The ID of the database to which the object belongs. Corresponds to `mz_databases.id`."),
-        ("database_name", "The name of the database to which the object belongs. Corresponds to `mz_databases.name`."),
-        ("cluster_id", "The ID of the cluster maintaining the source, materialized view, index, or sink. Corresponds to `mz_clusters.id`. `NULL` for other object types."),
+        (
+            "object_type",
+            "The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.",
+        ),
+        (
+            "schema_id",
+            "The ID of the schema to which the object belongs. Corresponds to `mz_schemas.id`.",
+        ),
+        (
+            "schema_name",
+            "The name of the schema to which the object belongs. Corresponds to `mz_schemas.name`.",
+        ),
+        (
+            "database_id",
+            "The ID of the database to which the object belongs. Corresponds to `mz_databases.id`.",
+        ),
+        (
+            "database_name",
+            "The name of the database to which the object belongs. Corresponds to `mz_databases.name`.",
+        ),
+        (
+            "cluster_id",
+            "The ID of the cluster maintaining the source, materialized view, index, or sink. Corresponds to `mz_clusters.id`. `NULL` for other object types.",
+        ),
     ]),
     sql: "
     SELECT o.id,
@@ -5189,12 +5738,10 @@ pub static MZ_OBJECT_FULLY_QUALIFIED_NAMES: LazyLock<BuiltinView> = LazyLock::ne
     -- LEFT JOIN accounts for objects in the ambient database.
     LEFT JOIN mz_catalog.mz_databases db ON db.id = sc.database_id",
     access: vec![PUBLIC_SELECT],
-}
 });
 
 // TODO (SangJunBak): Remove once mz_object_history is released and used in the Console https://github.com/MaterializeInc/console/issues/3342
-pub static MZ_OBJECT_LIFETIMES: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_OBJECT_LIFETIMES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_object_lifetimes",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_OBJECT_LIFETIMES_OID,
@@ -5211,9 +5758,18 @@ pub static MZ_OBJECT_LIFETIMES: LazyLock<BuiltinView> = LazyLock::new(|| {
     column_comments: BTreeMap::from_iter([
         ("id", "Materialize's unique ID for the object."),
         ("previous_id", "The object's previous ID, if one exists."),
-        ("object_type", "The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`."),
-        ("event_type", "The lifetime event, either `create` or `drop`."),
-        ("occurred_at", "Wall-clock timestamp of when the event occurred."),
+        (
+            "object_type",
+            "The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.",
+        ),
+        (
+            "event_type",
+            "The lifetime event, either `create` or `drop`.",
+        ),
+        (
+            "occurred_at",
+            "Wall-clock timestamp of when the event occurred.",
+        ),
     ]),
     sql: "
     SELECT
@@ -5228,11 +5784,9 @@ pub static MZ_OBJECT_LIFETIMES: LazyLock<BuiltinView> = LazyLock::new(|| {
     FROM mz_catalog.mz_audit_events a
     WHERE a.event_type = 'create' OR a.event_type = 'drop'",
     access: vec![PUBLIC_SELECT],
-}
 });
 
-pub static MZ_OBJECT_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_OBJECT_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_object_history",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_OBJECT_HISTORY_OID,
@@ -5251,10 +5805,22 @@ pub static MZ_OBJECT_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| {
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "Materialize's unique ID for the object."),
-        ("cluster_id", "The object's cluster ID. `NULL` if the object has no associated cluster."),
-        ("object_type", "The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`."),
-        ("created_at", "Wall-clock timestamp of when the object was created. `NULL` for built in system objects."),
-        ("dropped_at", "Wall-clock timestamp of when the object was dropped. `NULL` for built in system objects or if the object hasn't been dropped."),
+        (
+            "cluster_id",
+            "The object's cluster ID. `NULL` if the object has no associated cluster.",
+        ),
+        (
+            "object_type",
+            "The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.",
+        ),
+        (
+            "created_at",
+            "Wall-clock timestamp of when the object was created. `NULL` for built in system objects.",
+        ),
+        (
+            "dropped_at",
+            "Wall-clock timestamp of when the object was dropped. `NULL` for built in system objects or if the object hasn't been dropped.",
+        ),
     ]),
     sql: r#"
     WITH
@@ -5303,7 +5869,6 @@ pub static MZ_OBJECT_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| {
         )
     SELECT * FROM user_object_history UNION ALL (SELECT * FROM built_in_objects)"#,
     access: vec![PUBLIC_SELECT],
-}
 });
 
 pub static MZ_DATAFLOWS_PER_WORKER: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
@@ -5349,8 +5914,7 @@ WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_DATAFLOW_ADDRESSES: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_DATAFLOW_ADDRESSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_dataflow_addresses",
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_DATAFLOW_ADDRESSES_OID,
@@ -5366,19 +5930,23 @@ pub static MZ_DATAFLOW_ADDRESSES: LazyLock<BuiltinView> = LazyLock::new(|| {
         )
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("id", "The ID of the channel or operator. Corresponds to `mz_dataflow_channels.id` or `mz_dataflow_operators.id`."),
-        ("address", "A list of scope-local indexes indicating the path from the root to this channel or operator."),
+        (
+            "id",
+            "The ID of the channel or operator. Corresponds to `mz_dataflow_channels.id` or `mz_dataflow_operators.id`.",
+        ),
+        (
+            "address",
+            "A list of scope-local indexes indicating the path from the root to this channel or operator.",
+        ),
     ]),
     sql: "
 SELECT id, address
 FROM mz_introspection.mz_dataflow_addresses_per_worker
 WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
-}
 });
 
-pub static MZ_DATAFLOW_CHANNELS: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_DATAFLOW_CHANNELS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_dataflow_channels",
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_DATAFLOW_CHANNELS_OID,
@@ -5391,9 +5959,15 @@ pub static MZ_DATAFLOW_CHANNELS: LazyLock<BuiltinView> = LazyLock::new(|| {
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "The ID of the channel."),
-        ("from_index", "The scope-local index of the source operator. Corresponds to `mz_dataflow_addresses.address`."),
+        (
+            "from_index",
+            "The scope-local index of the source operator. Corresponds to `mz_dataflow_addresses.address`.",
+        ),
         ("from_port", "The source operator's output port."),
-        ("to_index", "The scope-local index of the target operator. Corresponds to `mz_dataflow_addresses.address`."),
+        (
+            "to_index",
+            "The scope-local index of the target operator. Corresponds to `mz_dataflow_addresses.address`.",
+        ),
         ("to_port", "The target operator's input port."),
     ]),
     sql: "
@@ -5401,7 +5975,6 @@ SELECT id, from_index, from_port, to_index, to_port
 FROM mz_introspection.mz_dataflow_channels_per_worker
 WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
-}
 });
 
 pub static MZ_DATAFLOW_OPERATORS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
@@ -5580,8 +6153,14 @@ pub static MZ_OBJECT_TRANSITIVE_DEPENDENCIES: LazyLock<BuiltinView> = LazyLock::
             .with_key(vec![0, 1])
             .finish(),
         column_comments: BTreeMap::from_iter([
-            ("object_id", "The ID of the dependent object. Corresponds to `mz_objects.id`."),
-            ("referenced_object_id", "The ID of the (possibly transitively) referenced object. Corresponds to `mz_objects.id`."),
+            (
+                "object_id",
+                "The ID of the dependent object. Corresponds to `mz_objects.id`.",
+            ),
+            (
+                "referenced_object_id",
+                "The ID of the (possibly transitively) referenced object. Corresponds to `mz_objects.id`.",
+            ),
         ]),
         sql: "
 WITH MUTUALLY RECURSIVE
@@ -5595,8 +6174,7 @@ SELECT object_id, referenced_object_id FROM reach;",
     }
 });
 
-pub static MZ_COMPUTE_EXPORTS: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_COMPUTE_EXPORTS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_compute_exports",
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_COMPUTE_EXPORTS_OID,
@@ -5605,15 +6183,20 @@ pub static MZ_COMPUTE_EXPORTS: LazyLock<BuiltinView> = LazyLock::new(|| {
         .with_column("dataflow_id", ScalarType::UInt64.nullable(false))
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("export_id", "The ID of the index, materialized view, or subscription exported by the dataflow. Corresponds to `mz_catalog.mz_indexes.id`, `mz_catalog.mz_materialized_views.id`, or `mz_internal.mz_subscriptions`."),
-        ("dataflow_id", "The ID of the dataflow. Corresponds to `mz_dataflows.id`."),
+        (
+            "export_id",
+            "The ID of the index, materialized view, or subscription exported by the dataflow. Corresponds to `mz_catalog.mz_indexes.id`, `mz_catalog.mz_materialized_views.id`, or `mz_internal.mz_subscriptions`.",
+        ),
+        (
+            "dataflow_id",
+            "The ID of the dataflow. Corresponds to `mz_dataflows.id`.",
+        ),
     ]),
     sql: "
 SELECT export_id, dataflow_id
 FROM mz_introspection.mz_compute_exports_per_worker
 WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
-}
 });
 
 pub static MZ_COMPUTE_FRONTIERS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
@@ -5707,8 +6290,7 @@ FROM channel_operator_addresses coa
         access: vec![PUBLIC_SELECT],
     });
 
-pub static MZ_DATAFLOW_CHANNEL_OPERATORS: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_DATAFLOW_CHANNEL_OPERATORS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_dataflow_channel_operators",
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_DATAFLOW_CHANNEL_OPERATORS_OID,
@@ -5734,22 +6316,35 @@ pub static MZ_DATAFLOW_CHANNEL_OPERATORS: LazyLock<BuiltinView> = LazyLock::new(
         )
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("id", "The ID of the channel. Corresponds to `mz_dataflow_channels.id`."),
-        ("from_operator_id", "The ID of the source of the channel. Corresponds to `mz_dataflow_operators.id`."),
-        ("from_operator_address", "The address of the source of the channel. Corresponds to `mz_dataflow_addresses.address`."),
-        ("to_operator_id", "The ID of the target of the channel. Corresponds to `mz_dataflow_operators.id`."),
-        ("to_operator_address", "The address of the target of the channel. Corresponds to `mz_dataflow_addresses.address`."),
+        (
+            "id",
+            "The ID of the channel. Corresponds to `mz_dataflow_channels.id`.",
+        ),
+        (
+            "from_operator_id",
+            "The ID of the source of the channel. Corresponds to `mz_dataflow_operators.id`.",
+        ),
+        (
+            "from_operator_address",
+            "The address of the source of the channel. Corresponds to `mz_dataflow_addresses.address`.",
+        ),
+        (
+            "to_operator_id",
+            "The ID of the target of the channel. Corresponds to `mz_dataflow_operators.id`.",
+        ),
+        (
+            "to_operator_address",
+            "The address of the target of the channel. Corresponds to `mz_dataflow_addresses.address`.",
+        ),
     ]),
     sql: "
 SELECT id, from_operator_id, from_operator_address, to_operator_id, to_operator_address
 FROM mz_introspection.mz_dataflow_channel_operators_per_worker
 WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
-}
 });
 
-pub static MZ_COMPUTE_IMPORT_FRONTIERS: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_COMPUTE_IMPORT_FRONTIERS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_compute_import_frontiers",
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_COMPUTE_IMPORT_FRONTIERS_OID,
@@ -5760,16 +6355,24 @@ pub static MZ_COMPUTE_IMPORT_FRONTIERS: LazyLock<BuiltinView> = LazyLock::new(||
         .with_key(vec![0, 1])
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("export_id", "The ID of the dataflow export. Corresponds to `mz_compute_exports.export_id`."),
-        ("import_id", "The ID of the dataflow import. Corresponds to `mz_catalog.mz_sources.id` or `mz_catalog.mz_tables.id` or `mz_compute_exports.export_id`."),
-        ("time", "The next timestamp at which the dataflow input may change."),
+        (
+            "export_id",
+            "The ID of the dataflow export. Corresponds to `mz_compute_exports.export_id`.",
+        ),
+        (
+            "import_id",
+            "The ID of the dataflow import. Corresponds to `mz_catalog.mz_sources.id` or `mz_catalog.mz_tables.id` or `mz_compute_exports.export_id`.",
+        ),
+        (
+            "time",
+            "The next timestamp at which the dataflow input may change.",
+        ),
     ]),
     sql: "SELECT
     export_id, import_id, pg_catalog.min(time) AS time
 FROM mz_introspection.mz_compute_import_frontiers_per_worker
 GROUP BY export_id, import_id",
     access: vec![PUBLIC_SELECT],
-}
 });
 
 pub static MZ_RECORDS_PER_DATAFLOW_OPERATOR_PER_WORKER: LazyLock<BuiltinView> =
@@ -7613,8 +8216,7 @@ pub static MZ_COMPUTE_HYDRATION_TIMES_IND: LazyLock<BuiltinIndex> =
         is_retained_metrics_object: true,
     });
 
-pub static MZ_COMPUTE_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_COMPUTE_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_compute_hydration_statuses",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_COMPUTE_HYDRATION_STATUSES_OID,
@@ -7625,10 +8227,19 @@ pub static MZ_COMPUTE_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyLock::new(
         .with_column("hydration_time", ScalarType::Interval.nullable(true))
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("object_id", "The ID of a compute object. Corresponds to `mz_catalog.mz_indexes.id` or `mz_catalog.mz_materialized_views.id`"),
+        (
+            "object_id",
+            "The ID of a compute object. Corresponds to `mz_catalog.mz_indexes.id` or `mz_catalog.mz_materialized_views.id`",
+        ),
         ("replica_id", "The ID of a cluster replica."),
-        ("hydrated", "Whether the compute object is hydrated on the replica."),
-        ("hydration_time", "The amount of time it took for the replica to hydrate the compute object."),
+        (
+            "hydrated",
+            "Whether the compute object is hydrated on the replica.",
+        ),
+        (
+            "hydration_time",
+            "The amount of time it took for the replica to hydrate the compute object.",
+        ),
     ]),
     sql: "
 WITH
@@ -7671,7 +8282,6 @@ SELECT * FROM complete_mvs
 UNION ALL
 SELECT * FROM complete_cts",
     access: vec![PUBLIC_SELECT],
-}
 });
 
 pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| {
@@ -7687,8 +8297,14 @@ pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyL
             .with_key(vec![0, 1, 2])
             .finish(),
         column_comments: BTreeMap::from_iter([
-            ("object_id", "The ID of a compute object. Corresponds to `mz_catalog.mz_indexes.id` or `mz_catalog.mz_materialized_views.id`."),
-            ("physical_plan_node_id", "The ID of a node in the physical plan of the compute object. Corresponds to a `node_id` displayed in the output of `EXPLAIN PHYSICAL PLAN WITH (node identifiers)`."),
+            (
+                "object_id",
+                "The ID of a compute object. Corresponds to `mz_catalog.mz_indexes.id` or `mz_catalog.mz_materialized_views.id`.",
+            ),
+            (
+                "physical_plan_node_id",
+                "The ID of a node in the physical plan of the compute object. Corresponds to a `node_id` displayed in the output of `EXPLAIN PHYSICAL PLAN WITH (node identifiers)`.",
+            ),
             ("replica_id", "The ID of a cluster replica."),
             ("hydrated", "Whether the node is hydrated on the replica."),
         ]),
@@ -7837,8 +8453,7 @@ GROUP BY channel_id",
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_ACTIVE_PEEKS: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_ACTIVE_PEEKS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_active_peeks",
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_ACTIVE_PEEKS_OID,
@@ -7850,8 +8465,14 @@ pub static MZ_ACTIVE_PEEKS: LazyLock<BuiltinView> = LazyLock::new(|| {
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "The ID of the peek request."),
-        ("object_id", "The ID of the collection the peek is targeting. Corresponds to `mz_catalog.mz_indexes.id`, `mz_catalog.mz_materialized_views.id`, `mz_catalog.mz_sources.id`, or `mz_catalog.mz_tables.id`."),
-        ("type", "The type of the corresponding peek: `index` if targeting an index or temporary dataflow; `persist` for a source, materialized view, or table."),
+        (
+            "object_id",
+            "The ID of the collection the peek is targeting. Corresponds to `mz_catalog.mz_indexes.id`, `mz_catalog.mz_materialized_views.id`, `mz_catalog.mz_sources.id`, or `mz_catalog.mz_tables.id`.",
+        ),
+        (
+            "type",
+            "The type of the corresponding peek: `index` if targeting an index or temporary dataflow; `persist` for a source, materialized view, or table.",
+        ),
         ("time", "The timestamp the peek has requested."),
     ]),
     sql: "
@@ -7859,7 +8480,6 @@ SELECT id, object_id, type, time
 FROM mz_introspection.mz_active_peeks_per_worker
 WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
-}
 });
 
 pub static MZ_DATAFLOW_OPERATOR_REACHABILITY_PER_WORKER: LazyLock<BuiltinView> =
@@ -8060,8 +8680,7 @@ LEFT OUTER JOIN batcher_allocations_cte USING (operator_id, worker_id)",
     }
 });
 
-pub static MZ_ARRANGEMENT_SIZES: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_ARRANGEMENT_SIZES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_arrangement_sizes",
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_ARRANGEMENT_SIZES_OID,
@@ -8105,12 +8724,21 @@ pub static MZ_ARRANGEMENT_SIZES: LazyLock<BuiltinView> = LazyLock::new(|| {
         .with_key(vec![0])
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("operator_id", "The ID of the operator that created the arrangement. Corresponds to `mz_dataflow_operators.id`."),
+        (
+            "operator_id",
+            "The ID of the operator that created the arrangement. Corresponds to `mz_dataflow_operators.id`.",
+        ),
         ("records", "The number of records in the arrangement."),
         ("batches", "The number of batches in the arrangement."),
         ("size", "The utilized size in bytes of the arrangement."),
-        ("capacity", "The capacity in bytes of the arrangement. Can be larger than the size."),
-        ("allocations", "The number of separate memory allocations backing the arrangement."),
+        (
+            "capacity",
+            "The capacity in bytes of the arrangement. Can be larger than the size.",
+        ),
+        (
+            "allocations",
+            "The number of separate memory allocations backing the arrangement.",
+        ),
     ]),
     sql: "
 SELECT
@@ -8123,7 +8751,6 @@ SELECT
 FROM mz_introspection.mz_arrangement_sizes_per_worker
 GROUP BY operator_id",
     access: vec![PUBLIC_SELECT],
-}
 });
 
 pub static MZ_ARRANGEMENT_SHARING_PER_WORKER: LazyLock<BuiltinView> =
@@ -8148,8 +8775,7 @@ GROUP BY operator_id, worker_id",
         access: vec![PUBLIC_SELECT],
     });
 
-pub static MZ_ARRANGEMENT_SHARING: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_ARRANGEMENT_SHARING: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_arrangement_sharing",
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_ARRANGEMENT_SHARING_OID,
@@ -8158,15 +8784,20 @@ pub static MZ_ARRANGEMENT_SHARING: LazyLock<BuiltinView> = LazyLock::new(|| {
         .with_column("count", ScalarType::Int64.nullable(false))
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("operator_id", "The ID of the operator that created the arrangement. Corresponds to `mz_dataflow_operators.id`."),
-        ("count", "The number of operators that share the arrangement."),
+        (
+            "operator_id",
+            "The ID of the operator that created the arrangement. Corresponds to `mz_dataflow_operators.id`.",
+        ),
+        (
+            "count",
+            "The number of operators that share the arrangement.",
+        ),
     ]),
     sql: "
 SELECT operator_id, count
 FROM mz_introspection.mz_arrangement_sharing_per_worker
 WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
-}
 });
 
 pub static MZ_CLUSTER_REPLICA_UTILIZATION: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
@@ -8389,8 +9020,7 @@ GROUP BY mdod.dataflow_id, mdod.dataflow_name",
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_EXPECTED_GROUP_SIZE_ADVICE: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_EXPECTED_GROUP_SIZE_ADVICE: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_expected_group_size_advice",
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_EXPECTED_GROUP_SIZE_ADVICE_OID,
@@ -8411,14 +9041,38 @@ pub static MZ_EXPECTED_GROUP_SIZE_ADVICE: LazyLock<BuiltinView> = LazyLock::new(
         .with_column("hint", ScalarType::Float64.nullable(false))
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("dataflow_id", "The ID of the [dataflow]. Corresponds to `mz_dataflows.id`."),
-        ("dataflow_name", "The internal name of the dataflow hosting the min/max aggregation or Top K."),
-        ("region_id", "The ID of the root operator scope. Corresponds to `mz_dataflow_operators.id`."),
-        ("region_name", "The internal name of the root operator scope for the min/max aggregation or Top K."),
-        ("levels", "The number of levels in the hierarchical scheme implemented by the region."),
-        ("to_cut", "The number of levels that can be eliminated (cut) from the region's hierarchy."),
-        ("savings", "A conservative estimate of the amount of memory in bytes to be saved by applying the hint."),
-        ("hint", "The hint value that will eliminate `to_cut` levels from the region's hierarchy."),
+        (
+            "dataflow_id",
+            "The ID of the [dataflow]. Corresponds to `mz_dataflows.id`.",
+        ),
+        (
+            "dataflow_name",
+            "The internal name of the dataflow hosting the min/max aggregation or Top K.",
+        ),
+        (
+            "region_id",
+            "The ID of the root operator scope. Corresponds to `mz_dataflow_operators.id`.",
+        ),
+        (
+            "region_name",
+            "The internal name of the root operator scope for the min/max aggregation or Top K.",
+        ),
+        (
+            "levels",
+            "The number of levels in the hierarchical scheme implemented by the region.",
+        ),
+        (
+            "to_cut",
+            "The number of levels that can be eliminated (cut) from the region's hierarchy.",
+        ),
+        (
+            "savings",
+            "A conservative estimate of the amount of memory in bytes to be saved by applying the hint.",
+        ),
+        (
+            "hint",
+            "The hint value that will eliminate `to_cut` levels from the region's hierarchy.",
+        ),
     ]),
     sql: "
         -- The mz_expected_group_size_advice view provides tuning suggestions for the GROUP SIZE
@@ -8549,7 +9203,6 @@ pub static MZ_EXPECTED_GROUP_SIZE_ADVICE: LazyLock<BuiltinView> = LazyLock::new(
             JOIN mz_introspection.mz_dataflow_operator_dataflows dod
                 ON dod.dataflow_id = c.dataflow_id AND dod.id = c.region_id",
     access: vec![PUBLIC_SELECT],
-}
 });
 
 pub static MZ_INDEX_ADVICE: LazyLock<BuiltinView> = LazyLock::new(|| {
@@ -10999,8 +11652,7 @@ WHERE
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_SHOW_DEFAULT_PRIVILEGES: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_SHOW_DEFAULT_PRIVILEGES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_show_default_privileges",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_DEFAULT_PRIVILEGES_OID,
@@ -11013,11 +11665,26 @@ pub static MZ_SHOW_DEFAULT_PRIVILEGES: LazyLock<BuiltinView> = LazyLock::new(|| 
         .with_column("privilege_type", ScalarType::String.nullable(true))
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("object_owner", "Privileges described in this row will be granted on objects created by `object_owner`."),
-        ("database", "Privileges described in this row will be granted only on objects created in `database` if non-null."),
-        ("schema", "Privileges described in this row will be granted only on objects created in `schema` if non-null."),
-        ("object_type", "Privileges described in this row will be granted only on objects of type `object_type`."),
-        ("grantee", "Privileges described in this row will be granted to `grantee`."),
+        (
+            "object_owner",
+            "Privileges described in this row will be granted on objects created by `object_owner`.",
+        ),
+        (
+            "database",
+            "Privileges described in this row will be granted only on objects created in `database` if non-null.",
+        ),
+        (
+            "schema",
+            "Privileges described in this row will be granted only on objects created in `schema` if non-null.",
+        ),
+        (
+            "object_type",
+            "Privileges described in this row will be granted only on objects of type `object_type`.",
+        ),
+        (
+            "grantee",
+            "Privileges described in this row will be granted to `grantee`.",
+        ),
         ("privilege_type", "They type of privilege to be granted."),
     ]),
     sql: r#"SELECT
@@ -11042,11 +11709,9 @@ WHERE defaults.grantee NOT LIKE 's%'
     AND defaults.database_id IS NULL OR defaults.database_id NOT LIKE 's%'
     AND defaults.schema_id IS NULL OR defaults.schema_id NOT LIKE 's%'"#,
     access: vec![PUBLIC_SELECT],
-}
 });
 
-pub static MZ_SHOW_MY_DEFAULT_PRIVILEGES: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_SHOW_MY_DEFAULT_PRIVILEGES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_show_my_default_privileges",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_MY_DEFAULT_PRIVILEGES_OID,
@@ -11059,11 +11724,26 @@ pub static MZ_SHOW_MY_DEFAULT_PRIVILEGES: LazyLock<BuiltinView> = LazyLock::new(
         .with_column("privilege_type", ScalarType::String.nullable(true))
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("object_owner", "Privileges described in this row will be granted on objects created by `object_owner`."),
-        ("database", "Privileges described in this row will be granted only on objects created in `database` if non-null."),
-        ("schema", "Privileges described in this row will be granted only on objects created in `schema` if non-null."),
-        ("object_type", "Privileges described in this row will be granted only on objects of type `object_type`."),
-        ("grantee", "Privileges described in this row will be granted to `grantee`."),
+        (
+            "object_owner",
+            "Privileges described in this row will be granted on objects created by `object_owner`.",
+        ),
+        (
+            "database",
+            "Privileges described in this row will be granted only on objects created in `database` if non-null.",
+        ),
+        (
+            "schema",
+            "Privileges described in this row will be granted only on objects created in `schema` if non-null.",
+        ),
+        (
+            "object_type",
+            "Privileges described in this row will be granted only on objects of type `object_type`.",
+        ),
+        (
+            "grantee",
+            "Privileges described in this row will be granted to `grantee`.",
+        ),
         ("privilege_type", "They type of privilege to be granted."),
     ]),
     sql: r#"SELECT object_owner, database, schema, object_type, grantee, privilege_type
@@ -11074,7 +11754,6 @@ WHERE
         ELSE pg_has_role(grantee, 'USAGE')
     END"#,
     access: vec![PUBLIC_SELECT],
-}
 });
 
 pub static MZ_SHOW_NETWORK_POLICIES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
@@ -11111,8 +11790,7 @@ GROUP BY policy.name, comments.comment;",
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_CLUSTER_REPLICA_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_CLUSTER_REPLICA_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_cluster_replica_history",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_CLUSTER_REPLICA_HISTORY_OID,
@@ -11137,13 +11815,28 @@ pub static MZ_CLUSTER_REPLICA_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| 
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("replica_id", "The ID of a cluster replica."),
-        ("size", "The size of the cluster replica. Corresponds to `mz_cluster_replica_sizes.size`."),
-        ("cluster_id", "The ID of the cluster associated with the replica."),
-        ("cluster_name", "The name of the cluster associated with the replica."),
+        (
+            "size",
+            "The size of the cluster replica. Corresponds to `mz_cluster_replica_sizes.size`.",
+        ),
+        (
+            "cluster_id",
+            "The ID of the cluster associated with the replica.",
+        ),
+        (
+            "cluster_name",
+            "The name of the cluster associated with the replica.",
+        ),
         ("replica_name", "The name of the replica."),
         ("created_at", "The time at which the replica was created."),
-        ("dropped_at", "The time at which the replica was dropped, or `NULL` if it still exists."),
-        ("credits_per_hour", "The number of compute credits consumed per hour. Corresponds to `mz_cluster_replica_sizes.credits_per_hour`."),
+        (
+            "dropped_at",
+            "The time at which the replica was dropped, or `NULL` if it still exists.",
+        ),
+        (
+            "credits_per_hour",
+            "The number of compute credits consumed per hour. Corresponds to `mz_cluster_replica_sizes.credits_per_hour`.",
+        ),
     ]),
     sql: r#"
         WITH
@@ -11186,11 +11879,9 @@ pub static MZ_CLUSTER_REPLICA_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| 
                     mz_catalog.mz_cluster_replica_sizes
                     ON mz_cluster_replica_sizes.size = creates.size"#,
     access: vec![PUBLIC_SELECT],
-}
 });
 
-pub static MZ_CLUSTER_REPLICA_NAME_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_CLUSTER_REPLICA_NAME_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_cluster_replica_name_history",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_CLUSTER_REPLICA_NAME_HISTORY_OID,
@@ -11204,9 +11895,15 @@ pub static MZ_CLUSTER_REPLICA_NAME_HISTORY: LazyLock<BuiltinView> = LazyLock::ne
         .with_column("new_name", ScalarType::String.nullable(true))
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("occurred_at", "The time at which the cluster replica was created or renamed. `NULL` if it's a built in system cluster replica."),
+        (
+            "occurred_at",
+            "The time at which the cluster replica was created or renamed. `NULL` if it's a built in system cluster replica.",
+        ),
         ("id", "The ID of the cluster replica."),
-        ("previous_name", "The previous name of the cluster replica. `NULL` if there was no previous name."),
+        (
+            "previous_name",
+            "The previous name of the cluster replica. `NULL` if there was no previous name.",
+        ),
         ("new_name", "The new name of the cluster replica."),
     ]),
     sql: r#"WITH user_replica_alter_history AS (
@@ -11248,11 +11945,9 @@ UNION ALL
 SELECT *
 FROM system_replicas"#,
     access: vec![PUBLIC_SELECT],
-}
 });
 
-pub static MZ_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_hydration_statuses",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_HYDRATION_STATUSES_OID,
@@ -11262,7 +11957,10 @@ pub static MZ_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| {
         .with_column("hydrated", ScalarType::Bool.nullable(true))
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("object_id", "The ID of a dataflow-powered object. Corresponds to `mz_catalog.mz_indexes.id`, `mz_catalog.mz_materialized_views.id`, `mz_internal.mz_subscriptions`, `mz_catalog.mz_sources.id`, or `mz_catalog.mz_sinks.id`."),
+        (
+            "object_id",
+            "The ID of a dataflow-powered object. Corresponds to `mz_catalog.mz_indexes.id`, `mz_catalog.mz_materialized_views.id`, `mz_internal.mz_subscriptions`, `mz_catalog.mz_sources.id`, or `mz_catalog.mz_sinks.id`.",
+        ),
         ("replica_id", "The ID of a cluster replica."),
         ("hydrated", "Whether the object is hydrated on the replica."),
     ]),
@@ -11345,11 +12043,9 @@ SELECT * FROM sources
 UNION ALL
 SELECT * FROM sinks"#,
     access: vec![PUBLIC_SELECT],
-}
 });
 
-pub static MZ_MATERIALIZATION_DEPENDENCIES: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_MATERIALIZATION_DEPENDENCIES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_materialization_dependencies",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_MATERIALIZATION_DEPENDENCIES_OID,
@@ -11358,8 +12054,14 @@ pub static MZ_MATERIALIZATION_DEPENDENCIES: LazyLock<BuiltinView> = LazyLock::ne
         .with_column("dependency_id", ScalarType::String.nullable(false))
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("object_id", "The ID of a materialization. Corresponds to `mz_catalog.mz_indexes.id`, `mz_catalog.mz_materialized_views.id`, or `mz_catalog.mz_sinks.id`."),
-        ("dependency_id", "The ID of a dataflow dependency. Corresponds to `mz_catalog.mz_indexes.id`, `mz_catalog.mz_materialized_views.id`, `mz_catalog.mz_sources.id`, or `mz_catalog.mz_tables.id`."),
+        (
+            "object_id",
+            "The ID of a materialization. Corresponds to `mz_catalog.mz_indexes.id`, `mz_catalog.mz_materialized_views.id`, or `mz_catalog.mz_sinks.id`.",
+        ),
+        (
+            "dependency_id",
+            "The ID of a dataflow dependency. Corresponds to `mz_catalog.mz_indexes.id`, `mz_catalog.mz_materialized_views.id`, `mz_catalog.mz_sources.id`, or `mz_catalog.mz_tables.id`.",
+        ),
     ]),
     sql: "
 SELECT object_id, dependency_id
@@ -11370,11 +12072,9 @@ FROM mz_internal.mz_object_dependencies d
 JOIN mz_catalog.mz_sinks s ON (s.id = d.object_id)
 JOIN mz_catalog.mz_relations r ON (r.id = d.referenced_object_id)",
     access: vec![PUBLIC_SELECT],
-}
 });
 
-pub static MZ_MATERIALIZATION_LAG: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_MATERIALIZATION_LAG: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_materialization_lag",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_MATERIALIZATION_LAG_OID,
@@ -11389,11 +12089,26 @@ pub static MZ_MATERIALIZATION_LAG: LazyLock<BuiltinView> = LazyLock::new(|| {
         )
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("object_id", "The ID of the materialized view, index, or sink."),
-        ("local_lag", "The amount of time the materialization lags behind its direct inputs."),
-        ("global_lag", "The amount of time the materialization lags behind its root inputs (sources and tables)."),
-        ("slowest_local_input_id", "The ID of the slowest direct input."),
-        ("slowest_global_input_id", "The ID of the slowest root input."),
+        (
+            "object_id",
+            "The ID of the materialized view, index, or sink.",
+        ),
+        (
+            "local_lag",
+            "The amount of time the materialization lags behind its direct inputs.",
+        ),
+        (
+            "global_lag",
+            "The amount of time the materialization lags behind its root inputs (sources and tables).",
+        ),
+        (
+            "slowest_local_input_id",
+            "The ID of the slowest direct input.",
+        ),
+        (
+            "slowest_global_input_id",
+            "The ID of the slowest root input.",
+        ),
     ]),
     sql: "
 WITH MUTUALLY RECURSIVE
@@ -11479,7 +12194,6 @@ FROM materialization_times m
 JOIN input_times i USING (id)
 JOIN root_times r USING (id)",
     access: vec![PUBLIC_SELECT],
-}
 });
 
 /**
@@ -11764,8 +12478,7 @@ FROM max_memory
  * process, but someone turning on a new use case that happens to have the same
  * name as a previous but logically distinct use case.
  */
-pub static MZ_CLUSTER_DEPLOYMENT_LINEAGE: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_CLUSTER_DEPLOYMENT_LINEAGE: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_cluster_deployment_lineage",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_CLUSTER_DEPLOYMENT_LINEAGE_OID,
@@ -11779,8 +12492,14 @@ pub static MZ_CLUSTER_DEPLOYMENT_LINEAGE: LazyLock<BuiltinView> = LazyLock::new(
         .with_key(vec![0, 1, 2])
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("cluster_id", "The ID of the cluster. Corresponds to `mz_clusters.id` (though the cluster may no longer exist)."),
-        ("current_deployment_cluster_id", "The cluster ID of the last cluster in `cluster_id`'s blue/green lineage (the cluster is guaranteed to exist)."),
+        (
+            "cluster_id",
+            "The ID of the cluster. Corresponds to `mz_clusters.id` (though the cluster may no longer exist).",
+        ),
+        (
+            "current_deployment_cluster_id",
+            "The cluster ID of the last cluster in `cluster_id`'s blue/green lineage (the cluster is guaranteed to exist).",
+        ),
         ("cluster_name", "The name of the cluster"),
     ]),
     sql: r#"WITH MUTUALLY RECURSIVE cluster_events (
@@ -11864,7 +12583,6 @@ dropped_clusters (
 SELECT *
 FROM mz_cluster_deployment_lineage"#,
     access: vec![PUBLIC_SELECT],
-}
 });
 
 pub const MZ_SHOW_DATABASES_IND: BuiltinIndex = BuiltinIndex {
@@ -12292,44 +13010,83 @@ ON mz_internal.mz_source_statistics_with_history (id)",
 // Used to query MZ_SOURCE_STATISTICS at the current time.
 pub static MZ_SOURCE_STATISTICS: LazyLock<BuiltinView> = LazyLock::new(|| {
     BuiltinView {
-    name: "mz_source_statistics",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_SOURCE_STATISTICS_OID,
-    // We need to add a redundant where clause for a new dataflow to be created.
-    desc: RelationDesc::builder()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("messages_received", ScalarType::UInt64.nullable(false))
-        .with_column("bytes_received", ScalarType::UInt64.nullable(false))
-        .with_column("updates_staged", ScalarType::UInt64.nullable(false))
-        .with_column("updates_committed", ScalarType::UInt64.nullable(false))
-        .with_column("records_indexed", ScalarType::UInt64.nullable(false))
-        .with_column("bytes_indexed", ScalarType::UInt64.nullable(false))
-        .with_column("rehydration_latency", ScalarType::Interval.nullable(true))
-        .with_column("snapshot_records_known", ScalarType::UInt64.nullable(true))
-        .with_column("snapshot_records_staged", ScalarType::UInt64.nullable(true))
-        .with_column("snapshot_committed", ScalarType::Bool.nullable(false))
-        .with_column("offset_known", ScalarType::UInt64.nullable(true))
-        .with_column("offset_committed", ScalarType::UInt64.nullable(true))
-        .with_key(vec![0])
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "The ID of the source. Corresponds to `mz_catalog.mz_sources.id`."),
-        ("messages_received", "The number of messages the source has received from the external system. Messages are counted in a source type-specific manner. Messages do not correspond directly to updates: some messages produce multiple updates, while other messages may be coalesced into a single update."),
-        ("bytes_received", "The number of bytes the source has read from the external system. Bytes are counted in a source type-specific manner and may or may not include protocol overhead."),
-        ("updates_staged", "The number of updates (insertions plus deletions) the source has written but not yet committed to the storage layer."),
-        ("updates_committed", "The number of updates (insertions plus deletions) the source has committed to the storage layer."),
-        ("records_indexed", "The number of individual records indexed in the source envelope state."),
-        ("bytes_indexed", "The number of bytes stored in the source's internal index, if any."),
-        ("rehydration_latency", "The amount of time it took for the source to rehydrate its internal index, if any, after the source last restarted."),
-        ("snapshot_records_known", "The size of the source's snapshot, measured in number of records. See below to learn what constitutes a record."),
-        ("snapshot_records_staged", "The number of records in the source's snapshot that Materialize has read. See below to learn what constitutes a record."),
-        ("snapshot_committed", "Whether the source has committed the initial snapshot for a source."),
-        ("offset_known", "The offset of the most recent data in the source's upstream service that Materialize knows about. See below to learn what constitutes an offset."),
-        ("offset_committed", "The offset of the the data that Materialize has durably ingested. See below to learn what constitutes an offset."),
-    ]),
-    sql: "SELECT * FROM mz_internal.mz_source_statistics_with_history WHERE length(id) > 0",
-    access: vec![PUBLIC_SELECT],
-}
+        name: "mz_source_statistics",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_SOURCE_STATISTICS_OID,
+        // We need to add a redundant where clause for a new dataflow to be created.
+        desc: RelationDesc::builder()
+            .with_column("id", ScalarType::String.nullable(false))
+            .with_column("messages_received", ScalarType::UInt64.nullable(false))
+            .with_column("bytes_received", ScalarType::UInt64.nullable(false))
+            .with_column("updates_staged", ScalarType::UInt64.nullable(false))
+            .with_column("updates_committed", ScalarType::UInt64.nullable(false))
+            .with_column("records_indexed", ScalarType::UInt64.nullable(false))
+            .with_column("bytes_indexed", ScalarType::UInt64.nullable(false))
+            .with_column("rehydration_latency", ScalarType::Interval.nullable(true))
+            .with_column("snapshot_records_known", ScalarType::UInt64.nullable(true))
+            .with_column("snapshot_records_staged", ScalarType::UInt64.nullable(true))
+            .with_column("snapshot_committed", ScalarType::Bool.nullable(false))
+            .with_column("offset_known", ScalarType::UInt64.nullable(true))
+            .with_column("offset_committed", ScalarType::UInt64.nullable(true))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "id",
+                "The ID of the source. Corresponds to `mz_catalog.mz_sources.id`.",
+            ),
+            (
+                "messages_received",
+                "The number of messages the source has received from the external system. Messages are counted in a source type-specific manner. Messages do not correspond directly to updates: some messages produce multiple updates, while other messages may be coalesced into a single update.",
+            ),
+            (
+                "bytes_received",
+                "The number of bytes the source has read from the external system. Bytes are counted in a source type-specific manner and may or may not include protocol overhead.",
+            ),
+            (
+                "updates_staged",
+                "The number of updates (insertions plus deletions) the source has written but not yet committed to the storage layer.",
+            ),
+            (
+                "updates_committed",
+                "The number of updates (insertions plus deletions) the source has committed to the storage layer.",
+            ),
+            (
+                "records_indexed",
+                "The number of individual records indexed in the source envelope state.",
+            ),
+            (
+                "bytes_indexed",
+                "The number of bytes stored in the source's internal index, if any.",
+            ),
+            (
+                "rehydration_latency",
+                "The amount of time it took for the source to rehydrate its internal index, if any, after the source last restarted.",
+            ),
+            (
+                "snapshot_records_known",
+                "The size of the source's snapshot, measured in number of records. See below to learn what constitutes a record.",
+            ),
+            (
+                "snapshot_records_staged",
+                "The number of records in the source's snapshot that Materialize has read. See below to learn what constitutes a record.",
+            ),
+            (
+                "snapshot_committed",
+                "Whether the source has committed the initial snapshot for a source.",
+            ),
+            (
+                "offset_known",
+                "The offset of the most recent data in the source's upstream service that Materialize knows about. See below to learn what constitutes an offset.",
+            ),
+            (
+                "offset_committed",
+                "The offset of the the data that Materialize has durably ingested. See below to learn what constitutes an offset.",
+            ),
+        ]),
+        sql: "SELECT * FROM mz_internal.mz_source_statistics_with_history WHERE length(id) > 0",
+        access: vec![PUBLIC_SELECT],
+    }
 });
 
 pub const MZ_SOURCE_STATISTICS_IND: BuiltinIndex = BuiltinIndex {
@@ -12341,8 +13098,7 @@ ON mz_internal.mz_source_statistics (id)",
     is_retained_metrics_object: false,
 };
 
-pub static MZ_SINK_STATISTICS: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_SINK_STATISTICS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_sink_statistics",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SINK_STATISTICS_OID,
@@ -12355,11 +13111,26 @@ pub static MZ_SINK_STATISTICS: LazyLock<BuiltinView> = LazyLock::new(|| {
         .with_key(vec![0])
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("id", "The ID of the sink. Corresponds to `mz_catalog.mz_sources.id`."),
-        ("messages_staged", "The number of messages staged but possibly not committed to the sink."),
-        ("messages_committed", "The number of messages committed to the sink."),
-        ("bytes_staged", "The number of bytes staged but possibly not committed to the sink. This counts both keys and values, if applicable."),
-        ("bytes_committed", "The number of bytes committed to the sink. This counts both keys and values, if applicable."),
+        (
+            "id",
+            "The ID of the sink. Corresponds to `mz_catalog.mz_sources.id`.",
+        ),
+        (
+            "messages_staged",
+            "The number of messages staged but possibly not committed to the sink.",
+        ),
+        (
+            "messages_committed",
+            "The number of messages committed to the sink.",
+        ),
+        (
+            "bytes_staged",
+            "The number of bytes staged but possibly not committed to the sink. This counts both keys and values, if applicable.",
+        ),
+        (
+            "bytes_committed",
+            "The number of bytes committed to the sink. This counts both keys and values, if applicable.",
+        ),
     ]),
     sql: "
 SELECT
@@ -12371,7 +13142,6 @@ SELECT
 FROM mz_internal.mz_sink_statistics_raw
 GROUP BY id",
     access: vec![PUBLIC_SELECT],
-}
 });
 
 pub const MZ_SINK_STATISTICS_IND: BuiltinIndex = BuiltinIndex {

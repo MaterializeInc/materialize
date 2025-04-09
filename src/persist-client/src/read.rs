@@ -22,7 +22,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::Stream;
-use futures_util::{stream, StreamExt};
+use futures_util::{StreamExt, stream};
 use mz_dyncfg::Config;
 use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
@@ -32,15 +32,15 @@ use mz_persist_types::columnar::{ColumnDecoder, Schema};
 use mz_persist_types::{Codec, Codec64};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
+use timely::progress::{Antichain, Timestamp};
 use tokio::runtime::Handle;
-use tracing::{debug_span, warn, Instrument};
+use tracing::{Instrument, debug_span, warn};
 use uuid::Uuid;
 
 use crate::batch::BLOB_TARGET_SIZE;
-use crate::cfg::{RetryParameters, COMPACTION_MEMORY_BOUND_BYTES};
-use crate::fetch::{fetch_leased_part, FetchBatchFilter, FetchedPart, Lease, LeasedBatchPart};
+use crate::cfg::{COMPACTION_MEMORY_BOUND_BYTES, RetryParameters};
+use crate::fetch::{FetchBatchFilter, FetchedPart, Lease, LeasedBatchPart, fetch_leased_part};
 use crate::internal::encoding::Schemas;
 use crate::internal::machine::{ExpireFn, Machine};
 use crate::internal::metrics::Metrics;
@@ -49,7 +49,7 @@ use crate::internal::watch::StateWatch;
 use crate::iter::{Consolidator, StructuredSort};
 use crate::schema::SchemaCache;
 use crate::stats::{SnapshotPartStats, SnapshotPartsStats, SnapshotStats};
-use crate::{parse_id, GarbageCollector, PersistConfig, ShardId};
+use crate::{GarbageCollector, PersistConfig, ShardId, parse_id};
 
 pub use crate::internal::encoding::LazyPartStats;
 pub use crate::internal::state::Since;
@@ -1108,7 +1108,10 @@ where
     pub async fn snapshot_and_stream(
         &mut self,
         as_of: Antichain<T>,
-    ) -> Result<impl Stream<Item = ((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
+    ) -> Result<
+        impl Stream<Item = ((Result<K, String>, Result<V, String>), T, D)> + use<K, V, T, D>,
+        Since<T>,
+    > {
         let snap = self.snapshot(as_of).await?;
 
         let blob = Arc::clone(&self.blob);
@@ -1182,7 +1185,10 @@ impl<K: Codec, V: Codec, T, D> Drop for ReadHandle<K, V, T, D> {
         let handle = match Handle::try_current() {
             Ok(x) => x,
             Err(_) => {
-                warn!("ReadHandle {} dropped without being explicitly expired, falling back to lease timeout", self.reader_id);
+                warn!(
+                    "ReadHandle {} dropped without being explicitly expired, falling back to lease timeout",
+                    self.reader_id
+                );
                 return;
             }
         };

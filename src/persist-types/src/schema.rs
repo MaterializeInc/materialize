@@ -12,7 +12,7 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
-use arrow::array::{new_null_array, Array, AsArray, ListArray, NullArray, StructArray};
+use arrow::array::{Array, AsArray, ListArray, NullArray, StructArray, new_null_array};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, SchemaBuilder};
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;

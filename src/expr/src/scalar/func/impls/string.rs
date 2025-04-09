@@ -16,7 +16,7 @@ use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
 use mz_ore::str::StrExt;
-use mz_repr::adt::char::{format_str_trim, Char};
+use mz_repr::adt::char::{Char, format_str_trim};
 use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::Jsonb;
@@ -26,16 +26,16 @@ use mz_repr::adt::regex::Regex;
 use mz_repr::adt::system::{Oid, PgLegacyChar};
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampPrecision};
 use mz_repr::adt::varchar::{VarChar, VarCharMaxLength};
-use mz_repr::{strconv, ColumnType, Datum, RowArena, ScalarType};
+use mz_repr::{ColumnType, Datum, RowArena, ScalarType, strconv};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::func::regexp_match_static;
 use crate::scalar::func::{
-    array_create_scalar, regexp_split_to_array_re, EagerUnaryFunc, LazyUnaryFunc,
+    EagerUnaryFunc, LazyUnaryFunc, array_create_scalar, regexp_split_to_array_re,
 };
-use crate::{like_pattern, EvalError, MirScalarExpr, UnaryFunc};
+use crate::{EvalError, MirScalarExpr, UnaryFunc, like_pattern};
 
 sqlfunc!(
     #[sqlname = "text_to_boolean"]

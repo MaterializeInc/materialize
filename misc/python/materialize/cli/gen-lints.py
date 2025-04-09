@@ -117,7 +117,7 @@ WARN_CLIPPY_LINTS = [
     "builtin_type_shadow",
     "duplicate_underscore_argument",
     # Purely redundant tokens; very likely to be confusing.
-    "double_neg",
+    "double_negations",
     # Purely redundant tokens; code is misleading.
     "unnecessary_mut_passed",
     # Purely redundant tokens; probably a mistake.

@@ -12,8 +12,8 @@
 use std::sync::Arc;
 
 use mz_catalog::memory::objects::ContinualTask;
-use mz_expr::visit::Visit;
 use mz_expr::Id;
+use mz_expr::visit::Visit;
 use mz_repr::GlobalId;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{self, HirRelationExpr};

@@ -44,8 +44,8 @@ use mz_persist_client::read::ReadHandle;
 use mz_persist_client::schema::CaESchema;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
-use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec64;
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::timestamp::CheckedTimestamp;
@@ -70,8 +70,8 @@ use mz_storage_client::statistics::{
 };
 use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::configuration::StorageConfiguration;
-use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{AlterError, CollectionMetadata, StorageError, TxnsCodecRow};
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::oneshot_sources::{OneshotIngestionRequest, OneshotResultCallback};
@@ -83,18 +83,18 @@ use mz_storage_types::sources::{
     GenericSourceConnection, IngestionDescription, SourceConnection, SourceData, SourceDesc,
     SourceExport, SourceExportDataConfig,
 };
-use mz_storage_types::{dyncfgs, AlterCompatible, StorageDiff};
+use mz_storage_types::{AlterCompatible, StorageDiff, dyncfgs};
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use mz_txn_wal::txn_read::TxnsRead;
 use mz_txn_wal::txns::TxnsHandle;
 use timely::order::{PartialOrder, TotalOrder};
-use timely::progress::frontier::MutableAntichain;
 use timely::progress::Timestamp as TimelyTimestamp;
+use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
-use tokio::sync::watch::{channel, Sender};
+use tokio::sync::watch::{Sender, channel};
 use tokio::sync::{mpsc, oneshot};
-use tokio::time::error::Elapsed;
 use tokio::time::MissedTickBehavior;
+use tokio::time::error::Elapsed;
 use tracing::{debug, info, warn};
 
 use crate::collection_mgmt::{
@@ -1209,17 +1209,21 @@ where
         for id in to_execute {
             match &self.collection(id)?.data_source {
                 DataSource::Ingestion(ingestion) => {
-                    if !self.read_only || (
-                        ENABLE_0DT_DEPLOYMENT_SOURCES.get(self.config.config_set())
-                        && ingestion.desc.connection.supports_read_only()
-                    ) {
+                    if !self.read_only
+                        || (ENABLE_0DT_DEPLOYMENT_SOURCES.get(self.config.config_set())
+                            && ingestion.desc.connection.supports_read_only())
+                    {
                         self.run_ingestion(id)?;
                     }
                 }
                 DataSource::IngestionExport { .. } => unreachable!(
                     "ingestion exports do not execute directly, but instead schedule their source to be re-executed"
                 ),
-                DataSource::Introspection(_) | DataSource::Webhook | DataSource::Table { .. } | DataSource::Progress | DataSource::Other => {}
+                DataSource::Introspection(_)
+                | DataSource::Webhook
+                | DataSource::Table { .. }
+                | DataSource::Progress
+                | DataSource::Other => {}
                 DataSource::Sink { .. } => {
                     if !self.read_only {
                         self.run_export(id)?;
@@ -1895,7 +1899,9 @@ where
                             Some(ingestion_collection) => ingestion_collection,
                             // Primary ingestion already dropped.
                             None => {
-                                tracing::error!("primary source {ingestion_id} seemingly dropped before subsource {id}");
+                                tracing::error!(
+                                    "primary source {ingestion_id} seemingly dropped before subsource {id}"
+                                );
                                 continue;
                             }
                         };
@@ -1908,7 +1914,9 @@ where
                                     "dropped subsource {id} already removed from source exports"
                                 );
                             }
-                            _ => unreachable!("SourceExport must only refer to primary sources that already exist"),
+                            _ => unreachable!(
+                                "SourceExport must only refer to primary sources that already exist"
+                            ),
                         };
 
                         // Ingestion exports also have ReadHolds that we need to
@@ -2591,7 +2599,6 @@ where
         + Into<Datum<'static>>,
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
-
     Self: StorageController<Timestamp = T>,
 {
     /// Create a new storage controller from a client it should wrap.
@@ -2927,7 +2934,8 @@ where
                     )]));
                 } else {
                     soft_panic_or_log!(
-                        "missing instance client for cluster {cluster_id} while we still have outstanding AllowCompaction command {frontier:?} for {key}");
+                        "missing instance client for cluster {cluster_id} while we still have outstanding AllowCompaction command {frontier:?} for {key}"
+                    );
                 }
             }
         }

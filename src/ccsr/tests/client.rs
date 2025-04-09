@@ -11,7 +11,7 @@ use std::env;
 use std::net::Ipv4Addr;
 use std::sync::LazyLock;
 
-use hyper::{service, Response, StatusCode};
+use hyper::{Response, StatusCode, service};
 use hyper_util::rt::TokioIo;
 use mz_ccsr::tls::Identity;
 use mz_ccsr::{

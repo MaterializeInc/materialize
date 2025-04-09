@@ -15,9 +15,9 @@ use std::rc::Rc;
 use anyhow::{Context, Error};
 use mz_avro::error::{DecodeError, Error as AvroError};
 use mz_avro::{
-    define_unexpected, give_value, AvroArrayAccess, AvroDecode, AvroDeserializer, AvroMapAccess,
-    AvroRead, AvroRecordAccess, GeneralDeserializer, StatefulAvroDecodable, ValueDecoder,
-    ValueOrReader,
+    AvroArrayAccess, AvroDecode, AvroDeserializer, AvroMapAccess, AvroRead, AvroRecordAccess,
+    GeneralDeserializer, StatefulAvroDecodable, ValueDecoder, ValueOrReader, define_unexpected,
+    give_value,
 };
 use mz_ore::error::ErrorExt;
 use mz_repr::adt::date::Date;
@@ -127,8 +127,7 @@ impl Decoder {
         if result.is_ok() {
             trace!(
                 "[customer-data] Decoded row {:?} in {}",
-                self.row_buf,
-                self.debug_name
+                self.row_buf, self.debug_name
             );
         }
         Ok(result)

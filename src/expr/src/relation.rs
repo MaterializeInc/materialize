@@ -9,7 +9,7 @@
 
 #![warn(missing_docs)]
 
-use std::cmp::{max, Ordering};
+use std::cmp::{Ordering, max};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fmt::{Display, Formatter};
@@ -39,19 +39,19 @@ use mz_repr::{
     ColumnName, ColumnType, Datum, Diff, GlobalId, IntoRowIterator, RelationType, Row, RowIterator,
     ScalarType,
 };
-use proptest::prelude::{any, Arbitrary, BoxedStrategy};
+use proptest::prelude::{Arbitrary, BoxedStrategy, any};
 use proptest::strategy::{Strategy, Union};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use crate::Id::Local;
 use crate::explain::{HumanizedExpr, HumanizerMode};
 use crate::relation::func::{AggregateFunc, LagLeadType, TableFunc};
 use crate::row::{RowCollection, SortedRowCollectionIter};
 use crate::visit::{Visit, VisitChildren};
-use crate::Id::Local;
 use crate::{
-    func as scalar_func, EvalError, FilterCharacteristics, Id, LocalId, MirScalarExpr, UnaryFunc,
-    VariadicFunc,
+    EvalError, FilterCharacteristics, Id, LocalId, MirScalarExpr, UnaryFunc, VariadicFunc,
+    func as scalar_func,
 };
 
 pub mod canonicalize;
@@ -1702,12 +1702,13 @@ impl MirRelationExpr {
     /// the correct type.
     pub fn take_safely(&mut self, typ: Option<RelationType>) -> MirRelationExpr {
         if let Some(typ) = &typ {
-            soft_assert_no_log!(self
-                .typ()
-                .column_types
-                .iter()
-                .zip_eq(typ.column_types.iter())
-                .all(|(t1, t2)| t1.scalar_type.base_eq(&t2.scalar_type)));
+            soft_assert_no_log!(
+                self.typ()
+                    .column_types
+                    .iter()
+                    .zip_eq(typ.column_types.iter())
+                    .all(|(t1, t2)| t1.scalar_type.base_eq(&t2.scalar_type))
+            );
         }
         let mut typ = typ.unwrap_or_else(|| self.typ());
         typ.keys = vec![vec![]];
@@ -2761,10 +2762,11 @@ impl AggregateExpr {
             // JsonbAgg takes _anything_ as input, but must output a Jsonb array.
             AggregateFunc::JsonbAgg { .. } => MirScalarExpr::CallVariadic {
                 func: VariadicFunc::JsonbBuildArray,
-                exprs: vec![self
-                    .expr
-                    .clone()
-                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)))],
+                exprs: vec![
+                    self.expr
+                        .clone()
+                        .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0))),
+                ],
             },
 
             // JsonbAgg takes _anything_ as input, but must output a Jsonb object.
@@ -3953,7 +3955,7 @@ impl RustType<proto_window_frame::ProtoWindowFrameUnits> for WindowFrameUnits {
             None => {
                 return Err(TryFromProtoError::missing_field(
                     "ProtoWindowFrameUnits::kind",
-                ))
+                ));
             }
         })
     }
@@ -4016,7 +4018,7 @@ impl RustType<proto_window_frame::ProtoWindowFrameBound> for WindowFrameBound {
             None => {
                 return Err(TryFromProtoError::missing_field(
                     "ProtoWindowFrameBound::kind",
-                ))
+                ));
             }
         })
     }

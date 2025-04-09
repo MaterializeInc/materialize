@@ -11,7 +11,7 @@ use std::fmt::Debug;
 use std::time::Duration;
 use std::{cmp, str};
 
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::error::KafkaError;
 use rdkafka::message::{Headers, Message};

@@ -13,15 +13,15 @@ use crate::CollectionMetadata;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroI64;
 use std::sync::atomic::AtomicBool;
-use std::sync::{atomic, Arc};
+use std::sync::{Arc, atomic};
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
-use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
 use mz_cluster_client::ReplicaId;
+use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
 use mz_dyncfg::ConfigValHandle;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;

@@ -21,18 +21,18 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{env, io};
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use derivative::Derivative;
 use ipnet::IpNet;
-use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
+use mz_adapter::config::{SystemParameterSyncConfig, system_parameter_sync};
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
-use mz_adapter::{load_remote_system_parameters, AdapterError};
+use mz_adapter::{AdapterError, load_remote_system_parameters};
 use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
 use mz_adapter_types::dyncfgs::{
     ENABLE_0DT_DEPLOYMENT, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT,
     WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL, WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
-use mz_build_info::{build_info, BuildInfo};
+use mz_build_info::{BuildInfo, build_info};
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_catalog::durable::BootstrapArgs;
 use mz_cloud_resources::CloudResourceController;
@@ -55,7 +55,7 @@ use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::{Value, VarInput};
 use tokio::sync::oneshot;
 use tower_http::cors::AllowOrigin;
-use tracing::{info, info_span, Instrument};
+use tracing::{Instrument, info, info_span};
 
 use crate::deployment::preflight::{PreflightInput, PreflightOutput};
 use crate::deployment::state::DeploymentState;

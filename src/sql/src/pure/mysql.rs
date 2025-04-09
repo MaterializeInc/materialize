@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mz_mysql_util::{
-    validate_source_privileges, MySqlError, MySqlTableDesc, QualifiedTableRef, SYSTEM_SCHEMAS,
+    MySqlError, MySqlTableDesc, QualifiedTableRef, SYSTEM_SCHEMAS, validate_source_privileges,
 };
 use mz_proto::RustType;
 use mz_sql_parser::ast::display::AstDisplay;

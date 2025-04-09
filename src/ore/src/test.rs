@@ -15,8 +15,8 @@
 
 //! Test utilities.
 
-use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::Once;
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
 

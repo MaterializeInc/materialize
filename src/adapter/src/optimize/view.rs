@@ -20,13 +20,13 @@ use std::time::Instant;
 use mz_expr::OptimizedMirRelationExpr;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
-use mz_transform::dataflow::DataflowMetainfo;
-use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
 use mz_transform::TransformCtx;
+use mz_transform::dataflow::DataflowMetainfo;
+use mz_transform::typecheck::{SharedContext as TypecheckContext, empty_context};
 
 use crate::optimize::{
-    optimize_mir_constant, optimize_mir_local, trace_plan, Optimize, OptimizerConfig,
-    OptimizerError,
+    Optimize, OptimizerConfig, OptimizerError, optimize_mir_constant, optimize_mir_local,
+    trace_plan,
 };
 
 pub struct Optimizer {

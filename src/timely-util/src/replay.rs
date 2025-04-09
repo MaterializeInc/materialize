@@ -24,15 +24,15 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 use timely::container::ContainerBuilder;
 
+use timely::Container;
 use timely::dataflow::channels::pushers::buffer::{Buffer as PushBuffer, Session};
 use timely::dataflow::channels::pushers::{Counter as PushCounter, Tee};
-use timely::dataflow::operators::capture::event::EventIterator;
 use timely::dataflow::operators::capture::Event;
+use timely::dataflow::operators::capture::event::EventIterator;
 use timely::dataflow::operators::generic::builder_raw::OperatorBuilder;
 use timely::dataflow::{Scope, StreamCore};
 use timely::progress::Timestamp;
 use timely::scheduling::ActivateOnDrop;
-use timely::Container;
 
 use crate::activator::ActivatorTrait;
 

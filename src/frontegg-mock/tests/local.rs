@@ -17,7 +17,7 @@ use std::time::Duration;
 use chrono::Utc;
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use mz_frontegg_mock::{
-    models::ApiToken, models::UserConfig, models::UserRole, FronteggMockServer,
+    FronteggMockServer, models::ApiToken, models::UserConfig, models::UserRole,
 };
 use mz_ore::now::SYSTEM_TIME;
 use openssl::rsa::Rsa;
@@ -1374,11 +1374,13 @@ async fn test_delete_sso_domain() {
         .unwrap();
 
     let body: serde_json::Value = get_domains_response.json().await.unwrap();
-    assert!(!body
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|domain| domain["id"] == domain_id));
+    assert!(
+        !body
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|domain| domain["id"] == domain_id)
+    );
 }
 
 #[mz_ore::test(tokio::test)]
@@ -1638,11 +1640,13 @@ async fn test_delete_sso_group_mapping() {
         .unwrap();
 
     let body: serde_json::Value = get_group_mappings_response.json().await.unwrap();
-    assert!(!body
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|group| group["id"] == group_id));
+    assert!(
+        !body
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|group| group["id"] == group_id)
+    );
 }
 
 #[mz_ore::test(tokio::test)]
@@ -2308,11 +2312,13 @@ async fn test_delete_scim_configuration() {
         .unwrap();
 
     let body: serde_json::Value = list_response.json().await.unwrap();
-    assert!(!body
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|config| config["id"] == config_id));
+    assert!(
+        !body
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|config| config["id"] == config_id)
+    );
 }
 
 // Roles Tests

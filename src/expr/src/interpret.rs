@@ -384,7 +384,7 @@ pub trait Interpreter {
 
     /// A function call that takes two expressions as arguments.
     fn binary(&self, func: &BinaryFunc, left: Self::Summary, right: Self::Summary)
-        -> Self::Summary;
+    -> Self::Summary;
 
     /// A function call that takes an arbitrary number of arguments.
     fn variadic(&self, func: &VariadicFunc, exprs: Vec<Self::Summary>) -> Self::Summary;
@@ -1098,7 +1098,7 @@ mod tests {
     use mz_repr::adt::datetime::DateTimeUnits;
     use mz_repr::{Datum, PropDatum, RowArena, ScalarType};
     use proptest::prelude::*;
-    use proptest::sample::{select, Index};
+    use proptest::sample::{Index, select};
 
     use crate::func::*;
     use crate::{BinaryFunc, MirScalarExpr, UnaryFunc};

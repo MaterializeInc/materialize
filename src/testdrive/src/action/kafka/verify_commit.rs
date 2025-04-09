@@ -9,7 +9,7 @@
 
 use std::time::Duration;
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
 use rdkafka::consumer::{Consumer, StreamConsumer};

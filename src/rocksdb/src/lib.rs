@@ -28,13 +28,13 @@ use mz_ore::metrics::{DeleteOnDropCounter, DeleteOnDropHistogram};
 use mz_ore::retry::{Retry, RetryResult};
 use prometheus::core::AtomicU64;
 use rocksdb::merge_operator::MergeOperandsIter;
-use rocksdb::{Env, Error as RocksDBError, ErrorKind, Options as RocksDBOptions, WriteOptions, DB};
-use serde::de::DeserializeOwned;
+use rocksdb::{DB, Env, Error as RocksDBError, ErrorKind, Options as RocksDBOptions, WriteOptions};
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use tokio::sync::{mpsc, oneshot};
 
 pub mod config;
-pub use config::{defaults, RocksDBConfig, RocksDBTuningParameters};
+pub use config::{RocksDBConfig, RocksDBTuningParameters, defaults};
 
 use crate::config::WriteBufferManagerHandle;
 

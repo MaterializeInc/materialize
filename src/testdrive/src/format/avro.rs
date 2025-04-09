@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 use std::convert::{TryFrom, TryInto};
 use std::fmt::Debug;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use byteorder::{BigEndian, ByteOrder};
 use chrono::NaiveDate;
 // Re-export components from the various other Avro libraries, so that other
@@ -35,23 +35,21 @@ use serde_json::Value as JsonValue;
 // This function is derived from code in the avro_rs project. Update the license
 // header on this file accordingly if you move it to a new home.
 pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, anyhow::Error> {
-    match (json, schema.inner) {
+    match (&json, &schema.inner) {
         (JsonValue::Null, SchemaPiece::Null) => Ok(Value::Null),
         (JsonValue::Bool(b), SchemaPiece::Boolean) => Ok(Value::Boolean(*b)),
-        (JsonValue::Number(ref n), SchemaPiece::Int) => {
-            Ok(Value::Int(n.as_i64().unwrap().try_into()?))
-        }
-        (JsonValue::Number(ref n), SchemaPiece::Long) => Ok(Value::Long(n.as_i64().unwrap())),
-        (JsonValue::Number(ref n), SchemaPiece::Float) => {
+        (JsonValue::Number(n), SchemaPiece::Int) => Ok(Value::Int(n.as_i64().unwrap().try_into()?)),
+        (JsonValue::Number(n), SchemaPiece::Long) => Ok(Value::Long(n.as_i64().unwrap())),
+        (JsonValue::Number(n), SchemaPiece::Float) => {
             // No other known way to cast an `f64` to an `f32`.
             #[allow(clippy::as_conversions)]
             Ok(Value::Float(n.as_f64().unwrap() as f32))
         }
-        (JsonValue::Number(ref n), SchemaPiece::Double) => Ok(Value::Double(n.as_f64().unwrap())),
-        (JsonValue::Number(ref n), SchemaPiece::Date) => {
+        (JsonValue::Number(n), SchemaPiece::Double) => Ok(Value::Double(n.as_f64().unwrap())),
+        (JsonValue::Number(n), SchemaPiece::Date) => {
             Ok(Value::Date(i32::try_from(n.as_i64().unwrap())?))
         }
-        (JsonValue::Number(ref n), SchemaPiece::TimestampMilli) => {
+        (JsonValue::Number(n), SchemaPiece::TimestampMilli) => {
             let ts = n.as_i64().unwrap();
             Ok(Value::Timestamp(
                 chrono::DateTime::from_timestamp_millis(ts)
@@ -59,7 +57,7 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, anyhow::
                     .naive_utc(),
             ))
         }
-        (JsonValue::Number(ref n), SchemaPiece::TimestampMicro) => {
+        (JsonValue::Number(n), SchemaPiece::TimestampMicro) => {
             let ts = n.as_i64().unwrap();
             Ok(Value::Timestamp(
                 chrono::DateTime::from_timestamp_micros(ts)
@@ -173,7 +171,10 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, anyhow::
             }
             let items = match val {
                 JsonValue::Object(items) => items,
-                _ => bail!("Union schema element must be `null` or a map from type name to value; found {:?}", val),
+                _ => bail!(
+                    "Union schema element must be `null` or a map from type name to value; found {:?}",
+                    val
+                ),
             };
             let (name, val) = if items.len() == 1 {
                 (items.keys().next().unwrap(), items.values().next().unwrap())
@@ -208,7 +209,7 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, anyhow::
                                 inner: Box::new(avro),
                                 n_variants: variants.len(),
                                 null_variant,
-                            })
+                            });
                         }
                         Err(msg) => return Err(msg),
                     }

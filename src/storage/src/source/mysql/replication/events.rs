@@ -9,7 +9,7 @@
 
 use maplit::btreemap;
 use mysql_common::binlog::events::{QueryEvent, RowsEventData};
-use mz_mysql_util::{pack_mysql_row, MySqlError};
+use mz_mysql_util::{MySqlError, pack_mysql_row};
 use mz_ore::iter::IteratorExt;
 use mz_repr::{Diff, Row};
 use mz_storage_types::errors::DataflowError;
@@ -329,7 +329,7 @@ pub(super) async fn handle_rows_event(
 
     if !event_buffer.is_empty() {
         for d in event_buffer.drain(..) {
-            let (rewind_data_cap, _) = ctx.rewinds.get(&d.0 .0).unwrap();
+            let (rewind_data_cap, _) = ctx.rewinds.get(&d.0.0).unwrap();
             ctx.data_output.give_fueled(rewind_data_cap, d).await;
         }
     }

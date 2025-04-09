@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use mz_ore::soft_assert_eq_or_log;
-use mz_ore::str::{closure_to_display, separated, Indent, IndentLike, StrExt};
+use mz_ore::str::{Indent, IndentLike, StrExt, closure_to_display, separated};
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{
     CompactScalars, ExprHumanizer, HumanizedAnalyses, IndexUsageType, Indices,

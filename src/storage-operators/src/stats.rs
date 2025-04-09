@@ -13,11 +13,11 @@ use mz_expr::{ResultSpec, SafeMfpPlan};
 use mz_persist_client::metrics::Metrics;
 use mz_persist_client::read::{Cursor, LazyPartStats, ReadHandle, Since};
 use mz_repr::{RelationDesc, Row, Timestamp};
+use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::TxnsCodecRow;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_storage_types::stats::RelationPartStats;
-use mz_storage_types::StorageDiff;
 use mz_txn_wal::txn_cache::TxnsCache;
 use timely::progress::Antichain;
 

@@ -16,8 +16,8 @@ use std::sync::Arc;
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::{AsCollection, Collection};
-use futures::future::FutureExt;
 use futures::StreamExt;
+use futures::future::FutureExt;
 use indexmap::map::Entry;
 use itertools::Itertools;
 use mz_ore::error::ErrorExt;
@@ -49,8 +49,8 @@ use crate::upsert_continual_feedback;
 use autospill::AutoSpillBackend;
 use memory::InMemoryHashMap;
 use types::{
-    consolidating_merge_function, upsert_bincode_opts, BincodeOpts, StateValue, UpsertState,
-    UpsertStateBackend, Value,
+    BincodeOpts, StateValue, UpsertState, UpsertStateBackend, Value, consolidating_merge_function,
+    upsert_bincode_opts,
 };
 
 mod autospill;

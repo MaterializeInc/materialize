@@ -53,7 +53,7 @@ use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::AdapterNotice;
-use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
+use crate::optimize::dataflows::{EvalTime, ExprPrepStyle, prep_scalar_expr};
 use crate::optimize::{self, Optimize};
 use crate::session::{RequireLinearization, Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::StatementLifecycleEvent;
@@ -327,7 +327,7 @@ impl Coordinator {
                         return Err(AdapterError::NoClusterReplicasAvailable {
                             name: cluster.name.clone(),
                             is_managed: cluster.is_managed(),
-                        })
+                        });
                     }
                 };
                 copy_to_ctx.output_batch_count = Some(max_worker_count);

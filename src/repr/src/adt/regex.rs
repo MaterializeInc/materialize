@@ -21,7 +21,7 @@ use proptest::prop_compose;
 use regex::{Error, RegexBuilder};
 use serde::de::Error as DeError;
 use serde::ser::SerializeStruct;
-use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.regex.rs"));
 

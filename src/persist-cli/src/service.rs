@@ -19,12 +19,12 @@ use futures::StreamExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::location::{SeqNo, VersionedData};
+use mz_persist_client::ShardId;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::metrics::Metrics;
 use mz_persist_client::rpc::{
     GrpcPubSubClient, PersistGrpcPubSubServer, PersistPubSubClient, PersistPubSubClientConfig,
 };
-use mz_persist_client::ShardId;
 use tracing::info;
 
 #[derive(clap::ValueEnum, Copy, Clone, Debug)]

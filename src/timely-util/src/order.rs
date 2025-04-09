@@ -22,8 +22,8 @@ use std::hash::Hash;
 use differential_dataflow::containers::CopyRegion;
 use serde::{Deserialize, Serialize};
 use timely::order::Product;
-use timely::progress::timestamp::{PathSummary, Refines, Timestamp};
 use timely::progress::Antichain;
+use timely::progress::timestamp::{PathSummary, Refines, Timestamp};
 use timely::{ExchangeData, PartialOrder};
 use uuid::Uuid;
 

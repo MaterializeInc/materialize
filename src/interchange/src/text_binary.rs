@@ -10,7 +10,7 @@
 use bytes::BytesMut;
 use mz_repr::{ColumnName, ColumnType, RelationDesc};
 
-use crate::encode::{column_names_and_types, Encode};
+use crate::encode::{Encode, column_names_and_types};
 use crate::envelopes;
 
 #[derive(Debug)]

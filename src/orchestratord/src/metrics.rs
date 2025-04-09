@@ -9,7 +9,7 @@
 
 use std::time::Duration;
 
-use axum::{body::Body, routing::get, Extension, Router};
+use axum::{Extension, Router, body::Body, routing::get};
 use http::{Method, Request, Response, StatusCode};
 use prometheus::{Encoder, TextEncoder};
 use tower_http::{classify::ServerErrorsFailureClass, trace::TraceLayer};

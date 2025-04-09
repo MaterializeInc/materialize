@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc, ScalarType};
-use proptest::prelude::{any, prop, Arbitrary, BoxedStrategy, Strategy};
+use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy, any, prop};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 

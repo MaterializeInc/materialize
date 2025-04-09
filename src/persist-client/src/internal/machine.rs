@@ -16,8 +16,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use futures::future::{self, BoxFuture};
 use futures::FutureExt;
+use futures::future::{self, BoxFuture};
 use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
@@ -30,9 +30,9 @@ use mz_persist::retry::Retry;
 use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec, Codec64, Opaque};
 use semver::Version;
-use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::{debug, info, trace_span, warn, Instrument};
+use timely::progress::{Antichain, Timestamp};
+use tracing::{Instrument, debug, info, trace_span, warn};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::INLINE_WRITES_TOTAL_MAX_BYTES;
@@ -310,13 +310,13 @@ where
                 .await;
             match res {
                 CompareAndAppendRes::Success(seqno, maintenance) => {
-                    return CompareAndAppendRes::Success(seqno, maintenance)
+                    return CompareAndAppendRes::Success(seqno, maintenance);
                 }
                 CompareAndAppendRes::InvalidUsage(x) => {
-                    return CompareAndAppendRes::InvalidUsage(x)
+                    return CompareAndAppendRes::InvalidUsage(x);
                 }
                 CompareAndAppendRes::InlineBackpressure => {
-                    return CompareAndAppendRes::InlineBackpressure
+                    return CompareAndAppendRes::InlineBackpressure;
                 }
                 CompareAndAppendRes::UpperMismatch(seqno, _current_upper) => {
                     // If the state machine thinks that the shard upper is not
@@ -587,11 +587,16 @@ where
                     //
                     // NB: This is intentionally not a halt! because it's quite
                     // unexpected.
-                    panic!(concat!(
-                        "cannot distinguish compare_and_append success or failure ",
-                        "caa_lower={:?} caa_upper={:?} writer_upper={:?} shard_upper={:?} err={:?}"),
-                        batch.desc.lower().elements(), batch.desc.upper().elements(),
-                        writer_upper.elements(), shard_upper.elements(), indeterminate,
+                    panic!(
+                        concat!(
+                            "cannot distinguish compare_and_append success or failure ",
+                            "caa_lower={:?} caa_upper={:?} writer_upper={:?} shard_upper={:?} err={:?}"
+                        ),
+                        batch.desc.lower().elements(),
+                        batch.desc.upper().elements(),
+                        writer_upper.elements(),
+                        shard_upper.elements(),
+                        indeterminate,
                     );
                 }
             };
@@ -805,7 +810,7 @@ where
             let err = match res {
                 Ok((_seqno, Ok(()), maintenance)) => return Ok((true, maintenance)),
                 Ok((_seqno, Err(NoOpStateTransition(())), maintenance)) => {
-                    return Ok((false, maintenance))
+                    return Ok((false, maintenance));
                 }
                 Err(err) => err,
             };
@@ -848,7 +853,7 @@ where
             Ok(x) => return Ok(x),
             Err(SnapshotErr::AsOfNotYetAvailable(seqno, Upper(upper))) => (seqno, upper),
             Err(SnapshotErr::AsOfHistoricalDistinctionsLost(Since(since))) => {
-                return Err(Since(since))
+                return Err(Since(since));
             }
         };
 
@@ -867,14 +872,18 @@ where
             Watch(&'a mut StateWatch<K, V, T, D>),
             Sleep(MetricsRetryStream),
         }
-        let mut watch_fut = std::pin::pin!(watch
-            .wait_for_seqno_ge(seqno.next())
-            .map(Wake::Watch)
-            .instrument(trace_span!("snapshot::watch")),);
-        let mut sleep_fut = std::pin::pin!(sleeps
-            .sleep()
-            .map(Wake::Sleep)
-            .instrument(trace_span!("snapshot::sleep")),);
+        let mut watch_fut = std::pin::pin!(
+            watch
+                .wait_for_seqno_ge(seqno.next())
+                .map(Wake::Watch)
+                .instrument(trace_span!("snapshot::watch")),
+        );
+        let mut sleep_fut = std::pin::pin!(
+            sleeps
+                .sleep()
+                .map(Wake::Sleep)
+                .instrument(trace_span!("snapshot::sleep")),
+        );
 
         // To reduce log spam, we log "not yet available" only once at info if
         // it passes a certain threshold. Then, if it did one info log, we log
@@ -937,7 +946,7 @@ where
                     (seqno, upper)
                 }
                 Err(SnapshotErr::AsOfHistoricalDistinctionsLost(Since(since))) => {
-                    return Err(Since(since))
+                    return Err(Since(since));
                 }
             };
 
@@ -1011,14 +1020,18 @@ where
             Watch(&'a mut StateWatch<K, V, T, D>),
             Sleep(MetricsRetryStream),
         }
-        let mut watch_fut = std::pin::pin!(watch
-            .wait_for_seqno_ge(seqno.next())
-            .map(Wake::Watch)
-            .instrument(trace_span!("snapshot::watch")));
-        let mut sleep_fut = std::pin::pin!(sleeps
-            .sleep()
-            .map(Wake::Sleep)
-            .instrument(trace_span!("snapshot::sleep")));
+        let mut watch_fut = std::pin::pin!(
+            watch
+                .wait_for_seqno_ge(seqno.next())
+                .map(Wake::Watch)
+                .instrument(trace_span!("snapshot::watch"))
+        );
+        let mut sleep_fut = std::pin::pin!(
+            sleeps
+                .sleep()
+                .map(Wake::Sleep)
+                .instrument(trace_span!("snapshot::sleep"))
+        );
 
         loop {
             let wake = match future::select(watch_fut.as_mut(), sleep_fut.as_mut()).await {
@@ -1111,9 +1124,19 @@ where
                 },
                 Err(err) => {
                     if retry.attempt() >= INFO_MIN_ATTEMPTS {
-                        info!("apply_unbatched_idempotent_cmd {} received an indeterminate error, retrying in {:?}: {}", cmd.name, retry.next_sleep(), err);
+                        info!(
+                            "apply_unbatched_idempotent_cmd {} received an indeterminate error, retrying in {:?}: {}",
+                            cmd.name,
+                            retry.next_sleep(),
+                            err
+                        );
                     } else {
-                        debug!("apply_unbatched_idempotent_cmd {} received an indeterminate error, retrying in {:?}: {}", cmd.name, retry.next_sleep(), err);
+                        debug!(
+                            "apply_unbatched_idempotent_cmd {} received an indeterminate error, retrying in {:?}: {}",
+                            cmd.name,
+                            retry.next_sleep(),
+                            err
+                        );
                     }
                     retry = retry.sleep().await;
                     continue;
@@ -1402,8 +1425,8 @@ pub mod datadriven {
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 
     use crate::batch::{
-        validate_truncate_batch, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
-        BatchParts, BLOB_TARGET_SIZE,
+        BLOB_TARGET_SIZE, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
+        BatchParts, validate_truncate_batch,
     };
     use crate::cfg::COMPACTION_MEMORY_BOUND_BYTES;
     use crate::fetch::EncodedPart;
@@ -1822,13 +1845,15 @@ pub mod datadriven {
         let batch = datadriven.batches.get(input).expect("unknown batch");
 
         let mut s = String::new();
-        let mut stream = pin!(batch
-            .part_stream(
-                datadriven.shard_id,
-                &*datadriven.state_versions.blob,
-                &*datadriven.state_versions.metrics
-            )
-            .enumerate());
+        let mut stream = pin!(
+            batch
+                .part_stream(
+                    datadriven.shard_id,
+                    &*datadriven.state_versions.blob,
+                    &*datadriven.state_versions.metrics
+                )
+                .enumerate()
+        );
         while let Some((idx, part)) = stream.next().await {
             let part = &*part?;
             write!(s, "<part {idx}>\n");
@@ -2110,13 +2135,15 @@ pub mod datadriven {
             );
             for (run, (_meta, parts)) in batch.runs().enumerate() {
                 writeln!(result, "<run {run}>");
-                let mut stream = pin!(futures::stream::iter(parts)
-                    .flat_map(|part| part.part_stream(
-                        datadriven.shard_id,
-                        &*datadriven.state_versions.blob,
-                        &*datadriven.state_versions.metrics
-                    ))
-                    .enumerate());
+                let mut stream = pin!(
+                    futures::stream::iter(parts)
+                        .flat_map(|part| part.part_stream(
+                            datadriven.shard_id,
+                            &*datadriven.state_versions.blob,
+                            &*datadriven.state_versions.metrics
+                        ))
+                        .enumerate()
+                );
 
                 while let Some((idx, part)) = stream.next().await {
                     let part = &*part?;
@@ -2394,7 +2421,7 @@ pub mod datadriven {
             match res {
                 CompareAndAppendRes::Success(_, x) => break x,
                 CompareAndAppendRes::UpperMismatch(_seqno, upper) => {
-                    return Err(anyhow!("{:?}", Upper(upper)))
+                    return Err(anyhow!("{:?}", Upper(upper)));
                 }
                 CompareAndAppendRes::InlineBackpressure => {
                     let mut b = datadriven.to_batch(batch.clone());
@@ -2475,12 +2502,12 @@ pub mod tests {
     use mz_persist::location::SeqNo;
     use timely::progress::Antichain;
 
+    use crate::ShardId;
     use crate::batch::BatchBuilderConfig;
     use crate::cache::StateCache;
     use crate::internal::gc::{GarbageCollector, GcReq};
     use crate::internal::state::{HandleDebugState, ROLLUP_THRESHOLD};
     use crate::tests::new_test_client;
-    use crate::ShardId;
 
     #[mz_persist_proc::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(miri, ignore)] // error: unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr` are not supported with `-Zmiri-strict-provenance`

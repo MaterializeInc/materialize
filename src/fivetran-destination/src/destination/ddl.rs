@@ -13,7 +13,7 @@ use mz_sql_parser::ast::{Ident, UnresolvedItemName};
 use postgres_protocol::escape;
 use tokio_postgres::Client;
 
-use crate::destination::{config, ColumnMetadata, FIVETRAN_SYSTEM_COLUMN_DELETE};
+use crate::destination::{ColumnMetadata, FIVETRAN_SYSTEM_COLUMN_DELETE, config};
 use crate::error::{Context, OpError, OpErrorKind};
 use crate::fivetran_sdk::{
     AlterTableRequest, Column, CreateTableRequest, DataType, DescribeTableRequest, Table,

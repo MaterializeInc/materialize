@@ -20,14 +20,14 @@ use futures::{StreamExt, TryStreamExt};
 use mz_persist_types::arrow::ProtoArrayData;
 use mz_proto::{ProtoType, RustType};
 use mz_repr::RelationDesc;
-use parquet::arrow::async_reader::{AsyncFileReader, MetadataFetch};
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
+use parquet::arrow::async_reader::{AsyncFileReader, MetadataFetch};
 use parquet::errors::ParquetError;
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use prost::Message;
 use serde::de::Visitor;
 use serde::{Deserialize, Deserializer, Serialize};
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 
 use crate::oneshot_source::{
     OneshotFormat, OneshotObject, OneshotSource, StorageErrorX, StorageErrorXContext,

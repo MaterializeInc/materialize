@@ -14,16 +14,16 @@
 // Also, we don't need any ordering for the values fetched, so using std HashMap.
 #![allow(clippy::disallowed_types)]
 
-use std::collections::hash_map::Drain;
 use std::collections::HashMap;
+use std::collections::hash_map::Drain;
 
 use itertools::Itertools;
 
+use super::UpsertKey;
 use super::types::{
     GetStats, MergeStats, MergeValue, PutStats, PutValue, StateValue, UpsertStateBackend,
     UpsertValueAndSize, ValueMetadata,
 };
-use super::UpsertKey;
 
 /// A `HashMap` tracking its total size
 pub struct InMemoryHashMap<T, O> {

@@ -13,8 +13,8 @@
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 
-use crate::client::role::Role;
 use crate::client::Client;
+use crate::client::role::Role;
 use crate::error::Error;
 use crate::parse::{Empty, Paginated};
 

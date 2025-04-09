@@ -26,7 +26,7 @@ use uuid::Uuid;
 use crate::internal::machine::Machine;
 use crate::internal::state::Since;
 use crate::stats::SnapshotStats;
-use crate::{parse_id, GarbageCollector, ShardId};
+use crate::{GarbageCollector, ShardId, parse_id};
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
 #[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

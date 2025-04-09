@@ -25,7 +25,7 @@ use maplit::btreemap;
 use mz_ore::str::StrExt;
 use serde::{Deserialize, Serialize};
 use tokio::fs;
-use toml_edit::{value, Document};
+use toml_edit::{DocumentMut, value};
 
 #[cfg(target_os = "macos")]
 use security_framework::passwords::{get_generic_password, set_generic_password};
@@ -70,7 +70,7 @@ static GLOBAL_PARAMS: LazyLock<BTreeMap<&'static str, GlobalParam>> = LazyLock::
 pub struct ConfigFile {
     path: PathBuf,
     parsed: TomlConfigFile,
-    editable: Document,
+    editable: DocumentMut,
 }
 
 impl ConfigFile {
@@ -396,7 +396,7 @@ impl Profile<'_> {
                                         return Ok(app_password);
                                     }
                                     Err(err) => {
-                                        return Err(Error::MacOsSecurityError(err.to_string()))
+                                        return Err(Error::MacOsSecurityError(err.to_string()));
                                     }
                                 }
                             }

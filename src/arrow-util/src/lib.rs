@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use arrow::array::{make_array, ArrayRef};
+use arrow::array::{ArrayRef, make_array};
 use arrow::buffer::NullBuffer;
 
 pub mod builder;

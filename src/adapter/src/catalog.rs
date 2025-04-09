@@ -20,7 +20,7 @@ use futures::future::BoxFuture;
 use futures::{Future, FutureExt};
 use itertools::Itertools;
 use mz_adapter_types::bootstrap_builtin_cluster_config::{
-    BootstrapBuiltinClusterConfig, ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR, BootstrapBuiltinClusterConfig,
     CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
     SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
 };
@@ -28,14 +28,14 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::{EventType, FullNameV1, ObjectType, VersionedStorageUsage};
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_catalog::builtin::{
-    BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BUILTIN_PREFIXES,
+    BUILTIN_PREFIXES, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable,
     MZ_CATALOG_SERVER_CLUSTER,
 };
 use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, Config, StateConfig};
 #[cfg(test)]
 use mz_catalog::durable::CatalogError;
 use mz_catalog::durable::{
-    test_bootstrap_args, BootstrapArgs, DurableCatalogState, TestCatalogStateBuilder,
+    BootstrapArgs, DurableCatalogState, TestCatalogStateBuilder, test_bootstrap_args,
 };
 use mz_catalog::expr_cache::{ExpressionCacheHandle, GlobalExpressions, LocalExpressions};
 use mz_catalog::memory::error::{Error, ErrorKind};
@@ -68,8 +68,8 @@ use mz_sql::catalog::{
 };
 use mz_sql::names::{
     CommentObjectId, DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId,
-    PartialItemName, QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier,
-    ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId, PUBLIC_ROLE_NAME,
+    PUBLIC_ROLE_NAME, PartialItemName, QualifiedItemName, QualifiedSchemaName,
+    ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId,
 };
 use mz_sql::plan::{Plan, PlanNotice, StatementDesc};
 use mz_sql::rbac;
@@ -77,14 +77,14 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
 use mz_sql::session::vars::SystemVars;
 use mz_sql_parser::ast::QualifiedReplica;
-use mz_storage_types::connections::inline::{ConnectionResolver, InlinedConnection};
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::connections::inline::{ConnectionResolver, InlinedConnection};
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 use smallvec::SmallVec;
-use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::MutexGuard;
+use tokio::sync::mpsc::UnboundedSender;
 use tracing::error;
 use uuid::Uuid;
 
@@ -1045,7 +1045,10 @@ impl Catalog {
         self.state.get_entry_by_global_id(id)
     }
 
-    pub fn get_global_ids(&self, id: &CatalogItemId) -> impl Iterator<Item = GlobalId> + '_ {
+    pub fn get_global_ids<'a>(
+        &'a self,
+        id: &CatalogItemId,
+    ) -> impl Iterator<Item = GlobalId> + use<'a> {
         self.get_entry(id).global_ids()
     }
 
@@ -2323,13 +2326,13 @@ mod tests {
 
     use itertools::Itertools;
     use mz_catalog::memory::objects::CatalogItem;
-    use tokio_postgres::types::Type;
     use tokio_postgres::NoTls;
+    use tokio_postgres::types::Type;
     use uuid::Uuid;
 
-    use mz_catalog::builtin::{Builtin, BuiltinType, BUILTINS};
-    use mz_catalog::durable::{test_bootstrap_args, CatalogError, DurableCatalogError, FenceError};
     use mz_catalog::SYSTEM_CONN_ID;
+    use mz_catalog::builtin::{BUILTINS, Builtin, BuiltinType};
+    use mz_catalog::durable::{CatalogError, DurableCatalogError, FenceError, test_bootstrap_args};
     use mz_controller_types::{ClusterId, ReplicaId};
     use mz_expr::MirScalarExpr;
     use mz_ore::now::to_datetime;
@@ -2343,7 +2346,7 @@ mod tests {
         ScalarType, Timestamp,
     };
     use mz_sql::catalog::{BuiltinsConfig, CatalogSchema, CatalogType, SessionCatalog};
-    use mz_sql::func::{Func, FuncImpl, Operation, OP_IMPLS};
+    use mz_sql::func::{Func, FuncImpl, OP_IMPLS, Operation};
     use mz_sql::names::{
         self, DatabaseId, ItemQualifiers, ObjectId, PartialItemName, QualifiedItemName,
         ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, SystemObjectId,
@@ -2357,7 +2360,7 @@ mod tests {
 
     use crate::catalog::state::LocalExpressionCache;
     use crate::catalog::{Catalog, Op};
-    use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
+    use crate::optimize::dataflows::{EvalTime, ExprPrepStyle, prep_scalar_expr};
     use crate::session::Session;
 
     /// System sessions have an empty `search_path` so it's necessary to
@@ -3170,12 +3173,14 @@ mod tests {
                             assert!(
                                 is_same_type(imp.oid, imp_return_oid, pg_fn.ret_oid),
                                 "funcs with oid {} ({}) don't match return types: {:?} in mz, {:?} in pg",
-                                imp.oid, func.name, imp_return_oid, pg_fn.ret_oid
+                                imp.oid,
+                                func.name,
+                                imp_return_oid,
+                                pg_fn.ret_oid
                             );
 
                             assert_eq!(
-                                imp.return_is_set,
-                                pg_fn.ret_set,
+                                imp.return_is_set, pg_fn.ret_set,
                                 "funcs with oid {} ({}) don't match set-returning value: {:?} in mz, {:?} in pg",
                                 imp.oid, func.name, imp.return_is_set, pg_fn.ret_set
                             );
@@ -3205,10 +3210,7 @@ mod tests {
                     if imp_return_oid != pg_op.oprresult {
                         panic!(
                             "operators with oid {} ({}) don't match return typs: {} in mz, {} in pg",
-                            imp.oid,
-                            op,
-                            imp_return_oid,
-                            pg_op.oprresult
+                            imp.oid, op, imp_return_oid, pg_op.oprresult
                         );
                     }
                 }
@@ -3416,7 +3418,9 @@ mod tests {
                         // is ok, but also catches if the function returned a null
                         // but the MIR type inference said "non-nullable".
                         if !eval_result_datum.is_instance_of(&mir_typ) {
-                            panic!("{call_name}: expected return type of {return_styp:?}, got {eval_result_datum}");
+                            panic!(
+                                "{call_name}: expected return type of {return_styp:?}, got {eval_result_datum}"
+                            );
                         }
                         // Check the consistency of `introduces_nulls` and
                         // `propagates_nulls` with `MirScalarExpr::typ`.
@@ -3427,13 +3431,25 @@ mod tests {
                                 // If the function introduces_nulls, then the return
                                 // type should always be nullable, regardless of
                                 // the nullability of the input types.
-                                assert!(mir_typ.nullable, "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}", name, args, mir, mir_typ.nullable);
+                                assert!(
+                                    mir_typ.nullable,
+                                    "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}",
+                                    name, args, mir, mir_typ.nullable
+                                );
                             } else {
                                 let any_input_null = args.iter().any(|arg| arg.is_null());
                                 if !any_input_null {
-                                    assert!(!mir_typ.nullable, "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}", name, args, mir, mir_typ.nullable);
+                                    assert!(
+                                        !mir_typ.nullable,
+                                        "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}",
+                                        name, args, mir, mir_typ.nullable
+                                    );
                                 } else {
-                                    assert_eq!(mir_typ.nullable, propagates_nulls, "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}", name, args, mir, mir_typ.nullable);
+                                    assert_eq!(
+                                        mir_typ.nullable, propagates_nulls,
+                                        "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}",
+                                        name, args, mir, mir_typ.nullable
+                                    );
                                 }
                             }
                         }
@@ -3446,13 +3462,35 @@ mod tests {
                                 match reduce_result {
                                     Ok(reduce_result_row) => {
                                         let reduce_result_datum = reduce_result_row.unpack_first();
-                                        assert_eq!(reduce_result_datum, eval_result_datum, "eval/reduce datum mismatch: fn named `{}` called on args `{:?}` (lowered to `{}`) evaluated to `{}` with typ `{:?}`, but reduced to `{}` with typ `{:?}`", name, args, mir, eval_result_datum, mir_typ.scalar_type, reduce_result_datum, ctyp.scalar_type);
+                                        assert_eq!(
+                                            reduce_result_datum,
+                                            eval_result_datum,
+                                            "eval/reduce datum mismatch: fn named `{}` called on args `{:?}` (lowered to `{}`) evaluated to `{}` with typ `{:?}`, but reduced to `{}` with typ `{:?}`",
+                                            name,
+                                            args,
+                                            mir,
+                                            eval_result_datum,
+                                            mir_typ.scalar_type,
+                                            reduce_result_datum,
+                                            ctyp.scalar_type
+                                        );
                                         // Let's check that the types also match.
                                         // (We are not checking nullability here,
                                         // because it's ok when we know a more
                                         // precise nullability after actually
                                         // evaluating a function than before.)
-                                        assert_eq!(ctyp.scalar_type, mir_typ.scalar_type, "eval/reduce type mismatch: fn named `{}` called on args `{:?}` (lowered to `{}`) evaluated to `{}` with typ `{:?}`, but reduced to `{}` with typ `{:?}`", name, args, mir, eval_result_datum, mir_typ.scalar_type, reduce_result_datum, ctyp.scalar_type);
+                                        assert_eq!(
+                                            ctyp.scalar_type,
+                                            mir_typ.scalar_type,
+                                            "eval/reduce type mismatch: fn named `{}` called on args `{:?}` (lowered to `{}`) evaluated to `{}` with typ `{:?}`, but reduced to `{}` with typ `{:?}`",
+                                            name,
+                                            args,
+                                            mir,
+                                            eval_result_datum,
+                                            mir_typ.scalar_type,
+                                            reduce_result_datum,
+                                            ctyp.scalar_type
+                                        );
                                     }
                                     Err(..) => {} // It's ok, we might have given invalid args to the function
                                 }

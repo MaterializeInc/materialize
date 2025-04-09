@@ -30,7 +30,7 @@ use std::time::UNIX_EPOCH;
 use tokio::net::UnixStream;
 use tokio::select;
 use tokio::sync::mpsc::{self, UnboundedSender};
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{Mutex, oneshot};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::body::BoxBody;
 use tonic::codegen::InterceptedService;
@@ -271,7 +271,7 @@ where
         host: Option<String>,
         client_builder: F,
         service_builder: Fs,
-    ) -> impl Future<Output = Result<(), anyhow::Error>>
+    ) -> impl Future<Output = Result<(), anyhow::Error>> + use<S, Fs, F, G>
     where
         S: Service<
                 http::Request<BoxBody>,

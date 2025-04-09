@@ -10,13 +10,13 @@
 use async_trait::async_trait;
 use bytes::{Buf, BufMut, BytesMut};
 use bytesize::ByteSize;
-use futures::{sink, SinkExt, TryStreamExt};
+use futures::{SinkExt, TryStreamExt, sink};
 use mz_ore::cast::CastFrom;
 use mz_ore::future::OreSinkExt;
 use mz_ore::netio::AsyncReady;
 use mz_pgwire_common::{
-    parse_frame_len, Conn, Cursor, DecodeState, ErrorResponse, FrontendMessage, Pgbuf,
-    MAX_REQUEST_SIZE,
+    Conn, Cursor, DecodeState, ErrorResponse, FrontendMessage, MAX_REQUEST_SIZE, Pgbuf,
+    parse_frame_len,
 };
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest, Ready};
 use tokio_util::codec::{Decoder, Encoder, Framed};

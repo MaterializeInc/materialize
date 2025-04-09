@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use proptest::arbitrary::{any, Arbitrary};
+use proptest::arbitrary::{Arbitrary, any};
 use proptest::prelude::{BoxedStrategy, Strategy};
 use std::time::Duration;
 
@@ -226,9 +226,9 @@ impl Arbitrary for RefreshEvery {
 
 #[cfg(test)]
 mod tests {
+    use crate::Timestamp;
     use crate::adt::interval::Interval;
     use crate::refresh_schedule::{RefreshEvery, RefreshSchedule};
-    use crate::Timestamp;
     use std::str::FromStr;
 
     #[mz_ore::test]

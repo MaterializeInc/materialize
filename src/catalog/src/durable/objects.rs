@@ -48,8 +48,8 @@ use mz_sql::plan::{ClusterSchedule, NetworkPolicyRule};
 use proptest_derive::Arbitrary;
 
 use crate::builtin::RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL;
-use crate::durable::objects::serialization::proto;
 use crate::durable::Epoch;
+use crate::durable::objects::serialization::proto;
 
 // Structs used to pass information to outside modules.
 

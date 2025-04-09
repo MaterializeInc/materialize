@@ -17,12 +17,12 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use arrow::array::{
-    make_array, Array, ArrayBuilder, ArrayRef, BinaryArray, BinaryBuilder, BooleanArray,
-    BooleanBufferBuilder, BooleanBuilder, FixedSizeBinaryArray, FixedSizeBinaryBuilder,
-    Float32Array, Float32Builder, Float64Array, Float64Builder, Int16Array, Int16Builder,
-    Int32Array, Int32Builder, Int64Array, Int64Builder, ListArray, ListBuilder, MapArray,
-    StringArray, StringBuilder, StructArray, UInt16Array, UInt16Builder, UInt32Array,
-    UInt32Builder, UInt64Array, UInt64Builder, UInt8Array, UInt8Builder,
+    Array, ArrayBuilder, ArrayRef, BinaryArray, BinaryBuilder, BooleanArray, BooleanBufferBuilder,
+    BooleanBuilder, FixedSizeBinaryArray, FixedSizeBinaryBuilder, Float32Array, Float32Builder,
+    Float64Array, Float64Builder, Int16Array, Int16Builder, Int32Array, Int32Builder, Int64Array,
+    Int64Builder, ListArray, ListBuilder, MapArray, StringArray, StringBuilder, StructArray,
+    UInt8Array, UInt8Builder, UInt16Array, UInt16Builder, UInt32Array, UInt32Builder, UInt64Array,
+    UInt64Builder, make_array,
 };
 use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{DataType, Field, Fields, ToByteSlice};
@@ -32,13 +32,13 @@ use dec::{Context, Decimal, OrderedDecimal};
 use itertools::{EitherOrBoth, Itertools};
 use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
+use mz_persist_types::Codec;
 use mz_persist_types::arrow::ArrayOrd;
 use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, FixedSizeCodec, Schema};
 use mz_persist_types::stats::{
     ColumnNullStats, ColumnStatKinds, ColumnarStats, ColumnarStatsBuilder, FixedSizeBytesStatsKind,
     OptionStats, PrimitiveStats, StructStats,
 };
-use mz_persist_types::Codec;
 use mz_proto::chrono::ProtoNaiveTime;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use prost::Message;
@@ -2213,7 +2213,7 @@ impl RustType<ProtoRow> for Row {
 mod tests {
     use std::collections::BTreeSet;
 
-    use arrow::array::{make_array, ArrayData};
+    use arrow::array::{ArrayData, make_array};
     use arrow::compute::SortOptions;
     use arrow::datatypes::ArrowNativeType;
     use arrow::row::SortField;
@@ -2222,9 +2222,9 @@ mod tests {
     use mz_ore::collections::CollectionExt;
     use mz_persist::indexed::columnar::arrow::realloc_array;
     use mz_persist::metrics::ColumnarMetrics;
+    use mz_persist_types::Codec;
     use mz_persist_types::arrow::{ArrayBound, ArrayOrd};
     use mz_persist_types::columnar::{codec_to_schema, schema_to_codec};
-    use mz_persist_types::Codec;
     use mz_proto::{ProtoType, RustType};
     use proptest::prelude::*;
     use proptest::strategy::Strategy;
@@ -2237,7 +2237,7 @@ mod tests {
     use crate::adt::timestamp::CheckedTimestamp;
     use crate::fixed_length::ToDatumIter;
     use crate::relation::arb_relation_desc;
-    use crate::{arb_datum_for_column, arb_row_for_relation, ColumnName, ColumnType, RowArena};
+    use crate::{ColumnName, ColumnType, RowArena, arb_datum_for_column, arb_row_for_relation};
     use crate::{Datum, RelationDesc, Row, ScalarType};
 
     #[track_caller]
@@ -2426,7 +2426,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
     fn proptest_datums() {
         let strat = any::<ColumnType>().prop_flat_map(|ty| {
-            proptest::collection::vec(arb_datum_for_column(&ty), 0..16)
+            proptest::collection::vec(arb_datum_for_column(ty.clone()), 0..16)
                 .prop_map(move |d| (ty.clone(), d))
         });
         let metrics = ColumnarMetrics::disconnected();

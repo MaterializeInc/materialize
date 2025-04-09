@@ -12,12 +12,12 @@ use std::sync::Arc;
 
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
-use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::ShardId;
+use mz_persist_client::cfg::PersistConfig;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{RelationDesc, ScalarType, Timestamp};
-use mz_storage_types::sources::SourceData;
 use mz_storage_types::StorageDiff;
+use mz_storage_types::sources::SourceData;
 
 use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;

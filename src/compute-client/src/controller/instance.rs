@@ -16,16 +16,16 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use mz_build_info::BuildInfo;
-use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
 use mz_cluster_client::WallclockLagFn;
+use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
+use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
-use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_compute_types::plan::LirId;
+use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_compute_types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, ContinualTaskConnection, MaterializedViewSinkConnection,
 };
 use mz_compute_types::sources::SourceInstanceDesc;
-use mz_compute_types::ComputeInstanceId;
 use mz_controller_types::dyncfgs::{
     ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION, WALLCLOCK_LAG_HISTOGRAM_REFRESH_INTERVAL,
     WALLCLOCK_LAG_HISTORY_REFRESH_INTERVAL,
@@ -46,15 +46,15 @@ use mz_storage_types::read_holds::{self, ReadHold};
 use mz_storage_types::read_policy::ReadPolicy;
 use serde::Serialize;
 use thiserror::Error;
+use timely::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
-use timely::PartialOrder;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::controller::error::{
-    CollectionLookupError, CollectionMissing, HydrationCheckBadTarget, ERROR_TARGET_REPLICA_FAILED,
+    CollectionLookupError, CollectionMissing, ERROR_TARGET_REPLICA_FAILED, HydrationCheckBadTarget,
 };
 use crate::controller::replica::{ReplicaClient, ReplicaConfig};
 use crate::controller::{

@@ -53,12 +53,16 @@ fn test_proto_serialization_stability() {
 
     let unknown_snapshots: Vec<_> = snapshot_files.difference(&protos).collect();
     if !unknown_snapshots.is_empty() {
-        panic!("Have snapshots, but no proto files on disk? If a .proto file was deleted, then the .txt snapshot file must be deleted too. {unknown_snapshots:#?}");
+        panic!(
+            "Have snapshots, but no proto files on disk? If a .proto file was deleted, then the .txt snapshot file must be deleted too. {unknown_snapshots:#?}"
+        );
     }
 
     let unencoded_protos: Vec<_> = protos.difference(&snapshot_files).collect();
     if !unencoded_protos.is_empty() {
-        panic!("Missing encodings for some proto objects, try generating them with `generate_missing_encodings`. {unencoded_protos:#?}");
+        panic!(
+            "Missing encodings for some proto objects, try generating them with `generate_missing_encodings`. {unencoded_protos:#?}"
+        );
     }
 
     let base64_config = base64::Config::new(base64::CharacterSet::Standard, true);

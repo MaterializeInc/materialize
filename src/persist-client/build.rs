@@ -75,6 +75,7 @@ fn main() {
         // broad, but it's better.
         .emit_rerun_if_changed(false)
         .extern_path(".mz_persist", "::mz_persist")
+        .extern_path(".mz_persist.gen", "::mz_persist::generated")
         .extern_path(".mz_persist_types", "::mz_persist_types")
         .extern_path(".mz_proto", "::mz_proto")
         .compile_protos_with_config(

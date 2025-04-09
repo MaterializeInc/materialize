@@ -11,7 +11,7 @@ use std::str::FromStr;
 
 use mz_ore::tracing::TracingHandle;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
+use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy, any};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 

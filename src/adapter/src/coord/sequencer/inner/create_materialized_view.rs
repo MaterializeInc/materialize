@@ -34,6 +34,7 @@ use std::collections::BTreeMap;
 use timely::progress::Antichain;
 use tracing::Span;
 
+use crate::ReadHolds;
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{
@@ -49,8 +50,7 @@ use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
 use crate::util::ResultExt;
-use crate::ReadHolds;
-use crate::{catalog, AdapterNotice, CollectionIdBundle, ExecuteContext, TimestampProvider};
+use crate::{AdapterNotice, CollectionIdBundle, ExecuteContext, TimestampProvider, catalog};
 
 impl Staged for CreateMaterializedViewStage {
     type Ctx = ExecuteContext;

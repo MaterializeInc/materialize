@@ -11,7 +11,7 @@ use std::cmp;
 use std::io::{BufRead, Read};
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use byteorder::{NetworkEndian, WriteBytesExt};
 use futures::stream::{FuturesUnordered, StreamExt};
 use maplit::btreemap;
@@ -297,7 +297,9 @@ pub async fn run_ingest(
         }
         match (is_confluent_format(kf), is_confluent_format(&format)) {
             (Some(false), Some(true)) | (Some(true), Some(false)) => {
-                bail!("It does not make sense to have the key be in confluent format and not the value, or vice versa.");
+                bail!(
+                    "It does not make sense to have the key be in confluent format and not the value, or vice versa."
+                );
             }
             _ => {}
         }

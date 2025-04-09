@@ -18,8 +18,8 @@
 
 use std::collections::BTreeMap;
 
-use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::JoinImplementation::{Differential, IndexedFilter, Unimplemented};
+use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{
     FilterCharacteristics, Id, JoinInputCharacteristics, JoinInputMapper, MapFilterProject,
     MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
@@ -507,7 +507,8 @@ impl JoinImplementation {
                         soft_assert_or_log!(
                             matches!(old_implementation, Differential(..)),
                             "implemented plan in second run of join implementation should be differential \
-                             if the delta plan is not viable")
+                             if the delta plan is not viable"
+                        )
                     }
                 }
                 // If we can't plan a delta join, plan a differential join.
@@ -673,8 +674,8 @@ mod differential {
     use mz_ore::soft_assert_eq_or_log;
     use mz_repr::optimize::OptimizerFeatures;
 
-    use crate::join_implementation::FilterCharacteristics;
     use crate::TransformError;
+    use crate::join_implementation::FilterCharacteristics;
 
     /// Creates a linear differential plan, and any predicates that need to be lifted.
     /// It also returns the number of new arrangements necessary for this plan.

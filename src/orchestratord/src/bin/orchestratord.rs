@@ -16,7 +16,7 @@ use std::{
 use kube::runtime::watcher;
 use tracing::info;
 
-use mz_build_info::{build_info, BuildInfo};
+use mz_build_info::{BuildInfo, build_info};
 use mz_orchestrator_kubernetes::util::create_client;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_orchestratord::{

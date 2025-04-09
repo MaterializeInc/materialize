@@ -20,8 +20,8 @@ use mz_dyncfg::ConfigSet;
 use mz_ore::iter::IteratorExt;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_repr::{Diff, Timestamp};
-use timely::progress::Antichain;
 use timely::PartialOrder;
+use timely::progress::Antichain;
 
 use crate::sink::correction_v2::{CorrectionV2, Data};
 
@@ -232,11 +232,11 @@ impl<D: Data> CorrectionV1<D> {
     /// # Panics
     ///
     /// Panics if `lower` is not less than or equal to `upper`.
-    pub fn updates_within(
-        &mut self,
+    pub fn updates_within<'a>(
+        &'a mut self,
         lower: &Antichain<Timestamp>,
         upper: &Antichain<Timestamp>,
-    ) -> impl Iterator<Item = (D, Timestamp, Diff)> + ExactSizeIterator + '_ {
+    ) -> impl Iterator<Item = (D, Timestamp, Diff)> + ExactSizeIterator + use<'a, D> {
         assert!(PartialOrder::less_equal(lower, upper));
 
         let start = match lower.as_option() {
@@ -257,10 +257,10 @@ impl<D: Data> CorrectionV1<D> {
     }
 
     /// Consolidate and return updates before the given `upper`.
-    pub fn updates_before(
-        &mut self,
+    pub fn updates_before<'a>(
+        &'a mut self,
         upper: &Antichain<Timestamp>,
-    ) -> impl Iterator<Item = (D, Timestamp, Diff)> + ExactSizeIterator + '_ {
+    ) -> impl Iterator<Item = (D, Timestamp, Diff)> + ExactSizeIterator + use<'a, D> {
         let lower = Antichain::from_elem(Timestamp::MIN);
         self.updates_within(&lower, upper)
     }

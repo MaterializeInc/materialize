@@ -14,12 +14,12 @@ use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use futures::stream::{BoxStream, StreamExt};
 use futures::TryStreamExt;
+use futures::stream::{BoxStream, StreamExt};
 use mz_pgcopy::CopyCsvFormatParams;
 use mz_repr::{Datum, RelationDesc, Row, RowArena};
 use serde::{Deserialize, Serialize};
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 use tokio_util::io::StreamReader;
 
 use crate::oneshot_source::{

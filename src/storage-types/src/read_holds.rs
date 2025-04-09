@@ -12,10 +12,10 @@ use std::sync::Arc;
 
 use mz_repr::GlobalId;
 use thiserror::Error;
-use timely::progress::{Antichain, ChangeBatch, Timestamp as TimelyTimestamp};
 use timely::PartialOrder;
-use tokio::sync::mpsc::error::SendError;
+use timely::progress::{Antichain, ChangeBatch, Timestamp as TimelyTimestamp};
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::error::SendError;
 
 pub type ChangeTx<T> = Arc<
     dyn Fn(GlobalId, ChangeBatch<T>) -> Result<(), SendError<(GlobalId, ChangeBatch<T>)>>

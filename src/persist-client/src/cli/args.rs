@@ -9,11 +9,11 @@
 
 //! CLI argument types for persist
 
+use crate::ShardId;
 use crate::cfg::PersistConfig;
 use crate::internal::metrics::{MetricsBlob, MetricsConsensus};
 use crate::internal::state_versions::StateVersions;
 use crate::metrics::Metrics;
-use crate::ShardId;
 use async_trait::async_trait;
 use bytes::Bytes;
 use mz_build_info::BuildInfo;
@@ -27,8 +27,8 @@ use mz_persist::location::{
     VersionedData,
 };
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::warn;
 
 /// Arguments for commands that work over both backing stores.

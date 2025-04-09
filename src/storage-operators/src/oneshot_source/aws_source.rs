@@ -14,12 +14,12 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use derivative::Derivative;
-use futures::stream::{BoxStream, TryStreamExt};
 use futures::StreamExt;
+use futures::stream::{BoxStream, TryStreamExt};
 use mz_ore::future::InTask;
 use mz_repr::CatalogItemId;
-use mz_storage_types::connections::aws::AwsConnection;
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::connections::aws::AwsConnection;
 use serde::{Deserialize, Serialize};
 
 use crate::oneshot_source::util::IntoRangeHeaderValue;

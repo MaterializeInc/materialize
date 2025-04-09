@@ -21,13 +21,13 @@ use differential_dataflow::operators::arrange::arrangement::Arranged;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::{AsCollection, Collection, Data};
 use mz_compute_types::dyncfgs::{ENABLE_MZ_JOIN_CORE, LINEAR_JOIN_YIELDING};
-use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
 use mz_compute_types::plan::join::JoinClosure;
+use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
 use mz_dyncfg::ConfigSet;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
-use mz_timely_util::containers::{columnar_exchange, Col2ValBatcher, ColumnBuilder};
+use mz_timely_util::containers::{Col2ValBatcher, ColumnBuilder, columnar_exchange};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::OkErr;
@@ -36,9 +36,9 @@ use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::{Refines, Timestamp};
 
 use crate::extensions::arrange::MzArrangeCore;
+use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context, ShutdownToken};
 use crate::render::join::mz_join_core::mz_join_core;
-use crate::render::RenderTimestamp;
 use crate::row_spine::{RowRowBuilder, RowRowSpine};
 use crate::typedefs::{RowRowAgent, RowRowEnter};
 

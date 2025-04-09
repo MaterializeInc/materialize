@@ -225,11 +225,7 @@ macro_rules! try_cast_from {
             fn try_cast_from(from: $from) -> Option<$to> {
                 let to = from as $to;
                 let inverse = to as $from;
-                if from == inverse {
-                    Some(to)
-                } else {
-                    None
-                }
+                if from == inverse { Some(to) } else { None }
             }
         }
     };

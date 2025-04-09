@@ -38,13 +38,13 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::healthcheck::HealthStatusUpdate;
 use crate::metrics::upsert::UpsertMetrics;
-use crate::upsert::types::UpsertValueAndSize;
-use crate::upsert::types::{self as upsert_types, ValueMetadata};
-use crate::upsert::types::{StateValue, UpsertState, UpsertStateBackend};
 use crate::upsert::UpsertConfig;
 use crate::upsert::UpsertErrorEmitter;
 use crate::upsert::UpsertKey;
 use crate::upsert::UpsertValue;
+use crate::upsert::types::UpsertValueAndSize;
+use crate::upsert::types::{self as upsert_types, ValueMetadata};
+use crate::upsert::types::{StateValue, UpsertState, UpsertStateBackend};
 
 /// An operator that transforms an input stream of upserts (updates to key-value
 /// pairs), which represents an imaginary key-value state, into a differential

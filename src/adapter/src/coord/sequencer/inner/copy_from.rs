@@ -24,7 +24,7 @@ use uuid::Uuid;
 
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{ActiveCopyFrom, Coordinator, TargetCluster};
-use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
+use crate::optimize::dataflows::{EvalTime, ExprPrepStyle, prep_scalar_expr};
 use crate::session::{TransactionOps, WriteOp};
 use crate::{AdapterError, ExecuteContext, ExecuteResponse};
 

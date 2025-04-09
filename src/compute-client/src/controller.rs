@@ -39,10 +39,10 @@ use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::metrics::ControllerMetrics;
 use mz_cluster_client::{ReplicaId, WallclockLagFn};
+use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::config::ComputeReplicaConfig;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::COMPUTE_REPLICA_EXPIRATION_OFFSET;
-use mz_compute_types::ComputeInstanceId;
 use mz_controller_types::dyncfgs::{
     ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC, TIMELY_ZERO_COPY_LIMIT,
 };
@@ -61,8 +61,8 @@ use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
 use prometheus::proto::LabelPair;
 use serde::{Deserialize, Serialize};
-use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
+use timely::progress::{Antichain, Timestamp};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{self, MissedTickBehavior};
 use tracing::debug_span;
@@ -74,7 +74,7 @@ use crate::controller::error::{
     ReplicaCreationError, ReplicaDropError,
 };
 use crate::controller::instance::{Instance, SharedCollectionState};
-use crate::controller::introspection::{spawn_introspection_sink, IntrospectionUpdates};
+use crate::controller::introspection::{IntrospectionUpdates, spawn_introspection_sink};
 use crate::controller::replica::ReplicaConfig;
 use crate::logging::{LogVariant, LoggingConfig};
 use crate::metrics::ComputeControllerMetrics;

@@ -10,7 +10,7 @@
 use std::str::FromStr;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_tls_util::make_tls;

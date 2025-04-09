@@ -15,29 +15,29 @@ use std::time::{Duration, Instant};
 
 use differential_dataflow::lattice::Lattice;
 use mz_adapter_types::connection::ConnectionId;
+use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
-use mz_compute_types::ComputeInstanceId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_or_log;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::SubscribeFrom;
+use mz_transform::TransformCtx;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
-use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
-use mz_transform::TransformCtx;
+use mz_transform::typecheck::{SharedContext as TypecheckContext, empty_context};
 use timely::progress::Antichain;
 
+use crate::CollectionIdBundle;
 use crate::optimize::dataflows::{
-    dataflow_import_id_bundle, prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot,
-    DataflowBuilder, ExprPrepStyle,
+    ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle, dataflow_import_id_bundle,
+    prep_relation_expr, prep_scalar_expr,
 };
 use crate::optimize::{
-    optimize_mir_local, trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize,
-    OptimizeMode, OptimizerCatalog, OptimizerConfig, OptimizerError,
+    LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode, OptimizerCatalog,
+    OptimizerConfig, OptimizerError, optimize_mir_local, trace_plan,
 };
-use crate::CollectionIdBundle;
 
 pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.

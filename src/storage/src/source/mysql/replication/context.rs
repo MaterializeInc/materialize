@@ -20,11 +20,11 @@ use mz_mysql_util::Config;
 use mz_storage_types::sources::mysql::{GtidPartition, GtidState};
 
 use crate::metrics::source::mysql::MySqlSourceMetrics;
+use crate::source::RawSourceCreationConfig;
 use crate::source::mysql::{
     MySqlTableName, RewindRequest, SourceOutputInfo, StackedAsyncOutputHandle,
 };
 use crate::source::types::SourceMessage;
-use crate::source::RawSourceCreationConfig;
 
 /// A container to hold various context information for the replication process, used when
 /// processing events from the binlog stream.

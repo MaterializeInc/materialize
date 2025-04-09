@@ -16,7 +16,7 @@ use futures::stream::{self, StreamExt, TryStreamExt};
 use mz_ore::cast::CastFrom;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
-use tracing::{error, event, info, Level};
+use tracing::{Level, error, event, info};
 use tracing_subscriber::filter::EnvFilter;
 
 /// Generate meaningless data in S3 to test download speeds

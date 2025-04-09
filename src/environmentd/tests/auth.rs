@@ -9,6 +9,7 @@
 
 //! Integration tests for TLS encryption and authentication.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::future::IntoFuture;
@@ -23,7 +24,7 @@ use chrono::Utc;
 use headers::Authorization;
 use http_body_util::BodyExt;
 use hyper::body::Incoming;
-use hyper::http::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+use hyper::http::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use hyper::http::uri::Scheme;
 use hyper::{Request, Response, StatusCode, Uri};
 use hyper_openssl::client::legacy::HttpsConnector;
@@ -31,14 +32,14 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use itertools::Itertools;
 use jsonwebtoken::{self, DecodingKey, EncodingKey};
-use mz_environmentd::test_util::{self, make_header, make_pg_tls, Ca};
+use mz_environmentd::test_util::{self, Ca, make_header, make_pg_tls};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
     Authenticator as FronteggAuthentication, AuthenticatorConfig as FronteggConfig, ClaimMetadata,
     ClaimTokenType, Claims, DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
 };
 use mz_frontegg_mock::{
-    models::ApiToken, models::TenantApiTokenConfig, models::UserConfig, FronteggMockServer,
+    FronteggMockServer, models::ApiToken, models::TenantApiTokenConfig, models::UserConfig,
 };
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME};
@@ -53,8 +54,8 @@ use postgres::error::SqlState;
 use serde::Deserialize;
 use serde_json::json;
 use tokio::time::sleep;
-use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::Message;
+use tungstenite::protocol::frame::coding::CloseCode;
 use uuid::Uuid;
 
 // How long, in seconds, a claim is valid for. Increasing this value will decrease some test flakes
@@ -75,7 +76,7 @@ where
     HttpsConnector::with_connector(http, connector_builder).unwrap()
 }
 
-fn make_ws_tls<F>(uri: &Uri, configure: F) -> impl Read + Write
+fn make_ws_tls<F>(uri: &Uri, configure: F) -> impl Read + Write + use<F>
 where
     F: Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack>,
 {
@@ -105,7 +106,7 @@ enum TestCase<'a> {
     Pgwire {
         user_to_auth_as: &'a str,
         user_reported_by_system: &'a str,
-        password: Option<&'a str>,
+        password: Option<Cow<'a, str>>,
         ssl_mode: SslMode,
         configure: Box<dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + 'a>,
         assert: Assert<
@@ -165,11 +166,12 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                 );
 
                 let tls = make_pg_tls(configure);
+                let password = password.as_ref().unwrap_or(&Cow::Borrowed(""));
                 let conn_config = server
                     .connect()
                     .ssl_mode(*ssl_mode)
                     .user(user_to_auth_as)
-                    .password(password.unwrap_or(""));
+                    .password(password);
 
                 match assert {
                     Assert::Success => {
@@ -539,10 +541,12 @@ async fn test_auth_expiry() {
     frontegg_server.wait_for_auth(EXPIRES_IN_SECS);
     // Sleep until the expiry future should resolve.
     tokio::time::sleep(Duration::from_secs(EXPIRES_IN_SECS + 1)).await;
-    assert!(pg_client
-        .query_one("SELECT current_user", &[])
-        .await
-        .is_err());
+    assert!(
+        pg_client
+            .query_one("SELECT current_user", &[])
+            .await
+            .is_err()
+    );
 }
 
 #[allow(clippy::unit_arg)]
@@ -844,7 +848,7 @@ async fn test_auth_base_require_tls_frontegg() {
             TestCase::Pgwire {
                 user_to_auth_as: frontegg_user,
                 user_reported_by_system: frontegg_user,
-                password: Some(frontegg_password),
+                password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
@@ -861,7 +865,7 @@ async fn test_auth_base_require_tls_frontegg() {
             TestCase::Pgwire {
                 user_to_auth_as: &frontegg_user_lowercase,
                 user_reported_by_system: frontegg_user,
-                password: Some(frontegg_password),
+                password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
@@ -891,10 +895,10 @@ async fn test_auth_base_require_tls_frontegg() {
                     let mut buf = vec![];
                     buf.extend(client_id.as_bytes());
                     buf.extend(secret.as_bytes());
-                    Some(&format!(
+                    Some(Cow::Owned(format!(
                         "mzp_{}",
                         base64::encode_config(buf, base64::URL_SAFE)
-                    ))
+                    )))
                 },
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -908,10 +912,10 @@ async fn test_auth_base_require_tls_frontegg() {
                     let mut buf = vec![];
                     buf.extend(client_id.as_bytes());
                     buf.extend(secret.as_bytes());
-                    Some(&format!(
+                    Some(Cow::Owned(format!(
                         "mzp_{}",
                         base64::encode_config(buf, base64::URL_SAFE_NO_PAD)
-                    ))
+                    )))
                 },
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -925,7 +929,7 @@ async fn test_auth_base_require_tls_frontegg() {
                     let mut password = frontegg_password.clone();
                     password.insert(10, '-');
                     password.insert_str(15, "@#!");
-                    Some(&password.clone())
+                    Some(Cow::Owned(password.clone()))
                 },
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -944,7 +948,7 @@ async fn test_auth_base_require_tls_frontegg() {
             TestCase::Pgwire {
                 user_to_auth_as: frontegg_user,
                 user_reported_by_system: frontegg_user,
-                password: Some(frontegg_password),
+                password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Disable,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
@@ -967,7 +971,7 @@ async fn test_auth_base_require_tls_frontegg() {
             TestCase::Pgwire {
                 user_to_auth_as: "materialize",
                 user_reported_by_system: "materialize",
-                password: Some(frontegg_password),
+                password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
@@ -990,7 +994,7 @@ async fn test_auth_base_require_tls_frontegg() {
             TestCase::Pgwire {
                 user_to_auth_as: frontegg_user,
                 user_reported_by_system: frontegg_user,
-                password: Some("bad password"),
+                password: Some(Cow::Borrowed("bad password")),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
@@ -1013,7 +1017,7 @@ async fn test_auth_base_require_tls_frontegg() {
             TestCase::Pgwire {
                 user_to_auth_as: frontegg_user,
                 user_reported_by_system: frontegg_user,
-                password: Some(&format!("mznope_{client_id}{secret}")),
+                password: Some(Cow::Owned(format!("mznope_{client_id}{secret}"))),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
@@ -1109,7 +1113,7 @@ async fn test_auth_base_require_tls_frontegg() {
             TestCase::Pgwire {
                 user_to_auth_as: "svc",
                 user_reported_by_system: "svc",
-                password: Some(frontegg_service_user_password),
+                password: Some(Cow::Borrowed(frontegg_service_user_password)),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
@@ -1139,7 +1143,7 @@ async fn test_auth_base_require_tls_frontegg() {
             TestCase::Pgwire {
                 user_to_auth_as: "sVc",
                 user_reported_by_system: "svc",
-                password: Some(frontegg_service_user_password),
+                password: Some(Cow::Borrowed(frontegg_service_user_password)),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
@@ -1151,7 +1155,7 @@ async fn test_auth_base_require_tls_frontegg() {
             TestCase::Pgwire {
                 user_to_auth_as: &*SYSTEM_USER.name,
                 user_reported_by_system: &*SYSTEM_USER.name,
-                password: Some(frontegg_system_password),
+                password: Some(Cow::Borrowed(frontegg_system_password)),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|err| {
@@ -1184,7 +1188,7 @@ async fn test_auth_base_require_tls_frontegg() {
             TestCase::Pgwire {
                 user_to_auth_as: &*SYSTEM_USER.name,
                 user_reported_by_system: &*SYSTEM_USER.name,
-                password: Some(frontegg_service_system_user_password),
+                password: Some(Cow::Borrowed(frontegg_service_system_user_password)),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|err| {
@@ -1218,7 +1222,7 @@ async fn test_auth_base_require_tls_frontegg() {
             TestCase::Pgwire {
                 user_to_auth_as: PUBLIC_ROLE_NAME.as_str(),
                 user_reported_by_system: PUBLIC_ROLE_NAME.as_str(),
-                password: Some(frontegg_system_password),
+                password: Some(Cow::Borrowed(frontegg_system_password)),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|err| {
@@ -1367,7 +1371,7 @@ async fn test_auth_base_require_tls() {
             TestCase::Pgwire {
                 user_to_auth_as: frontegg_user,
                 user_reported_by_system: frontegg_user,
-                password: Some(frontegg_password),
+                password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
@@ -1682,7 +1686,7 @@ async fn test_auth_admin_non_superuser() {
             TestCase::Pgwire {
                 user_to_auth_as: frontegg_user,
                 user_reported_by_system: frontegg_user,
-                password: Some(frontegg_password),
+                password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::SuccessSuperuserCheck(false),
@@ -1827,7 +1831,7 @@ async fn test_auth_admin_superuser() {
             TestCase::Pgwire {
                 user_to_auth_as: admin_frontegg_user,
                 user_reported_by_system: admin_frontegg_user,
-                password: Some(admin_frontegg_password),
+                password: Some(Cow::Borrowed(admin_frontegg_password)),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::SuccessSuperuserCheck(true),

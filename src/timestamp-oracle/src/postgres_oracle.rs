@@ -17,8 +17,8 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
-use deadpool_postgres::tokio_postgres::error::SqlState;
 use deadpool_postgres::tokio_postgres::Config;
+use deadpool_postgres::tokio_postgres::error::SqlState;
 use deadpool_postgres::{Object, PoolError};
 use dec::Decimal;
 use mz_adapter_types::timestamp_oracle::{
@@ -37,9 +37,9 @@ use postgres_protocol::escape::escape_identifier;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
+use crate::WriteTimestamp;
 use crate::metrics::{Metrics, RetryMetrics};
 use crate::retry::Retry;
-use crate::WriteTimestamp;
 use crate::{GenericNowFn, TimestampOracle};
 
 // The timestamp columns are a `DECIMAL` that is big enough to hold
@@ -467,7 +467,10 @@ where
                     if e.code() == Some(&SqlState::INVALID_PARAMETER_VALUE)
                         || e.code() == Some(&SqlState::SYNTAX_ERROR) =>
                 {
-                    info!("unable to initiate timestamp_oracle with CRDB params, this is expected and OK when running against Postgres: {:?}", e);
+                    info!(
+                        "unable to initiate timestamp_oracle with CRDB params, this is expected and OK when running against Postgres: {:?}",
+                        e
+                    );
                     false
                 }
                 Err(e) => return Err(e.into()),
@@ -708,7 +711,7 @@ where
     // We could add `From` impls for these but for now keep the code local to
     // the oracle.
     fn decimal_to_ts(ts: Numeric) -> Timestamp {
-        ts.0 .0.try_into().expect("we only use u64 timestamps")
+        ts.0.0.try_into().expect("we only use u64 timestamps")
     }
 }
 

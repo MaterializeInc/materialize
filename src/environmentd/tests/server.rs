@@ -26,19 +26,19 @@ use futures::FutureExt;
 use http::Request;
 use itertools::Itertools;
 use jsonwebtoken::{DecodingKey, EncodingKey};
-use mz_environmentd::test_util::{self, make_pg_tls, Ca, PostgresErrorExt, KAFKA_ADDRS};
+use mz_environmentd::test_util::{self, Ca, KAFKA_ADDRS, PostgresErrorExt, make_pg_tls};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
     Authenticator as FronteggAuthentication, AuthenticatorConfig as FronteggConfig,
     DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
 };
-use mz_frontegg_mock::{models::ApiToken, models::UserConfig, FronteggMockServer};
+use mz_frontegg_mock::{FronteggMockServer, models::ApiToken, models::UserConfig};
 use mz_ore::cast::CastFrom;
 use mz_ore::cast::CastLossy;
 use mz_ore::cast::TryCastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::{to_datetime, NowFn, SYSTEM_TIME};
+use mz_ore::now::{NowFn, SYSTEM_TIME, to_datetime};
 use mz_ore::retry::Retry;
 use mz_ore::{assert_contains, task::RuntimeExt};
 use mz_ore::{assert_err, assert_none, assert_ok, task};
@@ -50,8 +50,8 @@ use openssl::x509::X509;
 use postgres::config::SslMode;
 use postgres_array::Array;
 use rand::RngCore;
-use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::ClientConfig;
+use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka_sys::RDKafkaErrorCode;
 use reqwest::blocking::Client;
 use reqwest::header::CONTENT_TYPE;
@@ -478,11 +478,13 @@ ORDER BY mseh.began_at",
         "fast-path"
     );
     assert_eq!(sl_results[3].finished_status, "error");
-    assert!(sl_results[3]
-        .error_message
-        .as_ref()
-        .unwrap()
-        .contains("division by zero"));
+    assert!(
+        sl_results[3]
+            .error_message
+            .as_ref()
+            .unwrap()
+            .contains("division by zero")
+    );
     assert_none!(sl_results[3].result_size);
     assert_none!(sl_results[3].rows_returned);
 }
@@ -791,11 +793,7 @@ WHERE authenticated_user='mz_system'",
 
             let count: i64 = sl_results[0].get(0);
 
-            if count > 0 {
-                Ok(count)
-            } else {
-                Err(())
-            }
+            if count > 0 { Ok(count) } else { Err(()) }
         })
         .expect("at least some statements from mz_system should have been logged");
 
@@ -1023,11 +1021,7 @@ fn test_cancellation_cancels_dataflows(query: &str) {
                     .map_err(|_| ())
                     .unwrap()
                     .get(0);
-                if count == 0 {
-                    Err(())
-                } else {
-                    Ok(())
-                }
+                if count == 0 { Err(()) } else { Ok(()) }
             })
             .unwrap();
         cancel_token.cancel_query(postgres::NoTls).unwrap();
@@ -1046,11 +1040,7 @@ fn test_cancellation_cancels_dataflows(query: &str) {
                 .map_err(|_| ())
                 .unwrap()
                 .get(0);
-            if count == 0 {
-                Ok(())
-            } else {
-                Err(())
-            }
+            if count == 0 { Ok(()) } else { Err(()) }
         })
         .unwrap();
 }
@@ -1063,12 +1053,16 @@ fn test_cancel_dataflow_removal() {
 
 #[mz_ore::test]
 fn test_cancel_long_select() {
-    test_cancellation_cancels_dataflows("WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;");
+    test_cancellation_cancels_dataflows(
+        "WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;",
+    );
 }
 
 #[mz_ore::test]
 fn test_cancel_insert_select() {
-    test_cancellation_cancels_dataflows("INSERT INTO t WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;");
+    test_cancellation_cancels_dataflows(
+        "INSERT INTO t WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;",
+    );
 }
 
 fn test_closing_connection_cancels_dataflows(query: String) {
@@ -1122,11 +1116,7 @@ fn test_closing_connection_cancels_dataflows(query: String) {
                 .map_err(|_| ())
                 .unwrap()
                 .get(0);
-            if count == 0 {
-                Err(())
-            } else {
-                Ok(())
-            }
+            if count == 0 { Err(()) } else { Ok(()) }
         })
         .unwrap();
 
@@ -1148,11 +1138,7 @@ fn test_closing_connection_cancels_dataflows(query: String) {
                 .map_err(|_| ())
                 .unwrap()
                 .get(0);
-            if count == 0 {
-                Ok(())
-            } else {
-                Err(())
-            }
+            if count == 0 { Ok(()) } else { Err(()) }
         })
         .unwrap();
     info!(
@@ -2056,9 +2042,11 @@ fn test_http_options_param() {
     assert_eq!(result.results[0].notices.len(), 1);
 
     let notice = &result.results[0].notices[0];
-    assert!(notice
-        .message
-        .contains(r#"startup setting not_a_session_var not set"#));
+    assert!(
+        notice
+            .message
+            .contains(r#"startup setting not_a_session_var not set"#)
+    );
 }
 
 #[mz_ore::test]
@@ -2102,14 +2090,20 @@ fn test_max_connections_on_all_interfaces() {
         let status = res.status();
         let text = res.text().expect("no body?");
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-        assert_contains!(text, "creating connection would violate max_connections limit (desired: 2, limit: 2, current: 1)");
+        assert_contains!(
+            text,
+            "creating connection would violate max_connections limit (desired: 2, limit: 2, current: 1)"
+        );
     }
 
     {
         // while postgres client is connected, websockets can't auth
         let (mut ws, _resp) = tungstenite::connect(ws_url.clone()).unwrap();
         let err = test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap_err();
-        assert_contains!(err.to_string(), "creating connection would violate max_connections limit (desired: 2, limit: 2, current: 1)");
+        assert_contains!(
+            err.to_string(),
+            "creating connection would violate max_connections limit (desired: 2, limit: 2, current: 1)"
+        );
     }
 
     tracing::info!("closing postgres client");
@@ -2165,7 +2159,10 @@ fn test_max_connections_on_all_interfaces() {
     let status = res.status();
     let text = res.text().expect("no body?");
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-    assert_contains!(text, "creating connection would violate max_connections limit (desired: 2, limit: 2, current: 1)");
+    assert_contains!(
+        text,
+        "creating connection would violate max_connections limit (desired: 2, limit: 2, current: 1)"
+    );
 
     // Make sure lowering our max connections below the current limit does not
     // cause a panic.
@@ -2193,7 +2190,10 @@ fn test_max_connections_on_all_interfaces() {
     let Err(failure) = result else {
         panic!("unexpected success connecting to server");
     };
-    assert_contains!(failure.to_string(), "creating connection would violate max_connections limit (desired: 7, limit: 2, current: 6)");
+    assert_contains!(
+        failure.to_string(),
+        "creating connection would violate max_connections limit (desired: 7, limit: 2, current: 6)"
+    );
 }
 
 // Test max_connections and superuser_reserved_connections.
@@ -3624,7 +3624,9 @@ async fn webhook_concurrent_swap() {
     let src_foo = "webhook_foo";
     client
         .execute(
-            &format!("CREATE SOURCE {src_foo} IN CLUSTER {webhook_cluster} FROM WEBHOOK BODY FORMAT TEXT"),
+            &format!(
+                "CREATE SOURCE {src_foo} IN CLUSTER {webhook_cluster} FROM WEBHOOK BODY FORMAT TEXT"
+            ),
             &[],
         )
         .await
@@ -3632,7 +3634,9 @@ async fn webhook_concurrent_swap() {
     let src_bar = "webhook_bar";
     client
         .execute(
-            &format!("CREATE SOURCE {src_bar} IN CLUSTER {webhook_cluster} FROM WEBHOOK BODY FORMAT TEXT"),
+            &format!(
+                "CREATE SOURCE {src_bar} IN CLUSTER {webhook_cluster} FROM WEBHOOK BODY FORMAT TEXT"
+            ),
             &[],
         )
         .await

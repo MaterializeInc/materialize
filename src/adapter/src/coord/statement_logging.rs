@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use bytes::BytesMut;
 use mz_controller_types::ClusterId;
-use mz_ore::now::{to_datetime, NowFn};
+use mz_ore::now::{NowFn, to_datetime};
 use mz_ore::task::spawn;
 use mz_ore::{cast::CastFrom, cast::CastInto, now::EpochMillis};
 use mz_repr::adt::array::ArrayDimension;
@@ -22,7 +22,7 @@ use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{AstInfo, Statement};
 use mz_sql::plan::Params;
 use mz_sql::session::metadata::SessionMetadata;
-use mz_sql_parser::ast::{statement_kind_label_value, StatementKind};
+use mz_sql_parser::ast::{StatementKind, statement_kind_label_value};
 use mz_storage_client::controller::IntrospectionType;
 use qcell::QCell;
 use rand::SeedableRng;

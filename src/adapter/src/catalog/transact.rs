@@ -24,6 +24,7 @@ use mz_audit_log::{
     CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, IdFullNameV1, IdNameV1,
     ObjectType, SchedulingDecisionsWithReasonsV2, VersionedEvent, VersionedStorageUsage,
 };
+use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::BuiltinLog;
 use mz_catalog::durable::{NetworkPolicy, Transaction};
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
@@ -31,17 +32,16 @@ use mz_catalog::memory::objects::{
     CatalogItem, ClusterConfig, DataSourceDesc, SourceReferences, StateDiff, StateUpdate,
     StateUpdateKind, TemporaryItem,
 };
-use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::HashSet;
 use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_persist_types::ShardId;
-use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, PrivilegeMap};
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap, merge_mz_acl_items};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::{strconv, CatalogItemId, ColumnName, ColumnType, Diff, GlobalId};
+use mz_repr::{CatalogItemId, ColumnName, ColumnType, Diff, GlobalId, strconv};
 use mz_sql::ast::RawDataType;
 use mz_sql::catalog::{
     CatalogDatabase, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogRole,
@@ -56,21 +56,21 @@ use mz_sql::plan::{NetworkPolicyRule, PlanError};
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
 use mz_sql::session::vars::OwnedVarInput;
 use mz_sql::session::vars::{Value as VarValue, VarInput};
-use mz_sql::{rbac, DEFAULT_SCHEMA};
+use mz_sql::{DEFAULT_SCHEMA, rbac};
 use mz_sql_parser::ast::{QualifiedReplica, Value};
 use mz_storage_client::storage_collections::StorageCollections;
 use tracing::{info, trace};
 
+use crate::AdapterError;
 use crate::catalog::{
+    BuiltinTableUpdate, Catalog, CatalogState, UpdatePrivilegeVariant,
     catalog_type_to_audit_object_type, comment_id_to_audit_object_type, is_reserved_name,
     is_reserved_role_name, object_type_to_audit_object_type,
-    system_object_type_to_audit_object_type, BuiltinTableUpdate, Catalog, CatalogState,
-    UpdatePrivilegeVariant,
+    system_object_type_to_audit_object_type,
 };
-use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::coord::ConnMeta;
+use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::util::ResultExt;
-use crate::AdapterError;
 
 #[derive(Debug, Clone)]
 pub enum Op {

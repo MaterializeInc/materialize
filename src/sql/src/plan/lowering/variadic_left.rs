@@ -12,9 +12,9 @@ use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_ore::soft_assert_eq_or_log;
 use mz_repr::Diff;
 
+use crate::plan::PlanError;
 use crate::plan::hir::{HirRelationExpr, HirScalarExpr};
 use crate::plan::lowering::{ColumnMap, Context, CteMap};
-use crate::plan::PlanError;
 
 /// Attempt to render a stack of left joins as an inner join against "enriched" right relations.
 ///

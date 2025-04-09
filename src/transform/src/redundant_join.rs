@@ -30,7 +30,7 @@ use mz_expr::{Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr, RECU
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::{assert_none, soft_panic_or_log};
 
-use crate::{all, TransformCtx};
+use crate::{TransformCtx, all};
 
 /// Remove redundant collections of distinct elements from joins.
 #[derive(Debug)]

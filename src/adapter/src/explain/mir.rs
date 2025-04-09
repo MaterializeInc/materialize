@@ -19,7 +19,7 @@
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::explain::export_ids_for;
 use mz_expr::explain::{
-    enforce_linear_chains, ExplainContext, ExplainMultiPlan, ExplainSinglePlan, ExplainSource,
+    ExplainContext, ExplainMultiPlan, ExplainSinglePlan, ExplainSource, enforce_linear_chains,
 };
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_repr::explain::{Explain, ExplainError, UnsupportedFormat};

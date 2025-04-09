@@ -16,8 +16,8 @@ use std::sync::Arc;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use futures::stream::FuturesUnordered;
 use futures::StreamExt;
+use futures::stream::FuturesUnordered;
 use mz_dyncfg::{Config, ConfigSet, ConfigValHandle};
 use mz_ore::collections::HashSet;
 use mz_ore::instrument;
@@ -33,10 +33,10 @@ use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 use tracing::debug;
 
+use crate::TxnsCodecDefault;
 use crate::metrics::Metrics;
 use crate::txn_cache::{TxnsCache, Unapplied};
 use crate::txn_write::Txn;
-use crate::TxnsCodecDefault;
 
 /// An interface for atomic multi-shard writes.
 ///
@@ -947,17 +947,17 @@ mod tests {
     use mz_ore::cast::CastFrom;
     use mz_ore::collections::CollectionExt;
     use mz_ore::metrics::MetricsRegistry;
+    use mz_persist_client::PersistLocation;
     use mz_persist_client::cache::PersistClientCache;
     use mz_persist_client::cfg::RetryParameters;
-    use mz_persist_client::PersistLocation;
     use rand::rngs::SmallRng;
     use rand::{RngCore, SeedableRng};
     use timely::progress::Antichain;
     use tokio::sync::oneshot;
-    use tracing::{info, info_span, Instrument};
+    use tracing::{Instrument, info, info_span};
 
     use crate::operator::DataSubscribe;
-    use crate::tests::{reader, write_directly, writer, CommitLog};
+    use crate::tests::{CommitLog, reader, write_directly, writer};
 
     use super::*;
 

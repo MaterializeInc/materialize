@@ -12,7 +12,7 @@ use std::sync::Arc;
 use aws_types::sdk_config::SdkConfig;
 use mz_arrow_util::builder::ArrowBuilder;
 use mz_aws_util::s3_uploader::{
-    CompletedUpload, S3MultiPartUploader, S3MultiPartUploaderConfig, AWS_S3_MAX_PART_COUNT,
+    AWS_S3_MAX_PART_COUNT, CompletedUpload, S3MultiPartUploader, S3MultiPartUploaderConfig,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::future::OreFutureExt;

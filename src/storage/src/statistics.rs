@@ -37,8 +37,8 @@ use mz_storage_client::statistics::{Gauge, SinkStatisticsUpdate, SourceStatistic
 use mz_storage_types::sources::SourceEnvelope;
 use prometheus::core::{AtomicI64, AtomicU64};
 use serde::{Deserialize, Serialize};
-use timely::progress::frontier::Antichain;
 use timely::PartialOrder;
+use timely::progress::frontier::Antichain;
 
 // Note(guswynn): ordinarily these metric structs would be in the `metrics` modules, but we
 // put them here so they can be near the user-facing definitions as well.
@@ -973,7 +973,7 @@ impl AggregatedStatistics {
     ) {
         self.local_source_statistics
             .entry(id)
-            .and_modify(|(ref mut epoch, ref mut stats)| {
+            .and_modify(|(epoch, stats)| {
                 *epoch += 1;
                 stats.reset_gauges();
                 stats.meta = SourceStatisticsMetadata::new(resume_upper);
@@ -991,7 +991,7 @@ impl AggregatedStatistics {
     pub fn initialize_sink<F: FnOnce() -> SinkStatistics>(&mut self, id: GlobalId, stats: F) {
         self.local_sink_statistics
             .entry(id)
-            .and_modify(|(ref mut epoch, ref mut stats)| {
+            .and_modify(|(epoch, stats)| {
                 *epoch += 1;
                 stats.reset_gauges();
             })

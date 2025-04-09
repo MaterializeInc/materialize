@@ -15,8 +15,8 @@ use proptest::strategy::Strategy;
 use serde::Serialize;
 
 use crate::stats::{
-    proto_primitive_stats, BytesStats, ColumnStatKinds, ColumnStats, ColumnarStats, DynStats,
-    OptionStats, ProtoPrimitiveBytesStats, ProtoPrimitiveStats, TrimStats,
+    BytesStats, ColumnStatKinds, ColumnStats, ColumnarStats, DynStats, OptionStats,
+    ProtoPrimitiveBytesStats, ProtoPrimitiveStats, TrimStats, proto_primitive_stats,
 };
 use crate::timestamp::try_parse_monotonic_iso8601_timestamp;
 
@@ -256,7 +256,7 @@ macro_rules! primitive_stats_rust_type {
                     _ => {
                         return Err(TryFromProtoError::missing_field(
                             "proto_primitive_stats::Lower::$lower",
-                        ))
+                        ));
                     }
                 };
                 let upper = proto
@@ -267,7 +267,7 @@ macro_rules! primitive_stats_rust_type {
                     _ => {
                         return Err(TryFromProtoError::missing_field(
                             "proto_primitive_stats::Upper::$upper",
-                        ))
+                        ));
                     }
                 };
                 Ok(PrimitiveStats { lower, upper })

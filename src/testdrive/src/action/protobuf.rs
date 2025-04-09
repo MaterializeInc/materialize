@@ -10,7 +10,7 @@
 use std::path::{self, PathBuf};
 use std::{env, iter};
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use tokio::process::Command;
 
 use crate::action::{ControlFlow, State};

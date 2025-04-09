@@ -26,17 +26,17 @@ use itertools::Itertools;
 use kafka::KafkaSourceExportDetails;
 use load_generator::{LoadGeneratorOutput, LoadGeneratorSourceExportDetails};
 use mz_ore::assert_none;
+use mz_persist_types::Codec;
 use mz_persist_types::arrow::ArrayOrd;
 use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema};
 use mz_persist_types::stats::{
     ColumnNullStats, ColumnStatKinds, ColumnarStats, ColumnarStatsBuilder, PrimitiveStats,
     StructStats,
 };
-use mz_persist_types::Codec;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{
-    arb_row_for_relation, CatalogItemId, Datum, GlobalId, ProtoRelationDesc, ProtoRow,
-    RelationDesc, Row, RowColumnarDecoder, RowColumnarEncoder,
+    CatalogItemId, Datum, GlobalId, ProtoRelationDesc, ProtoRow, RelationDesc, Row,
+    RowColumnarDecoder, RowColumnarEncoder, arb_row_for_relation,
 };
 use mz_sql_parser::ast::{Ident, IdentError, UnresolvedItemName};
 use proptest::prelude::any;
@@ -48,6 +48,7 @@ use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::timestamp::Refines;
 use timely::progress::{PathSummary, Timestamp};
 
+use crate::AlterCompatible;
 use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
@@ -57,7 +58,6 @@ use crate::errors::{DataflowError, ProtoDataflowError};
 use crate::instances::StorageInstanceId;
 use crate::sources::proto_ingestion_description::{ProtoSourceExport, ProtoSourceImport};
 use crate::sources::sql_server::SqlServerSourceExportDetails;
-use crate::AlterCompatible;
 
 pub mod encoding;
 pub mod envelope;
@@ -681,7 +681,7 @@ impl RustType<ProtoCompression> for Compression {
             None => {
                 return Err(TryFromProtoError::MissingField(
                     "ProtoCompression::kind".into(),
-                ))
+                ));
             }
         })
     }
@@ -1306,7 +1306,7 @@ impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetail
             None => {
                 return Err(TryFromProtoError::missing_field(
                     "ProtoSourceExportStatementDetails::kind",
-                ))
+                ));
             }
         })
     }
@@ -1429,7 +1429,9 @@ impl Codec for SourceData {
 }
 
 /// Given a [`RelationDesc`] returns an arbitrary [`SourceData`].
-pub fn arb_source_data_for_relation_desc(desc: &RelationDesc) -> impl Strategy<Value = SourceData> {
+pub fn arb_source_data_for_relation_desc(
+    desc: &RelationDesc,
+) -> impl Strategy<Value = SourceData> + use<> {
     let row_strat = arb_row_for_relation(desc).no_shrink();
 
     proptest::strategy::Union::new_weighted(vec![
@@ -1988,7 +1990,7 @@ impl Schema<SourceData> for RelationDesc {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{make_comparator, ArrayData};
+    use arrow::array::{ArrayData, make_comparator};
     use bytes::Bytes;
     use mz_expr::EvalError;
     use mz_ore::assert_err;
@@ -1996,11 +1998,11 @@ mod tests {
     use mz_persist::indexed::columnar::arrow::{realloc_any, realloc_array};
     use mz_persist::metrics::ColumnarMetrics;
     use mz_persist_types::parquet::EncodingConfig;
-    use mz_persist_types::schema::{backward_compatible, Migration};
+    use mz_persist_types::schema::{Migration, backward_compatible};
     use mz_persist_types::stats::{PartStats, PartStatsMetrics};
     use mz_repr::{
-        arb_relation_desc_diff, arb_relation_desc_projection, ColumnIndex, DatumVec,
-        PropRelationDescDiff, ProtoRelationDesc, RelationDescBuilder, RowArena, ScalarType,
+        ColumnIndex, DatumVec, PropRelationDescDiff, ProtoRelationDesc, RelationDescBuilder,
+        RowArena, ScalarType, arb_relation_desc_diff, arb_relation_desc_projection,
     };
     use proptest::prelude::*;
     use proptest::strategy::{Union, ValueTree};

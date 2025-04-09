@@ -12,12 +12,12 @@
 //! Consult [TopKPlan] documentation for details.
 
 use columnar::Columnar;
+use differential_dataflow::IntoOwned;
 use differential_dataflow::containers::Columnation;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::{Batch, Builder, Trace, TraceReader};
-use differential_dataflow::IntoOwned;
 use differential_dataflow::{AsCollection, Collection};
 use mz_compute_types::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
@@ -32,17 +32,17 @@ use mz_timely_util::operator::CollectionExt;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
+use timely::Container;
 use timely::container::{CapacityContainerBuilder, PushInto};
+use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
-use timely::dataflow::Scope;
-use timely::Container;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
+use crate::render::Pairer;
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
-use crate::render::Pairer;
 use crate::row_spine::{
     DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBuilder, RowValSpine,
 };
@@ -915,8 +915,8 @@ pub mod monoids {
         type Item = Top1Monoid;
 
         unsafe fn copy(&mut self, item: &Self::Item) -> Self::Item {
-            let row = self.row_region.copy(&item.row);
-            let order_key = self.order_key_region.copy(&item.order_key);
+            let row = unsafe { self.row_region.copy(&item.row) };
+            let order_key = unsafe { self.order_key_region.copy(&item.order_key) };
             Self::Item { row, order_key }
         }
 

@@ -150,7 +150,7 @@ fn from_proto_with_type(
         (None, None) => {
             return Err(TryFromProtoError::MissingField(
                 "ProtoArrayData::data_type".to_string(),
-            ))
+            ));
         }
     };
     let nulls = nulls
@@ -747,7 +747,7 @@ fn maybe_trim_proto(data_type: &mut proto::DataType, body: &mut ProtoArrayData, 
 mod tests {
     use crate::arrow::{ArrayBound, ArrayOrd};
     use arrow::array::{
-        make_array, ArrayRef, AsArray, BooleanArray, StringArray, StructArray, UInt64Array,
+        ArrayRef, AsArray, BooleanArray, StringArray, StructArray, UInt64Array, make_array,
     };
     use arrow::datatypes::{DataType, Field, Fields};
     use mz_ore::assert_none;

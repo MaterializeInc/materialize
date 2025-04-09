@@ -16,13 +16,13 @@ use std::time::Instant;
 
 use differential_dataflow::lattice::antichain_join;
 use differential_dataflow::operators::arrange::{Arranged, ShutdownButton, TraceAgent};
-use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use differential_dataflow::trace::TraceReader;
+use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::{Diff, GlobalId, Timestamp};
-use timely::dataflow::operators::CapabilitySet;
-use timely::dataflow::Scope;
-use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::PartialOrder;
+use timely::dataflow::Scope;
+use timely::dataflow::operators::CapabilitySet;
+use timely::progress::frontier::{Antichain, AntichainRef};
 
 use crate::metrics::WorkerMetrics;
 use crate::typedefs::{ErrAgent, RowRowAgent};

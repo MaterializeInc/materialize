@@ -12,9 +12,9 @@ use differential_dataflow::{AsCollection, Collection, Data};
 use mz_ore::soft_panic_or_log;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Diff, Timestamp};
+use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::Scope;
 
 /// This is for REFRESH options on materialized views. It adds an operator that rounds up the
 /// timestamps of data and frontiers to the time of the next refresh. See

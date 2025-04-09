@@ -12,7 +12,7 @@ use mz_ore::result::ResultExt;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::{strconv, Timestamp};
+use mz_repr::{Timestamp, strconv};
 
 use crate::EvalError;
 

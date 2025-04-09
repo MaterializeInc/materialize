@@ -55,7 +55,7 @@ use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::mz_acl_item::{AclItem, MzAclItem};
-use crate::adt::numeric::{self, Numeric, NUMERIC_DATUM_MAX_PRECISION};
+use crate::adt::numeric::{self, NUMERIC_DATUM_MAX_PRECISION, Numeric};
 use crate::adt::pg_legacy_name::NAME_MAX_BYTES;
 use crate::adt::range::{Range, RangeBound, RangeInner};
 use crate::adt::timestamp::CheckedTimestamp;
@@ -683,7 +683,7 @@ pub fn parse_bytes_traditional(s: &str) -> Result<Vec<u8>, ParseError> {
         match bytes.next() {
             None => {
                 return Err(ParseError::invalid_input_syntax("bytea", s)
-                    .with_details("ends with escape character"))
+                    .with_details("ends with escape character"));
             }
             Some(b'\\') => out.push(b'\\'),
             b => match (b, bytes.next(), bytes.next()) {
@@ -692,7 +692,7 @@ pub fn parse_bytes_traditional(s: &str) -> Result<Vec<u8>, ParseError> {
                 }
                 _ => {
                     return Err(ParseError::invalid_input_syntax("bytea", s)
-                        .with_details("invalid escape sequence"))
+                        .with_details("invalid escape sequence"));
                 }
             },
         }
@@ -1045,11 +1045,11 @@ where
 
     let mut elems = Vec::with_capacity(raw_elems.len());
 
-    let mut gen = |elem| gen_elem(elem).map_err(|e| e.to_string());
+    let mut generated = |elem| gen_elem(elem).map_err(|e| e.to_string());
 
     for elem in raw_elems.into_iter() {
         elems.push(match elem {
-            Some(elem) => gen(elem)?,
+            Some(elem) => generated(elem)?,
             None => make_null(),
         });
     }
@@ -1096,7 +1096,7 @@ where
     }
 
     // Simplifies calls to `gen_elem` by handling errors
-    let mut gen = |elem| gen_elem(elem).map_err(|e| e.to_string());
+    let mut generated = |elem| gen_elem(elem).map_err(|e| e.to_string());
     let is_special_char = |c| matches!(c, '{' | '}' | ',' | '\\' | '"');
     let is_end_of_literal = |c| matches!(c, ',' | '}');
 
@@ -1119,7 +1119,7 @@ where
         buf.take_while(|ch| ch.is_ascii_whitespace());
         // Get elements.
         let elem = match buf.peek() {
-            Some('"') => gen(lex_quoted_element(buf)?)?,
+            Some('"') => generated(lex_quoted_element(buf)?)?,
             Some('{') => {
                 if !is_element_type_list {
                     bail!(
@@ -1127,10 +1127,10 @@ where
                         want a nested list, e.g. '{{a}}'::text list list"
                     )
                 }
-                gen(lex_embedded_element(buf)?)?
+                generated(lex_embedded_element(buf)?)?
             }
             Some(_) => match lex_unquoted_element(buf, is_special_char, is_end_of_literal)? {
-                Some(elem) => gen(elem)?,
+                Some(elem) => generated(elem)?,
                 None => make_null(),
             },
             None => bail!("unexpected end of input"),
@@ -1170,14 +1170,14 @@ where
     let mut elems = vec![];
     let buf = &mut LexBuf::new(s);
 
-    let mut gen = |elem| gen_elem(elem).map_err(|e| e.to_string());
+    let mut generated = |elem| gen_elem(elem).map_err(|e| e.to_string());
 
     loop {
         buf.take_while(|ch| ch.is_ascii_whitespace());
         match buf.peek() {
             Some(_) => {
                 let elem = buf.take_while(|ch| !ch.is_ascii_whitespace());
-                elems.push(gen(elem.into())?);
+                elems.push(generated(elem.into())?);
             }
             None => break,
         }
@@ -1780,11 +1780,7 @@ impl ElementEscaper for RecordElementEscaper {
     }
 
     fn escape_char(c: u8) -> u8 {
-        if c == b'"' {
-            b'"'
-        } else {
-            b'\\'
-        }
+        if c == b'"' { b'"' } else { b'\\' }
     }
 }
 
@@ -2030,8 +2026,8 @@ impl Error for ParseError {}
 
 impl RustType<ProtoParseError> for ParseError {
     fn into_proto(&self) -> ProtoParseError {
-        use proto_parse_error::*;
         use Kind::*;
+        use proto_parse_error::*;
         let kind = match self.kind {
             ParseErrorKind::OutOfRange => OutOfRange(()),
             ParseErrorKind::InvalidInputSyntax => InvalidInputSyntax(()),
@@ -2098,8 +2094,8 @@ impl fmt::Display for ParseHexError {
 
 impl RustType<ProtoParseHexError> for ParseHexError {
     fn into_proto(&self) -> ProtoParseHexError {
-        use proto_parse_hex_error::*;
         use Kind::*;
+        use proto_parse_hex_error::*;
         let kind = match self {
             ParseHexError::InvalidHexDigit(v) => InvalidHexDigit(v.into_proto()),
             ParseHexError::OddLength => OddLength(()),

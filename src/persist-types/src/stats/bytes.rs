@@ -13,12 +13,12 @@ use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::strategy::{Just, Strategy, Union};
 use serde::Serialize;
 
-use crate::stats::json::{any_json_stats, JsonStats};
-use crate::stats::primitive::{any_primitive_vec_u8_stats, PrimitiveStats};
+use crate::stats::json::{JsonStats, any_json_stats};
+use crate::stats::primitive::{PrimitiveStats, any_primitive_vec_u8_stats};
 use crate::stats::{
-    proto_bytes_stats, proto_fixed_size_bytes_stats, ColumnStatKinds, ColumnStats, ColumnarStats,
-    DynStats, OptionStats, ProtoAtomicBytesStats, ProtoBytesStats, ProtoFixedSizeBytesStats,
-    TrimStats,
+    ColumnStatKinds, ColumnStats, ColumnarStats, DynStats, OptionStats, ProtoAtomicBytesStats,
+    ProtoBytesStats, ProtoFixedSizeBytesStats, TrimStats, proto_bytes_stats,
+    proto_fixed_size_bytes_stats,
 };
 
 /// `PrimitiveStats<Vec<u8>>` that cannot safely be trimmed.

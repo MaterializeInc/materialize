@@ -17,8 +17,8 @@
 
 use mz_expr::MirRelationExpr;
 
-use crate::analysis::{DerivedBuilder, NonNegative, SubtreeSize};
 use crate::TransformCtx;
+use crate::analysis::{DerivedBuilder, NonNegative, SubtreeSize};
 
 /// Remove Threshold operators that have no effect.
 #[derive(Debug)]

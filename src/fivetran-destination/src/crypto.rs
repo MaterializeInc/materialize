@@ -11,7 +11,7 @@ use std::cmp;
 use std::io;
 use std::mem::MaybeUninit;
 use std::pin::Pin;
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll, ready};
 
 use openssl::symm::{Cipher, Crypter};
 use tokio::io::{AsyncRead, ReadBuf};

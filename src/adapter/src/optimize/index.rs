@@ -30,22 +30,22 @@ use std::time::{Duration, Instant};
 
 use mz_compute_types::dataflows::IndexDesc;
 use mz_compute_types::plan::Plan;
-use mz_repr::explain::trace_plan;
 use mz_repr::GlobalId;
+use mz_repr::explain::trace_plan;
 use mz_sql::names::QualifiedItemName;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
+use mz_transform::TransformCtx;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::notice::{IndexAlreadyExists, IndexKeyEmpty};
-use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
-use mz_transform::TransformCtx;
+use mz_transform::typecheck::{SharedContext as TypecheckContext, empty_context};
 
 use crate::optimize::dataflows::{
-    prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle,
+    ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle, prep_relation_expr, prep_scalar_expr,
 };
 use crate::optimize::{
-    trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode,
-    OptimizerCatalog, OptimizerConfig, OptimizerError,
+    LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode, OptimizerCatalog,
+    OptimizerConfig, OptimizerError, trace_plan,
 };
 
 pub struct Optimizer {

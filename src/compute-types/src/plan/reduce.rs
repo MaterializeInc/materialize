@@ -63,16 +63,16 @@
 use std::collections::BTreeMap;
 
 use mz_expr::{
-    permutation_for_arrangement, AggregateExpr, AggregateFunc, MapFilterProject, MirScalarExpr,
+    AggregateExpr, AggregateFunc, MapFilterProject, MirScalarExpr, permutation_for_arrangement,
 };
 use mz_ore::{assert_none, soft_assert_or_log};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use proptest::prelude::{any, Arbitrary, BoxedStrategy};
+use proptest::prelude::{Arbitrary, BoxedStrategy, any};
 use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use crate::plan::{bucketing_of_expected_group_size, AvailableCollections};
+use crate::plan::{AvailableCollections, bucketing_of_expected_group_size};
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_types.plan.reduce.rs"));
 

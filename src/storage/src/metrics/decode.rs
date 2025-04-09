@@ -11,8 +11,8 @@
 
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
-use mz_ore::metrics::raw::IntCounterVec;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::metrics::raw::IntCounterVec;
 
 use crate::decode::{DataDecoderInner, PreDelimitedFormat};
 

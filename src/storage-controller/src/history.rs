@@ -16,8 +16,8 @@ use mz_ore::cast::{CastFrom, CastInto};
 use mz_storage_client::client::StorageCommand;
 use mz_storage_client::metrics::HistoryMetrics;
 use mz_storage_types::parameters::StorageParameters;
-use timely::order::TotalOrder;
 use timely::PartialOrder;
+use timely::order::TotalOrder;
 
 /// A history of storage commands.
 #[derive(Debug)]

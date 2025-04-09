@@ -15,8 +15,8 @@ use std::sync::Arc;
 
 use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::{Fields, Schema as ArrowSchema};
-use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
 use parquet::arrow::ArrowWriter;
+use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
 use parquet::basic::Encoding;
 use parquet::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
 use parquet::file::reader::ChunkReader;

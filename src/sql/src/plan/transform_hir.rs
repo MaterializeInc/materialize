@@ -14,8 +14,8 @@ use std::sync::LazyLock;
 use std::{iter, mem};
 
 use itertools::Itertools;
-use mz_expr::visit::Visit;
 use mz_expr::WindowFrame;
+use mz_expr::visit::Visit;
 use mz_expr::{ColumnOrder, UnaryFunc, VariadicFunc};
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::{ColumnName, ColumnType, RelationType, ScalarType};
@@ -444,11 +444,12 @@ pub fn fuse_window_functions(
             HirScalarExpr::Windowing(WindowExpr {
                 func:
                     WindowExprType::Aggregate(AggregateWindowExpr {
-                        aggregate_expr: AggregateExpr {
-                            distinct,
-                            func: _,
-                            expr: _,
-                        },
+                        aggregate_expr:
+                            AggregateExpr {
+                                distinct,
+                                func: _,
+                                expr: _,
+                            },
                         order_by: inner_order_by,
                         window_frame,
                     }),
@@ -461,7 +462,9 @@ pub fn fuse_window_functions(
                 window_frame: window_frame.clone(),
                 distinct: distinct.clone(),
             }),
-            _ => panic!("extract_options should only be called on value window functions or window aggregations"),
+            _ => panic!(
+                "extract_options should only be called on value window functions or window aggregations"
+            ),
         }
     }
 

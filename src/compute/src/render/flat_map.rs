@@ -14,14 +14,14 @@ use mz_expr::{MapFilterProject, MirScalarExpr, TableFunc};
 use mz_repr::{DatumVec, RowArena, SharedRow};
 use mz_repr::{Diff, Row, Timestamp};
 use mz_timely_util::operator::StreamExt;
+use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::{Counter, Tee};
-use timely::dataflow::Scope;
 use timely::progress::Antichain;
 
-use crate::render::context::{CollectionBundle, Context};
 use crate::render::DataflowError;
+use crate::render::context::{CollectionBundle, Context};
 
 impl<G> Context<G>
 where

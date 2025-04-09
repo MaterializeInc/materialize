@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use mz_kafka_util::admin::EnsureTopicConfig;
-use mz_kafka_util::client::{create_new_client_config_simple, MzClientContext};
+use mz_kafka_util::client::{MzClientContext, create_new_client_config_simple};
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::error::KafkaError;
 use rdkafka::producer::{DeliveryFuture, FutureProducer, FutureRecord};

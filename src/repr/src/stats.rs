@@ -30,8 +30,8 @@ use mz_persist_types::stats::{
 };
 use ordered_float::OrderedFloat;
 use prost::Message;
-use serde::de::{DeserializeSeed, Error, MapAccess, SeqAccess, Visitor};
 use serde::Deserializer;
+use serde::de::{DeserializeSeed, Error, MapAccess, SeqAccess, Visitor};
 use uuid::Uuid;
 
 use crate::adt::date::Date;

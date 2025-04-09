@@ -13,15 +13,15 @@ use std::collections::BTreeMap;
 use std::fmt::Formatter;
 use std::time::Duration;
 
-use mz_ore::str::{separated, Indent, IndentLike};
-use mz_repr::explain::text::DisplayText;
+use mz_ore::str::{Indent, IndentLike, separated};
+use mz_repr::GlobalId;
 use mz_repr::explain::ExplainError::LinearChainsPlusRecursive;
+use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{
     AnnotatedPlan, Explain, ExplainConfig, ExplainError, ExprHumanizer, ScalarOps,
     UnsupportedFormat, UsedIndexes,
 };
 use mz_repr::optimize::OptimizerFeatures;
-use mz_repr::GlobalId;
 
 use crate::interpret::{Interpreter, MfpEval, Trace};
 use crate::visit::Visit;
@@ -30,7 +30,7 @@ use crate::{
 };
 
 pub use crate::explain::text::{
-    fmt_text_constant_rows, HumanizedExplain, HumanizedExpr, HumanizedNotice, HumanizerMode,
+    HumanizedExplain, HumanizedExpr, HumanizedNotice, HumanizerMode, fmt_text_constant_rows,
 };
 
 mod json;
@@ -286,7 +286,7 @@ pub fn enforce_linear_chains(expr: &mut MirRelationExpr) -> Result<(), ExplainEr
 
 // Create an [`Iterator`] for [`LocalId`] values that are guaranteed to be
 // fresh within the scope of the given [`MirRelationExpr`].
-fn id_gen(expr: &MirRelationExpr) -> impl Iterator<Item = LocalId> {
+fn id_gen(expr: &MirRelationExpr) -> impl Iterator<Item = LocalId> + use<> {
     let mut max_id = 0_u64;
 
     expr.visit_pre(|expr| {

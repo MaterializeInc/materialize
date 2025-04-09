@@ -26,12 +26,12 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_transform::EmptyStatisticsOracle;
 use serde::Serialize;
 
+use crate::TimestampContext;
 use crate::catalog::Catalog;
 use crate::coord::peek::{FastPathPlan, PeekPlan};
 use crate::optimize::dataflows::ComputeInstanceSnapshot;
 use crate::optimize::{self, Optimize, OptimizerConfig, OptimizerError};
 use crate::session::SessionMeta;
-use crate::TimestampContext;
 
 /// Information needed to compute PlanInsights.
 #[derive(Debug)]

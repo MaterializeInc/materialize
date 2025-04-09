@@ -21,8 +21,8 @@ use std::iter;
 use async_trait::async_trait;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
 use mz_cluster_client::ReplicaId;
+use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
 use mz_ore::assert_none;
 use mz_persist_client::batch::{BatchBuilder, ProtoBatch};
 use mz_persist_client::write::WriteHandle;
@@ -37,13 +37,13 @@ use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::IngestionDescription;
 use mz_timely_util::progress::any_antichain;
-use proptest::prelude::{any, Arbitrary};
+use proptest::prelude::{Arbitrary, any};
 use proptest::strategy::{BoxedStrategy, Strategy, Union};
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
-use timely::progress::frontier::{Antichain, MutableAntichain};
-use timely::progress::Timestamp;
 use timely::PartialOrder;
+use timely::progress::Timestamp;
+use timely::progress::frontier::{Antichain, MutableAntichain};
 use tonic::{Request, Status as TonicStatus, Streaming};
 use uuid::Uuid;
 
@@ -783,12 +783,11 @@ impl Arbitrary for StorageResponse<mz_repr::Timestamp> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         // TODO(guswynn): test `SourceStatisticsUpdates`
-        Union::new(vec![proptest::collection::vec(
-            (any::<GlobalId>(), any_antichain()),
-            1..4,
-        )
-        .prop_map(StorageResponse::FrontierUppers)
-        .boxed()])
+        Union::new(vec![
+            proptest::collection::vec((any::<GlobalId>(), any_antichain()), 1..4)
+                .prop_map(StorageResponse::FrontierUppers)
+                .boxed(),
+        ])
     }
 }
 

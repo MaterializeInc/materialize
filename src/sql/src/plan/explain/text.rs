@@ -21,13 +21,13 @@
 use itertools::Itertools;
 use std::fmt;
 
-use mz_expr::explain::{fmt_text_constant_rows, HumanizedExplain, HumanizerMode};
+use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
 use mz_expr::virtual_syntax::{AlgExcept, Except};
 use mz_expr::{Id, WindowFrame};
-use mz_ore::str::{separated, IndentLike};
+use mz_ore::str::{IndentLike, separated};
+use mz_repr::Diff;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalarSeq, Indices, PlanRenderingContext};
-use mz_repr::Diff;
 
 use crate::plan::{AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType};
 
@@ -375,10 +375,12 @@ impl fmt::Display for HirScalarExpr {
                 // We assume that the `column_order.column`s refer to each of the expressions in
                 // `expr.order_by` in order. This is a consequence of how `plan_function_order_by`
                 // works.
-                assert!(column_orders
-                    .iter()
-                    .enumerate()
-                    .all(|(i, column_order)| i == column_order.column));
+                assert!(
+                    column_orders
+                        .iter()
+                        .enumerate()
+                        .all(|(i, column_order)| i == column_order.column)
+                );
                 let order_by = column_orders
                     .iter()
                     .zip_eq(expr.order_by.iter())

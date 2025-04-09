@@ -25,7 +25,7 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::optimize::Optimize;
 use crate::session::{Session, TransactionOps};
-use crate::{optimize, AdapterNotice, ExecuteContext, TimelineContext};
+use crate::{AdapterNotice, ExecuteContext, TimelineContext, optimize};
 
 impl Staged for SubscribeStage {
     type Ctx = ExecuteContext;

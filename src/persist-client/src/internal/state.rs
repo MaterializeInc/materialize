@@ -18,13 +18,13 @@ use std::ops::ControlFlow::{self, Break, Continue};
 use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 
-use arrow::array::{make_array, Array, ArrayData};
+use arrow::array::{Array, ArrayData, make_array};
 use arrow::datatypes::DataType;
 use bytes::Bytes;
-use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::implementations::BatchContainer;
-use differential_dataflow::trace::Description;
 use differential_dataflow::Hashable;
+use differential_dataflow::lattice::Lattice;
+use differential_dataflow::trace::Description;
+use differential_dataflow::trace::implementations::BatchContainer;
 use futures::Stream;
 use futures_util::StreamExt;
 use mz_dyncfg::Config;
@@ -36,7 +36,7 @@ use mz_persist::indexed::encoding::BatchColumnarFormat;
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::arrow::{ArrayBound, ProtoArrayData};
 use mz_persist_types::columnar::{ColumnEncoder, Schema};
-use mz_persist_types::schema::{backward_compatible, SchemaId};
+use mz_persist_types::schema::{SchemaId, backward_compatible};
 use mz_persist_types::{Codec, Codec64, Opaque};
 use mz_proto::ProtoType;
 use mz_proto::RustType;
@@ -52,7 +52,7 @@ use uuid::Uuid;
 
 use crate::critical::CriticalReaderId;
 use crate::error::InvalidUsage;
-use crate::internal::encoding::{parse_id, LazyInlineBatchPart, LazyPartStats, LazyProto};
+use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, parse_id};
 use crate::internal::gc::GcReq;
 use crate::internal::machine::retry_external;
 use crate::internal::paths::{BlobKey, PartId, PartialBatchKey, PartialRollupKey, WriterKey};
@@ -2536,13 +2536,13 @@ pub(crate) mod tests {
     use proptest::prelude::*;
     use proptest::strategy::ValueTree;
 
+    use crate::InvalidUsage::{InvalidBounds, InvalidEmptyTimeInterval};
+    use crate::PersistLocation;
     use crate::cache::PersistClientCache;
     use crate::internal::encoding::any_some_lazy_part_stats;
     use crate::internal::paths::RollupId;
     use crate::internal::trace::tests::any_trace;
     use crate::tests::new_test_client_cache;
-    use crate::InvalidUsage::{InvalidBounds, InvalidEmptyTimeInterval};
-    use crate::PersistLocation;
 
     use super::*;
 
@@ -2617,8 +2617,8 @@ pub(crate) mod tests {
         Strategy::prop_map(any_batch_part(), |part| RunPart::Single(part))
     }
 
-    pub fn any_hollow_batch_part<T: Arbitrary + Timestamp>(
-    ) -> impl Strategy<Value = HollowBatchPart<T>> {
+    pub fn any_hollow_batch_part<T: Arbitrary + Timestamp>()
+    -> impl Strategy<Value = HollowBatchPart<T>> {
         Strategy::prop_map(
             (
                 any::<PartialBatchKey>(),
@@ -3091,20 +3091,22 @@ pub(crate) mod tests {
         );
 
         // Insert an empty batch with an upper > lower..
-        assert!(state
-            .compare_and_append(
-                &hollow(0, 5, &[], 0),
-                &writer_id,
-                now(),
-                LEASE_DURATION_MS,
-                &IdempotencyToken::new(),
-                &debug_state(),
-                0,
-                true,
-                100,
-                None
-            )
-            .is_continue());
+        assert!(
+            state
+                .compare_and_append(
+                    &hollow(0, 5, &[], 0),
+                    &writer_id,
+                    now(),
+                    LEASE_DURATION_MS,
+                    &IdempotencyToken::new(),
+                    &debug_state(),
+                    0,
+                    true,
+                    100,
+                    None
+                )
+                .is_continue()
+        );
 
         // Cannot insert a batch with a upper less than the lower.
         assert_eq!(
@@ -3150,20 +3152,22 @@ pub(crate) mod tests {
         );
 
         // Can insert an empty batch with an upper equal to lower.
-        assert!(state
-            .compare_and_append(
-                &hollow(5, 5, &[], 0),
-                &writer_id,
-                now(),
-                LEASE_DURATION_MS,
-                &IdempotencyToken::new(),
-                &debug_state(),
-                0,
-                true,
-                100,
-                None
-            )
-            .is_continue());
+        assert!(
+            state
+                .compare_and_append(
+                    &hollow(5, 5, &[], 0),
+                    &writer_id,
+                    now(),
+                    LEASE_DURATION_MS,
+                    &IdempotencyToken::new(),
+                    &debug_state(),
+                    0,
+                    true,
+                    100,
+                    None
+                )
+                .is_continue()
+        );
     }
 
     #[mz_ore::test]
@@ -3197,21 +3201,23 @@ pub(crate) mod tests {
         let writer_id = WriterId::new();
 
         // Advance upper to 5.
-        assert!(state
-            .collections
-            .compare_and_append(
-                &hollow(0, 5, &["key1"], 1),
-                &writer_id,
-                now(),
-                LEASE_DURATION_MS,
-                &IdempotencyToken::new(),
-                &debug_state(),
-                0,
-                true,
-                100,
-                None
-            )
-            .is_continue());
+        assert!(
+            state
+                .collections
+                .compare_and_append(
+                    &hollow(0, 5, &["key1"], 1),
+                    &writer_id,
+                    now(),
+                    LEASE_DURATION_MS,
+                    &IdempotencyToken::new(),
+                    &debug_state(),
+                    0,
+                    true,
+                    100,
+                    None
+                )
+                .is_continue()
+        );
 
         // Can take a snapshot with as_of < upper.
         assert_eq!(
@@ -3272,21 +3278,23 @@ pub(crate) mod tests {
         );
 
         // Advance the upper to 10 via an empty batch.
-        assert!(state
-            .collections
-            .compare_and_append(
-                &hollow(5, 10, &[], 0),
-                &writer_id,
-                now(),
-                LEASE_DURATION_MS,
-                &IdempotencyToken::new(),
-                &debug_state(),
-                0,
-                true,
-                100,
-                None
-            )
-            .is_continue());
+        assert!(
+            state
+                .collections
+                .compare_and_append(
+                    &hollow(5, 10, &[], 0),
+                    &writer_id,
+                    now(),
+                    LEASE_DURATION_MS,
+                    &IdempotencyToken::new(),
+                    &debug_state(),
+                    0,
+                    true,
+                    100,
+                    None
+                )
+                .is_continue()
+        );
 
         // Can still take snapshots at times < upper.
         assert_eq!(
@@ -3304,21 +3312,23 @@ pub(crate) mod tests {
         );
 
         // Advance upper to 15.
-        assert!(state
-            .collections
-            .compare_and_append(
-                &hollow(10, 15, &["key2"], 1),
-                &writer_id,
-                now(),
-                LEASE_DURATION_MS,
-                &IdempotencyToken::new(),
-                &debug_state(),
-                0,
-                true,
-                100,
-                None
-            )
-            .is_continue());
+        assert!(
+            state
+                .collections
+                .compare_and_append(
+                    &hollow(10, 15, &["key2"], 1),
+                    &writer_id,
+                    now(),
+                    LEASE_DURATION_MS,
+                    &IdempotencyToken::new(),
+                    &debug_state(),
+                    0,
+                    true,
+                    100,
+                    None
+                )
+                .is_continue()
+        );
 
         // Filter out batches whose lowers are less than the requested as of (the
         // batches that are too far in the future for the requested as_of).
@@ -3368,36 +3378,40 @@ pub(crate) mod tests {
         let now = SYSTEM_TIME.clone();
 
         // Add two batches of data, one from [0, 5) and then another from [5, 10).
-        assert!(state
-            .collections
-            .compare_and_append(
-                &hollow(0, 5, &["key1"], 1),
-                &writer_id,
-                now(),
-                LEASE_DURATION_MS,
-                &IdempotencyToken::new(),
-                &debug_state(),
-                0,
-                true,
-                100,
-                None
-            )
-            .is_continue());
-        assert!(state
-            .collections
-            .compare_and_append(
-                &hollow(5, 10, &["key2"], 1),
-                &writer_id,
-                now(),
-                LEASE_DURATION_MS,
-                &IdempotencyToken::new(),
-                &debug_state(),
-                0,
-                true,
-                100,
-                None
-            )
-            .is_continue());
+        assert!(
+            state
+                .collections
+                .compare_and_append(
+                    &hollow(0, 5, &["key1"], 1),
+                    &writer_id,
+                    now(),
+                    LEASE_DURATION_MS,
+                    &IdempotencyToken::new(),
+                    &debug_state(),
+                    0,
+                    true,
+                    100,
+                    None
+                )
+                .is_continue()
+        );
+        assert!(
+            state
+                .collections
+                .compare_and_append(
+                    &hollow(5, 10, &["key2"], 1),
+                    &writer_id,
+                    now(),
+                    LEASE_DURATION_MS,
+                    &IdempotencyToken::new(),
+                    &debug_state(),
+                    0,
+                    true,
+                    100,
+                    None
+                )
+                .is_continue()
+        );
 
         // All frontiers in [0, 5) return the first batch.
         for t in 0..=4 {
@@ -3441,43 +3455,49 @@ pub(crate) mod tests {
         let writer_id_two = WriterId::new();
 
         // Writer is eligible to write
-        assert!(state
-            .collections
-            .compare_and_append(
-                &hollow(0, 2, &["key1"], 1),
-                &writer_id_one,
-                now(),
-                LEASE_DURATION_MS,
-                &IdempotencyToken::new(),
-                &debug_state(),
-                0,
-                true,
-                100,
-                None
-            )
-            .is_continue());
+        assert!(
+            state
+                .collections
+                .compare_and_append(
+                    &hollow(0, 2, &["key1"], 1),
+                    &writer_id_one,
+                    now(),
+                    LEASE_DURATION_MS,
+                    &IdempotencyToken::new(),
+                    &debug_state(),
+                    0,
+                    true,
+                    100,
+                    None
+                )
+                .is_continue()
+        );
 
-        assert!(state
-            .collections
-            .expire_writer(&writer_id_one)
-            .is_continue());
+        assert!(
+            state
+                .collections
+                .expire_writer(&writer_id_one)
+                .is_continue()
+        );
 
         // Other writers should still be able to write
-        assert!(state
-            .collections
-            .compare_and_append(
-                &hollow(2, 5, &["key2"], 1),
-                &writer_id_two,
-                now(),
-                LEASE_DURATION_MS,
-                &IdempotencyToken::new(),
-                &debug_state(),
-                0,
-                true,
-                100,
-                None
-            )
-            .is_continue());
+        assert!(
+            state
+                .collections
+                .compare_and_append(
+                    &hollow(2, 5, &["key2"], 1),
+                    &writer_id_two,
+                    now(),
+                    LEASE_DURATION_MS,
+                    &IdempotencyToken::new(),
+                    &debug_state(),
+                    0,
+                    true,
+                    100,
+                    None
+                )
+                .is_continue()
+        );
     }
 
     #[mz_ore::test]
@@ -3557,10 +3577,12 @@ pub(crate) mod tests {
             encoded_size_bytes: None,
         };
 
-        assert!(state
-            .collections
-            .add_rollup((rollup_seqno, &rollup))
-            .is_continue());
+        assert!(
+            state
+                .collections
+                .add_rollup((rollup_seqno, &rollup))
+                .is_continue()
+        );
 
         // shouldn't need a rollup at the seqno of the rollup
         state.seqno = SeqNo(5);
@@ -3596,10 +3618,12 @@ pub(crate) mod tests {
             key: PartialRollupKey::new(rollup_seqno, &RollupId::new()),
             encoded_size_bytes: None,
         };
-        assert!(state
-            .collections
-            .add_rollup((rollup_seqno, &rollup))
-            .is_continue());
+        assert!(
+            state
+                .collections
+                .add_rollup((rollup_seqno, &rollup))
+                .is_continue()
+        );
 
         state.seqno = SeqNo(8);
         assert_none!(state.need_rollup(ROLLUP_THRESHOLD));

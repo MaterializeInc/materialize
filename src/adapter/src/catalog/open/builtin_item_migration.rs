@@ -12,9 +12,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use futures::future::BoxFuture;
 use futures::FutureExt;
-use mz_catalog::builtin::{BuiltinTable, Fingerprint, BUILTINS};
+use futures::future::BoxFuture;
+use mz_catalog::SYSTEM_CONN_ID;
+use mz_catalog::builtin::{BUILTINS, BuiltinTable, Fingerprint};
 use mz_catalog::config::BuiltinItemMigrationConfig;
 use mz_catalog::durable::objects::SystemObjectUniqueIdentifier;
 use mz_catalog::durable::{
@@ -22,7 +23,6 @@ use mz_catalog::durable::{
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::CatalogItem;
-use mz_catalog::SYSTEM_CONN_ID;
 use mz_ore::collections::CollectionExt;
 use mz_ore::{halt, soft_assert_or_log, soft_panic_or_log};
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_CATALOG;
@@ -30,8 +30,8 @@ use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient};
-use mz_persist_types::codec_impls::ShardIdSchema;
 use mz_persist_types::ShardId;
+use mz_persist_types::codec_impls::ShardIdSchema;
 use mz_repr::{CatalogItemId, GlobalId, Timestamp};
 use mz_sql::catalog::CatalogItem as _;
 use mz_storage_client::controller::StorageTxn;
@@ -495,12 +495,12 @@ mod persist_schema {
 
     use arrow::array::{StringArray, StringBuilder};
     use bytes::{BufMut, Bytes};
+    use mz_persist_types::Codec;
     use mz_persist_types::codec_impls::{
         SimpleColumnarData, SimpleColumnarDecoder, SimpleColumnarEncoder,
     };
     use mz_persist_types::columnar::Schema;
     use mz_persist_types::stats::NoneStats;
-    use mz_persist_types::Codec;
 
     #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
     pub(super) struct TableKey {

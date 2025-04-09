@@ -31,10 +31,10 @@ use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::replication::WalLevel;
 use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_proto::RustType;
-use mz_repr::{strconv, CatalogItemId, RelationDesc, RelationVersionSelector, Timestamp};
+use mz_repr::{CatalogItemId, RelationDesc, RelationVersionSelector, Timestamp, strconv};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::visit::{visit_function, Visit};
-use mz_sql_parser::ast::visit_mut::{visit_expr_mut, VisitMut};
+use mz_sql_parser::ast::visit::{Visit, visit_function};
+use mz_sql_parser::ast::visit_mut::{VisitMut, visit_expr_mut};
 use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceAddSubsourceOptionName, AlterSourceStatement, AvroDocOn,
     ColumnName, CreateMaterializedViewStatement, CreateSinkConnection, CreateSinkOptionName,
@@ -60,8 +60,8 @@ use mz_storage_types::sources::{
     SourceExportStatementDetails,
 };
 use prost::Message;
-use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
+use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use rdkafka::admin::AdminClient;
 use references::{RetrievedSourceReferences, SourceReferenceClient};
 use uuid::Uuid;

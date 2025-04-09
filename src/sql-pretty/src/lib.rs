@@ -12,7 +12,7 @@ mod util;
 
 use mz_sql_parser::ast::display::FormatMode;
 use mz_sql_parser::ast::*;
-use mz_sql_parser::parser::{parse_statements, ParserStatementError};
+use mz_sql_parser::parser::{ParserStatementError, parse_statements};
 use pretty::RcDoc;
 use thiserror::Error;
 

@@ -250,7 +250,10 @@ impl Deref for BlobKey {
 impl BlobKey {
     pub fn parse_ids(key: &str) -> Result<(ShardId, PartialBlobKey), String> {
         let err = || {
-            format!("invalid blob key format. expected either <shard_id>/<writer_id>/<part_id> or <shard_id>/<seqno>/<rollup_id>. got: {}", key)
+            format!(
+                "invalid blob key format. expected either <shard_id>/<writer_id>/<part_id> or <shard_id>/<seqno>/<rollup_id>. got: {}",
+                key
+            )
         };
         let (shard, blob) = key.split_once('/').ok_or(err())?;
         let shard_id = ShardId::from_str(shard)?;

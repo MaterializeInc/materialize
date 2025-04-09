@@ -46,7 +46,7 @@ use std::{iter, mem};
 use itertools::Itertools;
 use mz_expr::virtual_syntax::AlgExcept;
 use mz_expr::{
-    func as expr_func, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, RowSetFinishing,
+    Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, RowSetFinishing, func as expr_func,
 };
 use mz_ore::assert_none;
 use mz_ore::collections::CollectionExt;
@@ -54,25 +54,25 @@ use mz_ore::option::FallibleMapExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::str::StrExt;
 use mz_repr::adt::char::CharLength;
-use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
+use mz_repr::adt::numeric::{NUMERIC_DATUM_MAX_PRECISION, NumericMaxScale};
 use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::adt::varchar::VarCharMaxLength;
 use mz_repr::{
-    strconv, CatalogItemId, ColumnIndex, ColumnName, ColumnType, Datum, RelationDesc, RelationType,
-    RelationVersionSelector, Row, RowArena, ScalarType,
+    CatalogItemId, ColumnIndex, ColumnName, ColumnType, Datum, RelationDesc, RelationType,
+    RelationVersionSelector, Row, RowArena, ScalarType, strconv,
 };
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::Visit;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    visit, AsOf, Assignment, AstInfo, CreateWebhookSourceBody, CreateWebhookSourceCheck,
+    AsOf, Assignment, AstInfo, CreateWebhookSourceBody, CreateWebhookSourceCheck,
     CreateWebhookSourceHeader, CreateWebhookSourceSecret, CteBlock, DeleteStatement, Distinct,
     Expr, Function, FunctionArgs, HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join,
     JoinConstraint, JoinOperator, Limit, MapEntry, MutRecBlock, MutRecBlockOption,
     MutRecBlockOptionName, OrderByExpr, Query, Select, SelectItem, SelectOption, SelectOptionName,
     SetExpr, SetOperator, ShowStatement, SubscriptPosition, TableAlias, TableFactor,
     TableWithJoins, UnresolvedItemName, UpdateStatement, Value, Values, WindowFrame,
-    WindowFrameBound, WindowFrameUnits, WindowSpec,
+    WindowFrameBound, WindowFrameUnits, WindowSpec, visit,
 };
 use mz_sql_parser::ident;
 use uuid::Uuid;
@@ -83,6 +83,7 @@ use crate::names::{
     Aug, FullItemName, PartialItemName, ResolvedDataType, ResolvedItemName, SchemaSpecifier,
 };
 use crate::normalize;
+use crate::plan::PlanError::InvalidWmrRecursionLimit;
 use crate::plan::error::PlanError;
 use crate::plan::hir::{
     AbstractColumnType, AbstractExpr, AggregateExpr, AggregateFunc, AggregateWindowExpr,
@@ -92,12 +93,11 @@ use crate::plan::hir::{
 };
 use crate::plan::plan_utils::{self, GroupSizeHints, JoinSide};
 use crate::plan::scope::{Scope, ScopeItem, ScopeUngroupedColumn};
-use crate::plan::statement::{show, StatementContext, StatementDesc};
+use crate::plan::statement::{StatementContext, StatementDesc, show};
 use crate::plan::typeconv::{self, CastContext};
-use crate::plan::PlanError::InvalidWmrRecursionLimit;
 use crate::plan::{
-    literal, transform_ast, Params, PlanContext, QueryWhen, ShowCreatePlan, WebhookValidation,
-    WebhookValidationSecret,
+    Params, PlanContext, QueryWhen, ShowCreatePlan, WebhookValidation, WebhookValidationSecret,
+    literal, transform_ast,
 };
 use crate::session::vars::{self, FeatureFlag};
 
@@ -1669,7 +1669,9 @@ pub fn plan_ctes(
                 if proposed_typ.column_types.iter().any(|c| !c.nullable) {
                     // Once WMR CTEs support NOT NULL constraints, check that
                     // nullability of derived column types are compatible.
-                    sql_bail!("[internal error]: WMR CTEs do not support NOT NULL constraints on proposed column types");
+                    sql_bail!(
+                        "[internal error]: WMR CTEs do not support NOT NULL constraints on proposed column types"
+                    );
                 }
 
                 if !proposed_typ.keys.is_empty() {
@@ -2606,7 +2608,9 @@ fn plan_select_from_where(
                         expr = &map_exprs[ord.column - arity];
                     };
                     match distinct_exprs.iter().position(move |e| e == expr) {
-                        None => sql_bail!("SELECT DISTINCT ON expressions must match initial ORDER BY expressions"),
+                        None => sql_bail!(
+                            "SELECT DISTINCT ON expressions must match initial ORDER BY expressions"
+                        ),
                         Some(pos) => {
                             distinct_exprs.remove(pos);
                         }
@@ -5191,7 +5195,9 @@ fn plan_function<'a>(
         }
         Func::Scalar(impls) => {
             if over.is_some() {
-                sql_bail!("OVER clause not allowed on {name}. The OVER clause can only be used with window functions (including aggregations).");
+                sql_bail!(
+                    "OVER clause not allowed on {name}. The OVER clause can only be used with window functions (including aggregations)."
+                );
             }
             impls
         }

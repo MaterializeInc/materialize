@@ -15,10 +15,10 @@ mod schema;
 
 pub use crate::avro::decode::{Decoder, DiffPair};
 pub use crate::avro::encode::{
-    encode_datums_as_avro, encode_debezium_transaction_unchecked, get_debezium_transaction_schema,
-    AvroEncoder, AvroSchemaGenerator, DocTarget,
+    AvroEncoder, AvroSchemaGenerator, DocTarget, encode_datums_as_avro,
+    encode_debezium_transaction_unchecked, get_debezium_transaction_schema,
 };
-pub use crate::avro::schema::{parse_schema, schema_to_relationdesc, ConfluentAvroResolver};
+pub use crate::avro::schema::{ConfluentAvroResolver, parse_schema, schema_to_relationdesc};
 
 fn is_null(schema: &SchemaPieceOrNamed) -> bool {
     matches!(schema, SchemaPieceOrNamed::Piece(SchemaPiece::Null))

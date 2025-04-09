@@ -38,11 +38,11 @@ use std::sync::LazyLock;
 
 use mz_ore::collections::HashSet;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
+use mz_repr::Diff;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::numeric::{Dec, Numeric};
-use mz_repr::Diff;
-use mz_storage_types::sources::SourceData;
 use mz_storage_types::StorageDiff;
+use mz_storage_types::sources::SourceData;
 use proptest_derive::Arbitrary;
 use tracing::error;
 
@@ -63,15 +63,15 @@ pub trait IntoStateUpdateKindJson:
     fn try_from(raw: StateUpdateKindJson) -> Result<Self, Self::Error>;
 }
 impl<
-        T: Into<StateUpdateKindJson>
-            + TryFrom<StateUpdateKindJson>
-            + PartialEq
-            + Eq
-            + PartialOrd
-            + Ord
-            + Debug
-            + Clone,
-    > IntoStateUpdateKindJson for T
+    T: Into<StateUpdateKindJson>
+        + TryFrom<StateUpdateKindJson>
+        + PartialEq
+        + Eq
+        + PartialOrd
+        + Ord
+        + Debug
+        + Clone,
+> IntoStateUpdateKindJson for T
 where
     T::Error: Debug,
 {
@@ -1025,10 +1025,10 @@ mod tests {
     use mz_storage_types::sources::SourceData;
     use proptest::prelude::*;
 
+    use crate::durable::Epoch;
+    use crate::durable::objects::FenceToken;
     use crate::durable::objects::serialization::proto;
     use crate::durable::objects::state_update::{StateUpdateKind, StateUpdateKindJson};
-    use crate::durable::objects::FenceToken;
-    use crate::durable::Epoch;
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)]

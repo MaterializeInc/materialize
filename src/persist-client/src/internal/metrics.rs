@@ -24,9 +24,9 @@ use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::instrument;
 use mz_ore::metric;
 use mz_ore::metrics::{
-    raw, ComputedGauge, ComputedIntGauge, ComputedUIntGauge, Counter, DeleteOnDropCounter,
+    ComputedGauge, ComputedIntGauge, ComputedUIntGauge, Counter, DeleteOnDropCounter,
     DeleteOnDropGauge, IntCounter, MakeCollector, MetricVecExt, MetricsRegistry, UIntGauge,
-    UIntGaugeVec,
+    UIntGaugeVec, raw,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_persist::location::{
@@ -41,7 +41,7 @@ use prometheus::proto::MetricFamily;
 use prometheus::{CounterVec, Gauge, GaugeVec, Histogram, HistogramVec, IntCounterVec};
 use timely::progress::Antichain;
 use tokio_metrics::TaskMonitor;
-use tracing::{debug, info, info_span, Instrument};
+use tracing::{Instrument, debug, info, info_span};
 
 use crate::fetch::{FETCH_SEMAPHORE_COST_ADJUSTMENT, FETCH_SEMAPHORE_PERMIT_ADJUSTMENT};
 use crate::internal::paths::BlobKey;
@@ -1553,9 +1553,11 @@ impl ShardsMetrics {
             }
         }
         let shard = Arc::new(ShardMetrics::new(shard_id, name, self));
-        assert!(shards
-            .insert(shard_id.clone(), Arc::downgrade(&shard))
-            .is_none());
+        assert!(
+            shards
+                .insert(shard_id.clone(), Arc::downgrade(&shard))
+                .is_none()
+        );
         shard
     }
 

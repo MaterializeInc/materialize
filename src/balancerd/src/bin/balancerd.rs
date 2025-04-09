@@ -20,7 +20,7 @@ use std::time::Duration;
 use anyhow::Context;
 use jsonwebtoken::DecodingKey;
 use mz_balancerd::{
-    BalancerConfig, BalancerService, CancellationResolver, FronteggResolver, Resolver, BUILD_INFO,
+    BUILD_INFO, BalancerConfig, BalancerService, CancellationResolver, FronteggResolver, Resolver,
 };
 use mz_frontegg_auth::{
     Authenticator, AuthenticatorConfig, DEFAULT_REFRESH_DROP_FACTOR,
@@ -32,7 +32,7 @@ use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::TracingHandle;
 use mz_server_core::TlsCliArgs;
-use tracing::{info_span, warn, Instrument};
+use tracing::{Instrument, info_span, warn};
 
 #[derive(Debug, clap::Parser)]
 #[clap(about = "Balancer service", long_about = None)]
@@ -192,68 +192,70 @@ fn main() {
 
 pub async fn run(args: ServiceArgs, tracing_handle: TracingHandle) -> Result<(), anyhow::Error> {
     let metrics_registry = MetricsRegistry::new();
-    let (resolver, cancellation_resolver) =
-        match (args.static_resolver_addr, args.frontegg_resolver_template) {
-            (None, Some(addr_template)) => {
-                let auth = Authenticator::new(
-                    AuthenticatorConfig {
-                        admin_api_token_url: args.frontegg_api_token_url.expect("clap enforced"),
-                        decoding_key: match (args.frontegg_jwk, args.frontegg_jwk_file) {
-                            (None, Some(path)) => {
-                                let jwk = std::fs::read(&path).with_context(|| {
-                                    format!("read {path:?} for --frontegg-jwk-file")
-                                })?;
-                                DecodingKey::from_rsa_pem(&jwk)?
-                            }
-                            (Some(jwk), None) => DecodingKey::from_rsa_pem(jwk.as_bytes())?,
-                            _ => anyhow::bail!(
+    let (resolver, cancellation_resolver) = match (
+        args.static_resolver_addr,
+        args.frontegg_resolver_template,
+    ) {
+        (None, Some(addr_template)) => {
+            let auth = Authenticator::new(
+                AuthenticatorConfig {
+                    admin_api_token_url: args.frontegg_api_token_url.expect("clap enforced"),
+                    decoding_key: match (args.frontegg_jwk, args.frontegg_jwk_file) {
+                        (None, Some(path)) => {
+                            let jwk = std::fs::read(&path).with_context(|| {
+                                format!("read {path:?} for --frontegg-jwk-file")
+                            })?;
+                            DecodingKey::from_rsa_pem(&jwk)?
+                        }
+                        (Some(jwk), None) => DecodingKey::from_rsa_pem(jwk.as_bytes())?,
+                        _ => anyhow::bail!(
                             "exactly one of --frontegg-jwk or --frontegg-jwk-file must be present"
                         ),
-                        },
-                        tenant_id: None,
-                        now: mz_ore::now::SYSTEM_TIME.clone(),
-                        admin_role: args.frontegg_admin_role.expect("clap enforced"),
-                        refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
-                        refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
                     },
-                    mz_frontegg_auth::Client::environmentd_default(),
-                    &metrics_registry,
-                );
-                let cancellation_resolver_dir = args
-                    .cancellation_resolver_dir
-                    .expect("required unless static resolver present");
-                if !cancellation_resolver_dir.is_dir() {
-                    anyhow::bail!("{cancellation_resolver_dir:?} is not a directory");
-                }
-                (
-                    Resolver::Frontegg(FronteggResolver {
-                        auth,
-                        addr_template,
-                    }),
-                    CancellationResolver::Directory(cancellation_resolver_dir),
-                )
+                    tenant_id: None,
+                    now: mz_ore::now::SYSTEM_TIME.clone(),
+                    admin_role: args.frontegg_admin_role.expect("clap enforced"),
+                    refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+                    refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
+                },
+                mz_frontegg_auth::Client::environmentd_default(),
+                &metrics_registry,
+            );
+            let cancellation_resolver_dir = args
+                .cancellation_resolver_dir
+                .expect("required unless static resolver present");
+            if !cancellation_resolver_dir.is_dir() {
+                anyhow::bail!("{cancellation_resolver_dir:?} is not a directory");
             }
-            (Some(addr), None) => {
-                // As a typo-check, verify that the passed address resolves to at least one IP. This
-                // result isn't recorded anywhere: we re-resolve on each request in case DNS changes.
-                // Here only to cause startup to crash if mis-typed.
-                let mut addrs = tokio::net::lookup_host(&addr)
-                    .await
-                    .unwrap_or_else(|_| panic!("could not resolve {addr}"));
-                let Some(_resolved) = addrs.next() else {
-                    panic!("{addr} did not resolve to any addresses");
-                };
-                drop(addrs);
+            (
+                Resolver::Frontegg(FronteggResolver {
+                    auth,
+                    addr_template,
+                }),
+                CancellationResolver::Directory(cancellation_resolver_dir),
+            )
+        }
+        (Some(addr), None) => {
+            // As a typo-check, verify that the passed address resolves to at least one IP. This
+            // result isn't recorded anywhere: we re-resolve on each request in case DNS changes.
+            // Here only to cause startup to crash if mis-typed.
+            let mut addrs = tokio::net::lookup_host(&addr)
+                .await
+                .unwrap_or_else(|_| panic!("could not resolve {addr}"));
+            let Some(_resolved) = addrs.next() else {
+                panic!("{addr} did not resolve to any addresses");
+            };
+            drop(addrs);
 
-                (
-                    Resolver::Static(addr.clone()),
-                    CancellationResolver::Static(addr),
-                )
-            }
-            _ => anyhow::bail!(
+            (
+                Resolver::Static(addr.clone()),
+                CancellationResolver::Static(addr),
+            )
+        }
+        _ => anyhow::bail!(
             "exactly one of --static-resolver-addr or --frontegg-resolver-template must be present"
         ),
-        };
+    };
     let config = BalancerConfig::new(
         &BUILD_INFO,
         args.internal_http_listen_addr,

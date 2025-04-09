@@ -30,16 +30,16 @@ use mz_sql::session::vars::IsolationLevel;
 use mz_storage_types::sources::Timeline;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
-use tracing::{event, Level};
+use tracing::{Level, event};
 
+use crate::AdapterError;
 use crate::catalog::CatalogState;
+use crate::coord::Coordinator;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
 use crate::coord::timeline::TimelineContext;
-use crate::coord::Coordinator;
-use crate::optimize::dataflows::{prep_scalar_expr, ExprPrepStyle};
+use crate::optimize::dataflows::{ExprPrepStyle, prep_scalar_expr};
 use crate::session::Session;
-use crate::AdapterError;
 
 /// The timeline and timestamp context of a read.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -290,7 +290,8 @@ pub trait TimestampProvider {
                 assert!(
                     oracle_read_ts.is_some(),
                     "should get a timestamp from the oracle for linearized timeline {:?} but didn't",
-                    timeline);
+                    timeline
+                );
             }
         }
 

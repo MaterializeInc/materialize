@@ -12,11 +12,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::anyhow;
-use tokio_postgres::types::Oid;
 use tokio_postgres::Client;
+use tokio_postgres::types::Oid;
 
-use crate::desc::{PostgresColumnDesc, PostgresKeyDesc, PostgresSchemaDesc, PostgresTableDesc};
 use crate::PostgresError;
+use crate::desc::{PostgresColumnDesc, PostgresKeyDesc, PostgresSchemaDesc, PostgresTableDesc};
 
 pub async fn get_schemas(client: &Client) -> Result<Vec<PostgresSchemaDesc>, PostgresError> {
     Ok(client

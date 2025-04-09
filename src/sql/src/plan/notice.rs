@@ -18,7 +18,7 @@
 
 use std::fmt;
 
-use mz_ore::str::{separated, StrExt};
+use mz_ore::str::{StrExt, separated};
 use mz_repr::ColumnName;
 
 use crate::catalog::ObjectType;

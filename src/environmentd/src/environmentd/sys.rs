@@ -130,7 +130,7 @@ pub fn enable_termination_signal_cleanup() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-extern "C" {
+unsafe extern "C" {
     fn __llvm_profile_write_file() -> libc::c_int;
 }
 

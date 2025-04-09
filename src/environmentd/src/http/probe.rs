@@ -9,9 +9,9 @@
 
 //! Health check HTTP endpoints.
 
+use axum::Extension;
 use axum::extract::Query;
 use axum::response::IntoResponse;
-use axum::Extension;
 use futures::FutureExt;
 use http::StatusCode;
 use serde::Deserialize;

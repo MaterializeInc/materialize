@@ -87,7 +87,8 @@ disallowed-methods = [
 disallowed-macros = [
     { path = "proptest::prop_oneof", reason = "use `proptest::strategy::Union::new` instead" },
     { path = "log::log", reason = "use the macros provided by `tracing` instead (database-issues#3001)" },
-    { path = "tracing::instrument", reason = "use `mz_ore::instrument` instead" },
+    # TODO: Re-enable once <https://github.com/rust-lang/rust-clippy/issues/13521> is fixed.
+    # { path = "tracing::instrument", reason = "use `mz_ore::instrument` instead" },
 ]
 
 disallowed-types = [

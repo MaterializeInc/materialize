@@ -24,14 +24,14 @@
 
 use std::time::{Duration, SystemTime};
 
-use anyhow::{bail, Context};
-use aws_credential_types::provider::error::CredentialsError;
-use aws_credential_types::provider::ProvideCredentials;
+use anyhow::{Context, bail};
 use aws_credential_types::Credentials;
-use aws_types::region::Region;
+use aws_credential_types::provider::ProvideCredentials;
+use aws_credential_types::provider::error::CredentialsError;
 use aws_types::SdkConfig;
-use base64::prelude::BASE64_URL_SAFE_NO_PAD;
+use aws_types::region::Region;
 use base64::Engine;
+use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use chrono::NaiveDateTime;
 use thiserror::Error;
 use url::Url;
@@ -89,7 +89,7 @@ fn build_url(endpoint_url: &str) -> Result<Url, anyhow::Error> {
 
 fn sign_url(url: &mut Url, region: &Region, credentials: Credentials) -> Result<(), anyhow::Error> {
     use aws_sigv4::http_request::{
-        sign, SignableBody, SignableRequest, SignatureLocation, SigningSettings,
+        SignableBody, SignableRequest, SignatureLocation, SigningSettings, sign,
     };
     use aws_sigv4::sign::v4;
 

@@ -89,8 +89,8 @@ use mz_repr::{GlobalId, TimestampManipulation};
 use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
-use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
+use timely::progress::{Antichain, Timestamp};
 use tracing::info;
 
 /// Runs as-of selection for the given dataflows.
@@ -782,6 +782,7 @@ mod tests {
     use mz_storage_client::client::TimestamplessUpdateBuilder;
     use mz_storage_client::controller::{CollectionDescription, StorageMetadata, StorageTxn};
     use mz_storage_client::storage_collections::{CollectionFrontiers, SnapshotCursor};
+    use mz_storage_types::StorageDiff;
     use mz_storage_types::connections::inline::InlinedConnection;
     use mz_storage_types::controller::{CollectionMetadata, StorageError};
     use mz_storage_types::parameters::StorageParameters;
@@ -789,7 +790,6 @@ mod tests {
     use mz_storage_types::sources::{GenericSourceConnection, SourceDesc};
     use mz_storage_types::sources::{SourceData, SourceExportDataConfig};
     use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
-    use mz_storage_types::StorageDiff;
     use timely::progress::Timestamp as TimelyTimestamp;
 
     use super::*;

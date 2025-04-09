@@ -30,12 +30,12 @@ use std::io::{Seek, SeekFrom, Write};
 use anyhow::Error;
 use rand::random;
 
+use crate::Codec;
 use crate::decode::AvroRead;
 use crate::encode::{encode, encode_ref, encode_to_vec};
 use crate::reader::Header;
 use crate::schema::{Schema, SchemaPiece};
 use crate::types::{ToAvro, Value};
-use crate::Codec;
 
 const SYNC_SIZE: usize = 16;
 const SYNC_INTERVAL: usize = 1000 * SYNC_SIZE; // TODO: parametrize in Writer
@@ -371,9 +371,9 @@ mod tests {
 
     use serde::{Deserialize, Serialize};
 
+    use crate::Reader;
     use crate::types::Record;
     use crate::util::zig_i64;
-    use crate::Reader;
 
     use super::*;
 

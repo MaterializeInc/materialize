@@ -11,7 +11,7 @@ use std::fmt;
 use std::mem::size_of;
 use std::str::FromStr;
 
-use anyhow::{anyhow, Error};
+use anyhow::{Error, anyhow};
 use columnation::{Columnation, CopyRegion};
 use mz_lowertest::MzReflect;
 use mz_proto::{RustType, TryFromProtoError};

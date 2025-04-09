@@ -14,10 +14,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use futures::stream::BoxStream;
 use futures::StreamExt;
+use futures::stream::BoxStream;
 use kube::api::{DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
-use kube::runtime::{watcher, WatchStreamExt};
+use kube::runtime::{WatchStreamExt, watcher};
 use kube::{Api, ResourceExt};
 use maplit::btreemap;
 use mz_repr::CatalogItemId;
@@ -29,7 +29,7 @@ use mz_cloud_resources::{
     CloudResourceController, CloudResourceReader, VpcEndpointConfig, VpcEndpointEvent,
 };
 
-use crate::{util, KubernetesOrchestrator, FIELD_MANAGER};
+use crate::{FIELD_MANAGER, KubernetesOrchestrator, util};
 
 #[async_trait]
 impl CloudResourceController for KubernetesOrchestrator {

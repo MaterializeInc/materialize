@@ -8,8 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use crate::durable::traits::{UpgradeFrom, UpgradeInto};
-use crate::durable::upgrade::wire_compatible::{wire_compatible, WireCompatible};
 use crate::durable::upgrade::MigrationAction;
+use crate::durable::upgrade::wire_compatible::{WireCompatible, wire_compatible};
 use crate::durable::upgrade::{objects_v67 as v67, objects_v68 as v68};
 
 wire_compatible!(v67::GlobalId with v68::GlobalId);

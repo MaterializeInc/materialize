@@ -12,13 +12,13 @@ use crate::server::Context;
 use crate::utils::get_user_roles;
 use crate::utils::{decode_access_token, generate_access_token};
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::StatusCode,
-    Json,
 };
-use axum_extra::headers::authorization::Bearer;
-use axum_extra::headers::Authorization;
 use axum_extra::TypedHeader;
+use axum_extra::headers::Authorization;
+use axum_extra::headers::authorization::Bearer;
 use chrono::Utc;
 use jsonwebtoken::TokenData;
 use mz_frontegg_auth::{ClaimTokenType, Claims};
@@ -393,7 +393,7 @@ pub async fn handle_get_users_v3(
                     StatusCode::BAD_REQUEST,
                     Json(ErrorResponse {
                         errors: vec![
-                            "_order must be one of the following values: ASC, DESC".to_string()
+                            "_order must be one of the following values: ASC, DESC".to_string(),
                         ],
                     }),
                 )

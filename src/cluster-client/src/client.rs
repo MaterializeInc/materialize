@@ -12,7 +12,7 @@
 use std::num::NonZeroI64;
 
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use proptest::prelude::{any, Arbitrary};
+use proptest::prelude::{Arbitrary, any};
 use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};

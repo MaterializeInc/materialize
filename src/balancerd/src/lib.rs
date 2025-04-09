@@ -29,33 +29,33 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use axum::response::IntoResponse;
-use axum::{routing, Router};
+use axum::{Router, routing};
 use bytes::BytesMut;
 use domain::base::{Dname, Rtype};
 use domain::rdata::AllRecordData;
 use domain::resolv::StubResolver;
-use futures::stream::BoxStream;
 use futures::TryFutureExt;
+use futures::stream::BoxStream;
 use hyper::StatusCode;
 use hyper_util::rt::TokioIo;
 use launchdarkly_server_sdk as ld;
-use mz_build_info::{build_info, BuildInfo};
+use mz_build_info::{BuildInfo, build_info};
 use mz_dyncfg::ConfigSet;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_ore::cast::CastFrom;
 use mz_ore::id_gen::conn_id_org_uuid;
 use mz_ore::metrics::{ComputedGauge, IntCounter, IntGauge, MetricsRegistry};
 use mz_ore::netio::AsyncReady;
-use mz_ore::task::{spawn, JoinSetExt};
+use mz_ore::task::{JoinSetExt, spawn};
 use mz_ore::tracing::TracingHandle;
 use mz_ore::{metric, netio};
 use mz_pgwire_common::{
-    decode_startup, Conn, ErrorResponse, FrontendMessage, FrontendStartupMessage,
-    ACCEPT_SSL_ENCRYPTION, CONN_UUID_KEY, MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION, VERSION_3,
+    ACCEPT_SSL_ENCRYPTION, CONN_UUID_KEY, Conn, ErrorResponse, FrontendMessage,
+    FrontendStartupMessage, MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION, VERSION_3, decode_startup,
 };
 use mz_server_core::{
-    listen, Connection, ConnectionStream, ListenerHandle, ReloadTrigger, ReloadingSslContext,
-    ReloadingTlsConfig, ServeConfig, ServeDyncfg, TlsCertConfig, TlsMode,
+    Connection, ConnectionStream, ListenerHandle, ReloadTrigger, ReloadingSslContext,
+    ReloadingTlsConfig, ServeConfig, ServeDyncfg, TlsCertConfig, TlsMode, listen,
 };
 use openssl::ssl::{NameType, Ssl, SslConnector, SslMethod, SslVerifyMode};
 use prometheus::{IntCounterVec, IntGaugeVec};
@@ -73,8 +73,8 @@ use uuid::Uuid;
 
 use crate::codec::{BackendMessage, FramedConn};
 use crate::dyncfgs::{
-    has_tracing_config_update, tracing_config, INJECT_PROXY_PROTOCOL_HEADER_HTTP,
-    SIGTERM_CONNECTION_WAIT, SIGTERM_LISTEN_WAIT,
+    INJECT_PROXY_PROTOCOL_HEADER_HTTP, SIGTERM_CONNECTION_WAIT, SIGTERM_LISTEN_WAIT,
+    has_tracing_config_update, tracing_config,
 };
 
 /// Balancer build information.
@@ -558,11 +558,7 @@ impl ServerMetrics {
     }
 
     fn status_label(is_ok: bool) -> &'static str {
-        if is_ok {
-            "success"
-        } else {
-            "error"
-        }
+        if is_ok { "success" } else { "error" }
     }
 }
 
@@ -1337,7 +1333,7 @@ mod tests {
             (
                 // No -number suffix.
                 "environmentd.environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3.svc.cluster.local",
-               None,
+                None,
             ),
             (
                 // No service name.
@@ -1347,7 +1343,7 @@ mod tests {
             (
                 // Invalid UUID.
                 "environmentd.environment-8cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.svc.cluster.local",
-               None,
+                None,
             ),
         ];
         for (name, expect) in tests {

@@ -18,7 +18,7 @@ use std::{fmt, mem};
 use itertools::Itertools;
 use mz_expr::virtual_syntax::{AlgExcept, Except, IR};
 use mz_expr::visit::{Visit, VisitChildren};
-use mz_expr::{func, CollectionPlan, Id, LetRecLimit, RowSetFinishing};
+use mz_expr::{CollectionPlan, Id, LetRecLimit, RowSetFinishing, func};
 // these happen to be unchanged at the moment, but there might be additions later
 use mz_expr::AggregateFunc::{FusedWindowAggregate, WindowAggregate};
 pub use mz_expr::{
@@ -33,10 +33,10 @@ use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::*;
 use serde::{Deserialize, Serialize};
 
+use crate::plan::Params;
 use crate::plan::error::PlanError;
 use crate::plan::query::ExprContext;
 use crate::plan::typeconv::{self, CastContext};
-use crate::plan::Params;
 
 use super::plan_utils::GroupSizeHints;
 

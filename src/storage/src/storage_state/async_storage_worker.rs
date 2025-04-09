@@ -19,19 +19,19 @@ use std::sync::Arc;
 use std::thread::Thread;
 
 use differential_dataflow::lattice::Lattice;
+use mz_persist_client::Diagnostics;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::ListenEvent;
-use mz_persist_client::Diagnostics;
-use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec64;
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{GlobalId, Row, TimestampManipulation};
+use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::{
     GenericSourceConnection, IngestionDescription, KafkaSourceConnection,
     LoadGeneratorSourceConnection, MySqlSourceConnection, PostgresSourceConnection,
     SourceConnection, SourceData, SourceEnvelope, SourceTimestamp, SqlServerSource,
 };
-use mz_storage_types::StorageDiff;
 use timely::order::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};

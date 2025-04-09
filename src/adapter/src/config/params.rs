@@ -9,7 +9,7 @@
 
 use std::collections::BTreeSet;
 
-use mz_sql::session::vars::{SystemVars, Value, Var, VarInput, ENABLE_LAUNCHDARKLY};
+use mz_sql::session::vars::{ENABLE_LAUNCHDARKLY, SystemVars, Value, Var, VarInput};
 
 /// A struct that defines the system parameters that should be synchronized
 pub struct SynchronizedParameters {

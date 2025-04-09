@@ -83,8 +83,8 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
-use futures::future::{BoxFuture, FutureExt, LocalBoxFuture};
 use futures::StreamExt;
+use futures::future::{BoxFuture, FutureExt, LocalBoxFuture};
 use http::Uri;
 use ipnet::IpNet;
 use itertools::{Either, Itertools};
@@ -104,11 +104,11 @@ use mz_catalog::memory::objects::{
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::as_of_selection;
 use mz_compute_client::controller::error::InstanceMissing;
+use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
-use mz_compute_types::ComputeInstanceId;
-use mz_controller::clusters::{ClusterConfig, ClusterEvent, ClusterStatus, ProcessId};
 use mz_controller::ControllerConfig;
+use mz_controller::clusters::{ClusterConfig, ClusterEvent, ClusterStatus, ProcessId};
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
 use mz_expr::{MapFilterProject, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_license_keys::ValidatedLicenseKey;
@@ -118,7 +118,7 @@ use mz_ore::channel::trigger::Trigger;
 use mz_ore::future::TimeoutError;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
-use mz_ore::task::{spawn, JoinHandle};
+use mz_ore::task::{JoinHandle, spawn};
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_ore::url::SensitiveUrl;
@@ -145,21 +145,21 @@ use mz_sql::plan::{
 };
 use mz_sql::session::user::User;
 use mz_sql::session::vars::SystemVars;
-use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::ExplainStage;
+use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::client::TableData;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
-use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
 use mz_storage_types::connections::Connection as StorageConnection;
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::sinks::{S3SinkFormat, StorageSinkDesc};
-use mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC;
 use mz_storage_types::sources::Timeline;
+use mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC;
+use mz_timestamp_oracle::WriteTimestamp;
 use mz_timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
 };
-use mz_timestamp_oracle::WriteTimestamp;
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
 use serde::Serialize;
@@ -167,9 +167,9 @@ use thiserror::Error;
 use timely::progress::{Antichain, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
-use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
+use tokio::sync::{OwnedMutexGuard, mpsc, oneshot, watch};
 use tokio::time::{Interval, MissedTickBehavior};
-use tracing::{debug, info, info_span, span, warn, Instrument, Level, Span};
+use tracing::{Instrument, Level, Span, debug, info, info_span, span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
@@ -195,14 +195,14 @@ use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::{DispatchGuard, OptimizerTrace};
 use crate::metrics::Metrics;
 use crate::optimize::dataflows::{
-    dataflow_import_id_bundle, ComputeInstanceSnapshot, DataflowBuilder,
+    ComputeInstanceSnapshot, DataflowBuilder, dataflow_import_id_bundle,
 };
 use crate::optimize::{self, Optimize, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::{StatementEndedExecutionReason, StatementLifecycleEvent};
 use crate::util::{ClientTransmitter, ResultExt};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
-use crate::{flags, AdapterNotice, ReadHolds};
+use crate::{AdapterNotice, ReadHolds, flags};
 
 pub(crate) mod id_bundle;
 pub(crate) mod in_memory_oracle;
@@ -1302,7 +1302,9 @@ impl Drop for ExecuteContextExtra {
             // Note: the impact when this error hits
             // is that the statement will never be marked
             // as finished in the statement log.
-            soft_panic_or_log!("execute context for statement {statement_uuid:?} dropped without being properly retired.");
+            soft_panic_or_log!(
+                "execute context for statement {statement_uuid:?} dropped without being properly retired."
+            );
         }
     }
 }
@@ -2264,7 +2266,9 @@ impl Coordinator {
         info!("startup: coordinator init: bootstrap: generate builtin updates beginning");
 
         if self.controller.read_only() {
-            info!("coordinator init: bootstrap: stashing builtin table updates while in read-only mode");
+            info!(
+                "coordinator init: bootstrap: stashing builtin table updates while in read-only mode"
+            );
 
             // TODO(jkosh44) Optimize deserializing the audit log in read-only mode.
             let audit_join_start = Instant::now();
@@ -2325,7 +2329,9 @@ impl Coordinator {
 
             spawn(|| "cleanup-orphaned-secrets", async move {
                 if read_only {
-                    info!("coordinator init: not cleaning up orphaned secrets while in read-only mode");
+                    info!(
+                        "coordinator init: not cleaning up orphaned secrets while in read-only mode"
+                    );
                     return;
                 }
                 info!("coordinator init: cleaning up orphaned secrets");
@@ -2377,7 +2383,9 @@ impl Coordinator {
             .instrument(info_span!("coord::bootstrap::final"))
             .await;
 
-        debug!("startup: coordinator init: bootstrap: announcing completion of initialization to controller");
+        debug!(
+            "startup: coordinator init: bootstrap: announcing completion of initialization to controller"
+        );
         // Announce the completion of initialization.
         self.controller.initialization_complete();
 
@@ -2385,7 +2393,8 @@ impl Coordinator {
         self.bootstrap_introspection_subscribes().await;
 
         info!(
-            "startup: coordinator init: bootstrap: migrate builtin tables in read-only mode complete in {:?}", final_steps_start.elapsed()
+            "startup: coordinator init: bootstrap: migrate builtin tables in read-only mode complete in {:?}",
+            final_steps_start.elapsed()
         );
 
         info!(

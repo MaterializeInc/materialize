@@ -21,11 +21,11 @@ use prost::bytes::{BufMut, BytesMut};
 use sha2::{Digest, Sha256};
 use tokio::fs::File;
 use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
-use tokio_postgres::types::{to_sql_checked, Format, IsNull, ToSql, Type};
+use tokio_postgres::types::{Format, IsNull, ToSql, Type, to_sql_checked};
 
 use crate::crypto::AsyncAesDecrypter;
 use crate::destination::{
-    config, ColumnMetadata, FIVETRAN_SYSTEM_COLUMN_DELETE, FIVETRAN_SYSTEM_COLUMN_SYNCED,
+    ColumnMetadata, FIVETRAN_SYSTEM_COLUMN_DELETE, FIVETRAN_SYSTEM_COLUMN_SYNCED, config,
 };
 use crate::error::{Context, OpError, OpErrorKind};
 use crate::fivetran_sdk::{Compression, Encryption, Table, TruncateRequest, WriteBatchRequest};

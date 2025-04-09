@@ -13,6 +13,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Context;
+use cargo_gazelle::BazelBuildFile;
 use cargo_gazelle::args::Args;
 use cargo_gazelle::config::{CrateConfig, GlobalConfig};
 use cargo_gazelle::context::CrateContext;
@@ -20,7 +21,6 @@ use cargo_gazelle::header::BazelHeader;
 use cargo_gazelle::targets::{
     CargoBuildScript, ExtractCargoLints, RustBinary, RustLibrary, RustTarget, RustTest,
 };
-use cargo_gazelle::BazelBuildFile;
 use cargo_toml::Manifest;
 use clap::Parser;
 use guppy::graph::{BuildTargetId, PackageMetadata};

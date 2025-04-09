@@ -12,12 +12,12 @@ use std::fmt;
 use dec::{OrderedDecimal, Rounding};
 use mz_lowertest::MzReflect;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
-use mz_repr::{strconv, ColumnType, ScalarType};
+use mz_repr::{ColumnType, ScalarType, strconv};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use crate::scalar::func::EagerUnaryFunc;
 use crate::EvalError;
+use crate::scalar::func::EagerUnaryFunc;
 
 sqlfunc!(
     #[sqlname = "-"]

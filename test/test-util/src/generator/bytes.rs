@@ -7,8 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use rand::distributions::Alphanumeric;
 use rand::Rng;
+use rand::distributions::Alphanumeric;
 
 /// Generates and returns bytes of length `len`.
 pub fn generate_bytes(len: usize) -> Vec<u8> {

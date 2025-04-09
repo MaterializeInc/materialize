@@ -41,9 +41,9 @@ use mz_repr::optimize::OverrideFrom;
 use mz_repr::{Datum, GlobalId, Row};
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::{Params, Plan, SubscribePlan};
-use mz_sql::session::user::{RoleMetadata, MZ_SYSTEM_ROLE_ID};
+use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, RoleMetadata};
 use mz_storage_client::controller::{IntrospectionType, StorageWriteOp};
-use tracing::{info, Span};
+use tracing::{Span, info};
 
 use crate::coord::{
     Coordinator, IntrospectionSubscribeFinish, IntrospectionSubscribeOptimizeMir,
@@ -51,7 +51,7 @@ use crate::coord::{
     StageResult, Staged,
 };
 use crate::optimize::Optimize;
-use crate::{optimize, AdapterError, ExecuteResponse};
+use crate::{AdapterError, ExecuteResponse, optimize};
 
 // State tracked about an active introspection subscribe.
 #[derive(Derivative)]

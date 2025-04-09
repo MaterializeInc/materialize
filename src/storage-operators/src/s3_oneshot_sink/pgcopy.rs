@@ -15,7 +15,7 @@ use mz_aws_util::s3_uploader::{
 use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
 use mz_ore::task::JoinHandleExt;
-use mz_pgcopy::{encode_copy_format, encode_copy_format_header, CopyFormatParams};
+use mz_pgcopy::{CopyFormatParams, encode_copy_format, encode_copy_format_header};
 use mz_repr::{GlobalId, RelationDesc, Row};
 use mz_storage_types::sinks::s3_oneshot_sink::S3KeyManager;
 use mz_storage_types::sinks::{S3SinkFormat, S3UploadInfo};

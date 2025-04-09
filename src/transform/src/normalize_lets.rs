@@ -24,7 +24,7 @@
 //! be used to renumber bindings in an expression starting from a provided
 //! `IdGen`, which is used to prepare distinct expressions for inlining.
 
-use mz_expr::{visit::Visit, MirRelationExpr};
+use mz_expr::{MirRelationExpr, visit::Visit};
 use mz_ore::assert_none;
 use mz_ore::{id_gen::IdGen, stack::RecursionLimitError};
 use mz_repr::optimize::OptimizerFeatures;

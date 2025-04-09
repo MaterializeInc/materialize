@@ -42,21 +42,21 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
+use crate::EvalError;
+use crate::WindowFrameBound::{
+    CurrentRow, OffsetFollowing, OffsetPreceding, UnboundedFollowing, UnboundedPreceding,
+};
+use crate::WindowFrameUnits::{Groups, Range, Rows};
 use crate::explain::{HumanizedExpr, HumanizerMode};
 use crate::relation::proto_aggregate_func::{
     self, ProtoColumnOrders, ProtoFusedValueWindowFunc, ProtoFusedWindowAggregate,
 };
 use crate::relation::proto_table_func::ProtoTabletizedScalar;
 use crate::relation::{
-    compare_columns, proto_table_func, ColumnOrder, ProtoAggregateFunc, ProtoTableFunc,
-    WindowFrame, WindowFrameBound, WindowFrameUnits,
+    ColumnOrder, ProtoAggregateFunc, ProtoTableFunc, WindowFrame, WindowFrameBound,
+    WindowFrameUnits, compare_columns, proto_table_func,
 };
 use crate::scalar::func::{add_timestamp_months, jsonb_stringify};
-use crate::EvalError;
-use crate::WindowFrameBound::{
-    CurrentRow, OffsetFollowing, OffsetPreceding, UnboundedFollowing, UnboundedPreceding,
-};
-use crate::WindowFrameUnits::{Groups, Range, Rows};
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.relation.func.rs"));
 
@@ -2291,7 +2291,7 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
                     None => {
                         return Err(TryFromProtoError::MissingField(
                             "ProtoLagLead::lag_lead".into(),
-                        ))
+                        ));
                     }
                 },
                 ignore_nulls: pll.ignore_nulls,

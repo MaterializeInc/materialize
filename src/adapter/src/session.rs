@@ -35,12 +35,12 @@ use mz_sql::ast::{AstInfo, Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, QueryWhen, StatementDesc};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::{
-    RoleMetadata, User, INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, SYSTEM_USER,
+    INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, RoleMetadata, SYSTEM_USER, User,
 };
 use mz_sql::session::vars::IsolationLevel;
 pub use mz_sql::session::vars::{
-    EndTransactionAction, SessionVars, Var, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
-    SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
+    DEFAULT_DATABASE_NAME, EndTransactionAction, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION,
+    SERVER_PATCH_VERSION, SessionVars, Var,
 };
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_storage_client::client::TableData;
@@ -51,17 +51,17 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::watch;
 use uuid::Uuid;
 
+use crate::AdapterNotice;
 use crate::catalog::CatalogState;
 use crate::client::RecordFirstRowStream;
+use crate::coord::ExplainContext;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::in_memory_oracle::InMemoryTimestampOracle;
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::statement_logging::PreparedStatementLoggingInfo;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
-use crate::coord::ExplainContext;
 use crate::error::AdapterError;
 use crate::metrics::{Metrics, SessionMetrics};
-use crate::AdapterNotice;
 
 const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
 
@@ -334,7 +334,7 @@ impl<T: TimestampManipulation> Session<T> {
             notices_tx,
             notices_rx,
             next_transaction_id: 0,
-            secret_key: rand::thread_rng().gen(),
+            secret_key: rand::thread_rng().r#gen(),
             external_metadata_rx,
             qcell_owner: QCellOwner::new(),
             session_oracles: BTreeMap::new(),
@@ -1236,7 +1236,7 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                         _ => return Err(AdapterError::ReadOnlyTransaction),
                     },
                     TransactionOps::Subscribe => {
-                        return Err(AdapterError::SubscribeOnlyTransaction)
+                        return Err(AdapterError::SubscribeOnlyTransaction);
                     }
                     TransactionOps::Writes(txn_writes) => match add_ops {
                         TransactionOps::Writes(mut add_writes) => {
@@ -1254,7 +1254,7 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                         }
                     },
                     TransactionOps::SingleStatement { .. } => {
-                        return Err(AdapterError::SingleStatementTransaction)
+                        return Err(AdapterError::SingleStatementTransaction);
                     }
                     TransactionOps::DDL {
                         ops: og_ops,

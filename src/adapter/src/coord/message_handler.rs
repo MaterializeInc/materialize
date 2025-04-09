@@ -10,14 +10,14 @@
 //! Logic for processing [`Coordinator`] messages. The [`Coordinator`] receives
 //! messages from various sources (ex: controller, clients, background tasks, etc).
 
-use std::collections::{btree_map, BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, btree_map};
 use std::time::{Duration, Instant};
 
 use futures::FutureExt;
 use maplit::btreemap;
 use mz_catalog::memory::objects::ClusterReplicaProcessStatus;
-use mz_controller::clusters::{ClusterEvent, ClusterStatus};
 use mz_controller::ControllerResponse;
+use mz_controller::clusters::{ClusterEvent, ClusterStatus};
 use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_ore::option::OptionExt;
@@ -30,9 +30,9 @@ use mz_sql::pure::PurifiedStatement;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::controller::CollectionMetadata;
 use opentelemetry::trace::TraceContextExt;
-use rand::{rngs, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs};
 use serde_json::json;
-use tracing::{event, info_span, warn, Instrument, Level};
+use tracing::{Instrument, Level, event, info_span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};

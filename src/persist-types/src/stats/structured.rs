@@ -16,8 +16,8 @@ use proptest_derive::Arbitrary;
 use serde::ser::{SerializeMap, SerializeStruct};
 
 use crate::stats::{
-    any_columnar_stats, proto_dyn_stats, ColumnStatKinds, ColumnStats, ColumnarStats, DynStats,
-    OptionStats, ProtoStructStats, TrimStats,
+    ColumnStatKinds, ColumnStats, ColumnarStats, DynStats, OptionStats, ProtoStructStats,
+    TrimStats, any_columnar_stats, proto_dyn_stats,
 };
 
 /// Statistics about a column of a struct type with a uniform schema (the same
@@ -171,7 +171,7 @@ mod tests {
 
     use super::*;
     use crate::stats::primitive::PrimitiveStats;
-    use crate::stats::{trim_to_budget, BytesStats, ColumnNullStats, ColumnStatKinds};
+    use crate::stats::{BytesStats, ColumnNullStats, ColumnStatKinds, trim_to_budget};
 
     #[mz_ore::test]
     fn struct_trim_to_budget() {
