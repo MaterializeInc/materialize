@@ -364,6 +364,8 @@ impl Listeners {
             .await
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn serve_with_trigger(
         self,
         config: TestHarness,
@@ -1090,6 +1092,8 @@ pub async fn get_explain_timestamp_determination(
 ///
 /// WARNING: If multiple tests use this, and the tests are run in parallel, then make sure the test
 /// use different postgres tables.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub async fn create_postgres_source_with_table<'a>(
     server: &TestServer,
     mz_client: &Client,
@@ -1281,6 +1285,8 @@ pub fn auth_with_ws(
     )
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub fn auth_with_ws_impl(
     ws: &mut WebSocket<MaybeTlsStream<TcpStream>>,
     auth_message: Message,

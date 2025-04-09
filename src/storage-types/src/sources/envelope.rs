@@ -202,6 +202,8 @@ impl RustType<ProtoUpsertStyle> for UpsertStyle {
 /// Returns an error if it detects a common columns between the two relations that has the same
 /// name but a different type, if a key column is missing from the value, and if the key relation
 /// has a column with no name.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn match_key_indices(
     key_desc: &RelationDesc,
     value_desc: &RelationDesc,
@@ -261,6 +263,8 @@ impl UnplannedSourceEnvelope {
 
     /// Computes the output relation of this envelope when applied on top of the decoded key and
     /// value relation desc
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn desc(
         self,
         key_desc: Option<RelationDesc>,

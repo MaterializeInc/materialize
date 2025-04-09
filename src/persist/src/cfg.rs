@@ -80,6 +80,8 @@ impl BlobConfig {
     }
 
     /// Parses a [Blob] config from a uri string.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn try_from(
         url: &SensitiveUrl,
         knobs: Box<dyn BlobKnobs>,
@@ -229,6 +231,8 @@ impl ConsensusConfig {
     }
 
     /// Parses a [Consensus] config from a uri string.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn try_from(
         url: &SensitiveUrl,
         knobs: Box<dyn PostgresClientKnobs>,

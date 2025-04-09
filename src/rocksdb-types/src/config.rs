@@ -181,6 +181,8 @@ impl Default for RocksDBTuningParameters {
 
 impl RocksDBTuningParameters {
     /// Build a `RocksDBTuningParameters` from strings and values from LD parameters.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn from_parameters(
         compaction_style: CompactionStyle,
         optimize_compaction_memtable_budget: usize,
@@ -249,6 +251,8 @@ pub enum CompactionStyle {
 impl FromStr for CompactionStyle {
     type Err = anyhow::Error;
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = UncasedStr::new(s);
         if s == "level" {
@@ -283,6 +287,8 @@ pub enum CompressionType {
 impl FromStr for CompressionType {
     type Err = anyhow::Error;
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = UncasedStr::new(s);
         if s == "zstd" {

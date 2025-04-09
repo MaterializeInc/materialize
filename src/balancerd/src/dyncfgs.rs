@@ -112,7 +112,9 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
 /// Not all ConfigSet values can be defaulted with this
 /// function. An error will be returned if a key does
 /// not accept default overrides, or if there is a value
-/// parsing error..
+/// parsing error.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub(crate) fn set_defaults(
     config_set: &ConfigSet,
     default_config: Vec<(String, String)>,

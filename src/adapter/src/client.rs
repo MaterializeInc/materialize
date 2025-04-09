@@ -354,6 +354,8 @@ Issue a SQL query to get started. Need help?
 
     /// Executes a single SQL statement that returns rows as the
     /// `mz_support` user.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn support_execute_one(
         &self,
         sql: &str,
@@ -406,6 +408,8 @@ Issue a SQL query to get started. Need help?
     }
 
     /// Get a metadata and a channel that can be used to append to a webhook source.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn get_webhook_appender(
         &self,
         database: String,

@@ -2243,6 +2243,8 @@ where
         Ok(())
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn alter_table_desc(
         &self,
         existing_collection: GlobalId,

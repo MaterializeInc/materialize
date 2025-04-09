@@ -145,6 +145,8 @@ pub enum Type {
 /// This is a very, very lightweight semantic analysis phase for Rust code. Our
 /// main goal is to determine the type of each field of a struct or enum
 /// variant, so we know how to visit it. See [`Type`] for details.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub(crate) fn analyze(syn_items: &[syn::DeriveInput]) -> Result<Ir> {
     let mut items = BTreeMap::new();
     for syn_item in syn_items {
@@ -196,6 +198,8 @@ pub(crate) fn analyze(syn_items: &[syn::DeriveInput]) -> Result<Ir> {
     Ok(Ir { items, generics })
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn validate_fields<'a, I>(items: &BTreeMap<String, Item>, fields: I) -> Result<()>
 where
     I: IntoIterator<Item = &'a Field>,
@@ -226,6 +230,8 @@ fn analyze_fields(fields: &syn::Fields) -> Result<Vec<Field>> {
         .collect()
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn analyze_generics(generics: &syn::Generics) -> Result<Vec<ItemGeneric>> {
     let mut out = vec![];
     for g in generics.params.iter() {
@@ -251,6 +257,8 @@ fn analyze_generics(generics: &syn::Generics) -> Result<Vec<ItemGeneric>> {
     Ok(out)
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn analyze_generic_bounds<'a, I>(bounds: I) -> Result<Vec<String>>
 where
     I: IntoIterator<Item = &'a syn::TypeParamBound>,
@@ -271,6 +279,8 @@ where
     Ok(out)
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn analyze_type(ty: &syn::Type) -> Result<Type> {
     match ty {
         syn::Type::Path(syn::TypePath { qself: None, path }) => match path.segments.len() {

@@ -145,6 +145,8 @@ impl MemBlobCore {
         Ok(bytes)
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn restore(&mut self, key: &str) -> Result<(), ExternalError> {
         match self.dataz.get_mut(key) {
             None => Err(
@@ -284,6 +286,8 @@ impl Consensus for MemConsensus {
         Ok(values.last().cloned())
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn compare_and_set(
         &self,
         key: &str,
@@ -336,6 +340,8 @@ impl Consensus for MemConsensus {
         Self::scan_store(&store, key, from, limit)
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
         // Yield to maximize our chances for getting interesting orderings.
         let () = yield_now().await;

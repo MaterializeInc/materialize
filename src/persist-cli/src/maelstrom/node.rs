@@ -50,6 +50,8 @@ pub trait Service: Sized + Send + Sync {
 
 /// Runs the RPC loop, accepting Maelstrom workload requests, issuing responses,
 /// and communicating with Maelstrom services.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub fn run<R, W, S>(args: Args, read: R, write: W) -> Result<(), anyhow::Error>
 where
     R: BufRead,
@@ -306,6 +308,8 @@ impl Handle {
     /// Returns a [ShardId] for this Maelstrom run.
     ///
     /// Uses Maelstrom services to ensure all nodes end up with the same id.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn maybe_init_shard_id(&self) -> Result<ShardId, MaelstromError> {
         let proposal = ShardId::new();
         let key = "SHARD";

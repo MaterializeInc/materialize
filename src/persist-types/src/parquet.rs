@@ -190,6 +190,8 @@ pub fn encode_arrays<W: Write + Send>(
 }
 
 /// Decodes a [`RecordBatch`] from the provided reader.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub fn decode_arrays<R: ChunkReader + 'static>(
     r: R,
 ) -> Result<ParquetRecordBatchReader, anyhow::Error> {

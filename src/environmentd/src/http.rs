@@ -755,6 +755,8 @@ async fn http_auth(
     Ok(next.run(req).await)
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 async fn init_ws(
     WsState {
         frontegg,

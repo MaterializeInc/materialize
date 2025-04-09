@@ -122,6 +122,8 @@ impl Authenticator {
     }
 
     /// Create an [`Authenticator`] from [`FronteggCliArgs`].
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn from_args(
         args: FronteggCliArgs,
         registry: &MetricsRegistry,

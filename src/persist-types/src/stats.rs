@@ -95,6 +95,8 @@ impl ColumnarStats {
     }
 
     /// Helper method to "downcast" to stats of type `T`.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn try_as_stats<'a, T, F>(&'a self, map: F) -> Result<T, anyhow::Error>
     where
         F: FnOnce(&'a ColumnStatKinds) -> Result<T, anyhow::Error>,
@@ -109,6 +111,8 @@ impl ColumnarStats {
     }
 
     /// Helper method to "downcast" [`OptionStats<T>`].
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn try_as_option_stats<'a, T, F>(&'a self, map: F) -> Result<OptionStats<T>, anyhow::Error>
     where
         F: FnOnce(&'a ColumnStatKinds) -> Result<T, anyhow::Error>,
@@ -127,6 +131,8 @@ impl ColumnarStats {
 
     /// Tries to "downcast" this instance of [`ColumnarStats`] to an [`OptionStats<StructStats>`]
     /// if the inner statistics are nullable and for a structured column.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn try_as_optional_struct(&self) -> Result<OptionStats<&StructStats>, anyhow::Error> {
         self.try_as_option_stats(|values| match values {
             ColumnStatKinds::Struct(inner) => Ok(inner),
@@ -136,6 +142,8 @@ impl ColumnarStats {
 
     /// Tries to "downcast" this instance of [`ColumnarStats`] to an [`OptionStats<BytesStats>`]
     /// if the inner statistics are nullable and for a column of bytes.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn try_as_optional_bytes(&self) -> Result<OptionStats<&BytesStats>, anyhow::Error> {
         self.try_as_option_stats(|values| match values {
             ColumnStatKinds::Bytes(inner) => Ok(inner),
@@ -145,6 +153,8 @@ impl ColumnarStats {
 
     /// Tries to "downcast" this instance of [`ColumnarStats`] to a [`PrimitiveStats<String>`]
     /// if the inner statistics are nullable and for a structured column.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn try_as_string(&self) -> Result<&PrimitiveStats<String>, anyhow::Error> {
         self.try_as_stats(|values| match values {
             ColumnStatKinds::Primitive(PrimitiveStatsVariants::String(inner)) => Ok(inner),

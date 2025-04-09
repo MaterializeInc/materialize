@@ -124,6 +124,8 @@ pub(crate) struct RestoreBlobArgs {
 }
 
 /// Runs the given read-write admin command.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
     match command.command {
         Command::ForceCompaction(args) => {
@@ -553,6 +555,8 @@ async fn make_machine(
     .await
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 async fn make_typed_machine<K, V, T, D>(
     cfg: &PersistConfig,
     consensus: Arc<dyn Consensus>,

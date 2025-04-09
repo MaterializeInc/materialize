@@ -1032,6 +1032,8 @@ impl<T, E> ContextCreationErrorExt<T> for Result<T, E>
 where
     ContextCreationError: From<E>,
 {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn check_ssh_status<C>(
         self,
         cx: &TunnelingClientContext<C>,
@@ -1045,6 +1047,8 @@ where
         })
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn add_context(self, msg: &'static str) -> Result<T, ContextCreationError> {
         self.map_err(|e| {
             let e = ContextCreationError::from(e);
@@ -1069,6 +1073,8 @@ where
 }
 
 impl From<CsrConnectError> for ContextCreationError {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn from(csr: CsrConnectError) -> ContextCreationError {
         use ContextCreationError::*;
 

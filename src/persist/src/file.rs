@@ -97,6 +97,8 @@ impl Blob for FileBlob {
         Ok(Some(SegmentedBytes::from(buf)))
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn list_keys_and_metadata(
         &self,
         key_prefix: &str,
@@ -154,6 +156,8 @@ impl Blob for FileBlob {
         Ok(())
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn set(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
         let file_path = self.blob_path(&FileBlob::replace_forward_slashes(key));
 
@@ -192,6 +196,8 @@ impl Blob for FileBlob {
         Ok(())
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
         let file_path = self.blob_path(&FileBlob::replace_forward_slashes(key));
         // TODO: strict correctness requires that we fsync the parent directory
@@ -249,6 +255,8 @@ impl Blob for FileBlob {
         Ok(Some(usize::cast_from(size_bytes)))
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn restore(&self, key: &str) -> Result<(), ExternalError> {
         let file_path = self.blob_path(&FileBlob::replace_forward_slashes(key));
 

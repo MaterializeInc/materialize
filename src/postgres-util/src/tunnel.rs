@@ -205,6 +205,8 @@ impl Config {
         .await
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn address(&self) -> Result<(&str, u16), PostgresError> {
         match (self.inner.get_hosts(), self.inner.get_ports()) {
             ([Host::Tcp(host)], [port]) => Ok((host, *port)),
@@ -246,6 +248,8 @@ impl Config {
         }
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn connect_internal<F>(
         &self,
         task_name: &str,

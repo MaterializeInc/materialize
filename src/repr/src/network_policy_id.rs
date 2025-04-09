@@ -56,6 +56,8 @@ impl NetworkPolicyId {
 impl FromStr for NetworkPolicyId {
     type Err = Error;
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         fn parse_u64(s: &str) -> Result<u64, Error> {
             if s.len() < 2 {

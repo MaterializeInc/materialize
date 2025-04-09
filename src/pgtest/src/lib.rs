@@ -112,6 +112,8 @@ struct PgConn {
 }
 
 impl PgConn {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn new<'a>(
         addr: &str,
         user: &'a str,
@@ -139,12 +141,16 @@ impl PgConn {
         Ok(conn)
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn send<F: FnOnce(&mut BytesMut)>(&mut self, f: F) -> anyhow::Result<()> {
         self.send_buf.clear();
         f(&mut self.send_buf);
         self.stream.write_all(&self.send_buf)?;
         Ok(())
     }
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn until(
         &mut self,
         until: Vec<&str>,
@@ -323,6 +329,8 @@ impl PgConn {
     /// Returns the PostgreSQL message format and the `Message`.
     ///
     /// An error is returned if a new message is not received within the timeout.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn recv(&mut self) -> anyhow::Result<(char, Message)> {
         let mut buf = [0; 1024];
         let until = Instant::now();

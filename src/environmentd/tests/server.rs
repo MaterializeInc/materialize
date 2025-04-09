@@ -1176,6 +1176,8 @@ fn test_storage_usage_collection_interval() {
     /// Waits for the next storage collection to occur, then returns the
     /// timestamp at which the collection occurred. The timestamp of the last
     /// collection must be provided
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn wait_for_next_collection(
         client: &mut postgres::Client,
         last_timestamp: DateTime<Utc>,
@@ -2785,6 +2787,8 @@ fn test_cancel_ws() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 async fn smoketest_webhook_source() {
     let server = test_util::TestHarness::default().start().await;
     let client = server.connect().await.unwrap();
@@ -3090,7 +3094,10 @@ fn test_github_20262() {
 // Test that the server properly handles cancellation requests of read-then-write queries.
 // See database-issues#6134.
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+#[cfg_attr(miri, ignore)]
+// unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn test_cancel_read_then_write() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()

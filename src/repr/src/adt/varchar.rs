@@ -101,6 +101,8 @@ impl fmt::Display for InvalidVarCharMaxLengthError {
 
 impl Error for InvalidVarCharMaxLengthError {}
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub fn format_str(
     s: &str,
     length: Option<VarCharMaxLength>,

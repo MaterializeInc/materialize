@@ -200,6 +200,8 @@ pub async fn fetch_latest_state(args: &StateArgs) -> Result<impl serde::Serializ
 
 /// Fetches a state rollup of a given shard. If the seqno is not provided, choose the latest;
 /// if the rollup id is not provided, discover it by inspecting state.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub async fn fetch_state_rollup(
     args: &StateRollupArgs,
 ) -> Result<impl serde::Serialize, anyhow::Error> {
@@ -224,6 +226,8 @@ pub async fn fetch_state_rollup(
 }
 
 /// Fetches the state from all known rollups of a given shard
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub async fn fetch_state_rollups(args: &StateArgs) -> Result<impl serde::Serialize, anyhow::Error> {
     let shard_id = args.shard_id();
     let state_versions = args.open().await?;

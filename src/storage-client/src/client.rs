@@ -431,6 +431,8 @@ pub enum Status {
 impl std::str::FromStr for Status {
     type Err = anyhow::Error;
     /// Keep in sync with [`Status::to_str`].
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s {
             "starting" => Status::Starting,

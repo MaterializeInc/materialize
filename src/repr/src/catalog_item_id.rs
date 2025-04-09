@@ -67,6 +67,8 @@ impl CatalogItemId {
 impl FromStr for CatalogItemId {
     type Err = Error;
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn from_str(mut s: &str) -> Result<Self, Self::Err> {
         if s.len() < 2 {
             return Err(anyhow!("couldn't parse id {}", s));

@@ -70,6 +70,8 @@ pub fn pack_mysql_row(
 
 // TODO(guswynn|roshan): This function has various `.to_string()` and `format!` calls that should
 // use a shared allocation if possible.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn pack_val_as_datum(
     value: Value,
     col_desc: &MySqlColumnDesc,
@@ -334,6 +336,8 @@ fn pack_val_as_datum(
     Ok(())
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn check_char_length(
     length: Option<u32>,
     val: &str,

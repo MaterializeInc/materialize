@@ -270,6 +270,8 @@ impl Listeners {
     ///
     /// Returns a handle to the server once it is fully booted.
     #[instrument(name = "environmentd::serve")]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn serve(self, config: Config) -> Result<Server, AdapterError> {
         let serve_start = Instant::now();
         info!("startup: envd serve: beginning");
@@ -856,6 +858,8 @@ impl Listeners {
     }
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn get_ld_value<V>(
     name: &str,
     remote_system_parameters: &Option<BTreeMap<String, String>>,

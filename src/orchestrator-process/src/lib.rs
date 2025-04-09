@@ -547,6 +547,8 @@ impl OrchestratorWorker {
         }
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn fetch_service_metrics(
         &mut self,
         id: &str,
@@ -751,6 +753,8 @@ impl OrchestratorWorker {
         Ok(())
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn list_services(&self) -> Result<Vec<String>, anyhow::Error> {
         let mut services = vec![];
         let namespace_prefix = format!("{}-", self.config.namespace);

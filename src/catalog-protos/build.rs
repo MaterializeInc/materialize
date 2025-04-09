@@ -28,6 +28,8 @@ struct ProtoHash {
 const PROTO_DIRECTORY: &str = "protos";
 const PROTO_HASHES: &str = "protos/hashes.json";
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn main() -> anyhow::Result<()> {
     println!("cargo:rerun-if-changed={PROTO_DIRECTORY}");
 

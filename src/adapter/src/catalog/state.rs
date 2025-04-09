@@ -991,6 +991,8 @@ impl CatalogState {
 
     /// Parses the given SQL string into a `CatalogItem`.
     #[mz_ore::instrument]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub(crate) fn parse_item(
         &self,
         global_id: GlobalId,

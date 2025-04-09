@@ -676,6 +676,8 @@ pub fn main() {
     }
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn run(mut args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::install_enhanced_handler();
     let envd_start = Instant::now();

@@ -64,6 +64,8 @@ impl ArrowReader {
     /// columns, perform some lightweight casting, and matching not on column name but column
     /// position.
     /// TODO(cf2): Allow specifying an optional `arrow::Schema` for extra metadata.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn new(desc: &RelationDesc, array: StructArray) -> Result<Self, anyhow::Error> {
         let inner_columns = array.columns();
         let desc_columns = desc.typ().columns();
@@ -113,6 +115,8 @@ impl ArrowReader {
     }
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn scalar_type_and_array_to_reader(
     scalar_type: &ScalarType,
     array: Arc<dyn Array>,
@@ -448,6 +452,8 @@ enum ColReader {
 }
 
 impl ColReader {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn read(&self, idx: usize, packer: &mut RowPacker) -> Result<(), anyhow::Error> {
         let datum = match self {
             ColReader::Boolean(array) => array.is_valid(idx).then(|| array.value(idx)).map(|x| {

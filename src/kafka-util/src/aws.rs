@@ -52,6 +52,8 @@ pub enum SignerError {
 
 /// Generate a base64-encoded signed url as an auth token by loading IAM
 /// credentials from an AWS credentials provider.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub async fn generate_auth_token(sdk_config: &SdkConfig) -> Result<(String, i64), anyhow::Error> {
     let Some(region) = sdk_config.region() else {
         bail!("internal error: AWS configuration missing region");

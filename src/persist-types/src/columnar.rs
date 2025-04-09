@@ -121,6 +121,8 @@ pub trait Schema<T>: Debug + Send + Sync {
     fn decoder(&self, col: Self::ArrowColumn) -> Result<Self::Decoder, anyhow::Error>;
     /// Returns a type that is able to decode instances of `T` from a type erased
     /// [`arrow::array::Array`], erroring if the provided array is not [`Self::ArrowColumn`].
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn decoder_any(&self, col: &dyn arrow::array::Array) -> Result<Self::Decoder, anyhow::Error> {
         let col = col
             .as_any()
@@ -150,6 +152,8 @@ pub fn data_type<A: Codec>(schema: &A::Schema) -> anyhow::Result<DataType> {
 }
 
 /// Helper to convert from codec-encoded data to structured data.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub fn codec_to_schema<A: Codec + Default>(
     schema: &A::Schema,
     data: &BinaryArray,

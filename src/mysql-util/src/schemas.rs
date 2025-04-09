@@ -526,6 +526,8 @@ static ENUM_VAL_REGEX: LazyLock<Regex> =
 /// "enum('apple','banana','cher,ry','ora''nge')"
 /// We need to handle the case where the enum value itself contains a comma or a
 /// single quote (escaped with another quote), so we use a regex to do so
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn enum_vals_from_column_type(s: &str) -> Result<Vec<String>, anyhow::Error> {
     let vals_str = s
         .strip_prefix("enum(")

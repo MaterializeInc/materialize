@@ -59,6 +59,8 @@ pub struct BuildScriptContext {
 }
 
 impl BuildScriptContext {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn generate(
         config: &GlobalConfig,
         build_script_path: impl AsRef<Path>,

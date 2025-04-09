@@ -101,6 +101,8 @@ impl SecretsController for InMemorySecretsController {
 
 #[async_trait]
 impl SecretsReader for InMemorySecretsController {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn read(&self, id: CatalogItemId) -> Result<Vec<u8>, anyhow::Error> {
         let contents = self.data.lock().unwrap().get(&id).cloned();
         contents.ok_or_else(|| anyhow::anyhow!("secret does not exist"))

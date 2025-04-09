@@ -52,6 +52,8 @@ use timely::communication::allocator::{GenericBuilder, PeerBuilder};
 use tracing::{debug, info, warn};
 
 /// Creates communication mesh from cluster config
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub async fn initialize_networking<P>(
     workers: usize,
     process: usize,

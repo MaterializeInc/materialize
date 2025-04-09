@@ -484,6 +484,8 @@ pub struct SystemCatalogDumper<'n> {
     _pg_conn_handle: JoinHandle<Result<(), tokio_postgres::Error>>,
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub async fn create_postgres_connection(
     connection_string: &str,
 ) -> Result<

@@ -30,6 +30,8 @@ use tracing::{info, warn};
 ///
 /// Materialize may not have permission to list configs for the topic, so callers of this method
 /// should "fail open" if the configs are not available.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub async fn get_topic_config<'a, C>(
     client: &'a AdminClient<C>,
     admin_opts: &AdminOptions,
@@ -58,6 +60,8 @@ where
 ///
 /// Materialize may not have permission to alter configs for the topic, so callers of this method
 /// should "fail open" if the configs are not available.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub async fn alter_topic_config<'a, C>(
     client: &'a AdminClient<C>,
     admin_opts: &AdminOptions,
@@ -197,6 +201,8 @@ where
 /// succeed.
 ///
 /// Returns a boolean indicating whether the topic already existed.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub async fn ensure_topic<'a, C>(
     client: &'a AdminClient<C>,
     admin_opts: &AdminOptions,

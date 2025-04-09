@@ -420,6 +420,8 @@ pub(crate) async fn fetch_batch_part_blob<T>(
     Ok(value)
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub(crate) fn decode_batch_part_blob<T>(
     metrics: &Metrics,
     read_metrics: &ReadMetrics,

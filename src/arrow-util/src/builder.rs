@@ -35,6 +35,8 @@ pub struct ArrowBuilder {
 
 impl ArrowBuilder {
     /// Helper to validate that a RelationDesc can be encoded into Arrow.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn validate_desc(desc: &RelationDesc) -> Result<(), anyhow::Error> {
         let mut errs = vec![];
         for (col_name, col_type) in desc.iter() {
@@ -54,6 +56,8 @@ impl ArrowBuilder {
     /// the number of values that can be appended to each column before reallocating.
     /// `data_capacity` is used to initialize the buffer size of the string and binary builders.
     /// Errors if the relation contains an unimplemented type.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn new(
         desc: &RelationDesc,
         item_capacity: usize,
@@ -138,6 +142,8 @@ impl ArrowBuilder {
 /// Return the appropriate Arrow DataType for the given ScalarType, plus a string
 /// that should be used as part of the Arrow 'Extension Type' name for fields using
 /// this type: <https://arrow.apache.org/docs/format/Columnar.html#extension-types>
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn scalar_to_arrow_datatype(scalar_type: &ScalarType) -> Result<(DataType, String), anyhow::Error> {
     let (data_type, extension_name) = match scalar_type {
         ScalarType::Bool => (DataType::Boolean, "boolean"),
@@ -288,6 +294,8 @@ fn scalar_to_arrow_datatype(scalar_type: &ScalarType) -> Result<(DataType, Strin
     Ok((data_type, extension_name.to_lowercase()))
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn builder_for_datatype(
     data_type: &DataType,
     item_capacity: usize,
@@ -439,6 +447,8 @@ fn field_with_typename(
 }
 
 /// Extract the materialize 'type name' from the metadata of a Field.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn typename_from_field(field: &Field) -> Result<String, anyhow::Error> {
     let metadata = field.metadata();
     let extension_name = metadata
@@ -581,6 +591,8 @@ make_col_builder!(
 );
 
 impl ArrowColumn {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn append_datum(&mut self, datum: Datum) -> Result<(), anyhow::Error> {
         match (&mut self.inner, datum) {
             (s, Datum::Null) => s.append_null(),

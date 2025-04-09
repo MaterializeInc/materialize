@@ -588,6 +588,8 @@ struct Args {
 }
 
 #[tokio::main]
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 async fn main() -> anyhow::Result<()> {
     let args: Args = cli::parse_args(CliConfig::default());
 

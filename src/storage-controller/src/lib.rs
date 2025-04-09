@@ -1525,6 +1525,8 @@ where
     }
 
     /// Create a oneshot ingestion.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn create_oneshot_ingestion(
         &mut self,
         ingestion_id: uuid::Uuid,
@@ -1566,6 +1568,8 @@ where
         }
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn cancel_oneshot_ingestion(
         &mut self,
         ingestion_id: uuid::Uuid,

@@ -1462,6 +1462,8 @@ where
 /// # Panics
 ///
 /// Panics if `collection` is not a metrics history.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 async fn partially_truncate_metrics_history<T>(
     id: GlobalId,
     introspection_type: IntrospectionType,

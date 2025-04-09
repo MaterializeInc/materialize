@@ -79,6 +79,8 @@ impl Default for ValidatedLicenseKey {
     }
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub fn validate(license_key: &str, environment_id: &str) -> anyhow::Result<ValidatedLicenseKey> {
     let mut err = anyhow!("no public key found");
     for pubkey in PUBLIC_KEYS {
@@ -144,6 +146,8 @@ struct Payload {
     expiration_behavior: ExpirationBehavior,
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn validate_with_pubkey_v1(
     license_key: &str,
     pubkey_pem: &str,

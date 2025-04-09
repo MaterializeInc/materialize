@@ -3888,6 +3888,8 @@ impl Drop for LastMessage {
 /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 42KB. This would
 /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
 /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub fn serve(
     Config {
         controller_config,

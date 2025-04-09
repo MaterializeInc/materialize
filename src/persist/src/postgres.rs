@@ -380,6 +380,8 @@ impl Consensus for PostgresConsensus {
         }
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn scan(
         &self,
         key: &str,
@@ -413,6 +415,8 @@ impl Consensus for PostgresConsensus {
         Ok(results)
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
         let q = "DELETE FROM consensus
                 WHERE shard = $1 AND sequence_number < $2 AND

@@ -23,6 +23,8 @@ use tracing::info;
 
 /// Attempt to restore all the blobs referenced by the current state in consensus.
 /// Returns a list of blobs that were not possible to restore.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub(crate) async fn restore_blob(
     versions: &StateVersions,
     blob: &dyn Blob,

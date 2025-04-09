@@ -28,6 +28,8 @@ enum TimezoneAbbrevSpec<'a> {
     Tz(&'a str),
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn main() -> Result<()> {
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").context("Cannot read OUT_DIR env var")?);
 

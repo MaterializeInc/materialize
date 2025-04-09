@@ -1962,6 +1962,8 @@ where
         self.finish_peek(uuid, response)
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn handle_copy_to_response(
         &mut self,
         sink_id: GlobalId,

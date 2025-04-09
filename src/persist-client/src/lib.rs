@@ -670,6 +670,8 @@ impl PersistClient {
     /// We'll be thoughtful about making unnecessary changes, but the **output
     /// of this method needs to be gated from users**, so that it's not subject
     /// to our backward compatibility guarantees.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn inspect_shard<T: Timestamp + Lattice + Codec64>(
         &self,
         shard_id: &ShardId,

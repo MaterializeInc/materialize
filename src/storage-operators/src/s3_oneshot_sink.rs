@@ -206,6 +206,8 @@ where
 ///
 /// This cleanup work removes the INCOMPLETE sentinel file (see description
 /// of `render_initialization_operator` for more details).
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn render_completion_operator<G, F>(
     scope: G,
     connection_context: ConnectionContext,
@@ -291,6 +293,8 @@ where
 ///
 /// The `input_collection` must be a stream of chains, partitioned and exchanged by the row's hash
 /// modulo the number of batches.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn render_upload_operator<G, T>(
     scope: G,
     connection_context: ConnectionContext,

@@ -62,6 +62,8 @@ impl PostgresTableDesc {
     ///   Compatibility is defined as returning `true` for
     ///   `PostgresColumnDesc::is_compatible`.
     /// - `self`'s keys are all present in `other`
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn determine_compatibility(
         &self,
         other: &PostgresTableDesc,

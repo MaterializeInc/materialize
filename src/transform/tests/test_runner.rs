@@ -100,6 +100,8 @@ mod tests {
 
     // Converts string to MirRelationExpr. `args[in]` specifies which input
     // format is being used.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn parse_relation(
         s: &str,
         cat: &TestCatalog,
@@ -262,6 +264,8 @@ mod tests {
         Ok(out)
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn get_transform(name: &str) -> Result<Box<dyn Transform>, Error> {
         // TODO(justin): is there a way to just extract these from the Optimizer list of
         // transforms?

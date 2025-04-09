@@ -99,6 +99,8 @@ mod test {
     use super::*;
 
     #[crate::test]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn prints_error_chain() {
         let error = anyhow!("root");
         let error = error.context("context");

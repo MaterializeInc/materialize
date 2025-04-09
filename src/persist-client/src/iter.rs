@@ -195,6 +195,8 @@ impl<K: Codec, V: Codec, T: Codec64, D: Codec64> RowSort<T, D> for StructuredSor
 type FetchResult<T> = Result<EncodedPart<T>, HollowRun<T>>;
 
 impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn fetch(
         self,
         shard_id: ShardId,
@@ -513,6 +515,8 @@ where
     /// which may include the smallest remaining KVT.
     ///
     /// Returns success when we've successfully fetched enough parts to be able to make progress.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn unblock_progress(&mut self) -> anyhow::Result<()> {
         if self.runs.is_empty() {
             return Ok(());

@@ -232,6 +232,8 @@ impl SshTunnelHandle {
     }
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 async fn connect(
     config: &SshTunnelConfig,
     timeout_config: SshTimeoutConfig,
@@ -288,6 +290,8 @@ async fn connect(
         .unwrap_or_else(|| anyhow::anyhow!("no hosts to connect to")))
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 async fn port_forward(session: &Session, host: &str, port: u16) -> Result<u16, anyhow::Error> {
     // Loop trying to find an open port.
     for _ in 0..50 {

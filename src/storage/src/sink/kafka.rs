@@ -262,6 +262,8 @@ impl TransactionalProducer {
     /// Initializes a transcational producer for the sink identified by `sink_id`. After this call
     /// returns it is guranteed that all previous `TransactionalProducer` instances for the same
     /// sink have been fenced out (i.e `init_transations()` has been called successfully).
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn new(
         sink_id: GlobalId,
         connection: &KafkaSinkConnection,
@@ -625,6 +627,8 @@ struct KafkaHeader {
 /// This operator exchanges all updates to a single worker by hashing on the given sink `id`.
 ///
 /// Updates are sent in ascending timestamp order.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn sink_collection<G: Scope<Timestamp = Timestamp>>(
     name: String,
     input: &Collection<G, KafkaMessage, Diff>,
@@ -862,6 +866,8 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
 /// IMPORTANT: to achieve exactly once guarantees, the producer that will resume
 /// production at the returned timestamp *must* have called `init_transactions`
 /// prior to calling this method.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 async fn determine_sink_progress(
     sink_id: GlobalId,
     connection: &KafkaSinkConnection,
@@ -1073,6 +1079,8 @@ async fn determine_sink_progress(
     result
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn progress_search<C: ConsumerContext + 'static>(
     progress_client_read_committed: &BaseConsumer<C>,
     progress_record_fetch_timeout: Duration,
@@ -1269,6 +1277,8 @@ where
     Ok(Antichain::from(times))
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn parse_progress_record(payload: &[u8]) -> Result<ProgressRecord, anyhow::Error> {
     Ok(match serde_json::from_slice::<ProgressRecord>(payload) {
         Ok(progress) => progress,
@@ -1295,6 +1305,8 @@ fn parse_progress_record(payload: &[u8]) -> Result<ProgressRecord, anyhow::Error
 }
 
 /// Fetches the partition count for the identified topic.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 async fn fetch_partition_count(
     producer: &ThreadedProducer<TunnelingClientContext<MzClientContext>>,
     sink_id: GlobalId,
@@ -1355,6 +1367,8 @@ async fn fetch_partition_count_loop<F>(
 /// Encodes a stream of `(Option<Row>, Option<Row>)` updates using the specified encoder.
 ///
 /// Input [`Row`] updates must me compatible with the given implementor of [`Encode`].
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn encode_collection<G: Scope>(
     name: String,
     input: &Collection<G, (Option<Row>, DiffPair<Row>), Diff>,

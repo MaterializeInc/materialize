@@ -101,6 +101,8 @@ impl S3MultiPartUploaderConfig {
 
     /// As per S3 limits, the part size cannot be less than 5MiB and cannot exceed 5GiB.
     /// As per S3 limits, the object size cannot exceed 5TiB.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn validate(&self) -> Result<(), anyhow::Error> {
         let S3MultiPartUploaderConfig {
             part_size_limit,
@@ -151,6 +153,8 @@ impl S3MultiPartUploader {
     /// Creates a an instance of `S3MultiPartUploader` for the given `bucket` and `path`.
     /// This starts the multi part upload by making a `create_multipart_upload` call, and
     /// initializes all the internal state required to track the ongoing upload.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn try_new(
         sdk_config: &SdkConfig,
         bucket: String,
@@ -217,6 +221,8 @@ impl S3MultiPartUploader {
     /// Finishes the multi part upload.
     ///
     /// Returns the number of parts and number of bytes uploaded.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn finish(mut self) -> Result<CompletedUpload, S3MultiPartUploadError> {
         let remaining = self.buffer.split();
         self.upload_part_internal(remaining.freeze())?;

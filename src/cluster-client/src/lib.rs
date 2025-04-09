@@ -66,6 +66,8 @@ impl fmt::Display for ReplicaId {
 impl FromStr for ReplicaId {
     type Err = anyhow::Error;
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let first = s.chars().next();
         let rest = s.get(1..);

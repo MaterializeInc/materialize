@@ -1268,6 +1268,8 @@ impl Schema<Row> for RelationDesc {
         RowColumnarDecoder::new(col, self)
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn encoder(&self) -> Result<Self::Encoder, anyhow::Error> {
         RowColumnarEncoder::new(self)
             .ok_or_else(|| anyhow::anyhow!("Cannot encode a RelationDesc with no columns"))
@@ -1311,6 +1313,8 @@ impl RowColumnarDecoder {
     ///
     /// Returns an error if the schema of the [`StructArray`] does not match
     /// the provided [`RelationDesc`].
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn new(col: StructArray, desc: &RelationDesc) -> Result<Self, anyhow::Error> {
         let inner_columns = col.columns();
         let desc_columns = desc.typ().columns();
@@ -1525,6 +1529,8 @@ impl ColumnEncoder<Row> for RowColumnarEncoder {
 /// Note: it is _super_ important that we downcast as few times as possible. Datum encoding is a
 /// very hot path and downcasting is relatively slow
 #[inline]
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn downcast_array<T: 'static>(array: &Arc<dyn Array>) -> Result<&T, anyhow::Error> {
     array
         .as_any()
@@ -1536,6 +1542,8 @@ fn downcast_array<T: 'static>(array: &Arc<dyn Array>) -> Result<&T, anyhow::Erro
 ///
 /// Note: it is _super_ important that we downcast as few times as possible. Datum encoding is a
 /// very hot path and downcasting is relatively slow
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn array_to_decoder(
     array: &Arc<dyn Array>,
     col_ty: &ScalarType,

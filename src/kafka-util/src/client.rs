@@ -448,6 +448,8 @@ where
 {
     const ENABLE_REFRESH_OAUTH_TOKEN: bool = true;
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn generate_oauth_token(
         &self,
         _oauthbearer_config: Option<&str>,
@@ -679,6 +681,8 @@ pub enum GetPartitionsError {
 }
 
 /// Retrieve number of partitions for a given `topic` using the given `client`
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub fn get_partitions<C: ClientContext>(
     client: &Client<C>,
     topic: &str,
@@ -693,6 +697,8 @@ pub fn get_partitions<C: ClientContext>(
         ))?;
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn check_err(err: Option<RDKafkaRespErr>) -> Result<(), GetPartitionsError> {
         match err.map(RDKafkaErrorCode::from) {
             Some(RDKafkaErrorCode::UnknownTopic | RDKafkaErrorCode::UnknownTopicOrPartition) => {

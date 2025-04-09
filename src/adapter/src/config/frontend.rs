@@ -152,6 +152,8 @@ async fn ld_client(sync_config: &SystemParameterSyncConfig) -> Result<ld::Client
     Ok(ld_client)
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn ld_ctx(
     env_id: &EnvironmentId,
     build_info: &'static BuildInfo,

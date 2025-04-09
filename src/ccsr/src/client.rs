@@ -41,6 +41,8 @@ impl fmt::Debug for Client {
 }
 
 impl Client {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub(crate) fn new(
         inner: reqwest::Client,
         url: Arc<dyn Fn() -> Url + Send + Sync + 'static>,

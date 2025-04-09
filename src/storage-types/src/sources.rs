@@ -1662,6 +1662,8 @@ pub struct SourceDataColumnarDecoder {
 }
 
 impl SourceDataColumnarDecoder {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn new(col: StructArray, desc: &RelationDesc) -> Result<Self, anyhow::Error> {
         // TODO(parkmcar): We should validate the fields here.
         let (_fields, arrays, nullability) = col.into_parts();

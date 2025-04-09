@@ -23,6 +23,8 @@ pub enum WalLevel {
 
 impl std::str::FromStr for WalLevel {
     type Err = anyhow::Error;
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "minimal" => Ok(Self::Minimal),
@@ -86,6 +88,8 @@ pub async fn available_replication_slots(client: &Client) -> Result<i64, Postgre
     Ok(available_replication_slots)
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub async fn drop_replication_slots(
     ssh_tunnel_manager: &SshTunnelManager,
     config: Config,
@@ -140,6 +144,8 @@ pub async fn drop_replication_slots(
     Ok(())
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub async fn get_timeline_id(replication_client: &Client) -> Result<u64, PostgresError> {
     if let Some(r) = simple_query_opt(replication_client, "IDENTIFY_SYSTEM").await? {
         r.get("timeline")

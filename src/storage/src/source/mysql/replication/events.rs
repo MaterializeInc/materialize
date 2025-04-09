@@ -25,6 +25,8 @@ use super::context::ReplContext;
 
 /// Returns the MySqlTableName for the given table name referenced in a
 /// SQL statement, using the current schema if the table name is unqualified.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn table_ident(name: &str, current_schema: &str) -> Result<MySqlTableName, TransientError> {
     let stripped = name.replace('`', "");
     let mut name_iter = stripped.split('.');
@@ -49,6 +51,8 @@ fn table_ident(name: &str, current_schema: &str) -> Result<MySqlTableName, Trans
 /// This function returns a bool to represent whether the event that was handled
 /// represents a 'complete' event that should cause the frontier to advance beyond
 /// the current GTID.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub(super) async fn handle_query_event(
     event: QueryEvent<'_>,
     ctx: &mut ReplContext<'_>,
@@ -213,6 +217,8 @@ pub(super) async fn handle_query_event(
 ///
 /// We use these events to update the dataflow with the new rows, and return a new
 /// frontier with which to advance the dataflow's progress.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub(super) async fn handle_rows_event(
     event: RowsEventData<'_>,
     ctx: &ReplContext<'_>,

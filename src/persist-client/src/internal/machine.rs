@@ -1620,6 +1620,8 @@ pub mod datadriven {
     }
 
     #[allow(clippy::unused_async)]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn dyncfg(
         datadriven: &MachineState,
         args: DirectiveArgs<'_>,
@@ -1654,6 +1656,8 @@ pub mod datadriven {
         Ok("ok\n".to_string())
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn compare_and_downgrade_since(
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
@@ -1703,6 +1707,8 @@ pub mod datadriven {
         ))
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn add_rollup(
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
@@ -2039,6 +2045,8 @@ pub mod datadriven {
     }
 
     #[allow(clippy::unused_async)]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn rewrite_ts(
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
@@ -2088,6 +2096,8 @@ pub mod datadriven {
         ))
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn snapshot(
         datadriven: &MachineState,
         args: DirectiveArgs<'_>,
@@ -2159,6 +2169,8 @@ pub mod datadriven {
         Ok(result)
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn register_listen(
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
@@ -2284,6 +2296,8 @@ pub mod datadriven {
         Ok(format!("{} ok\n", datadriven.machine.seqno()))
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn compare_and_append_batches(
         datadriven: &MachineState,
         args: DirectiveArgs<'_>,
@@ -2356,6 +2370,8 @@ pub mod datadriven {
         Ok(format!("{seqno} {tombstone}\n"))
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn compare_and_append(
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,

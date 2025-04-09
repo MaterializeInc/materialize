@@ -1062,6 +1062,8 @@ impl fmt::Display for ObjectId {
 impl TryFrom<ResolvedObjectName> for ObjectId {
     type Error = anyhow::Error;
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn try_from(name: ResolvedObjectName) -> Result<ObjectId, Self::Error> {
         match name {
             ResolvedObjectName::Cluster(name) => Ok(ObjectId::Cluster(name.id)),

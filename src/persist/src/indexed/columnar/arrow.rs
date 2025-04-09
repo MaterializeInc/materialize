@@ -168,6 +168,8 @@ fn realloc_buffer(buffer: &Buffer, metrics: &ColumnarMetrics) -> Buffer {
 }
 
 /// Converts an [`arrow`] [RecordBatch] into a [BlobTraceUpdates] and reallocate the backing data.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub fn decode_arrow_batch(
     batch: &RecordBatch,
     metrics: &ColumnarMetrics,

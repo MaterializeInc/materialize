@@ -105,6 +105,8 @@ bitflags! {
 }
 
 impl AclMode {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn parse_single_privilege(s: &str) -> Result<Self, Error> {
         match s.trim().to_uppercase().as_str() {
             INSERT_STR => Ok(AclMode::INSERT),
@@ -173,6 +175,8 @@ impl AclMode {
 impl FromStr for AclMode {
     type Err = Error;
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut acl_mode = AclMode::empty();
         for c in s.chars() {
@@ -296,6 +300,8 @@ impl MzAclItem {
         res
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn decode_binary(raw: &[u8]) -> Result<MzAclItem, Error> {
         if raw.len() != MzAclItem::binary_size() {
             return Err(anyhow!(
@@ -328,6 +334,8 @@ impl MzAclItem {
 impl FromStr for MzAclItem {
     type Err = Error;
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let parts: Vec<_> = s.split('=').collect();
         let &[grantee, rest] = parts.as_slice() else {
@@ -549,6 +557,8 @@ impl AclItem {
         res
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn decode_binary(raw: &[u8]) -> Result<AclItem, Error> {
         if raw.len() != AclItem::binary_size() {
             return Err(anyhow!(
@@ -589,6 +599,8 @@ impl FromStr for AclItem {
     /// PostgreSQL is able to look up OIDs in the catalog while parsing, so it accepts aclitems that
     /// contain role OIDs or role names. We have no way to access the catalog here, so we can only
     /// accept oids. Therefore our implementation is much simpler than PostgreSQL's.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let parts: Vec<_> = s.split('=').collect();
         let &[grantee, rest] = parts.as_slice() else {

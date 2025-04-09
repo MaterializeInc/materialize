@@ -877,6 +877,8 @@ impl Coordinator {
         Ok(StageResult::Response(Self::send_immediate_rows(rows)))
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub(crate) async fn explain_pushdown_materialized_view(
         &self,
         ctx: ExecuteContext,

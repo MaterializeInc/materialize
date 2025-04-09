@@ -119,6 +119,8 @@ pub struct AwsCredentials {
 
 impl AwsCredentials {
     /// Loads a credentials provider with the configured credentials.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn load_credentials_provider(
         &self,
         connection_context: &ConnectionContext,
@@ -211,6 +213,8 @@ impl AwsAssumeRole {
     /// Only for use in the internal implementation of AWS connections. Using
     /// this method incorrectly can result in violating our AWS security
     /// requirements.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn dangerously_load_credentials_provider(
         &self,
         connection_context: &ConnectionContext,
@@ -262,6 +266,8 @@ impl AwsAssumeRole {
         Ok(credentials.build_from_provider(jump_credentials).await)
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn external_id(
         &self,
         connection_context: &ConnectionContext,
@@ -273,6 +279,8 @@ impl AwsAssumeRole {
         Ok(format!("mz_{}_{}", aws_external_id_prefix, connection_id))
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn example_trust_policy(
         &self,
         connection_context: &ConnectionContext,

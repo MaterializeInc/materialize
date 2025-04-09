@@ -88,6 +88,8 @@ where
         Ok(stats)
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn multi_merge<M>(&mut self, _merges: M) -> Result<MergeStats, anyhow::Error>
     where
         M: IntoIterator<Item = (UpsertKey, MergeValue<StateValue<T, O>>)>,

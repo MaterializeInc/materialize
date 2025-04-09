@@ -289,6 +289,8 @@ impl RustTarget for RustBinary {
 }
 
 impl RustBinary {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn generate(
         config: &GlobalConfig,
         metadata: &PackageMetadata,
@@ -575,6 +577,8 @@ impl RustTest {
         )
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn integration(
         config: &GlobalConfig,
         metadata: &PackageMetadata,
@@ -818,6 +822,8 @@ impl RustTarget for CargoBuildScript {
 }
 
 impl CargoBuildScript {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn generate(
         config: &GlobalConfig,
         context: &CrateContext,

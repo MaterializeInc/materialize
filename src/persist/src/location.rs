@@ -176,6 +176,8 @@ impl ExternalError {
     /// TODO: When we overhaul errors, this presumably should instead be a type
     /// that can be matched on.
     #[track_caller]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn new_timeout(deadline: Instant) -> Self {
         ExternalError::Indeterminate(Indeterminate {
             inner: anyhow!("timeout at {:?}", deadline),
@@ -287,6 +289,8 @@ impl From<deadpool_postgres::tokio_postgres::Error> for ExternalError {
 }
 
 impl From<azure_core::Error> for ExternalError {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn from(value: azure_core::Error) -> Self {
         ExternalError::Indeterminate(Indeterminate {
             inner: anyhow!(value),
@@ -812,6 +816,8 @@ pub mod tests {
     }
 
     /// Common test impl for different consensus implementations.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn consensus_impl_test<
         C: Consensus,
         F: Future<Output = Result<C, ExternalError>>,
@@ -1117,6 +1123,8 @@ pub mod tests {
     }
 
     #[mz_ore::test]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn timeout_error() {
         assert!(ExternalError::new_timeout(Instant::now()).is_timeout());
         assert!(!ExternalError::from(anyhow!("foo")).is_timeout());

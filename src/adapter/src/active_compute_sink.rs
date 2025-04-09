@@ -413,6 +413,8 @@ impl ActiveCopyTo {
     ///
     /// Either this method or `retire` must be called on every copy to before it
     /// is dropped.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn retire_with_response(self, response: Result<u64, anyhow::Error>) {
         let response = match response {
             Ok(n) => Ok(ExecuteResponse::Copied(usize::cast_from(n))),
@@ -425,6 +427,8 @@ impl ActiveCopyTo {
     ///
     /// Either this method or `retire_with_response` must be called on every
     /// copy to before it is dropped.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn retire(self, reason: ActiveComputeSinkRetireReason) {
         let message = match reason {
             ActiveComputeSinkRetireReason::Finished => return,

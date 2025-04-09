@@ -46,6 +46,8 @@ mod tests {
 
     use crate::regexp_split_to_array;
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn build_regex(needle: &str, flags: &str) -> Result<Regex, anyhow::Error> {
         let mut case_insensitive = false;
         // Note: Postgres accepts it when both flags are present, taking the last one. We do the same.

@@ -555,6 +555,8 @@ pub struct TlsCliArgs {
 
 impl TlsCliArgs {
     /// Convert args into configuration.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn into_config(self) -> Result<Option<TlsCertConfig>, anyhow::Error> {
         if self.tls_mode == "disable" {
             if self.tls_cert.is_some() {

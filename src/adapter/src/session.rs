@@ -745,6 +745,8 @@ impl<T: TimestampManipulation> Session<T> {
     }
 
     /// Creates and installs a new portal.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn create_new_portal(
         &mut self,
         stmt: Option<Statement<Raw>>,

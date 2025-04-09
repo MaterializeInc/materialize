@@ -866,6 +866,8 @@ impl<'a> Transaction<'a> {
     /// Allocates `amount` OIDs. OIDs can be recycled if they aren't currently assigned to any
     /// object.
     #[mz_ore::instrument]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn allocate_oids(
         &mut self,
         amount: u64,
@@ -2487,6 +2489,8 @@ impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
             .collect()
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn insert_collection_metadata(
         &mut self,
         metadata: BTreeMap<GlobalId, ShardId>,
@@ -2538,6 +2542,8 @@ impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
             .collect()
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn insert_unfinalized_shards(
         &mut self,
         s: BTreeSet<ShardId>,
@@ -2571,6 +2577,8 @@ impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
             .map(|TxnWalShardValue { shard }| *shard)
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn write_txn_wal_shard(
         &mut self,
         shard: ShardId,

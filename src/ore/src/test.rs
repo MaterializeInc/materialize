@@ -62,6 +62,8 @@ pub fn init_logging_default(level: &str) {
 /// Note that if the invoked function does not complete in the timeout, it is
 /// not killed; it is left to wind down normally. Therefore this function is
 /// only appropriate in tests, where the resource leak doesn't matter.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub fn timeout<F, T>(duration: Duration, f: F) -> Result<T, anyhow::Error>
 where
     F: FnOnce() -> Result<T, anyhow::Error> + Send + 'static,

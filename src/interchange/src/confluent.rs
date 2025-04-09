@@ -14,6 +14,8 @@ use byteorder::{BigEndian, ByteOrder};
 /// Optionally expect an empty
 ///
 /// This function returns the schema_id and a subslice of the rest of the buffer
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn extract_schema_id<'buf>(buf: &'buf [u8], protocol: &str) -> Result<(i32, &'buf [u8])> {
     // The first byte is a magic byte (0) that indicates the Confluent
     // serialization format version, and the next four bytes are a big
@@ -52,6 +54,8 @@ pub fn extract_avro_header(buf: &[u8]) -> Result<(i32, &[u8])> {
     extract_schema_id(buf, "avro")
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub fn extract_protobuf_header(buf: &[u8]) -> Result<(i32, &[u8])> {
     let (schema_id, buf) = extract_schema_id(buf, "protobuf")?;
 

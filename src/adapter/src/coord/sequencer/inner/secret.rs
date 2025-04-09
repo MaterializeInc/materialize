@@ -139,6 +139,8 @@ impl Coordinator {
         )))
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn extract_secret(
         &self,
         session: &Session,

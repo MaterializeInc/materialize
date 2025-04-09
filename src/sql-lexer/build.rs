@@ -22,6 +22,8 @@ use uncased::UncasedStr;
 
 const KEYWORDS_LIST: &str = "src/keywords.txt";
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn main() -> Result<()> {
     println!("cargo:rerun-if-changed={KEYWORDS_LIST}");
 
