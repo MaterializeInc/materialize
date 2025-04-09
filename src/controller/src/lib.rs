@@ -207,6 +207,14 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
         self.compute.set_arrangement_exert_proportionality(value);
     }
 
+    /// Start sinking the compute controller's introspection data into storage.
+    ///
+    /// This method should be called once the introspection collections have been registered with
+    /// the storage controller. It will panic if invoked earlier than that.
+    pub fn start_compute_introspection_sink(&mut self) {
+        self.compute.start_introspection_sink(&*self.storage);
+    }
+
     /// Returns the connection context installed in the controller.
     ///
     /// This is purely a helper, and can be obtained from `self.storage`.
@@ -470,7 +478,7 @@ where
     /// Process a pending response from the compute controller. If necessary,
     /// return a higher-level response to our client.
     fn process_compute_response(&mut self) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
-        let response = self.compute.process(&mut *self.storage);
+        let response = self.compute.process();
 
         let response = response.and_then(|r| match r {
             ComputeControllerResponse::PeekNotification(uuid, peek, otel_ctx) => {

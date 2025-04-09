@@ -1919,6 +1919,12 @@ impl Coordinator {
             init_storage_collections_start.elapsed()
         );
 
+        // The storage controller knows about the introspection collections now, so we can start
+        // sinking introspection updates in the compute controller. It makes sense to do that as
+        // soon as possible, to avoid updates piling up in the compute controller's internal
+        // buffers.
+        self.controller.start_compute_introspection_sink();
+
         let optimize_dataflows_start = Instant::now();
         info!("startup: coordinator init: bootstrap: optimize dataflow plans beginning");
         let entries: Vec<_> = self.catalog().entries().cloned().collect();

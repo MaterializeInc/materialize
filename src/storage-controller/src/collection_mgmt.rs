@@ -359,6 +359,30 @@ where
         Box::pin(futures::future::ready(()))
     }
 
+    /// Returns a sender for writes to the given append-only collection.
+    ///
+    /// # Panics
+    /// - If `id` does not belong to an append-only collections.
+    pub(super) fn append_only_write_sender(&self, id: GlobalId) -> AppendOnlyWriteChannel<T> {
+        let collections = self.append_only_collections.lock().expect("poisoned");
+        match collections.get(&id) {
+            Some((tx, _, _)) => tx.clone(),
+            None => panic!("missing append-only collection: {id}"),
+        }
+    }
+
+    /// Returns a sender for writes to the given differential collection.
+    ///
+    /// # Panics
+    /// - If `id` does not belong to a differential collections.
+    pub(super) fn differential_write_sender(&self, id: GlobalId) -> DifferentialWriteChannel<T> {
+        let collections = self.differential_collections.lock().expect("poisoned");
+        match collections.get(&id) {
+            Some((tx, _, _)) => tx.clone(),
+            None => panic!("missing differential collection: {id}"),
+        }
+    }
+
     /// Appends `updates` to the append-only collection identified by `id`, at
     /// _some_ timestamp. Does not wait for the append to complete.
     ///
@@ -372,16 +396,7 @@ where
         }
 
         if !updates.is_empty() {
-            // Get the update channel in a block to make sure the Mutex lock is scoped.
-            let update_tx = {
-                let guard = self
-                    .append_only_collections
-                    .lock()
-                    .expect("CollectionManager panicked");
-                let (update_tx, _, _) = guard.get(&id).expect("missing append-only collection");
-                update_tx.clone()
-            };
-
+            let update_tx = self.append_only_write_sender(id);
             let (tx, _rx) = oneshot::channel();
             update_tx.send((updates, tx)).expect("rx hung up");
         }
@@ -396,16 +411,7 @@ where
     /// - If the collection closed.
     pub(super) fn differential_write(&self, id: GlobalId, op: StorageWriteOp) {
         if !op.is_empty_append() {
-            // Get the update channel in a block to make sure the Mutex lock is scoped.
-            let update_tx = {
-                let guard = self
-                    .differential_collections
-                    .lock()
-                    .expect("CollectionManager panicked");
-                let (update_tx, _, _) = guard.get(&id).expect("missing differential collection");
-                update_tx.clone()
-            };
-
+            let update_tx = self.differential_write_sender(id);
             let (tx, _rx) = oneshot::channel();
             update_tx.send((op, tx)).expect("rx hung up");
         }

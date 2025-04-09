@@ -686,6 +686,32 @@ pub trait StorageController: Debug {
     /// introspection type, as readers rely on this and might panic otherwise.
     fn update_introspection_collection(&mut self, type_: IntrospectionType, op: StorageWriteOp);
 
+    /// Returns a sender for updates to the specified append-only introspection collection.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the given introspection type is not associated with an append-only collection.
+    fn append_only_introspection_tx(
+        &self,
+        type_: IntrospectionType,
+    ) -> mpsc::UnboundedSender<(
+        Vec<AppendOnlyUpdate>,
+        oneshot::Sender<Result<(), StorageError<Self::Timestamp>>>,
+    )>;
+
+    /// Returns a sender for updates to the specified differential introspection collection.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the given introspection type is not associated with a differential collection.
+    fn differential_introspection_tx(
+        &self,
+        type_: IntrospectionType,
+    ) -> mpsc::UnboundedSender<(
+        StorageWriteOp,
+        oneshot::Sender<Result<(), StorageError<Self::Timestamp>>>,
+    )>;
+
     async fn real_time_recent_timestamp(
         &self,
         source_ids: BTreeSet<GlobalId>,

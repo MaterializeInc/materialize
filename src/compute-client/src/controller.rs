@@ -33,7 +33,6 @@ use std::num::NonZeroI64;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use differential_dataflow::consolidation::consolidate;
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use mz_build_info::BuildInfo;
@@ -54,8 +53,8 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
-use mz_storage_client::controller::{IntrospectionType, StorageController, StorageWriteOp};
+use mz_repr::{Datum, GlobalId, Row, TimestampManipulation};
+use mz_storage_client::controller::StorageController;
 use mz_storage_types::dyncfgs::ORE_OVERFLOWING_BEHAVIOR;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
@@ -75,6 +74,7 @@ use crate::controller::error::{
     ReplicaCreationError, ReplicaDropError,
 };
 use crate::controller::instance::{Instance, SharedCollectionState};
+use crate::controller::introspection::{spawn_introspection_sink, IntrospectionUpdates};
 use crate::controller::replica::ReplicaConfig;
 use crate::logging::{LogVariant, LoggingConfig};
 use crate::metrics::ComputeControllerMetrics;
@@ -83,12 +83,12 @@ use crate::protocol::response::{PeekResponse, SubscribeBatch};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
 mod instance;
+mod introspection;
 mod replica;
 mod sequential_hydration;
 
 pub mod error;
 
-type IntrospectionUpdates = (IntrospectionType, Vec<(Row, Diff)>);
 pub(crate) type StorageCollections<T> = Arc<
     dyn mz_storage_client::storage_collections::StorageCollections<Timestamp = T> + Send + Sync,
 >;
@@ -203,9 +203,12 @@ pub struct ComputeController<T: ComputeControllerTimestamp> {
     /// Response sender that's passed to new `Instance`s.
     response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
     /// Receiver for introspection updates produced by `Instance`s.
-    introspection_rx: crossbeam_channel::Receiver<IntrospectionUpdates>,
+    ///
+    /// When [`ComputeController::start_introspection_sink`] is first called, this receiver is
+    /// passed to the introspection sink task.
+    introspection_rx: Option<mpsc::UnboundedReceiver<IntrospectionUpdates>>,
     /// Introspection updates sender that's passed to new `Instance`s.
-    introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+    introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
 
     /// Ticker for scheduling periodic maintenance work.
     maintenance_ticker: tokio::time::Interval,
@@ -226,7 +229,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         wallclock_lag: WallclockLagFn<T>,
     ) -> Self {
         let (response_tx, response_rx) = mpsc::unbounded_channel();
-        let (introspection_tx, introspection_rx) = crossbeam_channel::unbounded();
+        let (introspection_tx, introspection_rx) = mpsc::unbounded_channel();
 
         let mut maintenance_ticker = time::interval(Duration::from_secs(1));
         maintenance_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -299,10 +302,23 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             dyncfg: Arc::new(mz_dyncfgs::all_dyncfgs()),
             response_rx,
             response_tx,
-            introspection_rx,
+            introspection_rx: Some(introspection_rx),
             introspection_tx,
             maintenance_ticker,
             maintenance_scheduled: false,
+        }
+    }
+
+    /// Start sinking the compute controller's introspection data into storage.
+    ///
+    /// This method should be called once the introspection collections have been registered with
+    /// the storage controller. It will panic if invoked earlier than that.
+    pub fn start_introspection_sink(
+        &mut self,
+        storage_controller: &dyn StorageController<Timestamp = T>,
+    ) {
+        if let Some(rx) = self.introspection_rx.take() {
+            spawn_introspection_sink(rx, storage_controller);
         }
     }
 
@@ -1062,55 +1078,12 @@ where
         ))
     }
 
-    #[mz_ore::instrument(level = "debug")]
-    fn record_introspection_updates(&mut self, storage: &mut dyn StorageController<Timestamp = T>) {
-        use IntrospectionType::*;
-
-        // We could record the contents of `introspection_rx` directly here, but to reduce the
-        // pressure on persist we spend some effort consolidating first.
-        let mut updates_by_type = BTreeMap::new();
-
-        for (type_, updates) in self.introspection_rx.try_iter() {
-            updates_by_type
-                .entry(type_)
-                .or_insert_with(Vec::new)
-                .extend(updates);
-        }
-        for updates in updates_by_type.values_mut() {
-            consolidate(updates);
-        }
-
-        for (type_, updates) in updates_by_type {
-            if updates.is_empty() {
-                continue;
-            }
-
-            match type_ {
-                Frontiers
-                | ReplicaFrontiers
-                | ComputeDependencies
-                | ComputeOperatorHydrationStatus
-                | ComputeMaterializedViewRefreshes => {
-                    let op = StorageWriteOp::Append { updates };
-                    storage.update_introspection_collection(type_, op);
-                }
-                WallclockLagHistory | WallclockLagHistogram => {
-                    storage.append_introspection_updates(type_, updates);
-                }
-                _ => panic!("unexpected introspection type: {type_:?}"),
-            }
-        }
-    }
-
     /// Processes the work queued by [`ComputeController::ready`].
     #[mz_ore::instrument(level = "debug")]
-    pub fn process(
-        &mut self,
-        storage: &mut dyn StorageController<Timestamp = T>,
-    ) -> Option<ComputeControllerResponse<T>> {
+    pub fn process(&mut self) -> Option<ComputeControllerResponse<T>> {
         // Perform periodic maintenance work.
         if self.maintenance_scheduled {
-            self.maintain(storage);
+            self.maintain();
             self.maintenance_scheduled = false;
         }
 
@@ -1119,18 +1092,11 @@ where
     }
 
     #[mz_ore::instrument(level = "debug")]
-    fn maintain(&mut self, storage: &mut dyn StorageController<Timestamp = T>) {
+    fn maintain(&mut self) {
         // Perform instance maintenance work.
         for instance in self.instances.values_mut() {
             instance.call(Instance::maintain);
         }
-
-        // Record pending introspection updates.
-        //
-        // It's beneficial to do this as the last maintenance step because previous steps can cause
-        // dropping of state, which can can cause introspection retractions, which lower the volume
-        // of data we have to record.
-        self.record_introspection_updates(storage);
     }
 }
 
