@@ -246,9 +246,7 @@ mod container {
             if self.bytes.is_empty() {
                 None
             } else {
-                let mut offset = 0;
-                let result = unsafe { read_datum(self.bytes, &mut offset) };
-                self.bytes = &self.bytes[offset..];
+                let result = unsafe { read_datum(&mut self.bytes) };
                 Some(result)
             }
         }

@@ -585,10 +585,7 @@ impl RowRef {
 
     /// Iterate the [`Datum`] elements of the [`RowRef`].
     pub fn iter(&self) -> DatumListIter {
-        DatumListIter {
-            data: &self.0,
-            offset: 0,
-        }
+        DatumListIter { data: &self.0 }
     }
 
     /// Return the byte length of this [`RowRef`].
@@ -621,10 +618,7 @@ impl<'a> IntoIterator for &'a RowRef {
     type IntoIter = DatumListIter<'a>;
 
     fn into_iter(self) -> DatumListIter<'a> {
-        DatumListIter {
-            data: &self.0,
-            offset: 0,
-        }
+        DatumListIter { data: &self.0 }
     }
 }
 
@@ -671,13 +665,11 @@ pub struct RowPacker<'a> {
 #[derive(Debug, Clone)]
 pub struct DatumListIter<'a> {
     data: &'a [u8],
-    offset: usize,
 }
 
 #[derive(Debug, Clone)]
 pub struct DatumDictIter<'a> {
     data: &'a [u8],
-    offset: usize,
     prev_key: Option<&'a str>,
 }
 
@@ -752,17 +744,18 @@ impl<'a> DatumNested<'a> {
     // Figure out which bytes `read_datum` returns (e.g. including the tag),
     // and then store a reference to those bytes, so we can "replay" this same
     // call later on without storing the datum itself.
-    pub fn extract(data: &'a [u8], offset: &mut usize) -> DatumNested<'a> {
-        let start = *offset;
-        let _ = unsafe { read_datum(data, offset) };
+    pub fn extract(data: &mut &'a [u8]) -> DatumNested<'a> {
+        let prev = *data;
+        let _ = unsafe { read_datum(data) };
         DatumNested {
-            val: &data[start..*offset],
+            val: &prev[..(prev.len() - data.len())],
         }
     }
 
     /// Returns the datum `self` contains.
     pub fn datum(&self) -> Datum<'a> {
-        unsafe { read_datum(self.val, &mut 0) }
+        let mut temp = self.val;
+        unsafe { read_datum(&mut temp) }
     }
 }
 
@@ -946,11 +939,11 @@ impl Tag {
 /// Read a byte slice starting at byte `offset`.
 ///
 /// Updates `offset` to point to the first byte after the end of the read region.
-fn read_untagged_bytes<'a>(data: &'a [u8], offset: &mut usize) -> &'a [u8] {
-    let len = u64::from_le_bytes(read_byte_array(data, offset));
+fn read_untagged_bytes<'a>(data: &mut &'a [u8]) -> &'a [u8] {
+    let len = u64::from_le_bytes(read_byte_array(data));
     let len = usize::cast_from(len);
-    let bytes = &data[*offset..(*offset + len)];
-    *offset += len;
+    let (bytes, next) = data.split_at(len);
+    *data = next;
     bytes
 }
 
@@ -962,22 +955,22 @@ fn read_untagged_bytes<'a>(data: &'a [u8], offset: &mut usize) -> &'a [u8] {
 ///
 /// This function is safe if the datum's length and contents were previously written by `push_lengthed_bytes`,
 /// and it was only written with a `String` tag if it was indeed UTF-8.
-unsafe fn read_lengthed_datum<'a>(data: &'a [u8], offset: &mut usize, tag: Tag) -> Datum<'a> {
+unsafe fn read_lengthed_datum<'a>(data: &mut &'a [u8], tag: Tag) -> Datum<'a> {
     let len = match tag {
-        Tag::BytesTiny | Tag::StringTiny | Tag::ListTiny => usize::from(read_byte(data, offset)),
+        Tag::BytesTiny | Tag::StringTiny | Tag::ListTiny => usize::from(read_byte(data)),
         Tag::BytesShort | Tag::StringShort | Tag::ListShort => {
-            usize::from(u16::from_le_bytes(read_byte_array(data, offset)))
+            usize::from(u16::from_le_bytes(read_byte_array(data)))
         }
         Tag::BytesLong | Tag::StringLong | Tag::ListLong => {
-            usize::cast_from(u32::from_le_bytes(read_byte_array(data, offset)))
+            usize::cast_from(u32::from_le_bytes(read_byte_array(data)))
         }
         Tag::BytesHuge | Tag::StringHuge | Tag::ListHuge => {
-            usize::cast_from(u64::from_le_bytes(read_byte_array(data, offset)))
+            usize::cast_from(u64::from_le_bytes(read_byte_array(data)))
         }
         _ => unreachable!(),
     };
-    let bytes = &data[*offset..(*offset + len)];
-    *offset += len;
+    let (bytes, next) = data.split_at(len);
+    *data = next;
     match tag {
         Tag::BytesTiny | Tag::BytesShort | Tag::BytesLong | Tag::BytesHuge => Datum::Bytes(bytes),
         Tag::StringTiny | Tag::StringShort | Tag::StringLong | Tag::StringHuge => {
@@ -990,9 +983,9 @@ unsafe fn read_lengthed_datum<'a>(data: &'a [u8], offset: &mut usize, tag: Tag) 
     }
 }
 
-fn read_byte(data: &[u8], offset: &mut usize) -> u8 {
-    let byte = data[*offset];
-    *offset += 1;
+fn read_byte(data: &mut &[u8]) -> u8 {
+    let byte = data[0];
+    *data = &data[1..];
     byte
 }
 
@@ -1004,17 +997,15 @@ fn read_byte(data: &[u8], offset: &mut usize) -> u8 {
 ///   * length <= N
 ///   * offset + length <= data.len()
 unsafe fn read_byte_array_sign_extending<const N: usize, const FILL: u8>(
-    data: &[u8],
-    offset: &mut usize,
+    data: &mut &[u8],
     length: usize,
 ) -> [u8; N] {
     let mut raw = [FILL; N];
-    for i in 0..length {
-        debug_assert!(i < raw.len());
-        debug_assert!(*offset + i < data.len());
-        *raw.get_unchecked_mut(i) = *data.get_unchecked(*offset + i);
+    let (prev, next) = data.split_at(length);
+    for (i, prev_byte) in prev.iter().enumerate() {
+        raw[i] = *prev_byte;
     }
-    *offset += length;
+    *data = next;
     raw
 }
 /// Read `length` bytes from `data` at `offset`, updating the
@@ -1025,11 +1016,10 @@ unsafe fn read_byte_array_sign_extending<const N: usize, const FILL: u8>(
 ///   * length <= N
 ///   * offset + length <= data.len()
 unsafe fn read_byte_array_extending_negative<const N: usize>(
-    data: &[u8],
-    offset: &mut usize,
+    data: &mut &[u8],
     length: usize,
 ) -> [u8; N] {
-    read_byte_array_sign_extending::<N, 255>(data, offset, length)
+    read_byte_array_sign_extending::<N, 255>(data, length)
 }
 
 /// Read `length` bytes from `data` at `offset`, updating the
@@ -1040,34 +1030,32 @@ unsafe fn read_byte_array_extending_negative<const N: usize>(
 ///   * length <= N
 ///   * offset + length <= data.len()
 unsafe fn read_byte_array_extending_nonnegative<const N: usize>(
-    data: &[u8],
-    offset: &mut usize,
+    data: &mut &[u8],
     length: usize,
 ) -> [u8; N] {
-    read_byte_array_sign_extending::<N, 0>(data, offset, length)
+    read_byte_array_sign_extending::<N, 0>(data, length)
 }
 
-pub(super) fn read_byte_array<const N: usize>(data: &[u8], offset: &mut usize) -> [u8; N] {
-    let mut raw = [0; N];
-    raw.copy_from_slice(&data[*offset..*offset + N]);
-    *offset += N;
-    raw
+pub(super) fn read_byte_array<const N: usize>(data: &mut &[u8]) -> [u8; N] {
+    let (prev, next) = data.split_first_chunk().unwrap();
+    *data = next;
+    *prev
 }
 
-pub(super) fn read_date(data: &[u8], offset: &mut usize) -> Date {
-    let days = i32::from_le_bytes(read_byte_array(data, offset));
+pub(super) fn read_date(data: &mut &[u8]) -> Date {
+    let days = i32::from_le_bytes(read_byte_array(data));
     Date::from_pg_epoch(days).expect("unexpected date")
 }
 
-pub(super) fn read_naive_date(data: &[u8], offset: &mut usize) -> NaiveDate {
-    let year = i32::from_le_bytes(read_byte_array(data, offset));
-    let ordinal = u32::from_le_bytes(read_byte_array(data, offset));
+pub(super) fn read_naive_date(data: &mut &[u8]) -> NaiveDate {
+    let year = i32::from_le_bytes(read_byte_array(data));
+    let ordinal = u32::from_le_bytes(read_byte_array(data));
     NaiveDate::from_yo_opt(year, ordinal).unwrap()
 }
 
-pub(super) fn read_time(data: &[u8], offset: &mut usize) -> NaiveTime {
-    let secs = u32::from_le_bytes(read_byte_array(data, offset));
-    let nanos = u32::from_le_bytes(read_byte_array(data, offset));
+pub(super) fn read_time(data: &mut &[u8]) -> NaiveTime {
+    let secs = u32::from_le_bytes(read_byte_array(data));
+    let nanos = u32::from_le_bytes(read_byte_array(data));
     NaiveTime::from_num_seconds_from_midnight_opt(secs, nanos).unwrap()
 }
 
@@ -1079,8 +1067,8 @@ pub(super) fn read_time(data: &[u8], offset: &mut usize) -> NaiveTime {
 ///
 /// This function is safe if a `Datum` was previously written at this offset by `push_datum`.
 /// Otherwise it could return invalid values, which is Undefined Behavior.
-pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
-    let tag = Tag::try_from_primitive(read_byte(data, offset)).expect("unknown row tag");
+pub unsafe fn read_datum<'a>(data: &mut &'a [u8]) -> Datum<'a> {
+    let tag = Tag::try_from_primitive(read_byte(data)).expect("unknown row tag");
     match tag {
         Tag::Null => Datum::Null,
         Tag::False => Datum::False,
@@ -1088,14 +1076,13 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         Tag::UInt8_0 | Tag::UInt8_8 => {
             let i = u8::from_le_bytes(read_byte_array_extending_nonnegative(
                 data,
-                offset,
                 tag.actual_int_length()
                     .expect("returns a value for variable-length-encoded integer tags"),
             ));
             Datum::UInt8(i)
         }
         Tag::Int16 => {
-            let i = i16::from_le_bytes(read_byte_array(data, offset));
+            let i = i16::from_le_bytes(read_byte_array(data));
             Datum::Int16(i)
         }
         Tag::NonNegativeInt16_0 | Tag::NonNegativeInt16_16 | Tag::NonNegativeInt16_8 => {
@@ -1104,7 +1091,6 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             // are checked in debug asserts.
             let i = i16::from_le_bytes(read_byte_array_extending_nonnegative(
                 data,
-                offset,
                 tag.actual_int_length()
                     .expect("returns a value for variable-length-encoded integer tags"),
             ));
@@ -1113,14 +1099,13 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         Tag::UInt16_0 | Tag::UInt16_8 | Tag::UInt16_16 => {
             let i = u16::from_le_bytes(read_byte_array_extending_nonnegative(
                 data,
-                offset,
                 tag.actual_int_length()
                     .expect("returns a value for variable-length-encoded integer tags"),
             ));
             Datum::UInt16(i)
         }
         Tag::Int32 => {
-            let i = i32::from_le_bytes(read_byte_array(data, offset));
+            let i = i32::from_le_bytes(read_byte_array(data));
             Datum::Int32(i)
         }
         Tag::NonNegativeInt32_0
@@ -1133,7 +1118,6 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             // are checked in debug asserts.
             let i = i32::from_le_bytes(read_byte_array_extending_nonnegative(
                 data,
-                offset,
                 tag.actual_int_length()
                     .expect("returns a value for variable-length-encoded integer tags"),
             ));
@@ -1142,14 +1126,13 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         Tag::UInt32_0 | Tag::UInt32_8 | Tag::UInt32_16 | Tag::UInt32_24 | Tag::UInt32_32 => {
             let i = u32::from_le_bytes(read_byte_array_extending_nonnegative(
                 data,
-                offset,
                 tag.actual_int_length()
                     .expect("returns a value for variable-length-encoded integer tags"),
             ));
             Datum::UInt32(i)
         }
         Tag::Int64 => {
-            let i = i64::from_le_bytes(read_byte_array(data, offset));
+            let i = i64::from_le_bytes(read_byte_array(data));
             Datum::Int64(i)
         }
         Tag::NonNegativeInt64_0
@@ -1167,7 +1150,6 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
 
             let i = i64::from_le_bytes(read_byte_array_extending_nonnegative(
                 data,
-                offset,
                 tag.actual_int_length()
                     .expect("returns a value for variable-length-encoded integer tags"),
             ));
@@ -1184,7 +1166,6 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         | Tag::UInt64_64 => {
             let i = u64::from_le_bytes(read_byte_array_extending_nonnegative(
                 data,
-                offset,
                 tag.actual_int_length()
                     .expect("returns a value for variable-length-encoded integer tags"),
             ));
@@ -1196,7 +1177,6 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             // are checked in debug asserts.
             let i = i16::from_le_bytes(read_byte_array_extending_negative(
                 data,
-                offset,
                 tag.actual_int_length()
                     .expect("returns a value for variable-length-encoded integer tags"),
             ));
@@ -1212,7 +1192,6 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             // are checked in debug asserts.
             let i = i32::from_le_bytes(read_byte_array_extending_negative(
                 data,
-                offset,
                 tag.actual_int_length()
                     .expect("returns a value for variable-length-encoded integer tags"),
             ));
@@ -1232,7 +1211,6 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             // are checked in debug asserts.
             let i = i64::from_le_bytes(read_byte_array_extending_negative(
                 data,
-                offset,
                 tag.actual_int_length()
                     .expect("returns a value for variable-length-encoded integer tags"),
             ));
@@ -1240,33 +1218,33 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         }
 
         Tag::UInt8 => {
-            let i = u8::from_le_bytes(read_byte_array(data, offset));
+            let i = u8::from_le_bytes(read_byte_array(data));
             Datum::UInt8(i)
         }
         Tag::UInt16 => {
-            let i = u16::from_le_bytes(read_byte_array(data, offset));
+            let i = u16::from_le_bytes(read_byte_array(data));
             Datum::UInt16(i)
         }
         Tag::UInt32 => {
-            let i = u32::from_le_bytes(read_byte_array(data, offset));
+            let i = u32::from_le_bytes(read_byte_array(data));
             Datum::UInt32(i)
         }
         Tag::UInt64 => {
-            let i = u64::from_le_bytes(read_byte_array(data, offset));
+            let i = u64::from_le_bytes(read_byte_array(data));
             Datum::UInt64(i)
         }
         Tag::Float32 => {
-            let f = f32::from_bits(u32::from_le_bytes(read_byte_array(data, offset)));
+            let f = f32::from_bits(u32::from_le_bytes(read_byte_array(data)));
             Datum::Float32(OrderedFloat::from(f))
         }
         Tag::Float64 => {
-            let f = f64::from_bits(u64::from_le_bytes(read_byte_array(data, offset)));
+            let f = f64::from_bits(u64::from_le_bytes(read_byte_array(data)));
             Datum::Float64(OrderedFloat::from(f))
         }
-        Tag::Date => Datum::Date(read_date(data, offset)),
-        Tag::Time => Datum::Time(read_time(data, offset)),
+        Tag::Date => Datum::Date(read_date(data)),
+        Tag::Time => Datum::Time(read_time(data)),
         Tag::CheapTimestamp => {
-            let ts = i64::from_le_bytes(read_byte_array(data, offset));
+            let ts = i64::from_le_bytes(read_byte_array(data));
             let secs = ts.div_euclid(1_000_000_000);
             let nsecs: u32 = ts.rem_euclid(1_000_000_000).try_into().unwrap();
             let ndt = DateTime::from_timestamp(secs, nsecs)
@@ -1277,7 +1255,7 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             )
         }
         Tag::CheapTimestampTz => {
-            let ts = i64::from_le_bytes(read_byte_array(data, offset));
+            let ts = i64::from_le_bytes(read_byte_array(data));
             let secs = ts.div_euclid(1_000_000_000);
             let nsecs: u32 = ts.rem_euclid(1_000_000_000).try_into().unwrap();
             let dt = DateTime::from_timestamp(secs, nsecs)
@@ -1287,16 +1265,16 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             )
         }
         Tag::Timestamp => {
-            let date = read_naive_date(data, offset);
-            let time = read_time(data, offset);
+            let date = read_naive_date(data);
+            let time = read_time(data);
             Datum::Timestamp(
                 CheckedTimestamp::from_timestamplike(date.and_time(time))
                     .expect("unexpected timestamp"),
             )
         }
         Tag::TimestampTz => {
-            let date = read_naive_date(data, offset);
-            let time = read_time(data, offset);
+            let date = read_naive_date(data);
+            let time = read_time(data);
             Datum::TimestampTz(
                 CheckedTimestamp::from_timestamplike(DateTime::from_naive_utc_and_offset(
                     date.and_time(time),
@@ -1306,9 +1284,9 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             )
         }
         Tag::Interval => {
-            let months = i32::from_le_bytes(read_byte_array(data, offset));
-            let days = i32::from_le_bytes(read_byte_array(data, offset));
-            let micros = i64::from_le_bytes(read_byte_array(data, offset));
+            let months = i32::from_le_bytes(read_byte_array(data));
+            let days = i32::from_le_bytes(read_byte_array(data));
+            let micros = i64::from_le_bytes(read_byte_array(data));
             Datum::Interval(Interval {
                 months,
                 days,
@@ -1326,36 +1304,36 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         | Tag::ListTiny
         | Tag::ListShort
         | Tag::ListLong
-        | Tag::ListHuge => read_lengthed_datum(data, offset, tag),
-        Tag::Uuid => Datum::Uuid(Uuid::from_bytes(read_byte_array(data, offset))),
+        | Tag::ListHuge => read_lengthed_datum(data, tag),
+        Tag::Uuid => Datum::Uuid(Uuid::from_bytes(read_byte_array(data))),
         Tag::Array => {
             // See the comment in `Row::push_array` for details on the encoding
             // of arrays.
-            let ndims = read_byte(data, offset);
+            let ndims = read_byte(data);
             let dims_size = usize::from(ndims) * size_of::<u64>() * 2;
-            let dims = &data[*offset..*offset + dims_size];
-            *offset += dims_size;
-            let data = read_untagged_bytes(data, offset);
+            let (dims, next) = data.split_at(dims_size);
+            *data = next;
+            let bytes = read_untagged_bytes(data);
             Datum::Array(Array {
                 dims: ArrayDimensions { data: dims },
-                elements: DatumList { data },
+                elements: DatumList { data: bytes },
             })
         }
         Tag::Dict => {
-            let bytes = read_untagged_bytes(data, offset);
+            let bytes = read_untagged_bytes(data);
             Datum::Map(DatumMap { data: bytes })
         }
         Tag::JsonNull => Datum::JsonNull,
         Tag::Dummy => Datum::Dummy,
         Tag::Numeric => {
-            let digits = read_byte(data, offset).into();
-            let exponent = i8::reinterpret_cast(read_byte(data, offset));
-            let bits = read_byte(data, offset);
+            let digits = read_byte(data).into();
+            let exponent = i8::reinterpret_cast(read_byte(data));
+            let bits = read_byte(data);
 
             let lsu_u16_len = Numeric::digits_to_lsu_elements_len(digits);
             let lsu_u8_len = lsu_u16_len * 2;
-            let lsu_u8 = &data[*offset..(*offset + lsu_u8_len)];
-            *offset += lsu_u8_len;
+            let (lsu_u8, next) = data.split_at(lsu_u8_len);
+            *data = next;
 
             // TODO: if we refactor the decimal library to accept the owned
             // array as a parameter to `from_raw_parts` below, we could likely
@@ -1369,12 +1347,12 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             Datum::from(d)
         }
         Tag::MzTimestamp => {
-            let t = Timestamp::decode(read_byte_array(data, offset));
+            let t = Timestamp::decode(read_byte_array(data));
             Datum::MzTimestamp(t)
         }
         Tag::Range => {
             // See notes on `push_range_with` for details about encoding.
-            let flag_byte = read_byte(data, offset);
+            let flag_byte = read_byte(data);
             let flags = range::InternalFlags::from_bits(flag_byte)
                 .expect("range flags must be encoded validly");
 
@@ -1390,7 +1368,7 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             let lower_bound = if flags.contains(range::InternalFlags::LB_INFINITE) {
                 None
             } else {
-                Some(DatumNested::extract(data, offset))
+                Some(DatumNested::extract(data))
             };
 
             let lower = RangeBound {
@@ -1401,7 +1379,7 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             let upper_bound = if flags.contains(range::InternalFlags::UB_INFINITE) {
                 None
             } else {
-                Some(DatumNested::extract(data, offset))
+                Some(DatumNested::extract(data))
             };
 
             let upper = RangeBound {
@@ -1415,14 +1393,14 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         }
         Tag::MzAclItem => {
             const N: usize = MzAclItem::binary_size();
-            let mz_acl_item = MzAclItem::decode_binary(&read_byte_array::<N>(data, offset))
-                .expect("invalid mz_aclitem");
+            let mz_acl_item =
+                MzAclItem::decode_binary(&read_byte_array::<N>(data)).expect("invalid mz_aclitem");
             Datum::MzAclItem(mz_acl_item)
         }
         Tag::AclItem => {
             const N: usize = AclItem::binary_size();
-            let acl_item = AclItem::decode_binary(&read_byte_array::<N>(data, offset))
-                .expect("invalid aclitem");
+            let acl_item =
+                AclItem::decode_binary(&read_byte_array::<N>(data)).expect("invalid aclitem");
             Datum::AclItem(acl_item)
         }
     }
@@ -2459,7 +2437,7 @@ impl RowPacker<'_> {
 
         self.row.data.push(flags.bits());
 
-        let mut datum_check = self.row.data.len();
+        let datum_check = self.row.data.len();
 
         if let Some(value) = lower.bound {
             let start = self.row.data.len();
@@ -2484,8 +2462,9 @@ impl RowPacker<'_> {
         // Validate that what was written maintains the correct invariants.
         let mut actual_datums = 0;
         let mut seen = None;
-        while datum_check < self.row.data.len() {
-            let d = unsafe { read_datum(&self.row.data, &mut datum_check) };
+        let mut dataz = &self.row.data[datum_check..];
+        while !dataz.is_empty() {
+            let d = unsafe { read_datum(&mut dataz) };
             assert!(d != Datum::Null, "cannot push Datum::Null into range");
 
             match seen {
@@ -2545,11 +2524,12 @@ impl RowPacker<'_> {
 
     /// Truncates the underlying row to contain at most the first `n` datums.
     pub fn truncate_datums(&mut self, n: usize) {
+        let prev_len = self.row.data.len();
         let mut iter = self.row.iter();
         for _ in iter.by_ref().take(n) {}
-        let offset = iter.offset;
+        let next_len = self.row.data.len();
         // SAFETY: iterator offsets always lie on a datum boundary.
-        unsafe { self.truncate(offset) }
+        unsafe { self.truncate(prev_len - next_len) }
     }
 
     /// Returns the total amount of bytes used by the underlying row.
@@ -2595,10 +2575,7 @@ impl<'a> DatumList<'a> {
     }
 
     pub fn iter(&self) -> DatumListIter<'a> {
-        DatumListIter {
-            data: self.data,
-            offset: 0,
-        }
+        DatumListIter { data: self.data }
     }
 
     /// For debugging only
@@ -2618,10 +2595,10 @@ impl<'a> IntoIterator for &'a DatumList<'a> {
 impl<'a> Iterator for DatumListIter<'a> {
     type Item = Datum<'a>;
     fn next(&mut self) -> Option<Self::Item> {
-        if self.offset >= self.data.len() {
+        if self.data.is_empty() {
             None
         } else {
-            Some(unsafe { read_datum(self.data, &mut self.offset) })
+            Some(unsafe { read_datum(&mut self.data) })
         }
     }
 }
@@ -2634,7 +2611,6 @@ impl<'a> DatumMap<'a> {
     pub fn iter(&self) -> DatumDictIter<'a> {
         DatumDictIter {
             data: self.data,
-            offset: 0,
             prev_key: None,
         }
     }
@@ -2662,11 +2638,11 @@ impl<'a> IntoIterator for &'a DatumMap<'a> {
 impl<'a> Iterator for DatumDictIter<'a> {
     type Item = (&'a str, Datum<'a>);
     fn next(&mut self) -> Option<Self::Item> {
-        if self.offset >= self.data.len() {
+        if self.data.is_empty() {
             None
         } else {
-            let key_tag = Tag::try_from_primitive(read_byte(self.data, &mut self.offset))
-                .expect("unknown row tag");
+            let key_tag =
+                Tag::try_from_primitive(read_byte(&mut self.data)).expect("unknown row tag");
             assert!(
                 key_tag == Tag::StringTiny
                     || key_tag == Tag::StringShort
@@ -2675,9 +2651,8 @@ impl<'a> Iterator for DatumDictIter<'a> {
                 "Dict keys must be strings, got {:?}",
                 key_tag
             );
-            let key =
-                unsafe { read_lengthed_datum(self.data, &mut self.offset, key_tag).unwrap_str() };
-            let val = unsafe { read_datum(self.data, &mut self.offset) };
+            let key = unsafe { read_lengthed_datum(&mut self.data, key_tag).unwrap_str() };
+            let val = unsafe { read_datum(&mut self.data) };
 
             // if in debug mode, sanity check keys
             if cfg!(debug_assertions) {
@@ -2764,7 +2739,7 @@ impl RowArena {
             //     and moves the row.
             //   * We don't allow access to the byte vector itself, so it will
             //     never reallocate.
-            let datum = read_datum(&inner[inner.len() - 1], &mut 0);
+            let datum = read_datum(&mut &inner[inner.len() - 1][..]);
             transmute::<Datum<'_>, Datum<'a>>(datum)
         }
     }
@@ -2784,7 +2759,7 @@ impl RowArena {
             //     and moves the row.
             //   * We don't allow access to the byte vector itself, so it will
             //     never reallocate.
-            let nested = DatumNested::extract(&inner[inner.len() - 1], &mut 0);
+            let nested = DatumNested::extract(&mut &inner[inner.len() - 1][..]);
             transmute::<DatumNested<'_>, DatumNested<'a>>(nested)
         }
     }
