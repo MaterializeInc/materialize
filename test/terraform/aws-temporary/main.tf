@@ -64,6 +64,7 @@ module "materialize_infrastructure" {
   # e.g. ${namespace}-${environment}-eks and etc.
   namespace    = "aws-test"
   environment  = "dev"
+
   install_materialize_operator = true
   use_local_chart = true
   helm_chart = "materialize-operator-v25.2.0-beta.1.tgz"

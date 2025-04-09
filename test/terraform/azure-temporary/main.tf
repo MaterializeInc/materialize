@@ -43,6 +43,16 @@ resource "random_password" "pass" {
   special = false
 }
 
+variable "operator_version" {
+  type    = string
+  default = "v25.2.0-beta.1.tgz"
+}
+
+variable "orchestratord_version" {
+  type    = string
+  default = null
+}
+
 resource "azurerm_resource_group" "materialize" {
   name     = "mz-tf-test-rg"
   location = "eastus2"
@@ -54,9 +64,12 @@ module "materialize" {
   resource_group_name = azurerm_resource_group.materialize.name
   location            = "eastus2"
   prefix              = "mz-tf-test"
+
   install_materialize_operator = true
   use_local_chart = true
   helm_chart = "materialize-operator-v25.2.0-beta.1.tgz"
+  operator_version = var.operator_version
+  orchestratord_version = var.orchestratord_version
 
   install_cert_manager = false
   use_self_signed_cluster_issuer = false

@@ -824,6 +824,13 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
             ],
         )
 
+        vars = [
+            "-var",
+            "operator_version=v25.2.0-beta.1",
+            "-var",
+            f"orchestratord_version={tag}",
+        ]
+
         if args.setup:
             print("--- Setup")
             spawn.runv(
@@ -833,7 +840,7 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
             spawn.runv(["terraform", "init"], cwd=path)
             spawn.runv(["terraform", "validate"], cwd=path)
             spawn.runv(["terraform", "plan"], cwd=path)
-            spawn.runv(["terraform", "apply", "-auto-approve"], cwd=path)
+            spawn.runv(["terraform", "apply", "-auto-approve", *vars], cwd=path)
 
         gke_cluster = json.loads(
             spawn.capture(
@@ -1289,6 +1296,13 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                 env=venv_env,
             )
 
+        vars = [
+            "-var",
+            "operator_version=v25.2.0-beta.1",
+            "-var",
+            f"orchestratord_version={tag}",
+        ]
+
         if args.setup:
             print("--- Setup")
             spawn.runv(
@@ -1300,12 +1314,12 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
             spawn.runv(["terraform", "plan"], cwd=path, env=venv_env)
             try:
                 spawn.runv(
-                    ["terraform", "apply", "-auto-approve"], cwd=path, env=venv_env
+                    ["terraform", "apply", "-auto-approve", *vars], cwd=path, env=venv_env
                 )
             except:
                 print("terraform apply failed, retrying")
                 spawn.runv(
-                    ["terraform", "apply", "-auto-approve"], cwd=path, env=venv_env
+                    ["terraform", "apply", "-auto-approve", *vars], cwd=path, env=venv_env
                 )
 
         aks_cluster = json.loads(
