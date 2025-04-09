@@ -543,7 +543,7 @@ impl From<PlannedRoleAttributes> for RoleAttributes {
         RoleAttributes {
             inherit: inherit.unwrap_or(default_attributes.inherit),
             password,
-            superuser: superuser,
+            superuser,
             _private: (),
         }
     }
