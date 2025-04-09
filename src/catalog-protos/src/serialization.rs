@@ -116,7 +116,7 @@ impl RustType<crate::objects::RoleAttributes> for RoleAttributes {
     fn into_proto(&self) -> crate::objects::RoleAttributes {
         crate::objects::RoleAttributes {
             inherit: self.inherit,
-            superuser: Some(self.superuser),
+            superuser: self.superuser,
         }
     }
 

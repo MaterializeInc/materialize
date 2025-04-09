@@ -263,7 +263,7 @@ impl Coordinator {
                     let _ = match mz_auth::hash::scram256_verify(&password, &hash) {
                         Ok(_) => tx.send(Ok(AuthResponse {
                             role_id: role.id,
-                            superuser: role.attributes.superuser,
+                            superuser: role.attributes.superuser.unwrap_or(false),
                         })),
                         Err(_) => tx.send(Err(AdapterError::AuthenticationError)),
                     };

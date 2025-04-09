@@ -63,7 +63,7 @@ COMPLETE 0
 simple conn=regress_role_limited_admin,user=regress_role_limited_admin
 CREATE ROLE regress_nosuch_superuser SUPERUSER;
 ----
-db error: ERROR: SUPERUSER attribute is not supported, for more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
+db error: ERROR: self-managed auth is not enabled, setting password or superuser is not allowed are not supported
 
 simple conn=regress_role_limited_admin,user=regress_role_limited_admin
 CREATE ROLE regress_nosuch_createdb CREATEDB;
@@ -141,12 +141,12 @@ DETAIL: Use system privileges instead.
 simple conn=regress_role_admin,user=regress_role_admin
 ALTER ROLE regress_createdb SUPERUSER;
 ----
-db error: ERROR: SUPERUSER attribute is not supported, for more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
+db error: ERROR: self-managed auth is not enabled, setting password or superuser is not allowed are not supported
 
 simple conn=regress_role_admin,user=regress_role_admin
 ALTER ROLE regress_createdb NOSUPERUSER;
 ----
-db error: ERROR: SUPERUSER attribute is not supported, for more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
+db error: ERROR: self-managed auth is not enabled, setting password or superuser is not allowed are not supported
 
 simple conn=regress_role_admin,user=regress_role_admin
 CREATE ROLE regress_createrole;
@@ -166,7 +166,7 @@ db error: ERROR: Expected end of statement, found CONNECTION
 simple conn=regress_role_admin,user=regress_role_admin
 CREATE ROLE regress_password_null PASSWORD NULL;
 ----
-db error: ERROR: Expected end of statement, found PASSWORD
+db error: ERROR: Expected literal string, found NULL
 
 simple conn=regress_role_admin,user=regress_role_admin
 CREATE ROLE regress_noiseword SYSID 12345;

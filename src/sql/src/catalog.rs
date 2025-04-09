@@ -488,7 +488,7 @@ pub struct RoleAttributes {
     /// The password for the role
     pub password: Option<String>,
     /// Whether or not this user is a superuser.
-    pub superuser: bool,
+    pub superuser: Option<bool>,
     // Force use of constructor.
     _private: (),
 }
@@ -499,7 +499,7 @@ impl RoleAttributes {
         RoleAttributes {
             inherit: true,
             password: None,
-            superuser: false,
+            superuser: None,
             _private: (),
         }
     }
@@ -543,7 +543,7 @@ impl From<PlannedRoleAttributes> for RoleAttributes {
         RoleAttributes {
             inherit: inherit.unwrap_or(default_attributes.inherit),
             password,
-            superuser: superuser.unwrap_or(default_attributes.superuser),
+            superuser: superuser,
             _private: (),
         }
     }

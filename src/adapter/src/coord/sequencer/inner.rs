@@ -988,7 +988,7 @@ impl Coordinator {
     /// Validates the role attributes for a `CREATE ROLE` statement.
     fn validate_role_attributes(&self, attributes: &RoleAttributes) -> Result<(), AdapterError> {
         if !ENABLE_SELF_MANAGED_AUTH.get(self.catalog().system_config().dyncfgs()) {
-            if attributes.superuser || attributes.password.is_some() {
+            if attributes.superuser.is_some() || attributes.password.is_some() {
                 return Err(AdapterError::Unsupported(
                     "self-managed auth is not enabled, setting password or superuser is not allowed",
                 ));
@@ -3404,7 +3404,7 @@ impl Coordinator {
                 }
 
                 if let Some(superuser) = attrs.superuser {
-                    attributes.superuser = superuser;
+                    attributes.superuser = Some(superuser);
                 }
 
                 if let Some(notice) = self.should_emit_rbac_notice(session) {
