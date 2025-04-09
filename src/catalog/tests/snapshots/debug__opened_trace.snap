@@ -1258,6 +1258,7 @@ Trace {
                         attributes: Some(
                             RoleAttributes {
                                 inherit: true,
+                                superuser: false,
                             },
                         ),
                         membership: Some(
@@ -1296,6 +1297,7 @@ Trace {
                         attributes: Some(
                             RoleAttributes {
                                 inherit: true,
+                                superuser: false,
                             },
                         ),
                         membership: Some(
@@ -1334,6 +1336,7 @@ Trace {
                         attributes: Some(
                             RoleAttributes {
                                 inherit: true,
+                                superuser: false,
                             },
                         ),
                         membership: Some(
@@ -1372,6 +1375,7 @@ Trace {
                         attributes: Some(
                             RoleAttributes {
                                 inherit: true,
+                                superuser: false,
                             },
                         ),
                         membership: Some(
@@ -1410,6 +1414,7 @@ Trace {
                         attributes: Some(
                             RoleAttributes {
                                 inherit: true,
+                                superuser: false,
                             },
                         ),
                         membership: Some(
@@ -1448,6 +1453,7 @@ Trace {
                         attributes: Some(
                             RoleAttributes {
                                 inherit: true,
+                                superuser: false,
                             },
                         ),
                         membership: Some(
@@ -1469,6 +1475,9 @@ Trace {
                 ),
             ),
         ],
+    },
+    role_auth: CollectionTrace {
+        values: [],
     },
     schemas: CollectionTrace {
         values: [

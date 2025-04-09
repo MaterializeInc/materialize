@@ -50,7 +50,7 @@ CREATE ROLE foo NOINHERIT
 statement error LOGIN attribute is not supported, for more information consult the documentation at
 CREATE ROLE foo LOGIN
 
-statement error SUPERUSER attribute is not supported, for more information consult the documentation at
+statement error db error: ERROR: self-managed auth is not enabled, setting password or superuser is not allowed are not supported
 CREATE ROLE foo SUPERUSER
 
 statement error conflicting or redundant options
