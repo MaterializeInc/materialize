@@ -15,6 +15,7 @@ chrono = { version = "0.4.39", default-features = false }
 futures = "0.3.31"
 k8s-openapi = { version = "0.24.0", features = ["schemars", "v1_30"] }
 kube = { version = "0.98.0", default-features = false, features = ["client", "derive", "openssl-tls", "ws"] }
+mz-server-core = { path = "../server-core", default-features = false }
 mz-ore = { path = "../ore", default-features = false }
 rand = "0.8.5"
 schemars = { version = "0.8", features = ["uuid1"] }

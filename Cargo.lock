@@ -1984,6 +1984,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cookie"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ddef33a339a91ea89fb53151bd0a4689cfce27055c291dfa69945475d22c747"
+dependencies = [
+ "percent-encoding",
+ "time",
+ "version_check",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4454,6 +4465,7 @@ checksum = "07af8b9cdd281b7915f413fa73f29ebd5d55d0d3f0155584dade1ff18cea1b17"
 dependencies = [
  "autocfg",
  "scopeguard",
+ "serde",
 ]
 
 [[package]]
@@ -4995,6 +5007,7 @@ dependencies = [
 name = "mz-authenticator"
 version = "0.1.0"
 dependencies = [
+ "mz-adapter",
  "mz-frontegg-auth",
  "mz-server-core",
  "serde",
@@ -5318,6 +5331,7 @@ dependencies = [
  "kube",
  "mz-ore",
  "mz-repr",
+ "mz-server-core",
  "rand 0.8.5",
  "schemars",
  "semver",
@@ -5709,6 +5723,7 @@ dependencies = [
  "itertools 0.14.0",
  "jsonwebtoken",
  "libc",
+ "maplit",
  "mime",
  "mz-adapter",
  "mz-adapter-types",
@@ -5789,6 +5804,8 @@ dependencies = [
  "tokio-stream",
  "tower 0.5.2",
  "tower-http",
+ "tower-sessions",
+ "tower-sessions-memory-store",
  "tracing",
  "tracing-capture",
  "tracing-opentelemetry",
@@ -6393,6 +6410,7 @@ dependencies = [
  "maplit",
  "mz-alloc",
  "mz-alloc-default",
+ "mz-authenticator",
  "mz-build-info",
  "mz-build-tools",
  "mz-cloud-provider",
@@ -6401,6 +6419,7 @@ dependencies = [
  "mz-orchestrator-tracing",
  "mz-ore",
  "mz-prof-http",
+ "mz-server-core",
  "prometheus",
  "rand 0.8.5",
  "reqwest 0.11.24",
@@ -6746,6 +6765,7 @@ dependencies = [
  "mz-adapter",
  "mz-adapter-types",
  "mz-auth",
+ "mz-authenticator",
  "mz-frontegg-auth",
  "mz-ore",
  "mz-pgcopy",
@@ -7078,6 +7098,7 @@ dependencies = [
  "mz-ore",
  "openssl",
  "proxy-header",
+ "schemars",
  "scopeguard",
  "serde",
  "socket2 0.5.9",
@@ -7314,13 +7335,16 @@ dependencies = [
  "futures",
  "itertools 0.14.0",
  "junit-report",
+ "maplit",
  "md-5",
  "mz-adapter-types",
+ "mz-authenticator",
  "mz-build-info",
  "mz-catalog",
  "mz-controller",
  "mz-dyncfgs",
  "mz-environmentd",
+ "mz-frontegg-auth",
  "mz-license-keys",
  "mz-orchestrator",
  "mz-orchestrator-process",
@@ -11438,6 +11462,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "tower-cookies"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4fd0118512cf0b3768f7fcccf0bef1ae41d68f2b45edc1e77432b36c97c56c6d"
+dependencies = [
+ "async-trait",
+ "axum-core",
+ "cookie",
+ "futures-util",
+ "http 1.2.0",
+ "parking_lot",
+ "pin-project-lite",
+ "tower-layer",
+ "tower-service",
+]
+
+[[package]]
 name = "tower-http"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11501,6 +11542,57 @@ name = "tower-service"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8df9b6e13f2d32c91b9bd719c00d1958837bc7dec474d94952798cc8e69eeec3"
+
+[[package]]
+name = "tower-sessions"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65856c81ee244e0f8a55ab0f7b769b72fbde387c235f0a73cd97c579818d05eb"
+dependencies = [
+ "async-trait",
+ "http 1.2.0",
+ "time",
+ "tokio",
+ "tower-cookies",
+ "tower-layer",
+ "tower-service",
+ "tower-sessions-core",
+ "tower-sessions-memory-store",
+ "tracing",
+]
+
+[[package]]
+name = "tower-sessions-core"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb6abbfcaf6436ec5a772cd9f965401da12db793e404ae6134eac066fa5a04f3"
+dependencies = [
+ "async-trait",
+ "axum-core",
+ "base64 0.22.1",
+ "futures",
+ "http 1.2.0",
+ "parking_lot",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "time",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "tower-sessions-memory-store"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7fad75660c8afbe74f4e7cbbe8e9090171a056b57370ea4d7d5e9eb3e4af3092"
+dependencies = [
+ "async-trait",
+ "time",
+ "tokio",
+ "tower-sessions-core",
+]
 
 [[package]]
 name = "tracing"
@@ -12614,6 +12706,7 @@ dependencies = [
  "libc",
  "libz-sys",
  "linux-raw-sys 0.4.14",
+ "lock_api",
  "log",
  "lru 0.12.5",
  "memchr",
@@ -12631,6 +12724,7 @@ dependencies = [
  "num-traits",
  "openssl",
  "openssl-sys",
+ "parking_lot",
  "parquet",
  "pathdiff",
  "percent-encoding",

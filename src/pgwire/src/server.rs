@@ -14,12 +14,13 @@ use std::str::FromStr;
 
 use anyhow::Context;
 use async_trait::async_trait;
-use mz_frontegg_auth::Authenticator as FronteggAuthentication;
+use mz_authenticator::Authenticator;
 use mz_ore::now::{SYSTEM_TIME, epoch_to_uuid_v7};
 use mz_pgwire_common::{
     ACCEPT_SSL_ENCRYPTION, CONN_UUID_KEY, Conn, ConnectionCounter, FrontendStartupMessage,
     MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION, decode_startup,
 };
+use mz_server_core::listeners::AllowedRoles;
 use mz_server_core::{Connection, ConnectionHandler, ReloadingTlsConfig};
 use openssl::ssl::Ssl;
 use tokio::io::AsyncWriteExt;
@@ -42,35 +43,27 @@ pub struct Config {
     /// If not present, then TLS is not enabled, and clients requests to
     /// negotiate TLS will be rejected.
     pub tls: Option<ReloadingTlsConfig>,
-    /// The Frontegg authentication configuration.
-    ///
-    /// If present, Frontegg authentication is enabled, and users may present
-    /// a valid Frontegg API token as a password to authenticate. Otherwise,
-    /// password authentication is disabled.
-    pub frontegg: Option<FronteggAuthentication>,
-    /// Whether to use self-hosted authentication.
-    pub use_self_hosted_auth: bool,
+    /// Authentication method to use. Frontegg, Password, or None.
+    pub authenticator: Authenticator,
     /// The registry entries that the pgwire server uses to report metrics.
     pub metrics: MetricsConfig,
-    /// Whether this is an internal server that permits access to restricted
-    /// system resources.
-    pub internal: bool,
     /// Global connection limit and count
     pub active_connection_counter: ConnectionCounter,
     /// Helm chart version
     pub helm_chart_version: Option<String>,
+    /// Whether to allow reserved users (ie: mz_system).
+    pub allowed_roles: AllowedRoles,
 }
 
 /// A server that communicates with clients via the pgwire protocol.
 pub struct Server {
     tls: Option<ReloadingTlsConfig>,
     adapter_client: mz_adapter::Client,
-    frontegg: Option<FronteggAuthentication>,
+    authenticator: Authenticator,
     metrics: Metrics,
-    internal: bool,
     active_connection_counter: ConnectionCounter,
     helm_chart_version: Option<String>,
-    use_self_hosted_auth: bool,
+    allowed_roles: AllowedRoles,
 }
 
 #[async_trait]
@@ -91,12 +84,11 @@ impl Server {
         Server {
             tls: config.tls,
             adapter_client: config.adapter_client,
-            frontegg: config.frontegg,
-            use_self_hosted_auth: config.use_self_hosted_auth,
+            authenticator: config.authenticator,
             metrics: Metrics::new(config.metrics, config.label),
-            internal: config.internal,
             active_connection_counter: config.active_connection_counter,
             helm_chart_version: config.helm_chart_version,
+            allowed_roles: config.allowed_roles,
         }
     }
 
@@ -106,13 +98,12 @@ impl Server {
         conn: Connection,
     ) -> impl Future<Output = Result<(), anyhow::Error>> + 'static + Send {
         let adapter_client = self.adapter_client.clone();
-        let frontegg = self.frontegg.clone();
-        let use_self_hosted_auth = self.use_self_hosted_auth;
+        let authenticator = self.authenticator.clone();
         let tls = self.tls.clone();
-        let internal = self.internal;
         let metrics = self.metrics.clone();
         let active_connection_counter = self.active_connection_counter.clone();
         let helm_chart_version = self.helm_chart_version.clone();
+        let allowed_roles = self.allowed_roles;
 
         // TODO(guswynn): remove this redundant_closure_call
         #[allow(clippy::redundant_closure_call)]
@@ -183,11 +174,10 @@ impl Server {
                                     conn_uuid,
                                     version,
                                     params,
-                                    frontegg: frontegg.as_ref(),
-                                    use_self_hosted_auth,
-                                    internal,
+                                    authenticator,
                                     active_connection_counter,
                                     helm_chart_version,
+                                    allowed_roles,
                                 })
                                 .await?;
                                 conn.flush().await?;

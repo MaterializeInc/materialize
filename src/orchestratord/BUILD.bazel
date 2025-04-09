@@ -37,6 +37,7 @@ rust_library(
     deps = [
         "//src/alloc:mz_alloc",
         "//src/alloc-default:mz_alloc_default",
+        "//src/authenticator:mz_authenticator",
         "//src/build-info:mz_build_info",
         "//src/cloud-provider:mz_cloud_provider",
         "//src/cloud-resources:mz_cloud_resources",
@@ -44,6 +45,7 @@ rust_library(
         "//src/orchestrator-tracing:mz_orchestrator_tracing",
         "//src/ore:mz_ore",
         "//src/prof-http:mz_prof_http",
+        "//src/server-core:mz_server_core",
     ] + all_crate_deps(normal = True),
 )
 
@@ -76,6 +78,7 @@ rust_test(
     deps = [
         "//src/alloc:mz_alloc",
         "//src/alloc-default:mz_alloc_default",
+        "//src/authenticator:mz_authenticator",
         "//src/build-info:mz_build_info",
         "//src/cloud-provider:mz_cloud_provider",
         "//src/cloud-resources:mz_cloud_resources",
@@ -83,6 +86,7 @@ rust_test(
         "//src/orchestrator-tracing:mz_orchestrator_tracing",
         "//src/ore:mz_ore",
         "//src/prof-http:mz_prof_http",
+        "//src/server-core:mz_server_core",
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,
@@ -95,6 +99,7 @@ rust_doc_test(
     deps = [
         "//src/alloc:mz_alloc",
         "//src/alloc-default:mz_alloc_default",
+        "//src/authenticator:mz_authenticator",
         "//src/build-info:mz_build_info",
         "//src/cloud-provider:mz_cloud_provider",
         "//src/cloud-resources:mz_cloud_resources",
@@ -102,6 +107,7 @@ rust_doc_test(
         "//src/orchestrator-tracing:mz_orchestrator_tracing",
         "//src/ore:mz_ore",
         "//src/prof-http:mz_prof_http",
+        "//src/server-core:mz_server_core",
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,
@@ -132,6 +138,7 @@ rust_binary(
         ":mz_orchestratord",
         "//src/alloc:mz_alloc",
         "//src/alloc-default:mz_alloc_default",
+        "//src/authenticator:mz_authenticator",
         "//src/build-info:mz_build_info",
         "//src/cloud-provider:mz_cloud_provider",
         "//src/cloud-resources:mz_cloud_resources",
@@ -139,6 +146,7 @@ rust_binary(
         "//src/orchestrator-tracing:mz_orchestrator_tracing",
         "//src/ore:mz_ore",
         "//src/prof-http:mz_prof_http",
+        "//src/server-core:mz_server_core",
     ] + all_crate_deps(normal = True),
 )
 
