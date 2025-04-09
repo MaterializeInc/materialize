@@ -31,11 +31,6 @@ curl -fsSL https://dev.materialize.com/apt/materialize.sources | sudo tee /etc/a
 sudo apt update
 sudo apt install materialize-cli
 {{</ tab >}}
-{{< tab "Docker" >}}
-```shell
-docker run materialize/mz-debug
-```
-{{</ tab >}}
 {{</ tabs >}}
 
 ### Get version and help
