@@ -1889,23 +1889,14 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str, CalendarEra) {
     // First we need to see if the string contains " +" or " -" because
     // timestamps can come in a format YYYY-MM-DD {+|-}<tz> (where the timezone
     // string can have colons)
-    use CalendarEra::{AD, BC};
-
     let cut = value.find(" +").or_else(|| value.find(" -"));
 
     if let Some(cut) = cut {
-        let (first, second) = value.split_at(cut);
+        let (datetime, timezone) = value.split_at(cut);
 
-        let (second, era) = match (
-            second.strip_suffix(BC.as_str()),
-            second.strip_suffix(AD.as_str()),
-        ) {
-            (Some(remainder), None) => (remainder, BC),
-            (None, Some(remainder)) => (remainder, AD),
-            _ => (second, AD),
-        };
+        let (timezone, era) = strip_era_from_timezone(timezone);
 
-        return (first.trim(), second.trim(), era);
+        return (datetime.trim(), timezone.trim(), era);
     }
 
     // If we have a hh:mm:dd component, we need to go past that to see if we can
@@ -1919,21 +1910,15 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str, CalendarEra) {
                 .find(|c: char| (c == '-') || (c == '+') || (c == ' ') || c.is_ascii_alphabetic());
 
             if let Some(tz) = tz {
-                let (first, second) = value.split_at(colon + tz);
-                let (second, era) = match (
-                    second.strip_suffix(BC.as_str()),
-                    second.strip_suffix(AD.as_str()),
-                ) {
-                    (Some(remainder), None) => (remainder, BC),
-                    (None, Some(remainder)) => (remainder, AD),
-                    _ => (second, AD),
-                };
+                let (datetime, timezone) = value.split_at(colon + tz);
 
-                return (first.trim(), second.trim(), era);
+                let (timezone, era) = strip_era_from_timezone(timezone);
+
+                return (datetime.trim(), timezone.trim(), era);
             }
         }
 
-        (value.trim(), "", AD)
+        (value.trim(), "", CalendarEra::AD)
     } else {
         // We don't have a time, so the only formats available are YYY-mm-dd<tz>
         // or YYYY-MM-dd <tz> Numeric offset timezones need to be separated from
@@ -1941,21 +1926,29 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str, CalendarEra) {
         let cut = value.find(|c: char| c.is_ascii_alphabetic());
 
         if let Some(cut) = cut {
-            let (first, second) = value.split_at(cut);
+            let (datetime, timezone) = value.split_at(cut);
 
-            let (second, era) = match (
-                second.strip_suffix(BC.as_str()),
-                second.strip_suffix(AD.as_str()),
-            ) {
-                (Some(remainder), None) => (remainder, BC),
-                (None, Some(remainder)) => (remainder, AD),
-                _ => (second, AD),
-            };
+            let (timezone, era) = strip_era_from_timezone(timezone);
 
-            return (first.trim(), second.trim(), era);
+            return (datetime.trim(), timezone.trim(), era);
         }
 
-        (value.trim(), "", AD)
+        (value.trim(), "", CalendarEra::AD)
+    }
+}
+
+fn strip_era_from_timezone(timezone: &str) -> (&str, CalendarEra) {
+    use CalendarEra::{AD, BC};
+    let timezone = timezone.trim();
+    let timezone_upper = timezone.to_uppercase();
+
+    match (
+        timezone_upper.strip_suffix(BC.as_str()),
+        timezone_upper.strip_suffix(AD.as_str()),
+    ) {
+        (Some(remainder), None) => (&timezone[..remainder.len()], BC),
+        (None, Some(remainder)) => (&timezone[..remainder.len()], AD),
+        _ => (timezone, AD),
     }
 }
 
