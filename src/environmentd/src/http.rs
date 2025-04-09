@@ -99,6 +99,7 @@ pub struct HttpConfig {
     pub helm_chart_version: Option<String>,
     pub concurrent_webhook_req: Arc<tokio::sync::Semaphore>,
     pub metrics: Metrics,
+    pub allow_reserved_roles: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -119,6 +120,7 @@ pub struct WsState {
     adapter_client_rx: Delayed<mz_adapter::Client>,
     active_connection_counter: ConnectionCounter,
     helm_chart_version: Option<String>,
+    allow_reserved_roles: bool,
 }
 
 #[derive(Clone)]
@@ -145,6 +147,7 @@ impl HttpServer {
             helm_chart_version,
             concurrent_webhook_req,
             metrics,
+            allow_reserved_roles,
         }: HttpConfig,
     ) -> HttpServer {
         let tls_mode = tls.as_ref().map(|tls| tls.mode).unwrap_or(TlsMode::Disable);
@@ -160,7 +163,16 @@ impl HttpServer {
         let base_router = base_router(BaseRouterConfig { profiling: false })
             .layer(middleware::from_fn(move |req, next| {
                 let base_frontegg = Arc::clone(&base_frontegg);
-                async move { http_auth(req, next, tls_mode, base_frontegg.as_ref().as_ref()).await }
+                async move {
+                    http_auth(
+                        req,
+                        next,
+                        tls_mode,
+                        base_frontegg.as_ref().as_ref(),
+                        allow_reserved_roles,
+                    )
+                    .await
+                }
             }))
             .layer(Extension(adapter_client_rx.clone()))
             .layer(Extension(active_connection_counter.clone()))
@@ -184,6 +196,7 @@ impl HttpServer {
                 adapter_client_rx,
                 active_connection_counter,
                 helm_chart_version,
+                allow_reserved_roles,
             });
 
         let webhook_router = Router::new()
@@ -452,6 +465,7 @@ impl InternalHttpServer {
                 adapter_client_rx,
                 active_connection_counter,
                 helm_chart_version: helm_chart_version.clone(),
+                allow_reserved_roles: true,
             });
 
         let leader_router = Router::new()
@@ -710,6 +724,7 @@ async fn http_auth(
     next: Next,
     tls_mode: TlsMode,
     frontegg: Option<&FronteggAuthentication>,
+    allow_reserved_roles: bool,
 ) -> impl IntoResponse + use<> {
     // First, extract the username from the certificate, validating that the
     // connection matches the TLS configuration along the way.
@@ -747,7 +762,7 @@ async fn http_auth(
         }
     };
 
-    let user = auth(frontegg, creds).await?;
+    let user = auth(frontegg, creds, allow_reserved_roles).await?;
 
     // Add the authenticated user as an extension so downstream handlers can
     // inspect it if necessary.
@@ -763,6 +778,7 @@ async fn init_ws(
         adapter_client_rx,
         active_connection_counter,
         helm_chart_version,
+        allow_reserved_roles,
     }: &WsState,
     existing_user: Option<AuthedUser>,
     peer_addr: IpAddr,
@@ -809,7 +825,10 @@ async fn init_ws(
                     anyhow::bail!("expected auth information");
                 }
             };
-            (auth(Some(frontegg), creds).await?, options)
+            (
+                auth(Some(frontegg), creds, *allow_reserved_roles).await?,
+                options,
+            )
         }
         (
             None,
@@ -819,7 +838,10 @@ async fn init_ws(
                 password: _,
                 options,
             },
-        ) => (auth(None, Credentials::User(user)).await?, options),
+        ) => (
+            auth(None, Credentials::User(user), *allow_reserved_roles).await?,
+            options,
+        ),
         // No frontegg, specified existing user, we only accept options only.
         (None, Some(existing_user), WebSocketAuth::OptionsOnly { options }) => {
             (existing_user, options)
@@ -862,6 +884,7 @@ enum Credentials {
 async fn auth(
     frontegg: Option<&FronteggAuthentication>,
     creds: Credentials,
+    allow_reserved_roles: bool,
 ) -> Result<AuthedUser, AuthError> {
     // There are three places a username may be specified:
     //
@@ -906,7 +929,7 @@ async fn auth(
         },
     };
 
-    if mz_adapter::catalog::is_reserved_role_name(name.as_str()) {
+    if !allow_reserved_roles && mz_adapter::catalog::is_reserved_role_name(name.as_str()) {
         return Err(AuthError::InvalidLogin(name));
     }
     Ok(AuthedUser {

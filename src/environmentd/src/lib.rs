@@ -810,6 +810,7 @@ impl Listeners {
                 helm_chart_version: config.helm_chart_version.clone(),
                 concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
                 metrics: http_metrics.clone(),
+                allow_reserved_roles: config.allow_reserved_roles_on_external_ports,
             });
             mz_server_core::serve(ServeConfig {
                 conns: http_conns,
