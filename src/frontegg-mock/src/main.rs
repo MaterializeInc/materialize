@@ -76,6 +76,8 @@ async fn main() {
     }
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 async fn run(args: Args) -> Result<(), anyhow::Error> {
     let mut addrs = tokio::net::lookup_host(&args.listen_addr)
         .await

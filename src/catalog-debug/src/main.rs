@@ -546,6 +546,8 @@ async fn epoch(
     Ok(())
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 async fn upgrade_check(
     args: Args,
     openable_state: Box<dyn OpenableDurableCatalogState>,

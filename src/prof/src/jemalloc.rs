@@ -43,11 +43,17 @@ pub struct JemallocStats {
 }
 
 pub trait JemallocProfCtlExt {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     fn dump_stats(&mut self, json_format: bool) -> anyhow::Result<String>;
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     fn stats(&self) -> anyhow::Result<JemallocStats>;
 }
 
 impl JemallocProfCtlExt for JemallocProfCtl {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     fn dump_stats(&mut self, json_format: bool) -> anyhow::Result<String> {
         // Try to avoid allocations within `stats_print`
         let mut buf = Vec::with_capacity(1 << 22);
@@ -57,12 +63,16 @@ impl JemallocProfCtlExt for JemallocProfCtl {
         Ok(String::from_utf8(buf)?)
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     fn stats(&self) -> anyhow::Result<JemallocStats> {
         JemallocStats::get()
     }
 }
 
 impl JemallocStats {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     pub fn get() -> anyhow::Result<JemallocStats> {
         epoch::advance()?;
         Ok(JemallocStats {
@@ -125,6 +135,8 @@ impl JemallocMetrics {
         });
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     fn update(&self) -> anyhow::Result<()> {
         let s = JemallocStats::get()?;
         self.active.set(u64::cast_from(s.active));

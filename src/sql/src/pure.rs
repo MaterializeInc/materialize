@@ -2260,6 +2260,8 @@ async fn get_schema_with_strategy(
     }
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 async fn get_remote_csr_schema(
     ccsr_client: &mz_ccsr::Client,
     key_strategy: ReaderSchemaSelectionStrategy,

@@ -873,6 +873,8 @@ where
 /// This also keeps the shared frontier that is stored in `compute_state` in
 /// sync with the upper of the persist shard, and updates various metrics
 /// and statistics objects.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn append_batches<G>(
     scope: &G,
     collection_id: GlobalId,

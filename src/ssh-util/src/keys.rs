@@ -49,12 +49,16 @@ impl SshKeyPair {
 
     /// Deserializes a key pair from a key pair set that was serialized with
     /// [`SshKeyPairSet::serialize`].
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     pub fn from_bytes(data: &[u8]) -> anyhow::Result<SshKeyPair> {
         let set = SshKeyPairSet::from_bytes(data)?;
         Ok(set.primary().clone())
     }
 
     /// Deserializes a key pair from an OpenSSH-formatted private key.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     fn from_private_key(private_key: &[u8]) -> Result<SshKeyPair, anyhow::Error> {
         let private_key = PrivateKey::from_openssh(private_key)?;
 
@@ -243,6 +247,8 @@ impl SshKeyPairSet {
 
     /// Deserializes a key pair set that was serialized with
     /// [`SshKeyPairSet::serialize`].
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     pub fn from_bytes(data: &[u8]) -> anyhow::Result<SshKeyPairSet> {
         Ok(serde_json::from_slice(data)?)
     }
@@ -259,6 +265,8 @@ mod tests {
     use super::{SshKeyPair, SshKeyPairSet};
 
     #[mz_ore::test]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     fn test_key_pair_generation() -> anyhow::Result<()> {
         for _ in 0..100 {
             let key_pair = SshKeyPair::new()?;
@@ -276,6 +284,8 @@ mod tests {
     }
 
     #[mz_ore::test]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     fn test_unique_keys() -> anyhow::Result<()> {
         for _ in 0..100 {
             let key_set = SshKeyPairSet::new()?;
@@ -285,6 +295,8 @@ mod tests {
     }
 
     #[mz_ore::test]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     fn test_key_pair_serialization_roundtrip() -> anyhow::Result<()> {
         for _ in 0..100 {
             let key_pair = SshKeyPair::new()?;
@@ -298,6 +310,8 @@ mod tests {
     }
 
     #[mz_ore::test]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     fn test_key_set_serialization_roundtrip() -> anyhow::Result<()> {
         for _ in 0..100 {
             let key_set = SshKeyPairSet::new()?;
@@ -309,6 +323,8 @@ mod tests {
     }
 
     #[mz_ore::test]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     fn test_key_rotation() -> anyhow::Result<()> {
         for _ in 0..100 {
             let key_set = SshKeyPairSet::new()?;
@@ -323,6 +339,8 @@ mod tests {
 
     /// Ensure the new code can read legacy generated Keypairs
     #[mz_ore::test]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     fn test_deserializing_legacy_key_pairs() -> anyhow::Result<()> {
         for _ in 0..100 {
             let legacy_key_pair = LegacySshKeyPair::new()?;
@@ -341,6 +359,8 @@ mod tests {
 
     /// Ensure the legacy code can read newly generated Keypairs, e.g. if we have to rollback
     #[mz_ore::test]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     fn test_serializing_legacy_key_pairs() -> anyhow::Result<()> {
         for _ in 0..100 {
             let key_pair = SshKeyPair::new()?;
@@ -358,6 +378,8 @@ mod tests {
 
     /// Ensure the new code can read legacy generated Keysets
     #[mz_ore::test]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     fn test_deserializing_legacy_key_sets() -> anyhow::Result<()> {
         for _ in 0..100 {
             let legacy_key_pair = LegacySshKeyPairSet::new()?;
@@ -384,6 +406,8 @@ mod tests {
 
     /// Ensure the legacy code can read newly generated Keysets, e.g. if we have to rollback
     #[mz_ore::test]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     fn test_serializing_legacy_key_sets() -> anyhow::Result<()> {
         for _ in 0..100 {
             let key_pair = SshKeyPairSet::new()?;

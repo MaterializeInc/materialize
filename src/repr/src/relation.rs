@@ -61,6 +61,8 @@ fn return_true() -> bool {
 }
 
 impl ColumnType {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn union(&self, other: &Self) -> Result<Self, anyhow::Error> {
         match (self.scalar_type.clone(), other.scalar_type.clone()) {
             (scalar_type, other_scalar_type) if scalar_type == other_scalar_type => {
@@ -1283,6 +1285,8 @@ impl VersionedRelationDesc {
     ///
     /// Panics if a constraint is not satisfied.
     fn validate(&self) {
+        // database-issues#9092: anyhow should not be used.
+        #[allow(clippy::disallowed_macros)]
         fn validate_inner(desc: &RelationDesc) -> Result<(), anyhow::Error> {
             if desc.typ.column_types.len() != desc.metadata.len() {
                 anyhow::bail!("mismatch between number of types and metadatas");

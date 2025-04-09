@@ -37,6 +37,8 @@ mod tests {
     use super::*;
 
     #[mz_ore::test]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     fn record_without_fields() -> anyhow::Result<()> {
         let schema = r#"{
             "type": "record",
@@ -51,6 +53,8 @@ mod tests {
     }
 
     #[mz_ore::test]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     fn basic_record() -> anyhow::Result<()> {
         let schema = r#"{
             "type": "record",
@@ -71,14 +75,17 @@ mod tests {
         Ok(())
     }
 
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     /// Test that primitive Avro Schema types are allow Datums to be correctly
     /// serialized into Avro Values.
     ///
     /// Complete list of primitive types in test, also found in this
     /// documentation:
     /// https://avro.apache.org/docs/current/spec.html#schemas
+    #[mz_ore::test]
+    // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    #[cfg_attr(miri, ignore)]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     fn test_diff_pair_to_avro_primitive_types() -> anyhow::Result<()> {
         use numeric::Numeric;
         // Data to be used later in assertions.

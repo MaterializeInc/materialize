@@ -115,6 +115,8 @@ impl Staged for ClusterStage {
     }
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 impl Coordinator {
     #[instrument]
     pub(crate) async fn sequence_alter_cluster_staged(

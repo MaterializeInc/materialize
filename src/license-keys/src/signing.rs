@@ -67,6 +67,8 @@ pub async fn make_license_key(
     Ok(format!("{}.{}", signing_string, signature))
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 async fn get_pubkey(client: &aws_sdk_kms::Client, key_id: &str) -> anyhow::Result<Vec<u8>> {
     if let Some(pubkey) = client
         .get_public_key()
@@ -81,6 +83,8 @@ async fn get_pubkey(client: &aws_sdk_kms::Client, key_id: &str) -> anyhow::Resul
     }
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 async fn sign(
     client: &aws_sdk_kms::Client,
     key_id: &str,

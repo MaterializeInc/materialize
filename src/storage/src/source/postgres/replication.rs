@@ -605,6 +605,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 /// keepalive messages with the provided `uppers` stream.
 ///
 /// The returned stream will contain all transactions that whose commit LSN is beyond `resume_lsn`.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 async fn raw_stream<'a>(
     config: &'a RawSourceCreationConfig,
     replication_client: Client,

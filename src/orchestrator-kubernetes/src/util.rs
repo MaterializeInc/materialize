@@ -18,6 +18,8 @@ use kube::{Client, Config};
 ///
 /// Returns the constructed client and the default namespace loaded from the
 /// configuration.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub async fn create_client(context: String) -> Result<(Client, String), anyhow::Error> {
     let kubeconfig_options = KubeConfigOptions {
         context: Some(context),

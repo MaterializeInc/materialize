@@ -229,6 +229,8 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
     );
 
     /// Build a Timely cluster using the given config.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn build_cluster(
         &self,
         config: TimelyConfig,

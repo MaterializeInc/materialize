@@ -552,6 +552,8 @@ struct TableStatistics {
     count: u64,
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 async fn collect_table_statistics<Q>(
     conn: &mut Q,
     table: &MySqlTableName,

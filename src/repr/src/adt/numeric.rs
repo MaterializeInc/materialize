@@ -368,6 +368,8 @@ fn numeric_to_twos_complement_inner<D: Dec<N>, const N: usize>(
     buf.reverse();
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub fn twos_complement_be_to_numeric(
     input: &mut [u8],
     scale: u8,
@@ -395,6 +397,8 @@ pub fn twos_complement_be_to_numeric(
 
 /// Parses a buffer of two's complement digits in big-endian order and converts
 /// them to [`Decimal<N>`].
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub fn twos_complement_be_to_numeric_inner<D: Dec<N>, const N: usize>(
     input: &mut [u8],
 ) -> Result<Decimal<N>, anyhow::Error> {
@@ -689,6 +693,8 @@ pub fn munge_numeric(n: &mut Numeric) -> Result<(), anyhow::Error> {
 
 /// Rescale's `n` to fit within [`Numeric`]'s max precision or error if not
 /// possible.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn rescale_within_max_precision(n: &mut Numeric) -> Result<(), anyhow::Error> {
     let current_precision = get_precision(n);
     if current_precision > u32::from(NUMERIC_DATUM_MAX_PRECISION) {
@@ -712,6 +718,8 @@ fn rescale_within_max_precision(n: &mut Numeric) -> Result<(), anyhow::Error> {
 /// - Rescaling exceeds max precision
 /// - `n` requires > [`NUMERIC_DATUM_MAX_PRECISION`] - `scale` digits of precision
 ///   left of the decimal point
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub fn rescale(n: &mut Numeric, scale: u8) -> Result<(), anyhow::Error> {
     let mut cx = cx_datum();
     cx.rescale(n, &Numeric::from(-i32::from(scale)));

@@ -38,6 +38,8 @@ pub enum TlsError {
 }
 
 /// Creates a TLS connector for the given [`Config`](tokio_postgres::Config).
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub fn make_tls(config: &tokio_postgres::Config) -> Result<MakeTlsConnector, TlsError> {
     let mut builder = SslConnector::builder(SslMethod::tls_client())?;
     // The mode dictates whether we verify peer certs and hostnames. By default, Postgres is

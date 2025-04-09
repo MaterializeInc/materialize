@@ -46,6 +46,8 @@ impl SshTunnelManager {
     /// The manager guarantees that there will never be more than one in flight
     /// connection attempt for the same tunnel, even when this method is called
     /// concurrently from multiple threads.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn connect(
         &self,
         config: SshTunnelConfig,

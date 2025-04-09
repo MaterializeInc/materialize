@@ -60,6 +60,8 @@ impl Client {
     /// IntoFuture and does the default good thing of moving the `Connection`
     /// into a tokio task? And a `.raw()` option that will instead return both
     /// the Client and Connection for manual polling.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn connect(config: Config) -> Result<(Self, Connection), SqlServerError> {
         // Setup our tunnelling and return any resources that need to be kept
         // alive for the duration of the connection.
@@ -286,6 +288,8 @@ impl Client {
     }
 
     /// Returns the current transaction isolation level for the current session.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn get_transaction_isolation(
         &mut self,
     ) -> Result<TransactionIsolationLevel, SqlServerError> {
@@ -442,6 +446,8 @@ impl TransactionIsolationLevel {
     }
 
     /// Try to parse a [`TransactionIsolationLevel`] from the value returned from SQL Server.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn try_from_sql_server(val: i16) -> Result<TransactionIsolationLevel, anyhow::Error> {
         let level = match val {
             1 => TransactionIsolationLevel::ReadUncommitted,

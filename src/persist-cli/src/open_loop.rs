@@ -166,6 +166,8 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
     run_benchmark(args, metrics_registry, metrics, writers, readers).await
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 async fn run_benchmark<W, R>(
     args: Args,
     metrics_registry: MetricsRegistry,

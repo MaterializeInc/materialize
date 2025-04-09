@@ -29,6 +29,8 @@ use crate::session::{TransactionOps, WriteOp};
 use crate::{AdapterError, ExecuteContext, ExecuteResponse};
 
 impl Coordinator {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub(crate) async fn sequence_copy_from(
         &mut self,
         ctx: ExecuteContext,
@@ -212,6 +214,8 @@ impl Coordinator {
             .await;
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub(crate) fn commit_staged_batches(
         &mut self,
         conn_id: ConnectionId,

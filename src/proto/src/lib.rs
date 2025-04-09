@@ -658,6 +658,8 @@ where
 
 /// Blanket command for testing if `R` can be converted to its corresponding
 /// `ProtoType` and back.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_types)]
 pub fn protobuf_roundtrip<R, P>(val: &R) -> anyhow::Result<R>
 where
     P: ProtoType<R> + ::prost::Message + Default,

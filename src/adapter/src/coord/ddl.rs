@@ -181,6 +181,8 @@ impl Coordinator {
     /// called after this function successfully returns on any built
     /// [`DataflowDesc`](mz_compute_types::dataflows::DataflowDesc).
     #[instrument(name = "coord::catalog_transact_inner")]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub(crate) async fn catalog_transact_inner<'a>(
         &mut self,
         conn_id: Option<&ConnectionId>,
@@ -1164,6 +1166,8 @@ impl Coordinator {
         self.drop_sources(source_ids)
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn drop_vpc_endpoints_in_background(&self, vpc_endpoints: Vec<CatalogItemId>) {
         let cloud_resource_controller = Arc::clone(self.cloud_resource_controller
             .as_ref()

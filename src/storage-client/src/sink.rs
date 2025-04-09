@@ -59,6 +59,8 @@ struct TopicConfigs {
     replication_factor: i32,
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 async fn discover_topic_configs<C: ClientContext>(
     client: &AdminClient<C>,
     topic: &str,

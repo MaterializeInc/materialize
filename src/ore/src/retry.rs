@@ -868,7 +868,10 @@ mod tests {
     /// Test that canceling retry operations surface the last error when the
     /// underlying future is not explicitly timed out.
     #[crate::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
+    // unsupported operation: cannot write to event
+    #[cfg_attr(miri, ignore)]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn test_retry_async_canceling_uncanceled_failure() {
         let res = Retry::default()
             .max_duration(Duration::from_millis(100))
@@ -880,7 +883,10 @@ mod tests {
     /// Test that canceling retry operations surface the last error when the
     /// underlying future *is* not explicitly timed out.
     #[crate::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
+    // unsupported operation: cannot write to event
+    #[cfg_attr(miri, ignore)]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn test_retry_async_canceling_canceled_failure() {
         let res = Retry::default()
             .max_duration(Duration::from_millis(100))

@@ -98,6 +98,8 @@ impl RoleId {
         res
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn decode_binary(raw: &[u8]) -> Result<RoleId, Error> {
         if raw.len() != RoleId::binary_size() {
             return Err(anyhow!(
@@ -127,7 +129,11 @@ impl RoleId {
 impl FromStr for RoleId {
     type Err = Error;
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // database-issues#9092: anyhow should not be used.
+        #[allow(clippy::disallowed_macros)]
         fn parse_u64(s: &str) -> Result<u64, Error> {
             if s.len() < 2 {
                 return Err(anyhow!("couldn't parse role id '{s}'"));

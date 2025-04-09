@@ -248,6 +248,8 @@ pub trait TimestampProvider {
     }
 
     /// Determines the timestamp for a query using the classical logic (as opposed to constraint-based).
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn determine_timestamp_classical(
         &self,
         session: &Session,
@@ -407,6 +409,8 @@ pub trait TimestampProvider {
     /// Uses constraints and preferences to determine a timestamp for a query.
     /// Returns the determined timestamp, the constraints that were applied, and
     /// session_oracle_read_ts.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn determine_timestamp_via_constraints(
         &self,
         session: &Session,
@@ -937,6 +941,8 @@ impl Coordinator {
         }
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub(crate) fn evaluate_when(
         catalog: &CatalogState,
         mut timestamp: MirScalarExpr,

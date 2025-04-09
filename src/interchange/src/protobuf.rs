@@ -28,6 +28,8 @@ pub struct DecodedDescriptors {
 impl DecodedDescriptors {
     /// Builds a `DecodedDescriptors` from an encoded `FileDescriptorSet` and
     /// the fully qualified name of a message inside that file descriptor set.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn from_bytes(bytes: &[u8], message_name: String) -> Result<Self, anyhow::Error> {
         let fds = DescriptorPool::decode(bytes).context("decoding file descriptor set")?;
         let message_descriptor = fds.get_message_by_name(&message_name).ok_or_else(|| {
@@ -111,6 +113,8 @@ impl Decoder {
     }
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn derive_column_type(
     seen_messages: &mut BTreeSet<String>,
     field: &FieldDescriptor,
@@ -133,6 +137,8 @@ fn derive_column_type(
     }
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn derive_inner_type(
     seen_messages: &mut BTreeSet<String>,
     ty: Kind,
@@ -169,6 +175,8 @@ fn derive_inner_type(
     }
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn pack_message(packer: &mut RowPacker, message: &DynamicMessage) -> Result<(), anyhow::Error> {
     for field_desc in message.descriptor().fields() {
         if !message.has_field(&field_desc) {
@@ -189,6 +197,8 @@ fn pack_message(packer: &mut RowPacker, message: &DynamicMessage) -> Result<(), 
     Ok(())
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn pack_value(
     packer: &mut RowPacker,
     field_desc: &FieldDescriptor,

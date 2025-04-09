@@ -1370,6 +1370,8 @@ mod tests {
     // this test requires a running Kafka instance at localhost:9092.
     #[mz_ore::test]
     #[ignore]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn demonstrate_kafka_queue_race_condition() -> Result<(), anyhow::Error> {
         let topic_name = "queue-test";
         let pid = 0;
@@ -1442,6 +1444,8 @@ mod tests {
 }
 
 /// Fetches the list of partitions and their corresponding high watermark.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn fetch_partition_info<C: ConsumerContext>(
     consumer: &BaseConsumer<C>,
     topic: &str,

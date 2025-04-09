@@ -369,6 +369,8 @@ impl Catalog {
     }
 
     #[instrument(name = "catalog::transact")]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn transact(
         &mut self,
         // n.b. this is an option to prevent us from needing to build out a

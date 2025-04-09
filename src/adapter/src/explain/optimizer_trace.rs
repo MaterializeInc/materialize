@@ -128,6 +128,8 @@ impl OptimizerTrace {
 
     /// Convert the optimizer trace into a vector or rows that can be returned
     /// to the client.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn into_rows(
         self,
         format: ExplainFormat,

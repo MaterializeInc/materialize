@@ -99,6 +99,8 @@ impl UnreliableHandle {
         core.rng.gen_bool(should_timeout)
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn run_op<R, F, WorkFn>(&self, name: &str, work_fn: WorkFn) -> Result<R, ExternalError>
     where
         F: Future<Output = Result<R, ExternalError>>,

@@ -35,6 +35,8 @@ pub fn new_presigned_config() -> PresigningConfig {
     PresigningConfig::expires_in(Duration::from_secs(5 * 60)).expect("known valid")
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub async fn list_bucket_path(
     client: &Client,
     bucket: &str,

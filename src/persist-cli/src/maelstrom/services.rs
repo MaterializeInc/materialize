@@ -185,6 +185,8 @@ impl MaelstromBlob {
 
 #[async_trait]
 impl Blob for MaelstromBlob {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         let value = match self
             .handle
@@ -231,6 +233,8 @@ impl Blob for MaelstromBlob {
         Ok(Some(0))
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn restore(&self, key: &str) -> Result<(), ExternalError> {
         let read = self
             .handle
@@ -399,6 +403,8 @@ impl MaelstromOracleKey {
         }
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn peek(&mut self) -> Result<u64, ExternalError> {
         let value = self
             .handle

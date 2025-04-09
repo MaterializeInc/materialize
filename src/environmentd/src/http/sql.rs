@@ -826,6 +826,8 @@ impl ResultSender for WebSocket {
     // error the transaction, but remain connected. It is Ok(Ok(())) if the statement succeeded. The
     // second component of the return value is `Some` if execution still needs to be retired for
     // statement logging purposes.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn add_result(
         &mut self,
         client: &mut SessionClient,
@@ -1118,6 +1120,8 @@ async fn execute_stmt_group<S: ResultSender>(
 ///
 /// See the user-facing documentation about the HTTP API for a description of
 /// the semantics of this function.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 async fn execute_request<S: ResultSender>(
     client: &mut AuthedClient,
     request: SqlRequest,
@@ -1178,6 +1182,8 @@ async fn execute_request<S: ResultSender>(
         Ok(())
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn parse<'a>(
         client: &SessionClient,
         query: &'a str,
@@ -1257,6 +1263,8 @@ async fn execute_request<S: ResultSender>(
 }
 
 /// Executes a single statement in a [`SqlRequest`].
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 async fn execute_stmt<S: ResultSender>(
     client: &mut SessionClient,
     sender: &mut S,

@@ -93,6 +93,8 @@ impl std::fmt::Debug for PostgresClient {
 
 impl PostgresClient {
     /// Open a [PostgresClient] using the given `config`.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn open(config: PostgresClientConfig) -> Result<Self, PostgresError> {
         let mut pg_config: Config = config.url.to_string_unredacted().parse()?;
         pg_config.connect_timeout(config.knobs.connect_timeout());

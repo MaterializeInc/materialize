@@ -413,6 +413,8 @@ impl NamespacedKubernetesOrchestrator {
         format!("{}.environmentd.materialize.cloud/{}", self.namespace, key)
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn label_selector_to_k8s(
         &self,
         MzLabelSelector { label_name, logic }: MzLabelSelector,
@@ -491,6 +493,8 @@ impl ScaledQuantity {
 // (1) Handle negative numbers (because it's not useful for that use-case)
 // (2) Handle non-integers (because I have never observed them being actually sent)
 // (3) Handle scientific notation (e.g. 1.23e2)
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn parse_k8s_quantity(s: &str) -> Result<ScaledQuantity, anyhow::Error> {
     const DEC_SUFFIXES: &[(&str, i8)] = &[
         ("n", -9),
@@ -550,6 +554,8 @@ fn parse_k8s_quantity(s: &str) -> Result<ScaledQuantity, anyhow::Error> {
 
 #[async_trait]
 impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn fetch_service_metrics(
         &self,
         id: &str,
@@ -573,6 +579,8 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         Ok(metrics)
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn ensure_service(
         &self,
         id: &str,
@@ -1236,6 +1244,8 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
     }
 
     /// Drops the identified service, if it exists.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn drop_service(&self, id: &str) -> Result<(), anyhow::Error> {
         fail::fail_point!("kubernetes_drop_service", |_| Err(anyhow!("failpoint")));
         self.service_infos.lock().expect("poisoned lock").remove(id);
@@ -1260,6 +1270,8 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
     }
 
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
+        // database-issues#9092: anyhow should not be used.
+        #[allow(clippy::disallowed_macros)]
         fn into_service_event(pod: Pod) -> Result<ServiceEvent, anyhow::Error> {
             let process_id = pod.name_any().split('-').last().unwrap().parse()?;
             let service_id_label = "environmentd.materialize.cloud/service-id";

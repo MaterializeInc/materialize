@@ -196,6 +196,8 @@ impl NpmPackage {
     }
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub fn ensure(out_dir: Option<PathBuf>) -> Result<(), anyhow::Error> {
     println!("ensuring all npm packages are up-to-date...");
 

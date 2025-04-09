@@ -47,6 +47,8 @@ impl Part {
             + self.diff.values().to_byte_slice().len()
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     fn combine(
         parts: &[Part],
         mut combine_fn: impl FnMut(&[&dyn Array]) -> anyhow::Result<ArrayRef>,
@@ -68,6 +70,8 @@ impl Part {
     }
 
     /// Executes [::arrow::compute::concat] columnwise, or returns `None` if no parts are given.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     pub fn concat(parts: &[Part]) -> anyhow::Result<Option<Self>> {
         match parts.len() {
             0 => return Ok(None),
@@ -79,6 +83,8 @@ impl Part {
     }
 
     /// Executes [::arrow::compute::interleave] columnwise.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     pub fn interleave(parts: &[Part], indices: &[(usize, usize)]) -> anyhow::Result<Self> {
         Part::combine(parts, |cols| {
             ::arrow::compute::interleave(cols, indices).err_into()
@@ -86,6 +92,8 @@ impl Part {
     }
 
     /// Iterate over the contents of this part, decoding as we go.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     pub fn decode_iter<
         'a,
         K: Default + Clone + 'static,

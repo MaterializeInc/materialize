@@ -16,6 +16,9 @@
 //! This crate implements a parser and runner for sqllogictest files.
 //! The parser is generic, but the runner is specific to Materialize.
 
+// database-issues#9092: anyhow should not be used.
+#![allow(clippy::disallowed_macros)]
+
 pub mod ast;
 pub mod parser;
 pub mod runner;

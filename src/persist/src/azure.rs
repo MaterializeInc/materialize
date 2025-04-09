@@ -395,6 +395,8 @@ impl Blob for AzureBlob {
         }
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn restore(&self, key: &str) -> Result<(), ExternalError> {
         let path = self.get_path(key);
         let blob = self.client.blob_client(&path);

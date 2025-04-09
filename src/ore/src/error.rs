@@ -92,6 +92,8 @@ mod tests {
     use super::*;
 
     #[crate::test]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn basic_usage() {
         let error = anyhow!("root");
         let error = error.context("context");
@@ -99,6 +101,8 @@ mod tests {
     }
 
     #[crate::test]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn basic_usage_with_arc() {
         // The reason for this signature is that our Plan errors have a `cause` field like this:
         // ```

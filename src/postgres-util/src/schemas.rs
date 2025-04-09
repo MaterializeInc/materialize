@@ -44,6 +44,8 @@ pub async fn get_schemas(client: &Client) -> Result<Vec<PostgresSchemaDesc>, Pos
 ///
 /// - Invalid connection string, user information, or user permissions.
 /// - Upstream publication does not exist or contains invalid values.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub async fn publication_info(
     client: &Client,
     publication: &str,

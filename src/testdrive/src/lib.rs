@@ -10,6 +10,8 @@
 //! Integration test driver for Materialize.
 
 #![warn(missing_docs)]
+// database-issues#9092: anyhow should not be used.
+#![allow(clippy::disallowed_macros)]
 
 use std::fs::File;
 use std::io::{self, Read, Write};

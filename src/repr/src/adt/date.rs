@@ -50,6 +50,8 @@ impl RustType<ProtoDate> for Date {
 impl std::str::FromStr for Date {
     type Err = anyhow::Error;
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         crate::strconv::parse_date(s).map_err(|e| anyhow!(e))
     }

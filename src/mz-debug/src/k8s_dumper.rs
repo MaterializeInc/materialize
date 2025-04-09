@@ -166,6 +166,8 @@ impl<'n> K8sDumper<'n> {
         }
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn _dump_kubectl_describe<K>(
         &self,
         namespace: Option<&String>,

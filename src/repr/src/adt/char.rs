@@ -129,6 +129,8 @@ impl CharWhiteSpace {
 ///
 /// This function should only fail when `fail_on_len` is `true` _and_ `length`
 /// is present and exceeded.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn format_char_str(
     s: &str,
     length: Option<CharLength>,

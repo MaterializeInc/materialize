@@ -153,6 +153,8 @@ pub(super) struct ParquetUploader {
 }
 
 impl CopyToS3Uploader for ParquetUploader {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn new(
         sdk_config: SdkConfig,
         connection_details: S3UploadInfo,

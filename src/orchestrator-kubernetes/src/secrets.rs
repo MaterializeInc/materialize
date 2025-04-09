@@ -119,6 +119,8 @@ impl KubernetesSecretsReader {
 
 #[async_trait]
 impl SecretsReader for KubernetesSecretsReader {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn read(&self, id: CatalogItemId) -> Result<Vec<u8>, anyhow::Error> {
         let secret = self
             .secret_api

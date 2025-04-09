@@ -33,6 +33,8 @@ use crate::sinks::S3UploadInfo;
 /// performed by multiple replicas it simplifies the user ergonomics by only
 /// having to listen for a single event (a PutObject sentinel would trigger once
 /// for each replica).
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub async fn preflight(
     connection_context: ConnectionContext,
     aws_connection: &AwsConnection,

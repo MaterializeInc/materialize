@@ -519,6 +519,8 @@ pub(super) struct SubscribeSpec {
 }
 
 impl SubscribeSpec {
+    // database-issues#9092: anyhow should not be used.
+    #![allow(clippy::disallowed_macros)]
     fn to_plan(&self, catalog: &dyn SessionCatalog) -> Result<SubscribePlan, anyhow::Error> {
         let parsed = mz_sql::parse::parse(self.sql)?.into_element();
         let (stmt, resolved_ids) = mz_sql::names::resolve(catalog, parsed.ast)?;

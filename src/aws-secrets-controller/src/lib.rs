@@ -211,6 +211,8 @@ impl AwsSecretsClient {
 
 #[async_trait]
 impl SecretsReader for AwsSecretsClient {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn read(&self, id: CatalogItemId) -> Result<Vec<u8>, anyhow::Error> {
         let op_id = Uuid::new_v4();
         info!(secret_id = %id, %op_id, "reading secret from AWS");

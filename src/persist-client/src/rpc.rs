@@ -407,6 +407,8 @@ impl GrpcPubSubClient {
         }
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn consume_grpc_stream(
         mut responses: Streaming<ProtoPubSubMessage>,
         receiver_input: &Sender<ProtoPubSubMessage>,

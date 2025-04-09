@@ -1000,6 +1000,8 @@ impl Catalog {
         }
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn active_cluster(&self, session: &Session) -> Result<&Cluster, AdapterError> {
         // TODO(benesch): this check here is not sufficiently protective. It'd
         // be very easy for a code path to accidentally avoid this check by

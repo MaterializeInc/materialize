@@ -429,6 +429,8 @@ async fn fetch_slot_metadata(
 }
 
 /// Fetch the `pg_current_wal_lsn`, used to report metrics.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 async fn fetch_max_lsn(client: &Client) -> Result<MzOffset, TransientError> {
     let query = "SELECT pg_current_wal_lsn()";
     let row = simple_query_opt(client, query).await?;

@@ -50,6 +50,8 @@ pub(super) struct PgCopyUploader {
 }
 
 impl CopyToS3Uploader for PgCopyUploader {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn new(
         sdk_config: SdkConfig,
         connection_details: S3UploadInfo,
@@ -97,6 +99,8 @@ impl CopyToS3Uploader for PgCopyUploader {
     /// `part_size_limit` after which the `S3MultiPartUploader` will upload that part. In case it will
     /// exceed the max file size of the ongoing upload, then a new `S3MultiPartUploader` for a new file will
     /// be created and the row data will be appended there.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn append_row(&mut self, row: &Row) -> Result<(), anyhow::Error> {
         let mut buf: Vec<u8> = vec![];
         // encode the row and write to temp buffer.
@@ -128,6 +132,8 @@ impl CopyToS3Uploader for PgCopyUploader {
 
 impl PgCopyUploader {
     /// Creates the uploader for the next file and starts the multi part upload.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn start_new_file_upload(&mut self) -> Result<(), anyhow::Error> {
         self.finish().await?;
         assert_none!(self.current_file_uploader);

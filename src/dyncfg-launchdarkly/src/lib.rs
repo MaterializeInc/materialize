@@ -102,6 +102,8 @@ where
     Ok(())
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn ld_ctx<F>(build_info: &'static BuildInfo, ctx_builder: F) -> Result<ld::Context, anyhow::Error>
 where
     F: FnOnce(&mut ld::MultiContextBuilder) -> Result<(), anyhow::Error>,
@@ -163,6 +165,8 @@ impl<F: Fn(&ConfigUpdates, &ConfigSet) + Send> SyncedConfigSet<F> {
     }
 
     /// Reads current values from LaunchDarkly and updates the ConfigSet.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn sync(&self) -> Result<(), anyhow::Error> {
         let mut updates = ConfigUpdates::default();
         let Some(ld_client) = &self.ld_client else {
@@ -211,6 +215,8 @@ impl<F: Fn(&ConfigUpdates, &ConfigSet) + Send> SyncedConfigSet<F> {
 
 /// Converts a dyncfg ConfigVal into a LaunchDarkly FlagValue. Returns an error if the ConfigVal
 /// type isn't supported by the FlagValue format.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn dyn_into_flag(val: ConfigVal) -> Result<ld::FlagValue, anyhow::Error> {
     // Note that errors must only (and always) occur when the ConfigVal type isn't fully supported.
     // That is, don't error only if the current value isn't supported (like None in an Opt type):

@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::iter;
 
-use anyhow::{bail, Result};
+use anyhow::bail;
 use itertools::Itertools;
 use quote::ToTokens;
 
@@ -145,7 +145,10 @@ pub enum Type {
 /// This is a very, very lightweight semantic analysis phase for Rust code. Our
 /// main goal is to determine the type of each field of a struct or enum
 /// variant, so we know how to visit it. See [`Type`] for details.
-pub(crate) fn analyze(syn_items: &[syn::DeriveInput]) -> Result<Ir> {
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
+#[allow(clippy::disallowed_types)]
+pub(crate) fn analyze(syn_items: &[syn::DeriveInput]) -> anyhow::Result<Ir> {
     let mut items = BTreeMap::new();
     for syn_item in syn_items {
         let name = syn_item.ident.to_string();
@@ -196,7 +199,10 @@ pub(crate) fn analyze(syn_items: &[syn::DeriveInput]) -> Result<Ir> {
     Ok(Ir { items, generics })
 }
 
-fn validate_fields<'a, I>(items: &BTreeMap<String, Item>, fields: I) -> Result<()>
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
+#[allow(clippy::disallowed_types)]
+fn validate_fields<'a, I>(items: &BTreeMap<String, Item>, fields: I) -> anyhow::Result<()>
 where
     I: IntoIterator<Item = &'a Field>,
 {
@@ -214,7 +220,9 @@ where
     Ok(())
 }
 
-fn analyze_fields(fields: &syn::Fields) -> Result<Vec<Field>> {
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_types)]
+fn analyze_fields(fields: &syn::Fields) -> anyhow::Result<Vec<Field>> {
     fields
         .iter()
         .map(|f| {
@@ -226,7 +234,10 @@ fn analyze_fields(fields: &syn::Fields) -> Result<Vec<Field>> {
         .collect()
 }
 
-fn analyze_generics(generics: &syn::Generics) -> Result<Vec<ItemGeneric>> {
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
+#[allow(clippy::disallowed_types)]
+fn analyze_generics(generics: &syn::Generics) -> anyhow::Result<Vec<ItemGeneric>> {
     let mut out = vec![];
     for g in generics.params.iter() {
         match g {
@@ -251,7 +262,10 @@ fn analyze_generics(generics: &syn::Generics) -> Result<Vec<ItemGeneric>> {
     Ok(out)
 }
 
-fn analyze_generic_bounds<'a, I>(bounds: I) -> Result<Vec<String>>
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
+#[allow(clippy::disallowed_types)]
+fn analyze_generic_bounds<'a, I>(bounds: I) -> anyhow::Result<Vec<String>>
 where
     I: IntoIterator<Item = &'a syn::TypeParamBound>,
 {
@@ -271,7 +285,10 @@ where
     Ok(out)
 }
 
-fn analyze_type(ty: &syn::Type) -> Result<Type> {
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
+#[allow(clippy::disallowed_types)]
+fn analyze_type(ty: &syn::Type) -> anyhow::Result<Type> {
     match ty {
         syn::Type::Path(syn::TypePath { qself: None, path }) => match path.segments.len() {
             2 => {

@@ -158,6 +158,8 @@ where
     T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Ord + Codec64 + Send + Sync,
 {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn new(
         cfg: PersistConfig,
         metrics: Arc<Metrics>,
@@ -303,6 +305,8 @@ where
         Some(compaction_completed_receiver)
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub(crate) async fn compact_and_apply(
         machine: &Machine<K, V, T, D>,
         req: CompactReq<T>,
@@ -689,6 +693,8 @@ where
     ///     b1 runs=[C]                           output=[A, C, D, B, E, F]
     ///     b2 runs=[D, E, F]
     /// ```
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     async fn order_runs<'a>(
         req: &'a CompactReq<T>,
         target_order: RunOrder,
@@ -878,6 +884,8 @@ where
         Ok(batch.into_hollow_batch())
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn validate_req(req: &CompactReq<T>) -> Result<(), anyhow::Error> {
         let mut frontier = req.desc.lower();
         for input in req.inputs.iter() {

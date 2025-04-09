@@ -580,6 +580,8 @@ impl ImpliedValue for u64 {
 }
 
 impl<V: TryFromValue<WithOptionValue<Aug>>> TryFromValue<WithOptionValue<Aug>> for Vec<V> {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
         match v {
             WithOptionValue::Sequence(a) => {

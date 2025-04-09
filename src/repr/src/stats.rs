@@ -271,6 +271,8 @@ pub fn decode_numeric<'a>(
     stats: &PrimitiveStats<Vec<u8>>,
     arena: &'a RowArena,
 ) -> Result<(Datum<'a>, Datum<'a>), anyhow::Error> {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn decode<'a>(bytes: &[u8], arena: &'a RowArena) -> Result<Datum<'a>, anyhow::Error> {
         let proto = ProtoDatum::decode(bytes)?;
         let datum = arena.make_datum(|r| {

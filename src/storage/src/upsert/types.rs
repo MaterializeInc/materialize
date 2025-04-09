@@ -1124,6 +1124,8 @@ where
     ///
     /// Also note that we use `self.inner.multi_*`, not `self.multi_*`. This is
     /// to avoid erroneously changing metric and stats values.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn consolidate_chunk<U>(
         &mut self,
         updates: U,
@@ -1366,6 +1368,8 @@ where
 
     /// Insert or delete for all `puts` keys, prioritizing the last value for
     /// repeated keys.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn multi_put<P>(
         &mut self,
         update_per_record_stats: bool,
@@ -1415,6 +1419,8 @@ where
     /// Get the `gets` keys, which must be unique, placing the results in `results_out`.
     ///
     /// Panics if `gets` and `results_out` are not the same length.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn multi_get<'r, G, R>(
         &mut self,
         gets: G,

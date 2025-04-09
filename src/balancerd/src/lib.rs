@@ -186,6 +186,8 @@ pub struct BalancerService {
 }
 
 impl BalancerService {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn new(cfg: BalancerConfig) -> Result<Self, anyhow::Error> {
         let pgwire = listen(&cfg.pgwire_listen_addr).await?;
         let https = listen(&cfg.https_listen_addr).await?;
@@ -1226,6 +1228,8 @@ pub enum Resolver {
 }
 
 impl Resolver {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn resolve<A>(
         &self,
         conn: &mut FramedConn<A>,
@@ -1278,6 +1282,8 @@ impl Resolver {
 }
 
 /// Returns the first IP address resolved from the provided hostname.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 async fn lookup(name: &str) -> Result<SocketAddr, anyhow::Error> {
     let mut addrs = tokio::net::lookup_host(name).await?;
     match addrs.next() {

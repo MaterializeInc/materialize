@@ -74,6 +74,8 @@ impl Decoder {
     /// The provided schema is called the "reader schema", which is the schema
     /// that we are expecting to use to decode records. The records may indicate
     /// that they are encoded with a different schema; as long as those.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     pub fn new(
         reader_schema: &str,
         ccsr_client: Option<mz_ccsr::Client>,

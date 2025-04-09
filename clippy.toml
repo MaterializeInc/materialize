@@ -88,9 +88,12 @@ disallowed-macros = [
     { path = "proptest::prop_oneof", reason = "use `proptest::strategy::Union::new` instead" },
     { path = "log::log", reason = "use the macros provided by `tracing` instead (database-issues#3001)" },
     { path = "tracing::instrument", reason = "use `mz_ore::instrument` instead" },
+    { path = "anyhow::anyhow", reason = "use structured errors instead" },
+    { path = "anyhow::bail", reason = "use structured errors instead" },
 ]
 
 disallowed-types = [
+    { path = "anyhow::Result", reason = "use structured errors instead" },
     { path = "std::collections::HashMap", reason = "use `std::collections::BTreeMap` or `mz_ore::collections::HashMap` instead" },
     { path = "std::collections::HashSet", reason = "use `std::collections::BTreeSet` or `mz_ore::collections::HashSet` instead" },
 ]

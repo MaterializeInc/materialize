@@ -771,6 +771,8 @@ impl Coordinator {
     }
 
     #[instrument]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub(super) async fn sequence_create_connection(
         &mut self,
         mut ctx: ExecuteContext,
@@ -1765,6 +1767,8 @@ impl Coordinator {
         Ok(ExecuteResponse::DroppedOwned)
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn sequence_drop_common(
         &self,
         session: &Session,
@@ -2798,6 +2802,8 @@ impl Coordinator {
     /// or read-then-writes can occur between the Peek and SendDiff otherwise a
     /// serializability violation could occur.
     #[instrument]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub(super) async fn sequence_read_then_write(
         &mut self,
         mut ctx: ExecuteContext,

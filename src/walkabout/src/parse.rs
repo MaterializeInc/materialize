@@ -12,7 +12,7 @@
 use std::fs;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 use syn::{Data, DataEnum, DataStruct, DataUnion, DeriveInput, Item};
 
 /// Parses the module at `path` and any contained submodules.
@@ -20,7 +20,9 @@ use syn::{Data, DataEnum, DataStruct, DataUnion, DeriveInput, Item};
 /// Returns [`DeriveInput`]s representing all struct and enum items in the
 /// module. This is exactly what a custom derive procedural macro would see,
 /// except that we can present information for all types simultaneously.
-pub fn parse_mod<P>(path: P) -> Result<Vec<DeriveInput>>
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_types)]
+pub fn parse_mod<P>(path: P) -> anyhow::Result<Vec<DeriveInput>>
 where
     P: AsRef<Path>,
 {
@@ -29,7 +31,9 @@ where
     Ok(out)
 }
 
-fn collect_items<P>(path: P, out: &mut Vec<DeriveInput>) -> Result<()>
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_types)]
+fn collect_items<P>(path: P, out: &mut Vec<DeriveInput>) -> anyhow::Result<()>
 where
     P: AsRef<Path>,
 {

@@ -103,6 +103,8 @@ async fn connect_metabase() -> Result<mz_metabase::Client, anyhow::Error> {
 }
 
 #[tokio::main]
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 async fn main() -> Result<(), anyhow::Error> {
     mz_ore::test::init_logging();
 

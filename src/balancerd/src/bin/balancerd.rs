@@ -190,6 +190,8 @@ fn main() {
     drop(_tracing_guard);
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 pub async fn run(args: ServiceArgs, tracing_handle: TracingHandle) -> Result<(), anyhow::Error> {
     let metrics_registry = MetricsRegistry::new();
     let (resolver, cancellation_resolver) =

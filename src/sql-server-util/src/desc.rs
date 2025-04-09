@@ -551,6 +551,8 @@ impl SqlServerRowDecoder {
     /// Try to create a [`SqlServerRowDecoder`] that will decode [`tiberius::Row`]s that match
     /// the shape of the provided [`SqlServerTableDesc`], to [`mz_repr::Row`]s that match the
     /// shape of the provided [`RelationDesc`].
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn try_new(
         table: &SqlServerTableDesc,
         desc: &RelationDesc,

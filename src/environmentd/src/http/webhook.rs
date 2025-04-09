@@ -229,6 +229,8 @@ fn transform_body(
 }
 
 /// Pack the headers of a request into a [`Row`].
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
 fn pack_header(
     mut body_row: BodyRow,
     headers: &BTreeMap<String, String>,
@@ -333,6 +335,8 @@ pub enum WebhookError {
 }
 
 impl From<AppendWebhookError> for WebhookError {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn from(err: AppendWebhookError) -> Self {
         match err {
             AppendWebhookError::MissingSecret => WebhookError::SecretMissing,

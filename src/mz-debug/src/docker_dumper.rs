@@ -44,6 +44,8 @@ impl DockerDumper {
     }
 
     /// Execute a Docker command and return (stdout, stderr).
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn execute_docker_command(
         &self,
         args: &[String],

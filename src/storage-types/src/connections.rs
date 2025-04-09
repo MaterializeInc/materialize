@@ -1046,6 +1046,8 @@ impl<C: ConnectionAccess> CsrConnection<C> {
 
 impl CsrConnection {
     /// Constructs a schema registry client from the connection.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn connect(
         &self,
         storage_configuration: &StorageConfiguration,
@@ -1521,6 +1523,8 @@ impl PostgresConnection<InlinedConnection> {
         )?)
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn validate(
         &self,
         _id: CatalogItemId,
@@ -2561,6 +2565,8 @@ impl SshConnection {
 
 impl AwsPrivatelinkConnection {
     #[allow(clippy::unused_async)]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn validate(
         &self,
         id: CatalogItemId,

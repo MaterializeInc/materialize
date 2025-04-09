@@ -76,6 +76,8 @@ impl StorageInstanceId {
 impl FromStr for StorageInstanceId {
     type Err = anyhow::Error;
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.len() < 2 {
             bail!("couldn't parse compute instance id {}", s);

@@ -208,6 +208,8 @@ pub enum BatchPart<T> {
     },
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_types)]
 fn decode_structured_lower(lower: &LazyProto<ProtoArrayData>) -> Option<ArrayBound> {
     let try_decode = |lower: &LazyProto<ProtoArrayData>| {
         let proto = lower.decode()?;

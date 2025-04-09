@@ -346,6 +346,8 @@ pub(crate) const ENABLE_S3_LGALLOC_NONCC_SIZES: Config<bool> = Config::new(
 
 #[async_trait]
 impl Blob for S3Blob {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         let start_overall = Instant::now();
         let path = self.get_path(key);
@@ -569,6 +571,8 @@ impl Blob for S3Blob {
         Ok(Some(SegmentedBytes::from(segments)))
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn list_keys_and_metadata(
         &self,
         key_prefix: &str,
@@ -644,6 +648,8 @@ impl Blob for S3Blob {
         }
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
         // There is a race condition here where, if two delete calls for the
         // same key occur simultaneously, both might think they did the actual
@@ -690,6 +696,8 @@ impl Blob for S3Blob {
         Ok(Some(usize::cast_from(size_bytes)))
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn restore(&self, key: &str) -> Result<(), ExternalError> {
         let path = self.get_path(key);
         // Fetch the latest version of the object. If it's a normal version, return true;
@@ -785,6 +793,8 @@ impl S3Blob {
     // TODO(benesch): remove this once this function no longer makes use of
     // potentially dangerous `as` conversions.
     #[allow(clippy::as_conversions)]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn set_multi_part(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
         let start_overall = Instant::now();
         let path = self.get_path(key);

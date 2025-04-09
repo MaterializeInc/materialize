@@ -7,6 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// database-issues#9092: anyhow should not be used.
+#![allow(clippy::disallowed_macros)]
+
 use std::fmt;
 use std::io::{Read, Write};
 use std::path::Path;

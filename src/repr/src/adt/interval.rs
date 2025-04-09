@@ -88,6 +88,8 @@ impl num_traits::ops::checked::CheckedNeg for Interval {
 impl std::str::FromStr for Interval {
     type Err = anyhow::Error;
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         crate::strconv::parse_interval(s).map_err(|e| anyhow!(e))
     }
@@ -151,6 +153,8 @@ impl Interval {
     /// microseconds. Errors if
     /// - the number of microseconds doesn't fit in i64, or
     /// - the `Duration` involves fractional microseconds.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn from_duration(duration: &Duration) -> Result<Interval, anyhow::Error> {
         if duration.subsec_nanos() % 1000 != 0 {
             return Err(anyhow!(
@@ -412,6 +416,8 @@ impl Interval {
         Duration::try_days(self.days.into()).unwrap() + Duration::microseconds(self.micros)
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn duration(&self) -> Result<Duration, anyhow::Error> {
         if self.months != 0 {
             bail!("cannot convert interval with months to duration");
@@ -452,6 +458,8 @@ impl Interval {
     ///
     /// # Errors
     /// - If `fsec_max_precision` is not None or within (0,6).
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub fn truncate_low_fields(
         &mut self,
         f: DateTimeField,
@@ -650,6 +658,8 @@ impl Interval {
         Ok(Self::new(months, days, self.micros))
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn justify_days_inner(months: i32, days: i32) -> Result<(i32, i32), anyhow::Error> {
         let days_per_month = i32::from(Self::DAY_PER_MONTH);
         let whole_month = days / days_per_month;
@@ -676,6 +686,8 @@ impl Interval {
         Ok(Self::new(self.months, days, micros))
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     fn justify_hours_inner(days: i32, micros: i64) -> Result<(i32, i64), anyhow::Error> {
         let days = i32::try_from(micros / &*USECS_PER_DAY)
             .ok()

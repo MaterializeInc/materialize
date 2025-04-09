@@ -65,6 +65,9 @@ where
     FromTime: SourceTimestamp,
     IntoTime: Timestamp + Lattice + Codec64,
 {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
+    #[allow(clippy::disallowed_types)]
     pub async fn new(
         persist_clients: Arc<PersistClientCache>,
         read_only_rx: watch::Receiver<bool>,

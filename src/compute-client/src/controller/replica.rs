@@ -230,6 +230,8 @@ where
     /// Returns (with an `Err`) if it encounters an error condition (e.g. the replica disconnects).
     /// If no error condition is encountered, the task runs until the controller disconnects from
     /// the command channel, or the task is dropped.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn run_message_loop(mut self, mut client: Client<T>) -> Result<(), anyhow::Error>
     where
         T: ComputeControllerTimestamp,

@@ -15,7 +15,6 @@
 
 //! Port forwards k8s service via Kubectl
 
-use anyhow::Result;
 use k8s_openapi::api::core::v1::Service;
 use kube::api::ListParams;
 use kube::{Api, Client};
@@ -41,6 +40,8 @@ impl KubectlPortForwarder {
     /// The process will retry if the port-forwarding fails and
     /// will terminate once the port forwarding reaches the max number of retries.
     /// We retry since kubectl port-forward is flaky.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     pub async fn port_forward(&self) {
         if let Err(err) = retry::Retry::default()
             .max_duration(Duration::from_secs(60))
@@ -118,10 +119,13 @@ impl KubectlPortForwarder {
     }
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
+#[allow(clippy::disallowed_types)]
 pub async fn create_kubectl_port_forwarder(
     client: &Client,
     args: &SelfManagedDebugMode,
-) -> Result<KubectlPortForwarder, anyhow::Error> {
+) -> anyhow::Result<KubectlPortForwarder, anyhow::Error> {
     for namespace in &args.k8s_namespaces {
         let services: Api<Service> = Api::namespaced(client.clone(), namespace);
         let services = services

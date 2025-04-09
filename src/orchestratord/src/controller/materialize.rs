@@ -299,6 +299,8 @@ impl k8s_controller::Context for Context {
     const FINALIZER_NAME: &'static str = "orchestratord.materialize.cloud/materialize";
 
     #[instrument(fields(organization_name=mz.name_unchecked()))]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_macros)]
     async fn apply(
         &self,
         client: Client,

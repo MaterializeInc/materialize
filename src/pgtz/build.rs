@@ -16,7 +16,7 @@
 use std::path::PathBuf;
 use std::{env, fs};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Context};
 use chrono_tz::TZ_VARIANTS;
 use mz_ore_build::codegen::CodegenBuf;
 use uncased::UncasedStr;
@@ -28,7 +28,10 @@ enum TimezoneAbbrevSpec<'a> {
     Tz(&'a str),
 }
 
-fn main() -> Result<()> {
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_macros)]
+#[allow(clippy::disallowed_types)]
+fn main() -> anyhow::Result<()> {
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").context("Cannot read OUT_DIR env var")?);
 
     // Build protobufs.
