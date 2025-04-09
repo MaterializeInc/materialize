@@ -50,7 +50,7 @@ use openssl::error::ErrorStack;
 use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslOptions, SslVerifyMode};
 use postgres::config::SslMode;
 use postgres::error::SqlState;
-use serde::Deserialize;
+use serde::{ser, Deserialize};
 use serde_json::json;
 use tokio::time::sleep;
 use tungstenite::protocol::frame::coding::CloseCode;
@@ -3098,4 +3098,186 @@ async fn test_transient_auth_failure_on_refresh() {
         .unwrap();
     assert_ok!(pg_client2.query_one("SELECT 1", &[]).await);
     assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 3);
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+async fn test_self_managed_auth() {
+    let metrics_registry = MetricsRegistry::new();
+
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "log_filter".to_string(),
+            "mz_frontegg_auth=debug,info".to_string(),
+        )
+        .with_system_parameter_default("enable_self_managed_auth".to_string(), "true".to_string())
+        .with_self_hosted_auth(true)
+        .with_metrics_registry(metrics_registry)
+        .start()
+        .await;
+
+    let pg_client = server.connect().no_tls().internal().await.unwrap();
+    pg_client
+        .execute("CREATE ROLE foo WITH PASSWORD 'bar'", &[])
+        .await
+        .unwrap();
+
+    let external_client = server
+        .connect()
+        .no_tls()
+        .user("foo")
+        .password("bar")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        external_client
+            .query_one("SELECT current_user", &[])
+            .await
+            .unwrap()
+            .get::<_, String>(0),
+        "foo"
+    );
+
+    assert_eq!(
+        external_client
+            .query_one("SELECT mz_is_superuser()", &[])
+            .await
+            .unwrap()
+            .get::<_, bool>(0),
+        false
+    );
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+async fn test_self_managed_auth_superuser() {
+    let metrics_registry = MetricsRegistry::new();
+
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "log_filter".to_string(),
+            "mz_frontegg_auth=debug,info".to_string(),
+        )
+        .with_system_parameter_default("enable_self_managed_auth".to_string(), "true".to_string())
+        .with_self_hosted_auth(true)
+        .with_metrics_registry(metrics_registry)
+        .start()
+        .await;
+
+    let pg_client = server.connect().no_tls().internal().await.unwrap();
+    pg_client
+        .execute("CREATE ROLE foo WITH SUPERUSER PASSWORD 'bar'", &[])
+        .await
+        .unwrap();
+
+    let external_client = server
+        .connect()
+        .no_tls()
+        .user("foo")
+        .password("bar")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        external_client
+            .query_one("SELECT current_user", &[])
+            .await
+            .unwrap()
+            .get::<_, String>(0),
+        "foo"
+    );
+
+    assert_eq!(
+        external_client
+            .query_one("SELECT mz_is_superuser()", &[])
+            .await
+            .unwrap()
+            .get::<_, bool>(0),
+        true
+    );
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+async fn test_self_managed_auth_alter_role() {
+    let metrics_registry = MetricsRegistry::new();
+
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "log_filter".to_string(),
+            "mz_frontegg_auth=debug,info".to_string(),
+        )
+        .with_system_parameter_default("enable_self_managed_auth".to_string(), "true".to_string())
+        .with_self_hosted_auth(true)
+        .with_metrics_registry(metrics_registry)
+        .start()
+        .await;
+
+    let pg_client = server.connect().no_tls().internal().await.unwrap();
+    pg_client
+        .execute("CREATE ROLE foo WITH PASSWORD 'bar'", &[])
+        .await
+        .unwrap();
+
+    {
+        let external_client = server
+            .connect()
+            .no_tls()
+            .user("foo")
+            .password("bar")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            external_client
+                .query_one("SELECT current_user", &[])
+                .await
+                .unwrap()
+                .get::<_, String>(0),
+            "foo"
+        );
+
+        assert_eq!(
+            external_client
+                .query_one("SELECT mz_is_superuser()", &[])
+                .await
+                .unwrap()
+                .get::<_, bool>(0),
+            false
+        );
+    }
+
+    pg_client
+        .execute("ALTER ROLE foo WITH SUPERUSER PASSWORD 'baz'", &[])
+        .await
+        .unwrap();
+
+    {
+        let external_client = server
+            .connect()
+            .no_tls()
+            .user("foo")
+            .password("baz")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            external_client
+                .query_one("SELECT current_user", &[])
+                .await
+                .unwrap()
+                .get::<_, String>(0),
+            "foo"
+        );
+
+        assert_eq!(
+            external_client
+                .query_one("SELECT mz_is_superuser()", &[])
+                .await
+                .unwrap()
+                .get::<_, bool>(0),
+            true
+        );
+    }
 }
