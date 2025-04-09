@@ -939,8 +939,12 @@ Snapshot {
             attributes: Some(
                 RoleAttributes {
                     inherit: true,
-                    superuser: None,
-                    login: None,
+                    superuser: Some(
+                        true,
+                    ),
+                    login: Some(
+                        true,
+                    ),
                 },
             ),
             membership: Some(

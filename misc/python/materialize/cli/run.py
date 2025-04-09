@@ -172,6 +172,11 @@ def main() -> int:
         action="store_true",
     )
     parser.add_argument(
+        "--listeners-config-path",
+        help="Path to json file with environmentd listeners configuration.",
+        default=f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth.json",
+    )
+    parser.add_argument(
         "--bazel",
         help="Build with Bazel (not supported by all options)",
         default=False,
@@ -273,12 +278,9 @@ def main() -> int:
                 environment_file.write_text(environment_id)
 
             print(f"persist-blob-url: {args.blob}")
+            print(f"listeners config path: {args.listeners_config_path}")
             command += [
-                # Setting the listen addresses below to 0.0.0.0 is required
-                # to allow other services (e.g., docker containers) to
-                # access these services.
-                "--http-listen-addr=0.0.0.0:6876",
-                "--internal-http-listen-addr=0.0.0.0:6878",
+                f"--listeners-config-path={args.listeners_config_path}",
                 "--orchestrator=process",
                 f"--orchestrator-process-secrets-directory={MZDATA}/secrets",
                 "--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",

@@ -31,7 +31,9 @@ use mz_ore::option::OptionExt;
 use mz_ore::task::JoinSetExt;
 use openssl::ssl::{SslAcceptor, SslContext, SslFiletype, SslMethod};
 use proxy_header::{ParseConfig, ProxiedAddress, ProxyHeader};
+use schemars::JsonSchema;
 use scopeguard::ScopeGuard;
+use serde::{Deserialize, Serialize};
 use socket2::{SockRef, TcpKeepalive};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, Interest, ReadBuf, Ready};
 use tokio::net::{TcpListener, TcpStream};
@@ -211,7 +213,7 @@ impl<T> ConnectionStream for T where T: Stream<Item = io::Result<TcpStream>> + U
 /// A handle to a listener created by [`listen`].
 #[derive(Debug)]
 pub struct ListenerHandle {
-    local_addr: SocketAddr,
+    pub local_addr: SocketAddr,
     _trigger: trigger::Trigger,
 }
 
@@ -408,7 +410,7 @@ pub struct TlsConfig {
 }
 
 /// Specifies how strictly to enforce TLS encryption.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, JsonSchema)]
 pub enum TlsMode {
     /// Allow TLS encryption.
     Allow,
