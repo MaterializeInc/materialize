@@ -2490,10 +2490,10 @@ impl Coordinator {
             debug!("coordinator init: resetting system table {full_name} ({table_id})");
 
             // Fetch the current contents of the table for retraction.
-            let stream_fut = self
+            let snapshot_fut = self
                 .controller
                 .storage_collections
-                .snapshot_and_stream(system_table.table.global_id_writes(), read_ts);
+                .snapshot_cursor(system_table.table.global_id_writes(), read_ts);
             let batch_fut = self
                 .controller
                 .storage_collections
@@ -2505,15 +2505,18 @@ impl Coordinator {
                     .await
                     .unwrap_or_terminate("cannot fail to create a batch for a BuiltinTable");
                 tracing::info!(?table_id, "starting snapshot");
-                // Start a stream of unconsolidated updates from the builtin table.
-                let mut contents = stream_fut
+                // Get a cursor which will emit a consolidated snapshot.
+                let mut snapshot_cursor = snapshot_fut
                     .await
-                    .unwrap_or_terminate("cannot fail to fetch snapshot");
+                    .unwrap_or_terminate("cannot fail to snapshot");
 
                 // Retract the current contents, spilling into our builder.
-                while let Some((data, _t, d)) = contents.next().await {
-                    let d_invert = d.neg();
-                    batch.add(&data, &(), &d_invert).await;
+                while let Some(values) = snapshot_cursor.next().await {
+                    for ((key, _val), _t, d) in values {
+                        let key = key.expect("builtin table had errors");
+                        let d_invert = d.neg();
+                        batch.add(&key, &(), &d_invert).await;
+                    }
                 }
                 tracing::info!(?table_id, "finished snapshot");
 
