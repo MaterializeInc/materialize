@@ -71,7 +71,7 @@ Explained Query:
     Project (#0{x}, #1{y}, #0{x}, #3{y})
       Join on=(#0{x} = #2{x}) type=differential
         implementation
-          %0:l0[#0]KA|4| » %1:l0[#0]KA|4|
+          %0:l0[#0{x}]KA|4| » %1:l0[#0{x}]KA|4|
         Get l0
         Get l0
 
@@ -92,7 +92,7 @@ Explained Query:
   Project (#0{x}, #1{y}, #0{x}, #3{y})
     Join on=(#0{x} = #2{x}) type=differential
       implementation
-        %0:t[#0]KA|4| » %1:t2[#0]KA|10000|
+        %0:t[#0{x}]KA|4| » %1:t2[#0{x}]KA|10000|
       ArrangeBy keys=[[#0{x}]]
         ReadIndex on=t t_x=[differential join]
       ArrangeBy keys=[[#0{x}]]
@@ -162,7 +162,7 @@ Explained Query:
   With Mutually Recursive
     cte l0 =
       Project (#1, #3{person2id})
-        Join on=(#0 = #2{person1id}) type=differential
+        Join on=(#0{src} = #2{person1id}) type=differential
           ArrangeBy keys=[[#0{person2id}]]
             Get l3
           ArrangeBy keys=[[#0{person1id}]]
@@ -179,11 +179,11 @@ Explained Query:
           Join on=(#0{person2id} = #1{person2id}) type=differential
             ArrangeBy keys=[[#0{person2id}]]
               Project (#0{person2id})
-                Filter #1
+                Filter #1{dir}
                   Get l1
             ArrangeBy keys=[[#0{person2id}]]
               Project (#0{person2id})
-                Filter NOT(#1)
+                Filter NOT(#1{dir})
                   Get l1
     cte l3 =
       Distinct project=[#0{person2id}, #1]
@@ -260,7 +260,7 @@ Explained Query:
   With Mutually Recursive
     cte l0 =
       Project (#1, #3{person2id})
-        Join on=(#0 = #2{person1id}) type=differential
+        Join on=(#0{src} = #2{person1id}) type=differential
           ArrangeBy keys=[[#0{person2id}]]
             Get l3
           ArrangeBy keys=[[#0{person1id}]]
@@ -277,11 +277,11 @@ Explained Query:
           Join on=(#0{person2id} = #1{person2id}) type=differential
             ArrangeBy keys=[[#0{person2id}]]
               Project (#0{person2id})
-                Filter #1
+                Filter #1{dir}
                   Get l1
             ArrangeBy keys=[[#0{person2id}]]
               Project (#0{person2id})
-                Filter NOT(#1)
+                Filter NOT(#1{dir})
                   Get l1
     cte l3 =
       Distinct project=[#0{person2id}, #1]
@@ -436,16 +436,16 @@ Explained Query:
   Project (#0{x}, #1{y}, #0{x}, #3{y}, #0{x}, #5{y}, #0{x}, #7{y}, #0{x}, #9{y}, #0{x}, #11{y}, #0{x}, #13{y}, #0{x}, #15{y}, #0{x}, #17{y}, #0{x}, #19{y})
     Join on=(#0{x} = #2{x} = #4{x} = #6{x} = #8{x} = #10{x} = #12{x} = #14{x} = #16{x} = #18{x}) type=delta
       implementation
-        %0:t » %1:t2[#0]KA|10000| » %2:t3[#0]K|169| » %9:t10[#0]K|260| » %8:t9[#0]K|273| » %5:t6[#0]K|299| » %6:t7[#0]K|299| » %7:t8[#0]K|299| » %4:t5[#0]K|494| » %3:t4[#0]K|611|
-        %1:t2 » %0:t[#0]KA|4| » %2:t3[#0]K|169| » %9:t10[#0]K|260| » %8:t9[#0]K|273| » %5:t6[#0]K|299| » %6:t7[#0]K|299| » %7:t8[#0]K|299| » %4:t5[#0]K|494| » %3:t4[#0]K|611|
-        %2:t3 » %0:t[#0]KA|4| » %1:t2[#0]KA|10000| » %9:t10[#0]K|260| » %8:t9[#0]K|273| » %5:t6[#0]K|299| » %6:t7[#0]K|299| » %7:t8[#0]K|299| » %4:t5[#0]K|494| » %3:t4[#0]K|611|
-        %3:t4 » %0:t[#0]KA|4| » %1:t2[#0]KA|10000| » %2:t3[#0]K|169| » %9:t10[#0]K|260| » %8:t9[#0]K|273| » %5:t6[#0]K|299| » %6:t7[#0]K|299| » %7:t8[#0]K|299| » %4:t5[#0]K|494|
-        %4:t5 » %0:t[#0]KA|4| » %1:t2[#0]KA|10000| » %2:t3[#0]K|169| » %9:t10[#0]K|260| » %8:t9[#0]K|273| » %5:t6[#0]K|299| » %6:t7[#0]K|299| » %7:t8[#0]K|299| » %3:t4[#0]K|611|
-        %5:t6 » %0:t[#0]KA|4| » %1:t2[#0]KA|10000| » %2:t3[#0]K|169| » %9:t10[#0]K|260| » %8:t9[#0]K|273| » %6:t7[#0]K|299| » %7:t8[#0]K|299| » %4:t5[#0]K|494| » %3:t4[#0]K|611|
-        %6:t7 » %0:t[#0]KA|4| » %1:t2[#0]KA|10000| » %2:t3[#0]K|169| » %9:t10[#0]K|260| » %8:t9[#0]K|273| » %5:t6[#0]K|299| » %7:t8[#0]K|299| » %4:t5[#0]K|494| » %3:t4[#0]K|611|
-        %7:t8 » %0:t[#0]KA|4| » %1:t2[#0]KA|10000| » %2:t3[#0]K|169| » %9:t10[#0]K|260| » %8:t9[#0]K|273| » %5:t6[#0]K|299| » %6:t7[#0]K|299| » %4:t5[#0]K|494| » %3:t4[#0]K|611|
-        %8:t9 » %0:t[#0]KA|4| » %1:t2[#0]KA|10000| » %2:t3[#0]K|169| » %9:t10[#0]K|260| » %5:t6[#0]K|299| » %6:t7[#0]K|299| » %7:t8[#0]K|299| » %4:t5[#0]K|494| » %3:t4[#0]K|611|
-        %9:t10 » %0:t[#0]KA|4| » %1:t2[#0]KA|10000| » %2:t3[#0]K|169| » %8:t9[#0]K|273| » %5:t6[#0]K|299| » %6:t7[#0]K|299| » %7:t8[#0]K|299| » %4:t5[#0]K|494| » %3:t4[#0]K|611|
+        %0:t » %1:t2[#0{x}]KA|10000| » %2:t3[#0{x}]K|169| » %9:t10[#0{x}]K|260| » %8:t9[#0{x}]K|273| » %5:t6[#0{x}]K|299| » %6:t7[#0{x}]K|299| » %7:t8[#0{x}]K|299| » %4:t5[#0{x}]K|494| » %3:t4[#0{x}]K|611|
+        %1:t2 » %0:t[#0{x}]KA|4| » %2:t3[#0{x}]K|169| » %9:t10[#0{x}]K|260| » %8:t9[#0{x}]K|273| » %5:t6[#0{x}]K|299| » %6:t7[#0{x}]K|299| » %7:t8[#0{x}]K|299| » %4:t5[#0{x}]K|494| » %3:t4[#0{x}]K|611|
+        %2:t3 » %0:t[#0{x}]KA|4| » %1:t2[#0{x}]KA|10000| » %9:t10[#0{x}]K|260| » %8:t9[#0{x}]K|273| » %5:t6[#0{x}]K|299| » %6:t7[#0{x}]K|299| » %7:t8[#0{x}]K|299| » %4:t5[#0{x}]K|494| » %3:t4[#0{x}]K|611|
+        %3:t4 » %0:t[#0{x}]KA|4| » %1:t2[#0{x}]KA|10000| » %2:t3[#0{x}]K|169| » %9:t10[#0{x}]K|260| » %8:t9[#0{x}]K|273| » %5:t6[#0{x}]K|299| » %6:t7[#0{x}]K|299| » %7:t8[#0{x}]K|299| » %4:t5[#0{x}]K|494|
+        %4:t5 » %0:t[#0{x}]KA|4| » %1:t2[#0{x}]KA|10000| » %2:t3[#0{x}]K|169| » %9:t10[#0{x}]K|260| » %8:t9[#0{x}]K|273| » %5:t6[#0{x}]K|299| » %6:t7[#0{x}]K|299| » %7:t8[#0{x}]K|299| » %3:t4[#0{x}]K|611|
+        %5:t6 » %0:t[#0{x}]KA|4| » %1:t2[#0{x}]KA|10000| » %2:t3[#0{x}]K|169| » %9:t10[#0{x}]K|260| » %8:t9[#0{x}]K|273| » %6:t7[#0{x}]K|299| » %7:t8[#0{x}]K|299| » %4:t5[#0{x}]K|494| » %3:t4[#0{x}]K|611|
+        %6:t7 » %0:t[#0{x}]KA|4| » %1:t2[#0{x}]KA|10000| » %2:t3[#0{x}]K|169| » %9:t10[#0{x}]K|260| » %8:t9[#0{x}]K|273| » %5:t6[#0{x}]K|299| » %7:t8[#0{x}]K|299| » %4:t5[#0{x}]K|494| » %3:t4[#0{x}]K|611|
+        %7:t8 » %0:t[#0{x}]KA|4| » %1:t2[#0{x}]KA|10000| » %2:t3[#0{x}]K|169| » %9:t10[#0{x}]K|260| » %8:t9[#0{x}]K|273| » %5:t6[#0{x}]K|299| » %6:t7[#0{x}]K|299| » %4:t5[#0{x}]K|494| » %3:t4[#0{x}]K|611|
+        %8:t9 » %0:t[#0{x}]KA|4| » %1:t2[#0{x}]KA|10000| » %2:t3[#0{x}]K|169| » %9:t10[#0{x}]K|260| » %5:t6[#0{x}]K|299| » %6:t7[#0{x}]K|299| » %7:t8[#0{x}]K|299| » %4:t5[#0{x}]K|494| » %3:t4[#0{x}]K|611|
+        %9:t10 » %0:t[#0{x}]KA|4| » %1:t2[#0{x}]KA|10000| » %2:t3[#0{x}]K|169| » %8:t9[#0{x}]K|273| » %5:t6[#0{x}]K|299| » %6:t7[#0{x}]K|299| » %7:t8[#0{x}]K|299| » %4:t5[#0{x}]K|494| » %3:t4[#0{x}]K|611|
       ArrangeBy keys=[[#0{x}]]
         ReadIndex on=t t_x=[delta join 1st input (full scan)]
       ArrangeBy keys=[[#0{x}]]
@@ -501,8 +501,8 @@ Explained Query:
           - (1)
     cte l1 =
       Project (#1) // { cardinality: "<UNKNOWN>" }
-        Filter (#0 < 7) // { cardinality: "<UNKNOWN>" }
-          Map ((#0 + 1)) // { cardinality: "<UNKNOWN>" }
+        Filter (#0{x} < 7) // { cardinality: "<UNKNOWN>" }
+          Map ((#0{x} + 1)) // { cardinality: "<UNKNOWN>" }
             Get l0 // { cardinality: "<UNKNOWN>" }
   Return // { cardinality: "<UNKNOWN>" }
     Get l0 // { cardinality: "<UNKNOWN>" }

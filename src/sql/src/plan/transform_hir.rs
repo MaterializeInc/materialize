@@ -21,7 +21,7 @@ use mz_ore::stack::RecursionLimitError;
 use mz_repr::{ColumnName, ColumnType, RelationType, ScalarType};
 
 use crate::plan::hir::{
-    AbstractExpr, AggregateFunc, AggregateWindowExpr, ColumnRef, HirRelationExpr, HirScalarExpr,
+    AbstractExpr, AggregateFunc, AggregateWindowExpr, HirRelationExpr, HirScalarExpr,
     ValueWindowExpr, ValueWindowFunc, WindowExpr,
 };
 use crate::plan::{AggregateExpr, WindowExprType};
@@ -95,7 +95,7 @@ pub fn split_subquery_predicates(expr: &mut HirRelationExpr) -> Result<(), Recur
     fn walk_scalar(expr: &mut HirScalarExpr) -> Result<(), RecursionLimitError> {
         expr.try_visit_mut_post(&mut |expr| {
             match expr {
-                HirScalarExpr::Exists(input) | HirScalarExpr::Select(input) => {
+                HirScalarExpr::Exists(input, _name) | HirScalarExpr::Select(input, _name) => {
                     walk_relation(input)?
                 }
                 _ => (),
@@ -107,7 +107,7 @@ pub fn split_subquery_predicates(expr: &mut HirRelationExpr) -> Result<(), Recur
     fn contains_subquery(expr: &HirScalarExpr) -> Result<bool, RecursionLimitError> {
         let mut found = false;
         expr.visit_pre(&mut |expr| match expr {
-            HirScalarExpr::Exists(_) | HirScalarExpr::Select(_) => found = true,
+            HirScalarExpr::Exists(..) | HirScalarExpr::Select(..) => found = true,
             _ => (),
         })?;
         Ok(found)
@@ -137,6 +137,7 @@ pub fn split_subquery_predicates(expr: &mut HirRelationExpr) -> Result<(), Recur
             HirScalarExpr::CallVariadic {
                 func: VariadicFunc::And,
                 exprs,
+                name: _,
             } => {
                 exprs
                     .into_iter()
@@ -232,8 +233,8 @@ pub fn try_simplify_quantified_comparisons(
     ) -> Result<(), RecursionLimitError> {
         expr.try_visit_mut_pre(&mut |e| {
             match e {
-                HirScalarExpr::Exists(input) => walk_relation(input, outers)?,
-                HirScalarExpr::Select(input) => {
+                HirScalarExpr::Exists(input, _name) => walk_relation(input, outers)?,
+                HirScalarExpr::Select(input, _name) => {
                     walk_relation(input, outers)?;
 
                     // We're inside a `(SELECT ...)` subquery. Now let's see if
@@ -423,39 +424,45 @@ pub fn fuse_window_functions(
     /// Helper function to extract the above options.
     fn extract_options(call: &HirScalarExpr) -> WindowFuncCallOptions {
         match call {
-            HirScalarExpr::Windowing(WindowExpr {
-                func:
-                    WindowExprType::Value(ValueWindowExpr {
-                        order_by: inner_order_by,
-                        window_frame,
-                        ignore_nulls,
-                        func: _,
-                        args: _,
-                    }),
-                partition_by,
-                order_by: outer_order_by,
-            }) => WindowFuncCallOptions::Value(ValueWindowFuncCallOptions {
+            HirScalarExpr::Windowing(
+                WindowExpr {
+                    func:
+                        WindowExprType::Value(ValueWindowExpr {
+                            order_by: inner_order_by,
+                            window_frame,
+                            ignore_nulls,
+                            func: _,
+                            args: _,
+                        }),
+                    partition_by,
+                    order_by: outer_order_by,
+                },
+                _name,
+            ) => WindowFuncCallOptions::Value(ValueWindowFuncCallOptions {
                 partition_by: partition_by.clone(),
                 outer_order_by: outer_order_by.clone(),
                 inner_order_by: inner_order_by.clone(),
                 window_frame: window_frame.clone(),
                 ignore_nulls: ignore_nulls.clone(),
             }),
-            HirScalarExpr::Windowing(WindowExpr {
-                func:
-                    WindowExprType::Aggregate(AggregateWindowExpr {
-                        aggregate_expr:
-                            AggregateExpr {
-                                distinct,
-                                func: _,
-                                expr: _,
-                            },
-                        order_by: inner_order_by,
-                        window_frame,
-                    }),
-                partition_by,
-                order_by: outer_order_by,
-            }) => WindowFuncCallOptions::Agg(AggregateWindowFuncCallOptions {
+            HirScalarExpr::Windowing(
+                WindowExpr {
+                    func:
+                        WindowExprType::Aggregate(AggregateWindowExpr {
+                            aggregate_expr:
+                                AggregateExpr {
+                                    distinct,
+                                    func: _,
+                                    expr: _,
+                                },
+                            order_by: inner_order_by,
+                            window_frame,
+                        }),
+                    partition_by,
+                    order_by: outer_order_by,
+                },
+                _name,
+            ) => WindowFuncCallOptions::Agg(AggregateWindowFuncCallOptions {
                 partition_by: partition_by.clone(),
                 outer_order_by: outer_order_by.clone(),
                 inner_order_by: inner_order_by.clone(),
@@ -489,18 +496,21 @@ pub fn fuse_window_functions(
                         .calls
                         .iter()
                         .map(|(_idx, call)| {
-                            if let HirScalarExpr::Windowing(WindowExpr {
-                                func:
-                                    WindowExprType::Value(ValueWindowExpr {
-                                        func,
-                                        args,
-                                        order_by: _,
-                                        window_frame: _,
-                                        ignore_nulls: _,
-                                    }),
-                                partition_by: _,
-                                order_by: _,
-                            }) = call
+                            if let HirScalarExpr::Windowing(
+                                WindowExpr {
+                                    func:
+                                        WindowExprType::Value(ValueWindowExpr {
+                                            func,
+                                            args,
+                                            order_by: _,
+                                            window_frame: _,
+                                            ignore_nulls: _,
+                                        }),
+                                    partition_by: _,
+                                    order_by: _,
+                                },
+                                _name,
+                            ) = call
                             {
                                 (func.clone(), (**args).clone())
                             } else {
@@ -508,8 +518,8 @@ pub fn fuse_window_functions(
                             }
                         })
                         .unzip();
-                    let fused_args = HirScalarExpr::CallVariadic {
-                        func: VariadicFunc::RecordCreate {
+                    let fused_args = HirScalarExpr::call_variadic(
+                        VariadicFunc::RecordCreate {
                             // These field names are not important, because this record will only be an
                             // intermediate expression, which we'll manipulate further before it ends up
                             // anywhere where a column name would be visible.
@@ -517,9 +527,9 @@ pub fn fuse_window_functions(
                                 .take(fused_args.len())
                                 .collect(),
                         },
-                        exprs: fused_args,
-                    };
-                    HirScalarExpr::Windowing(WindowExpr {
+                        fused_args,
+                    );
+                    HirScalarExpr::windowing(WindowExpr {
                         func: WindowExprType::Value(ValueWindowExpr {
                             func: ValueWindowFunc::Fused(fused_funcs),
                             args: Box::new(fused_args),
@@ -536,21 +546,24 @@ pub fn fuse_window_functions(
                         .calls
                         .iter()
                         .map(|(_idx, call)| {
-                            if let HirScalarExpr::Windowing(WindowExpr {
-                                func:
-                                    WindowExprType::Aggregate(AggregateWindowExpr {
-                                        aggregate_expr:
-                                            AggregateExpr {
-                                                func,
-                                                expr,
-                                                distinct: _,
-                                            },
-                                        order_by: _,
-                                        window_frame: _,
-                                    }),
-                                partition_by: _,
-                                order_by: _,
-                            }) = call
+                            if let HirScalarExpr::Windowing(
+                                WindowExpr {
+                                    func:
+                                        WindowExprType::Aggregate(AggregateWindowExpr {
+                                            aggregate_expr:
+                                                AggregateExpr {
+                                                    func,
+                                                    expr,
+                                                    distinct: _,
+                                                },
+                                            order_by: _,
+                                            window_frame: _,
+                                        }),
+                                    partition_by: _,
+                                    order_by: _,
+                                },
+                                _name,
+                            ) = call
                             {
                                 (func.clone(), (**expr).clone())
                             } else {
@@ -558,15 +571,15 @@ pub fn fuse_window_functions(
                             }
                         })
                         .unzip();
-                    let fused_args = HirScalarExpr::CallVariadic {
-                        func: VariadicFunc::RecordCreate {
+                    let fused_args = HirScalarExpr::call_variadic(
+                        VariadicFunc::RecordCreate {
                             field_names: iter::repeat(ColumnName::from(""))
                                 .take(fused_args.len())
                                 .collect(),
                         },
-                        exprs: fused_args,
-                    };
-                    HirScalarExpr::Windowing(WindowExpr {
+                        fused_args,
+                    );
+                    HirScalarExpr::windowing(WindowExpr {
                         func: WindowExprType::Aggregate(AggregateWindowExpr {
                             aggregate_expr: AggregateExpr {
                                 func: AggregateFunc::FusedWindowAgg { funcs: fused_funcs },
@@ -583,12 +596,9 @@ pub fn fuse_window_functions(
             };
 
             let decompositions = (0..self.calls.len())
-                .map(|field| HirScalarExpr::CallUnary {
-                    func: UnaryFunc::RecordGet(mz_expr::func::RecordGet(field)),
-                    expr: Box::new(HirScalarExpr::Column(ColumnRef {
-                        level: 0,
-                        column: new_col,
-                    })),
+                .map(|field| {
+                    HirScalarExpr::column(new_col)
+                        .call_unary(UnaryFunc::RecordGet(mz_expr::func::RecordGet(field)))
                 })
                 .collect();
 
@@ -600,23 +610,29 @@ pub fn fuse_window_functions(
         // Look for calls only at the root of scalar expressions. This is enough
         // because they are always there, see 72e84bb78.
         match scalar_expr {
-            HirScalarExpr::Windowing(WindowExpr {
-                func: WindowExprType::Value(ValueWindowExpr { func, .. }),
-                ..
-            }) => {
+            HirScalarExpr::Windowing(
+                WindowExpr {
+                    func: WindowExprType::Value(ValueWindowExpr { func, .. }),
+                    ..
+                },
+                _name,
+            ) => {
                 // Exclude those calls that are already fused. (We shouldn't currently
                 // encounter these, because we just do one pass, but it's better to be
                 // robust against future code changes.)
                 !matches!(func, ValueWindowFunc::Fused(..))
             }
-            HirScalarExpr::Windowing(WindowExpr {
-                func:
-                    WindowExprType::Aggregate(AggregateWindowExpr {
-                        aggregate_expr: AggregateExpr { func, .. },
-                        ..
-                    }),
-                ..
-            }) => !matches!(func, AggregateFunc::FusedWindowAgg { .. }),
+            HirScalarExpr::Windowing(
+                WindowExpr {
+                    func:
+                        WindowExprType::Aggregate(AggregateWindowExpr {
+                            aggregate_expr: AggregateExpr { func, .. },
+                            ..
+                        }),
+                    ..
+                },
+                _name,
+            ) => !matches!(func, AggregateFunc::FusedWindowAgg { .. }),
             _ => false,
         }
     };

@@ -544,7 +544,7 @@ Explained Query:
             ReadIndex on=t t_a_idx=[*** full scan ***]
   Return
     Project (#2)
-      Map ((#0 + #1))
+      Map ((#0{v} + #1{v}))
         CrossJoin type=differential
           Get l0
           Get l0
@@ -807,9 +807,9 @@ Explained Query:
     Filter (#0{a}) IS NOT NULL AND (#1{b}) IS NOT NULL AND (#3{d}) IS NOT NULL
       Join on=(#0{a} = #2{c} AND #1{b} = #5{f} AND #3{d} = #4{e}) type=delta
         implementation
-          %0:t » %1:u[#0]KA » %2:v[#0]KA
-          %1:u » %0:t[#0]KA » %2:v[#0]KA
-          %2:v » %1:u[#1]KA » %0:t[#0]KA
+          %0:t » %1:u[#0{c}]KA » %2:v[#0{e}]KA
+          %1:u » %0:t[#0{a}]KA » %2:v[#0{e}]KA
+          %2:v » %1:u[#1{d}]KA » %0:t[#0{a}]KA
         ArrangeBy keys=[[#0{a}]]
           ReadIndex on=t t_a_idx=[delta join 1st input (full scan)]
         ArrangeBy keys=[[#0{c}], [#1{d}]]
@@ -877,9 +877,9 @@ Explained Query:
     Filter (#1{b}) IS NOT NULL AND (#3{d}) IS NOT NULL
       Join on=(#1{b} = #2{c} AND #3{d} = #4{e}) type=delta
         implementation
-          %0:t » %1:u[#0]KA » %2:v[#0]KA
-          %1:u » %0:t[#1]KA » %2:v[#0]KA
-          %2:v » %1:u[#1]KA » %0:t[#1]KA
+          %0:t » %1:u[#0{c}]KA » %2:v[#0{e}]KA
+          %1:u » %0:t[#1{b}]KA » %2:v[#0{e}]KA
+          %2:v » %1:u[#1{d}]KA » %0:t[#1{b}]KA
         ArrangeBy keys=[[#1{b}]]
           ReadIndex on=t t_b_idx=[delta join 1st input (full scan)]
         ArrangeBy keys=[[#0{c}], [#1{d}]]
@@ -909,9 +909,9 @@ Explained Query:
     Filter (#0{a}) IS NOT NULL AND (#1{b}) IS NOT NULL
       Join on=(#0{a} = #2{c} AND #1{b} = #4{e}) type=delta
         implementation
-          %0:t » %1:u[#0]KA » %2:v[#0]KA
-          %1:u » %0:t[#0]KA » %2:v[#0]KA
-          %2:v » %0:t[#1]KA » %1:u[#0]KA
+          %0:t » %1:u[#0{c}]KA » %2:v[#0{e}]KA
+          %1:u » %0:t[#0{a}]KA » %2:v[#0{e}]KA
+          %2:v » %0:t[#1{b}]KA » %1:u[#0{c}]KA
         ArrangeBy keys=[[#0{a}], [#1{b}]]
           ReadIndex on=t t_a_idx=[delta join 1st input (full scan)] t_b_idx=[delta join lookup]
         ArrangeBy keys=[[#0{c}]]
@@ -1752,7 +1752,7 @@ SELECT a+b FROM t4;
 ----
 Explained Query:
   Project (#3)
-    Map ((#0 + #1))
+    Map ((#0{a} + #1{b}))
       ReadStorage materialize.public.t4
 
 Source materialize.public.t4

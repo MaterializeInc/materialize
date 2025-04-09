@@ -186,7 +186,7 @@ GROUP BY 1, 2, 3;
 Explained Query:
   With
     cte l0 =
-      Filter (#0{f2} = (#0{f2} + #1)) // { arity: 2 }
+      Filter (#0{f2} = (#0{f2} + #1{f2})) // { arity: 2 }
         TopK order_by=[#0{f2} asc nulls_last, #1 asc nulls_last] limit=1 offset=1 // { arity: 2 }
           Project (#1{f2}, #2) // { arity: 2 }
             Map ((#1{f2} + #0{f1})) // { arity: 3 }
@@ -194,12 +194,12 @@ Explained Query:
   Return // { arity: 3 }
     Project (#0{f2}, #3, #2) // { arity: 3 }
       Map (null) // { arity: 4 }
-        Distinct project=[#0{f2}, (#0{f2} + #1), #1] // { arity: 3 }
+        Distinct project=[#0{f2}, (#0{f2} + #1{f2}), #1] // { arity: 3 }
           Union // { arity: 2 }
             Negate // { arity: 2 }
               CrossJoin type=differential // { arity: 2 }
                 ArrangeBy keys=[[]] // { arity: 2 }
-                  Filter (#1 != 4) // { arity: 2 }
+                  Filter (#1{f2} != 4) // { arity: 2 }
                     Get l0 // { arity: 2 }
                 ArrangeBy keys=[[]] // { arity: 0 }
                   Project () // { arity: 0 }

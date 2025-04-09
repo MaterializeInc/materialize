@@ -168,7 +168,7 @@ Explained Query:
       Project (#0{f1}, #1{f2}) // { arity: 2 }
         Join on=(#0{f1} = #2{nokey}) type=differential // { arity: 3 }
           implementation
-            %0:l0[#0]K » %1:t2[#0]K
+            %0:l0[#0{f1}]K » %1:t2[#0{nokey}]K
           Get l0 // { arity: 2 }
           ArrangeBy keys=[[#0{nokey}]] // { arity: 1 }
             Project (#1{nokey}) // { arity: 1 }
@@ -180,7 +180,7 @@ Explained Query:
         Project (#0{f1}, #1{f2}) // { arity: 2 }
           Join on=(#0{f1} = #2{f1}) type=differential // { arity: 3 }
             implementation
-              %1[#0]UKA » %0:l0[#0]K
+              %1[#0]UKA » %0:l0[#0{f1}]K
             Get l0 // { arity: 2 }
             ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
               Distinct project=[#0{f1}] // { arity: 1 }

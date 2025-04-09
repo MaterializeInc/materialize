@@ -131,11 +131,11 @@ Explained Query:
   With
     cte l0 =
       Project (#1, #2) // { arity: 2 }
-        Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1))) // { arity: 3 }
+        Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1{r}))) // { arity: 3 }
           FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#0{input}) array_length 1), 1) // { arity: 2 }
             ReadStorage materialize.public.input // { arity: 1 }
     cte l1 =
-      Reduce aggregates=[max(#0)] // { arity: 1 }
+      Reduce aggregates=[max(#0{r})] // { arity: 1 }
         Project (#0) // { arity: 1 }
           Get l0 // { arity: 2 }
     cte l2 =
@@ -150,8 +150,8 @@ Explained Query:
               - ()
     cte l3 =
       Project (#0, #2, #3) // { arity: 3 }
-        Map (substr(#1, #2, 1)) // { arity: 4 }
-          FlatMap generate_series(1, char_length(#1), 1) // { arity: 3 }
+        Map (substr(#1{line}, #2{c}, 1)) // { arity: 4 }
+          FlatMap generate_series(1, char_length(#1{line}), 1) // { arity: 3 }
             Get l0 // { arity: 2 }
   Return // { arity: 1 }
     With Mutually Recursive
@@ -164,11 +164,11 @@ Explained Query:
                   Union // { arity: 3 }
                     Get l4 // { arity: 3 }
                     Project (#2, #1, #3) // { arity: 3 }
-                      Map ((#0 - 1), "O") // { arity: 4 }
+                      Map ((#0{r} - 1), "O") // { arity: 4 }
                         Get l6 // { arity: 2 }
                     Negate // { arity: 3 }
                       Project (#2, #1, #3) // { arity: 3 }
-                        Map ((#0 - 1), ".") // { arity: 4 }
+                        Map ((#0{r} - 1), ".") // { arity: 4 }
                           Get l6 // { arity: 2 }
                 Map (".") // { arity: 3 }
                   Get l6 // { arity: 2 }
@@ -180,21 +180,21 @@ Explained Query:
               Get l8 // { arity: 3 }
       cte l5 =
         Project (#0, #1) // { arity: 2 }
-          Filter (#2 = "O") // { arity: 3 }
+          Filter (#2{symbol} = "O") // { arity: 3 }
             Get l4 // { arity: 3 }
       cte l6 =
         Project (#0, #1) // { arity: 2 }
-          Join on=(#0 = (#2 + 1) AND #1 = #3) type=differential // { arity: 4 }
+          Join on=(#0{r} = (#2{r} + 1) AND #1{c} = #3{c}) type=differential // { arity: 4 }
             implementation
-              %0:l5[#1, #0]KKef » %1:l4[#1, (#0 + 1)]KKef
-            ArrangeBy keys=[[#1, #0]] // { arity: 2 }
+              %0:l5[#1{c}, #0{r}]KKef » %1:l4[#1{c}, (#0{r} + 1)]KKef
+            ArrangeBy keys=[[#1{c}, #0{r}]] // { arity: 2 }
               Get l5 // { arity: 2 }
-            ArrangeBy keys=[[#1, (#0 + 1)]] // { arity: 2 }
+            ArrangeBy keys=[[#1{c}, (#0{r} + 1)]] // { arity: 2 }
               Project (#0, #1) // { arity: 2 }
-                Filter (#2 = ".") // { arity: 3 }
+                Filter (#2{symbol} = ".") // { arity: 3 }
                   Get l4 // { arity: 3 }
       cte l7 =
-        Reduce aggregates=[sum(((1 + #1{max}) - #0))] // { arity: 1 }
+        Reduce aggregates=[sum(((1 + #1{max}) - #0{r}))] // { arity: 1 }
           CrossJoin type=differential // { arity: 2 }
             implementation
               %1[×]U » %0:l5[×]ef
@@ -579,11 +579,11 @@ Explained Query:
   With
     cte l0 =
       Project (#1, #2) // { arity: 2 }
-        Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1))) // { arity: 3 }
+        Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1{r}))) // { arity: 3 }
           FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#0{input}) array_length 1), 1) // { arity: 2 }
             ReadStorage materialize.public.input // { arity: 1 }
     cte l1 =
-      Reduce aggregates=[max(#0)] // { arity: 1 }
+      Reduce aggregates=[max(#0{r})] // { arity: 1 }
         Project (#0) // { arity: 1 }
           Get l0 // { arity: 2 }
     cte l2 =
@@ -598,8 +598,8 @@ Explained Query:
               - ()
     cte l3 =
       Project (#0, #2, #3) // { arity: 3 }
-        Map (substr(#1, #2, 1)) // { arity: 4 }
-          FlatMap generate_series(1, char_length(#1), 1) // { arity: 3 }
+        Map (substr(#1{line}, #2{c}, 1)) // { arity: 4 }
+          FlatMap generate_series(1, char_length(#1{line}), 1) // { arity: 3 }
             Get l0 // { arity: 2 }
   Return // { arity: 1 }
     With Mutually Recursive
@@ -621,11 +621,11 @@ Explained Query:
                       Union // { arity: 3 }
                         Get l5 // { arity: 3 }
                         Project (#2, #1, #3) // { arity: 3 }
-                          Map ((#0 - 1), "O") // { arity: 4 }
+                          Map ((#0{r} - 1), "O") // { arity: 4 }
                             Get l6 // { arity: 2 }
                         Negate // { arity: 3 }
                           Project (#2, #1, #3) // { arity: 3 }
-                            Map ((#0 - 1), ".") // { arity: 4 }
+                            Map ((#0{r} - 1), ".") // { arity: 4 }
                               Get l6 // { arity: 2 }
                     Map (".") // { arity: 3 }
                       Get l6 // { arity: 2 }
@@ -637,16 +637,16 @@ Explained Query:
                   Get l7 // { arity: 3 }
           cte l6 =
             Project (#0, #1) // { arity: 2 }
-              Join on=(#0 = (#2 + 1) AND #1 = #3) type=differential // { arity: 4 }
+              Join on=(#0{r} = (#2{r} + 1) AND #1{c} = #3{c}) type=differential // { arity: 4 }
                 implementation
-                  %0:l5[#1, #0]KKef » %1:l5[#1, (#0 + 1)]KKef
-                ArrangeBy keys=[[#1, #0]] // { arity: 2 }
+                  %0:l5[#1{c}, #0{r}]KKef » %1:l5[#1{c}, (#0{r} + 1)]KKef
+                ArrangeBy keys=[[#1{c}, #0{r}]] // { arity: 2 }
                   Project (#0, #1) // { arity: 2 }
-                    Filter (#2 = "O") // { arity: 3 }
+                    Filter (#2{symbol} = "O") // { arity: 3 }
                       Get l5 // { arity: 3 }
-                ArrangeBy keys=[[#1, (#0 + 1)]] // { arity: 2 }
+                ArrangeBy keys=[[#1{c}, (#0{r} + 1)]] // { arity: 2 }
                   Project (#0, #1) // { arity: 2 }
-                    Filter (#2 = ".") // { arity: 3 }
+                    Filter (#2{symbol} = ".") // { arity: 3 }
                       Get l5 // { arity: 3 }
           cte l7 =
             Get l4 // { arity: 3 }
@@ -663,11 +663,11 @@ Explained Query:
                       Union // { arity: 3 }
                         Get l9 // { arity: 3 }
                         Project (#0, #2, #3) // { arity: 3 }
-                          Map ((#1 - 1), "O") // { arity: 4 }
+                          Map ((#1{c} - 1), "O") // { arity: 4 }
                             Get l10 // { arity: 2 }
                         Negate // { arity: 3 }
                           Project (#0, #2, #3) // { arity: 3 }
-                            Map ((#1 - 1), ".") // { arity: 4 }
+                            Map ((#1{c} - 1), ".") // { arity: 4 }
                               Get l10 // { arity: 2 }
                     Map (".") // { arity: 3 }
                       Get l10 // { arity: 2 }
@@ -679,16 +679,16 @@ Explained Query:
                   Get l11 // { arity: 3 }
           cte l10 =
             Project (#0, #1) // { arity: 2 }
-              Join on=(#0 = #2 AND #1 = (#3 + 1)) type=differential // { arity: 4 }
+              Join on=(#0{r} = #2{r} AND #1{c} = (#3{c} + 1)) type=differential // { arity: 4 }
                 implementation
-                  %0:l9[#0, #1]KKef » %1:l9[#0, (#1 + 1)]KKef
-                ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+                  %0:l9[#0{r}, #1{c}]KKef » %1:l9[#0{r}, (#1{c} + 1)]KKef
+                ArrangeBy keys=[[#0{r}, #1{c}]] // { arity: 2 }
                   Project (#0, #1) // { arity: 2 }
-                    Filter (#2 = "O") // { arity: 3 }
+                    Filter (#2{symbol} = "O") // { arity: 3 }
                       Get l9 // { arity: 3 }
-                ArrangeBy keys=[[#0, (#1 + 1)]] // { arity: 2 }
+                ArrangeBy keys=[[#0{r}, (#1{c} + 1)]] // { arity: 2 }
                   Project (#0, #1) // { arity: 2 }
-                    Filter (#2 = ".") // { arity: 3 }
+                    Filter (#2{symbol} = ".") // { arity: 3 }
                       Get l9 // { arity: 3 }
           cte l11 =
             Get l8 // { arity: 3 }
@@ -705,11 +705,11 @@ Explained Query:
                       Union // { arity: 3 }
                         Get l13 // { arity: 3 }
                         Project (#2, #1, #3) // { arity: 3 }
-                          Map ((#0 + 1), "O") // { arity: 4 }
+                          Map ((#0{r} + 1), "O") // { arity: 4 }
                             Get l14 // { arity: 2 }
                         Negate // { arity: 3 }
                           Project (#2, #1, #3) // { arity: 3 }
-                            Map ((#0 + 1), ".") // { arity: 4 }
+                            Map ((#0{r} + 1), ".") // { arity: 4 }
                               Get l14 // { arity: 2 }
                     Map (".") // { arity: 3 }
                       Get l14 // { arity: 2 }
@@ -721,16 +721,16 @@ Explained Query:
                   Get l15 // { arity: 3 }
           cte l14 =
             Project (#0, #1) // { arity: 2 }
-              Join on=(#0 = (#2 - 1) AND #1 = #3) type=differential // { arity: 4 }
+              Join on=(#0{r} = (#2{r} - 1) AND #1{c} = #3{c}) type=differential // { arity: 4 }
                 implementation
-                  %0:l13[#1, #0]KKef » %1:l13[#1, (#0 - 1)]KKef
-                ArrangeBy keys=[[#1, #0]] // { arity: 2 }
+                  %0:l13[#1{c}, #0{r}]KKef » %1:l13[#1{c}, (#0{r} - 1)]KKef
+                ArrangeBy keys=[[#1{c}, #0{r}]] // { arity: 2 }
                   Project (#0, #1) // { arity: 2 }
-                    Filter (#2 = "O") // { arity: 3 }
+                    Filter (#2{symbol} = "O") // { arity: 3 }
                       Get l13 // { arity: 3 }
-                ArrangeBy keys=[[#1, (#0 - 1)]] // { arity: 2 }
+                ArrangeBy keys=[[#1{c}, (#0{r} - 1)]] // { arity: 2 }
                   Project (#0, #1) // { arity: 2 }
-                    Filter (#2 = ".") // { arity: 3 }
+                    Filter (#2{symbol} = ".") // { arity: 3 }
                       Get l13 // { arity: 3 }
           cte l15 =
             Get l12 // { arity: 3 }
@@ -747,11 +747,11 @@ Explained Query:
                       Union // { arity: 3 }
                         Get l17 // { arity: 3 }
                         Project (#0, #2, #3) // { arity: 3 }
-                          Map ((#1 + 1), "O") // { arity: 4 }
+                          Map ((#1{c} + 1), "O") // { arity: 4 }
                             Get l18 // { arity: 2 }
                         Negate // { arity: 3 }
                           Project (#0, #2, #3) // { arity: 3 }
-                            Map ((#1 + 1), ".") // { arity: 4 }
+                            Map ((#1{c} + 1), ".") // { arity: 4 }
                               Get l18 // { arity: 2 }
                     Map (".") // { arity: 3 }
                       Get l18 // { arity: 2 }
@@ -763,29 +763,29 @@ Explained Query:
                   Get l19 // { arity: 3 }
           cte l18 =
             Project (#0, #1) // { arity: 2 }
-              Join on=(#0 = #2 AND #1 = (#3 - 1)) type=differential // { arity: 4 }
+              Join on=(#0{r} = #2{r} AND #1{c} = (#3{c} - 1)) type=differential // { arity: 4 }
                 implementation
-                  %0:l17[#0, #1]KKef » %1:l17[#0, (#1 - 1)]KKef
-                ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+                  %0:l17[#0{r}, #1{c}]KKef » %1:l17[#0{r}, (#1{c} - 1)]KKef
+                ArrangeBy keys=[[#0{r}, #1{c}]] // { arity: 2 }
                   Project (#0, #1) // { arity: 2 }
-                    Filter (#2 = "O") // { arity: 3 }
+                    Filter (#2{symbol} = "O") // { arity: 3 }
                       Get l17 // { arity: 3 }
-                ArrangeBy keys=[[#0, (#1 - 1)]] // { arity: 2 }
+                ArrangeBy keys=[[#0{r}, (#1{c} - 1)]] // { arity: 2 }
                   Project (#0, #1) // { arity: 2 }
-                    Filter (#2 = ".") // { arity: 3 }
+                    Filter (#2{symbol} = ".") // { arity: 3 }
                       Get l17 // { arity: 3 }
           cte l19 =
             Get l16 // { arity: 3 }
         Return // { arity: 3 }
           Get l17 // { arity: 3 }
       cte l21 =
-        Reduce aggregates=[sum(((1 + #1{max}) - #0))] // { arity: 1 }
+        Reduce aggregates=[sum(((1 + #1{max}) - #0{r}))] // { arity: 1 }
           CrossJoin type=differential // { arity: 2 }
             implementation
               %1[×]U » %0:l20[×]ef
             ArrangeBy keys=[[]] // { arity: 1 }
               Project (#0) // { arity: 1 }
-                Filter (#2 = "O") // { arity: 3 }
+                Filter (#2{symbol} = "O") // { arity: 3 }
                   Get l20 // { arity: 3 }
             ArrangeBy keys=[[]] // { arity: 1 }
               Union // { arity: 1 }

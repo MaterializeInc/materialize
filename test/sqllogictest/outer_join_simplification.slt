@@ -643,8 +643,8 @@ Explained Query:
   With Mutually Recursive
     cte l0 =
       Project (#0..=#2, #4{v})
-        Join on=(#0 = #3{a}) type=differential
-          ArrangeBy keys=[[#0]]
+        Join on=(#0{a} = #3{a}) type=differential
+          ArrangeBy keys=[[#0{a}]]
             Project (#0..=#2)
               Filter (#0{a}) IS NOT NULL
                 Get l1
@@ -755,7 +755,7 @@ Explained Query:
       Distinct project=[#0{a}..=#2{u}]
         Union
           Project (#11..=#13)
-            Map ((#7) IS NULL, (#0 + case when (#4) IS NULL then null else #0 end), (#1 + case when #10 then null else #1 end), (#2 || smallint_to_text((case when #10 then null else #6{c} end + case when (#9) IS NULL then null else #8{c} end))))
+            Map ((#7) IS NULL, (#0{a} + case when (#4) IS NULL then null else #0 end), (#1{b} + case when #10 then null else #1 end), (#2{u} || smallint_to_text((case when #10 then null else #6{c} end + case when (#9) IS NULL then null else #8{c} end))))
               Join on=(#0 = #3{a} AND #1 = #5{b} AND #8{c} = case when (#7) IS NULL then null else #6{c} end) type=delta
                 ArrangeBy keys=[[#0{a}], [#1{b}]]
                   Get l1

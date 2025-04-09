@@ -31,7 +31,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 ----
 Explained Query:
   Project (#2, #3) // { arity: 2 }
-    Map (row(#0{a}, #0{a}), record_get[1](#2)) // { arity: 4 }
+    Map (row(#0{a}, #0{a}), record_get[1](#2{record})) // { arity: 4 }
       ReadStorage materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1

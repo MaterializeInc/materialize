@@ -302,14 +302,14 @@ fn id_gen(expr: &MirRelationExpr) -> impl Iterator<Item = LocalId> + use<> {
 impl ScalarOps for MirScalarExpr {
     fn match_col_ref(&self) -> Option<usize> {
         match self {
-            MirScalarExpr::Column(c) => Some(*c),
+            MirScalarExpr::Column(c, _name) => Some(*c),
             _ => None,
         }
     }
 
     fn references(&self, column: usize) -> bool {
         match self {
-            MirScalarExpr::Column(c) => *c == column,
+            MirScalarExpr::Column(c, _name) => *c == column,
             _ => false,
         }
     }

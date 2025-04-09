@@ -568,7 +568,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 Explained Query:
   Join on=(#1{double_col} = integer_to_double(#0{int_col})) type=differential // { arity: 2 }
     implementation
-      %0:int_table[integer_to_double(#0)]K » %1:double_table[#0]K
+      %0:int_table[integer_to_double(#0{int_col})]K » %1:double_table[#0{double_col}]K
     ArrangeBy keys=[[integer_to_double(#0{int_col})]] // { arity: 1 }
       ReadStorage materialize.public.int_table // { arity: 1 }
     ArrangeBy keys=[[#0{double_col}]] // { arity: 1 }

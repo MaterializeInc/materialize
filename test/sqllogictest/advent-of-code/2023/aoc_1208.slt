@@ -75,21 +75,21 @@ Explained Query:
             Map (0) // { arity: 4 }
               ReadStorage materialize.public.paths // { arity: 3 }
         Project (#3, #8, #9) // { arity: 3 }
-          Map (case when (#7 = "L") then #1{"left"} else case when (#7 = "R") then #2{"right"} else "???" end end, (#5 + 1)) // { arity: 10 }
-            Join on=(#0{state} = #4 AND #6 = (1 + (#5 % 263))) type=delta // { arity: 8 }
+          Map (case when (#7{step} = "L") then #1{"left"} else case when (#7{step} = "R") then #2{"right"} else "???" end end, (#5{steps} + 1)) // { arity: 10 }
+            Join on=(#0{state} = #4{state} AND #6{steps} = (1 + (#5{steps} % 263))) type=delta // { arity: 8 }
               implementation
-                %0:paths » %1:l0[#1]Kf » %2[#0]K
-                %1:l0 » %0:paths[#0]Kf » %2[#0]K
-                %2 » %1:l0[(1 + (#2 % 263))]Kf » %0:paths[#0]Kf
+                %0:paths » %1:l0[#1{state}]Kf » %2[#0{steps}]K
+                %1:l0 » %0:paths[#0{state}]Kf » %2[#0{steps}]K
+                %2 » %1:l0[(1 + (#2{steps} % 263))]Kf » %0:paths[#0{state}]Kf
               ArrangeBy keys=[[#0{state}]] // { arity: 3 }
                 Filter ("Z" != substr(#0{state}, 3, 1)) // { arity: 3 }
                   ReadStorage materialize.public.paths // { arity: 3 }
-              ArrangeBy keys=[[#1], [(1 + (#2 % 263))]] // { arity: 3 }
+              ArrangeBy keys=[[#1{state}], [(1 + (#2{steps} % 263))]] // { arity: 3 }
                 Filter ("Z" != substr(#1{state}, 3, 1)) // { arity: 3 }
                   Get l0 // { arity: 3 }
-              ArrangeBy keys=[[#0]] // { arity: 2 }
+              ArrangeBy keys=[[#0{steps}]] // { arity: 2 }
                 Project (#1, #2) // { arity: 2 }
-                  Map (substr(#0{input}, #1, 1)) // { arity: 3 }
+                  Map (substr(#0{input}, #1{steps}, 1)) // { arity: 3 }
                     FlatMap generate_series(1, char_length(#0{input}), 1) // { arity: 2 }
                       ReadStorage materialize.public.steps_input // { arity: 1 }
   Return // { arity: 3 }

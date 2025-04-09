@@ -506,7 +506,7 @@ where
     ) -> Self {
         let mut keys = Vec::new();
         for column in columns {
-            keys.push(MirScalarExpr::Column(column));
+            keys.push(MirScalarExpr::column(column));
         }
         Self::from_expressions(keys, arrangements)
     }

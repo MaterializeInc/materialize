@@ -69,7 +69,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 Explained Query:
   Join on=(#0{a} = abs(#2{a})) type=differential // { arity: 4 }
     implementation
-      %0:foo[#0]Kef » %1:bar[abs(#0)]Kef
+      %0:foo[#0{a}]Kef » %1:bar[abs(#0{a})]Kef
     ArrangeBy keys=[[#0{a}]] // { arity: 2 }
       Filter (1 = (#0{a} % 2)) // { arity: 2 }
         ReadStorage materialize.public.foo // { arity: 2 }
@@ -155,9 +155,9 @@ Explained Query:
   Project (#0{a}, #5{b}) // { arity: 2 }
     Join on=(#0{a} = #2{a} AND #3{b} = #4{a}) type=delta // { arity: 6 }
       implementation
-        %0:foo » %1:bar[#0]KA » %2:baz[#0]UK
-        %1:bar » %2:baz[#0]UK » %0:foo[#0]KA
-        %2:baz » %1:bar[#1]K » %0:foo[#0]KA
+        %0:foo » %1:bar[#0{a}]KA » %2:baz[#0{a}]UK
+        %1:bar » %2:baz[#0{a}]UK » %0:foo[#0{a}]KA
+        %2:baz » %1:bar[#1{b}]K » %0:foo[#0{a}]KA
       ArrangeBy keys=[[#0{a}]] // { arity: 2 }
         ReadIndex on=foo foo_idx=[delta join 1st input (full scan)] // { arity: 2 }
       ArrangeBy keys=[[#0{a}], [#1{b}]] // { arity: 2 }
@@ -209,9 +209,9 @@ Explained Query:
   Project (#0{a}, #5{b}) // { arity: 2 }
     Join on=(#0{a} = #2{a} AND #3{b} = #4{a}) type=delta // { arity: 6 }
       implementation
-        %0:foo » %1:bar[#0]KA » %2:baz[#0]KA
-        %1:bar » %0:foo[#0]KA » %2:baz[#0]KA
-        %2:baz » %1:bar[#1]K » %0:foo[#0]KA
+        %0:foo » %1:bar[#0{a}]KA » %2:baz[#0{a}]KA
+        %1:bar » %0:foo[#0{a}]KA » %2:baz[#0{a}]KA
+        %2:baz » %1:bar[#1{b}]K » %0:foo[#0{a}]KA
       ArrangeBy keys=[[#0{a}]] // { arity: 2 }
         ReadIndex on=foo foo_idx=[delta join 1st input (full scan)] // { arity: 2 }
       ArrangeBy keys=[[#0{a}], [#1{b}]] // { arity: 2 }
@@ -257,7 +257,7 @@ Explained Query:
     Filter (#2{a}) IS NOT NULL // { arity: 4 }
       Join on=(-(#2{a}) = case when (#0{a} = 0) then null else #0{a} end) type=differential // { arity: 4 }
         implementation
-          %0:foo[case when (#0 = 0) then null else #0 end]KA » %1:bar[-(#0)]KA
+          %0:foo[case when (#0{a} = 0) then null else #0{a} end]KA » %1:bar[-(#0{a})]KA
         ArrangeBy keys=[[case when (#0{a} = 0) then null else #0{a} end]] // { arity: 2 }
           ReadIndex on=foo foo_idx2=[differential join] // { arity: 2 }
         ArrangeBy keys=[[-(#0{a})]] // { arity: 2 }
@@ -302,9 +302,9 @@ Explained Query:
     Filter (#4{a}) IS NOT NULL // { arity: 6 }
       Join on=(#0{a} = #2{a} AND #4{a} = (#0{a} + 4)) type=delta // { arity: 6 }
         implementation
-          %0:bar » %1:foo[#0]KA » %2:baz[#0]KA
-          %1:foo » %0:bar[#0]K » %2:baz[#0]KA
-          %2:baz » %0:bar[(#0 + 4)]KA » %1:foo[#0]KA
+          %0:bar » %1:foo[#0{a}]KA » %2:baz[#0{a}]KA
+          %1:foo » %0:bar[#0{a}]K » %2:baz[#0{a}]KA
+          %2:baz » %0:bar[(#0{a} + 4)]KA » %1:foo[#0{a}]KA
         ArrangeBy keys=[[#0{a}], [(#0{a} + 4)]] // { arity: 2 }
           Filter (#0{a}) IS NOT NULL // { arity: 2 }
             ReadIndex on=bar bar_idx2=[*** full scan ***] // { arity: 2 }
@@ -416,9 +416,9 @@ Explained Query:
   Project (#1{b}, #3{b}, #5{b}) // { arity: 3 }
     Join on=(#0{a} = #2{a} AND #4{a} = (#0{a} + 4)) type=delta // { arity: 6 }
       implementation
-        %0:foo » %1:bar[#0]K » %2:baz[#0]K
-        %1:bar » %0:foo[#0]KA » %2:baz[#0]K
-        %2:baz » %0:foo[(#0 + 4)]K » %1:bar[#0]K
+        %0:foo » %1:bar[#0{a}]K » %2:baz[#0{a}]K
+        %1:bar » %0:foo[#0{a}]KA » %2:baz[#0{a}]K
+        %2:baz » %0:foo[(#0{a} + 4)]K » %1:bar[#0{a}]K
       ArrangeBy keys=[[#0{a}], [(#0{a} + 4)]] // { arity: 2 }
         Filter (#0{a}) IS NOT NULL // { arity: 2 }
           ReadIndex on=foo foo_idx=[*** full scan ***] // { arity: 2 }
@@ -632,17 +632,17 @@ Explained Query:
     Filter (#109{x}) IS NULL AND like["a%"](#125{s}) AND (#137{x} = 71) AND (#95{x} <= 8) AND (#81{x} > 5) AND (#95{x} >= 3) AND NOT(like["b%"](#69{s})) AND (#39{x} != #40{y}) AND (#53{x} != #54{y}) // { arity: 154 }
       Join on=(#0{a} = #15{b} = #30{c} = #45{d} = #60{e} = #75{f} = #90{g} = #105{h} = #120{i} = #135{j} = #150{k}) type=delta // { arity: 154 }
         implementation
-          %0:big » %9:big[#9]KAef » %8:big[#8]KAlf » %7:big[#7]KAnf » %6:big[#6]KAiif » %5:big[#5]KAif » %2:big[#2]KAf » %3:big[#3]KAf » %4:big[#4]KAf » %1:big[#1]KA » %10:big[#10]KA
-          %1:big » %9:big[#9]KAef » %8:big[#8]KAlf » %7:big[#7]KAnf » %6:big[#6]KAiif » %5:big[#5]KAif » %2:big[#2]KAf » %3:big[#3]KAf » %4:big[#4]KAf » %0:big[#0]KA » %10:big[#10]KA
-          %2:big » %9:big[#9]KAef » %8:big[#8]KAlf » %7:big[#7]KAnf » %6:big[#6]KAiif » %5:big[#5]KAif » %3:big[#3]KAf » %4:big[#4]KAf » %0:big[#0]KA » %1:big[#1]KA » %10:big[#10]KA
-          %3:big » %9:big[#9]KAef » %8:big[#8]KAlf » %7:big[#7]KAnf » %6:big[#6]KAiif » %5:big[#5]KAif » %2:big[#2]KAf » %4:big[#4]KAf » %0:big[#0]KA » %1:big[#1]KA » %10:big[#10]KA
-          %4:big » %9:big[#9]KAef » %8:big[#8]KAlf » %7:big[#7]KAnf » %6:big[#6]KAiif » %5:big[#5]KAif » %2:big[#2]KAf » %3:big[#3]KAf » %0:big[#0]KA » %1:big[#1]KA » %10:big[#10]KA
-          %5:big » %9:big[#9]KAef » %8:big[#8]KAlf » %7:big[#7]KAnf » %6:big[#6]KAiif » %2:big[#2]KAf » %3:big[#3]KAf » %4:big[#4]KAf » %0:big[#0]KA » %1:big[#1]KA » %10:big[#10]KA
-          %6:big » %9:big[#9]KAef » %8:big[#8]KAlf » %7:big[#7]KAnf » %5:big[#5]KAif » %2:big[#2]KAf » %3:big[#3]KAf » %4:big[#4]KAf » %0:big[#0]KA » %1:big[#1]KA » %10:big[#10]KA
-          %7:big » %9:big[#9]KAef » %8:big[#8]KAlf » %6:big[#6]KAiif » %5:big[#5]KAif » %2:big[#2]KAf » %3:big[#3]KAf » %4:big[#4]KAf » %0:big[#0]KA » %1:big[#1]KA » %10:big[#10]KA
-          %8:big » %9:big[#9]KAef » %7:big[#7]KAnf » %6:big[#6]KAiif » %5:big[#5]KAif » %2:big[#2]KAf » %3:big[#3]KAf » %4:big[#4]KAf » %0:big[#0]KA » %1:big[#1]KA » %10:big[#10]KA
-          %9:big » %8:big[#8]KAlf » %7:big[#7]KAnf » %6:big[#6]KAiif » %5:big[#5]KAif » %2:big[#2]KAf » %3:big[#3]KAf » %4:big[#4]KAf » %0:big[#0]KA » %1:big[#1]KA » %10:big[#10]KA
-          %10:big » %9:big[#9]KAef » %8:big[#8]KAlf » %7:big[#7]KAnf » %6:big[#6]KAiif » %5:big[#5]KAif » %2:big[#2]KAf » %3:big[#3]KAf » %4:big[#4]KAf » %0:big[#0]KA » %1:big[#1]KA
+          %0:big » %9:big[#9{j}]KAef » %8:big[#8{i}]KAlf » %7:big[#7{h}]KAnf » %6:big[#6{g}]KAiif » %5:big[#5{f}]KAif » %2:big[#2{c}]KAf » %3:big[#3{d}]KAf » %4:big[#4{e}]KAf » %1:big[#1{b}]KA » %10:big[#10{k}]KA
+          %1:big » %9:big[#9{j}]KAef » %8:big[#8{i}]KAlf » %7:big[#7{h}]KAnf » %6:big[#6{g}]KAiif » %5:big[#5{f}]KAif » %2:big[#2{c}]KAf » %3:big[#3{d}]KAf » %4:big[#4{e}]KAf » %0:big[#0{a}]KA » %10:big[#10{k}]KA
+          %2:big » %9:big[#9{j}]KAef » %8:big[#8{i}]KAlf » %7:big[#7{h}]KAnf » %6:big[#6{g}]KAiif » %5:big[#5{f}]KAif » %3:big[#3{d}]KAf » %4:big[#4{e}]KAf » %0:big[#0{a}]KA » %1:big[#1{b}]KA » %10:big[#10{k}]KA
+          %3:big » %9:big[#9{j}]KAef » %8:big[#8{i}]KAlf » %7:big[#7{h}]KAnf » %6:big[#6{g}]KAiif » %5:big[#5{f}]KAif » %2:big[#2{c}]KAf » %4:big[#4{e}]KAf » %0:big[#0{a}]KA » %1:big[#1{b}]KA » %10:big[#10{k}]KA
+          %4:big » %9:big[#9{j}]KAef » %8:big[#8{i}]KAlf » %7:big[#7{h}]KAnf » %6:big[#6{g}]KAiif » %5:big[#5{f}]KAif » %2:big[#2{c}]KAf » %3:big[#3{d}]KAf » %0:big[#0{a}]KA » %1:big[#1{b}]KA » %10:big[#10{k}]KA
+          %5:big » %9:big[#9{j}]KAef » %8:big[#8{i}]KAlf » %7:big[#7{h}]KAnf » %6:big[#6{g}]KAiif » %2:big[#2{c}]KAf » %3:big[#3{d}]KAf » %4:big[#4{e}]KAf » %0:big[#0{a}]KA » %1:big[#1{b}]KA » %10:big[#10{k}]KA
+          %6:big » %9:big[#9{j}]KAef » %8:big[#8{i}]KAlf » %7:big[#7{h}]KAnf » %5:big[#5{f}]KAif » %2:big[#2{c}]KAf » %3:big[#3{d}]KAf » %4:big[#4{e}]KAf » %0:big[#0{a}]KA » %1:big[#1{b}]KA » %10:big[#10{k}]KA
+          %7:big » %9:big[#9{j}]KAef » %8:big[#8{i}]KAlf » %6:big[#6{g}]KAiif » %5:big[#5{f}]KAif » %2:big[#2{c}]KAf » %3:big[#3{d}]KAf » %4:big[#4{e}]KAf » %0:big[#0{a}]KA » %1:big[#1{b}]KA » %10:big[#10{k}]KA
+          %8:big » %9:big[#9{j}]KAef » %7:big[#7{h}]KAnf » %6:big[#6{g}]KAiif » %5:big[#5{f}]KAif » %2:big[#2{c}]KAf » %3:big[#3{d}]KAf » %4:big[#4{e}]KAf » %0:big[#0{a}]KA » %1:big[#1{b}]KA » %10:big[#10{k}]KA
+          %9:big » %8:big[#8{i}]KAlf » %7:big[#7{h}]KAnf » %6:big[#6{g}]KAiif » %5:big[#5{f}]KAif » %2:big[#2{c}]KAf » %3:big[#3{d}]KAf » %4:big[#4{e}]KAf » %0:big[#0{a}]KA » %1:big[#1{b}]KA » %10:big[#10{k}]KA
+          %10:big » %9:big[#9{j}]KAef » %8:big[#8{i}]KAlf » %7:big[#7{h}]KAnf » %6:big[#6{g}]KAiif » %5:big[#5{f}]KAif » %2:big[#2{c}]KAf » %3:big[#3{d}]KAf » %4:big[#4{e}]KAf » %0:big[#0{a}]KA » %1:big[#1{b}]KA
         ArrangeBy keys=[[#0{a}]] // { arity: 14 }
           ReadIndex on=big big_idx_a=[delta join 1st input (full scan)] // { arity: 14 }
         ArrangeBy keys=[[#1{b}]] // { arity: 14 }
@@ -700,9 +700,9 @@ Explained Query:
     Filter like["a%"](#13{s}) // { arity: 43 }
       Join on=(#0{a} = #15{b} = #31{c}) type=delta // { arity: 43 }
         implementation
-          %0:big » %1:big[#1]KAe » %2:big[#2]KA
-          %1:big » %0:big[#0]KAlf » %2:big[#2]KA
-          %2:big » %1:big[#1]KAe » %0:big[#0]KAlf
+          %0:big » %1:big[#1{b}]KAe » %2:big[#2{c}]KA
+          %1:big » %0:big[#0{a}]KAlf » %2:big[#2{c}]KA
+          %2:big » %1:big[#1{b}]KAe » %0:big[#0{a}]KAlf
         ArrangeBy keys=[[#0{a}]] // { arity: 14 }
           ReadIndex on=big big_idx_a=[delta join 1st input (full scan)] // { arity: 14 }
         ArrangeBy keys=[[#1{b}]] // { arity: 15 }

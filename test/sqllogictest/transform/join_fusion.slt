@@ -35,9 +35,9 @@ Explained Query:
     Filter (#0{f1} <= #2{f1}) // { arity: 6 }
       Join on=(#0{f1} = #4{f1} AND #1{f2} = #3{f2}) type=delta // { arity: 6 }
         implementation
-          %0:t1 » %2:t3[#0]Kif » %1:t2[#1]K
-          %1:t2 » %0:t1[#1]Kif » %2:t3[#0]Kif
-          %2:t3 » %0:t1[#0]Kif » %1:t2[#1]K
+          %0:t1 » %2:t3[#0{f1}]Kif » %1:t2[#1{f2}]K
+          %1:t2 » %0:t1[#1{f2}]Kif » %2:t3[#0{f1}]Kif
+          %2:t3 » %0:t1[#0{f1}]Kif » %1:t2[#1{f2}]K
         ArrangeBy keys=[[#0{f1}], [#1{f2}]] // { arity: 2 }
           Filter (#0{f1} > 0) AND (#1{f2}) IS NOT NULL // { arity: 2 }
             ReadStorage materialize.public.t1 // { arity: 2 }
@@ -120,9 +120,9 @@ Explained Query:
     Filter (#5{l_shipdate} != #11{o_orderdate}) AND (#14{c_acctbal} >= #10{o_totalprice}) // { arity: 15 }
       Join on=(#0{l_orderkey} = #8{o_orderkey} AND date_to_timestamp(#11{o_orderdate}) = (#5{l_shipdate} - 9 months)) type=delta // { arity: 15 }
         implementation
-          %0:lineitem » %1:orders[#0]KA » %2:customer[×]
-          %1:orders » %0:lineitem[#0]KA » %2:customer[×]
-          %2:customer » %0:lineitem[×] » %1:orders[#0]KA
+          %0:lineitem » %1:orders[#0{o_orderkey}]KA » %2:customer[×]
+          %1:orders » %0:lineitem[#0{l_orderkey}]KA » %2:customer[×]
+          %2:customer » %0:lineitem[×] » %1:orders[#0{o_orderkey}]KA
         ArrangeBy keys=[[], [#0{l_orderkey}]] // { arity: 8 }
           ReadIndex on=lineitem fk_lineitem_orderkey=[*** full scan ***, delta join lookup] // { arity: 8 }
         ArrangeBy keys=[[#0{o_orderkey}]] // { arity: 4 }
@@ -157,9 +157,9 @@ Explained Query:
         Project (#1{o_orderkey}) // { arity: 1 }
           Join on=(#0{l_extendedprice} = #2{o_totalprice} AND #1{o_orderkey} = #3{l_orderkey}) type=delta // { arity: 4 }
             implementation
-              %0:lineitem » %1:orders[#1]Keiif » %2[#0]K
-              %1:orders » %0:lineitem[#0]Kef » %2[#0]K
-              %2 » %1:orders[#0]KAeiif » %0:lineitem[#0]Kef
+              %0:lineitem » %1:orders[#1{o_totalprice}]Keiif » %2[#0]K
+              %1:orders » %0:lineitem[#0{l_extendedprice}]Kef » %2[#0]K
+              %2 » %1:orders[#0{o_orderkey}]KAeiif » %0:lineitem[#0{l_extendedprice}]Kef
             ArrangeBy keys=[[#0{l_extendedprice}]] // { arity: 1 }
               Project (#4{l_extendedprice}) // { arity: 1 }
                 Filter (#6{l_commitdate} = 1997-01-25) // { arity: 8 }
@@ -214,9 +214,9 @@ Explained Query:
     Project (#1{l_partkey}, #0{l_orderkey}, #1{l_partkey}) // { arity: 3 }
       Join on=(#2{l_extendedprice} = #4{o_totalprice} AND #3{l_commitdate} = #5{o_orderdate}) type=delta // { arity: 6 }
         implementation
-          %0:lineitem » %1:orders[#0, #1]KKef » %2:customer[×]e
-          %1:orders » %0:lineitem[#2, #3]KKf » %2:customer[×]e
-          %2:customer » %1:orders[×]ef » %0:lineitem[#2, #3]KKf
+          %0:lineitem » %1:orders[#0{o_totalprice}, #1{o_orderdate}]KKef » %2:customer[×]e
+          %1:orders » %0:lineitem[#2{l_extendedprice}, #3{l_commitdate}]KKf » %2:customer[×]e
+          %2:customer » %1:orders[×]ef » %0:lineitem[#2{l_extendedprice}, #3{l_commitdate}]KKf
         ArrangeBy keys=[[#2{l_extendedprice}, #3{l_commitdate}]] // { arity: 4 }
           Project (#0{l_orderkey}, #1{l_partkey}, #4{l_extendedprice}, #6{l_commitdate}) // { arity: 4 }
             Filter (#4{l_extendedprice} = (#4{l_extendedprice} % 5)) // { arity: 8 }
@@ -256,9 +256,9 @@ Explained Query:
     Project (#0{l_orderkey}..=#9{o_custkey}, #4{l_extendedprice}, #5{l_shipdate}, #12{c_custkey}..=#14{c_acctbal}) // { arity: 15 }
       Join on=(#4{l_extendedprice} = #10{o_totalprice} AND #5{l_shipdate} = #11{o_orderdate}) type=delta // { arity: 15 }
         implementation
-          %0:lineitem » %1:orders[#2, #3]KKe » %2:customer[×]e
-          %1:orders » %0:lineitem[#4, #5]KKf » %2:customer[×]e
-          %2:customer » %1:orders[×]e » %0:lineitem[#4, #5]KKf
+          %0:lineitem » %1:orders[#2{o_totalprice}, #3{o_orderdate}]KKe » %2:customer[×]e
+          %1:orders » %0:lineitem[#4{l_extendedprice}, #5{l_shipdate}]KKf » %2:customer[×]e
+          %2:customer » %1:orders[×]e » %0:lineitem[#4{l_extendedprice}, #5{l_shipdate}]KKf
         ArrangeBy keys=[[#4{l_extendedprice}, #5{l_shipdate}]] // { arity: 8 }
           Filter (date_to_timestamp(#7{l_receiptdate}) = (#5{l_shipdate} + 6 days)) // { arity: 8 }
             ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 8 }

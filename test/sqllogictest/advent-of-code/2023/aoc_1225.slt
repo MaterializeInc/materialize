@@ -132,14 +132,14 @@ Explained Query:
   With
     cte l0 =
       Project (#3, #4) // { arity: 2 }
-        Map (regexp_split_to_array[" ", case_insensitive=false](#0), btrim(array_index(#2, 1), ":"), btrim(array_index(#2, integer_to_bigint(#1)), ",")) // { arity: 5 }
-          FlatMap generate_series(2, (regexp_split_to_array[" ", case_insensitive=false](#0) array_length 1), 1) // { arity: 2 }
+        Map (regexp_split_to_array[" ", case_insensitive=false](#0{line}), btrim(array_index(#2, 1), ":"), btrim(array_index(#2, integer_to_bigint(#1{x})), ",")) // { arity: 5 }
+          FlatMap generate_series(2, (regexp_split_to_array[" ", case_insensitive=false](#0{line}) array_length 1), 1) // { arity: 2 }
             Project (#2) // { arity: 1 }
-              Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1))) // { arity: 3 }
+              Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1{r}))) // { arity: 3 }
                 FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#0{input}) array_length 1), 1) // { arity: 2 }
                   ReadStorage materialize.public.input // { arity: 1 }
     cte l1 =
-      Map (case when (#0 < "n") then 1 else -1 end) // { arity: 2 }
+      Map (case when (#0{src} < "n") then 1 else -1 end) // { arity: 2 }
         Union // { arity: 1 }
           Project (#0) // { arity: 1 }
             Get l0 // { arity: 2 }
@@ -151,7 +151,7 @@ Explained Query:
         Project (#1{sum}) // { arity: 1 }
           Get l7 // { arity: 2 }
       cte l3 =
-        Reduce aggregates=[sum(#0), count(#0)] // { arity: 2 }
+        Reduce aggregates=[sum(#0{val}), count(#0{val})] // { arity: 2 }
           Get l2 // { arity: 1 }
       cte l4 =
         Project (#2) // { arity: 1 }
@@ -166,7 +166,7 @@ Explained Query:
                   Constant // { arity: 0 }
                     - ()
       cte l5 =
-        Reduce aggregates=[sum((#0 * #0)), sum(#0), count(#0)] // { arity: 3 }
+        Reduce aggregates=[sum((#0{val} * #0{val})), sum(#0{val}), count(#0{val})] // { arity: 3 }
           Get l2 // { arity: 1 }
       cte l6 =
         Project (#3) // { arity: 1 }
@@ -187,23 +187,23 @@ Explained Query:
               Get l1 // { arity: 2 }
               Negate // { arity: 2 }
                 Get l8 // { arity: 2 }
-          Reduce group_by=[#0] aggregates=[sum(((#1 - #2) / #3))] // { arity: 2 }
+          Reduce group_by=[#0] aggregates=[sum(((#1{val} - #2) / #3))] // { arity: 2 }
             Project (#0, #3..=#5) // { arity: 4 }
-              Join on=(#1 = #2) type=delta // { arity: 6 }
+              Join on=(#1{dst} = #2{src}) type=delta // { arity: 6 }
                 implementation
-                  %0 » %2[×]U » %3[×]U » %1:l7[#0]K
-                  %1:l7 » %2[×]U » %3[×]U » %0[#1]K
-                  %2 » %3[×]U » %0[×] » %1:l7[#0]K
-                  %3 » %2[×]U » %0[×] » %1:l7[#0]K
-                ArrangeBy keys=[[], [#1]] // { arity: 2 }
+                  %0 » %2[×]U » %3[×]U » %1:l7[#0{src}]K
+                  %1:l7 » %2[×]U » %3[×]U » %0[#1{dst}]K
+                  %2 » %3[×]U » %0[×] » %1:l7[#0{src}]K
+                  %3 » %2[×]U » %0[×] » %1:l7[#0{src}]K
+                ArrangeBy keys=[[], [#1{dst}]] // { arity: 2 }
                   Union // { arity: 2 }
-                    Filter (#1) IS NOT NULL // { arity: 2 }
+                    Filter (#1{dst}) IS NOT NULL // { arity: 2 }
                       Get l0 // { arity: 2 }
                     Project (#1, #0) // { arity: 2 }
-                      Filter (#0) IS NOT NULL // { arity: 2 }
+                      Filter (#0{dst}) IS NOT NULL // { arity: 2 }
                         Get l0 // { arity: 2 }
-                ArrangeBy keys=[[#0]] // { arity: 2 }
-                  Filter (#0) IS NOT NULL // { arity: 2 }
+                ArrangeBy keys=[[#0{src}]] // { arity: 2 }
+                  Filter (#0{src}) IS NOT NULL // { arity: 2 }
                     Get l7 // { arity: 2 }
                 ArrangeBy keys=[[]] // { arity: 1 }
                   Union // { arity: 1 }
