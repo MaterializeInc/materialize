@@ -24,6 +24,7 @@ use futures::Future;
 use futures::future::{BoxFuture, LocalBoxFuture};
 use headers::{Header, HeaderMapExt};
 use hyper::http::header::HeaderMap;
+use maplit::btreemap;
 use mz_adapter::TimestampExplanation;
 use mz_adapter_types::bootstrap_builtin_cluster_config::{
     ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR, BootstrapBuiltinClusterConfig,
@@ -50,6 +51,9 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::{CONSENSUS_CONNECTION_POOL_MAX_SIZE, PersistConfig};
 use mz_persist_client::rpc::PersistGrpcPubSubServer;
 use mz_secrets::SecretsController;
+use mz_server_core::listeners::{
+    AllowedRoles, AuthenticatorKind, BaseListenerConfig, HttpRoutesEnabled,
+};
 use mz_server_core::{ReloadTrigger, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::connections::ConnectionContext;
@@ -82,7 +86,10 @@ use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 use url::Url;
 
-use crate::{CatalogConfig, FronteggAuthentication, WebSocketAuth, WebSocketResponse};
+use crate::{
+    CatalogConfig, FronteggAuthenticator, HttpListenerConfig, ListenersConfig, SqlListenerConfig,
+    WebSocketAuth, WebSocketResponse,
+};
 
 pub static KAFKA_ADDRS: LazyLock<String> =
     LazyLock::new(|| env::var("KAFKA_ADDRS").unwrap_or_else(|_| "localhost:9092".into()));
@@ -92,9 +99,8 @@ pub static KAFKA_ADDRS: LazyLock<String> =
 pub struct TestHarness {
     data_directory: Option<PathBuf>,
     tls: Option<TlsCertConfig>,
-    frontegg: Option<FronteggAuthentication>,
-    self_hosted_auth: bool,
-    self_hosted_auth_internal: bool,
+    frontegg: Option<FronteggAuthenticator>,
+    listeners_config: ListenersConfig,
     unsafe_mode: bool,
     workers: usize,
     now: NowFn,
@@ -130,8 +136,54 @@ impl Default for TestHarness {
             data_directory: None,
             tls: None,
             frontegg: None,
-            self_hosted_auth: false,
-            self_hosted_auth_internal: false,
+            listeners_config: ListenersConfig {
+                sql: btreemap![
+                    "external".to_owned() => SqlListenerConfig {
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::None,
+                        allowed_roles: AllowedRoles::Normal,
+                        enable_tls: false,
+                    },
+                    "internal".to_owned() => SqlListenerConfig {
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::None,
+                        allowed_roles: AllowedRoles::NormalAndInternal,
+                        enable_tls: false,
+                    },
+                ],
+                http: btreemap![
+                    "external".to_owned() => HttpListenerConfig {
+                        base: BaseListenerConfig {
+                            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                            authenticator_kind: AuthenticatorKind::None,
+                            allowed_roles: AllowedRoles::Normal,
+                            enable_tls: false,
+                        },
+                        routes: HttpRoutesEnabled{
+                            base: true,
+                            webhook: true,
+                            internal: false,
+                            metrics: false,
+                            profiling: false,
+                        },
+                    },
+                    "internal".to_owned() => HttpListenerConfig {
+                        base: BaseListenerConfig {
+                            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                            authenticator_kind: AuthenticatorKind::None,
+                            allowed_roles: AllowedRoles::NormalAndInternal,
+                            enable_tls: false,
+                        },
+                        routes: HttpRoutesEnabled{
+                            base: true,
+                            webhook: true,
+                            internal: true,
+                            metrics: true,
+                            profiling: true,
+                        },
+                    },
+                ],
+            },
             unsafe_mode: false,
             workers: 1,
             now: SYSTEM_TIME.clone(),
@@ -209,7 +261,7 @@ impl TestHarness {
         self,
         tls_reload_certs: ReloadTrigger,
     ) -> Result<TestServer, anyhow::Error> {
-        let listeners = Listeners::new().await?;
+        let listeners = Listeners::new(&self).await?;
         listeners.serve_with_trigger(self, tls_reload_certs).await
     }
 
@@ -233,6 +285,12 @@ impl TestHarness {
             cert: cert_path.into(),
             key: key_path.into(),
         });
+        for (_, listener) in &mut self.listeners_config.sql {
+            listener.enable_tls = true;
+        }
+        for (_, listener) in &mut self.listeners_config.http {
+            listener.base.enable_tls = true;
+        }
         self
     }
 
@@ -246,18 +304,111 @@ impl TestHarness {
         self
     }
 
-    pub fn with_frontegg(mut self, frontegg: &FronteggAuthentication) -> Self {
+    pub fn with_frontegg_auth(mut self, frontegg: &FronteggAuthenticator) -> Self {
         self.frontegg = Some(frontegg.clone());
+        let enable_tls = self.tls.is_some();
+        self.listeners_config = ListenersConfig {
+            sql: btreemap! {
+                "external".to_owned() => SqlListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::Frontegg,
+                    allowed_roles: AllowedRoles::Normal,
+                    enable_tls,
+                },
+                "internal".to_owned() => SqlListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::None,
+                    allowed_roles: AllowedRoles::NormalAndInternal,
+                    enable_tls: false,
+                },
+            },
+            http: btreemap! {
+                "external".to_owned() => HttpListenerConfig {
+                    base: BaseListenerConfig {
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::Frontegg,
+                        allowed_roles: AllowedRoles::Normal,
+                        enable_tls,
+                    },
+                    routes: HttpRoutesEnabled{
+                        base: true,
+                        webhook: true,
+                        internal: false,
+                        metrics: false,
+                        profiling: false,
+                    },
+                },
+                "internal".to_owned() => HttpListenerConfig {
+                    base: BaseListenerConfig {
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::None,
+                        allowed_roles: AllowedRoles::NormalAndInternal,
+                        enable_tls: false,
+                    },
+                    routes: HttpRoutesEnabled{
+                        base: true,
+                        webhook: true,
+                        internal: true,
+                        metrics: true,
+                        profiling: true,
+                    },
+                },
+            },
+        };
         self
     }
 
-    pub fn with_self_hosted_auth(mut self, self_hosted_auth: bool) -> Self {
-        self.self_hosted_auth = self_hosted_auth;
-        self
-    }
-
-    pub fn with_self_hosted_auth_internal(mut self, self_hosted_auth_internal: bool) -> Self {
-        self.self_hosted_auth_internal = self_hosted_auth_internal;
+    pub fn with_password_auth(mut self) -> Self {
+        // TODO include mz_system password?
+        let enable_tls = self.tls.is_some();
+        self.listeners_config = ListenersConfig {
+            sql: btreemap! {
+                "external".to_owned() => SqlListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::Password,
+                    allowed_roles: AllowedRoles::Normal,
+                    enable_tls,
+                },
+                "internal".to_owned() => SqlListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::None,
+                    allowed_roles: AllowedRoles::NormalAndInternal,
+                    enable_tls: false,
+                },
+            },
+            http: btreemap! {
+                "external".to_owned() => HttpListenerConfig {
+                    base: BaseListenerConfig {
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::Password,
+                        allowed_roles: AllowedRoles::Normal,
+                        enable_tls,
+                    },
+                    routes: HttpRoutesEnabled{
+                        base: true,
+                        webhook: true,
+                        internal: false,
+                        metrics: false,
+                        profiling: false,
+                    },
+                },
+                "internal".to_owned() => HttpListenerConfig {
+                    base: BaseListenerConfig {
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::None,
+                        allowed_roles: AllowedRoles::NormalAndInternal,
+                        enable_tls: false,
+                    },
+                    routes: HttpRoutesEnabled{
+                        base: true,
+                        webhook: true,
+                        internal: true,
+                        metrics: true,
+                        profiling: true,
+                    },
+                },
+            },
+        };
         self
     }
 
@@ -370,8 +521,8 @@ pub struct Listeners {
 }
 
 impl Listeners {
-    pub async fn new() -> Result<Listeners, anyhow::Error> {
-        let inner = crate::Listeners::bind_any_local().await?;
+    pub async fn new(config: &TestHarness) -> Result<Listeners, anyhow::Error> {
+        let inner = crate::Listeners::bind(config.listeners_config.clone()).await?;
         Ok(Listeners { inner })
     }
 
@@ -514,7 +665,10 @@ impl Listeners {
         } else {
             (TracingHandle::disabled(), None)
         };
-        let host_name = format!("localhost:{}", self.inner.http_local_addr().port());
+        let host_name = format!(
+            "localhost:{}",
+            self.inner.http["external"].handle.local_addr.port()
+        );
         let catalog_config = CatalogConfig {
             persist_clients: Arc::clone(&persist_clients),
             metrics: Arc::new(mz_catalog::durable::Metrics::new(&MetricsRegistry::new())),
@@ -554,8 +708,6 @@ impl Listeners {
                 cloud_resource_controller: None,
                 tls: config.tls,
                 frontegg: config.frontegg,
-                self_hosted_auth: config.self_hosted_auth,
-                self_hosted_auth_internal: config.self_hosted_auth_internal,
                 unsafe_mode: config.unsafe_mode,
                 all_features: false,
                 metrics_registry: metrics_registry.clone(),
@@ -592,6 +744,7 @@ impl Listeners {
                 tls_reload_certs,
                 helm_chart_version: None,
                 license_key: ValidatedLicenseKey::for_tests(),
+                external_login_password_mz_system: None,
             })
             .await?;
 
@@ -631,7 +784,7 @@ impl TestServer {
     pub fn ws_addr(&self) -> Url {
         Url::parse(&format!(
             "ws://{}/api/experimental/sql",
-            self.inner.http_local_addr()
+            self.inner.http_listener_handles["internal"].local_addr
         ))
         .unwrap()
     }
@@ -639,9 +792,25 @@ impl TestServer {
     pub fn internal_ws_addr(&self) -> Url {
         Url::parse(&format!(
             "ws://{}/api/experimental/sql",
-            self.inner.internal_http_local_addr()
+            self.inner.http_listener_handles["internal"].local_addr
         ))
         .unwrap()
+    }
+
+    pub fn http_local_addr(&self) -> SocketAddr {
+        self.inner.http_listener_handles["external"].local_addr
+    }
+
+    pub fn internal_http_local_addr(&self) -> SocketAddr {
+        self.inner.http_listener_handles["internal"].local_addr
+    }
+
+    pub fn sql_local_addr(&self) -> SocketAddr {
+        self.inner.sql_listener_handles["external"].local_addr
+    }
+
+    pub fn internal_sql_local_addr(&self) -> SocketAddr {
+        self.inner.sql_listener_handles["internal"].local_addr
     }
 }
 
@@ -678,7 +847,7 @@ impl<'s> ConnectBuilder<'s, (), NoHandle> {
         ConnectBuilder {
             server,
             pg_config,
-            port: server.inner.sql_local_addr().port(),
+            port: server.sql_local_addr().port(),
             tls: (),
             notice_callback: None,
             _with_handle: NoHandle,
@@ -766,18 +935,8 @@ impl<'s, T, H> ConnectBuilder<'s, T, H> {
     ///
     /// For example, this will change the port we connect to, and the user we connect as.
     pub fn internal(mut self) -> Self {
-        self.port = self.server.inner.internal_sql_local_addr().port();
+        self.port = self.server.internal_sql_local_addr().port();
         self.pg_config.user(mz_sql::session::user::SYSTEM_USER_NAME);
-        self
-    }
-
-    /// Configures this [`ConnectBuilder`] to connect to the __balancer__ SQL port of the running
-    /// [`TestServer`].
-    ///
-    /// For example, this will change the port we connect to, and the user we connect as.
-    pub fn balancer(mut self) -> Self {
-        self.port = self.server.inner.sql_local_addr().port();
-        self.pg_config.user("materialize");
         self
     }
 
@@ -954,7 +1113,7 @@ impl TestServerWithRuntime {
     /// Return a [`postgres::Config`] for connecting to the __public__ SQL port of the running
     /// `environmentd` server.
     pub fn pg_config(&self) -> postgres::Config {
-        let local_addr = self.server.inner.sql_local_addr();
+        let local_addr = self.server.sql_local_addr();
         let mut config = postgres::Config::new();
         config
             .host(&Ipv4Addr::LOCALHOST.to_string())
@@ -967,7 +1126,7 @@ impl TestServerWithRuntime {
     /// Return a [`postgres::Config`] for connecting to the __internal__ SQL port of the running
     /// `environmentd` server.
     pub fn pg_config_internal(&self) -> postgres::Config {
-        let local_addr = self.server.inner.internal_sql_local_addr();
+        let local_addr = self.server.internal_sql_local_addr();
         let mut config = postgres::Config::new();
         config
             .host(&Ipv4Addr::LOCALHOST.to_string())
@@ -977,26 +1136,28 @@ impl TestServerWithRuntime {
         config
     }
 
-    /// Return a [`postgres::Config`] for connecting to the __balancer__ SQL port of the running
-    /// `environmentd` server.
-    pub fn pg_config_balancer(&self) -> postgres::Config {
-        let local_addr = self.server.inner.sql_local_addr();
-        let mut config = postgres::Config::new();
-        config
-            .host(&Ipv4Addr::LOCALHOST.to_string())
-            .port(local_addr.port())
-            .user("materialize")
-            .options("--welcome_message=off")
-            .ssl_mode(tokio_postgres::config::SslMode::Disable);
-        config
-    }
-
     pub fn ws_addr(&self) -> Url {
         self.server.ws_addr()
     }
 
     pub fn internal_ws_addr(&self) -> Url {
         self.server.internal_ws_addr()
+    }
+
+    pub fn http_local_addr(&self) -> SocketAddr {
+        self.server.http_local_addr()
+    }
+
+    pub fn internal_http_local_addr(&self) -> SocketAddr {
+        self.server.internal_http_local_addr()
+    }
+
+    pub fn sql_local_addr(&self) -> SocketAddr {
+        self.server.sql_local_addr()
+    }
+
+    pub fn internal_sql_local_addr(&self) -> SocketAddr {
+        self.server.internal_sql_local_addr()
     }
 }
 

@@ -16,11 +16,12 @@ import socket
 import subprocess
 import threading
 from collections.abc import Callable, Sequence
-from textwrap import dedent
 from time import sleep
 from typing import TypeVar
 from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
+
+import yaml
 
 from materialize import MZ_ROOT, ui
 
@@ -64,6 +65,9 @@ def main():
     parser_environment.add_argument("--postgres-url", default=DEFAULT_POSTGRES)
     parser_environment.add_argument("--s3-bucket", default=DEFAULT_MINIO)
     parser_environment.add_argument("--license-key-file", required=True)
+    parser_environment.add_argument(
+        "--external-login-password-mz-system", required=False
+    )
     parser_environment.set_defaults(func=environment)
 
     parser_portforward = subparsers.add_parser("port-forward")
@@ -115,16 +119,24 @@ def reset(args: argparse.Namespace):
         (namespace, environment_name) = environment.split("/", 1)
         env_kubectl = make_env_kubectl(args, namespace)
 
-        secret_name = env_kubectl(
-            "get",
-            "materialize",
-            environment_name,
-            "-o=jsonpath={.spec.backendSecretName}",
+        mz = json.loads(
+            env_kubectl(
+                "get",
+                "materialize",
+                environment_name,
+                "-o",
+                "json",
+            )
         )
-        assert secret_name is not None
+        backend_secret_name = mz["spec"]["backendSecretName"]
+        mz_system_password_secret_name = mz["spec"].get("externalLoginSecretMzSystem")
 
         env_kubectl("delete", "--wait=true", "materialize", environment_name)
-        env_kubectl("delete", "--wait=true", "secret", secret_name)
+        env_kubectl("delete", "--wait=true", "secret", backend_secret_name)
+        if mz_system_password_secret_name is not None:
+            env_kubectl(
+                "delete", "--wait=true", "secret", mz_system_password_secret_name
+            )
 
     try:
         subprocess.check_call(
@@ -219,31 +231,53 @@ def environment(args: argparse.Namespace):
     with open(args.license_key_file) as f:
         license_key = f.read()
 
-    secret_name = f"materialize-backend-{environment_id}"
+    backend_secret_name = f"materialize-backend-{environment_id}"
 
-    resources = dedent(
-        f"""
-        ---
-        apiVersion: v1
-        kind: Secret
-        metadata:
-          name: {secret_name}
-        stringData:
-          metadata_backend_url: {metadata_backend_url}
-          persist_backend_url: {persist_backend_url}
-          license_key: {license_key}
-        ---
-        apiVersion: materialize.cloud/v1alpha1
-        kind: Materialize
-        metadata:
-          name: {args.environment_name}
-        spec:
-          environmentdImageRef: {environmentd_image_ref}
-          backendSecretName: {secret_name}
-          environmentId: {environment_id}
-        """
-    )
-    env_kubectl("apply", "-f", "-", input=resources.encode())
+    resources = [
+        {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {
+                "name": backend_secret_name,
+            },
+            "stringData": {
+                "metadata_backend_url": metadata_backend_url,
+                "persist_backend_url": persist_backend_url,
+                "license_key": license_key,
+            },
+        },
+        {
+            "apiVersion": "materialize.cloud/v1alpha1",
+            "kind": "Materialize",
+            "metadata": {
+                "name": args.environment_name,
+            },
+            "spec": {
+                "environmentdImageRef": environmentd_image_ref,
+                "backendSecretName": backend_secret_name,
+                "environmentId": environment_id,
+            },
+        },
+    ]
+
+    if args.external_login_password_mz_system is not None:
+        mz_system_password_secret_name = f"password-mz-system-{environment_id}"
+        resources.insert(
+            0,
+            {
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": {
+                    "name": mz_system_password_secret_name,
+                },
+                "stringData": {"password": args.external_login_password_mz_system},
+            },
+        )
+        resources[-1]["spec"][
+            "externalLoginSecretMzSystem"
+        ] = mz_system_password_secret_name
+
+    env_kubectl("apply", "-f", "-", input=yaml.safe_dump_all(resources).encode())
 
     resource_id = get_resource_id(args)
     retry(
