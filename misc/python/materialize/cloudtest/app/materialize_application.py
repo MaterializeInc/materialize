@@ -104,7 +104,7 @@ class MaterializeApplication(CloudtestApplicationBase):
             "-f",
             os.path.join(
                 os.path.abspath(self.mz_root),
-                "src/cloud-resources/src/crd/gen/vpcendpoints.json",
+                "src/cloud-resources/src/crd/generated/vpcendpoints.json",
             ),
         )
 
