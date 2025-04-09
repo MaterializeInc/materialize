@@ -158,7 +158,6 @@ fi
 
 ci_collapsed_heading ":docker: Purging all existing docker containers and volumes, regardless of origin"
 docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
-rm -f services.log
 
 if [[ "$BUILDKITE_LABEL" =~ Terraform\ .* ]]; then
   ci_unimportant_heading "terraform: Destroying leftover state in case job was cancelled or timed out..."
@@ -174,3 +173,4 @@ if [ ! -s services.log ] && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of persi
     echo "+++ services.log is empty, failing"
     exit 1
 fi
+rm -f services.log

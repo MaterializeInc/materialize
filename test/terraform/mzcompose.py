@@ -209,9 +209,6 @@ class AWS:
         persist_backend_url = spawn.capture(
             ["terraform", "output", "-raw", "persist_backend_url"], cwd=self.path
         ).strip()
-        spawn.capture(
-            ["terraform", "output", "-raw", "materialize_s3_role_arn"], cwd=self.path
-        ).strip()
 
         spawn.runv(
             [
@@ -226,18 +223,6 @@ class AWS:
         )
 
         spawn.runv(["kubectl", "get", "nodes"])
-
-        spawn.capture(
-            [
-                "aws",
-                "sts",
-                "get-caller-identity",
-                "--query",
-                "Account",
-                "--output",
-                "text",
-            ]
-        ).strip()
 
         for i in range(60):
             try:
@@ -427,6 +412,33 @@ class AWS:
     def upgrade(self, tag: str) -> None:
         print("--- Upgrading")
         # Following https://materialize.com/docs/self-managed/v25.1/installation/install-on-aws/upgrade-on-aws/
+        metadata_backend_url = spawn.capture(
+            ["terraform", "output", "-raw", "metadata_backend_url"], cwd=self.path
+        ).strip()
+        persist_backend_url = spawn.capture(
+            ["terraform", "output", "-raw", "persist_backend_url"], cwd=self.path
+        ).strip()
+
+        materialize_backend_secret = {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {
+                "name": "materialize-backend",
+                "namespace": "materialize-environment",
+            },
+            "stringData": {
+                "metadata_backend_url": metadata_backend_url,
+                "persist_backend_url": persist_backend_url,
+                "license_key": os.getenv("MZ_CI_LICENSE_KEY"),
+            },
+        }
+
+        spawn.runv(
+            ["kubectl", "apply", "-f", "-"],
+            cwd=self.path,
+            stdin=yaml.dump(materialize_backend_secret).encode(),
+        )
+
         self.materialize_environment = {
             "apiVersion": "materialize.cloud/v1alpha1",
             "kind": "Materialize",
