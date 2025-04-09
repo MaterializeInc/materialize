@@ -1,6 +1,6 @@
 # Deploy the Materialize debug tool.
 
-The CI process will build and deploy the LSP server to the materialize-binaries S3 bucket.
+The CI process will build and deploy the Materialize debug tool to the materialize-binaries S3 bucket.
 You can try the process by running the following commands:
 
 ```bash
