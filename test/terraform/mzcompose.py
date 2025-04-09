@@ -826,6 +826,10 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
 
         if args.setup:
             print("--- Setup")
+            spawn.runv(
+                ["helm", "package", "../../../misc/helm-charts/operator/"],
+                cwd=path,
+            )
             spawn.runv(["terraform", "init"], cwd=path)
             spawn.runv(["terraform", "validate"], cwd=path)
             spawn.runv(["terraform", "plan"], cwd=path)
@@ -1042,18 +1046,22 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                     ],
                     cwd=path,
                 )
-                pod_names = spawn.capture(
-                    [
-                        "kubectl",
-                        "get",
-                        "pods",
-                        "-n",
-                        "materialize-environment",
-                        "-o",
-                        "name",
-                    ],
-                    cwd=path,
-                ).strip().split("\n")
+                pod_names = (
+                    spawn.capture(
+                        [
+                            "kubectl",
+                            "get",
+                            "pods",
+                            "-n",
+                            "materialize-environment",
+                            "-o",
+                            "name",
+                        ],
+                        cwd=path,
+                    )
+                    .strip()
+                    .split("\n")
+                )
                 print("Logging all pods in materialize-environment:")
                 for pod_name in pod_names:
                     try:
@@ -1177,11 +1185,10 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                         MZ_ROOT / "misc" / "helm-charts" / "operator" / "Chart.yaml"
                     ) as f:
                         content = yaml.load(f, Loader=yaml.Loader)
-                        content["version"]
-                    # TODO: Reenable when we can pass the helm-chart path in directly
-                    # assert version.endswith(
-                    #     f", helm chart: {helm_chart_version})"
-                    # ), f"Actual version: {version}, expected to contain {helm_chart_version}"
+                        helm_chart_version = content["version"]
+                    assert version.endswith(
+                        f", helm chart: {helm_chart_version})"
+                    ), f"Actual version: {version}, expected to contain {helm_chart_version}"
 
             c.run_testdrive_files(*args.files)
     finally:
@@ -1284,6 +1291,10 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
 
         if args.setup:
             print("--- Setup")
+            spawn.runv(
+                ["helm", "package", "../../../misc/helm-charts/operator/"],
+                cwd=path,
+            )
             spawn.runv(["terraform", "init"], cwd=path, env=venv_env)
             spawn.runv(["terraform", "validate"], cwd=path, env=venv_env)
             spawn.runv(["terraform", "plan"], cwd=path, env=venv_env)
@@ -1652,11 +1663,10 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                         MZ_ROOT / "misc" / "helm-charts" / "operator" / "Chart.yaml"
                     ) as f:
                         content = yaml.load(f, Loader=yaml.Loader)
-                        content["version"]
-                    # TODO: Reenable when we can pass the helm-chart path in directly
-                    # assert version.endswith(
-                    #     f", helm chart: {helm_chart_version})"
-                    # ), f"Actual version: {version}, expected to contain {helm_chart_version}"
+                        helm_chart_version = content["version"]
+                    assert version.endswith(
+                        f", helm chart: {helm_chart_version})"
+                    ), f"Actual version: {version}, expected to contain {helm_chart_version}"
 
             c.run_testdrive_files(*args.files)
     finally:

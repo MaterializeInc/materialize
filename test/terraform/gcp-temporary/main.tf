@@ -72,6 +72,8 @@ module "materialize" {
   }
 
   install_materialize_operator = true
+  use_local_chart = true
+  helm_chart = "materialize-operator-v25.2.0-beta.1.tgz"
 
   install_cert_manager = false
   use_self_signed_cluster_issuer = false
