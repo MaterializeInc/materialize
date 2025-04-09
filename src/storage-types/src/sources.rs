@@ -49,7 +49,6 @@ use timely::progress::timestamp::Refines;
 use timely::progress::{PathSummary, Timestamp};
 
 use crate::AlterCompatible;
-use crate::AlterCompatible;
 use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
