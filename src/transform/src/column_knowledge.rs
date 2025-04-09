@@ -269,10 +269,10 @@ impl ColumnKnowledge {
                         {
                             // Collect knowledge about the inputs (for columns and literals).
                             let mut knowledge = DatumKnowledge::top();
-                            if let MirScalarExpr::Column(c) = &**expr1 {
+                            if let MirScalarExpr::Column(c, _) = &**expr1 {
                                 knowledge.meet_assign(&input_knowledge[*c]);
                             }
-                            if let MirScalarExpr::Column(c) = &**expr2 {
+                            if let MirScalarExpr::Column(c, _) = &**expr2 {
                                 knowledge.meet_assign(&input_knowledge[*c]);
                             }
 
@@ -285,10 +285,10 @@ impl ColumnKnowledge {
                             }
 
                             // Write back unified knowledge to each column.
-                            if let MirScalarExpr::Column(c) = &**expr1 {
+                            if let MirScalarExpr::Column(c, _) = &**expr1 {
                                 input_knowledge[*c].meet_assign(&knowledge);
                             }
-                            if let MirScalarExpr::Column(c) = &**expr2 {
+                            if let MirScalarExpr::Column(c, _) = &**expr2 {
                                 input_knowledge[*c].meet_assign(&knowledge);
                             }
                         }
@@ -302,7 +302,7 @@ impl ColumnKnowledge {
                                 expr,
                             } = &**expr
                             {
-                                if let MirScalarExpr::Column(c) = &**expr {
+                                if let MirScalarExpr::Column(c, _) = &**expr {
                                     input_knowledge[*c].meet_assign(&DatumKnowledge::any(false));
                                 }
                             }
@@ -354,7 +354,7 @@ impl ColumnKnowledge {
                                     knowledge_stack,
                                 )?;
                             }
-                            if let MirScalarExpr::Column(c) = expr {
+                            if let MirScalarExpr::Column(c, _) = expr {
                                 knowledge.meet_assign(&knowledges[*c]);
                             }
                             if let MirScalarExpr::Literal(..) = expr {
@@ -362,7 +362,7 @@ impl ColumnKnowledge {
                             }
                         }
                         for expr in equivalence.iter_mut() {
-                            if let MirScalarExpr::Column(c) = expr {
+                            if let MirScalarExpr::Column(c, _) = expr {
                                 knowledges[*c] = knowledge.clone();
                             }
                         }
@@ -793,7 +793,7 @@ fn optimize(
         },
         &mut |e| {
             let result = match e {
-                MirScalarExpr::Column(index) => {
+                MirScalarExpr::Column(index, _) => {
                     let index = *index;
                     if let DatumKnowledge::Lit { value, typ } = &column_knowledge[index] {
                         let nullable = column_knowledge[index].nullable();

@@ -130,15 +130,15 @@ Explained Query:
   With
     cte l0 =
       Project (#0, #1, #4) // { arity: 3 }
-        Join on=(#3 = substr(#0, #1, #2)) type=delta // { arity: 5 }
+        Join on=(#3{t} = substr(#0{line}, #1{index}, #2{width})) type=delta // { arity: 5 }
           implementation
-            %0 » %1[×] » %2[#0]UK
-            %1 » %0[×] » %2[#0]UK
+            %0 » %1[×] » %2[#0{t}]UK
+            %1 » %0[×] » %2[#0{t}]UK
             %2 » %0[×] » %1[×]
           ArrangeBy keys=[[]] // { arity: 2 }
-            FlatMap generate_series(1, char_length(#0), 1) // { arity: 2 }
+            FlatMap generate_series(1, char_length(#0{line}), 1) // { arity: 2 }
               Project (#1) // { arity: 1 }
-                Filter (#1) IS NOT NULL // { arity: 2 }
+                Filter (#1{line}) IS NOT NULL // { arity: 2 }
                   FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](#0{input})) // { arity: 2 }
                     ReadStorage materialize.public.aoc_1201 // { arity: 1 }
           ArrangeBy keys=[[]] // { arity: 1 }
@@ -148,7 +148,7 @@ Explained Query:
               - (3)
               - (4)
               - (5)
-          ArrangeBy keys=[[#0]] // { arity: 2 }
+          ArrangeBy keys=[[#0{t}]] // { arity: 2 }
             Constant // { arity: 2 }
               - ("0", 0)
               - ("1", 1)
@@ -171,16 +171,16 @@ Explained Query:
               - ("seven", 7)
               - ("three", 3)
     cte l1 =
-      Reduce aggregates=[sum(((#0 * 10) + #1))] // { arity: 1 }
+      Reduce aggregates=[sum(((#0{f} * 10) + #1{l}))] // { arity: 1 }
         Project (#1, #3) // { arity: 2 }
-          Join on=(#0 = #2) type=differential // { arity: 4 }
+          Join on=(#0{line} = #2{line}) type=differential // { arity: 4 }
             implementation
-              %0[#0]UK » %1[#0]UK
-            ArrangeBy keys=[[#0]] // { arity: 2 }
+              %0[#0{line}]UK » %1[#0{line}]UK
+            ArrangeBy keys=[[#0{line}]] // { arity: 2 }
               Project (#0, #2) // { arity: 2 }
                 TopK group_by=[#0] order_by=[#1 asc nulls_last] limit=1 // { arity: 3 }
                   Get l0 // { arity: 3 }
-            ArrangeBy keys=[[#0]] // { arity: 2 }
+            ArrangeBy keys=[[#0{line}]] // { arity: 2 }
               Project (#0, #2) // { arity: 2 }
                 TopK group_by=[#0] order_by=[#1 desc nulls_first] limit=1 // { arity: 3 }
                   Get l0 // { arity: 3 }

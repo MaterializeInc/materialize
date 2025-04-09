@@ -83,7 +83,7 @@ impl Analysis for Equivalences {
                     for (index, common) in common.into_iter().enumerate() {
                         if let Some(datum) = common {
                             equivalences.classes.push(vec![
-                                MirScalarExpr::Column(index),
+                                MirScalarExpr::column(index),
                                 MirScalarExpr::literal_ok(
                                     datum,
                                     typ.column_types[index].scalar_type.clone(),
@@ -152,7 +152,7 @@ impl Analysis for Equivalences {
                     for (pos, expr) in scalars.iter().enumerate() {
                         equivalences
                             .classes
-                            .push(vec![MirScalarExpr::Column(input_arity + pos), expr.clone()]);
+                            .push(vec![MirScalarExpr::column(input_arity + pos), expr.clone()]);
                     }
                 }
                 equivalences
@@ -215,7 +215,7 @@ impl Analysis for Equivalences {
                     for (pos, expr) in group_key.iter().enumerate() {
                         equivalences
                             .classes
-                            .push(vec![MirScalarExpr::Column(input_arity + pos), expr.clone()]);
+                            .push(vec![MirScalarExpr::column(input_arity + pos), expr.clone()]);
                     }
 
                     // Having added classes to `equivalences`, we should minimize the classes to fold the
@@ -402,9 +402,9 @@ impl EquivalenceClasses {
             (Literal(_, _), Literal(_, _)) => e1.cmp(e2),
             (Literal(_, _), _) => Less,
             (_, Literal(_, _)) => Greater,
-            (Column(_), Column(_)) => e1.cmp(e2),
-            (Column(_), _) => Less,
-            (_, Column(_)) => Greater,
+            (Column(_, _), Column(_, _)) => e1.cmp(e2),
+            (Column(_, _), _) => Less,
+            (_, Column(_, _)) => Greater,
             (x, y) => {
                 // General expressions should be ordered by their size,
                 // to ensure we only simplify expressions by substitution.
@@ -931,8 +931,8 @@ impl EquivalenceClasses {
         // We introduce only the equivalence to the first occurrence, and rely on minimization to collect them.
         for (col1, col2) in dupes {
             self.classes.push(vec![
-                MirScalarExpr::Column(col1),
-                MirScalarExpr::Column(col2),
+                MirScalarExpr::column(col1),
+                MirScalarExpr::column(col2),
             ]);
         }
         self.remap.clear();

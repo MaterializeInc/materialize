@@ -575,7 +575,7 @@ impl Context {
                         // All columns of the constant input will be part of the arrangement key.
                         let source_arrangement = (
                             (0..key.len())
-                                .map(MirScalarExpr::Column)
+                                .map(MirScalarExpr::column)
                                 .collect::<Vec<_>>(),
                             (0..key.len()).collect::<Vec<_>>(),
                             Vec::<usize>::new(),

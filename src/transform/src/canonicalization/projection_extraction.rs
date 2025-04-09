@@ -46,13 +46,13 @@ impl ProjectionExtraction {
         if let MirRelationExpr::Map { input, scalars } = relation {
             if scalars
                 .iter()
-                .any(|s| matches!(s, MirScalarExpr::Column(_)))
+                .any(|s| matches!(s, MirScalarExpr::Column(_, _)))
             {
                 let input_arity = input.arity();
                 let mut outputs: Vec<_> = (0..input_arity).collect();
                 let mut dropped = 0;
                 scalars.retain(|scalar| {
-                    if let MirScalarExpr::Column(col) = scalar {
+                    if let MirScalarExpr::Column(col, _) = scalar {
                         dropped += 1;
                         // We may need to chase down a few levels of indirection;
                         // find the original input column in `outputs[*col]`.

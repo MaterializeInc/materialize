@@ -175,7 +175,7 @@ impl PermutedRowPacker {
         let (_, value) = permutation_for_arrangement(
             &key.iter()
                 .cloned()
-                .map(MirScalarExpr::Column)
+                .map(MirScalarExpr::column)
                 .collect::<Vec<_>>(),
             variant.desc().arity(),
         );

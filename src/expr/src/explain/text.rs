@@ -11,9 +11,11 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
 
 use mz_ore::soft_assert_eq_or_log;
 use mz_ore::str::{Indent, IndentLike, StrExt, closure_to_display, separated};
+use mz_ore::treat_as_equal::TreatAsEqual;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{
     CompactScalars, ExprHumanizer, HumanizedAnalyses, IndexUsageType, Indices,
@@ -1173,6 +1175,31 @@ where
     }
 }
 
+// A column reference with a stored name.
+// We defer to the inferred name, if available.
+impl<'a, M> fmt::Display for HumanizedExpr<'a, (&usize, &Arc<str>), M>
+where
+    M: HumanizerMode,
+{
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.cols {
+            // We have a name inferred for the column indexed by `self.expr`. Write `ident`.
+            Some(cols) if cols.len() > *self.expr.0 && !cols[*self.expr.0].is_empty() => {
+                // Note: using unchecked here is okay since we're directly
+                // converting to a string afterwards.
+                let ident = Ident::new_unchecked(cols[*self.expr.0].clone()); // TODO: try to avoid the `.clone()` here.
+                M::humanize_ident(*self.expr.0, ident, f)
+            }
+            // We don't have name inferred for this column.
+            _ => {
+                // Write the stored name.
+                write!(f, "#{}{{{}}}", self.expr.0, self.expr.1)
+            }
+        }
+    }
+}
+
 impl<'a, M> ScalarOps for HumanizedExpr<'a, MirScalarExpr, M> {
     fn match_col_ref(&self) -> Option<usize> {
         self.expr.match_col_ref()
@@ -1201,9 +1228,13 @@ where
         use MirScalarExpr::*;
 
         match self.expr {
-            Column(i) => {
-                // Delegate to the `HumanizedExpr<'a, _>` implementation.
+            Column(i, TreatAsEqual(None)) => {
+                // Delegate to the `HumanizedExpr<'a, _>` implementation (plain column reference).
                 self.child(i).fmt(f)
+            }
+            Column(i, TreatAsEqual(Some(name))) => {
+                // Delegate to the `HumanizedExpr<'a, _>` implementation (with stored name information)
+                self.child(&(i, name)).fmt(f)
             }
             Literal(row, _) => {
                 // Delegate to the `HumanizedExpr<'a, _>` implementation.

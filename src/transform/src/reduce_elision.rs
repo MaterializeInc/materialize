@@ -80,7 +80,7 @@ impl ReduceElision {
 
                 if input_keys.iter().any(|keys| {
                     keys.iter()
-                        .all(|k| group_key.contains(&mz_expr::MirScalarExpr::Column(*k)))
+                        .all(|k| group_key.iter().any(|gk| gk.as_column() == Some(*k)))
                 }) {
                     let map_scalars = aggregates
                         .iter()

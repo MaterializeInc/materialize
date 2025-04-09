@@ -49,7 +49,7 @@ $ set-regex match=u\d+ replacement=UID
 Explained Query:
   CrossJoin type=differential
     ArrangeBy keys=[[]]
-      Filter (#0) IS NOT NULL
+      Filter (#0{f1}) IS NOT NULL
         ReadStorage materialize.public.t1
     ArrangeBy keys=[[]]
       ReadStorage materialize.public.t1

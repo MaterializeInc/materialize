@@ -70,10 +70,13 @@ SELECT a + 1, b, 4 FROM mv WHERE a > 0
                 "CallBinary": {
                   "func": "Gt",
                   "expr1": {
-                    "Column": {
-                      "level": 0,
-                      "column": 0
-                    }
+                    "Column": [
+                      {
+                        "level": 0,
+                        "column": 0
+                      },
+                      "a"
+                    ]
                   },
                   "expr2": {
                     "Literal": [
@@ -85,9 +88,11 @@ SELECT a + 1, b, 4 FROM mv WHERE a > 0
                       {
                         "scalar_type": "Int32",
                         "nullable": false
-                      }
+                      },
+                      null
                     ]
-                  }
+                  },
+                  "name": null
                 }
               }
             ]
@@ -98,10 +103,13 @@ SELECT a + 1, b, 4 FROM mv WHERE a > 0
             "CallBinary": {
               "func": "AddInt32",
               "expr1": {
-                "Column": {
-                  "level": 0,
-                  "column": 0
-                }
+                "Column": [
+                  {
+                    "level": 0,
+                    "column": 0
+                  },
+                  "a"
+                ]
               },
               "expr2": {
                 "Literal": [
@@ -114,9 +122,11 @@ SELECT a + 1, b, 4 FROM mv WHERE a > 0
                   {
                     "scalar_type": "Int32",
                     "nullable": false
-                  }
+                  },
+                  null
                 ]
-              }
+              },
+              "name": null
             }
           },
           {
@@ -130,7 +140,8 @@ SELECT a + 1, b, 4 FROM mv WHERE a > 0
               {
                 "scalar_type": "Int32",
                 "nullable": false
-              }
+              },
+              null
             ]
           }
         ]
@@ -165,7 +176,8 @@ SELECT * FROM generate_series(1, 7)
           {
             "scalar_type": "Int32",
             "nullable": false
-          }
+          },
+          null
         ]
       },
       {
@@ -179,7 +191,8 @@ SELECT * FROM generate_series(1, 7)
           {
             "scalar_type": "Int32",
             "nullable": false
-          }
+          },
+          null
         ]
       },
       {
@@ -193,7 +206,8 @@ SELECT * FROM generate_series(1, 7)
           {
             "scalar_type": "Int32",
             "nullable": false
-          }
+          },
+          null
         ]
       }
     ]
@@ -355,20 +369,26 @@ SELECT abs(min(a) - max(a)) FROM t
               {
                 "func": "MinInt32",
                 "expr": {
-                  "Column": {
-                    "level": 0,
-                    "column": 0
-                  }
+                  "Column": [
+                    {
+                      "level": 0,
+                      "column": 0
+                    },
+                    "a"
+                  ]
                 },
                 "distinct": false
               },
               {
                 "func": "MaxInt32",
                 "expr": {
-                  "Column": {
-                    "level": 0,
-                    "column": 0
-                  }
+                  "Column": [
+                    {
+                      "level": 0,
+                      "column": 0
+                    },
+                    "a"
+                  ]
                 },
                 "distinct": false
               }
@@ -386,19 +406,27 @@ SELECT abs(min(a) - max(a)) FROM t
                 "CallBinary": {
                   "func": "SubInt32",
                   "expr1": {
-                    "Column": {
-                      "level": 0,
-                      "column": 0
-                    }
+                    "Column": [
+                      {
+                        "level": 0,
+                        "column": 0
+                      },
+                      "?column?"
+                    ]
                   },
                   "expr2": {
-                    "Column": {
-                      "level": 0,
-                      "column": 1
-                    }
-                  }
+                    "Column": [
+                      {
+                        "level": 0,
+                        "column": 1
+                      },
+                      "?column?"
+                    ]
+                  },
+                  "name": null
                 }
-              }
+              },
+              "name": null
             }
           }
         ]
@@ -448,10 +476,13 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                 },
                 "scalars": [
                   {
-                    "Column": {
-                      "level": 0,
-                      "column": 1
-                    }
+                    "Column": [
+                      {
+                        "level": 0,
+                        "column": 1
+                      },
+                      "b"
+                    ]
                   }
                 ]
               }
@@ -463,20 +494,26 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
               {
                 "func": "MinInt32",
                 "expr": {
-                  "Column": {
-                    "level": 0,
-                    "column": 0
-                  }
+                  "Column": [
+                    {
+                      "level": 0,
+                      "column": 0
+                    },
+                    "a"
+                  ]
                 },
                 "distinct": false
               },
               {
                 "func": "MaxInt32",
                 "expr": {
-                  "Column": {
-                    "level": 0,
-                    "column": 0
-                  }
+                  "Column": [
+                    {
+                      "level": 0,
+                      "column": 0
+                    },
+                    "a"
+                  ]
                 },
                 "distinct": false
               }
@@ -494,19 +531,27 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                 "CallBinary": {
                   "func": "SubInt32",
                   "expr1": {
-                    "Column": {
-                      "level": 0,
-                      "column": 1
-                    }
+                    "Column": [
+                      {
+                        "level": 0,
+                        "column": 1
+                      },
+                      "?column?"
+                    ]
                   },
                   "expr2": {
-                    "Column": {
-                      "level": 0,
-                      "column": 2
-                    }
-                  }
+                    "Column": [
+                      {
+                        "level": 0,
+                        "column": 2
+                      },
+                      "?column?"
+                    ]
+                  },
+                  "name": null
                 }
-              }
+              },
+              "name": null
             }
           }
         ]
@@ -557,17 +602,24 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
             "CallBinary": {
               "func": "Gt",
               "expr1": {
-                "Column": {
-                  "level": 1,
-                  "column": 1
-                }
+                "Column": [
+                  {
+                    "level": 1,
+                    "column": 1
+                  },
+                  "b"
+                ]
               },
               "expr2": {
-                "Column": {
-                  "level": 0,
-                  "column": 1
-                }
-              }
+                "Column": [
+                  {
+                    "level": 0,
+                    "column": 1
+                  },
+                  "b"
+                ]
+              },
+              "name": null
             }
           }
         ]
@@ -606,17 +658,24 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                 "CallBinary": {
                   "func": "Lt",
                   "expr1": {
-                    "Column": {
-                      "level": 1,
-                      "column": 0
-                    }
+                    "Column": [
+                      {
+                        "level": 1,
+                        "column": 0
+                      },
+                      "a"
+                    ]
                   },
                   "expr2": {
-                    "Column": {
-                      "level": 0,
-                      "column": 0
-                    }
-                  }
+                    "Column": [
+                      {
+                        "level": 0,
+                        "column": 0
+                      },
+                      "a"
+                    ]
+                  },
+                  "name": null
                 }
               }
             ]
@@ -652,32 +711,39 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                   "func": "And",
                   "exprs": [
                     {
-                      "Exists": {
-                        "Get": {
-                          "id": {
-                            "Local": 1
-                          },
-                          "typ": {
-                            "column_types": [],
-                            "keys": []
+                      "Exists": [
+                        {
+                          "Get": {
+                            "id": {
+                              "Local": 1
+                            },
+                            "typ": {
+                              "column_types": [],
+                              "keys": []
+                            }
                           }
-                        }
-                      }
+                        },
+                        null
+                      ]
                     },
                     {
-                      "Exists": {
-                        "Get": {
-                          "id": {
-                            "Local": 2
-                          },
-                          "typ": {
-                            "column_types": [],
-                            "keys": []
+                      "Exists": [
+                        {
+                          "Get": {
+                            "id": {
+                              "Local": 2
+                            },
+                            "typ": {
+                              "column_types": [],
+                              "keys": []
+                            }
                           }
-                        }
-                      }
+                        },
+                        null
+                      ]
                     }
-                  ]
+                  ],
+                  "name": null
                 }
               }
             ]
@@ -733,17 +799,24 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                         "CallBinary": {
                           "func": "Eq",
                           "expr1": {
-                            "Column": {
-                              "level": 0,
-                              "column": 1
-                            }
+                            "Column": [
+                              {
+                                "level": 0,
+                                "column": 1
+                              },
+                              "b"
+                            ]
                           },
                           "expr2": {
-                            "Column": {
-                              "level": 1,
-                              "column": 1
-                            }
-                          }
+                            "Column": [
+                              {
+                                "level": 1,
+                                "column": 1
+                              },
+                              "b"
+                            ]
+                          },
+                          "name": null
                         }
                       }
                     ]
@@ -762,7 +835,8 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                     {
                       "scalar_type": "Int64",
                       "nullable": false
-                    }
+                    },
+                    null
                   ]
                 },
                 "offset": 0,
@@ -811,17 +885,24 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                             "CallBinary": {
                               "func": "Eq",
                               "expr1": {
-                                "Column": {
-                                  "level": 0,
-                                  "column": 1
-                                }
+                                "Column": [
+                                  {
+                                    "level": 0,
+                                    "column": 1
+                                  },
+                                  "b"
+                                ]
                               },
                               "expr2": {
-                                "Column": {
-                                  "level": 1,
-                                  "column": 1
-                                }
-                              }
+                                "Column": [
+                                  {
+                                    "level": 1,
+                                    "column": 1
+                                  },
+                                  "b"
+                                ]
+                              },
+                              "name": null
                             }
                           }
                         ]
@@ -840,7 +921,8 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                         {
                           "scalar_type": "Int64",
                           "nullable": false
-                        }
+                        },
+                        null
                       ]
                     },
                     "offset": 0,
@@ -878,30 +960,36 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                 },
                 "scalars": [
                   {
-                    "Select": {
-                      "Get": {
-                        "id": {
-                          "Local": 1
-                        },
-                        "typ": {
-                          "column_types": [],
-                          "keys": []
+                    "Select": [
+                      {
+                        "Get": {
+                          "id": {
+                            "Local": 1
+                          },
+                          "typ": {
+                            "column_types": [],
+                            "keys": []
+                          }
                         }
-                      }
-                    }
+                      },
+                      null
+                    ]
                   },
                   {
-                    "Select": {
-                      "Get": {
-                        "id": {
-                          "Local": 2
-                        },
-                        "typ": {
-                          "column_types": [],
-                          "keys": []
+                    "Select": [
+                      {
+                        "Get": {
+                          "id": {
+                            "Local": 2
+                          },
+                          "typ": {
+                            "column_types": [],
+                            "keys": []
+                          }
                         }
-                      }
-                    }
+                      },
+                      null
+                    ]
                   }
                 ]
               }
@@ -981,7 +1069,8 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
             {
               "scalar_type": "Bool",
               "nullable": false
-            }
+            },
+            null
           ]
         },
         "kind": "Inner"
@@ -1067,7 +1156,8 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                     {
                       "scalar_type": "Bool",
                       "nullable": false
-                    }
+                    },
+                    null
                   ]
                 },
                 "kind": "Inner"
@@ -1105,7 +1195,8 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                 {
                   "scalar_type": "Bool",
                   "nullable": false
-                }
+                },
+                null
               ]
             },
             "kind": "Inner"
@@ -1120,37 +1211,52 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                   "CallBinary": {
                     "func": "Eq",
                     "expr1": {
-                      "Column": {
-                        "level": 0,
-                        "column": 1
-                      }
+                      "Column": [
+                        {
+                          "level": 0,
+                          "column": 1
+                        },
+                        "b"
+                      ]
                     },
                     "expr2": {
-                      "Column": {
-                        "level": 0,
-                        "column": 3
-                      }
-                    }
+                      "Column": [
+                        {
+                          "level": 0,
+                          "column": 3
+                        },
+                        "b"
+                      ]
+                    },
+                    "name": null
                   }
                 },
                 {
                   "CallBinary": {
                     "func": "Eq",
                     "expr1": {
-                      "Column": {
-                        "level": 0,
-                        "column": 3
-                      }
+                      "Column": [
+                        {
+                          "level": 0,
+                          "column": 3
+                        },
+                        "b"
+                      ]
                     },
                     "expr2": {
-                      "Column": {
-                        "level": 0,
-                        "column": 5
-                      }
-                    }
+                      "Column": [
+                        {
+                          "level": 0,
+                          "column": 5
+                        },
+                        "b"
+                      ]
+                    },
+                    "name": null
                   }
                 }
-              ]
+              ],
+              "name": null
             }
           }
         ]
@@ -1200,7 +1306,8 @@ WITH A AS (SELECT 1 AS a), B as (SELECT a as b FROM A WHERE a > 0) SELECT * FROM
               {
                 "scalar_type": "Int32",
                 "nullable": false
-              }
+              },
+              null
             ]
           }
         ]
@@ -1233,10 +1340,13 @@ WITH A AS (SELECT 1 AS a), B as (SELECT a as b FROM A WHERE a > 0) SELECT * FROM
                 "CallBinary": {
                   "func": "Gt",
                   "expr1": {
-                    "Column": {
-                      "level": 0,
-                      "column": 0
-                    }
+                    "Column": [
+                      {
+                        "level": 0,
+                        "column": 0
+                      },
+                      "a"
+                    ]
                   },
                   "expr2": {
                     "Literal": [
@@ -1248,9 +1358,11 @@ WITH A AS (SELECT 1 AS a), B as (SELECT a as b FROM A WHERE a > 0) SELECT * FROM
                       {
                         "scalar_type": "Int32",
                         "nullable": false
-                      }
+                      },
+                      null
                     ]
-                  }
+                  },
+                  "name": null
                 }
               }
             ]
@@ -1300,7 +1412,8 @@ WITH A AS (SELECT 1 AS a), B as (SELECT a as b FROM A WHERE a > 0) SELECT * FROM
                 {
                   "scalar_type": "Bool",
                   "nullable": false
-                }
+                },
+                null
               ]
             },
             "kind": "Inner"

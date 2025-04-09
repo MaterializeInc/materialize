@@ -573,7 +573,7 @@ impl EquivalencePropagation {
                 outer_equivalences.permute(&permutation[..]);
                 for (index, group) in group_key.iter().enumerate() {
                     outer_equivalences.classes.push(vec![
-                        MirScalarExpr::Column(input_arity + index),
+                        MirScalarExpr::column(input_arity + index),
                         group.clone(),
                     ]);
                 }

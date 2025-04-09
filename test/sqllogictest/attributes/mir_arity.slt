@@ -121,14 +121,14 @@ SELECT u.g as g, w.g as h FROM u, u as w WHERE u.g = w.g
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#0]] // { arity: 1 }
+      ArrangeBy keys=[[#0{g}]] // { arity: 1 }
         Project (#2) // { arity: 1 }
           Filter (#0{c}) IS NOT NULL // { arity: 3 }
             Map ((#0{c} + 1)) // { arity: 3 }
               ReadIndex on=u u_d_idx=[*** full scan ***] // { arity: 2 }
   Return // { arity: 2 }
     Project (#0, #0) // { arity: 2 }
-      Join on=(#0 = #1) type=differential // { arity: 2 }
+      Join on=(#0{g} = #1{g}) type=differential // { arity: 2 }
         Get l0 // { arity: 1 }
         Get l0 // { arity: 1 }
 

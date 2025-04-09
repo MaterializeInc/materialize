@@ -161,10 +161,16 @@ SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
                   "CallBinary": {
                     "func": "AddInt32",
                     "expr1": {
-                      "Column": 0
+                      "Column": [
+                        0,
+                        "a"
+                      ]
                     },
                     "expr2": {
-                      "Column": 1
+                      "Column": [
+                        1,
+                        "b"
+                      ]
                     }
                   }
                 },
@@ -192,7 +198,10 @@ SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
                     "CallBinary": {
                       "func": "Gt",
                       "expr1": {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          "a"
+                        ]
                       },
                       "expr2": {
                         "Literal": [
@@ -218,7 +227,10 @@ SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
                     "CallBinary": {
                       "func": "Lt",
                       "expr1": {
-                        "Column": 1
+                        "Column": [
+                          1,
+                          "b"
+                        ]
                       },
                       "expr2": {
                         "Literal": [
@@ -244,7 +256,10 @@ SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
                     "CallBinary": {
                       "func": "Gt",
                       "expr1": {
-                        "Column": 2
+                        "Column": [
+                          2,
+                          null
+                        ]
                       },
                       "expr2": {
                         "Literal": [
@@ -323,10 +338,16 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                       "CallBinary": {
                         "func": "AddInt32",
                         "expr1": {
-                          "Column": 0
+                          "Column": [
+                            0,
+                            "a"
+                          ]
                         },
                         "expr2": {
-                          "Column": 1
+                          "Column": [
+                            1,
+                            "b"
+                          ]
                         }
                       }
                     },
@@ -354,7 +375,10 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                   "CallBinary": {
                     "func": "Lt",
                     "expr1": {
-                      "Column": 1
+                      "Column": [
+                        1,
+                        "b"
+                      ]
                     },
                     "expr2": {
                       "Literal": [
@@ -377,7 +401,10 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                   "CallBinary": {
                     "func": "Gt",
                     "expr1": {
-                      "Column": 0
+                      "Column": [
+                        0,
+                        "a"
+                      ]
                     },
                     "expr2": {
                       "Literal": [
@@ -400,7 +427,10 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                   "CallBinary": {
                     "func": "Gt",
                     "expr1": {
-                      "Column": 2
+                      "Column": [
+                        2,
+                        null
+                      ]
                     },
                     "expr2": {
                       "Literal": [
@@ -444,7 +474,10 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
               "CallBinary": {
                 "func": "Gt",
                 "expr1": {
-                  "Column": 0
+                  "Column": [
+                    0,
+                    "a"
+                  ]
                 },
                 "expr2": {
                   "Literal": [
@@ -470,7 +503,10 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
               "CallBinary": {
                 "func": "Lt",
                 "expr1": {
-                  "Column": 1
+                  "Column": [
+                    1,
+                    "b"
+                  ]
                 },
                 "expr2": {
                   "Literal": [
@@ -499,10 +535,16 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                   "CallBinary": {
                     "func": "AddInt32",
                     "expr1": {
-                      "Column": 0
+                      "Column": [
+                        0,
+                        "a"
+                      ]
                     },
                     "expr2": {
-                      "Column": 1
+                      "Column": [
+                        1,
+                        "b"
+                      ]
                     }
                   }
                 },
@@ -584,10 +626,16 @@ SELECT generate_series(a, b) from t
               "func": "GenerateSeriesInt32",
               "exprs": [
                 {
-                  "Column": 0
+                  "Column": [
+                    0,
+                    "a"
+                  ]
                 },
                 {
-                  "Column": 1
+                  "Column": [
+                    1,
+                    "b"
+                  ]
                 },
                 {
                   "Literal": [
@@ -675,7 +723,10 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                   },
                   "group_key": [
                     {
-                      "Column": 0
+                      "Column": [
+                        0,
+                        null
+                      ]
                     }
                   ],
                   "aggregates": [],
@@ -720,7 +771,10 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                         },
                         "group_key": [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         "aggregates": [],
@@ -1031,14 +1085,20 @@ SELECT abs(min(a) - max(a)) FROM t
                 {
                   "func": "MinInt32",
                   "expr": {
-                    "Column": 0
+                    "Column": [
+                      0,
+                      "a"
+                    ]
                   },
                   "distinct": false
                 },
                 {
                   "func": "MaxInt32",
                   "expr": {
-                    "Column": 0
+                    "Column": [
+                      0,
+                      "a"
+                    ]
                   },
                   "distinct": false
                 }
@@ -1182,10 +1242,16 @@ SELECT abs(min(a) - max(a)) FROM t
                           "CallBinary": {
                             "func": "SubInt32",
                             "expr1": {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "?column?"
+                              ]
                             },
                             "expr2": {
-                              "Column": 1
+                              "Column": [
+                                1,
+                                "?column?"
+                              ]
                             }
                           }
                         }
@@ -1256,21 +1322,30 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                   },
                   "group_key": [
                     {
-                      "Column": 1
+                      "Column": [
+                        1,
+                        null
+                      ]
                     }
                   ],
                   "aggregates": [
                     {
                       "func": "MinInt32",
                       "expr": {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          "a"
+                        ]
                       },
                       "distinct": false
                     },
                     {
                       "func": "MaxInt32",
                       "expr": {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          "a"
+                        ]
                       },
                       "distinct": false
                     }
@@ -1289,10 +1364,16 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                       "CallBinary": {
                         "func": "SubInt32",
                         "expr1": {
-                          "Column": 1
+                          "Column": [
+                            1,
+                            "?column?"
+                          ]
                         },
                         "expr2": {
-                          "Column": 2
+                          "Column": [
+                            2,
+                            "?column?"
+                          ]
                         }
                       }
                     }
@@ -1366,7 +1447,10 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                         "keys": [
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "a"
+                              ]
                             }
                           ]
                         ]
@@ -1428,7 +1512,10 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                   },
                                                   "group_key": [
                                                     {
-                                                      "Column": 0
+                                                      "Column": [
+                                                        0,
+                                                        null
+                                                      ]
                                                     }
                                                   ],
                                                   "aggregates": [],
@@ -1535,10 +1622,16 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                         "CallBinary": {
                                           "func": "Lt",
                                           "expr1": {
-                                            "Column": 0
+                                            "Column": [
+                                              0,
+                                              "a"
+                                            ]
                                           },
                                           "expr2": {
-                                            "Column": 1
+                                            "Column": [
+                                              1,
+                                              "a"
+                                            ]
                                           }
                                         }
                                       }
@@ -1552,7 +1645,10 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                             },
                             "group_key": [
                               {
-                                "Column": 0
+                                "Column": [
+                                  0,
+                                  null
+                                ]
                               }
                             ],
                             "aggregates": [],
@@ -1563,7 +1659,10 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                         "keys": [
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                null
+                              ]
                             }
                           ]
                         ]
@@ -1573,10 +1672,16 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                   "equivalences": [
                     [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          null
+                        ]
                       },
                       {
-                        "Column": 2
+                        "Column": [
+                          2,
+                          null
+                        ]
                       }
                     ]
                   ],
@@ -1586,7 +1691,10 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                         1,
                         [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         {
@@ -1612,7 +1720,10 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                           0,
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "a"
+                              ]
                             }
                           ],
                           {
@@ -1675,7 +1786,10 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                         "keys": [
                           [
                             {
-                              "Column": 1
+                              "Column": [
+                                1,
+                                null
+                              ]
                             }
                           ]
                         ]
@@ -1726,7 +1840,10 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                   },
                                                   "group_key": [
                                                     {
-                                                      "Column": 0
+                                                      "Column": [
+                                                        0,
+                                                        null
+                                                      ]
                                                     }
                                                   ],
                                                   "aggregates": [],
@@ -1833,10 +1950,16 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                         "CallBinary": {
                                           "func": "Gt",
                                           "expr1": {
-                                            "Column": 0
+                                            "Column": [
+                                              0,
+                                              "b"
+                                            ]
                                           },
                                           "expr2": {
-                                            "Column": 1
+                                            "Column": [
+                                              1,
+                                              "b"
+                                            ]
                                           }
                                         }
                                       }
@@ -1850,7 +1973,10 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                             },
                             "group_key": [
                               {
-                                "Column": 0
+                                "Column": [
+                                  0,
+                                  null
+                                ]
                               }
                             ],
                             "aggregates": [],
@@ -1861,7 +1987,10 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                         "keys": [
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                null
+                              ]
                             }
                           ]
                         ]
@@ -1871,10 +2000,16 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                   "equivalences": [
                     [
                       {
-                        "Column": 1
+                        "Column": [
+                          1,
+                          null
+                        ]
                       },
                       {
-                        "Column": 2
+                        "Column": [
+                          2,
+                          null
+                        ]
                       }
                     ]
                   ],
@@ -1884,7 +2019,10 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                         1,
                         [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              null
+                            ]
                           }
                         ],
                         {
@@ -1910,7 +2048,10 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                           0,
                           [
                             {
-                              "Column": 1
+                              "Column": [
+                                1,
+                                null
+                              ]
                             }
                           ],
                           {
@@ -2032,7 +2173,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                   },
                   "group_key": [
                     {
-                      "Column": 0
+                      "Column": [
+                        0,
+                        null
+                      ]
                     }
                   ],
                   "aggregates": [],
@@ -2069,7 +2213,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                       "keys": [
                         [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "b"
+                            ]
                           }
                         ]
                       ]
@@ -2154,7 +2301,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                         "IsNull": null
                                                       },
                                                       "expr": {
-                                                        "Column": 1
+                                                        "Column": [
+                                                          1,
+                                                          "b"
+                                                        ]
                                                       }
                                                     }
                                                   }
@@ -2166,7 +2316,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                         "keys": [
                                           [
                                             {
-                                              "Column": 1
+                                              "Column": [
+                                                1,
+                                                "b"
+                                              ]
                                             }
                                           ]
                                         ]
@@ -2176,10 +2329,16 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                   "equivalences": [
                                     [
                                       {
-                                        "Column": 0
+                                        "Column": [
+                                          0,
+                                          "b"
+                                        ]
                                       },
                                       {
-                                        "Column": 2
+                                        "Column": [
+                                          2,
+                                          "b"
+                                        ]
                                       }
                                     ]
                                   ],
@@ -2189,7 +2348,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                         0,
                                         [
                                           {
-                                            "Column": 0
+                                            "Column": [
+                                              0,
+                                              "b"
+                                            ]
                                           }
                                         ],
                                         {
@@ -2215,7 +2377,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                           1,
                                           [
                                             {
-                                              "Column": 1
+                                              "Column": [
+                                                1,
+                                                "b"
+                                              ]
                                             }
                                           ],
                                           {
@@ -2342,7 +2507,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                             "IsNull": null
                                                           },
                                                           "expr": {
-                                                            "Column": 1
+                                                            "Column": [
+                                                              1,
+                                                              "b"
+                                                            ]
                                                           }
                                                         }
                                                       }
@@ -2354,7 +2522,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                             "keys": [
                                               [
                                                 {
-                                                  "Column": 1
+                                                  "Column": [
+                                                    1,
+                                                    "b"
+                                                  ]
                                                 }
                                               ]
                                             ]
@@ -2364,10 +2535,16 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                       "equivalences": [
                                         [
                                           {
-                                            "Column": 0
+                                            "Column": [
+                                              0,
+                                              "b"
+                                            ]
                                           },
                                           {
-                                            "Column": 2
+                                            "Column": [
+                                              2,
+                                              "b"
+                                            ]
                                           }
                                         ]
                                       ],
@@ -2377,7 +2554,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                             0,
                                             [
                                               {
-                                                "Column": 0
+                                                "Column": [
+                                                  0,
+                                                  "b"
+                                                ]
                                               }
                                             ],
                                             {
@@ -2403,7 +2583,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                               1,
                                               [
                                                 {
-                                                  "Column": 1
+                                                  "Column": [
+                                                    1,
+                                                    "b"
+                                                  ]
                                                 }
                                               ],
                                               {
@@ -2487,7 +2670,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                         "keys": [
                                           [
                                             {
-                                              "Column": 0
+                                              "Column": [
+                                                0,
+                                                null
+                                              ]
                                             }
                                           ]
                                         ]
@@ -2613,7 +2799,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                         "keys": [
                                           [
                                             {
-                                              "Column": 0
+                                              "Column": [
+                                                0,
+                                                null
+                                              ]
                                             }
                                           ]
                                         ]
@@ -2739,7 +2928,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                         "keys": [
                                           [
                                             {
-                                              "Column": 0
+                                              "Column": [
+                                                0,
+                                                null
+                                              ]
                                             }
                                           ]
                                         ]
@@ -2749,13 +2941,22 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                   "equivalences": [
                                     [
                                       {
-                                        "Column": 0
+                                        "Column": [
+                                          0,
+                                          null
+                                        ]
                                       },
                                       {
-                                        "Column": 1
+                                        "Column": [
+                                          1,
+                                          null
+                                        ]
                                       },
                                       {
-                                        "Column": 3
+                                        "Column": [
+                                          3,
+                                          null
+                                        ]
                                       }
                                     ]
                                   ],
@@ -2766,7 +2967,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                           1,
                                           [
                                             {
-                                              "Column": 0
+                                              "Column": [
+                                                0,
+                                                null
+                                              ]
                                             }
                                           ],
                                           {
@@ -2791,7 +2995,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                           2,
                                           [
                                             {
-                                              "Column": 0
+                                              "Column": [
+                                                0,
+                                                null
+                                              ]
                                             }
                                           ],
                                           {
@@ -2818,7 +3025,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                           2,
                                           [
                                             {
-                                              "Column": 0
+                                              "Column": [
+                                                0,
+                                                null
+                                              ]
                                             }
                                           ],
                                           {
@@ -2843,7 +3053,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                           0,
                                           [
                                             {
-                                              "Column": 0
+                                              "Column": [
+                                                0,
+                                                null
+                                              ]
                                             }
                                           ],
                                           {
@@ -2870,7 +3083,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                           1,
                                           [
                                             {
-                                              "Column": 0
+                                              "Column": [
+                                                0,
+                                                null
+                                              ]
                                             }
                                           ],
                                           {
@@ -2895,7 +3111,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                           0,
                                           [
                                             {
-                                              "Column": 0
+                                              "Column": [
+                                                0,
+                                                null
+                                              ]
                                             }
                                           ],
                                           {
@@ -2960,7 +3179,10 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                       "IsNull": null
                     },
                     "expr": {
-                      "Column": 1
+                      "Column": [
+                        1,
+                        "b"
+                      ]
                     }
                   }
                 }
@@ -3040,7 +3262,10 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                           "IsNull": null
                         },
                         "expr": {
-                          "Column": 1
+                          "Column": [
+                            1,
+                            "b"
+                          ]
                         }
                       }
                     }
@@ -3078,7 +3303,10 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                   "keys": [
                     [
                       {
-                        "Column": 1
+                        "Column": [
+                          1,
+                          "b"
+                        ]
                       }
                     ]
                   ]
@@ -3120,7 +3348,10 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                       "keys": [
                         [
                           {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "b"
+                            ]
                           }
                         ]
                       ]
@@ -3197,13 +3428,22 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                               "equivalences": [
                                 [
                                   {
-                                    "Column": 1
+                                    "Column": [
+                                      1,
+                                      "b"
+                                    ]
                                   },
                                   {
-                                    "Column": 3
+                                    "Column": [
+                                      3,
+                                      "b"
+                                    ]
                                   },
                                   {
-                                    "Column": 4
+                                    "Column": [
+                                      4,
+                                      "b"
+                                    ]
                                   }
                                 ]
                               ],
@@ -3214,7 +3454,10 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                       1,
                                       [
                                         {
-                                          "Column": 1
+                                          "Column": [
+                                            1,
+                                            "b"
+                                          ]
                                         }
                                       ],
                                       {
@@ -3239,7 +3482,10 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                       2,
                                       [
                                         {
-                                          "Column": 0
+                                          "Column": [
+                                            0,
+                                            "b"
+                                          ]
                                         }
                                       ],
                                       {
@@ -3266,7 +3512,10 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                       0,
                                       [
                                         {
-                                          "Column": 1
+                                          "Column": [
+                                            1,
+                                            "b"
+                                          ]
                                         }
                                       ],
                                       {
@@ -3291,7 +3540,10 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                       2,
                                       [
                                         {
-                                          "Column": 0
+                                          "Column": [
+                                            0,
+                                            "b"
+                                          ]
                                         }
                                       ],
                                       {
@@ -3318,7 +3570,10 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                       0,
                                       [
                                         {
-                                          "Column": 1
+                                          "Column": [
+                                            1,
+                                            "b"
+                                          ]
                                         }
                                       ],
                                       {
@@ -3343,7 +3598,10 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                       1,
                                       [
                                         {
-                                          "Column": 1
+                                          "Column": [
+                                            1,
+                                            "b"
+                                          ]
                                         }
                                       ],
                                       {
@@ -3444,7 +3702,10 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                         },
                                                         "group_key": [
                                                           {
-                                                            "Column": 0
+                                                            "Column": [
+                                                              0,
+                                                              null
+                                                            ]
                                                           }
                                                         ],
                                                         "aggregates": [],
@@ -3455,7 +3716,10 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                     "keys": [
                                                       [
                                                         {
-                                                          "Column": 0
+                                                          "Column": [
+                                                            0,
+                                                            null
+                                                          ]
                                                         }
                                                       ]
                                                     ]
@@ -3465,10 +3729,16 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                               "equivalences": [
                                                 [
                                                   {
-                                                    "Column": 0
+                                                    "Column": [
+                                                      0,
+                                                      "b"
+                                                    ]
                                                   },
                                                   {
-                                                    "Column": 1
+                                                    "Column": [
+                                                      1,
+                                                      null
+                                                    ]
                                                   }
                                                 ]
                                               ],
@@ -3478,7 +3748,10 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                     1,
                                                     [
                                                       {
-                                                        "Column": 0
+                                                        "Column": [
+                                                          0,
+                                                          null
+                                                        ]
                                                       }
                                                     ],
                                                     {
@@ -3504,7 +3777,10 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                       0,
                                                       [
                                                         {
-                                                          "Column": 0
+                                                          "Column": [
+                                                            0,
+                                                            "b"
+                                                          ]
                                                         }
                                                       ],
                                                       {
@@ -3804,7 +4080,10 @@ FROM
                                     "keys": [
                                       [
                                         {
-                                          "Column": 0
+                                          "Column": [
+                                            0,
+                                            "a"
+                                          ]
                                         }
                                       ]
                                     ]
@@ -3840,7 +4119,10 @@ FROM
                                                       },
                                                       "group_key": [
                                                         {
-                                                          "Column": 0
+                                                          "Column": [
+                                                            0,
+                                                            null
+                                                          ]
                                                         }
                                                       ],
                                                       "aggregates": [],
@@ -3924,7 +4206,10 @@ FROM
                                         },
                                         "group_key": [
                                           {
-                                            "Column": 0
+                                            "Column": [
+                                              0,
+                                              null
+                                            ]
                                           }
                                         ],
                                         "aggregates": [
@@ -3934,10 +4219,16 @@ FROM
                                               "CallBinary": {
                                                 "func": "MulInt32",
                                                 "expr1": {
-                                                  "Column": 0
+                                                  "Column": [
+                                                    0,
+                                                    "a"
+                                                  ]
                                                 },
                                                 "expr2": {
-                                                  "Column": 1
+                                                  "Column": [
+                                                    1,
+                                                    "a"
+                                                  ]
                                                 }
                                               }
                                             },
@@ -3951,7 +4242,10 @@ FROM
                                     "keys": [
                                       [
                                         {
-                                          "Column": 0
+                                          "Column": [
+                                            0,
+                                            null
+                                          ]
                                         }
                                       ]
                                     ]
@@ -3961,10 +4255,16 @@ FROM
                               "equivalences": [
                                 [
                                   {
-                                    "Column": 0
+                                    "Column": [
+                                      0,
+                                      null
+                                    ]
                                   },
                                   {
-                                    "Column": 2
+                                    "Column": [
+                                      2,
+                                      null
+                                    ]
                                   }
                                 ]
                               ],
@@ -3974,7 +4274,10 @@ FROM
                                     1,
                                     [
                                       {
-                                        "Column": 0
+                                        "Column": [
+                                          0,
+                                          null
+                                        ]
                                       }
                                     ],
                                     {
@@ -4000,7 +4303,10 @@ FROM
                                       0,
                                       [
                                         {
-                                          "Column": 0
+                                          "Column": [
+                                            0,
+                                            "a"
+                                          ]
                                         }
                                       ],
                                       {
@@ -4031,10 +4337,16 @@ FROM
                               "CallBinary": {
                                 "func": "NotEq",
                                 "expr1": {
-                                  "Column": 0
+                                  "Column": [
+                                    0,
+                                    null
+                                  ]
                                 },
                                 "expr2": {
-                                  "Column": 3
+                                  "Column": [
+                                    3,
+                                    "m"
+                                  ]
                                 }
                               }
                             }
@@ -4085,7 +4397,10 @@ FROM
                                     "keys": [
                                       [
                                         {
-                                          "Column": 0
+                                          "Column": [
+                                            0,
+                                            null
+                                          ]
                                         }
                                       ]
                                     ]
@@ -4136,7 +4451,10 @@ FROM
                                                       },
                                                       "group_key": [
                                                         {
-                                                          "Column": 0
+                                                          "Column": [
+                                                            0,
+                                                            null
+                                                          ]
                                                         }
                                                       ],
                                                       "aggregates": [],
@@ -4220,7 +4538,10 @@ FROM
                                         },
                                         "group_key": [
                                           {
-                                            "Column": 0
+                                            "Column": [
+                                              0,
+                                              null
+                                            ]
                                           }
                                         ],
                                         "aggregates": [
@@ -4230,10 +4551,16 @@ FROM
                                               "CallBinary": {
                                                 "func": "MulInt32",
                                                 "expr1": {
-                                                  "Column": 0
+                                                  "Column": [
+                                                    0,
+                                                    "a"
+                                                  ]
                                                 },
                                                 "expr2": {
-                                                  "Column": 1
+                                                  "Column": [
+                                                    1,
+                                                    "a"
+                                                  ]
                                                 }
                                               }
                                             },
@@ -4247,7 +4574,10 @@ FROM
                                     "keys": [
                                       [
                                         {
-                                          "Column": 0
+                                          "Column": [
+                                            0,
+                                            null
+                                          ]
                                         }
                                       ]
                                     ]
@@ -4257,10 +4587,16 @@ FROM
                               "equivalences": [
                                 [
                                   {
-                                    "Column": 0
+                                    "Column": [
+                                      0,
+                                      null
+                                    ]
                                   },
                                   {
-                                    "Column": 3
+                                    "Column": [
+                                      3,
+                                      null
+                                    ]
                                   }
                                 ]
                               ],
@@ -4270,7 +4606,10 @@ FROM
                                     1,
                                     [
                                       {
-                                        "Column": 0
+                                        "Column": [
+                                          0,
+                                          null
+                                        ]
                                       }
                                     ],
                                     {
@@ -4296,7 +4635,10 @@ FROM
                                       0,
                                       [
                                         {
-                                          "Column": 0
+                                          "Column": [
+                                            0,
+                                            null
+                                          ]
                                         }
                                       ],
                                       {
@@ -4327,10 +4669,16 @@ FROM
                               "CallBinary": {
                                 "func": "NotEq",
                                 "expr1": {
-                                  "Column": 0
+                                  "Column": [
+                                    0,
+                                    null
+                                  ]
                                 },
                                 "expr2": {
-                                  "Column": 4
+                                  "Column": [
+                                    4,
+                                    "m"
+                                  ]
                                 }
                               }
                             }
@@ -4575,7 +4923,10 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                           "IsNull": null
                         },
                         "expr": {
-                          "Column": 1
+                          "Column": [
+                            1,
+                            "b"
+                          ]
                         }
                       }
                     }
@@ -4613,7 +4964,10 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                   "keys": [
                     [
                       {
-                        "Column": 1
+                        "Column": [
+                          1,
+                          "b"
+                        ]
                       }
                     ]
                   ]
@@ -4699,7 +5053,10 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                             "keys": [
                               [
                                 {
-                                  "Column": 0
+                                  "Column": [
+                                    0,
+                                    "b"
+                                  ]
                                 }
                               ]
                             ]
@@ -4709,13 +5066,22 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                       "equivalences": [
                         [
                           {
-                            "Column": 1
+                            "Column": [
+                              1,
+                              "b"
+                            ]
                           },
                           {
-                            "Column": 3
+                            "Column": [
+                              3,
+                              "b"
+                            ]
                           },
                           {
-                            "Column": 4
+                            "Column": [
+                              4,
+                              "b"
+                            ]
                           }
                         ]
                       ],
@@ -4726,7 +5092,10 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                               1,
                               [
                                 {
-                                  "Column": 1
+                                  "Column": [
+                                    1,
+                                    "b"
+                                  ]
                                 }
                               ],
                               {
@@ -4751,7 +5120,10 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                               2,
                               [
                                 {
-                                  "Column": 0
+                                  "Column": [
+                                    0,
+                                    "b"
+                                  ]
                                 }
                               ],
                               {
@@ -4778,7 +5150,10 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                               0,
                               [
                                 {
-                                  "Column": 1
+                                  "Column": [
+                                    1,
+                                    "b"
+                                  ]
                                 }
                               ],
                               {
@@ -4803,7 +5178,10 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                               2,
                               [
                                 {
-                                  "Column": 0
+                                  "Column": [
+                                    0,
+                                    "b"
+                                  ]
                                 }
                               ],
                               {
@@ -4830,7 +5208,10 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                               0,
                               [
                                 {
-                                  "Column": 1
+                                  "Column": [
+                                    1,
+                                    "b"
+                                  ]
                                 }
                               ],
                               {
@@ -4855,7 +5236,10 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                               1,
                               [
                                 {
-                                  "Column": 1
+                                  "Column": [
+                                    1,
+                                    "b"
+                                  ]
                                 }
                               ],
                               {
@@ -4965,7 +5349,10 @@ WHERE a = c and d = e and b = f
                         "keys": [
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "a"
+                              ]
                             }
                           ]
                         ]
@@ -5018,12 +5405,18 @@ WHERE a = c and d = e and b = f
                         "keys": [
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "c"
+                              ]
                             }
                           ],
                           [
                             {
-                              "Column": 1
+                              "Column": [
+                                1,
+                                "d"
+                              ]
                             }
                           ]
                         ]
@@ -5068,7 +5461,10 @@ WHERE a = c and d = e and b = f
                         "keys": [
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "e"
+                              ]
                             }
                           ]
                         ]
@@ -5078,26 +5474,44 @@ WHERE a = c and d = e and b = f
                   "equivalences": [
                     [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          "a"
+                        ]
                       },
                       {
-                        "Column": 2
+                        "Column": [
+                          2,
+                          "c"
+                        ]
                       }
                     ],
                     [
                       {
-                        "Column": 1
+                        "Column": [
+                          1,
+                          "b"
+                        ]
                       },
                       {
-                        "Column": 5
+                        "Column": [
+                          5,
+                          "f"
+                        ]
                       }
                     ],
                     [
                       {
-                        "Column": 3
+                        "Column": [
+                          3,
+                          "d"
+                        ]
                       },
                       {
-                        "Column": 4
+                        "Column": [
+                          4,
+                          "e"
+                        ]
                       }
                     ]
                   ],
@@ -5108,7 +5522,10 @@ WHERE a = c and d = e and b = f
                           1,
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "c"
+                              ]
                             }
                           ],
                           {
@@ -5133,7 +5550,10 @@ WHERE a = c and d = e and b = f
                           2,
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "e"
+                              ]
                             }
                           ],
                           {
@@ -5160,7 +5580,10 @@ WHERE a = c and d = e and b = f
                           0,
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "a"
+                              ]
                             }
                           ],
                           {
@@ -5185,7 +5608,10 @@ WHERE a = c and d = e and b = f
                           2,
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "e"
+                              ]
                             }
                           ],
                           {
@@ -5212,7 +5638,10 @@ WHERE a = c and d = e and b = f
                           1,
                           [
                             {
-                              "Column": 1
+                              "Column": [
+                                1,
+                                "d"
+                              ]
                             }
                           ],
                           {
@@ -5237,7 +5666,10 @@ WHERE a = c and d = e and b = f
                           0,
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "a"
+                              ]
                             }
                           ],
                           {
@@ -5275,7 +5707,10 @@ WHERE a = c and d = e and b = f
                           "IsNull": null
                         },
                         "expr": {
-                          "Column": 0
+                          "Column": [
+                            0,
+                            "a"
+                          ]
                         }
                       }
                     }
@@ -5292,7 +5727,10 @@ WHERE a = c and d = e and b = f
                           "IsNull": null
                         },
                         "expr": {
-                          "Column": 1
+                          "Column": [
+                            1,
+                            "b"
+                          ]
                         }
                       }
                     }
@@ -5309,7 +5747,10 @@ WHERE a = c and d = e and b = f
                           "IsNull": null
                         },
                         "expr": {
-                          "Column": 3
+                          "Column": [
+                            3,
+                            "d"
+                          ]
                         }
                       }
                     }
@@ -5396,7 +5837,10 @@ WHERE b = c and d = e
                         "keys": [
                           [
                             {
-                              "Column": 1
+                              "Column": [
+                                1,
+                                "b"
+                              ]
                             }
                           ]
                         ]
@@ -5449,12 +5893,18 @@ WHERE b = c and d = e
                         "keys": [
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "c"
+                              ]
                             }
                           ],
                           [
                             {
-                              "Column": 1
+                              "Column": [
+                                1,
+                                "d"
+                              ]
                             }
                           ]
                         ]
@@ -5499,7 +5949,10 @@ WHERE b = c and d = e
                         "keys": [
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "e"
+                              ]
                             }
                           ]
                         ]
@@ -5509,18 +5962,30 @@ WHERE b = c and d = e
                   "equivalences": [
                     [
                       {
-                        "Column": 1
+                        "Column": [
+                          1,
+                          "b"
+                        ]
                       },
                       {
-                        "Column": 2
+                        "Column": [
+                          2,
+                          "c"
+                        ]
                       }
                     ],
                     [
                       {
-                        "Column": 3
+                        "Column": [
+                          3,
+                          "d"
+                        ]
                       },
                       {
-                        "Column": 4
+                        "Column": [
+                          4,
+                          "e"
+                        ]
                       }
                     ]
                   ],
@@ -5531,7 +5996,10 @@ WHERE b = c and d = e
                           1,
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "c"
+                              ]
                             }
                           ],
                           {
@@ -5556,7 +6024,10 @@ WHERE b = c and d = e
                           2,
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "e"
+                              ]
                             }
                           ],
                           {
@@ -5583,7 +6054,10 @@ WHERE b = c and d = e
                           0,
                           [
                             {
-                              "Column": 1
+                              "Column": [
+                                1,
+                                "b"
+                              ]
                             }
                           ],
                           {
@@ -5608,7 +6082,10 @@ WHERE b = c and d = e
                           2,
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "e"
+                              ]
                             }
                           ],
                           {
@@ -5635,7 +6112,10 @@ WHERE b = c and d = e
                           1,
                           [
                             {
-                              "Column": 1
+                              "Column": [
+                                1,
+                                "d"
+                              ]
                             }
                           ],
                           {
@@ -5660,7 +6140,10 @@ WHERE b = c and d = e
                           0,
                           [
                             {
-                              "Column": 1
+                              "Column": [
+                                1,
+                                "b"
+                              ]
                             }
                           ],
                           {
@@ -5698,7 +6181,10 @@ WHERE b = c and d = e
                           "IsNull": null
                         },
                         "expr": {
-                          "Column": 1
+                          "Column": [
+                            1,
+                            "b"
+                          ]
                         }
                       }
                     }
@@ -5715,7 +6201,10 @@ WHERE b = c and d = e
                           "IsNull": null
                         },
                         "expr": {
-                          "Column": 3
+                          "Column": [
+                            3,
+                            "d"
+                          ]
                         }
                       }
                     }
@@ -5799,7 +6288,10 @@ SELECT s FROM t2 WHERE s ~ 'a.*';
                       }
                     },
                     "expr": {
-                      "Column": 0
+                      "Column": [
+                        0,
+                        "s"
+                      ]
                     }
                   }
                 }
@@ -5833,7 +6325,10 @@ SELECT s FROM t2 WHERE s ~ 'a.*';
                   }
                 },
                 "expr": {
-                  "Column": 0
+                  "Column": [
+                    0,
+                    "s"
+                  ]
                 }
               }
             }

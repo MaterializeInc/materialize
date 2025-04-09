@@ -156,7 +156,7 @@ ORDER BY row_number, x
 ----
 Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0, #1]
   Project (#2, #0)
-    Map (row_number() over (partition by [#0] order by [#0 asc nulls_last]))
+    Map (row_number() over (partition by [#0{x}] order by [#0{x} asc nulls_last]))
       Get materialize.public.t
 
 Target cluster: quickstart
@@ -174,7 +174,7 @@ Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0, #1]
       Project (#3..=#5) // { arity: 3 }
         Map (record_get[0](record_get[1](#2)), record_get[1](record_get[1](#2)), record_get[0](#2)) // { arity: 6 }
           FlatMap unnest_list(#1) // { arity: 3 }
-            Reduce group_by=[#0] aggregates=[row_number[order_by=[#0 asc nulls_last]](row(list[row(#0, #1)], #0))] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[row_number[order_by=[#0 asc nulls_last]](row(list[row(#0, #1)], #0{x}))] // { arity: 2 }
               CrossJoin // { arity: 2 }
                 Constant // { arity: 0 }
                   - ()
@@ -227,7 +227,7 @@ With
   cte l2 =
     Map (true) // { arity: 2 }
       Distinct project=[#0] // { arity: 1 }
-        Filter (integer_to_bigint(#0) = #1) // { arity: 2 }
+        Filter (integer_to_bigint(#0{f1}) = #1{right_col0_0}) // { arity: 2 }
           Project (#0, #4) // { arity: 2 }
             Map (#3) // { arity: 5 }
               Project (#3..=#6) // { arity: 4 }
@@ -362,7 +362,7 @@ Return // { arity: 5 }
             Map (record_get[0](record_get[1](#2)), record_get[1](record_get[1](#2)), record_get[2](record_get[1](#2)), record_get[0](#2)) // { arity: 7 }
               FlatMap unnest_list(#1) // { arity: 3 }
                 Reduce group_by=[#0] aggregates=[row_number[order_by=[]](row(list[row(#0, #1, #2)]))] // { arity: 2 }
-                  Filter (#2 = #0) // { arity: 3 }
+                  Filter (#2{f2} = #0{f2}) // { arity: 3 }
                     CrossJoin // { arity: 3 }
                       Distinct project=[#1] // { arity: 1 }
                         Get l0 // { arity: 2 }
@@ -391,7 +391,7 @@ Return // { arity: 5 }
             Map (record_get[0](record_get[1](#3)), record_get[1](record_get[1](#3)), record_get[2](record_get[1](#3)), record_get[0](#3)) // { arity: 8 }
               FlatMap unnest_list(#2) // { arity: 4 }
                 Reduce group_by=[#0, #1] aggregates=[row_number[order_by=[]](row(list[row(#0, #1, #2)]))] // { arity: 3 }
-                  Filter (#2 = #0) // { arity: 3 }
+                  Filter (#2{f2} = #0{f2}) // { arity: 3 }
                     CrossJoin // { arity: 3 }
                       Distinct project=[#1] // { arity: 1 }
                         Get l0 // { arity: 2 }
@@ -5165,7 +5165,7 @@ SELECT 3 + lag(a) OVER (ORDER BY a) + 5 + 27
 FROM foo;
 ----
 Project (#3)
-  Map (lag(row(#0, 1, null)) over (order by [#0 asc nulls_last]), (((3 + #2) + 5) + 27))
+  Map (lag(row(#0{a}, 1, null)) over (order by [#0{a} asc nulls_last]), (((3 + #2{?column?}) + 5) + 27))
     Get materialize.public.foo
 
 Target cluster: quickstart
@@ -5179,13 +5179,13 @@ FROM foo LEFT JOIN (SELECT a AS right_a FROM foo WHERE a<2) ON foo.a = right_a
 GROUP BY b, right_a;
 ----
 Project (#4, #5, #0)
-  Map (lag(row(((10 * #1) + 3), 1, null)) over (order by [#1 asc nulls_first]), -(#3), -(#2))
-    Reduce group_by=[#3, #4] aggregates=[sum(#0)]
-      Map (#1, #2)
-        LeftOuterJoin (#0 = #2)
+  Map (lag(row(((10 * #1{right_a}) + 3), 1, null)) over (order by [#1{right_a} asc nulls_first]), -(#3{?column?}), -(#2{?column?}))
+    Reduce group_by=[#3, #4] aggregates=[sum(#0{a})]
+      Map (#1{b}, #2{right_a})
+        LeftOuterJoin (#0{a} = #2{right_a})
           Get materialize.public.foo
           Project (#0)
-            Filter (#0 < 2)
+            Filter (#0{a} < 2)
               Get materialize.public.foo
 
 Target cluster: quickstart
@@ -5200,7 +5200,7 @@ ORDER BY o;
 ----
 Finish order_by=[#0 asc nulls_last] output=[#0]
   Project (#3)
-    Map (lag(row(#0, 1, null)) over (order by [#0 asc nulls_last]), (3 + #2))
+    Map (lag(row(#0{a}, 1, null)) over (order by [#0{a} asc nulls_last]), (3 + #2{?column?}))
       Get materialize.public.foo
 
 Target cluster: quickstart
@@ -5221,7 +5221,7 @@ ORDER BY a;
 ----
 Finish order_by=[#0 asc nulls_last] output=[#0..=#5]
   Project (#0, #4, #4, #2, #3, #5)
-    Map (lag(row(#0, 1, null)) over (order by [#0 asc nulls_last]), lead(row(#0, 1, null)) over (order by [#0 asc nulls_last]), (3 + #2), (5 + #2))
+    Map (lag(row(#0{a}, 1, null)) over (order by [#0{a} asc nulls_last]), lead(row(#0{a}, 1, null)) over (order by [#0{a} asc nulls_last]), (3 + #2{?column?}), (5 + #2{?column?}))
       Get materialize.public.foo
 
 Target cluster: quickstart
@@ -5254,7 +5254,7 @@ ORDER BY a;
 ----
 Finish order_by=[#0 asc nulls_last] output=[#0..=#2]
   Project (#0, #1, #3)
-    Map (lag(row(#0, 1, null)) over (order by [#0 asc nulls_last]), (#2 + #2))
+    Map (lag(row(#0{a}, 1, null)) over (order by [#0{a} asc nulls_last]), (#2{?column?} + #2{?column?}))
       Get materialize.public.foo
 
 Target cluster: quickstart
@@ -5281,7 +5281,7 @@ ORDER BY a;
 ----
 Finish order_by=[#0 asc nulls_last] output=[#0..=#2]
   Project (#0, #1, #4)
-    Map (lead(row(#0, 1, null)) over (order by [#0 asc nulls_last]), lag(row(#0, 1, null)) over (order by [#0 asc nulls_last]), (#3 + #2))
+    Map (lead(row(#0{a}, 1, null)) over (order by [#0{a} asc nulls_last]), lag(row(#0{a}, 1, null)) over (order by [#0{a} asc nulls_last]), (#3{?column?} + #2{?column?}))
       Get materialize.public.foo
 
 Target cluster: quickstart
@@ -5307,7 +5307,7 @@ FROM foo;
 ----
 Project (#0, #1)
   TopK group_by=[#3] limit=1
-    Map (lag(row(#0, 1, 0)) over (order by [#0 asc nulls_last]), (1 + #2))
+    Map (lag(row(#0{a}, 1, 0)) over (order by [#0{a} asc nulls_last]), (1 + #2{?column?}))
       Get materialize.public.foo
 
 Target cluster: quickstart
@@ -5384,7 +5384,7 @@ ORDER BY 5 + lag(a) OVER (ORDER BY a), o;
 ----
 Finish order_by=[#4 asc nulls_last, #3 asc nulls_last] output=[#3]
   TopK group_by=[#4] order_by=[#3 asc nulls_last] limit=1
-    Map (lag(row(#0, 1, null)) over (order by [#0 asc nulls_last]), lead(row(#0, 1, null)) over (order by [#1 asc nulls_last]), (5 + #2))
+    Map (lag(row(#0{a}, 1, null)) over (order by [#0{a} asc nulls_last]), lead(row(#0{a}, 1, null)) over (order by [#1{b} asc nulls_last]), (5 + #2{?column?}))
       Get materialize.public.foo
 
 Target cluster: quickstart
@@ -5526,7 +5526,7 @@ SELECT
 FROM bools;
 ----
 Project (#0, #1, #3)
-  Map (first_value(#1) over (order by [#1 desc nulls_first]), case when #0 then #2 else 42 end)
+  Map (first_value(#1{x}) over (order by [#1{x} desc nulls_first]), case when #0{cond} then #2{?column?} else 42 end)
     Get materialize.public.bools
 
 Target cluster: quickstart
@@ -5971,9 +5971,9 @@ ORDER BY outer_a, outer_b;
 Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#2]
   With
     cte [l1 as subquery-1] =
-      Reduce aggregates=[sum(#0)]
+      Reduce aggregates=[sum(#0{lead_a})]
         Project (#3)
-          Map (lead(row(#0, 1, null)) over (partition by [((4 * #0) / (#^0 + char_length(#^1)))] order by [#0 asc nulls_last]), (3 + #2))
+          Map (lead(row(#0{a}, 1, null)) over (partition by [((4 * #0{a}) / (#^0{outer_a} + char_length(#^1{outer_b})))] order by [#0{a} asc nulls_last]), (3 + #2{?column?}))
             Get materialize.public.foo
   Return
     Map (select(Get l1))
@@ -5983,10 +5983,10 @@ Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#2]
             Union
               Get materialize.public.foo
               Project (#2, #1)
-                Map ((#0 + 2))
+                Map ((#0{a} + 2))
                   Get materialize.public.foo
           Project (#2, #1)
-            Map ((#0 + 5))
+            Map ((#0{a} + 5))
               Get materialize.public.foo
 
 Target cluster: quickstart
@@ -6014,8 +6014,8 @@ Finish order_by=[#0 asc nulls_last] output=[#2]
       Project (#4..=#6)
         Map (record_get[0](record_get[1](#3)), record_get[1](record_get[1](#3)), record_get[0](#3))
           FlatMap unnest_list(#2)
-            Reduce group_by=[#2, #3] aggregates=[window_agg[sum order_by=[#0 asc nulls_last, #1 asc nulls_last] rows between unbounded preceding and current row](row(row(row(#0, #1), (#1 - 3)), (#0 + 1), (#1 + 2)))]
-              Map ((2 * #0), (3 * #1))
+            Reduce group_by=[#2, #3] aggregates=[window_agg[sum order_by=[#0 asc nulls_last, #1 asc nulls_last] rows between unbounded preceding and current row](row(row(row(#0, #1), (#1{y} - 3)), (#0{x} + 1), (#1{y} + 2)))]
+              Map ((2 * #0{x}), (3 * #1{y}))
                 CrossJoin
                   Constant
                     - ()
@@ -7453,7 +7453,7 @@ ORDER BY x,y;
 Explained Query:
   Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#14]
     Project (#3, #4, #16, #15, #14, #17, #13, #9, #11, #10, #18, #8, #7, #6, #5)
-      Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[2](#2), record_get[4](#2), record_get[5](#2), record_get[7](#2), record_get[8](#2), record_get[10](#2), record_get[12](#2), record_get[0](#1), record_get[0](#12), record_get[1](#12), record_get[2](#12), record_get[3](#12), (#3 * #4), (#3 + #4))
+      Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[2](#2), record_get[4](#2), record_get[5](#2), record_get[7](#2), record_get[8](#2), record_get[10](#2), record_get[12](#2), record_get[0](#1), record_get[0](#12), record_get[1](#12), record_get[2](#12), record_get[3](#12), (#3{x} * #4{y}), (#3{x} + #4{y}))
         FlatMap unnest_list(#0{fused_value_window_func})
           Reduce aggregates=[fused_value_window_func[lag[order_by=[#0 asc nulls_last]], last_value[order_by=[#0 asc nulls_last]], first_value[order_by=[#0 asc nulls_last]], lag[order_by=[#0 asc nulls_last]] order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[2](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[4](record_get[1](#0)), record_get[5](record_get[1](#0)), record_get[6](record_get[1](#0)), record_get[7](record_get[1](#0)), record_get[8](record_get[1](#0)), record_get[9](record_get[1](#0)), record_get[10](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), row(row(record_get[1](record_get[1](#0)), 1, null), record_get[0](record_get[1](#0)), record_get[0](record_get[1](#0)), row(record_get[0](record_get[1](#0)), 1, null))), record_get[0](record_get[1](#0))))]
             Project (#1)
@@ -7535,7 +7535,7 @@ ORDER BY x,y;
 Explained Query:
   Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#7]
     Project (#3, #4, #8, #9, #7, #6, #5, #10)
-      Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[2](#2), record_get[3](#2), record_get[8](#2), record_get[0](#1), (#3 * #4), (#3 + #4))
+      Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[2](#2), record_get[3](#2), record_get[8](#2), record_get[0](#1), (#3{x} * #4{y}), (#3{x} + #4{y}))
         FlatMap unnest_list(#0{first_value})
           Project (#1{first_value})
             Reduce group_by=[record_get[0](record_get[1](#0))] aggregates=[first_value[order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[2](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[4](record_get[1](#0)), record_get[5](record_get[1](#0)), record_get[6](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), record_get[6](record_get[1](#0))), record_get[1](record_get[1](#0))))]
@@ -7675,10 +7675,10 @@ Explained Query:
     map=(record_get[0](#0))
     input_key=
     Reduce::Basic
-      aggr=(0, lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0)), fused_unnest_list=true)
+      aggr=(0, lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0{x}, (#1{y} - 2), 120)), #0{x})), fused_unnest_list=true)
       val_plan
         project=(#2)
-        map=(row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0))
+        map=(row(row(row(#0, #1), row(#0{x}, (#1{y} - 2), 120)), #0{x}))
       key_plan
         project=()
       Get::PassArrangements materialize.public.t9
@@ -7703,13 +7703,13 @@ Explained Query:
     map=(record_get[0](#1))
     input_key=#0
     Reduce::Basic
-      aggr=(0, lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0)), fused_unnest_list=true)
+      aggr=(0, lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0{x}, (#1{y} - 2), 120)), #0{x})), fused_unnest_list=true)
       val_plan
         project=(#2)
-        map=(row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0))
+        map=(row(row(row(#0, #1), row(#0{x}, (#1{y} - 2), 120)), #0{x}))
       key_plan
         project=(#2)
-        map=((#0 / 2))
+        map=((#0{x} / 2))
       Get::PassArrangements materialize.public.t9
         raw=true
 
@@ -7732,13 +7732,13 @@ Explained Query:
     map=(record_get[0](#2))
     input_key=#0, #1
     Reduce::Basic
-      aggr=(0, lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0)), fused_unnest_list=true)
+      aggr=(0, lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0{x}, (#1{y} - 2), 120)), #0{x})), fused_unnest_list=true)
       val_plan
         project=(#2)
-        map=(row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0))
+        map=(row(row(row(#0, #1), row(#0{x}, (#1{y} - 2), 120)), #0{x}))
       key_plan
         project=(#2, #1)
-        map=((#0 / 2))
+        map=((#0{x} / 2))
       Get::PassArrangements materialize.public.t9
         raw=true
 
@@ -7764,10 +7764,10 @@ Explained Query:
       map=(record_get[0](record_get[1](#0)), record_get[0](#0))
       input_key=
       Reduce::Basic
-        aggr=(0, row_number[order_by=[#0 asc nulls_last]](row(list[row(#0, #1)], #0)), fused_unnest_list=true)
+        aggr=(0, row_number[order_by=[#0 asc nulls_last]](row(list[row(#0, #1)], #0{x})), fused_unnest_list=true)
         val_plan
           project=(#2)
-          map=(row(list[row(#0, #1)], #0))
+          map=(row(list[row(#0, #1)], #0{x}))
         key_plan
           project=()
         Get::PassArrangements materialize.public.t7
@@ -7797,10 +7797,10 @@ Explained Query:
       map=(record_get[0](#0), record_get[1](#0), record_get[0](#2), record_get[1](#2))
       input_key=
       Reduce::Basic
-        aggr=(0, lag[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0, 1, null)), #0)), fused_unnest_list=true)
+        aggr=(0, lag[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0{x}, 1, null)), #0{x})), fused_unnest_list=true)
         val_plan
           project=(#2)
-          map=(row(row(row(#0, #1), row(#0, 1, null)), #0))
+          map=(row(row(row(#0, #1), row(#0{x}, 1, null)), #0{x}))
         key_plan
           project=()
         mfp_after
@@ -7831,10 +7831,10 @@ Explained Query:
       map=(record_get[1](#0), record_get[0](#1), record_get[1](#1), record_get[0](#0), record_get[0](#4), record_get[1](#4))
       input_key=
       Reduce::Basic
-        aggr=(0, fused_value_window_func[lag[order_by=[]], lag[order_by=[]] order_by=[]](row(row(row(#0, #1), row(row(#1, 1, null), row(#0, 1, null))))), fused_unnest_list=true)
+        aggr=(0, fused_value_window_func[lag[order_by=[]], lag[order_by=[]] order_by=[]](row(row(row(#0, #1), row(row(#1{y}, 1, null), row(#0{x}, 1, null))))), fused_unnest_list=true)
         val_plan
           project=(#2)
-          map=(row(row(row(#0, #1), row(row(#1, 1, null), row(#0, 1, null)))))
+          map=(row(row(row(#0, #1), row(row(#1{y}, 1, null), row(#0{x}, 1, null)))))
         key_plan
           project=()
         Get::PassArrangements materialize.public.t7

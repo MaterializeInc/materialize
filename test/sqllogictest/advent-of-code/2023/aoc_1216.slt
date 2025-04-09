@@ -227,17 +227,17 @@ Explained Query:
   With
     cte l0 =
       Project (#0, #2, #3) // { arity: 3 }
-        Map (substr(#1, #2, 1)) // { arity: 4 }
-          FlatMap generate_series(1, char_length(#1), 1) // { arity: 3 }
+        Map (substr(#1{line}, #2{c}, 1)) // { arity: 4 }
+          FlatMap generate_series(1, char_length(#1{line}), 1) // { arity: 3 }
             Project (#1, #2) // { arity: 2 }
-              Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1))) // { arity: 3 }
+              Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1{r}))) // { arity: 3 }
                 FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#0{input}) array_length 1), 1) // { arity: 2 }
                   ReadStorage materialize.public.input // { arity: 1 }
     cte l1 =
       Project (#1) // { arity: 1 }
         Get l0 // { arity: 3 }
     cte l2 =
-      Reduce aggregates=[min(#0)] // { arity: 1 }
+      Reduce aggregates=[min(#0{c})] // { arity: 1 }
         Get l1 // { arity: 1 }
     cte l3 =
       Union // { arity: 1 }
@@ -250,7 +250,7 @@ Explained Query:
             Constant // { arity: 0 }
               - ()
     cte l4 =
-      Reduce aggregates=[max(#0)] // { arity: 1 }
+      Reduce aggregates=[max(#0{c})] // { arity: 1 }
         Get l1 // { arity: 1 }
     cte l5 =
       Union // { arity: 1 }
@@ -266,7 +266,7 @@ Explained Query:
       Project (#0) // { arity: 1 }
         Get l0 // { arity: 3 }
     cte l7 =
-      Reduce aggregates=[min(#0)] // { arity: 1 }
+      Reduce aggregates=[min(#0{r})] // { arity: 1 }
         Get l6 // { arity: 1 }
     cte l8 =
       Union // { arity: 1 }
@@ -298,11 +298,11 @@ Explained Query:
                 Constant // { arity: 0 }
                   - ()
     cte l11 =
-      ArrangeBy keys=[[#0, #1]] // { arity: 3 }
-        Filter (#2) IS NOT NULL // { arity: 3 }
+      ArrangeBy keys=[[#0{r}, #1{c}]] // { arity: 3 }
+        Filter (#2{symbol}) IS NOT NULL // { arity: 3 }
           Get l0 // { arity: 3 }
     cte l12 =
-      ArrangeBy keys=[[#0, #1]] // { arity: 5 }
+      ArrangeBy keys=[[#0{dir}, #1{symbol}]] // { arity: 5 }
         Constant // { arity: 5 }
           total_rows (diffs absed): 24
           first_rows:
@@ -332,11 +332,11 @@ Explained Query:
         Distinct project=[#0..=#2] // { arity: 3 }
           Union // { arity: 3 }
             Project (#11, #12, #10) // { arity: 3 }
-              Map ((#0 + #8), (#1 + #9)) // { arity: 13 }
-                Join on=(#0 = #3 AND #1 = #4 AND #2 = #6 AND #5 = #7) type=differential // { arity: 11 }
+              Map ((#0{r} + #8{dr}), (#1{c} + #9{dc})) // { arity: 13 }
+                Join on=(#0{r} = #3{r} AND #1{c} = #4{c} AND #2{dir} = #6{dir} AND #5{symbol} = #7{symbol}) type=differential // { arity: 11 }
                   implementation
-                    %0:l13[#0, #1]KK » %1:l11[#0, #1]KK » %2:l12[#0, #1]KK
-                  ArrangeBy keys=[[#0, #1]] // { arity: 3 }
+                    %0:l13[#0{r}, #1{c}]KK » %1:l11[#0{r}, #1{c}]KK » %2:l12[#0{dir}, #1{symbol}]KK
+                  ArrangeBy keys=[[#0{r}, #1{c}]] // { arity: 3 }
                     Get l13 // { arity: 3 }
                   Get l11 // { arity: 3 }
                   Get l12 // { arity: 5 }
@@ -345,21 +345,21 @@ Explained Query:
       cte l14 =
         Reduce aggregates=[count(*)] // { arity: 1 }
           Project () // { arity: 0 }
-            Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 4 }
+            Join on=(#0{r} = #2{r} AND #1{c} = #3{c}) type=differential // { arity: 4 }
               implementation
                 %0[#0, #1]UKKA » %1[#0, #1]UKKA
-              ArrangeBy keys=[[#0, #1]] // { arity: 2 }
-                Distinct project=[#0, #1] // { arity: 2 }
+              ArrangeBy keys=[[#0{r}, #1{c}]] // { arity: 2 }
+                Distinct project=[#0{r}, #1{c}] // { arity: 2 }
                   Project (#0, #1) // { arity: 2 }
                     Get l13 // { arity: 3 }
-              ArrangeBy keys=[[#0, #1]] // { arity: 2 }
-                Distinct project=[#0, #1] // { arity: 2 }
+              ArrangeBy keys=[[#0{r}, #1{c}]] // { arity: 2 }
+                Distinct project=[#0{r}, #1{c}] // { arity: 2 }
                   Get l9 // { arity: 2 }
       cte l15 =
         Distinct project=[#0{min}..=#3] // { arity: 4 }
           Union // { arity: 4 }
             Project (#0, #1{min}, #3, #2) // { arity: 4 }
-              Map (("r" || integer_to_text(#0)), "r") // { arity: 4 }
+              Map (("r" || integer_to_text(#0{r})), "r") // { arity: 4 }
                 CrossJoin type=differential // { arity: 2 }
                   implementation
                     %1[×]U » %0:l6[×]
@@ -376,10 +376,10 @@ Explained Query:
                           Constant // { arity: 0 }
                             - ()
             Project (#0, #2{max}, #4, #3) // { arity: 4 }
-              Map (("l" || integer_to_text(#0)), "l") // { arity: 5 }
+              Map (("l" || integer_to_text(#0{r})), "l") // { arity: 5 }
                 Get l10 // { arity: 3 }
             Project (#1{min}, #0, #3, #2) // { arity: 4 }
-              Map (("d" || integer_to_text(#0)), "d") // { arity: 4 }
+              Map (("d" || integer_to_text(#0{c})), "d") // { arity: 4 }
                 CrossJoin type=differential // { arity: 2 }
                   implementation
                     %1[×]U » %0:l1[×]
@@ -396,13 +396,13 @@ Explained Query:
                           Constant // { arity: 0 }
                             - ()
             Project (#2{max}, #1, #4, #3) // { arity: 4 }
-              Map (("u" || integer_to_text(#1)), "u") // { arity: 5 }
+              Map (("u" || integer_to_text(#1{c})), "u") // { arity: 5 }
                 Get l10 // { arity: 3 }
             Project (#12, #13, #11, #3) // { arity: 4 }
-              Map ((#0 + #9), (#1 + #10)) // { arity: 14 }
-                Join on=(#0 = #4 AND #1 = #5 AND #2 = #7 AND #6 = #8) type=differential // { arity: 12 }
+              Map ((#0{r} + #9{dr}), (#1{c} + #10{dc})) // { arity: 14 }
+                Join on=(#0{r} = #4{r} AND #1{c} = #5{c} AND #2{dir} = #7{dir} AND #6{symbol} = #8{symbol}) type=differential // { arity: 12 }
                   implementation
-                    %0:l15[#0, #1]KK » %1:l11[#0, #1]KK » %2:l12[#0, #1]KK
+                    %0:l15[#0{r}, #1{c}]KK » %1:l11[#0{r}, #1{c}]KK » %2:l12[#0{dir}, #1{symbol}]KK
                   ArrangeBy keys=[[#0{min}, #1{min}]] // { arity: 4 }
                     Filter (#0{min}) IS NOT NULL AND (#1{min}) IS NOT NULL // { arity: 4 }
                       Get l15 // { arity: 4 }
@@ -415,7 +415,7 @@ Explained Query:
             Project (#1{count}) // { arity: 1 }
               Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
                 Project (#2) // { arity: 1 }
-                  Join on=(#0{min} = #3 AND #1{min} = #4) type=differential // { arity: 5 }
+                  Join on=(#0{min} = #3{r} AND #1{min} = #4{c}) type=differential // { arity: 5 }
                     implementation
                       %1[#0, #1]UKKA » %0[#0, #1]KK
                     ArrangeBy keys=[[#0{min}, #1{min}]] // { arity: 3 }
@@ -423,8 +423,8 @@ Explained Query:
                         Project (#0{min}, #1{min}, #3) // { arity: 3 }
                           Filter (#0{min}) IS NOT NULL AND (#1{min}) IS NOT NULL // { arity: 4 }
                             Get l15 // { arity: 4 }
-                    ArrangeBy keys=[[#0, #1]] // { arity: 2 }
-                      Distinct project=[#0, #1] // { arity: 2 }
+                    ArrangeBy keys=[[#0{r}, #1{c}]] // { arity: 2 }
+                      Distinct project=[#0{r}, #1{c}] // { arity: 2 }
                         Project (#0, #1) // { arity: 2 }
                           Get l0 // { arity: 3 }
       Return // { arity: 2 }

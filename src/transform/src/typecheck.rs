@@ -1097,7 +1097,7 @@ impl Typecheck {
         use MirScalarExpr::*;
 
         self.checked_recur(|tc| match expr {
-            Column(i) => match column_types.get(*i) {
+            Column(i, _) => match column_types.get(*i) {
                 Some(ty) => Ok(ty.clone()),
                 None => Err(TypeError::NoSuchColumn {
                     source,

@@ -3973,10 +3973,13 @@ pub fn plan_create_index(
             let index_name_col_suffix = keys
                 .iter()
                 .map(|k| match k {
-                    mz_expr::MirScalarExpr::Column(i) => match on_desc.get_unambiguous_name(*i) {
-                        Some(col_name) => col_name.to_string(),
-                        None => format!("{}", i + 1),
-                    },
+                    mz_expr::MirScalarExpr::Column(i, name) => {
+                        match (on_desc.get_unambiguous_name(*i), &name.0) {
+                            (Some(col_name), _) => col_name.to_string(),
+                            (None, Some(name)) => name.to_string(),
+                            (None, None) => format!("{}", i + 1),
+                        }
+                    }
                     _ => "expr".to_string(),
                 })
                 .join("_");

@@ -489,7 +489,7 @@ fn prune_and_annotate_dataflow_index_imports(
                                 key.iter()
                                     // Convert the Vec<usize> key to Vec<MirScalarExpr>, so that
                                     // later we can more easily compare index keys to these keys.
-                                    .map(|col_idx| MirScalarExpr::Column(*col_idx))
+                                    .map(|col_idx| MirScalarExpr::column(*col_idx))
                                     .collect()
                             })
                             .collect()

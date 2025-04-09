@@ -137,7 +137,7 @@ Explained Query:
             - ()
 
 Source materialize.public.t
-  filter=((1 = (#0 % 2)))
+  filter=((1 = (#0{a} % 2)))
 
 Target cluster: quickstart
 
@@ -174,7 +174,7 @@ Explained Query:
           project=(#1, #0)
         key_plan
           project=()
-        FlatMap generate_series(1, #0, 1)
+        FlatMap generate_series(1, #0{a}, 1)
           mfp_after
             project=(#1, #2)
           Get::PassArrangements materialize.public.t
@@ -279,7 +279,7 @@ Explained Query:
 
 Source materialize.public.t
   project=(#0..=#2)
-  map=((#0 % 2))
+  map=((#0{a} % 2))
 
 Target cluster: quickstart
 
@@ -364,7 +364,7 @@ Explained Query:
 
 Source materialize.public.t
   project=(#0..=#2)
-  map=((#0 % 2))
+  map=((#0{a} % 2))
 
 Target cluster: quickstart
 
@@ -413,7 +413,7 @@ Explained Query:
     cte l0 =
       Get::PassArrangements materialize.public.t
         raw=false
-        arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+        arrangements[0]={ key=[#1{b}], permutation={#0: #1, #1: #0}, thinning=(#0) }
         types=[integer?, integer?]
     cte l1 =
       Reduce::Hierarchical
@@ -428,17 +428,17 @@ Explained Query:
           linear_stage[0]
             closure
               project=(#0)
-              filter=((#0) IS NOT NULL AND (#1 = 5) AND (1 = (#1 % 2)) AND (#2 = 5))
-            lookup={ relation=1, key=[#1] }
-            stream={ key=[#1], thinning=(#0) }
-          source={ relation=0, key=[#1] }
+              filter=((#0{b}) IS NOT NULL AND (#1{a} = 5) AND (1 = (#1{a} % 2)) AND (#2{a} = 5))
+            lookup={ relation=1, key=[#1{b}] }
+            stream={ key=[#1{b}], thinning=(#0) }
+          source={ relation=0, key=[#1{b}] }
           Get::PassArrangements l0
             raw=false
-            arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+            arrangements[0]={ key=[#1{b}], permutation={#0: #1, #1: #0}, thinning=(#0) }
             types=[integer?, integer?]
           Get::PassArrangements l0
             raw=false
-            arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+            arrangements[0]={ key=[#1{b}], permutation={#0: #1, #1: #0}, thinning=(#0) }
             types=[integer?, integer?]
   Return
     Union
@@ -526,20 +526,20 @@ Explained Query:
           project=()
         Join::Linear
           linear_stage[0]
-            lookup={ relation=1, key=[#0] }
-            stream={ key=[#0], thinning=() }
-          source={ relation=0, key=[#0] }
+            lookup={ relation=1, key=[#0{b}] }
+            stream={ key=[#0{b}], thinning=() }
+          source={ relation=0, key=[#0{b}] }
           ArrangeBy
             raw=true
-            arrangements[0]={ key=[#0], permutation=id, thinning=() }
+            arrangements[0]={ key=[#0{b}], permutation=id, thinning=() }
             types=[integer]
             Get::Collection materialize.public.t
               project=(#1)
-              filter=((1 = (#0 % 2)))
+              filter=((1 = (#0{a} % 2)))
               raw=true
           ArrangeBy
             raw=true
-            arrangements[0]={ key=[#0], permutation=id, thinning=() }
+            arrangements[0]={ key=[#0{b}], permutation=id, thinning=() }
             types=[integer]
             Get::Collection materialize.public.t
               project=(#1)
@@ -566,7 +566,7 @@ Explained Query:
             - ()
 
 Source materialize.public.t
-  filter=((#0 = 5) AND (#1) IS NOT NULL)
+  filter=((#0{a} = 5) AND (#1{b}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -605,7 +605,7 @@ Explained Query:
           project=()
         input_key=#0
         Reduce::Accumulable
-          simple_aggrs[0]=(0, 0, sum(#0))
+          simple_aggrs[0]=(0, 0, sum(#0{a}))
           val_plan
             project=(#0)
           key_plan
@@ -769,7 +769,7 @@ Explained Query:
         key_plan
           project=(#1, #0)
         mfp_after
-          filter=((2 = (#2 + 1)))
+          filter=((2 = (#2{c} + 1)))
         Get::Collection materialize.public.t
           raw=true
     cte l1 =
@@ -781,19 +781,19 @@ Explained Query:
           project=(#1, #0)
         key_plan
           project=()
-        FlatMap generate_series(1, #1, 1)
+        FlatMap generate_series(1, #1{a}, 1)
           mfp_after
             project=(#0, #2)
           Union
             Get::Arrangement l0
               project=(#0, #1)
-              filter=((1 = (#1 % 2)))
+              filter=((1 = (#1{a} % 2)))
               key=#0, #1
               raw=false
               arrangements[0]={ key=[#0, #1], permutation=id, thinning=(#2) }
             Get::Arrangement l0
               project=(#0, #1)
-              filter=((1 = (#2 % 2)))
+              filter=((1 = (#2{c} % 2)))
               key=#0, #1
               raw=false
               arrangements[0]={ key=[#0, #1], permutation=id, thinning=(#2) }
@@ -1187,7 +1187,7 @@ Explained Query:
                 - ()
             TopK::Basic group_by=[#0] limit=1
               Get::Collection l0
-                filter=((#0 > 20000))
+                filter=((#0{a} > 20000))
                 raw=true
   Return
     With

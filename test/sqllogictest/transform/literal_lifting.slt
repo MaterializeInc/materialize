@@ -804,7 +804,7 @@ Explained Query:
         Project (#0{a}) // { arity: 1 }
           Join on=(#0{a} = #1) type=differential // { arity: 2 }
             implementation
-              %0:t_pk[#0]UKiif » %1[#0]UKiif
+              %0:t_pk[#0{a}]UKiif » %1[#0]UKiif
             ArrangeBy keys=[[#0{a}]] // { arity: 1 }
               Project (#0{a}) // { arity: 1 }
                 Filter (#0{a} <= 195) AND (#0{a} >= 38) // { arity: 2 }
@@ -847,7 +847,7 @@ Explained Query:
         Project (#0{a}) // { arity: 1 }
           Join on=(#0{a} = #1) type=differential // { arity: 2 }
             implementation
-              %1[#0]UK » %0:t[#0]Kiif
+              %1[#0]UK » %0:t[#0{a}]Kiif
             ArrangeBy keys=[[#0{a}]] // { arity: 1 }
               Project (#0{a}) // { arity: 1 }
                 Filter (#0{a} <= 195) AND (#0{a} >= 38) // { arity: 2 }

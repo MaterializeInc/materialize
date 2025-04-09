@@ -45,16 +45,16 @@ MATERIALIZED VIEW mv_fusable_mfp_accumulable;
 ----
 materialize.public.mv_fusable_mfp_accumulable:
   Reduce::Accumulable
-    simple_aggrs[0]=(0, 0, sum(#1))
-    simple_aggrs[1]=(1, 1, count(#1))
+    simple_aggrs[0]=(0, 0, sum(#1{b}))
+    simple_aggrs[1]=(1, 1, count(#1{b}))
     val_plan
       project=(#1, #1)
     key_plan
       project=(#0)
     mfp_after
       project=(#0, #1)
-      filter=(((#3 - integer_to_bigint(#0)) > 2) AND ((#3 / integer_to_bigint((1 + #0))) >= 1))
-      map=((#2 + 1))
+      filter=(((#3 - integer_to_bigint(#0{a})) > 2) AND ((#3 / integer_to_bigint((1 + #0{a}))) >= 1))
+      map=((#2{?column?} + 1))
     Get::PassArrangements materialize.public.t
       raw=true
 
@@ -85,18 +85,18 @@ MATERIALIZED VIEW mv_complex_mfp_accumulable;
 materialize.public.mv_complex_mfp_accumulable:
   Mfp
     project=(#0, #3)
-    map=((#1 + 1))
+    map=((#1{?column?} + 1))
     input_key=#0
     Reduce::Accumulable
-      simple_aggrs[0]=(0, 0, sum(#1))
-      simple_aggrs[1]=(1, 1, count(#1))
+      simple_aggrs[0]=(0, 0, sum(#1{b}))
+      simple_aggrs[1]=(1, 1, count(#1{b}))
       val_plan
         project=(#1, #1)
       key_plan
         project=(#0)
       mfp_after
-        filter=(((#3 - integer_to_bigint(#0)) > 2) AND ((#3 / integer_to_bigint((1 + #0))) >= 1))
-        map=((#2 + 1))
+        filter=(((#3 - integer_to_bigint(#0{a})) > 2) AND ((#3 / integer_to_bigint((1 + #0{a}))) >= 1))
+        map=((#2{?column?} + 1))
       Get::PassArrangements materialize.public.t
         raw=true
 

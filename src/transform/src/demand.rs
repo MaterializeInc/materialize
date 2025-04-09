@@ -245,7 +245,7 @@ impl Demand {
                     for equivalence in equivalences.iter() {
                         let mut first_column = None;
                         for expr in equivalence.iter() {
-                            if let MirScalarExpr::Column(c) = expr {
+                            if let MirScalarExpr::Column(c, _) = expr {
                                 if let Some(prior) = &first_column {
                                     permutation[*c] = *prior;
                                 } else {

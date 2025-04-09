@@ -109,7 +109,7 @@ FROM
 ----
 Explained Query:
   Project (#3, #4) // { arity: 2 }
-    Map ((#1{b} / 2), case when (#2 = 0) then 0 else (1 / #2) end, case when (#2 != 0) then (1 / #2) else 0 end) // { arity: 5 }
+    Map ((#1{b} / 2), case when (#2{b} = 0) then 0 else (1 / #2) end, case when (#2{b} != 0) then (1 / #2) else 0 end) // { arity: 5 }
       ReadStorage materialize.public.x // { arity: 2 }
 
 Source materialize.public.x

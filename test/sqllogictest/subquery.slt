@@ -180,7 +180,7 @@ query BBBBBBBBBBBBBBB
 ----
 true  false  false  true  false  false  NULL  true  NULL  NULL  NULL  NULL  NULL  NULL  NULL
 
-query error subquery has 0 columns available but 1 columns specified
+query error db error: ERROR: subquery1 has 0 columns available but 1 columns specified
 SELECT 1 < ALL(SELECT * FROM nullary)
 
 query error Expected subselect to return 1 column, got 0 columns
@@ -192,7 +192,7 @@ SELECT * FROM (SELECT);
 ----
 
 
-query error subquery has 2 columns available but 1 columns specified
+query error db error: ERROR: subquery1 has 2 columns available but 1 columns specified
 SELECT 1 < ALL(SELECT 1, 2)
 
 statement ok
@@ -276,9 +276,9 @@ Explained Query:
   Project (#0{a}, #0{a}, #2{b}) // { arity: 3 }
     Join on=(#0{a} = #1{a}) type=delta // { arity: 3 }
       implementation
-        %0:t1 » %2[×]UA » %1:t3[#0]K
-        %1:t3 » %2[×]UA » %0:t1[#0]K
-        %2 » %0:t1[×] » %1:t3[#0]K
+        %0:t1 » %2[×]UA » %1:t3[#0{a}]K
+        %1:t3 » %2[×]UA » %0:t1[#0{a}]K
+        %2 » %0:t1[×] » %1:t3[#0{a}]K
       ArrangeBy keys=[[], [#0{a}]] // { arity: 1 }
         ReadStorage materialize.public.t1 // { arity: 1 }
       ArrangeBy keys=[[#0{a}]] // { arity: 2 }
@@ -303,9 +303,9 @@ Explained Query:
   Project (#0{a}, #0{a}, #2{b}) // { arity: 3 }
     Join on=(#0{a} = #1{a} AND #2{b} = #3{b}) type=delta // { arity: 4 }
       implementation
-        %0:t1 » %1:t3[#0]K » %2[#0]UKA
-        %1:t3 » %2[#0]UKA » %0:t1[#0]K
-        %2 » %1:t3[#1]K » %0:t1[#0]K
+        %0:t1 » %1:t3[#0{a}]K » %2[#0]UKA
+        %1:t3 » %2[#0]UKA » %0:t1[#0{a}]K
+        %2 » %1:t3[#1]K » %0:t1[#0{a}]K
       ArrangeBy keys=[[#0{a}]] // { arity: 1 }
         ReadStorage materialize.public.t1 // { arity: 1 }
       ArrangeBy keys=[[#0{a}], [#1{b}]] // { arity: 2 }
@@ -343,7 +343,7 @@ Explained Query:
     Map ((ascii(substr(replace(#1{likee}, "o", "i"), 2, 1)) * 2)) // { arity: 5 }
       Join on=(#0{liker} = #2{peep}) type=differential // { arity: 4 }
         implementation
-          %0:likes[#0]K » %1:age[#0]K
+          %0:likes[#0{liker}]K » %1:age[#0{peep}]K
         ArrangeBy keys=[[#0{liker}]] // { arity: 2 }
           Filter (#0{liker}) IS NOT NULL // { arity: 2 }
             ReadStorage materialize.public.likes // { arity: 2 }

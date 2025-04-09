@@ -38,8 +38,8 @@ EXPLAIN RAW PLAN FOR
 ----
 Finish order_by=[#1 asc nulls_last, #0 asc nulls_last] limit=2 output=[#0..=#2]
   TopK group_by=[#1] order_by=[#0 asc nulls_last] limit=1 exp_group_size=1000
-    Reduce group_by=[#4, #5] aggregates=[max(#2)] exp_group_size=1000
-      Map (#0, #1)
+    Reduce group_by=[#4, #5] aggregates=[max(#2{course_id})] exp_group_size=1000
+      Map (#0{id}, #1{teacher_id})
         Get materialize.public.sections
 
 Target cluster: quickstart

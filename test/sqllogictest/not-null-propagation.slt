@@ -636,7 +636,7 @@ Explained Query:
       FlatMap wrap1(#0{col_not_null}, null) // { types: "(integer, integer?)" }
         Get l1 // { types: "(integer)" }
     cte l3 =
-      Reduce group_by=[#0{col_not_null}] aggregates=[any((#1 = 1))] // { types: "(integer, boolean?)" }
+      Reduce group_by=[#0{col_not_null}] aggregates=[any((#1{right_col0_0} = 1))] // { types: "(integer, boolean?)" }
         Get l2 // { types: "(integer, integer?)" }
     cte l4 =
       Union // { types: "(integer, boolean?)" }
@@ -648,7 +648,7 @@ Explained Query:
                 Get l3 // { types: "(integer, boolean?)" }
             Get l1 // { types: "(integer)" }
     cte l5 =
-      Reduce group_by=[#0{col_not_null}] aggregates=[all((#1 = 1))] // { types: "(integer, boolean?)" }
+      Reduce group_by=[#0{col_not_null}] aggregates=[all((#1{right_col0_2} = 1))] // { types: "(integer, boolean?)" }
         Get l2 // { types: "(integer, integer?)" }
     cte l6 =
       Union // { types: "(integer, boolean?)" }
@@ -785,7 +785,7 @@ Explained Query:
       Distinct project=[] // { types: "()" }
         Get l0 // { types: "()" }
   Return // { types: "(boolean, boolean)" }
-    Map (NOT(#0)) // { types: "(boolean, boolean)" }
+    Map (NOT(#0{?column?})) // { types: "(boolean, boolean)" }
       CrossJoin type=differential // { types: "(boolean)" }
         ArrangeBy keys=[[]] // { types: "()" }
           Get l0 // { types: "()" }

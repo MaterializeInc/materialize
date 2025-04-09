@@ -709,8 +709,8 @@ query T multiline
 EXPLAIN RAW PLAN FOR SELECT stddev(x), sum(x) FROM t_variance;
 ----
 Project (#4, #3)
-  Map (sqrtf64(case when (((#0 - ((#1 * #1) / bigint_to_double(case when (#2 = integer_to_bigint(0)) then null else #2 end))) / bigint_to_double(case when ((#2 - integer_to_bigint(1)) = integer_to_bigint(0)) then null else (#2 - integer_to_bigint(1)) end))) IS NULL then null else greatest(((#0 - ((#1 * #1) / bigint_to_double(case when (#2 = integer_to_bigint(0)) then null else #2 end))) / bigint_to_double(case when ((#2 - integer_to_bigint(1)) = integer_to_bigint(0)) then null else (#2 - integer_to_bigint(1)) end)), integer_to_double(0)) end))
-    Reduce aggregates=[sum((#0 * #0)), sum(#0), count(#0), sum(#0)]
+  Map (sqrtf64(case when (((#0{?column?} - ((#1{?column?} * #1{?column?}) / bigint_to_double(case when (#2{?column?} = integer_to_bigint(0)) then null else #2{?column?} end))) / bigint_to_double(case when ((#2{?column?} - integer_to_bigint(1)) = integer_to_bigint(0)) then null else (#2{?column?} - integer_to_bigint(1)) end))) IS NULL then null else greatest(((#0{?column?} - ((#1{?column?} * #1{?column?}) / bigint_to_double(case when (#2{?column?} = integer_to_bigint(0)) then null else #2{?column?} end))) / bigint_to_double(case when ((#2{?column?} - integer_to_bigint(1)) = integer_to_bigint(0)) then null else (#2{?column?} - integer_to_bigint(1)) end)), integer_to_double(0)) end))
+    Reduce aggregates=[sum((#0{x} * #0{x})), sum(#0{x}), count(#0{x}), sum(#0{x})]
       Get materialize.public.t_variance
 
 Target cluster: quickstart

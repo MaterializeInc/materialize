@@ -49,11 +49,11 @@ $ set-regex match=u\d+ replacement=UID
 
 ? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM v;
 Explained Query:
-  Filter (#0 = 1) AND (#3 = 3)
+  Filter (#0{a} = 1) AND (#3{d} = 3)
     ReadStorage materialize.public.data_tbl
 
 Source materialize.public.data_tbl
-  filter=((#0 = 1) AND (#3 = 3))
+  filter=((#0{a} = 1) AND (#3{d} = 3))
 
 Target cluster: quickstart
 
@@ -70,11 +70,11 @@ Target cluster: quickstart
 ? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM v;
 Explained Query:
   Project (#1)
-    Filter (#1 = 1)
+    Filter (#1{b} = 1)
       ReadStorage materialize.public.data_tbl
 
 Source materialize.public.data_tbl
-  filter=((#1 = 1))
+  filter=((#1{b} = 1))
 
 Target cluster: quickstart
 
@@ -95,11 +95,11 @@ Target cluster: quickstart
 ? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM v;
 Explained Query:
   Project (#1)
-    Filter (#0 = 1) AND (#3 = 4)
+    Filter (#0{a} = 1) AND (#3{d} = 4)
       ReadStorage materialize.public.data_tbl
 
 Source materialize.public.data_tbl
-  filter=((#0 = 1) AND (#3 = 4))
+  filter=((#0{a} = 1) AND (#3{d} = 4))
 
 Target cluster: quickstart
 
@@ -116,11 +116,11 @@ Target cluster: quickstart
 ? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM v;
 Explained Query:
   Project (#3)
-    Filter (#0 = 1) AND (#3 = 4)
+    Filter (#0{a} = 1) AND (#3{d} = 4)
       ReadStorage materialize.public.data_tbl
 
 Source materialize.public.data_tbl
-  filter=((#0 = 1) AND (#3 = 4))
+  filter=((#0{a} = 1) AND (#3{d} = 4))
 
 Target cluster: quickstart
 
@@ -135,14 +135,14 @@ Target cluster: quickstart
 ? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM v;
 Explained Query:
   Project (#0)
-    Join on=(#0 = #1) type=differential
-      ArrangeBy keys=[[#0]]
+    Join on=(#0{a} = #1{b}) type=differential
+      ArrangeBy keys=[[#0{a}]]
         Project (#0)
-          Filter (#0) IS NOT NULL
+          Filter (#0{a}) IS NOT NULL
             ReadStorage materialize.public.data_tbl
-      ArrangeBy keys=[[#0]]
+      ArrangeBy keys=[[#0{b}]]
         Project (#1)
-          Filter (#3 = 4) AND (#1) IS NOT NULL
+          Filter (#3{d} = 4) AND (#1{b}) IS NOT NULL
             ReadStorage materialize.public.data_tbl
 
 Source materialize.public.data_tbl
@@ -165,18 +165,18 @@ Target cluster: quickstart
 ? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM v;
 Explained Query:
   Project (#1)
-    Join on=(#0 = #2) type=differential
-      ArrangeBy keys=[[#0]]
+    Join on=(#0{a} = #2{b}) type=differential
+      ArrangeBy keys=[[#0{a}]]
         Project (#0)
-          Filter (#3 = 4) AND (#0) IS NOT NULL
+          Filter (#3{d} = 4) AND (#0{a}) IS NOT NULL
             ReadStorage materialize.public.data_tbl
-      ArrangeBy keys=[[#1]]
+      ArrangeBy keys=[[#1{b}]]
         Project (#0, #1)
-          Filter (#3 = 4) AND (#1) IS NOT NULL
+          Filter (#3{d} = 4) AND (#1{b}) IS NOT NULL
             ReadStorage materialize.public.data_tbl
 
 Source materialize.public.data_tbl
-  filter=((#3 = 4))
+  filter=((#3{d} = 4))
 
 Target cluster: quickstart
 
@@ -194,19 +194,19 @@ Explained Query:
   With
     cte l0 =
       Project (#0, #2)
-        Filter (#0) IS NOT NULL
+        Filter (#0{a}) IS NOT NULL
           ReadStorage materialize.public.data_tbl
   Return
     Project (#2)
-      Join on=(#0 = #1) type=differential
-        ArrangeBy keys=[[#0]]
+      Join on=(#0{a} = #1{a}) type=differential
+        ArrangeBy keys=[[#0{a}]]
           Project (#0)
             Get l0
-        ArrangeBy keys=[[#0]]
+        ArrangeBy keys=[[#0{a}]]
           Get l0
 
 Source materialize.public.data_tbl
-  filter=((#0) IS NOT NULL)
+  filter=((#0{a}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -228,13 +228,13 @@ Explained Query:
   Union
     Project (#1, #0)
       Map (1)
-        Reduce aggregates=[sum(#0)]
+        Reduce aggregates=[sum(#0{b})]
           Project (#1)
             Filter (#0 = 1)
               ReadStorage materialize.public.data_tbl
     Project (#0, #4)
       Filter (#0 = 1)
-        Map (bigint_to_numeric((1 + #2)))
+        Map (bigint_to_numeric((1 + #2{c})))
           ReadStorage materialize.public.data_tbl
 
 Source materialize.public.data_tbl
@@ -275,12 +275,12 @@ Explained Query:
         ReadStorage materialize.public.data_tbl
       Negate
         Project (#0, #2)
-          Filter (#3) IS NULL
+          Filter (#3{d}) IS NULL
             ReadStorage materialize.public.data2_tbl
 
 Source materialize.public.data_tbl
 Source materialize.public.data2_tbl
-  filter=((#3) IS NULL)
+  filter=((#3{d}) IS NULL)
 
 Target cluster: quickstart
 

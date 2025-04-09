@@ -50,8 +50,8 @@ EXPLAIN RAW PLAN AS TEXT FOR
 SELECT a + 1, b, 4 FROM mv WHERE a > 0
 ----
 Project (#2, #1, #3)
-  Map ((#0 + 1), 4)
-    Filter (#0 > 0)
+  Map ((#0{a} + 1), 4)
+    Filter (#0{a} > 0)
       Get materialize.public.mv
 
 Target cluster: quickstart
@@ -136,8 +136,8 @@ EXPLAIN RAW PLAN AS TEXT FOR
 SELECT abs(min(a) - max(a)) FROM t
 ----
 Project (#2)
-  Map (abs((#0 - #1)))
-    Reduce aggregates=[min(#0), max(#0)]
+  Map (abs((#0{?column?} - #1{?column?})))
+    Reduce aggregates=[min(#0{a}), max(#0{a})]
       Get materialize.public.t
 
 Target cluster: quickstart
@@ -150,9 +150,9 @@ EXPLAIN RAW PLAN AS TEXT FOR
 SELECT abs(min(a) - max(a)) FROM t GROUP BY b
 ----
 Project (#3)
-  Map (abs((#1 - #2)))
-    Reduce group_by=[#2] aggregates=[min(#0), max(#0)]
-      Map (#1)
+  Map (abs((#1{?column?} - #2{?column?})))
+    Reduce group_by=[#2] aggregates=[min(#0{a}), max(#0{a})]
+      Map (#1{b})
         Get materialize.public.t
 
 Target cluster: quickstart
@@ -166,10 +166,10 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
 ----
 With
   cte [l2 as subquery-2] =
-    Filter (#^1 > #1)
+    Filter (#^1{b} > #1{b})
       Get materialize.public.mv
   cte [l1 as subquery-1] =
-    Filter (#^0 < #0)
+    Filter (#^0{a} < #0{a})
       Get materialize.public.mv
 Return
   Filter (exists(Get l1) AND exists(Get l2))
@@ -189,12 +189,12 @@ Project (#2, #3)
     cte [l2 as subquery-2] =
       Project (#0)
         TopK limit=1
-          Filter (#1 = #^1)
+          Filter (#1{b} = #^1{b})
             Get materialize.public.mv
     cte [l1 as subquery-1] =
       Project (#0)
         TopK limit=1
-          Filter (#1 = #^1)
+          Filter (#1{b} = #^1{b})
             Get materialize.public.v
   Return
     Map (select(Get l1), select(Get l2))
@@ -243,7 +243,7 @@ FROM
 WHERE t1.b = t2.b AND t2.b = t3.b
 ----
 Project (#0, #2)
-  Filter ((#1 = #3) AND (#3 = #5))
+  Filter ((#1{b} = #3{b}) AND (#3{b} = #5{b}))
     CrossJoin
       CrossJoin
         Get materialize.public.t
@@ -263,8 +263,8 @@ INNER JOIN t as t2 ON t1.b = t2.b
 INNER JOIN t as t3 ON t2.b = t3.b
 ----
 Project (#0, #2)
-  InnerJoin (#3 = #5)
-    InnerJoin (#1 = #3)
+  InnerJoin (#3{b} = #5{b})
+    InnerJoin (#1{b} = #3{b})
       Get materialize.public.t
       Get materialize.public.t
     Get materialize.public.t
@@ -282,8 +282,8 @@ LEFT JOIN t as t2 ON t1.b = t2.b
 RIGHT JOIN t as t3 ON t2.b = t3.b
 ----
 Project (#0, #2)
-  RightOuterJoin (#3 = #5)
-    LeftOuterJoin (#1 = #3)
+  RightOuterJoin (#3{b} = #5{b})
+    LeftOuterJoin (#1{b} = #3{b})
       Get materialize.public.t
       Get materialize.public.t
     Get materialize.public.t
@@ -301,10 +301,10 @@ Project (#1)
   With
     cte [l0 as x] =
       Project (#2)
-        Map ((#0 * #1))
+        Map ((#0{a} * #1{b}))
           Get materialize.public.t
   Return
-    Map ((#0 + 5))
+    Map ((#0{v} + 5))
       Get l0
 
 Target cluster: quickstart
@@ -322,7 +322,7 @@ With
       Constant
         - ()
   cte [l1 as b] =
-    Filter (#0 > 0)
+    Filter (#0{a} > 0)
       Get l0
 Return
   CrossJoin
@@ -361,17 +361,17 @@ CrossJoin
     Get materialize.public.t
     With
       cte [l0 as r2] =
-        Reduce aggregates=[max((#^0 * #0))]
+        Reduce aggregates=[max((#^0{a} * #0{a}))]
           Get materialize.public.t
     Return
-      Filter (#0 != #^0)
+      Filter (#0{m} != #^0{a})
         Get l0
   With
     cte [l0 as r4] =
-      Reduce aggregates=[max((#^0 * #0))]
+      Reduce aggregates=[max((#^0{a} * #0{a}))]
         Get materialize.public.t
   Return
-    Filter ((#0 != #^0) OR ((#0) IS NOT NULL AND (#^0) IS NULL))
+    Filter ((#0{m} != #^0{a}) OR ((#0{m}) IS NOT NULL AND (#^0{a}) IS NULL))
       Get l0
 
 Target cluster: quickstart
@@ -409,18 +409,18 @@ CrossJoin
   Get materialize.public.t
   With
     cte [l0 as r4] =
-      Reduce aggregates=[max((#^0 * #0))]
+      Reduce aggregates=[max((#^0{a} * #0{a}))]
         Get materialize.public.t
   Return
-    Filter (#^0 != #^0)
+    Filter (#^0{a} != #^0{a})
       CrossJoin
         Get l0
         With
           cte [l1 as r2] =
-            Reduce aggregates=[max((#^^0 * #0))]
+            Reduce aggregates=[max((#^^0{a} * #0{a}))]
               Get materialize.public.t
         Return
-          Filter ((#^^0 = #^0) AND (#0 > 5))
+          Filter ((#^^0{a} = #^0{m}) AND (#0{m} > 5))
             Get l1
 
 Target cluster: quickstart
@@ -485,7 +485,7 @@ SELECT lag(b, 3) OVER ()
 FROM t;
 ----
 Project (#2)
-  Map (lag(row(#1, 3, null)) over (order by []))
+  Map (lag(row(#1{b}, 3, null)) over (order by []))
     Get materialize.public.t
 
 Target cluster: quickstart
@@ -498,7 +498,7 @@ SELECT lag(b, 333) RESPECT NULLS OVER ()
 FROM t;
 ----
 Project (#2)
-  Map (lag(row(#1, 333, null)) over (order by []))
+  Map (lag(row(#1{b}, 333, null)) over (order by []))
     Get materialize.public.t
 
 Target cluster: quickstart
@@ -511,7 +511,7 @@ SELECT lag(b, 333) IGNORE NULLS OVER ()
 FROM t;
 ----
 Project (#2)
-  Map (lag(row(#1, 333, null)) ignore nulls over (order by []))
+  Map (lag(row(#1{b}, 333, null)) ignore nulls over (order by []))
     Get materialize.public.t
 
 Target cluster: quickstart
@@ -530,11 +530,11 @@ FROM (
 );
 ----
 Project (#1)
-  Map (row_number() over (order by [#0 desc nulls_first]))
+  Map (row_number() over (order by [#0{r} desc nulls_first]))
     Project (#1)
-      Map (row_number() over (partition by [#0] order by []))
+      Map (row_number() over (partition by [#0{l}] order by []))
         Project (#2)
-          Map (lag(row(#1, 3, null)) over (partition by [(#1 % 2), (#0 % 3)] order by [#0 desc nulls_first, -(#1) asc nulls_last, ((2 * #1) + #0) asc nulls_first]))
+          Map (lag(row(#1{b}, 3, null)) over (partition by [(#1{b} % 2), (#0{a} % 3)] order by [#0{a} desc nulls_first, -(#1{b}) asc nulls_last, ((2 * #1{b}) + #0{a}) asc nulls_first]))
             Get materialize.public.t
 
 Target cluster: quickstart
@@ -549,7 +549,7 @@ SELECT
 FROM t;
 ----
 Project (#2)
-  Map (first_value(#1) over (partition by [(#1 % 6)] order by [(#1 + 33) asc nulls_last]))
+  Map (first_value(#1{b}) over (partition by [(#1{b} % 6)] order by [(#1{b} + 33) asc nulls_last]))
     Get materialize.public.t
 
 Target cluster: quickstart
@@ -563,7 +563,7 @@ SELECT
 FROM t;
 ----
 Project (#2)
-  Map (first_value(#1) over (partition by [(#1 % 6)] order by [(#1 + 33) asc nulls_last] rows between 2 preceding and current row))
+  Map (first_value(#1{b}) over (partition by [(#1{b} % 6)] order by [(#1{b} + 33) asc nulls_last] rows between 2 preceding and current row))
     Get materialize.public.t
 
 Target cluster: quickstart
@@ -577,7 +577,7 @@ SELECT
 FROM t;
 ----
 Project (#2)
-  Map (sum((#1 + 8)) over (partition by [(#1 % 6)] order by [(#1 + 33) desc nulls_first] rows between 2 preceding and 3 following))
+  Map (sum((#1{b} + 8)) over (partition by [(#1{b} % 6)] order by [(#1{b} + 33) desc nulls_first] rows between 2 preceding and 3 following))
     Get materialize.public.t
 
 Target cluster: quickstart
@@ -684,8 +684,8 @@ EXPLAIN RAW PLAN AS TEXT FOR
 VIEW v;
 ----
 Project (#0, #1, #3)
-  Filter (#1 = 100)
-    LeftOuterJoin (integer_to_bigint(#0) = #2)
+  Filter (#1{balance} = 100)
+    LeftOuterJoin (integer_to_bigint(#0{id}) = #2{id})
       Get materialize.public.accounts
       Get materialize.public.account_details
 

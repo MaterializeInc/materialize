@@ -62,7 +62,7 @@ materialize.public.mv:
     raw=true
 
 Source materialize.public.accounts
-  filter=((#1 = 100))
+  filter=((#1{balance} = 100))
 
 Target cluster: quickstart
 
@@ -97,12 +97,12 @@ materialize.public.mv:
     linear_stage[0]
       closure
         project=(#1, #0)
-      lookup={ relation=0, key=[#1] }
+      lookup={ relation=0, key=[#1{balance}] }
       stream={ key=[#0], thinning=() }
     source={ relation=1, key=[#0] }
     Get::PassArrangements materialize.public.accounts
       raw=false
-      arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+      arrangements[0]={ key=[#1{balance}], permutation={#0: #1, #1: #0}, thinning=(#0) }
       types=[integer?, integer?]
     ArrangeBy
       raw=true
@@ -146,12 +146,12 @@ materialize.public.mv:
     linear_stage[0]
       closure
         project=(#1, #0)
-      lookup={ relation=0, key=[#1] }
+      lookup={ relation=0, key=[#1{balance}] }
       stream={ key=[#0], thinning=() }
     source={ relation=1, key=[#0] }
     Get::PassArrangements materialize.public.accounts
       raw=false
-      arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+      arrangements[0]={ key=[#1{balance}], permutation={#0: #1, #1: #0}, thinning=(#0) }
       types=[integer?, integer?]
     ArrangeBy
       raw=true
@@ -196,12 +196,12 @@ materialize.public.mv:
     linear_stage[0]
       closure
         project=(#1, #0)
-      lookup={ relation=0, key=[#1] }
+      lookup={ relation=0, key=[#1{balance}] }
       stream={ key=[#0], thinning=() }
     source={ relation=1, key=[#0] }
     Get::PassArrangements materialize.public.accounts
       raw=false
-      arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+      arrangements[0]={ key=[#1{balance}], permutation={#0: #1, #1: #0}, thinning=(#0) }
       types=[integer?, integer?]
     ArrangeBy
       raw=true

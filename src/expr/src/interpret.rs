@@ -395,7 +395,7 @@ pub trait Interpreter {
     /// Evaluate an entire expression, by delegating to the fine-grained methods on [Interpreter].
     fn expr(&self, expr: &MirScalarExpr) -> Self::Summary {
         match expr {
-            MirScalarExpr::Column(id) => self.column(*id),
+            MirScalarExpr::Column(id, _name) => self.column(*id),
             MirScalarExpr::Literal(value, col_type) => self.literal(value, col_type),
             MirScalarExpr::CallUnmaterializable(func) => self.unmaterializable(func),
             MirScalarExpr::CallUnary { func, expr } => {
@@ -559,7 +559,7 @@ impl SpecialUnary {
                         func: UnaryFunc::TryParseMonotonicIso8601Timestamp(
                             crate::func::TryParseMonotonicIso8601Timestamp,
                         ),
-                        expr: Box::new(MirScalarExpr::Column(0)),
+                        expr: Box::new(MirScalarExpr::column(0)),
                     };
                     let eval = |d| specs.eval_result(expr.eval(&[d], specs.arena));
 
@@ -1268,7 +1268,7 @@ mod tests {
             any::<Index>()
                 .prop_map(move |idx| {
                     let id = idx.index(column_types.len());
-                    (MirScalarExpr::Column(id), column_types[id].clone())
+                    (MirScalarExpr::column(id), column_types[id].clone())
                 })
                 .boxed()
         };
@@ -1443,8 +1443,8 @@ mod tests {
                         func: UnaryFunc::IsNull(IsNull),
                         expr: Box::new(CallBinary {
                             func: BinaryFunc::MulInt32,
-                            expr1: Box::new(Column(0)),
-                            expr2: Box::new(Column(0)),
+                            expr1: Box::new(MirScalarExpr::column(0)),
+                            expr2: Box::new(MirScalarExpr::column(0)),
                         }),
                     },
                 ),
@@ -1453,7 +1453,7 @@ mod tests {
                     1,
                     CallBinary {
                         func: BinaryFunc::Eq,
-                        expr1: Box::new(Column(0)),
+                        expr1: Box::new(MirScalarExpr::column(0)),
                         expr2: Box::new(Literal(
                             Ok(Row::pack_slice(&[Datum::Int32(1727694505)])),
                             ScalarType::Int32.nullable(false),
@@ -1478,7 +1478,7 @@ mod tests {
         let expr = MirScalarExpr::CallVariadic {
             func: VariadicFunc::Concat,
             exprs: vec![
-                MirScalarExpr::Column(0),
+                MirScalarExpr::column(0),
                 MirScalarExpr::literal_ok(Datum::String("a"), ScalarType::String),
                 MirScalarExpr::literal_ok(Datum::String("b"), ScalarType::String),
             ],
@@ -1510,7 +1510,7 @@ mod tests {
                     expr1: Box::new(period_ms.clone()),
                     expr2: Box::new(MirScalarExpr::CallBinary {
                         func: BinaryFunc::DivInt64,
-                        expr1: Box::new(MirScalarExpr::Column(0)),
+                        expr1: Box::new(MirScalarExpr::column(0)),
                         expr2: Box::new(period_ms),
                     }),
                 }),
@@ -1568,7 +1568,7 @@ mod tests {
             func: UnaryFunc::CastJsonbToNumeric(CastJsonbToNumeric(None)),
             expr: Box::new(MirScalarExpr::CallBinary {
                 func: BinaryFunc::JsonbGetString,
-                expr1: Box::new(MirScalarExpr::Column(0)),
+                expr1: Box::new(MirScalarExpr::column(0)),
                 expr2: Box::new(MirScalarExpr::Literal(
                     Ok(Row::pack_slice(&["ts".into()])),
                     ScalarType::String.nullable(false),
@@ -1607,7 +1607,7 @@ mod tests {
             func: UnaryFunc::IsLikeMatch(IsLikeMatch(
                 crate::like_pattern::compile("%whatever%", true).unwrap(),
             )),
-            expr: Box::new(MirScalarExpr::Column(0)),
+            expr: Box::new(MirScalarExpr::column(0)),
         };
 
         let relation = RelationType::new(vec![ScalarType::String.nullable(true)]);
@@ -1635,7 +1635,7 @@ mod tests {
 
         let expr = MirScalarExpr::CallUnary {
             func: UnaryFunc::TryParseMonotonicIso8601Timestamp(TryParseMonotonicIso8601Timestamp),
-            expr: Box::new(MirScalarExpr::Column(0)),
+            expr: Box::new(MirScalarExpr::column(0)),
         };
 
         let relation = RelationType::new(vec![ScalarType::String.nullable(true)]);
@@ -1721,7 +1721,7 @@ mod tests {
 
         let expr = MirScalarExpr::CallBinary {
             func: BinaryFunc::Gte,
-            expr1: Box::new(MirScalarExpr::Column(0)),
+            expr1: Box::new(MirScalarExpr::column(0)),
             expr2: Box::new(MirScalarExpr::CallUnmaterializable(
                 UnmaterializableFunc::MzNow,
             )),
@@ -1761,13 +1761,13 @@ mod tests {
 
         let expr = MirScalarExpr::CallBinary {
             func: BinaryFunc::Gte,
-            expr1: Box::new(MirScalarExpr::Column(0)),
+            expr1: Box::new(MirScalarExpr::column(0)),
             expr2: Box::new(MirScalarExpr::CallBinary {
                 func: BinaryFunc::AddInt64,
-                expr1: Box::new(MirScalarExpr::Column(1)),
+                expr1: Box::new(MirScalarExpr::column(1)),
                 expr2: Box::new(MirScalarExpr::CallUnary {
                     func: UnaryFunc::NegInt64(NegInt64),
-                    expr: Box::new(MirScalarExpr::Column(3)),
+                    expr: Box::new(MirScalarExpr::column(3)),
                 }),
             }),
         };
