@@ -200,6 +200,7 @@ pub enum Connection<C: ConnectionAccess = InlinedConnection> {
     Aws(AwsConnection),
     AwsPrivatelink(AwsPrivatelinkConnection),
     MySql(MySqlConnection<C>),
+    SqlServer(SqlServerConnectionDetails<C>),
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<Connection, R>
@@ -214,6 +215,9 @@ impl<R: ConnectionResolver> IntoInlineConnection<Connection, R>
             Connection::Aws(aws) => Connection::Aws(aws),
             Connection::AwsPrivatelink(awspl) => Connection::AwsPrivatelink(awspl),
             Connection::MySql(mysql) => Connection::MySql(mysql.into_inline_connection(r)),
+            Connection::SqlServer(sql_server) => {
+                Connection::SqlServer(sql_server.into_inline_connection(r))
+            }
         }
     }
 }
@@ -229,6 +233,7 @@ impl<C: ConnectionAccess> Connection<C> {
             Connection::Aws(conn) => conn.validate_by_default(),
             Connection::AwsPrivatelink(conn) => conn.validate_by_default(),
             Connection::MySql(conn) => conn.validate_by_default(),
+            Connection::SqlServer(conn) => conn.validate_by_default(),
         }
     }
 }
@@ -248,6 +253,7 @@ impl Connection<InlinedConnection> {
             Connection::Aws(conn) => conn.validate(id, storage_configuration).await?,
             Connection::AwsPrivatelink(conn) => conn.validate(id, storage_configuration).await?,
             Connection::MySql(conn) => conn.validate(id, storage_configuration).await?,
+            Connection::SqlServer(conn) => conn.validate(id, storage_configuration).await?,
         }
         Ok(())
     }
@@ -270,6 +276,13 @@ impl Connection<InlinedConnection> {
         match self {
             Self::MySql(conn) => conn,
             o => unreachable!("{o:?} is not a MySQL connection"),
+        }
+    }
+
+    pub fn unwrap_sql_server(self) -> <InlinedConnection as ConnectionAccess>::SqlServer {
+        match self {
+            Self::SqlServer(conn) => conn,
+            o => unreachable!("{o:?} is not a SQL Server connection"),
         }
     }
 
@@ -2010,6 +2023,279 @@ impl<C: ConnectionAccess> AlterCompatible for MySqlConnection<C> {
             }
         }
         Ok(())
+    }
+}
+
+/// Details how to connect to an instance of Microsoft SQL Server.
+///
+/// For specifics of connecting to SQL Server for purposes of creating a
+/// Materialize Source, see [`SqlServerSource`] which wraps this type.
+///
+/// [`SqlServerSource`]: crate::sources::SqlServerSource
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct SqlServerConnectionDetails<C: ConnectionAccess = InlinedConnection> {
+    /// The hostname of the server.
+    pub host: String,
+    /// The port of the server.
+    pub port: u16,
+    /// Database we should connect to.
+    pub database: String,
+    /// The username to authenticate as.
+    pub user: StringOrSecret,
+    /// Password used for authentication.
+    pub password: CatalogItemId,
+    /// A tunnel through which to route traffic.
+    pub tunnel: Tunnel<C>,
+    /// Level of encryption to use for the connection.
+    pub encryption: mz_sql_server_util::config::EncryptionLevel,
+}
+
+impl<C: ConnectionAccess> SqlServerConnectionDetails<C> {
+    fn validate_by_default(&self) -> bool {
+        true
+    }
+}
+
+impl SqlServerConnectionDetails<InlinedConnection> {
+    /// Attempts to open a connection to the upstream SQL Server instance.
+    async fn validate(
+        &self,
+        _id: CatalogItemId,
+        storage_configuration: &StorageConfiguration,
+    ) -> Result<(), anyhow::Error> {
+        let config = self
+            .resolve_config(
+                &storage_configuration.connection_context.secrets_reader,
+                storage_configuration,
+                InTask::No,
+            )
+            .await?;
+        tracing::debug!(?config, "Validating SQL Server connection");
+
+        // Just connecting is enough to validate, no need to send any queries.
+        let (_client, _conn) = mz_sql_server_util::Client::connect(config).await?;
+
+        Ok(())
+    }
+
+    /// Resolve all of the connection details (e.g. read from the [`SecretsReader`])
+    /// so the returned [`Config`] can be used to open a connection with the
+    /// upstream system.
+    ///
+    /// The provided [`InTask`] argument determines whether any I/O is run in an
+    /// [`mz_ore::task`] (i.e. a different thread) or directly in the returned
+    /// future. The main goal here is to prevent running I/O in timely threads.
+    ///
+    /// [`Config`]: mz_sql_server_util::Config
+    pub async fn resolve_config(
+        &self,
+        secrets_reader: &Arc<dyn mz_secrets::SecretsReader>,
+        storage_configuration: &StorageConfiguration,
+        in_task: InTask,
+    ) -> Result<mz_sql_server_util::Config, anyhow::Error> {
+        let dyncfg = storage_configuration.config_set();
+        let mut inner_config = tiberius::Config::new();
+
+        // Setup default connection params.
+        inner_config.host(&self.host);
+        inner_config.port(self.port);
+        inner_config.database(self.database.clone());
+        // TODO(sql_server1): Figure out the right settings for encryption.
+        // inner_config.encryption(self.encryption.into());
+        inner_config.application_name("materialize");
+
+        // Read our auth settings from
+        let user = self
+            .user
+            .get_string(in_task, secrets_reader)
+            .await
+            .context("username")?;
+        let password = secrets_reader
+            .read_string_in_task_if(in_task, self.password)
+            .await
+            .context("password")?;
+        // TODO(sql_server3): Support other methods of authentication besides
+        // username and password.
+        inner_config.authentication(tiberius::AuthMethod::sql_server(user, password));
+
+        // TODO(sql_server2): Fork the tiberius library and add support for
+        // specifying a cert bundle from a binary blob.
+        //
+        // See: <https://github.com/prisma/tiberius/pull/290>
+        inner_config.trust_cert();
+
+        // Prevent users from probing our internal network ports by trying to
+        // connect to localhost, or another non-external IP.
+        let enfoce_external_addresses = ENFORCE_EXTERNAL_ADDRESSES.get(dyncfg);
+
+        let tunnel = match &self.tunnel {
+            Tunnel::Direct => mz_sql_server_util::config::TunnelConfig::Direct,
+            Tunnel::Ssh(SshTunnel {
+                connection_id,
+                connection: ssh_connection,
+            }) => {
+                let secret = secrets_reader
+                    .read_in_task_if(in_task, *connection_id)
+                    .await
+                    .context("ssh secret")?;
+                let key_pair = SshKeyPair::from_bytes(&secret).context("ssh key pair")?;
+                // Ensure any SSH-bastion host we connect to is resolved to an
+                // external address.
+                let addresses = resolve_address(&ssh_connection.host, enfoce_external_addresses)
+                    .await
+                    .context("ssh tunnel")?;
+
+                let config = SshTunnelConfig {
+                    host: addresses.into_iter().map(|a| a.to_string()).collect(),
+                    port: ssh_connection.port,
+                    user: ssh_connection.user.clone(),
+                    key_pair,
+                };
+                mz_sql_server_util::config::TunnelConfig::Ssh {
+                    config,
+                    manager: storage_configuration
+                        .connection_context
+                        .ssh_tunnel_manager
+                        .clone(),
+                    timeout: storage_configuration.parameters.ssh_timeout_config.clone(),
+                    // TODO(sql_server1): These should not be here.
+                    host: self.host.clone(),
+                    port: self.port,
+                }
+            }
+            Tunnel::AwsPrivatelink(private_link_connection) => {
+                assert_none!(private_link_connection.port);
+                mz_sql_server_util::config::TunnelConfig::AwsPrivatelink {
+                    connection_id: private_link_connection.connection_id,
+                }
+            }
+        };
+
+        Ok(mz_sql_server_util::Config::new(
+            inner_config,
+            tunnel,
+            in_task,
+        ))
+    }
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<SqlServerConnectionDetails, R>
+    for SqlServerConnectionDetails<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> SqlServerConnectionDetails {
+        let SqlServerConnectionDetails {
+            host,
+            port,
+            database,
+            user,
+            password,
+            tunnel,
+            encryption,
+        } = self;
+
+        SqlServerConnectionDetails {
+            host,
+            port,
+            database,
+            user,
+            password,
+            tunnel: tunnel.into_inline_connection(&r),
+            encryption,
+        }
+    }
+}
+
+impl<C: ConnectionAccess> AlterCompatible for SqlServerConnectionDetails<C> {
+    fn alter_compatible(
+        &self,
+        id: mz_repr::GlobalId,
+        other: &Self,
+    ) -> Result<(), crate::controller::AlterError> {
+        let SqlServerConnectionDetails {
+            tunnel,
+            // TODO(sql_server1): Figure out how these variables are allowed to change.
+            host: _,
+            port: _,
+            database: _,
+            user: _,
+            password: _,
+            encryption: _,
+        } = self;
+
+        let compatibility_checks = [(tunnel.alter_compatible(id, &other.tunnel).is_ok(), "tunnel")];
+
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "SqlServerConnectionDetails incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(AlterError { id });
+            }
+        }
+        Ok(())
+    }
+}
+
+impl RustType<ProtoSqlServerConnectionDetails> for SqlServerConnectionDetails {
+    fn into_proto(&self) -> ProtoSqlServerConnectionDetails {
+        ProtoSqlServerConnectionDetails {
+            host: self.host.into_proto(),
+            port: self.port.into_proto(),
+            database: self.database.into_proto(),
+            user: Some(self.user.into_proto()),
+            password: Some(self.password.into_proto()),
+            tunnel: Some(self.tunnel.into_proto()),
+            encryption: self.encryption.into_proto().into(),
+        }
+    }
+
+    fn from_proto(proto: ProtoSqlServerConnectionDetails) -> Result<Self, TryFromProtoError> {
+        Ok(SqlServerConnectionDetails {
+            host: proto.host,
+            port: proto.port.into_rust()?,
+            database: proto.database.into_rust()?,
+            user: proto
+                .user
+                .into_rust_if_some("ProtoSqlServerConnectionDetails::user")?,
+            password: proto
+                .password
+                .into_rust_if_some("ProtoSqlServerConnectionDetails::password")?,
+            tunnel: proto
+                .tunnel
+                .into_rust_if_some("ProtoSqlServerConnectionDetails::tunnel")?,
+            encryption: ProtoSqlServerEncryptionLevel::try_from(proto.encryption)?.into_rust()?,
+        })
+    }
+}
+
+impl RustType<ProtoSqlServerEncryptionLevel> for mz_sql_server_util::config::EncryptionLevel {
+    fn into_proto(&self) -> ProtoSqlServerEncryptionLevel {
+        match self {
+            Self::None => ProtoSqlServerEncryptionLevel::SqlServerNone,
+            Self::Login => ProtoSqlServerEncryptionLevel::SqlServerLogin,
+            Self::Preferred => ProtoSqlServerEncryptionLevel::SqlServerPreferred,
+            Self::Required => ProtoSqlServerEncryptionLevel::SqlServerRequired,
+        }
+    }
+
+    fn from_proto(proto: ProtoSqlServerEncryptionLevel) -> Result<Self, TryFromProtoError> {
+        Ok(match proto {
+            ProtoSqlServerEncryptionLevel::SqlServerNone => {
+                mz_sql_server_util::config::EncryptionLevel::None
+            }
+            ProtoSqlServerEncryptionLevel::SqlServerLogin => {
+                mz_sql_server_util::config::EncryptionLevel::Login
+            }
+            ProtoSqlServerEncryptionLevel::SqlServerPreferred => {
+                mz_sql_server_util::config::EncryptionLevel::Preferred
+            }
+            ProtoSqlServerEncryptionLevel::SqlServerRequired => {
+                mz_sql_server_util::config::EncryptionLevel::Required
+            }
+        })
     }
 }
 

@@ -40,6 +40,7 @@ fn main() {
         .extern_path(".mz_repr.antichain", "::mz_repr::antichain")
         .extern_path(".mz_repr.global_id", "::mz_repr::global_id")
         .extern_path(".mz_repr.catalog_item_id", "::mz_repr::catalog_item_id")
+        .extern_path(".mz_sql_server_util", "::mz_sql_server_util")
         .extern_path(".mz_orchestrator", "::mz_orchestrator")
         .extern_path(".mz_pgcopy.copy", "::mz_pgcopy")
         .extern_path(".mz_postgres_util.tunnel", "::mz_postgres_util::tunnel")
@@ -70,6 +71,7 @@ fn main() {
                 "storage-types/src/sources/kafka.proto",
                 "storage-types/src/sources/mysql.proto",
                 "storage-types/src/sources/postgres.proto",
+                "storage-types/src/sources/sql_server.proto",
                 "storage-types/src/sources/load_generator.proto",
                 "storage-types/src/time_dependence.proto",
             ],

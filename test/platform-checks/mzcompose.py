@@ -39,6 +39,7 @@ from materialize.mzcompose.services.postgres import (
     Postgres,
 )
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive as TestdriveService
@@ -96,6 +97,7 @@ SERVICES = [
     Mc(),
     Postgres(),
     MySql(),
+    SqlServer(),
     Zookeeper(),
     Kafka(
         auto_create_topics=True,

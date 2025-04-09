@@ -7,26 +7,38 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# Setup SQL Server state.
 
-> CREATE SECRET sql_server_pass AS 'sql_server123?'
+$ sql-server-connect name=sql-server
+server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=${arg.default-sql-server-user};Password=${arg.default-sql-server-password}
 
-! CREATE CONNECTION ms TO SQL SERVER (
-    HOST sql_server1,
-    PORT 1433,
-    DATABASE quickstart,
-    USER s1,
-    PASSWORD SECRET sql_server_pass
-  )
-contains:Creating a SQL SERVER source is not available
+$ sql-server-execute name=sql-server
+DROP DATABASE IF EXISTS test;
+CREATE DATABASE test;
+USE test;
+
+
+# Exercise Materialize.
+
+> CREATE SECRET sql_server_pass AS '${arg.default-sql-server-password}'
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_sql_server_source = true;
 
-! CREATE CONNECTION ms TO SQL SERVER (
-    HOST sql_server1,
+> CREATE CONNECTION sql_server_test_connection TO SQL SERVER (
+    HOST 'sql-server',
     PORT 1433,
-    DATABASE quickstart,
-    USER s1,
-    PASSWORD SECRET sql_server_pass
-  )
-contains:SQL SERVER not yet supported
+    DATABASE test,
+    USER '${arg.default-sql-server-user}',
+    PASSWORD = SECRET sql_server_pass
+  );
+
+> VALIDATE CONNECTION sql_server_test_connection;
+
+> SELECT name, type from mz_connections WHERE id LIKE 'u%';
+name                         type
+---------------------------------------
+sql_server_test_connection   sql-server
+
+> SHOW CONNECTIONS;
+sql_server_test_connection sql-server ""

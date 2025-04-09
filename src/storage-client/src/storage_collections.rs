@@ -2597,8 +2597,9 @@ where
                 Ingestion(ingestion) => {
                     use GenericSourceConnection::*;
                     match ingestion.desc.connection {
-                        // Kafka, Postgres, MySql sources follow wall clock.
-                        Kafka(_) | Postgres(_) | MySql(_) => {
+                        // Kafka, Postgres, MySql, and SQL Server sources all
+                        // follow wall clock.
+                        Kafka(_) | Postgres(_) | MySql(_) | SqlServer(_) => {
                             result = Some(TimeDependence::default())
                         }
                         // Load generators not further specified.

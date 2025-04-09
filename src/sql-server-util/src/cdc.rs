@@ -319,6 +319,11 @@ pub enum CdcError {
 pub struct Lsn([u8; 10]);
 
 impl Lsn {
+    /// Interpret the provided bytes as an [`Lsn`].
+    pub fn interpret(bytes: [u8; 10]) -> Self {
+        Lsn(bytes)
+    }
+
     /// Return the underlying byte slice for this [`Lsn`].
     pub fn as_bytes(&self) -> &[u8] {
         self.0.as_slice()
