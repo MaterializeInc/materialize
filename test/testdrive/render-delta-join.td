@@ -34,13 +34,13 @@ count
 ? EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS VERBOSE TEXT FOR SELECT * FROM delta_join;
 Explained Query:
   Project (#0, #1, #0, #3)
-    Filter (#0) IS NOT NULL
-      Join on=(#0 = #2) type=differential
+    Filter (#0{f1}) IS NOT NULL
+      Join on=(#0{f1} = #2{f1}) type=differential
         implementation
-          %0:t1[#0]KA » %1:t2[#0]KA
-        ArrangeBy keys=[[#0]]
+          %0:t1[#0{f1}]KA » %1:t2[#0{f1}]KA
+        ArrangeBy keys=[[#0{f1}]]
           ReadIndex on=t1 i1=[differential join]
-        ArrangeBy keys=[[#0]]
+        ArrangeBy keys=[[#0{f1}]]
           ReadIndex on=t2 i2=[differential join]
 
 Used Indexes:
@@ -48,11 +48,6 @@ Used Indexes:
   - i2 (differential join)
 
 Target cluster: quickstart
-
-> SELECT count(*) AS count FROM delta_join;
-count
-----
-1
 
 # The purpose of this test is to check that only the first delta path sees updates
 # at start-up time. According to the plan above, only t1's path will see them, so

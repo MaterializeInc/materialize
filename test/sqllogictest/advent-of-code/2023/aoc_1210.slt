@@ -374,19 +374,19 @@ Explained Query:
   With
     cte l0 =
       Project (#0, #2, #3) // { arity: 3 }
-        Map (substr(#1, #2, 1)) // { arity: 4 }
-          FlatMap generate_series(1, char_length(#1), 1) // { arity: 3 }
+        Map (substr(#1{line}, #2{j}, 1)) // { arity: 4 }
+          FlatMap generate_series(1, char_length(#1{line}), 1) // { arity: 3 }
             Project (#1, #2) // { arity: 2 }
-              Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1))) // { arity: 3 }
+              Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1{i}))) // { arity: 3 }
                 FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#0{input}) array_length 1), 1) // { arity: 2 }
                   ReadStorage materialize.public.input // { arity: 1 }
     cte l1 =
       Project (#0..=#2, #4, #5) // { arity: 5 }
-        Map ((#2 = "-"), case when #3 then #0 else case when (#2 = "|") then (#0 - 1) else case when (#2 = "F") then (#0 + 1) else case when (#2 = "L") then (#0 - 1) else case when (#2 = "J") then #0 else case when (#2 = "7") then #0 else null end end end end end end, case when #3 then (#1 - 1) else case when (#2 = "|") then #1 else case when (#2 = "F") then #1 else case when (#2 = "L") then #1 else case when (#2 = "J") then (#1 - 1) else case when (#2 = "7") then (#1 - 1) else null end end end end end end) // { arity: 6 }
+        Map ((#2{symb} = "-"), case when #3 then #0{row_no} else case when (#2{symb} = "|") then (#0{row_no} - 1) else case when (#2{symb} = "F") then (#0{row_no} + 1) else case when (#2{symb} = "L") then (#0{row_no} - 1) else case when (#2{symb} = "J") then #0{row_no} else case when (#2{symb} = "7") then #0{row_no} else null end end end end end end, case when #3 then (#1{col_no} - 1) else case when (#2{symb} = "|") then #1{col_no} else case when (#2{symb} = "F") then #1{col_no} else case when (#2{symb} = "L") then #1{col_no} else case when (#2{symb} = "J") then (#1{col_no} - 1) else case when (#2{symb} = "7") then (#1{col_no} - 1) else null end end end end end end) // { arity: 6 }
           Get l0 // { arity: 3 }
     cte l2 =
       Project (#0..=#2, #4, #5) // { arity: 5 }
-        Map ((#2 = "-"), case when #3 then #0 else case when (#2 = "|") then (#0 + 1) else case when (#2 = "F") then #0 else case when (#2 = "L") then #0 else case when (#2 = "J") then (#0 - 1) else case when (#2 = "7") then (#0 + 1) else null end end end end end end, case when #3 then (#1 + 1) else case when (#2 = "|") then #1 else case when (#2 = "F") then (#1 + 1) else case when (#2 = "L") then (#1 + 1) else case when (#2 = "J") then #1 else case when (#2 = "7") then #1 else null end end end end end end) // { arity: 6 }
+        Map ((#2{symb} = "-"), case when #3 then #0{row_no} else case when (#2{symb} = "|") then (#0{row_no} + 1) else case when (#2{symb} = "F") then #0{row_no} else case when (#2{symb} = "L") then #0{row_no} else case when (#2{symb} = "J") then (#0{row_no} - 1) else case when (#2{symb} = "7") then (#0{row_no} + 1) else null end end end end end end, case when #3 then (#1{col_no} + 1) else case when (#2{symb} = "|") then #1{col_no} else case when (#2{symb} = "F") then (#1{col_no} + 1) else case when (#2{symb} = "L") then (#1{col_no} + 1) else case when (#2{symb} = "J") then #1{col_no} else case when (#2{symb} = "7") then #1{col_no} else null end end end end end end) // { arity: 6 }
           Get l0 // { arity: 3 }
     cte l3 =
       Project (#0..=#3) // { arity: 4 }
@@ -394,39 +394,39 @@ Explained Query:
           Reduce group_by=[#0..=#3] aggregates=[count(*)] // { arity: 5 }
             Union // { arity: 4 }
               Project (#0, #1, #3, #4) // { arity: 4 }
-                Filter (#2 != ".") AND (#2 != "S") // { arity: 5 }
+                Filter (#2{symb} != ".") AND (#2{symb} != "S") // { arity: 5 }
                   Get l1 // { arity: 5 }
               Project (#0, #1, #3, #4) // { arity: 4 }
-                Filter (#2 != ".") AND (#2 != "S") // { arity: 5 }
+                Filter (#2{symb} != ".") AND (#2{symb} != "S") // { arity: 5 }
                   Get l2 // { arity: 5 }
               Project (#3, #4, #0, #1) // { arity: 4 }
-                Filter (#2 != ".") AND (#2 != "S") AND (#3) IS NOT NULL AND (#4) IS NOT NULL // { arity: 5 }
+                Filter (#2{symb} != ".") AND (#2{symb} != "S") AND (#3) IS NOT NULL AND (#4) IS NOT NULL // { arity: 5 }
                   Get l1 // { arity: 5 }
               Project (#3, #4, #0, #1) // { arity: 4 }
-                Filter (#2 != ".") AND (#2 != "S") AND (#3) IS NOT NULL AND (#4) IS NOT NULL // { arity: 5 }
+                Filter (#2{symb} != ".") AND (#2{symb} != "S") AND (#3) IS NOT NULL AND (#4) IS NOT NULL // { arity: 5 }
                   Get l2 // { arity: 5 }
               Project (#0, #1, #3, #1) // { arity: 4 }
-                Filter (#2 = "S") // { arity: 4 }
-                  Map ((#0 + 1)) // { arity: 4 }
+                Filter (#2{symb} = "S") // { arity: 4 }
+                  Map ((#0{row_no} + 1)) // { arity: 4 }
                     Get l0 // { arity: 3 }
               Project (#0, #1, #0, #3) // { arity: 4 }
-                Filter (#2 = "S") // { arity: 4 }
-                  Map ((#1 + 1)) // { arity: 4 }
+                Filter (#2{symb} = "S") // { arity: 4 }
+                  Map ((#1{col_no} + 1)) // { arity: 4 }
                     Get l0 // { arity: 3 }
               Project (#0, #1, #3, #1) // { arity: 4 }
-                Filter (#2 = "S") // { arity: 4 }
-                  Map ((#0 - 1)) // { arity: 4 }
+                Filter (#2{symb} = "S") // { arity: 4 }
+                  Map ((#0{row_no} - 1)) // { arity: 4 }
                     Get l0 // { arity: 3 }
               Project (#0, #1, #0, #3) // { arity: 4 }
-                Filter (#2 = "S") // { arity: 4 }
-                  Map ((#1 - 1)) // { arity: 4 }
+                Filter (#2{symb} = "S") // { arity: 4 }
+                  Map ((#1{col_no} - 1)) // { arity: 4 }
                     Get l0 // { arity: 3 }
     cte l4 =
       Project (#0, #1) // { arity: 2 }
-        Filter (#2 = "S") // { arity: 3 }
+        Filter (#2{symb} = "S") // { arity: 3 }
           Get l0 // { arity: 3 }
     cte l5 =
-      ArrangeBy keys=[[#0, #1]] // { arity: 4 }
+      ArrangeBy keys=[[#0{r1}, #1{c1}]] // { arity: 4 }
         Get l3 // { arity: 4 }
   Return // { arity: 2 }
     With Mutually Recursive
@@ -435,11 +435,11 @@ Explained Query:
           Union // { arity: 2 }
             Get l4 // { arity: 2 }
             Project (#4, #5) // { arity: 2 }
-              Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 6 }
+              Join on=(#0{r} = #2{r1} AND #1{c} = #3{c1}) type=differential // { arity: 6 }
                 implementation
-                  %0:l6[#0, #1]UKK » %1:l5[#0, #1]KK
-                ArrangeBy keys=[[#0, #1]] // { arity: 2 }
-                  Filter (#0) IS NOT NULL AND (#1) IS NOT NULL // { arity: 2 }
+                  %0:l6[#0{r}, #1{c}]UKK » %1:l5[#0{r1}, #1{c1}]KK
+                ArrangeBy keys=[[#0{r}, #1{c}]] // { arity: 2 }
+                  Filter (#0{r}) IS NOT NULL AND (#1{c}) IS NOT NULL // { arity: 2 }
                     Get l6 // { arity: 2 }
                 Get l5 // { arity: 4 }
       cte l7 =
@@ -450,54 +450,54 @@ Explained Query:
         Distinct project=[#0..=#2] // { arity: 3 }
           Union // { arity: 3 }
             Project (#0, #1, #4) // { arity: 3 }
-              Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 5 }
+              Join on=(#0{r} = #2{row_no} AND #1{c} = #3{col_no}) type=differential // { arity: 5 }
                 implementation
-                  %0:l6[#0, #1]UKK » %1:l0[#0, #1]KKf
-                ArrangeBy keys=[[#0, #1]] // { arity: 2 }
-                  Filter (#0) IS NOT NULL AND (#1) IS NOT NULL // { arity: 2 }
+                  %0:l6[#0{r}, #1{c}]UKK » %1:l0[#0{row_no}, #1{col_no}]KKf
+                ArrangeBy keys=[[#0{r}, #1{c}]] // { arity: 2 }
+                  Filter (#0{r}) IS NOT NULL AND (#1{c}) IS NOT NULL // { arity: 2 }
                     Get l6 // { arity: 2 }
-                ArrangeBy keys=[[#0, #1]] // { arity: 3 }
-                  Filter (#2 != "S") // { arity: 3 }
+                ArrangeBy keys=[[#0{row_no}, #1{col_no}]] // { arity: 3 }
+                  Filter (#2{symb} != "S") // { arity: 3 }
                     Get l0 // { arity: 3 }
             Project (#0, #1, #8) // { arity: 3 }
-              Map (case when ((#0 = #0) AND (#0 = (#6 + 1)) AND (#1 = #7) AND (#1 = (#1 + 1))) then "J" else case when ((#0 = #0) AND (#0 = #6) AND (#1 = (#1 + 1)) AND (#1 = (#7 - 1))) then "-" else case when ((#0 = #0) AND (#0 = (#6 - 1)) AND (#1 = #7) AND (#1 = (#1 + 1))) then "7" else case when ((#0 = #6) AND (#0 = (#0 + 1)) AND (#1 = #1) AND (#1 = (#7 - 1))) then "L" else case when ((#0 = (#0 + 1)) AND (#0 = (#6 - 1)) AND (#1 = #1) AND (#1 = #7)) then "|" else case when ((#0 = #0) AND (#0 = #6) AND (#1 = (#1 - 1)) AND (#1 = (#7 - 1))) then "F" else "???" end end end end end end) // { arity: 9 }
-                Join on=(#0 = #2 = #4 AND #1 = #3 = #5) type=delta // { arity: 8 }
+              Map (case when ((#0{row_no} = #0{r1}) AND (#0{row_no} = (#6{r2} + 1)) AND (#1{col_no} = #7{c2}) AND (#1{col_no} = (#1{c1} + 1))) then "J" else case when ((#0{row_no} = #0{r1}) AND (#0{row_no} = #6{r2}) AND (#1{col_no} = (#1{c1} + 1)) AND (#1{col_no} = (#7{c2} - 1))) then "-" else case when ((#0{row_no} = #0{r1}) AND (#0{row_no} = (#6{r2} - 1)) AND (#1{col_no} = #7{c2}) AND (#1{col_no} = (#1{c1} + 1))) then "7" else case when ((#0{row_no} = #6{r2}) AND (#0{row_no} = (#0{r1} + 1)) AND (#1{col_no} = #1{c1}) AND (#1{col_no} = (#7{c2} - 1))) then "L" else case when ((#0{row_no} = (#0{r1} + 1)) AND (#0{row_no} = (#6{r2} - 1)) AND (#1{col_no} = #1{c1}) AND (#1{col_no} = #7{c2})) then "|" else case when ((#0{row_no} = #0{r1}) AND (#0{row_no} = #6{r2}) AND (#1{col_no} = (#1{c1} - 1)) AND (#1{col_no} = (#7{c2} - 1))) then "F" else "???" end end end end end end) // { arity: 9 }
+                Join on=(#0{row_no} = #2{r1} = #4{r1} AND #1{col_no} = #3{c1} = #5{c1}) type=delta // { arity: 8 }
                   implementation
-                    %0:l4 » %1:l3[#0, #1]KK » %2:l5[#0, #1]KK
-                    %1:l3 » %0:l4[#0, #1]KKef » %2:l5[#0, #1]KK
-                    %2:l5 » %0:l4[#0, #1]KKef » %1:l3[#0, #1]KK
-                  ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+                    %0:l4 » %1:l3[#0{r1}, #1{c1}]KK » %2:l5[#0{r1}, #1{c1}]KK
+                    %1:l3 » %0:l4[#0{row_no}, #1{col_no}]KKef » %2:l5[#0{r1}, #1{c1}]KK
+                    %2:l5 » %0:l4[#0{row_no}, #1{col_no}]KKef » %1:l3[#0{r1}, #1{c1}]KK
+                  ArrangeBy keys=[[#0{row_no}, #1{col_no}]] // { arity: 2 }
                     Get l4 // { arity: 2 }
-                  ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+                  ArrangeBy keys=[[#0{r1}, #1{c1}]] // { arity: 2 }
                     Project (#0, #1) // { arity: 2 }
                       Get l3 // { arity: 4 }
                   Get l5 // { arity: 4 }
       cte l9 =
-        ArrangeBy keys=[[#0, #1]] // { arity: 3 }
+        ArrangeBy keys=[[#0{r}, #1{c}]] // { arity: 3 }
           Get l17 // { arity: 3 }
       cte l10 =
         Project (#0..=#2, #5) // { arity: 4 }
-          Join on=(#0 = #3 AND #1 = #4) type=differential // { arity: 6 }
+          Join on=(#0{r} = #3{r} AND #1{c} = #4{c}) type=differential // { arity: 6 }
             implementation
-              %0:l9[#0, #1]KK » %1:l8[#0, #1]KK
+              %0:l9[#0{r}, #1{c}]KK » %1:l8[#0{r}, #1{c}]KK
             Get l9 // { arity: 3 }
-            ArrangeBy keys=[[#0, #1]] // { arity: 3 }
+            ArrangeBy keys=[[#0{r}, #1{c}]] // { arity: 3 }
               Get l8 // { arity: 3 }
       cte l11 =
         Project (#2, #3, #6, #7) // { arity: 4 }
-          Map ((#0 + 1), (#1 + 1)) // { arity: 8 }
-            Join on=(#0 = #4 AND #1 = #5) type=differential // { arity: 6 }
+          Map ((#0{r} + 1), (#1{c} + 1)) // { arity: 8 }
+            Join on=(#0{r} = #4{row_no} AND #1{c} = #5{col_no}) type=differential // { arity: 6 }
               implementation
-                %0[#0, #1]KK » %1:l0[#0, #1]KK
-              ArrangeBy keys=[[#0, #1]] // { arity: 4 }
+                %0[#0{r}, #1{c}]KK » %1:l0[#0{row_no}, #1{col_no}]KK
+              ArrangeBy keys=[[#0{r}, #1{c}]] // { arity: 4 }
                 Union // { arity: 4 }
                   Map (null) // { arity: 4 }
                     Union // { arity: 3 }
                       Negate // { arity: 3 }
                         Project (#0..=#2) // { arity: 3 }
-                          Join on=(#0 = #3 AND #1 = #4) type=differential // { arity: 5 }
+                          Join on=(#0{r} = #3 AND #1{c} = #4) type=differential // { arity: 5 }
                             implementation
-                              %1[#0, #1]UKKA » %0:l9[#0, #1]KK
+                              %1[#0, #1]UKKA » %0:l9[#0{r}, #1{c}]KK
                             Get l9 // { arity: 3 }
                             ArrangeBy keys=[[#0, #1]] // { arity: 2 }
                               Distinct project=[#0, #1] // { arity: 2 }
@@ -505,7 +505,7 @@ Explained Query:
                                   Get l10 // { arity: 4 }
                       Get l17 // { arity: 3 }
                   Get l10 // { arity: 4 }
-              ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+              ArrangeBy keys=[[#0{row_no}, #1{col_no}]] // { arity: 2 }
                 Project (#0, #1) // { arity: 2 }
                   Get l0 // { arity: 3 }
       cte l12 =
@@ -513,7 +513,7 @@ Explained Query:
           Project (#1) // { arity: 1 }
             Get l11 // { arity: 4 }
       cte l13 =
-        Reduce group_by=[#0] aggregates=[any((#0 = #1))] // { arity: 2 }
+        Reduce group_by=[#0] aggregates=[any((#0{symb} = #1{right_col0_0}))] // { arity: 2 }
           FlatMap wrap1("J", "-", "|", "F") // { arity: 2 }
             Get l12 // { arity: 1 }
       cte l14 =
@@ -547,11 +547,11 @@ Explained Query:
         Distinct project=[#0..=#2] // { arity: 3 }
           Union // { arity: 3 }
             Project (#0, #1, #3) // { arity: 3 }
-              Filter ((#0 = 1) OR (#1 = 1)) // { arity: 4 }
+              Filter ((#0{row_no} = 1) OR (#1{col_no} = 1)) // { arity: 4 }
                 Map (false) // { arity: 4 }
                   Get l0 // { arity: 3 }
             Project (#2, #3, #6) // { arity: 3 }
-              Map (case when #5{any} then NOT(#0) else #0 end) // { arity: 7 }
+              Map (case when #5{any} then NOT(#0{encl}) else #0{encl} end) // { arity: 7 }
                 Join on=(#1 = #4) type=differential // { arity: 6 }
                   implementation
                     %0:l11[#1]K » %1[#0]K
@@ -577,20 +577,20 @@ Explained Query:
       With
         cte l18 =
           Project (#0, #1) // { arity: 2 }
-            Filter (#2 = true) // { arity: 3 }
+            Filter (#2{encl} = true) // { arity: 3 }
               Get l17 // { arity: 3 }
         cte l19 =
           Reduce aggregates=[count(*)] // { arity: 1 }
             Union // { arity: 0 }
               Negate // { arity: 0 }
                 Project () // { arity: 0 }
-                  Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 4 }
+                  Join on=(#0 = #2{right_col0_2} AND #1 = #3{right_col1_3}) type=differential // { arity: 4 }
                     implementation
                       %1[#0, #1]UKKA » %0:l18[#0, #1]UKKef
                     ArrangeBy keys=[[#0, #1]] // { arity: 2 }
                       Get l18 // { arity: 2 }
-                    ArrangeBy keys=[[#0, #1]] // { arity: 2 }
-                      Distinct project=[#0, #1] // { arity: 2 }
+                    ArrangeBy keys=[[#0{right_col0_2}, #1{right_col1_3}]] // { arity: 2 }
+                      Distinct project=[#0{right_col0_2}, #1{right_col1_3}] // { arity: 2 }
                         Project (#0, #1) // { arity: 2 }
                           Get l8 // { arity: 3 }
               Project () // { arity: 0 }

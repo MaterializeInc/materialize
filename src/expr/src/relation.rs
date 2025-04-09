@@ -682,7 +682,7 @@ impl MirRelationExpr {
                     let col_inds = equivalence
                         .iter()
                         .filter_map(|expr| match expr {
-                            MirScalarExpr::Column(col) => Some(*col),
+                            MirScalarExpr::Column(col, _name) => Some(*col),
                             _ => None,
                         })
                         .collect_vec();
@@ -838,7 +838,7 @@ impl MirRelationExpr {
                                     None
                                 }
                             }
-                            MirScalarExpr::Column(c) => Some(*c),
+                            MirScalarExpr::Column(c, _name) => Some(*c),
                             _ => None,
                         }
                     }
@@ -905,12 +905,12 @@ impl MirRelationExpr {
                             expr2,
                         } = expr
                         {
-                            if let MirScalarExpr::Column(c) = &**expr1 {
+                            if let MirScalarExpr::Column(c, _name) = &**expr1 {
                                 if expr2.is_literal_ok() {
                                     cols_equal_to_literal.insert(c);
                                 }
                             }
-                            if let MirScalarExpr::Column(c) = &**expr2 {
+                            if let MirScalarExpr::Column(c, _name) = &**expr2 {
                                 if expr1.is_literal_ok() {
                                     cols_equal_to_literal.insert(c);
                                 }
@@ -1024,7 +1024,7 @@ impl MirRelationExpr {
                 for key_set in input_keys.next().unwrap() {
                     if key_set
                         .iter()
-                        .all(|k| group_key.contains(&MirScalarExpr::Column(*k)))
+                        .all(|k| group_key.contains(&MirScalarExpr::column(*k)))
                     {
                         result.push(
                             key_set
@@ -1032,7 +1032,7 @@ impl MirRelationExpr {
                                 .map(|i| {
                                     group_key
                                         .iter()
-                                        .position(|k| k == &MirScalarExpr::Column(*i))
+                                        .position(|k| k == &MirScalarExpr::column(*i))
                                         .unwrap()
                                 })
                                 .collect::<Vec<_>>(),
@@ -1485,7 +1485,7 @@ impl MirRelationExpr {
             .into_iter()
             .map(|vs| {
                 vs.into_iter()
-                    .map(|(r, c)| input_mapper.map_expr_to_global(MirScalarExpr::Column(c), r))
+                    .map(|(r, c)| input_mapper.map_expr_to_global(MirScalarExpr::column(c), r))
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
@@ -1521,7 +1521,7 @@ impl MirRelationExpr {
     ) -> Self {
         MirRelationExpr::Reduce {
             input: Box::new(self),
-            group_key: group_key.into_iter().map(MirScalarExpr::Column).collect(),
+            group_key: group_key.into_iter().map(MirScalarExpr::column).collect(),
             aggregates,
             monotonic: false,
             expected_group_size,
@@ -2149,7 +2149,7 @@ impl MirRelationExpr {
             use MirScalarExpr::*;
             if let Err(_) = self.try_visit_scalars::<_, RecursionLimitError>(&mut |scalar| {
                 result |= match scalar {
-                    Column(_) | Literal(_, _) | CallUnmaterializable(_) | If { .. } => false,
+                    Column(_, _) | Literal(_, _) | CallUnmaterializable(_) | If { .. } => false,
                     // Function calls are considered expensive
                     CallUnary { .. } | CallBinary { .. } | CallVariadic { .. } => true,
                 };
@@ -2376,7 +2376,7 @@ pub fn non_nullable_columns(predicates: &[MirScalarExpr]) -> BTreeSet<usize> {
                 expr,
             } = &**expr
             {
-                if let MirScalarExpr::Column(c) = &**expr {
+                if let MirScalarExpr::Column(c, _name) = &**expr {
                     nonnull_required_columns.insert(*c);
                 }
             }
