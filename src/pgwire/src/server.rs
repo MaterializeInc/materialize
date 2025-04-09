@@ -59,6 +59,8 @@ pub struct Config {
     pub active_connection_counter: ConnectionCounter,
     /// Helm chart version
     pub helm_chart_version: Option<String>,
+    /// Whether to allow reserved users (ie: mz_system) on the external port.
+    pub allow_reserved_roles_on_external_ports: bool,
 }
 
 /// A server that communicates with clients via the pgwire protocol.
@@ -71,6 +73,7 @@ pub struct Server {
     active_connection_counter: ConnectionCounter,
     helm_chart_version: Option<String>,
     use_self_hosted_auth: bool,
+    allow_reserved_roles_on_external_ports: bool,
 }
 
 #[async_trait]
@@ -97,6 +100,7 @@ impl Server {
             internal: config.internal,
             active_connection_counter: config.active_connection_counter,
             helm_chart_version: config.helm_chart_version,
+            allow_reserved_roles_on_external_ports: config.allow_reserved_roles_on_external_ports,
         }
     }
 
@@ -113,6 +117,7 @@ impl Server {
         let metrics = self.metrics.clone();
         let active_connection_counter = self.active_connection_counter.clone();
         let helm_chart_version = self.helm_chart_version.clone();
+        let allow_reserved_roles_on_external_ports = self.allow_reserved_roles_on_external_ports;
 
         // TODO(guswynn): remove this redundant_closure_call
         #[allow(clippy::redundant_closure_call)]
@@ -185,6 +190,7 @@ impl Server {
                                     internal,
                                     active_connection_counter,
                                     helm_chart_version,
+                                    allow_reserved_roles_on_external_ports,
                                 })
                                 .await?;
                                 conn.flush().await?;

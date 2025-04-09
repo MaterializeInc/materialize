@@ -1101,6 +1101,9 @@ impl<'a> RunnerInner<'a> {
             tls_reload_certs: mz_server_core::cert_reload_never_reload(),
             helm_chart_version: None,
             license_key: ValidatedLicenseKey::for_tests(),
+            external_login_password_mz_system: None,
+            enable_internal_ports: true,
+            allow_reserved_roles_on_external_ports: false,
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned

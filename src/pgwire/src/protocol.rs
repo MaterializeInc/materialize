@@ -106,6 +106,8 @@ pub struct RunParams<'a, A> {
     pub active_connection_counter: ConnectionCounter,
     /// Helm chart version
     pub helm_chart_version: Option<String>,
+    /// Whether to allow reserved users (ie: mz_system) on the external port.
+    pub allow_reserved_roles_on_external_ports: bool,
 }
 
 /// Runs a pgwire connection to completion.
@@ -131,6 +133,7 @@ pub async fn run<'a, A>(
         internal,
         active_connection_counter,
         helm_chart_version,
+        allow_reserved_roles_on_external_ports,
     }: RunParams<'a, A>,
 ) -> Result<(), io::Error>
 where
@@ -157,7 +160,9 @@ where
         }
     } else {
         // The external server cannot be used to connect to any system users.
-        if mz_adapter::catalog::is_reserved_role_name(user.as_str()) {
+        if !allow_reserved_roles_on_external_ports
+            && mz_adapter::catalog::is_reserved_role_name(user.as_str())
+        {
             let msg = format!("unauthorized login to user '{user}'");
             return conn
                 .send(ErrorResponse::fatal(SqlState::INSUFFICIENT_PRIVILEGE, msg))

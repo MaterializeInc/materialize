@@ -592,6 +592,8 @@ impl Listeners {
                 tls_reload_certs,
                 helm_chart_version: None,
                 license_key: ValidatedLicenseKey::for_tests(),
+                enable_internal_ports: true,
+                external_login_password_mz_system: None,
             })
             .await?;
 

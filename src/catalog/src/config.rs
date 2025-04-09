@@ -13,6 +13,7 @@ use anyhow::bail;
 use bytesize::ByteSize;
 use ipnet::IpNet;
 use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
+use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_controller::clusters::ReplicaAllocation;
@@ -96,6 +97,7 @@ pub struct StateConfig {
     pub enable_0dt_deployment: bool,
     /// Helm chart version
     pub helm_chart_version: Option<String>,
+    pub external_login_password_mz_system: Option<Password>,
 }
 
 #[derive(Debug)]

@@ -5589,6 +5589,7 @@ dependencies = [
  "mz-adapter-types",
  "mz-alloc",
  "mz-alloc-default",
+ "mz-auth",
  "mz-aws-secrets-controller",
  "mz-build-info",
  "mz-catalog",
