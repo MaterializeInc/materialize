@@ -10,8 +10,6 @@
 use crate::durable::upgrade::MigrationAction;
 use crate::durable::upgrade::{objects_v73 as v73, objects_v74 as v74};
 
-/// Adds the introspection source index global ID variant. Included in this change is shortening
-/// cluster IDs from 64 bits to 32 bits.
 pub fn upgrade(
     _snapshot: Vec<v73::StateUpdateKind>,
 ) -> Vec<MigrationAction<v73::StateUpdateKind, v74::StateUpdateKind>> {
