@@ -1258,7 +1258,7 @@ Trace {
                         attributes: Some(
                             RoleAttributes {
                                 inherit: true,
-                                superuser: false,
+                                superuser: None,
                             },
                         ),
                         membership: Some(
@@ -1297,7 +1297,7 @@ Trace {
                         attributes: Some(
                             RoleAttributes {
                                 inherit: true,
-                                superuser: false,
+                                superuser: None,
                             },
                         ),
                         membership: Some(
@@ -1336,7 +1336,7 @@ Trace {
                         attributes: Some(
                             RoleAttributes {
                                 inherit: true,
-                                superuser: false,
+                                superuser: None,
                             },
                         ),
                         membership: Some(
@@ -1375,7 +1375,7 @@ Trace {
                         attributes: Some(
                             RoleAttributes {
                                 inherit: true,
-                                superuser: false,
+                                superuser: None,
                             },
                         ),
                         membership: Some(
@@ -1414,7 +1414,7 @@ Trace {
                         attributes: Some(
                             RoleAttributes {
                                 inherit: true,
-                                superuser: false,
+                                superuser: None,
                             },
                         ),
                         membership: Some(
@@ -1453,7 +1453,7 @@ Trace {
                         attributes: Some(
                             RoleAttributes {
                                 inherit: true,
-                                superuser: false,
+                                superuser: None,
                             },
                         ),
                         membership: Some(
