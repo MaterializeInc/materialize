@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::iter;
 
-use anyhow::{bail, Result};
+use anyhow::bail;
 use itertools::Itertools;
 use quote::ToTokens;
 
@@ -147,7 +147,8 @@ pub enum Type {
 /// variant, so we know how to visit it. See [`Type`] for details.
 // database-issues#9092: anyhow should not be used.
 #[allow(clippy::disallowed_macros)]
-pub(crate) fn analyze(syn_items: &[syn::DeriveInput]) -> Result<Ir> {
+#[allow(clippy::disallowed_types)]
+pub(crate) fn analyze(syn_items: &[syn::DeriveInput]) -> anyhow::Result<Ir> {
     let mut items = BTreeMap::new();
     for syn_item in syn_items {
         let name = syn_item.ident.to_string();
@@ -200,7 +201,8 @@ pub(crate) fn analyze(syn_items: &[syn::DeriveInput]) -> Result<Ir> {
 
 // database-issues#9092: anyhow should not be used.
 #[allow(clippy::disallowed_macros)]
-fn validate_fields<'a, I>(items: &BTreeMap<String, Item>, fields: I) -> Result<()>
+#[allow(clippy::disallowed_types)]
+fn validate_fields<'a, I>(items: &BTreeMap<String, Item>, fields: I) -> anyhow::Result<()>
 where
     I: IntoIterator<Item = &'a Field>,
 {
@@ -218,7 +220,9 @@ where
     Ok(())
 }
 
-fn analyze_fields(fields: &syn::Fields) -> Result<Vec<Field>> {
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_types)]
+fn analyze_fields(fields: &syn::Fields) -> anyhow::Result<Vec<Field>> {
     fields
         .iter()
         .map(|f| {
@@ -232,7 +236,8 @@ fn analyze_fields(fields: &syn::Fields) -> Result<Vec<Field>> {
 
 // database-issues#9092: anyhow should not be used.
 #[allow(clippy::disallowed_macros)]
-fn analyze_generics(generics: &syn::Generics) -> Result<Vec<ItemGeneric>> {
+#[allow(clippy::disallowed_types)]
+fn analyze_generics(generics: &syn::Generics) -> anyhow::Result<Vec<ItemGeneric>> {
     let mut out = vec![];
     for g in generics.params.iter() {
         match g {
@@ -259,7 +264,8 @@ fn analyze_generics(generics: &syn::Generics) -> Result<Vec<ItemGeneric>> {
 
 // database-issues#9092: anyhow should not be used.
 #[allow(clippy::disallowed_macros)]
-fn analyze_generic_bounds<'a, I>(bounds: I) -> Result<Vec<String>>
+#[allow(clippy::disallowed_types)]
+fn analyze_generic_bounds<'a, I>(bounds: I) -> anyhow::Result<Vec<String>>
 where
     I: IntoIterator<Item = &'a syn::TypeParamBound>,
 {
@@ -281,7 +287,8 @@ where
 
 // database-issues#9092: anyhow should not be used.
 #[allow(clippy::disallowed_macros)]
-fn analyze_type(ty: &syn::Type) -> Result<Type> {
+#[allow(clippy::disallowed_types)]
+fn analyze_type(ty: &syn::Type) -> anyhow::Result<Type> {
     match ty {
         syn::Type::Path(syn::TypePath { qself: None, path }) => match path.segments.len() {
             2 => {

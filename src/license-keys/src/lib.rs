@@ -81,6 +81,7 @@ impl Default for ValidatedLicenseKey {
 
 // database-issues#9092: anyhow should not be used.
 #[allow(clippy::disallowed_macros)]
+#[allow(clippy::disallowed_types)]
 pub fn validate(license_key: &str, environment_id: &str) -> anyhow::Result<ValidatedLicenseKey> {
     let mut err = anyhow!("no public key found");
     for pubkey in PUBLIC_KEYS {
@@ -97,6 +98,8 @@ pub fn validate(license_key: &str, environment_id: &str) -> anyhow::Result<Valid
     Err(err)
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_types)]
 fn validate_with_pubkey(
     license_key: &str,
     pubkey_pem: &str,
@@ -115,6 +118,8 @@ fn validate_with_pubkey(
         Err(e) => e,
     };
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     let previous_versions: Vec<Box<dyn Fn() -> anyhow::Result<ValidatedLicenseKey>>> = vec![
         // add to this if/when we add new versions
         // for example,
@@ -148,6 +153,7 @@ struct Payload {
 
 // database-issues#9092: anyhow should not be used.
 #[allow(clippy::disallowed_macros)]
+#[allow(clippy::disallowed_types)]
 fn validate_with_pubkey_v1(
     license_key: &str,
     pubkey_pem: &str,

@@ -26,6 +26,7 @@ use tokio::time::{self, Duration};
 /// In particular, jemalloc memory profiling must be off.
 // database-issues#9092: anyhow should not be used.
 #[allow(clippy::disallowed_macros)]
+#[allow(clippy::disallowed_types)]
 pub async unsafe fn prof_time(
     total_time: Duration,
     sample_freq: u32,

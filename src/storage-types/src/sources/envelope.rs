@@ -204,6 +204,7 @@ impl RustType<ProtoUpsertStyle> for UpsertStyle {
 /// has a column with no name.
 // database-issues#9092: anyhow should not be used.
 #[allow(clippy::disallowed_macros)]
+#[allow(clippy::disallowed_types)]
 fn match_key_indices(
     key_desc: &RelationDesc,
     value_desc: &RelationDesc,
@@ -265,6 +266,7 @@ impl UnplannedSourceEnvelope {
     /// value relation desc
     // database-issues#9092: anyhow should not be used.
     #[allow(clippy::disallowed_macros)]
+    #[allow(clippy::disallowed_types)]
     pub fn desc(
         self,
         key_desc: Option<RelationDesc>,

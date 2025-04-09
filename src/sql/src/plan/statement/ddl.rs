@@ -3230,6 +3230,8 @@ pub fn plan_create_sink(
 /// logic is reused by both CREATE SINK and ALTER SINK planning. It is the responsibility of the
 /// callers (plan_create_sink and plan_alter_sink) to check for name collisions if this is
 /// important.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_types)]
 fn plan_sink(
     scx: &StatementContext,
     mut stmt: CreateSinkStatement<Aug>,

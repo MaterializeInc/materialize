@@ -405,6 +405,7 @@ impl BlobTraceUpdates {
     /// [`Codec`] data, re-encoding structured data if necessary.
     // database-issues#9092: anyhow should not be used.
     #[allow(clippy::disallowed_macros)]
+    #[allow(clippy::disallowed_types)]
     pub fn concat<K: Codec, V: Codec>(
         mut updates: Vec<BlobTraceUpdates>,
         key_schema: &K::Schema,

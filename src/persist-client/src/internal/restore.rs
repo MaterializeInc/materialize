@@ -25,6 +25,7 @@ use tracing::info;
 /// Returns a list of blobs that were not possible to restore.
 // database-issues#9092: anyhow should not be used.
 #[allow(clippy::disallowed_macros)]
+#[allow(clippy::disallowed_types)]
 pub(crate) async fn restore_blob(
     versions: &StateVersions,
     blob: &dyn Blob,

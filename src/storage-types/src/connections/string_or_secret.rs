@@ -31,6 +31,8 @@ pub enum StringOrSecret {
 
 impl StringOrSecret {
     /// Gets the value as a string, reading the secret if necessary.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     pub async fn get_string(
         &self,
         in_task: InTask,

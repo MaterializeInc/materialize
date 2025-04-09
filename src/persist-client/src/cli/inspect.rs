@@ -486,6 +486,8 @@ pub async fn blob_counts(blob_uri: &SensitiveUrl) -> Result<impl serde::Serializ
 }
 
 /// Rummages through S3 to find the latest rollup for each shard, then calculates summary stats.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_types)]
 pub async fn shard_stats(blob_uri: &SensitiveUrl) -> anyhow::Result<()> {
     let cfg = PersistConfig::new_default_configs(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));

@@ -2352,6 +2352,8 @@ pub mod datadriven {
         Ok(format!("{} ok\n", datadriven.machine.seqno()))
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     pub(crate) async fn finalize(
         datadriven: &mut MachineState,
         _args: DirectiveArgs<'_>,
@@ -2361,6 +2363,8 @@ pub mod datadriven {
         Ok(format!("{} ok\n", datadriven.machine.seqno()))
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     pub(crate) fn is_finalized(
         datadriven: &MachineState,
         _args: DirectiveArgs<'_>,

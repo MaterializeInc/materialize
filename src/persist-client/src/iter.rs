@@ -197,6 +197,7 @@ type FetchResult<T> = Result<EncodedPart<T>, HollowRun<T>>;
 impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
     // database-issues#9092: anyhow should not be used.
     #[allow(clippy::disallowed_macros)]
+    #[allow(clippy::disallowed_types)]
     async fn fetch(
         self,
         shard_id: ShardId,
@@ -257,6 +258,8 @@ impl PartIndices {
 }
 
 #[derive(Debug)]
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_types)]
 enum ConsolidationPart<T, D> {
     Queued {
         data: FetchData<T>,
@@ -517,6 +520,7 @@ where
     /// Returns success when we've successfully fetched enough parts to be able to make progress.
     // database-issues#9092: anyhow should not be used.
     #[allow(clippy::disallowed_macros)]
+    #[allow(clippy::disallowed_types)]
     async fn unblock_progress(&mut self) -> anyhow::Result<()> {
         if self.runs.is_empty() {
             return Ok(());
@@ -634,6 +638,8 @@ where
     /// consolidated chunk of output. If this method returns `None`, that all the data has been
     /// exhausted and the full consolidated dataset has been returned.
     #[allow(unused)]
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     pub(crate) async fn next(
         &mut self,
     ) -> anyhow::Result<Option<impl Iterator<Item = (SortKV<'_>, T, D)>>> {
@@ -673,6 +679,8 @@ where
     /// Wait until data is available, then return an iterator over the next
     /// consolidated chunk of output. If this method returns `None`, that all the data has been
     /// exhausted and the full consolidated dataset has been returned.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     pub(crate) async fn next_chunk(
         &mut self,
         max_len: usize,

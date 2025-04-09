@@ -534,6 +534,8 @@ where
     }
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_types)]
 async fn make_machine(
     cfg: &PersistConfig,
     consensus: Arc<dyn Consensus>,
@@ -557,6 +559,7 @@ async fn make_machine(
 
 // database-issues#9092: anyhow should not be used.
 #[allow(clippy::disallowed_macros)]
+#[allow(clippy::disallowed_types)]
 async fn make_typed_machine<K, V, T, D>(
     cfg: &PersistConfig,
     consensus: Arc<dyn Consensus>,
@@ -639,6 +642,8 @@ where
     Ok(machine)
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_types)]
 async fn force_gc(
     cfg: PersistConfig,
     metrics_registry: &MetricsRegistry,

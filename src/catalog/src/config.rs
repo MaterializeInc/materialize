@@ -110,6 +110,7 @@ pub struct ClusterReplicaSizeMap(pub BTreeMap<String, ReplicaAllocation>);
 impl ClusterReplicaSizeMap {
     // database-issues#9092: anyhow should not be used.
     #[allow(clippy::disallowed_macros)]
+    #[allow(clippy::disallowed_types)]
     pub fn parse_from_str(s: &str, credit_consumption_from_memory: bool) -> anyhow::Result<Self> {
         let mut cluster_replica_sizes: BTreeMap<String, ReplicaAllocation> =
             serde_json::from_str(s)?;

@@ -120,6 +120,8 @@ impl StateArgs {
     }
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_types)]
 pub(super) async fn make_consensus(
     cfg: &PersistConfig,
     consensus_uri: &SensitiveUrl,
@@ -142,6 +144,8 @@ pub(super) async fn make_consensus(
     Ok(consensus)
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_types)]
 pub(super) async fn make_blob(
     cfg: &PersistConfig,
     blob_uri: &SensitiveUrl,

@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use anyhow::{bail, Result};
+use anyhow::bail;
 use byteorder::{BigEndian, ByteOrder};
 
 /// Extracts the schema_id placed in front of the serialized message by the confluent stack
@@ -16,7 +16,8 @@ use byteorder::{BigEndian, ByteOrder};
 /// This function returns the schema_id and a subslice of the rest of the buffer
 // database-issues#9092: anyhow should not be used.
 #[allow(clippy::disallowed_macros)]
-fn extract_schema_id<'buf>(buf: &'buf [u8], protocol: &str) -> Result<(i32, &'buf [u8])> {
+#[allow(clippy::disallowed_types)]
+fn extract_schema_id<'buf>(buf: &'buf [u8], protocol: &str) -> anyhow::Result<(i32, &'buf [u8])> {
     // The first byte is a magic byte (0) that indicates the Confluent
     // serialization format version, and the next four bytes are a big
     // endian 32-bit schema ID.
@@ -50,13 +51,16 @@ fn extract_schema_id<'buf>(buf: &'buf [u8], protocol: &str) -> Result<(i32, &'bu
     Ok((schema_id, &buf[expected_len..]))
 }
 
-pub fn extract_avro_header(buf: &[u8]) -> Result<(i32, &[u8])> {
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_types)]
+pub fn extract_avro_header(buf: &[u8]) -> anyhow::Result<(i32, &[u8])> {
     extract_schema_id(buf, "avro")
 }
 
 // database-issues#9092: anyhow should not be used.
 #[allow(clippy::disallowed_macros)]
-pub fn extract_protobuf_header(buf: &[u8]) -> Result<(i32, &[u8])> {
+#[allow(clippy::disallowed_types)]
+pub fn extract_protobuf_header(buf: &[u8]) -> anyhow::Result<(i32, &[u8])> {
     let (schema_id, buf) = extract_schema_id(buf, "protobuf")?;
 
     match buf.get(0) {

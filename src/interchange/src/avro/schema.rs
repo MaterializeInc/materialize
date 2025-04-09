@@ -55,6 +55,8 @@ use tracing::warn;
 
 use crate::avro::is_null;
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_types)]
 pub fn parse_schema(schema: &str) -> anyhow::Result<Schema> {
     let schema = serde_json::from_str(schema)?;
     Ok(Schema::parse(&schema)?)
@@ -72,6 +74,8 @@ pub fn schema_to_relationdesc(schema: Schema) -> Result<RelationDesc, anyhow::Er
 
 /// Convert an Avro schema to a series of columns and names, flattening the top-level record,
 /// if the top node is indeed a record.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_types)]
 fn validate_schema_1(schema: SchemaNode) -> anyhow::Result<Vec<(ColumnName, ColumnType)>> {
     let mut columns = vec![];
     let mut seen_avro_nodes = Default::default();
@@ -96,6 +100,7 @@ fn validate_schema_1(schema: SchemaNode) -> anyhow::Result<Vec<(ColumnName, Colu
 /// See module comments for details.
 // database-issues#9092: anyhow should not be used.
 #[allow(clippy::disallowed_macros)]
+#[allow(clippy::disallowed_types)]
 fn get_union_columns<'a>(
     seen_avro_nodes: &mut BTreeSet<usize>,
     schema: SchemaNode<'a>,
@@ -166,6 +171,8 @@ fn get_union_columns<'a>(
     Ok(columns)
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_types)]
 fn get_named_columns<'a>(
     seen_avro_nodes: &mut BTreeSet<usize>,
     schema: SchemaNode<'a>,
@@ -189,6 +196,7 @@ fn get_named_columns<'a>(
 /// (because it is an Essential Union in the sense described in the module docs).
 // database-issues#9092: anyhow should not be used.
 #[allow(clippy::disallowed_macros)]
+#[allow(clippy::disallowed_types)]
 fn validate_schema_2(
     seen_avro_nodes: &mut BTreeSet<usize>,
     schema: SchemaNode,
@@ -306,6 +314,8 @@ pub struct ConfluentAvroResolver {
 }
 
 impl ConfluentAvroResolver {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     pub fn new(
         reader_schema: &str,
         ccsr_client: Option<mz_ccsr::Client>,
@@ -320,6 +330,8 @@ impl ConfluentAvroResolver {
         })
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     pub async fn resolve<'a, 'b>(
         &'a mut self,
         mut bytes: &'b [u8],
@@ -404,6 +416,8 @@ impl SchemaCache {
     /// that this schema cache was initialized with, returns the schema directly.
     /// If not, performs schema resolution on the reader and writer and
     /// returns the result.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     async fn get(
         &mut self,
         id: i32,

@@ -693,6 +693,8 @@ where
     ///     b1 runs=[C]                           output=[A, C, D, B, E, F]
     ///     b2 runs=[D, E, F]
     /// ```
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     async fn order_runs<'a>(
         req: &'a CompactReq<T>,
         target_order: RunOrder,

@@ -30,6 +30,7 @@ const PROTO_HASHES: &str = "protos/hashes.json";
 
 // database-issues#9092: anyhow should not be used.
 #[allow(clippy::disallowed_macros)]
+#[allow(clippy::disallowed_types)]
 fn main() -> anyhow::Result<()> {
     println!("cargo:rerun-if-changed={PROTO_DIRECTORY}");
 

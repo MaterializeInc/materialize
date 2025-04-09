@@ -629,6 +629,7 @@ struct KafkaHeader {
 /// Updates are sent in ascending timestamp order.
 // database-issues#9092: anyhow should not be used.
 #[allow(clippy::disallowed_macros)]
+#[allow(clippy::disallowed_types)]
 fn sink_collection<G: Scope<Timestamp = Timestamp>>(
     name: String,
     input: &Collection<G, KafkaMessage, Diff>,
@@ -1081,6 +1082,7 @@ async fn determine_sink_progress(
 
 // database-issues#9092: anyhow should not be used.
 #[allow(clippy::disallowed_macros)]
+#[allow(clippy::disallowed_types)]
 fn progress_search<C: ConsumerContext + 'static>(
     progress_client_read_committed: &BaseConsumer<C>,
     progress_record_fetch_timeout: Duration,

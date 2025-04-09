@@ -34,8 +34,6 @@
 
 use std::path::Path;
 
-use anyhow::Result;
-
 mod gen;
 mod parse;
 
@@ -59,7 +57,9 @@ pub use gen::{gen_fold, gen_visit, gen_visit_mut};
 /// Rust containers, like [`Option`] and [`Vec`]. It does, however, endeavor to
 /// produce understandable error messages when it encounters a type it does not
 /// know how to handle.
-pub fn load<P>(path: P) -> Result<ir::Ir>
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_types)]
+pub fn load<P>(path: P) -> anyhow::Result<ir::Ir>
 where
     P: AsRef<Path>,
 {

@@ -114,6 +114,7 @@ struct PgConn {
 impl PgConn {
     // database-issues#9092: anyhow should not be used.
     #[allow(clippy::disallowed_macros)]
+    #[allow(clippy::disallowed_types)]
     fn new<'a>(
         addr: &str,
         user: &'a str,
@@ -143,14 +144,17 @@ impl PgConn {
 
     // database-issues#9092: anyhow should not be used.
     #[allow(clippy::disallowed_macros)]
+    #[allow(clippy::disallowed_types)]
     fn send<F: FnOnce(&mut BytesMut)>(&mut self, f: F) -> anyhow::Result<()> {
         self.send_buf.clear();
         f(&mut self.send_buf);
         self.stream.write_all(&self.send_buf)?;
         Ok(())
     }
+
     // database-issues#9092: anyhow should not be used.
     #[allow(clippy::disallowed_macros)]
+    #[allow(clippy::disallowed_types)]
     fn until(
         &mut self,
         until: Vec<&str>,
@@ -331,6 +335,7 @@ impl PgConn {
     /// An error is returned if a new message is not received within the timeout.
     // database-issues#9092: anyhow should not be used.
     #[allow(clippy::disallowed_macros)]
+    #[allow(clippy::disallowed_types)]
     pub fn recv(&mut self) -> anyhow::Result<(char, Message)> {
         let mut buf = [0; 1024];
         let until = Instant::now();
@@ -369,6 +374,8 @@ pub struct PgTest {
 }
 
 impl PgTest {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     pub fn new(addr: String, user: String, timeout: Duration) -> anyhow::Result<Self> {
         let verbose = std::env::var_os("PGTEST_VERBOSE").is_some();
         let conn = PgConn::new(&addr, &user, timeout.clone(), verbose, vec![])?;
@@ -386,6 +393,8 @@ impl PgTest {
 
     // Returns the named connection. If this is the first time that connection is
     // seen, sends options.
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     fn get_conn(
         &mut self,
         name: Option<String>,
@@ -405,6 +414,8 @@ impl PgTest {
         Ok(self.conns.get_mut(&name).expect("must exist"))
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     pub fn send<F: Fn(&mut BytesMut)>(
         &mut self,
         conn: Option<String>,
@@ -415,6 +426,8 @@ impl PgTest {
         conn.send(f)
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     pub fn until(
         &mut self,
         conn: Option<String>,

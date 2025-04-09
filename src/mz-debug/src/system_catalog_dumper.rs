@@ -18,7 +18,7 @@
 //! connection are run in serial anyways. Running the queries in serial also makes
 //! cleaning up / aborting queries much easier.
 
-use anyhow::{Context as _, Result};
+use anyhow::Context as _;
 use chrono::{DateTime, Utc};
 use csv_async::AsyncSerializer;
 use futures::TryStreamExt;
@@ -481,14 +481,17 @@ pub struct SystemCatalogDumper<'n> {
     pg_client: Arc<Mutex<PgClient>>,
     pg_tls: MakeTlsConnector,
     cluster_replicas: Vec<ClusterReplica>,
-    _pg_conn_handle: JoinHandle<Result<(), tokio_postgres::Error>>,
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
+    _pg_conn_handle: JoinHandle<anyhow::Result<(), tokio_postgres::Error>>,
 }
 
 // database-issues#9092: anyhow should not be used.
 #[allow(clippy::disallowed_macros)]
+#[allow(clippy::disallowed_types)]
 pub async fn create_postgres_connection(
     connection_string: &str,
-) -> Result<
+) -> anyhow::Result<
     (
         PgClient,
         Connection<Socket, TlsStream<Socket>>,
@@ -515,12 +518,14 @@ pub async fn create_postgres_connection(
     Ok((pg_client, pg_conn, tls))
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_types)]
 pub async fn write_copy_stream(
     transaction: &Transaction<'_>,
     copy_query: &str,
     file: &mut tokio::fs::File,
     relation_name: &str,
-) -> Result<(), anyhow::Error> {
+) -> anyhow::Result<(), anyhow::Error> {
     let copy_stream = transaction
         .copy_out(copy_query)
         .await
@@ -535,12 +540,14 @@ pub async fn write_copy_stream(
     Ok::<(), anyhow::Error>(())
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_types)]
 pub async fn copy_relation_to_csv(
     transaction: &Transaction<'_>,
     file_path_name: PathBuf,
     column_names: &Vec<String>,
     relation: &Relation,
-) -> Result<(), anyhow::Error> {
+) -> anyhow::Result<(), anyhow::Error> {
     let mut file = tokio::fs::File::create(&file_path_name).await?;
 
     match relation.category {
@@ -591,10 +598,12 @@ pub async fn copy_relation_to_csv(
     Ok::<(), anyhow::Error>(())
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_types)]
 pub async fn query_column_names(
     pg_client: &PgClient,
     relation: &Relation,
-) -> Result<Vec<String>, anyhow::Error> {
+) -> anyhow::Result<Vec<String>, anyhow::Error> {
     let relation_name = relation.name;
     // We query the column names to write the header row of the CSV file.
     let mut column_names = pg_client
@@ -619,13 +628,15 @@ pub async fn query_column_names(
     Ok(column_names)
 }
 
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_types)]
 pub async fn query_relation(
     transaction: &Transaction<'_>,
     start_time: DateTime<Utc>,
     relation: &Relation,
     column_names: &Vec<String>,
     cluster_replica: Option<&ClusterReplica>,
-) -> Result<(), anyhow::Error> {
+) -> anyhow::Result<(), anyhow::Error> {
     let relation_name = relation.name;
     let relation_category = &relation.category;
 
@@ -687,7 +698,12 @@ pub async fn query_relation(
 }
 
 impl<'n> SystemCatalogDumper<'n> {
-    pub async fn new(context: &'n Context, connection_string: &str) -> Result<Self, anyhow::Error> {
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
+    pub async fn new(
+        context: &'n Context,
+        connection_string: &str,
+    ) -> anyhow::Result<Self, anyhow::Error> {
         let (pg_client, pg_conn, pg_tls) = create_postgres_connection(connection_string).await?;
 
         info!("Connected to PostgreSQL server at {}...", connection_string);
@@ -734,11 +750,13 @@ impl<'n> SystemCatalogDumper<'n> {
         })
     }
 
+    // database-issues#9092: anyhow should not be used.
+    #[allow(clippy::disallowed_types)]
     pub async fn dump_relation(
         &self,
         relation: &Relation,
         cluster_replica: Option<&ClusterReplica>,
-    ) -> Result<(), anyhow::Error> {
+    ) -> anyhow::Result<(), anyhow::Error> {
         info!(
             "Copying relation {}{}{}",
             relation.name,

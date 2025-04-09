@@ -308,6 +308,8 @@ pub async fn run_verify_data(
 }
 
 /// Expect and split out `n` whitespace-delimited headers before the main contents of the 'expect' row.
+// database-issues#9092: anyhow should not be used.
+#[allow(clippy::disallowed_types)]
 fn split_headers(input: &str, n_headers: usize) -> anyhow::Result<(Vec<String>, &str)> {
     let whitespace = Regex::new("\\s+").expect("building known-valid regex");
     let mut parts = whitespace.splitn(input, n_headers + 1);
