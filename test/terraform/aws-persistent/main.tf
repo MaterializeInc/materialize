@@ -18,12 +18,7 @@ resource "random_password" "db_password" {
 
 variable "operator_version" {
   type    = string
-  default = "v25.2.0-beta.1"
-}
-
-variable "orchestratord_version" {
-  type    = string
-  default = "v0.130.3"
+  default = "v25.2.0-beta.1.tgz"
 }
 
 module "materialize_infrastructure" {
@@ -36,21 +31,6 @@ module "materialize_infrastructure" {
   use_local_chart = true
   helm_chart = "materialize-operator-v25.2.0-beta.1.tgz"
   operator_version = var.operator_version
-  orchestratord_version = var.orchestratord_version
-
-  # TODO: Doesn't seem to work yet
-  # helm_values = {
-  #   operator = {
-  #     clusters = {
-  #       defaultReplicationFactor = {
-  #           system = 1
-  #           probe = 1
-  #           support = 1
-  #           analytics = 1
-  #       }
-  #     }
-  #   }
-  # }
 
   # VPC Configuration
   vpc_cidr             = "10.0.0.0/16"

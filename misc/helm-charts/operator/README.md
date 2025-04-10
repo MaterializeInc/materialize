@@ -143,7 +143,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.features.authentication` | Whether to enable environmentd rbac checks TODO: this is not yet supported in the helm chart | ``false`` |
 | `operator.image.pullPolicy` | Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images | ``"IfNotPresent"`` |
 | `operator.image.repository` | The Docker repository for the operator image | ``"materialize/orchestratord"`` |
-| `operator.image.tag` | The tag/version of the operator image to be used | ``"v0.141.0-dev.0"`` |
+| `operator.image.tag` | The tag/version of the operator image to be used | ``"v0.138.0"`` |
 | `operator.nodeSelector` |  | ``{}`` |
 | `operator.resources.limits` | Resource limits for the operator's CPU and memory | ``{"memory":"512Mi"}`` |
 | `operator.resources.requests` | Resources requested by the operator for CPU and memory | ``{"cpu":"100m","memory":"512Mi"}`` |

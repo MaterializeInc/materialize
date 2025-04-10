@@ -45,11 +45,6 @@ variable "operator_version" {
   default = "v25.2.0-beta.1.tgz"
 }
 
-variable "orchestratord_version" {
-  type    = string
-  default = null
-}
-
 module "materialize_infrastructure" {
   source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=v0.4.2"
 
@@ -69,7 +64,6 @@ module "materialize_infrastructure" {
   use_local_chart = true
   helm_chart = "materialize-operator-v25.2.0-beta.1.tgz"
   operator_version = var.operator_version
-  orchestratord_version = var.orchestratord_version
 
   install_cert_manager = false
   use_self_signed_cluster_issuer = false
