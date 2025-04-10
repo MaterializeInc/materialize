@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-ring = { version = "0.17.14", features = ["std"] }
+aws-lc-rs = "1.13.0"
 base64 = "0.22.1"
 mz-ore = { path = "../ore" }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }

@@ -33,6 +33,8 @@ aws-smithy-runtime-api = { version = "1.7.3", features = ["client", "http-02x", 
 aws-smithy-types = { version = "1.2.13", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "http-body-1-x", "rt-tokio", "test-util"] }
 axum = { version = "0.7.5", features = ["ws"] }
 axum-core = { version = "0.4.5", default-features = false, features = ["tracing"] }
+bit-set = { version = "0.8.0" }
+bit-vec = { version = "0.8.0" }
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
 byteorder = { version = "1.5.0" }
 bytes = { version = "1.10.1", features = ["serde"] }
@@ -104,6 +106,7 @@ postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-fe
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 predicates = { version = "2.1.5", default-features = false, features = ["diff"] }
 proc-macro2 = { version = "1.0.93", features = ["span-locations"] }
+proptest = { version = "1.6.0" }
 prost = { version = "0.13.5", features = ["no-recursion-limit", "prost-derive"] }
 prost-reflect = { version = "0.14.7", default-features = false, features = ["serde"] }
 prost-types = { version = "0.13.5" }
@@ -117,7 +120,6 @@ regex-automata = { version = "0.4.7", default-features = false, features = ["dfa
 regex-syntax = { version = "0.8.3" }
 reqwest-5ef9efb8ec2df382 = { package = "reqwest", version = "0.12.4", default-features = false, features = ["blocking", "charset", "http2", "json", "native-tls-vendored", "stream"] }
 reqwest-a6292c17cd707f01 = { package = "reqwest", version = "0.11.24", features = ["blocking", "json", "multipart", "native-tls-vendored", "stream"] }
-ring = { version = "0.17.14", features = ["std"] }
 schemars = { version = "0.8.22", features = ["uuid1"] }
 scopeguard = { version = "1.2.0" }
 semver = { version = "1.0.26", features = ["serde"] }
@@ -172,6 +174,8 @@ aws-smithy-runtime-api = { version = "1.7.3", features = ["client", "http-02x", 
 aws-smithy-types = { version = "1.2.13", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "http-body-1-x", "rt-tokio", "test-util"] }
 axum = { version = "0.7.5", features = ["ws"] }
 axum-core = { version = "0.4.5", default-features = false, features = ["tracing"] }
+bit-set = { version = "0.8.0" }
+bit-vec = { version = "0.8.0" }
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
 byteorder = { version = "1.5.0" }
 bytes = { version = "1.10.1", features = ["serde"] }
@@ -244,6 +248,7 @@ postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-fe
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 predicates = { version = "2.1.5", default-features = false, features = ["diff"] }
 proc-macro2 = { version = "1.0.93", features = ["span-locations"] }
+proptest = { version = "1.6.0" }
 proptest-derive = { version = "0.5.1", default-features = false, features = ["boxed_union"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit", "prost-derive"] }
 prost-reflect = { version = "0.14.7", default-features = false, features = ["serde"] }
@@ -258,7 +263,6 @@ regex-automata = { version = "0.4.7", default-features = false, features = ["dfa
 regex-syntax = { version = "0.8.3" }
 reqwest-5ef9efb8ec2df382 = { package = "reqwest", version = "0.12.4", default-features = false, features = ["blocking", "charset", "http2", "json", "native-tls-vendored", "stream"] }
 reqwest-a6292c17cd707f01 = { package = "reqwest", version = "0.11.24", features = ["blocking", "json", "multipart", "native-tls-vendored", "stream"] }
-ring = { version = "0.17.14", features = ["std"] }
 schemars = { version = "0.8.22", features = ["uuid1"] }
 scopeguard = { version = "1.2.0" }
 semver = { version = "1.0.26", features = ["serde"] }
@@ -304,6 +308,7 @@ hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-featu
 linux-raw-sys = { version = "0.4.14", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
+ring = { version = "0.17.14", features = ["std"] }
 rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
@@ -313,6 +318,7 @@ hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-featu
 linux-raw-sys = { version = "0.4.14", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
+ring = { version = "0.17.14", features = ["std"] }
 rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
 
 [target.x86_64-apple-darwin.dependencies]
@@ -321,6 +327,7 @@ getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3.1", default
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-features = false, features = ["runtime"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
+ring = { version = "0.17.14", features = ["std"] }
 rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
 security-framework = { version = "2.10.0", features = ["alpn"] }
 
@@ -330,6 +337,7 @@ getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3.1", default
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-features = false, features = ["runtime"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
+ring = { version = "0.17.14", features = ["std"] }
 rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
 security-framework = { version = "2.10.0", features = ["alpn"] }
 

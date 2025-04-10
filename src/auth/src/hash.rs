@@ -13,11 +13,11 @@
 use std::fmt::Display;
 use std::num::NonZeroU32;
 
+use aws_lc_rs::digest::SHA256_OUTPUT_LEN;
+use aws_lc_rs::hmac::{self, HMAC_SHA256, Key};
+use aws_lc_rs::pbkdf2::{self, PBKDF2_HMAC_SHA256 as SHA256};
+use aws_lc_rs::rand::SecureRandom;
 use base64::prelude::*;
-use ring::digest::SHA256_OUTPUT_LEN;
-use ring::hmac::{self, HMAC_SHA256, Key};
-use ring::pbkdf2::{self, PBKDF2_HMAC_SHA256 as SHA256};
-use ring::rand::SecureRandom;
 
 use crate::password::Password;
 
@@ -58,7 +58,9 @@ pub enum VerifyError {
 /// and a random salt.
 pub fn hash_password(password: &Password) -> PasswordHash {
     let mut salt = [0u8; DEFAULT_SALT_SIZE];
-    ring::rand::SystemRandom::new().fill(&mut salt).unwrap();
+    aws_lc_rs::rand::SystemRandom::new()
+        .fill(&mut salt)
+        .unwrap();
 
     let hash = hash_password_inner(
         &HashOpts {
