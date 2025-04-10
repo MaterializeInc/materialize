@@ -21,6 +21,7 @@ use derivative::Derivative;
 use futures::{Stream, StreamExt};
 use itertools::Itertools;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
+use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
 use mz_compute_types::ComputeInstanceId;
 use mz_ore::channel::OneshotReceiverExt;
@@ -154,12 +155,12 @@ impl Client {
     pub async fn authenticate(
         &self,
         user: &String,
-        password: &String,
+        password: &Password,
     ) -> Result<AuthResponse, AdapterError> {
         let (tx, rx) = oneshot::channel();
-        self.send(Command::AuthCheck {
+        self.send(Command::AuthenticatePassword {
             role_name: user.to_string(),
-            password: Some(password.to_string()),
+            password: Some(password.clone()),
             tx,
         });
         let response = rx.await.expect("sender dropped")?;
@@ -891,7 +892,7 @@ impl SessionClient {
                 Command::Execute { .. } => typ = Some("execute"),
                 Command::GetWebhook { .. } => typ = Some("webhook"),
                 Command::Startup { .. }
-                | Command::AuthCheck { .. }
+                | Command::AuthenticatePassword { .. }
                 | Command::CatalogSnapshot { .. }
                 | Command::Commit { .. }
                 | Command::CancelRequest { .. }

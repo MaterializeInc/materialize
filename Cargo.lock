@@ -4869,6 +4869,7 @@ dependencies = [
  "base64 0.22.1",
  "mz-ore",
  "ring",
+ "static_assertions",
  "workspace-hack",
 ]
 

@@ -14,6 +14,7 @@ ring = { version = "0.17.14", features = ["std"] }
 base64 = "0.22.1"
 mz-ore = { path = "../ore" }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+static_assertions = "1.1"
 
 [features]
 default = ["workspace-hack"]

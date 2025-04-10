@@ -12,6 +12,7 @@
 
 use differential_dataflow::lattice::Lattice;
 use mz_adapter_types::dyncfgs::ALLOW_USER_SESSIONS;
+use mz_auth::password::Password;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
 use mz_sql::session::metadata::SessionMetadata;
 use std::collections::{BTreeMap, BTreeSet};
@@ -110,12 +111,13 @@ impl Coordinator {
                     .await;
                 }
 
-                Command::AuthCheck {
+                Command::AuthenticatePassword {
                     tx,
                     role_name,
                     password,
                 } => {
-                    self.handle_auth_check(tx, role_name, password).await;
+                    self.handle_authenticate_password(tx, role_name, password)
+                        .await;
                 }
 
                 Command::Execute {
@@ -245,11 +247,11 @@ impl Coordinator {
     }
 
     #[mz_ore::instrument(level = "debug")]
-    async fn handle_auth_check(
+    async fn handle_authenticate_password(
         &mut self,
         tx: oneshot::Sender<Result<AuthResponse, AdapterError>>,
         role_name: String,
-        password: Option<String>,
+        password: Option<Password>,
     ) {
         let Some(password) = password else {
             // The user did not provide a password.
@@ -265,7 +267,7 @@ impl Coordinator {
             }
             if let Some(auth) = self.catalog().try_get_role_auth_by_id(&role.id) {
                 if let Some(hash) = &auth.password_hash {
-                    let _ = match mz_auth::hash::scram256_verify(&password, hash) {
+                    let _ = match mz_auth::hash::scram256_verify(&password.to_string(), hash) {
                         Ok(_) => tx.send(Ok(AuthResponse {
                             role_id: role.id,
                             superuser: role.attributes.superuser.unwrap_or(false),

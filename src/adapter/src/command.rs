@@ -16,6 +16,7 @@ use std::sync::Arc;
 use derivative::Derivative;
 use enum_kinds::EnumKind;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
+use mz_auth::password::Password;
 use mz_compute_types::ComputeInstanceId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_no_log;
@@ -66,10 +67,10 @@ pub enum Command {
         notice_tx: mpsc::UnboundedSender<AdapterNotice>,
     },
 
-    AuthCheck {
+    AuthenticatePassword {
         tx: oneshot::Sender<Result<AuthResponse, AdapterError>>,
         role_name: String,
-        password: Option<String>,
+        password: Option<Password>,
     },
 
     Execute {
@@ -146,7 +147,7 @@ impl Command {
             Command::Execute { session, .. } | Command::Commit { session, .. } => Some(session),
             Command::CancelRequest { .. }
             | Command::Startup { .. }
-            | Command::AuthCheck { .. }
+            | Command::AuthenticatePassword { .. }
             | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::GetWebhook { .. }
@@ -164,7 +165,7 @@ impl Command {
             Command::Execute { session, .. } | Command::Commit { session, .. } => Some(session),
             Command::CancelRequest { .. }
             | Command::Startup { .. }
-            | Command::AuthCheck { .. }
+            | Command::AuthenticatePassword { .. }
             | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::GetWebhook { .. }

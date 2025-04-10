@@ -231,7 +231,7 @@ where
                     .await
             }
         };
-        let auth_response = match adapter_client.authenticate(&user, &password).await {
+        let auth_response = match adapter_client.authenticate(&user, &password.into()).await {
             Ok(resp) => resp,
             Err(err) => {
                 warn!(?err, "pgwire connection failed authentication");
