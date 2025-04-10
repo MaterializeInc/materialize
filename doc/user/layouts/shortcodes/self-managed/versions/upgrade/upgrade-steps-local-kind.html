@@ -1,3 +1,8 @@
+{{ $orchestratord_version := site.Data.self_managed.latest_versions.orchestratord_version }}
+{{ $environmentd_version :=
+site.Data.self_managed.latest_versions.environmentd_version }}
+{{ $operator_version := site.Data.self_managed.latest_versions.operator_helm_chart_version }}
+
 1. Open a Terminal window.
 
 1. Go to your Materialize working directory.
@@ -15,9 +20,9 @@
 1. Get the sample configuration files for the new version.
 
    ```shell
-   mz_version=v0.130.8
+   mz_operator_version={{ $orchestratord_version }}
 
-   curl -o upgrade-values.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/tags/$mz_version/misc/helm-charts/operator/values.yaml
+   curl -o upgrade-values.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/tags/$mz_operator_version/misc/helm-charts/operator/values.yaml
    ```
 
    If you have previously modified the `values.yaml` file for your deployment,
@@ -30,7 +35,7 @@
    ```shell
    helm upgrade my-materialize-operator materialize/materialize-operator \
    --namespace=materialize \
-   --version v25.1.7 \
+   --version {{ $operator_version }} \
    -f upgrade-values.yaml \
    --set observability.podMetrics.enabled=true
    ```
@@ -63,7 +68,7 @@
      name: 12345678-1234-1234-1234-123456789012
      namespace: materialize-environment
    spec:
-     environmentdImageRef: materialize/environmentd:v0.130.8 # Update version
+     environmentdImageRef: materialize/environmentd:{{ $environmentd_version }} # Update version
      requestRollout: 22222222-2222-2222-2222-222222222222    # Enter a new UUID
      # forceRollout: 33333333-3333-3333-3333-333333333333    # For forced rollouts
      inPlaceRollout: true                                    # When false,  performs a rolling upgrade rather than in-place
