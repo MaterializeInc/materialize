@@ -940,6 +940,7 @@ Snapshot {
                 RoleAttributes {
                     inherit: true,
                     superuser: None,
+                    login: None,
                 },
             ),
             membership: Some(
@@ -970,6 +971,7 @@ Snapshot {
                 RoleAttributes {
                     inherit: true,
                     superuser: None,
+                    login: None,
                 },
             ),
             membership: Some(
@@ -1000,6 +1002,7 @@ Snapshot {
                 RoleAttributes {
                     inherit: true,
                     superuser: None,
+                    login: None,
                 },
             ),
             membership: Some(
@@ -1030,6 +1033,7 @@ Snapshot {
                 RoleAttributes {
                     inherit: true,
                     superuser: None,
+                    login: None,
                 },
             ),
             membership: Some(
@@ -1060,6 +1064,7 @@ Snapshot {
                 RoleAttributes {
                     inherit: true,
                     superuser: None,
+                    login: None,
                 },
             ),
             membership: Some(
@@ -1090,6 +1095,7 @@ Snapshot {
                 RoleAttributes {
                     inherit: true,
                     superuser: None,
+                    login: None,
                 },
             ),
             membership: Some(
