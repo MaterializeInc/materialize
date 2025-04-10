@@ -370,6 +370,7 @@ impl<'a> Transaction<'a> {
                 }
             }
         }
+
         match self.roles.insert(
             RoleKey { id },
             RoleValue {
@@ -1446,6 +1447,8 @@ impl<'a> Transaction<'a> {
     pub fn update_role(&mut self, id: RoleId, role: Role) -> Result<(), CatalogError> {
         let key = RoleKey { id };
         if self.roles.get(&key).is_some() {
+            let auth_key = RoleAuthKey { role_id: id };
+
             if let Some(ref password) = role.attributes.password {
                 let hash = mz_auth::hash::scram256_hash(password);
                 let value = RoleAuthValue {
@@ -1453,12 +1456,22 @@ impl<'a> Transaction<'a> {
                     updated_at: SYSTEM_TIME(),
                 };
 
-                let auth_key = RoleAuthKey { role_id: id };
                 if self.role_auth.get(&auth_key).is_some() {
-                    self.role_auth.update_by_key(auth_key, value, self.op_id)?;
+                    self.role_auth
+                        .update_by_key(auth_key.clone(), value, self.op_id)?;
                 } else {
-                    self.role_auth.insert(auth_key, value, self.op_id)?;
+                    self.role_auth.insert(auth_key.clone(), value, self.op_id)?;
                 }
+            } else if self.role_auth.get(&auth_key).is_some() {
+                // If the role is being updated to not have a password, we need to
+                // remove the password hash from the role_auth catalog.
+                let value = RoleAuthValue {
+                    password_hash: None,
+                    updated_at: SYSTEM_TIME(),
+                };
+
+                self.role_auth
+                    .update_by_key(auth_key.clone(), value, self.op_id)?;
             }
 
             self.roles

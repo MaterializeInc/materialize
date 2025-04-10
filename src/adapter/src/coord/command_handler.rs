@@ -251,13 +251,18 @@ impl Coordinator {
         role_name: String,
         password: Option<String>,
     ) {
-        if !password.is_some() {
+        let Some(password) = password else {
             // The user did not provide a password.
             let _ = tx.send(Err(AdapterError::AuthenticationError));
             return;
-        }
-        let password = password.expect("a password, we don't support other auth modes for now");
+        };
+
         if let Some(role) = self.catalog().try_get_role_by_name(role_name.as_str()) {
+            if !role.attributes.login.unwrap_or(false) {
+                // The user is not allowed to login.
+                let _ = tx.send(Err(AdapterError::AuthenticationError));
+                return;
+            }
             if let Some(auth) = self.catalog().try_get_role_auth_by_id(&role.id) {
                 if let Some(hash) = &auth.password_hash {
                     let _ = match mz_auth::hash::scram256_verify(&password, hash) {

@@ -485,6 +485,7 @@ message RoleId {
 message RoleAttributes {
   bool inherit = 1;
   optional bool superuser = 2;
+  optional bool login = 3;
 }
 
 message RoleMembership {

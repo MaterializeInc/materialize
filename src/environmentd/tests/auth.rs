@@ -50,7 +50,7 @@ use openssl::error::ErrorStack;
 use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslOptions, SslVerifyMode};
 use postgres::config::SslMode;
 use postgres::error::SqlState;
-use serde::{ser, Deserialize};
+use serde::Deserialize;
 use serde_json::json;
 use tokio::time::sleep;
 use tungstenite::protocol::frame::coding::CloseCode;
@@ -3118,7 +3118,7 @@ async fn test_self_managed_auth() {
 
     let pg_client = server.connect().no_tls().internal().await.unwrap();
     pg_client
-        .execute("CREATE ROLE foo WITH PASSWORD 'bar'", &[])
+        .execute("CREATE ROLE foo WITH LOGIN PASSWORD 'bar'", &[])
         .await
         .unwrap();
 
@@ -3167,7 +3167,7 @@ async fn test_self_managed_auth_superuser() {
 
     let pg_client = server.connect().no_tls().internal().await.unwrap();
     pg_client
-        .execute("CREATE ROLE foo WITH SUPERUSER PASSWORD 'bar'", &[])
+        .execute("CREATE ROLE foo WITH LOGIN SUPERUSER PASSWORD 'bar'", &[])
         .await
         .unwrap();
 
@@ -3216,7 +3216,7 @@ async fn test_self_managed_auth_alter_role() {
 
     let pg_client = server.connect().no_tls().internal().await.unwrap();
     pg_client
-        .execute("CREATE ROLE foo WITH PASSWORD 'bar'", &[])
+        .execute("CREATE ROLE foo WITH LOGIN PASSWORD 'bar'", &[])
         .await
         .unwrap();
 
@@ -3279,5 +3279,55 @@ async fn test_self_managed_auth_alter_role() {
                 .get::<_, bool>(0),
             true
         );
+    }
+
+    pg_client
+        .execute("ALTER ROLE foo WITH SUPERUSER PASSWORD NULL", &[])
+        .await
+        .unwrap();
+
+    {
+        assert_err!(server.connect().no_tls().user("foo").password("baz").await);
+    }
+
+    pg_client
+        .execute("ALTER ROLE foo WITH SUPERUSER PASSWORD 'baz'", &[])
+        .await
+        .unwrap();
+
+    {
+        let external_client = server
+            .connect()
+            .no_tls()
+            .user("foo")
+            .password("baz")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            external_client
+                .query_one("SELECT current_user", &[])
+                .await
+                .unwrap()
+                .get::<_, String>(0),
+            "foo"
+        );
+
+        assert_eq!(
+            external_client
+                .query_one("SELECT mz_is_superuser()", &[])
+                .await
+                .unwrap()
+                .get::<_, bool>(0),
+            true
+        );
+    }
+    pg_client
+        .execute("ALTER ROLE foo WITH NOLOGIN", &[])
+        .await
+        .unwrap();
+
+    {
+        assert_err!(server.connect().no_tls().user("foo").password("baz").await);
     }
 }

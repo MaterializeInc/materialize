@@ -3407,6 +3407,14 @@ impl Coordinator {
                     attributes.superuser = Some(superuser);
                 }
 
+                if let Some(login) = attrs.login {
+                    attributes.login = Some(login);
+                }
+
+                if attrs.nopassword.unwrap_or(false) {
+                    attributes.password = None;
+                }
+
                 if let Some(notice) = self.should_emit_rbac_notice(session) {
                     notices.push(notice);
                 }

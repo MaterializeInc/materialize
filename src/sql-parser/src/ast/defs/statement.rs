@@ -1905,7 +1905,7 @@ pub enum RoleAttribute {
     /// The `NOINHERIT` option.
     NoInherit,
     /// The `PASSWORD` option.
-    Password(String),
+    Password(Option<String>),
     // The following are not supported, but included to give helpful error messages.
     Login,
     NoLogin,

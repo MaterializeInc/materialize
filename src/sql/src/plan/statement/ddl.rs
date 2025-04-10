@@ -4141,7 +4141,12 @@ pub enum PlannedAlterRoleOption {
 pub struct PlannedRoleAttributes {
     pub inherit: Option<bool>,
     pub password: Option<String>,
+    /// `nopassword` is set to true if the password is from the parser is None.
+    /// This is semantically different than not supplying a password at all,
+    /// to allow for unsetting a password.
+    pub nopassword: Option<bool>,
     pub superuser: Option<bool>,
+    pub login: Option<bool>,
 }
 
 fn plan_role_attributes(options: Vec<RoleAttribute>) -> Result<PlannedRoleAttributes, PlanError> {
@@ -4149,13 +4154,12 @@ fn plan_role_attributes(options: Vec<RoleAttribute>) -> Result<PlannedRoleAttrib
         inherit: None,
         password: None,
         superuser: None,
+        login: None,
+        nopassword: None,
     };
 
     for option in options {
         match option {
-            RoleAttribute::Login | RoleAttribute::NoLogin => {
-                bail_never_supported!("LOGIN attribute", "sql/create-role/#details");
-            }
             RoleAttribute::Inherit | RoleAttribute::NoInherit
                 if planned_attributes.inherit.is_some() =>
             {
@@ -4188,7 +4192,13 @@ fn plan_role_attributes(options: Vec<RoleAttribute>) -> Result<PlannedRoleAttrib
 
             RoleAttribute::Inherit => planned_attributes.inherit = Some(true),
             RoleAttribute::NoInherit => planned_attributes.inherit = Some(false),
-            RoleAttribute::Password(password) => planned_attributes.password = Some(password),
+            RoleAttribute::Password(password) => {
+                if let Some(password) = password {
+                    planned_attributes.password = Some(password.to_string());
+                } else {
+                    planned_attributes.nopassword = Some(true);
+                }
+            }
             RoleAttribute::SuperUser => {
                 if planned_attributes.superuser == Some(false) {
                     sql_bail!("conflicting or redundant options");
@@ -4200,6 +4210,18 @@ fn plan_role_attributes(options: Vec<RoleAttribute>) -> Result<PlannedRoleAttrib
                     sql_bail!("conflicting or redundant options");
                 }
                 planned_attributes.superuser = Some(false);
+            }
+            RoleAttribute::Login => {
+                if planned_attributes.login == Some(false) {
+                    sql_bail!("conflicting or redundant options");
+                }
+                planned_attributes.login = Some(true);
+            }
+            RoleAttribute::NoLogin => {
+                if planned_attributes.login == Some(true) {
+                    sql_bail!("conflicting or redundant options");
+                }
+                planned_attributes.login = Some(false);
             }
         }
     }

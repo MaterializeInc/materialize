@@ -489,6 +489,8 @@ pub struct RoleAttributes {
     pub password: Option<String>,
     /// Whether or not this user is a superuser.
     pub superuser: Option<bool>,
+    /// Whether this role is login
+    pub login: Option<bool>,
     // Force use of constructor.
     _private: (),
 }
@@ -500,6 +502,7 @@ impl RoleAttributes {
             inherit: true,
             password: None,
             superuser: None,
+            login: None,
             _private: (),
         }
     }
@@ -526,6 +529,7 @@ impl RoleAttributes {
             inherit: self.inherit,
             password: None,
             superuser: self.superuser,
+            login: self.login,
             _private: (),
         }
     }
@@ -537,6 +541,8 @@ impl From<PlannedRoleAttributes> for RoleAttributes {
             inherit,
             password,
             superuser,
+            login,
+            ..
         }: PlannedRoleAttributes,
     ) -> RoleAttributes {
         let default_attributes = RoleAttributes::new();
@@ -544,6 +550,7 @@ impl From<PlannedRoleAttributes> for RoleAttributes {
             inherit: inherit.unwrap_or(default_attributes.inherit),
             password,
             superuser,
+            login,
             _private: (),
         }
     }
