@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use bytes::BytesMut;
 use mz_controller_types::ClusterId;
-use mz_ore::now::{NowFn, to_datetime};
+use mz_ore::now::{NowFn, epoch_to_uuid_v7, to_datetime};
 use mz_ore::task::spawn;
 use mz_ore::{cast::CastFrom, cast::CastInto, now::EpochMillis};
 use mz_repr::adt::array::ArrayDimension;
@@ -321,7 +321,7 @@ impl Coordinator {
                     *accounted,
                     "accounting for logging should be done in `begin_statement_execution`"
                 );
-                let uuid = Uuid::new_v4();
+                let uuid = epoch_to_uuid_v7(prepared_at);
                 let sql = std::mem::take(sql);
                 let redacted_sql = std::mem::take(redacted_sql);
                 let sql_hash: [u8; 32] = Sha256::digest(sql.as_bytes()).into();
@@ -719,10 +719,16 @@ impl Coordinator {
         }
         let (ps_record, ps_uuid) = self.log_prepared_statement(session, logging)?;
 
-        let ev_id = Uuid::new_v4();
+        let uuid = match session.qcell_rw(logging) {
+            PreparedStatementLoggingInfo::AlreadyLogged { uuid } => *uuid,
+            PreparedStatementLoggingInfo::StillToLog { prepared_at, .. } => {
+                epoch_to_uuid_v7(prepared_at)
+            }
+        };
+
         let now = self.now();
         self.record_statement_lifecycle_event(
-            &StatementLoggingId(ev_id),
+            &StatementLoggingId(uuid),
             &StatementLifecycleEvent::ExecutionBegan,
             now,
         );
@@ -738,7 +744,7 @@ impl Coordinator {
             })
             .collect();
         let record = StatementBeganExecutionRecord {
-            id: ev_id,
+            id: uuid,
             prepared_statement_id: ps_uuid,
             sample_rate,
             params,
@@ -773,9 +779,7 @@ impl Coordinator {
         self.statement_logging
             .pending_statement_execution_events
             .push((mseh_update, Diff::ONE));
-        self.statement_logging
-            .executions_begun
-            .insert(ev_id, record);
+        self.statement_logging.executions_begun.insert(uuid, record);
         if let Some((ps_record, ps_update)) = ps_record {
             self.statement_logging
                 .pending_prepared_statement_events
@@ -791,7 +795,7 @@ impl Coordinator {
                     .push(sh_update);
             }
         }
-        Some(StatementLoggingId(ev_id))
+        Some(StatementLoggingId(uuid))
     }
 
     /// Record a new connection event

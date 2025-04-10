@@ -46,6 +46,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::id_gen::conn_id_org_uuid;
 use mz_ore::metrics::{ComputedGauge, IntCounter, IntGauge, MetricsRegistry};
 use mz_ore::netio::AsyncReady;
+use mz_ore::now::{NowFn, SYSTEM_TIME, epoch_to_uuid_v7};
 use mz_ore::task::{JoinSetExt, spawn};
 use mz_ore::tracing::TracingHandle;
 use mz_ore::{metric, netio};
@@ -292,6 +293,7 @@ impl BalancerService {
                 tls: pgwire_tls,
                 internal_tls: self.cfg.internal_tls,
                 metrics: ServerMetrics::new(metrics.clone(), "pgwire"),
+                now: SYSTEM_TIME.clone(),
             };
             let (handle, stream) = self.pgwire;
             server_handles.push(handle);
@@ -573,6 +575,7 @@ struct PgwireBalancer {
     cancellation_resolver: Arc<CancellationResolver>,
     resolver: Arc<Resolver>,
     metrics: ServerMetrics,
+    now: NowFn,
 }
 
 impl PgwireBalancer {
@@ -749,7 +752,7 @@ impl mz_server_core::Server for PgwireBalancer {
         let inner_metrics = self.metrics.clone();
         let outer_metrics = self.metrics.clone();
         let cancellation_resolver = Arc::clone(&self.cancellation_resolver);
-        let conn_uuid = Uuid::new_v4();
+        let conn_uuid = epoch_to_uuid_v7(&(self.now)());
         let peer_addr = conn.peer_addr();
         conn.uuid_handle().set(conn_uuid);
         Box::pin(async move {
