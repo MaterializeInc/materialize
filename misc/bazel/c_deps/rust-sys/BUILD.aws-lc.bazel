@@ -1,0 +1,66 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+"""Additive BUILD file for the aws-lc-rs Rust crate."""
+
+load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
+load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
+
+filegroup(
+    name = "srcs",
+    srcs = [":c_rehash"] + glob(["aws-lc/**"]),
+)
+
+filegroup(
+    name = "generated_include_src",
+    srcs = glob(["generated-include/**"]),
+)
+
+copy_to_directory(
+    name = "generated_include",
+    srcs = [":generated_include_src"],
+    root_paths = ["generated-include"],
+)
+
+cmake(
+    name = "aws_lc",
+    build_args = ["-j8"],
+    build_data = [":generated_include"],
+    copts = select(
+        {
+            "@platforms//os:macos": [
+                "-Wno-overriding-option",
+            ],
+            "@platforms//os:linux": [],
+        },
+        no_match_error = "Building aws_lc for the specified OS is not supported.",
+    ),
+    generate_args = [
+        "-DBUILD_SHARED_LIBS=0",
+        "-DBORINGSSL_PREFIX=aws_lc_fips_0_13_5",
+        "-DBORINGSSL_PREFIX_HEADERS=$(execpath :generated_include)",
+        "-DBUILD_TESTING=OFF",
+    ] + select({
+        "@platforms//cpu:x86_64": [
+            "-DCMAKE_OSX_ARCHITECTURES=x86_64",
+            "-DCMAKE_SYSTEM_PROCESSOR=x86_64",
+        ],
+        "@platforms//cpu:aarch64": [
+            "-DCMAKE_OSX_ARCHITECTURES=arm64",
+            "-DCMAKE_SYSTEM_PROCESSOR=arm64",
+        ],
+    }) + select({
+        "@platforms//os:linux": ["-DFIPS=1"],
+        "@platforms//os:macos": [],
+    }),
+    lib_source = ":srcs",
+    out_static_libs = ["foo.a"],
+    targets = ["aws-lc"],
+    visibility = ["//visibility:public"],
+)
