@@ -116,7 +116,7 @@ assume:
 <th>Trust policy</th>
 <tr>
 <td><code>WarehouseExport</code></td>
-<td>400121260767</td>
+<td>000000000000</td>
 <td>
 
 ```json
@@ -126,7 +126,7 @@ assume:
         {
             "Effect": "Allow",
             "Principal": {
-                "AWS": "arn:aws:iam::664411391173:role/MaterializeConnection"
+                "AWS": "arn:aws:iam::000000000000:role/MaterializeConnection"
             },
             "Action": "sts:AssumeRole",
             "Condition": {
@@ -147,15 +147,17 @@ To create an AWS connection that will assume the `WarehouseExport` role:
 
 ```mzsql
 CREATE CONNECTION aws_role_assumption TO AWS (
-    ASSUME ROLE ARN = 'arn:aws:iam::400121260767:role/WarehouseExport'
+    ASSUME ROLE ARN = 'arn:aws:iam::000000000000:role/WarehouseExport'
 );
 ```
 {{< /tab >}}
 
 {{< tab "Credentials">}}
 {{< warning >}}
+
 Use of credentials-based authentication is deprecated.  AWS strongly encourages
 the use of role assumption-based authentication instead.
+
 {{< /warning >}}
 
 To create an AWS connection that uses static access key credentials:
@@ -194,7 +196,7 @@ connections to create [sources](/sql/create-source/kafka) and [sinks](/sql/creat
 | `SSL CERTIFICATE`                         | secret or `text` | Your TLS certificate in PEM format for SSL client authentication. If unspecified, no client authentication is performed.<br><br>Only valid when the security protocol is `SSL` or `SASL_SSL`.
 | `SSL KEY`                                 | secret           | Your TLS certificate's key in PEM format.<br><br>Required and only valid when `SSL CERTIFICATE` is specified.
 | `SSH TUNNEL`                              | object name      | The name of an [SSH tunnel connection](#ssh-tunnel) to route network traffic through by default.
-| `AWS CONNECTION` <a name="kafka-aws-connection"></a>  | object name      | The name of an [AWS connection](#aws) to use when performing IAM authentication with an Amazon MSK cluster.<br><br>Only valid if the security protocol is `SASL_PLAINTEXT` or `SASL_SSL`.<br><br>***Private preview.** This option has known performance or stability issues and is under active development.*
+| `AWS CONNECTION` <a name="kafka-aws-connection"></a>  | object name      | The name of an [AWS connection](#aws) to use when performing IAM authentication with an Amazon MSK cluster.<br><br>Only valid if the security protocol is `SASL_PLAINTEXT` or `SASL_SSL`.
 | `AWS PRIVATELINK`                         | object name      | The name of an [AWS PrivateLink connection](#aws-privatelink) to route network traffic through. <br><br>Exactly one of `BROKER`, `BROKERS`, or `AWS PRIVATELINK` must be specified.
 | `PROGRESS TOPIC`                          | `text`           | The name of a topic that Kafka sinks can use to track internal consistency metadata. Default: `_materialize-progress-{REGION ID}-{CONNECTION ID}`.
 | `PROGRESS TOPIC REPLICATION FACTOR`       | `int`            | {{< warn-if-unreleased-inline "v0.106" >}} The partition count to use when creating the progress topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
@@ -313,7 +315,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 
 ```mzsql
 CREATE CONNECTION aws_msk TO AWS (
-    ASSUME ROLE ARN = 'arn:aws:iam::400121260767:role/MaterializeMSK'
+    ASSUME ROLE ARN = 'arn:aws:iam::000000000000:role/MaterializeMSK'
 );
 
 CREATE CONNECTION kafka_msk TO KAFKA (
@@ -732,7 +734,7 @@ an SSH bastion server to accept connections from Materialize, check [this guide]
 
 ```mzsql
 CREATE CONNECTION aws_rds_mysql TO AWS (
-    ASSUME ROLE ARN = 'arn:aws:iam::400121260767:role/MaterializeRDS'
+    ASSUME ROLE ARN = 'arn:aws:iam::000000000000:role/MaterializeRDS'
 );
 
 CREATE CONNECTION mysql_connection TO MYSQL (
