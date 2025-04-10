@@ -79,8 +79,8 @@ use crate::session::vars::{OwnedVarInput, SystemVars};
 ///   * Session management, such as managing variables' states and adding
 ///     notices to the session.
 ///
-/// [`list_databases`]: Catalog::list_databases
-/// [`get_item`]: Catalog::resolve_item
+/// [`get_databases`]: SessionCatalog::get_databases
+/// [`get_item`]: SessionCatalog::get_item
 /// [`resolve_item`]: SessionCatalog::resolve_item
 pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionResolver {
     /// Returns the id of the role that is issuing the query.
