@@ -466,6 +466,11 @@ SELECT '0001-12-31 19:03:58 BC '::timestamp;
 0001-12-31 19:03:58 BC
 
 query T
+SELECT '0001-12-31 19:03:58BC '::timestamp;
+----
+0001-12-31 19:03:58 BC
+
+query T
 SELECT '0001-12-31 19:03:58 AD'::timestamp;
 ----
 0001-12-31 19:03:58
@@ -482,5 +487,10 @@ SELECT '0001-12-31 19:03:58 ad'::timestamp;
 
 query T
 SELECT '0001-12-31 19:03:58 AD '::timestamp;
+----
+0001-12-31 19:03:58
+
+query T
+SELECT '0001-12-31 19:03:58AD '::timestamp;
 ----
 0001-12-31 19:03:58
