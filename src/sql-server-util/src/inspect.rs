@@ -9,6 +9,7 @@
 
 //! Useful queries to inspect the state of a SQL Server instance.
 
+use futures::Stream;
 use itertools::Itertools;
 use smallvec::SmallVec;
 use std::sync::Arc;
@@ -80,26 +81,24 @@ fn parse_lsn(result: &[tiberius::Row]) -> Result<Lsn, SqlServerError> {
     }
 }
 
-/// Queries the specified capture instance and returns all changes from `start_lsn` to `end_lsn`.
+/// Queries the specified capture instance and returns all changes from `start_lsn` to
+/// `end_lsn`, ordered by `start_lsn` in an ascending fashion.
 ///
 /// TODO(sql_server1): This presents an opportunity for SQL injection. We should create a stored
 /// procedure using `QUOTENAME` to sanitize the input for the capture instance provided by the
 /// user.
-pub async fn get_changes(
+pub fn get_changes_asc(
     client: &mut Client,
     capture_instance: &str,
     start_lsn: Lsn,
     end_lsn: Lsn,
     filter: RowFilterOption,
-) -> Result<SmallVec<[tiberius::Row; 1]>, SqlServerError> {
+) -> impl Stream<Item = Result<tiberius::Row, SqlServerError>> + Send {
+    const START_LSN_COLUMN: &str = "__$start_lsn";
     let query = format!(
-        "SELECT * FROM cdc.fn_cdc_get_all_changes_{capture_instance}(@P1, @P2, N'{filter}');"
+        "SELECT * FROM cdc.fn_cdc_get_all_changes_{capture_instance}(@P1, @P2, N'{filter}') ORDER BY {START_LSN_COLUMN} ASC;"
     );
-    let results = client
-        .query(&query, &[&start_lsn.as_bytes(), &end_lsn.as_bytes()])
-        .await?;
-
-    Ok(results)
+    client.query_streaming(query, &[&start_lsn.as_bytes(), &end_lsn.as_bytes()])
 }
 
 /// Returns the `(capture_instance, schema_name, table_name)` for the tables
