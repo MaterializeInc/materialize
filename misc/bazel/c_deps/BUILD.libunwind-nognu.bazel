@@ -38,6 +38,9 @@ libunwind_defines = [
     "HAVE_ZLIB",
     # TODO: Add support for LZMA compression.
     # "HAVE_LZMA",
+
+    'PACKAGE_STRING=\\"libunwind\\"',
+    'PACKAGE_BUGREPORT=\\"\\"',
 ]
 
 ### Common source files ########################################################
@@ -78,14 +81,7 @@ arm64_srcs = select({
             "src/aarch64/*.c",
             "src/aarch64/*.h",
         ],
-        exclude = [
-            "src/aarch64/Los-freebsd.c",
-            "src/aarch64/Los-linux.c",
-            "src/aarch64/Los-qnx.c",
-            "src/aarch64/Gos-freebsd.c",
-            "src/aarch64/Gos-linux.c",
-            "src/aarch64/Gos-qnx.c",
-        ],
+        exclude = [],
     ) + [
         # The Makefile doesn't include this and only includes it if the OS
         # is FreeBSD. This is inconsistent with the other archs, not sure
@@ -102,11 +98,7 @@ arm64_textual_hdrs = select({
         [
             "src/aarch64/G*.c",
         ],
-        exclude = [
-            "src/aarch64/Gos-freebsd.c",
-            "src/aarch64/Gos-linux.c",
-            "src/aarch64/Gos-qnx.c",
-        ],
+        exclude = [],
     ) + [
         "src/elf64.c",
     ],
@@ -203,10 +195,7 @@ linux_srcs = select({
     ],
     "//conditions:default": [],
 }) + select({
-    "@//misc/bazel/platforms:linux_arm": [
-        "src/aarch64/Los-linux.c",
-        "src/aarch64/Gos-linux.c",
-    ],
+    "@//misc/bazel/platforms:linux_arm": [],
     "//conditions:default": [],
 }) + select({
     "@//misc/bazel/platforms:linux_x86_64": [
@@ -217,7 +206,7 @@ linux_srcs = select({
 })
 
 linux_textual_hdrs = select({
-    "@//misc/bazel/platforms:linux_arm": ["src/aarch64/Gos-linux.c"],
+    "@//misc/bazel/platforms:linux_arm": [],
     "//conditions:default": [],
 }) + select({
     "@//misc/bazel/platforms:linux_x86_64": ["src/x86_64/Gos-linux.c"],
@@ -285,4 +274,5 @@ cc_library(
     deps = [
         "@zlib",
     ],
+    visibility = ["//visibility:public"],
 )

@@ -40,7 +40,7 @@ def c_repositories():
         ],
     )
 
-    LIBUNWIND_NOGNU_VERSION = "1.8.1"
+    LIBUNWIND_NOGNU_VERSION = "1.7.2"
     LIBUNWIND_NOGNU_INTEGRITY = ""
 
     maybe(
