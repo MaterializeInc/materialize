@@ -31,6 +31,7 @@ use k8s_openapi::{
 use kube::{Api, Client, ResourceExt, api::ObjectMeta, runtime::controller::Action};
 use maplit::btreemap;
 use rand::{Rng, thread_rng};
+use reqwest::StatusCode;
 use semver::{BuildMetadata, Prerelease, Version};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -127,6 +128,7 @@ impl Resources {
         client: &Client,
         args: &super::MaterializeControllerArgs,
         increment_generation: bool,
+        force_promote: bool,
         namespace: &str,
     ) -> Result<Option<Action>, anyhow::Error> {
         let environmentd_network_policy_api: Api<NetworkPolicy> =
@@ -215,7 +217,19 @@ impl Resources {
             match http_client.get(status_url.clone()).send().await {
                 Ok(response) => {
                     let response: BTreeMap<String, DeploymentStatus> = response.json().await?;
-                    if response["status"] == DeploymentStatus::Initializing {
+                    if force_promote {
+                        trace!("skipping cluster catchup");
+                        let skip_catchup_url = reqwest::Url::parse(&format!(
+                            "http://{}/api/leader/skip-catchup",
+                            environmentd_url
+                        ))
+                        .unwrap();
+                        let response = http_client.post(skip_catchup_url).send().await?;
+                        if response.status() == StatusCode::BAD_REQUEST {
+                            let err: SkipCatchupError = response.json().await?;
+                            bail!("failed to skip catchup: {}", err.message);
+                        }
+                    } else if response["status"] == DeploymentStatus::Initializing {
                         trace!("environmentd is still initializing, retrying...");
                         return Ok(Some(retry_action));
                     } else {
@@ -1390,6 +1404,11 @@ struct BecomeLeaderResponse {
 enum BecomeLeaderResult {
     Success,
     Failure { message: String },
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+struct SkipCatchupError {
+    message: String,
 }
 
 fn environmentd_internal_http_address(

@@ -392,7 +392,13 @@ impl k8s_controller::Context for Context {
 
                 trace!("applying environment resources");
                 match resources
-                    .apply(&client, &self.config, increment_generation, &mz.namespace())
+                    .apply(
+                        &client,
+                        &self.config,
+                        increment_generation,
+                        mz.should_force_promote(),
+                        &mz.namespace(),
+                    )
                     .await
                 {
                     Ok(Some(action)) => {

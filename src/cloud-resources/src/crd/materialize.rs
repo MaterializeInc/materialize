@@ -108,6 +108,12 @@ pub mod v1alpha1 {
         // generation rollout is automatically triggered.
         #[serde(default = "Uuid::new_v4")]
         pub request_rollout: Uuid,
+        // If force_promote is set to the same value as request_rollout, the
+        // current rollout will skip waiting for clusters in the new
+        // generation to rehydrate before promoting the new environmentd to
+        // leader.
+        #[serde(default)]
+        pub force_promote: Uuid,
         // This value will be written to an annotation in the generated
         // environmentd statefulset, in order to force the controller to
         // detect the generated resources as changed even if no other changes
@@ -318,6 +324,14 @@ pub mod v1alpha1 {
                     .status
                     .as_ref()
                     .map_or_else(Uuid::nil, |status| status.last_completed_rollout_request)
+        }
+
+        pub fn set_force_promote(&mut self) {
+            self.spec.force_promote = self.spec.request_rollout;
+        }
+
+        pub fn should_force_promote(&self) -> bool {
+            self.spec.force_promote == self.spec.request_rollout
         }
 
         pub fn conditions_need_update(&self) -> bool {
