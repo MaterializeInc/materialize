@@ -57,7 +57,7 @@
 Explained Query:
   With
     cte l0 =
-      Reduce aggregates=[min(#0)]
+      Reduce aggregates=[min(#0{counter})]
         ReadIndex on=mv mv_counter_idx=[*** full scan ***]
   Return
     Union
@@ -75,8 +75,6 @@ Used Indexes:
 
 Target cluster: cluster2
 
-> SELECT 1
-1
 # Should return instantly since it only uses the index and we have selected serializable isolation
 > SELECT min(counter) FROM mv;
 1

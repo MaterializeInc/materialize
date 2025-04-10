@@ -199,7 +199,7 @@ Explained Query:
     Filter ((#4{l_quantity} = 24) OR ((#3{l_linenumber} = 6) AND (#4{l_quantity} <= 4) AND (#4{l_quantity} >= 3))) // { arity: 25 }
       Join on=(#0{l_orderkey} = #16{o_orderkey}) type=differential // { arity: 25 }
         implementation
-          %0:lineitem[#0]KAeif » %1:orders[#0]KAeif
+          %0:lineitem[#0{l_orderkey}]KAeif » %1:orders[#0{o_orderkey}]KAeif
         ArrangeBy keys=[[#0{l_orderkey}]] // { arity: 16 }
           ReadIndex on=lineitem fk_lineitem_orderkey=[differential join] // { arity: 16 }
         ArrangeBy keys=[[#0{o_orderkey}]] // { arity: 9 }
@@ -246,9 +246,9 @@ Explained Query:
     Filter (#11{l_commitdate} > #20{o_orderdate}) AND (#10{l_shipdate} >= #20{o_orderdate}) AND (#30{c_acctbal} >= #19{o_totalprice}) // { arity: 33 }
       Join on=(#0{l_orderkey} = #16{o_orderkey} AND #17{o_custkey} = #25{c_custkey}) type=delta // { arity: 33 }
         implementation
-          %0:lineitem » %1:orders[#0]KA » %2:customer[#0]KA
-          %1:orders » %0:lineitem[#0]KA » %2:customer[#0]KA
-          %2:customer » %1:orders[#1]KA » %0:lineitem[#0]KA
+          %0:lineitem » %1:orders[#0{o_orderkey}]KA » %2:customer[#0{c_custkey}]KA
+          %1:orders » %0:lineitem[#0{l_orderkey}]KA » %2:customer[#0{c_custkey}]KA
+          %2:customer » %1:orders[#1{o_custkey}]KA » %0:lineitem[#0{l_orderkey}]KA
         ArrangeBy keys=[[#0{l_orderkey}]] // { arity: 16 }
           ReadIndex on=lineitem fk_lineitem_orderkey=[delta join 1st input (full scan)] // { arity: 16 }
         ArrangeBy keys=[[#0{o_orderkey}], [#1{o_custkey}]] // { arity: 9 }
@@ -312,9 +312,9 @@ Explained Query:
         Filter (#10{l_shipdate} <= 1995-11-14) AND (#30{c_acctbal} <= 12907776) AND (#10{l_shipdate} >= 1995-04-19) AND (#30{c_acctbal} >= #5{l_extendedprice}) // { arity: 33 }
           Join on=(#0{l_orderkey} = #16{o_orderkey} AND #17{o_custkey} = #25{c_custkey}) type=delta // { arity: 33 }
             implementation
-              %0:lineitem » %1:orders[#0]KA » %2:customer[#0]KAif
-              %1:orders » %0:lineitem[#0]KAiif » %2:customer[#0]KAif
-              %2:customer » %1:orders[#1]KA » %0:lineitem[#0]KAiif
+              %0:lineitem » %1:orders[#0{o_orderkey}]KA » %2:customer[#0{c_custkey}]KAif
+              %1:orders » %0:lineitem[#0{l_orderkey}]KAiif » %2:customer[#0{c_custkey}]KAif
+              %2:customer » %1:orders[#1{o_custkey}]KA » %0:lineitem[#0{l_orderkey}]KAiif
             ArrangeBy keys=[[#0{l_orderkey}]] // { arity: 16 }
               ReadIndex on=lineitem fk_lineitem_orderkey=[delta join 1st input (full scan)] // { arity: 16 }
             ArrangeBy keys=[[#0{o_orderkey}], [#1{o_custkey}]] // { arity: 9 }
@@ -386,9 +386,9 @@ Explained Query:
       Filter (#13{c_acctbal} < #6{o_totalprice}) AND (#13{c_acctbal} <= #3{l_extendedprice}) // { arity: 16 }
         Join on=(#4{l_receiptdate} = #7{o_orderdate} AND #5{o_custkey} = #8{c_custkey}) type=delta // { arity: 16 }
           implementation
-            %0:lineitem » %1:orders[#2]K » %2:customer[#0]KA
-            %1:orders » %2:customer[#0]KA » %0:lineitem[#4]Kf
-            %2:customer » %1:orders[#0]KA » %0:lineitem[#4]Kf
+            %0:lineitem » %1:orders[#2{o_orderdate}]K » %2:customer[#0{c_custkey}]KA
+            %1:orders » %2:customer[#0{c_custkey}]KA » %0:lineitem[#4{l_receiptdate}]Kf
+            %2:customer » %1:orders[#0{o_custkey}]KA » %0:lineitem[#4{l_receiptdate}]Kf
           ArrangeBy keys=[[#4{l_receiptdate}]] // { arity: 5 }
             Project (#2{l_suppkey}..=#5{l_extendedprice}, #12{l_receiptdate}) // { arity: 5 }
               Filter (#3{l_linenumber} != 1) AND (#3{l_linenumber} != 2) AND (#3{l_linenumber} != 6) // { arity: 16 }
@@ -436,7 +436,7 @@ Explained Query:
       Project (#0{l_orderkey}..=#4{o_orderkey}) // { arity: 5 }
         Join on=(#2{l_commitdate} = #5{o_orderdate}) type=differential // { arity: 6 }
           implementation
-            %0:lineitem[#2]K » %1:orders[#1]K
+            %0:lineitem[#2{l_commitdate}]K » %1:orders[#1{o_orderdate}]K
           ArrangeBy keys=[[#2{l_commitdate}]] // { arity: 4 }
             Project (#0{l_orderkey}, #4{l_quantity}, #11{l_commitdate}, #12{l_receiptdate}) // { arity: 4 }
               ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }
@@ -456,7 +456,7 @@ Explained Query:
               Project (#0{l_quantity}) // { arity: 1 }
                 Join on=(#1{l_commitdate} = #2{l_commitdate}) type=differential // { arity: 3 }
                   implementation
-                    %1[#0]UKA » %0:l1[#1]Kif
+                    %1[#0]UKA » %0:l1[#1{l_commitdate}]Kif
                   ArrangeBy keys=[[#1{l_commitdate}]] // { arity: 2 }
                     Get l1 // { arity: 2 }
                   ArrangeBy keys=[[#0{l_commitdate}]] // { arity: 1 }
@@ -508,9 +508,9 @@ Explained Query:
     Filter (#12{c_acctbal} <= #5{o_totalprice}) AND ((#1{l_quantity} = 7) OR (#1{l_quantity} = 33) OR ((#1{l_quantity} = 17) AND (#13{c_comment} <= "x") AND (#13{c_comment} >= "s"))) // { arity: 14 }
       Join on=(#0{l_orderkey} = #2{o_orderkey}) type=delta // { arity: 14 }
         implementation
-          %0:lineitem » %1:orders[#0]KA » %2:customer[×]
-          %1:orders » %0:lineitem[#0]KAef » %2:customer[×]
-          %2:customer » %0:lineitem[×]ef » %1:orders[#0]KA
+          %0:lineitem » %1:orders[#0{o_orderkey}]KA » %2:customer[×]
+          %1:orders » %0:lineitem[#0{l_orderkey}]KAef » %2:customer[×]
+          %2:customer » %0:lineitem[×]ef » %1:orders[#0{o_orderkey}]KA
         ArrangeBy keys=[[], [#0{l_orderkey}]] // { arity: 2 }
           Project (#0{l_orderkey}, #4{l_quantity}) // { arity: 2 }
             Filter ((#4{l_quantity} = 7) OR (#4{l_quantity} = 17) OR (#4{l_quantity} = 33)) // { arity: 16 }
@@ -567,9 +567,9 @@ Explained Query:
       Filter (#4{l_quantity} <= 30) AND (#12{l_receiptdate} <= 1998-11-27) AND (#12{l_receiptdate} <= 1992-11-22) AND (#4{l_quantity} >= 1) AND (#12{l_receiptdate} >= 1992-06-21) AND (#12{l_receiptdate} >= 1992-07-13) // { arity: 33 }
         Join on=(#0{l_orderkey} = #16{o_orderkey} AND #17{o_custkey} = #25{c_custkey}) type=delta // { arity: 33 }
           implementation
-            %0:lineitem » %1:orders[#0]KA » %2:customer[#0]KA
-            %1:orders » %0:lineitem[#0]KAiiiiiif » %2:customer[#0]KA
-            %2:customer » %1:orders[#1]KA » %0:lineitem[#0]KAiiiiiif
+            %0:lineitem » %1:orders[#0{o_orderkey}]KA » %2:customer[#0{c_custkey}]KA
+            %1:orders » %0:lineitem[#0{l_orderkey}]KAiiiiiif » %2:customer[#0{c_custkey}]KA
+            %2:customer » %1:orders[#1{o_custkey}]KA » %0:lineitem[#0{l_orderkey}]KAiiiiiif
           ArrangeBy keys=[[#0{l_orderkey}]] // { arity: 16 }
             ReadIndex on=lineitem fk_lineitem_orderkey=[delta join 1st input (full scan)] // { arity: 16 }
           ArrangeBy keys=[[#0{o_orderkey}], [#1{o_custkey}]] // { arity: 9 }
@@ -626,9 +626,9 @@ Explained Query:
         Filter (#1{l_shipdate} < #5{o_orderdate}) AND (#11{c_acctbal} > #4{o_totalprice}) AND (#11{c_acctbal} >= #0{l_extendedprice}) // { arity: 14 }
           Join on=(#3{o_custkey} = #6{c_custkey}) type=delta // { arity: 14 }
             implementation
-              %0:lineitem » %1:orders[×] » %2:customer[#0]KA
-              %1:orders » %2:customer[#0]KA » %0:lineitem[×]f
-              %2:customer » %1:orders[#1]KA » %0:lineitem[×]f
+              %0:lineitem » %1:orders[×] » %2:customer[#0{c_custkey}]KA
+              %1:orders » %2:customer[#0{c_custkey}]KA » %0:lineitem[×]f
+              %2:customer » %1:orders[#1{o_custkey}]KA » %0:lineitem[×]f
             ArrangeBy keys=[[]] // { arity: 2 }
               Project (#5{l_extendedprice}, #10{l_shipdate}) // { arity: 2 }
                 Filter (#3{l_linenumber} != 4) // { arity: 16 }
@@ -695,9 +695,9 @@ Explained Query:
       Filter (#0{l_orderkey} <= 280) AND (#0{l_orderkey} <= 289) AND (#0{l_orderkey} >= 62) AND (#0{l_orderkey} >= 117) AND (#10{l_shipdate} > #20{o_orderdate}) // { arity: 33 }
         Join on=(#0{l_orderkey} = #16{o_orderkey} AND #17{o_custkey} = #25{c_custkey}) type=delta // { arity: 33 }
           implementation
-            %0:lineitem » %1:orders[#0]KAiiiif » %2:customer[#0]KA
-            %1:orders » %0:lineitem[#0]KAiiiif » %2:customer[#0]KA
-            %2:customer » %1:orders[#1]KAiiiif » %0:lineitem[#0]KAiiiif
+            %0:lineitem » %1:orders[#0{o_orderkey}]KAiiiif » %2:customer[#0{c_custkey}]KA
+            %1:orders » %0:lineitem[#0{l_orderkey}]KAiiiif » %2:customer[#0{c_custkey}]KA
+            %2:customer » %1:orders[#1{o_custkey}]KAiiiif » %0:lineitem[#0{l_orderkey}]KAiiiif
           ArrangeBy keys=[[#0{l_orderkey}]] // { arity: 16 }
             ReadIndex on=lineitem fk_lineitem_orderkey=[delta join 1st input (full scan)] // { arity: 16 }
           ArrangeBy keys=[[#0{o_orderkey}], [#1{o_custkey}]] // { arity: 9 }
@@ -749,9 +749,9 @@ Explained Query:
       Filter (#0{l_orderkey} >= 53) AND (#1{l_extendedprice} < #5{o_totalprice}) AND (#12{c_acctbal} < #5{o_totalprice}) // { arity: 13 }
         Join on=(#0{l_orderkey} = #2{o_orderkey}) type=delta // { arity: 13 }
           implementation
-            %0:lineitem » %1:orders[#0]KAif » %2:customer[×]
-            %1:orders » %0:lineitem[#0]KAiif » %2:customer[×]
-            %2:customer » %0:lineitem[×]iif » %1:orders[#0]KAif
+            %0:lineitem » %1:orders[#0{o_orderkey}]KAif » %2:customer[×]
+            %1:orders » %0:lineitem[#0{l_orderkey}]KAiif » %2:customer[×]
+            %2:customer » %0:lineitem[×]iif » %1:orders[#0{o_orderkey}]KAif
           ArrangeBy keys=[[], [#0{l_orderkey}]] // { arity: 2 }
             Project (#0{l_orderkey}, #5{l_extendedprice}) // { arity: 2 }
               Filter (#10{l_shipdate} <= 1994-03-17) AND (#0{l_orderkey} >= 53) // { arity: 16 }

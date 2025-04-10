@@ -218,45 +218,45 @@ Explained Query:
   With
     cte l0 =
       Project (#3, #5, #6) // { arity: 3 }
-        Map (text_to_integer(substr(#0, 5)), regexp_split_to_array[" ", case_insensitive=false](#2), array_index(#4, 3), text_to_integer(array_index(#4, 2))) // { arity: 7 }
-          FlatMap unnest_array(regexp_split_to_array[",", case_insensitive=false](#1)) // { arity: 3 }
+        Map (text_to_integer(substr(#0{game}, 5)), regexp_split_to_array[" ", case_insensitive=false](#2{color}), array_index(#4, 3), text_to_integer(array_index(#4, 2))) // { arity: 7 }
+          FlatMap unnest_array(regexp_split_to_array[",", case_insensitive=false](#1{visible})) // { arity: 3 }
             Project (#0, #2) // { arity: 2 }
-              FlatMap unnest_array(regexp_split_to_array[";", case_insensitive=false](#1)) // { arity: 3 }
+              FlatMap unnest_array(regexp_split_to_array[";", case_insensitive=false](#1{report})) // { arity: 3 }
                 Project (#3, #4) // { arity: 2 }
-                  Map (regexp_split_to_array[":", case_insensitive=false](#1), array_index(#2, 1), array_index(#2, 2)) // { arity: 5 }
+                  Map (regexp_split_to_array[":", case_insensitive=false](#1{line}), array_index(#2, 1), array_index(#2, 2)) // { arity: 5 }
                     FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](#0{input})) // { arity: 2 }
                       ReadStorage materialize.public.input // { arity: 1 }
     cte l1 =
-      Filter (#0) IS NOT NULL // { arity: 3 }
+      Filter (#0{game}) IS NOT NULL // { arity: 3 }
         Get l0 // { arity: 3 }
     cte l2 =
-      ArrangeBy keys=[[#0]] // { arity: 1 }
+      ArrangeBy keys=[[#0{game}]] // { arity: 1 }
         Project (#0) // { arity: 1 }
           Get l1 // { arity: 3 }
     cte l3 =
-      Reduce aggregates=[sum(#0)] // { arity: 1 }
+      Reduce aggregates=[sum(#0{game})] // { arity: 1 }
         Distinct project=[#0] // { arity: 1 }
           Union // { arity: 1 }
             Negate // { arity: 1 }
               Project (#0) // { arity: 1 }
-                Join on=(#0 = #1) type=differential // { arity: 2 }
+                Join on=(#0{game} = #1) type=differential // { arity: 2 }
                   implementation
-                    %1[#0]UKA » %0:l2[#0]K
+                    %1[#0]UKA » %0:l2[#0{game}]K
                   Get l2 // { arity: 1 }
                   ArrangeBy keys=[[#0]] // { arity: 1 }
                     Distinct project=[#0] // { arity: 1 }
                       Project (#0) // { arity: 1 }
-                        Filter (#3 > #5) // { arity: 6 }
-                          Join on=(#0 = #1 AND #2 = #4) type=delta // { arity: 6 }
+                        Filter (#3{number} > #5{number}) // { arity: 6 }
+                          Join on=(#0{game} = #1{game} AND #2{color} = #4{color}) type=delta // { arity: 6 }
                             implementation
-                              %0:l2 » %1:l0[#0]K » %2[#0]UK
-                              %1:l0 » %2[#0]UK » %0:l2[#0]K
-                              %2 » %1:l0[#1]K » %0:l2[#0]K
+                              %0:l2 » %1:l0[#0{game}]K » %2[#0{color}]UK
+                              %1:l0 » %2[#0{color}]UK » %0:l2[#0{game}]K
+                              %2 » %1:l0[#1{color}]K » %0:l2[#0{game}]K
                             Get l2 // { arity: 1 }
-                            ArrangeBy keys=[[#0], [#1]] // { arity: 3 }
-                              Filter (#0) IS NOT NULL AND (#1) IS NOT NULL // { arity: 3 }
+                            ArrangeBy keys=[[#0{game}], [#1{color}]] // { arity: 3 }
+                              Filter (#0{game}) IS NOT NULL AND (#1{color}) IS NOT NULL // { arity: 3 }
                                 Get l0 // { arity: 3 }
-                            ArrangeBy keys=[[#0]] // { arity: 2 }
+                            ArrangeBy keys=[[#0{color}]] // { arity: 2 }
                               Constant // { arity: 2 }
                                 - ("red", 12)
                                 - ("blue", 14)
@@ -264,35 +264,35 @@ Explained Query:
             Project (#0) // { arity: 1 }
               Get l0 // { arity: 3 }
     cte l4 =
-      Reduce group_by=[#0, #1] aggregates=[max(#2)] // { arity: 3 }
+      Reduce group_by=[#0, #1] aggregates=[max(#2{number})] // { arity: 3 }
         Get l1 // { arity: 3 }
     cte l5 =
       Reduce aggregates=[sum(#0{count})] // { arity: 1 }
         Project (#1{count}) // { arity: 1 }
           Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
             Project (#0) // { arity: 1 }
-              Join on=(#0 = #1 = #2) type=delta // { arity: 3 }
+              Join on=(#0{game} = #1{game} = #2{game}) type=delta // { arity: 3 }
                 implementation
-                  %0 » %1[#0]K » %2[#0]K
-                  %1 » %0[#0]K » %2[#0]K
-                  %2 » %0[#0]K » %1[#0]K
-                ArrangeBy keys=[[#0]] // { arity: 1 }
+                  %0 » %1[#0{game}]K » %2[#0{game}]K
+                  %1 » %0[#0{game}]K » %2[#0{game}]K
+                  %2 » %0[#0{game}]K » %1[#0{game}]K
+                ArrangeBy keys=[[#0{game}]] // { arity: 1 }
                   Project (#0) // { arity: 1 }
                     FlatMap generate_series(1, #1{max}, 1) // { arity: 3 }
                       Project (#0, #2{max}) // { arity: 2 }
-                        Filter (#1 = "red") // { arity: 3 }
+                        Filter (#1{color} = "red") // { arity: 3 }
                           Get l4 // { arity: 3 }
-                ArrangeBy keys=[[#0]] // { arity: 1 }
+                ArrangeBy keys=[[#0{game}]] // { arity: 1 }
                   Project (#0) // { arity: 1 }
                     FlatMap generate_series(1, #1{max}, 1) // { arity: 3 }
                       Project (#0, #2{max}) // { arity: 2 }
-                        Filter (#1 = "blue") // { arity: 3 }
+                        Filter (#1{color} = "blue") // { arity: 3 }
                           Get l4 // { arity: 3 }
-                ArrangeBy keys=[[#0]] // { arity: 1 }
+                ArrangeBy keys=[[#0{game}]] // { arity: 1 }
                   Project (#0) // { arity: 1 }
                     FlatMap generate_series(1, #1{max}, 1) // { arity: 3 }
                       Project (#0, #2{max}) // { arity: 2 }
-                        Filter (#1 = "green") // { arity: 3 }
+                        Filter (#1{color} = "green") // { arity: 3 }
                           Get l4 // { arity: 3 }
   Return // { arity: 2 }
     CrossJoin type=differential // { arity: 2 }

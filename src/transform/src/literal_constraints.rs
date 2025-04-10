@@ -166,7 +166,7 @@ impl LiteralConstraints {
                             keys: vec![(0..key.len()).collect()],
                         },
                     }
-                    .arrange_by(&[(0..key.len()).map(MirScalarExpr::Column).collect_vec()]);
+                    .arrange_by(&[(0..key.len()).map(MirScalarExpr::column).collect_vec()]);
 
                     if possible_vals.is_empty() {
                         // Even better than what we were hoping for: Found contradicting
@@ -575,14 +575,14 @@ impl LiteralConstraints {
                 } = e
                 {
                     if matches!(**expr1, MirScalarExpr::Literal(..)) {
-                        if let MirScalarExpr::Column(col) = **expr2 {
+                        if let MirScalarExpr::Column(col, _) = **expr2 {
                             if col >= mfp.input_arity {
                                 should_inline[col] = true;
                             }
                         }
                     }
                     if matches!(**expr2, MirScalarExpr::Literal(..)) {
-                        if let MirScalarExpr::Column(col) = **expr1 {
+                        if let MirScalarExpr::Column(col, _) = **expr1 {
                             if col >= mfp.input_arity {
                                 should_inline[col] = true;
                             }
