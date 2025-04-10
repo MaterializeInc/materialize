@@ -996,15 +996,13 @@ fn read_byte(data: &mut &[u8]) -> u8 {
 /// SAFETY:
 ///   * length <= N
 ///   * offset + length <= data.len()
-unsafe fn read_byte_array_sign_extending<const N: usize, const FILL: u8>(
+fn read_byte_array_sign_extending<const N: usize, const FILL: u8>(
     data: &mut &[u8],
     length: usize,
 ) -> [u8; N] {
     let mut raw = [FILL; N];
     let (prev, next) = data.split_at(length);
-    for (i, prev_byte) in prev.iter().enumerate() {
-        raw[i] = *prev_byte;
-    }
+    (raw[..prev.len()]).copy_from_slice(prev);
     *data = next;
     raw
 }
@@ -1015,10 +1013,7 @@ unsafe fn read_byte_array_sign_extending<const N: usize, const FILL: u8>(
 /// SAFETY:
 ///   * length <= N
 ///   * offset + length <= data.len()
-unsafe fn read_byte_array_extending_negative<const N: usize>(
-    data: &mut &[u8],
-    length: usize,
-) -> [u8; N] {
+fn read_byte_array_extending_negative<const N: usize>(data: &mut &[u8], length: usize) -> [u8; N] {
     read_byte_array_sign_extending::<N, 255>(data, length)
 }
 
@@ -1029,7 +1024,7 @@ unsafe fn read_byte_array_extending_negative<const N: usize>(
 /// SAFETY:
 ///   * length <= N
 ///   * offset + length <= data.len()
-unsafe fn read_byte_array_extending_nonnegative<const N: usize>(
+fn read_byte_array_extending_nonnegative<const N: usize>(
     data: &mut &[u8],
     length: usize,
 ) -> [u8; N] {
@@ -2459,7 +2454,9 @@ impl RowPacker<'_> {
             expected_datums += 1;
         }
 
-        // Validate that what was written maintains the correct invariants.
+        // Validate the invariants that 0, 1, or 2 elements were pushed, none are Null,
+        // and if two are pushed then the second is not less than the first. Panic in
+        // some cases and error in others.
         let mut actual_datums = 0;
         let mut seen = None;
         let mut dataz = &self.row.data[datum_check..];
@@ -2491,13 +2488,6 @@ impl RowPacker<'_> {
             "finite values must each push exactly one value; expected {expected_datums} but got {actual_datums}"
         );
 
-        // Anything that triggers this check is undefined behavior, so
-        // unnecessary but also trivial to perform the check in our case.
-        assert!(
-            datum_check == self.row.data.len(),
-            "non-Datum data packed into row"
-        );
-
         Ok(())
     }
 
@@ -2527,7 +2517,7 @@ impl RowPacker<'_> {
         let prev_len = self.row.data.len();
         let mut iter = self.row.iter();
         for _ in iter.by_ref().take(n) {}
-        let next_len = self.row.data.len();
+        let next_len = iter.data.len();
         // SAFETY: iterator offsets always lie on a datum boundary.
         unsafe { self.truncate(prev_len - next_len) }
     }
