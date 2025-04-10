@@ -296,7 +296,7 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
 1. Open the Materialize Console in your browser:
 
-   {{% self-managed/port-forwarding-handling %}}
+   {{% self-managed/port-forwarding-handling-local %}}
 
       {{< tip >}}
 
