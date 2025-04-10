@@ -1166,17 +1166,41 @@ impl<'a> Transaction<'a> {
             return Ok(());
         }
 
-        let to_remove = roles
+        let to_remove_keys = roles
             .iter()
-            .map(|role_id| (RoleKey { id: *role_id }, None))
+            .map(|role_id| RoleKey { id: *role_id })
+            .collect::<Vec<_>>();
+
+        let to_remove_roles = to_remove_keys
+            .iter()
+            .map(|role_key| (role_key.clone(), None))
             .collect();
-        let mut prev = self.roles.set_many(to_remove, self.op_id)?;
+
+        let mut prev = self.roles.set_many(to_remove_roles, self.op_id)?;
+
+        let to_remove_role_auth = to_remove_keys
+            .iter()
+            .map(|role_key| {
+                (
+                    RoleAuthKey {
+                        role_id: role_key.id,
+                    },
+                    None,
+                )
+            })
+            .collect();
+
+        let mut role_auth_prev = self.role_auth.set_many(to_remove_role_auth, self.op_id)?;
 
         prev.retain(|_k, v| v.is_none());
         if !prev.is_empty() {
             let err = prev.keys().map(|k| k.id.to_string()).join(", ");
             return Err(SqlCatalogError::UnknownRole(err).into());
         }
+
+        role_auth_prev.retain(|_k, v| v.is_none());
+        // The reason we don't to the same check as above is that the role auth table
+        // is not required to have all roles in the role table.
 
         Ok(())
     }

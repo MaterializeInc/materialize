@@ -47,10 +47,10 @@ COMPLETE 0
 statement error non inherit roles not yet supported
 CREATE ROLE foo NOINHERIT
 
-statement error LOGIN attribute is not supported, for more information consult the documentation at
+statement error db error: ERROR: SUPERUSER, PASSWORD, and LOGIN attributes is not supported in this environment. For more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
 CREATE ROLE foo LOGIN
 
-statement error db error: ERROR: self-managed auth is not enabled, setting password or superuser is not allowed are not supported
+statement error db error: ERROR: SUPERUSER, PASSWORD, and LOGIN attributes is not supported in this environment. For more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
 CREATE ROLE foo SUPERUSER
 
 statement error conflicting or redundant options

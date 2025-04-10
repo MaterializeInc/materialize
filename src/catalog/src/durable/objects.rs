@@ -1484,7 +1484,7 @@ pub struct SystemPrivilegesValue {
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct RoleAuthKey {
-    // Depending on what the future holds, here is where
+    // TODO(auth): Depending on what the future holds, here is where
     // we might also want to key by a `version` field.
     // That way we can store password versions or what have you.
     pub(crate) role_id: RoleId,

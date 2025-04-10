@@ -988,10 +988,14 @@ impl Coordinator {
     /// Validates the role attributes for a `CREATE ROLE` statement.
     fn validate_role_attributes(&self, attributes: &RoleAttributes) -> Result<(), AdapterError> {
         if !ENABLE_SELF_MANAGED_AUTH.get(self.catalog().system_config().dyncfgs()) {
-            if attributes.superuser.is_some() || attributes.password.is_some() {
-                return Err(AdapterError::Unsupported(
-                    "self-managed auth is not enabled, setting password or superuser is not allowed",
-                ));
+            if attributes.superuser.is_some()
+                || attributes.password.is_some()
+                || attributes.login.is_some()
+            {
+                return Err(AdapterError::UnavailableFeature {
+                    feature: "SUPERUSER, PASSWORD, and LOGIN attributes".to_string(),
+                    docs: Some("https://materialize.com/docs/sql/create-role/#details".to_string()),
+                });
             }
         }
         Ok(())

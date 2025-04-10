@@ -20,7 +20,7 @@ use ring::rand::SecureRandom;
 /// https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
 const DEFAULT_ITERATIONS: NonZeroU32 = NonZeroU32::new(600_000).unwrap();
 
-/// The default salt size, not currently configurable
+/// The default salt size, which isn't currently configurable.
 const DEFAULT_SALT_SIZE: usize = 32;
 
 /// The options for hashing a password
@@ -52,7 +52,7 @@ pub enum VerifyError {
 /// Hashes a password using PBKDF2 with SHA256
 /// and a random salt.
 pub fn hash_password(password: &String) -> PasswordHash {
-    let mut salt = [0u8; 32];
+    let mut salt = [0u8; DEFAULT_SALT_SIZE];
     ring::rand::SystemRandom::new().fill(&mut salt).unwrap();
 
     let hash = hash_password_inner(

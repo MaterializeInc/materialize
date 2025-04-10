@@ -175,6 +175,11 @@ pub enum AdapterError {
     Unstructured(anyhow::Error),
     /// The named feature is not supported and will (probably) not be.
     Unsupported(&'static str),
+    /// Some
+    UnavailableFeature {
+        feature: String,
+        docs: Option<String>,
+    },
     /// Attempted to read from log sources without selecting a target replica.
     UntargetedLogRead {
         log_names: Vec<String>,
@@ -524,6 +529,7 @@ impl AdapterError {
             AdapterError::UnknownClusterReplica { .. } => SqlState::UNDEFINED_OBJECT,
             AdapterError::UnrecognizedConfigurationParam(_) => SqlState::UNDEFINED_OBJECT,
             AdapterError::Unsupported(..) => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::UnavailableFeature { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Unstructured(_) => SqlState::INTERNAL_ERROR,
             AdapterError::UntargetedLogRead { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::DDLTransactionRace => SqlState::T_R_SERIALIZATION_FAILURE,
@@ -786,6 +792,16 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::AuthenticationError => {
                 write!(f, "authentication error")
+            }
+            AdapterError::UnavailableFeature { feature, docs } => {
+                write!(f, "{} is not supported in this environment.", feature)?;
+                if let Some(docs) = docs {
+                    write!(
+                        f,
+                        " For more information consult the documentation at {docs}"
+                    )?;
+                }
+                Ok(())
             }
         }
     }
