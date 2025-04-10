@@ -81,7 +81,6 @@ arm64_srcs = select({
             "src/aarch64/*.c",
             "src/aarch64/*.h",
         ],
-        exclude = [],
     ) + [
         # The Makefile doesn't include this and only includes it if the OS
         # is FreeBSD. This is inconsistent with the other archs, not sure
@@ -98,7 +97,6 @@ arm64_textual_hdrs = select({
         [
             "src/aarch64/G*.c",
         ],
-        exclude = [],
     ) + [
         "src/elf64.c",
     ],
@@ -234,6 +232,15 @@ expand_template(
     },
     template = "include/libunwind-common.h.in",
 )
+expand_template(
+    name = "libunwind_config_h",
+    out = "include/config.h",
+    substitutions = {
+        "@PACKAGE_STRING@": "libunwind",
+        "@PACKAGE_BUGREPORT@": "",
+    },
+    template = "include/config.h.in",
+)
 
 cc_library(
     name = "unwind",
@@ -250,6 +257,7 @@ cc_library(
         "include/remote.h",
         "include/unwind.h",
         ":libunwind_common_h",
+        ":libunwind_config_h",
     ] + select({
         "@platforms//cpu:arm64": glob(["include/tdep-aarch64/*.h"]) + ["include/libunwind-aarch64.h"],
         "@platforms//cpu:arm": glob(["include/tdep-arm/*.h"]) + ["include/libunwind-arm.h"],
