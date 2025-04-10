@@ -256,7 +256,7 @@ JOIN cdc.change_tables ch ON t.object_id = ch.source_object_id
             scale: get_value(&row, "col_scale")?,
         };
 
-        let columns = tables
+        let columns: &mut Vec<_> = tables
             .entry((
                 Arc::clone(&schema_name),
                 Arc::clone(&table_name),
