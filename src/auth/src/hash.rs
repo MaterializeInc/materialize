@@ -7,6 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// Clippy misreads some doc comments as HTML tags, so we disable the lint
+#![allow(rustdoc::invalid_html_tags)]
+
 use std::fmt::Display;
 use std::num::NonZeroU32;
 
