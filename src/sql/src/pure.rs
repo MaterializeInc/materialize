@@ -1014,10 +1014,10 @@ async fn purify_create_source(
             let subsources = sql_server::purify_source_exports(
                 &mut client,
                 &retrieved_source_references,
-                &external_references,
+                external_references,
                 &text_columns,
                 &exclude_columns,
-                &source_name,
+                source_name,
                 &reference_policy,
             )
             .await?;

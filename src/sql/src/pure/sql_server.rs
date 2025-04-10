@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use mz_proto::RustType;
 use mz_sql_parser::ast::display::AstDisplay;
@@ -27,6 +28,7 @@ use crate::pure::{
 
 /// Purify the requested [`ExternalReferences`] from the provided
 /// [`RetrievedSourceReferences`].
+#[allow(clippy::unused_async)]
 pub(super) async fn purify_source_exports(
     _client: &mut mz_sql_server_util::Client,
     retrieved_references: &RetrievedSourceReferences,
@@ -83,13 +85,12 @@ pub(super) async fn purify_source_exports(
             let capture_instance = requested
                 .meta
                 .sql_server_capture_instance()
-                .expect("sql server source")
-                .clone();
+                .expect("sql server source");
             let export = PurifiedSourceExport {
                 external_reference: requested.external_reference,
                 details: PurifiedExportDetails::SqlServer {
                     table,
-                    capture_instance,
+                    capture_instance: Arc::clone(capture_instance),
                 },
             };
 
