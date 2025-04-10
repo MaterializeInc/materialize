@@ -1884,7 +1884,8 @@ impl CalendarEra {
 }
 
 /// Takes a 'date timezone' 'date time timezone' string and splits it into 'date
-/// {time}' and 'timezone' components with a boolean if true indicates it is BC.
+/// {time}' and 'timezone' components then checks for a 'CalenderEra' defaulting
+/// to 'AD'.
 pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str, CalendarEra) {
     // First we need to see if the string contains " +" or " -" because
     // timestamps can come in a format YYYY-MM-DD {+|-}<tz> (where the timezone
