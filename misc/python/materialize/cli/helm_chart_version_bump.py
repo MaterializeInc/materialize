@@ -36,10 +36,6 @@ def main() -> int:
     # necessary? Would be nicer to only bump in one place
     mods = [
         (
-            MZ_ROOT / "misc" / "helm-charts" / "operator" / "values.yaml",
-            lambda docs: docs[0]["operator"]["image"].update({"tag": args.version}),
-        ),
-        (
             MZ_ROOT / "misc" / "helm-charts" / "operator" / "Chart.yaml",
             lambda docs: docs[0].update({"appVersion": args.version}),
         ),
@@ -47,17 +43,6 @@ def main() -> int:
             MZ_ROOT / "misc" / "helm-charts" / "testing" / "materialize.yaml",
             lambda docs: docs[2]["spec"].update(
                 {"environmentdImageRef": f"materialize/environmentd:{args.version}"}
-            ),
-        ),
-        (
-            MZ_ROOT
-            / "misc"
-            / "helm-charts"
-            / "operator"
-            / "tests"
-            / "deployment_test.yaml",
-            lambda docs: docs[0]["tests"][0]["asserts"][1]["equal"].update(
-                {"value": f"materialize/orchestratord:{args.version}"}
             ),
         ),
     ]
