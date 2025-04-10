@@ -394,7 +394,12 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     pub fn handle_compute_command(&mut self, cmd: ComputeCommand) {
         use ComputeCommand::*;
 
-        self.compute_state.command_history.push(cmd.clone());
+        let cmd2 = mz_ore::panic::catch_unwind_str(|| {
+            cmd.clone()
+        }).unwrap_or_else(|panic| {
+            panic!("allocation error cloning compute command: {panic}, cmd={cmd:?}");
+        });
+        self.compute_state.command_history.push(cmd2);
 
         // Record the command duration, per worker and command kind.
         let timer = self
