@@ -21,6 +21,7 @@ use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
+use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
 use mz_cloud_provider::{CloudProvider, InvalidCloudProviderError};
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -485,8 +486,8 @@ pub trait CatalogSchema {
 pub struct RoleAttributes {
     /// Indicates whether the role has inheritance of privileges.
     pub inherit: bool,
-    /// The password for the role
-    pub password: Option<String>,
+    /// The raw password of the role. This is for self managed auth, not cloud.
+    pub password: Option<Password>,
     /// Whether or not this user is a superuser.
     pub superuser: Option<bool>,
     /// Whether this role is login

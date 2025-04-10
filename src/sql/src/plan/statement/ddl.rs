@@ -20,6 +20,7 @@ use std::time::Duration;
 use itertools::{Either, Itertools};
 use mz_adapter_types::compaction::{CompactionWindow, DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION};
 use mz_adapter_types::dyncfgs::ENABLE_MULTI_REPLICA_SOURCES;
+use mz_auth::password::Password;
 use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL, ReplicaId};
 use mz_expr::{CollectionPlan, UnmaterializableFunc};
 use mz_interchange::avro::{AvroSchemaGenerator, DocTarget};
@@ -4192,7 +4193,7 @@ pub enum PlannedAlterRoleOption {
 #[derive(Debug, Clone)]
 pub struct PlannedRoleAttributes {
     pub inherit: Option<bool>,
-    pub password: Option<String>,
+    pub password: Option<Password>,
     /// `nopassword` is set to true if the password is from the parser is None.
     /// This is semantically different than not supplying a password at all,
     /// to allow for unsetting a password.
@@ -4246,7 +4247,7 @@ fn plan_role_attributes(options: Vec<RoleAttribute>) -> Result<PlannedRoleAttrib
             RoleAttribute::NoInherit => planned_attributes.inherit = Some(false),
             RoleAttribute::Password(password) => {
                 if let Some(password) = password {
-                    planned_attributes.password = Some(password.to_string());
+                    planned_attributes.password = Some(password.into());
                 } else {
                     planned_attributes.nopassword = Some(true);
                 }

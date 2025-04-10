@@ -15,9 +15,11 @@ use std::num::NonZeroU32;
 
 use base64::prelude::*;
 use ring::digest::SHA256_OUTPUT_LEN;
-use ring::hmac::{self, Key, HMAC_SHA256};
+use ring::hmac::{self, HMAC_SHA256, Key};
 use ring::pbkdf2::{self, PBKDF2_HMAC_SHA256 as SHA256};
 use ring::rand::SecureRandom;
+
+use crate::password::Password;
 
 /// The default iteration count as suggested by
 /// https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
@@ -54,7 +56,7 @@ pub enum VerifyError {
 
 /// Hashes a password using PBKDF2 with SHA256
 /// and a random salt.
-pub fn hash_password(password: &String) -> PasswordHash {
+pub fn hash_password(password: &Password) -> PasswordHash {
     let mut salt = [0u8; DEFAULT_SALT_SIZE];
     ring::rand::SystemRandom::new().fill(&mut salt).unwrap();
 
@@ -63,7 +65,7 @@ pub fn hash_password(password: &String) -> PasswordHash {
             iterations: DEFAULT_ITERATIONS,
             salt,
         },
-        password.as_bytes(),
+        password.to_string().as_bytes(),
     );
 
     PasswordHash {
@@ -75,8 +77,8 @@ pub fn hash_password(password: &String) -> PasswordHash {
 
 /// Hashes a password using PBKDF2 with SHA256
 /// and the given options.
-pub fn hash_password_with_opts(opts: &HashOpts, password: &String) -> PasswordHash {
-    let hash = hash_password_inner(opts, password.as_bytes());
+pub fn hash_password_with_opts(opts: &HashOpts, password: &Password) -> PasswordHash {
+    let hash = hash_password_inner(opts, password.to_string().as_bytes());
 
     PasswordHash {
         salt: opts.salt,
@@ -88,13 +90,13 @@ pub fn hash_password_with_opts(opts: &HashOpts, password: &String) -> PasswordHa
 /// Hashes a password using PBKDF2 with SHA256,
 /// and returns it in the SCRAM-SHA-256 format.
 /// The format is SCRAM-SHA-256$<iterations>:<salt>$<client_key>:<server_key>
-pub fn scram256_hash(password: &String) -> String {
+pub fn scram256_hash(password: &Password) -> String {
     let hashed_password = hash_password(password);
     scram256_hash_inner(hashed_password).to_string()
 }
 
 /// Verifies a password against a SCRAM-SHA-256 hash.
-pub fn scram256_verify(password: &String, hashed_password: &str) -> Result<(), VerifyError> {
+pub fn scram256_verify(password: &Password, hashed_password: &str) -> Result<(), VerifyError> {
     let opts = scram256_parse_opts(hashed_password)?;
     let hashed = hash_password_with_opts(&opts, password);
     let scram = scram256_hash_inner(hashed);
@@ -197,7 +199,7 @@ mod tests {
     #[mz_ore::test]
     fn test_hash_password() {
         let password = "password".to_string();
-        let hashed_password = hash_password(&password);
+        let hashed_password = hash_password(&password.into());
         assert_eq!(hashed_password.iterations, DEFAULT_ITERATIONS);
         assert_eq!(hashed_password.salt.len(), DEFAULT_SALT_SIZE);
         assert_eq!(hashed_password.hash.len(), SHA256_OUTPUT_LEN);
@@ -205,12 +207,12 @@ mod tests {
 
     #[mz_ore::test]
     fn test_scram256_hash() {
-        let password = "password".to_string();
+        let password = "password".into();
         let scram_hash = scram256_hash(&password);
 
         let res = scram256_verify(&password, &scram_hash);
         assert!(res.is_ok());
-        let res = scram256_verify(&"wrong_password".to_string(), &scram_hash);
+        let res = scram256_verify(&"wrong_password".into(), &scram_hash);
         assert!(res.is_err());
     }
 

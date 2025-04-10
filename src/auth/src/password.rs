@@ -7,12 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
 
 use static_assertions::assert_not_impl_all;
 
 ///Password is a String wrapper type that does not implement Display or Debug
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord, Arbitrary)]
 pub struct Password(String);
 
 assert_not_impl_all!(Password: Display);
@@ -20,6 +22,12 @@ assert_not_impl_all!(Password: Display);
 impl From<String> for Password {
     fn from(password: String) -> Self {
         Password(password)
+    }
+}
+
+impl From<&str> for Password {
+    fn from(password: &str) -> Self {
+        Password(password.to_string())
     }
 }
 

@@ -228,7 +228,7 @@ where
                         SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
                         "expected Password message",
                     ))
-                    .await
+                    .await;
             }
         };
         let auth_response = match adapter_client.authenticate(&user, &password.into()).await {

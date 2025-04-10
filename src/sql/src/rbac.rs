@@ -1174,11 +1174,27 @@ fn generate_rbac_requirements(
             name: _,
             option,
         }) => match option {
+            // Only superusers can alter the superuserness of a role.
             plan::PlannedAlterRoleOption::Attributes(attributes)
                 if attributes.superuser.unwrap_or(false) =>
             {
                 RbacRequirements {
                     superuser_action: Some("alter superuser role".to_string()),
+                    ..Default::default()
+                }
+            }
+            // Roles are allowed to change their own password.
+            plan::PlannedAlterRoleOption::Attributes(attributes)
+                if attributes.password.is_some() && role_id == *id =>
+            {
+                RbacRequirements::default()
+            }
+            // But no one elses...
+            plan::PlannedAlterRoleOption::Attributes(attributes)
+                if attributes.password.is_some() =>
+            {
+                RbacRequirements {
+                    superuser_action: Some("alter password of role".to_string()),
                     ..Default::default()
                 }
             }

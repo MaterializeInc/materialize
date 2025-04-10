@@ -263,6 +263,12 @@ COMPLETE 0
 simple conn=regress_role_admin,user=regress_role_admin
 ALTER ROLE password_role WITH PASSWORD 'new_password';
 ----
+db error: ERROR: permission denied to alter role password
+DETAIL: You must be a superuser to alter role password
+
+simple conn=regress_role_admin,user=regress_role_admin
+ALTER ROLE regress_role_admin WITH PASSWORD 'new_password';
+----
 COMPLETE 0
 
 simple conn=regress_role_admin,user=regress_role_admin
