@@ -9,8 +9,8 @@
 
 import os
 
-from materialize.mz_version import MzCliVersion
+from materialize.mz_version import MzDebugVersion
 
-APT_BUCKET = "materialize-apt"
 TAG = os.environ["BUILDKITE_TAG"]
-MZ_CLI_VERSION = MzCliVersion.parse(TAG)
+MZ_DEBUG_VERSION = MzDebugVersion.parse(TAG)
+MZ_DEBUG_VERSION_STR = f"v{MZ_DEBUG_VERSION.str_without_prefix()}"

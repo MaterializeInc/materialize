@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -6,11 +8,11 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+#
+# mz-debug -- build and run the Materialize debug tool.
 
-import os
+set -euo pipefail
 
-from materialize.mz_version import MzCliVersion
+cd "$(dirname "$0")/.."
 
-APT_BUCKET = "materialize-apt"
-TAG = os.environ["BUILDKITE_TAG"]
-MZ_CLI_VERSION = MzCliVersion.parse(TAG)
+exec cargo run --bin mz-debug -- "$@"

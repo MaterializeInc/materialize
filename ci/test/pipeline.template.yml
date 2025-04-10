@@ -759,6 +759,16 @@ steps:
       queue: hetzner-aarch64-4cpu-8gb
     skip: "Version upgrade skips are allowed for LTS releases now"
 
+  - id: mz-debug
+    label: "mz-debug tool"
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: mz-debug
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
   - id: deploy-website
     label: Deploy website
     depends_on: lint-docs

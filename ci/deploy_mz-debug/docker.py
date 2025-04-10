@@ -15,7 +15,7 @@ from materialize import mzbuild, ui
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch
 
-from .deploy_util import MZ_CLI_VERSION
+from .deploy_util import MZ_DEBUG_VERSION
 
 
 def main() -> None:
@@ -44,8 +44,8 @@ def main() -> None:
     print("--- Tagging Docker images")
     deps = [[repo.resolve_dependencies([repo.images["mz"]])["mz"]] for repo in repos]
 
-    mzbuild.publish_multiarch_images(f"v{MZ_CLI_VERSION.str_without_prefix()}", deps)
-    if tarball_uploader.is_latest_version(MZ_CLI_VERSION):
+    mzbuild.publish_multiarch_images(f"v{MZ_DEBUG_VERSION.str_without_prefix()}", deps)
+    if tarball_uploader.is_latest_version(MZ_DEBUG_VERSION):
         mzbuild.publish_multiarch_images("latest", deps)
 
 

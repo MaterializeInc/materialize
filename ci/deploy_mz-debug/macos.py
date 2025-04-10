@@ -10,7 +10,7 @@
 import os
 from pathlib import Path
 
-from ci import tarball_uploader
+from ci.tarball_uploader import TarballUploader
 from materialize import spawn
 from materialize.xcompile import Arch
 
@@ -21,18 +21,18 @@ from . import deploy_util
 def main() -> None:
     target = f"{Arch.host()}-apple-darwin"
 
-    print("--- Building mz-lsp-server")
+    print("--- Building mz-debug")
     spawn.runv(
-        ["cargo", "build", "--bin", "mz-lsp-server", "--release"],
+        ["cargo", "build", "--bin", "mz-debug", "--release"],
         env=dict(os.environ, RUSTUP_TOOLCHAIN=rust_version()),
     )
 
-    print(f"--- Uploading {target} binary tarball")
-    uploader = tarball_uploader.TarballUploader(
-        package_name="mz-lsp-server",
-        version=deploy_util.MZ_LSP_SERVER_VERSION,
+    uploader = TarballUploader(
+        package_name="mz-debug",
+        version=deploy_util.MZ_DEBUG_VERSION,
     )
-    uploader.deploy_tarball(target, Path("target") / "release" / "mz-lsp-server")
+
+    uploader.deploy_tarball(target, Path("target") / "release" / "mz-debug")
 
 
 if __name__ == "__main__":

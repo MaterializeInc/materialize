@@ -13,11 +13,11 @@ from pathlib import Path
 from ci import tarball_uploader
 from ci.deploy.deploy_util import rust_version
 from materialize import mzbuild, spawn, ui
-from materialize.mz_version import MzLspServerVersion
+from materialize.mz_version import MzDebugVersion
 from materialize.rustc_flags import Sanitizer
 
 from . import deploy_util
-from .deploy_util import MZ_LSP_SERVER_VERSION
+from .deploy_util import MZ_DEBUG_VERSION
 
 
 def main() -> None:
@@ -35,26 +35,26 @@ def main() -> None:
 
     print("--- Checking version")
     assert (
-        MzLspServerVersion.parse_without_prefix(
-            repo.rd.cargo_workspace.crates["mz-lsp-server"].version_string
+        MzDebugVersion.parse_without_prefix(
+            repo.rd.cargo_workspace.crates["mz-debug"].version_string
         )
-        == MZ_LSP_SERVER_VERSION
+        == MZ_DEBUG_VERSION
     )
 
-    print("--- Building mz-lsp-server")
+    print("--- Building mz-debug")
     # The bin/ci-builder uses target-xcompile as the volume and
     # is where the binary release will be available.
-    path = Path("target-xcompile") / "release" / "mz-lsp-server"
+    path = Path("target-xcompile") / "release" / "mz-debug"
     spawn.runv(
-        ["cargo", "build", "--bin", "mz-lsp-server", "--release"],
+        ["cargo", "build", "--bin", "mz-debug", "--release"],
         env=dict(os.environ, RUSTUP_TOOLCHAIN=rust_version()),
     )
     mzbuild.chmod_x(path)
 
     print(f"--- Uploading {target} binary tarball")
     uploader = tarball_uploader.TarballUploader(
-        package_name="mz-lsp-server",
-        version=deploy_util.MZ_LSP_SERVER_VERSION,
+        package_name="mz-debug",
+        version=deploy_util.MZ_DEBUG_VERSION,
     )
     uploader.deploy_tarball(target, path)
 

@@ -69,6 +69,11 @@ done
 # can be huge, clean up
 rm -rf cores
 
+echo "Removing mz-debug files"
+if find mz_debug*; then
+    rm -rf mz_debug*
+fi
+
 echo "Compressing parallel-workload-queries.log"
 bin/ci-builder run stable zstd --rm parallel-workload-queries.log || true
 

@@ -11,15 +11,15 @@ import boto3
 
 from ci.tarball_uploader import BINARIES_BUCKET
 
-from .deploy_util import MZ_CLI_VERSION
+from .deploy_util import MZ_DEBUG_VERSION
 
 
 def main() -> None:
     print("--- Uploading version file")
     boto3.client("s3").put_object(
-        Body=f"{MZ_CLI_VERSION.str_without_prefix()}",
+        Body=f"{MZ_DEBUG_VERSION.str_without_prefix()}",
         Bucket=BINARIES_BUCKET,
-        Key="mz-latest.version",
+        Key="mz-debug-latest.version",
         ContentType="text/plain",
     )
 

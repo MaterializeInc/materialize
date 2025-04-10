@@ -63,6 +63,11 @@ if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
     fi
 fi
 
+ci_unimportant_heading "cloudtest: Cleaning up mz_debug files from test/cloudtest/test_mz_debug_tool.py"
+if find mz_debug*; then
+    rm -rf mz_debug*
+fi
+
 ci_unimportant_heading "kail: Stopping instance..."
 docker logs kail > kail-output.log 2>&1
 docker stop kail
