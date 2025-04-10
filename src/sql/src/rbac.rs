@@ -427,12 +427,21 @@ fn generate_rbac_requirements(
         }
         Plan::CreateRole(plan::CreateRolePlan {
             name: _,
-            attributes: _,
-        }) => RbacRequirements {
-            privileges: vec![(SystemObjectId::System, AclMode::CREATE_ROLE, role_id)],
-            item_usage: &CREATE_ITEM_USAGE,
-            ..Default::default()
-        },
+            attributes,
+        }) => {
+            if attributes.superuser.unwrap_or(false) {
+                return RbacRequirements {
+                    superuser_action: Some("create superuser role".to_string()),
+                    ..Default::default()
+                };
+            } else {
+                return RbacRequirements {
+                    privileges: vec![(SystemObjectId::System, AclMode::CREATE_ROLE, role_id)],
+                    item_usage: &CREATE_ITEM_USAGE,
+                    ..Default::default()
+                };
+            }
+        }
         Plan::CreateNetworkPolicy(plan::CreateNetworkPolicyPlan { .. }) => RbacRequirements {
             privileges: vec![(
                 SystemObjectId::System,
@@ -1165,6 +1174,14 @@ fn generate_rbac_requirements(
             name: _,
             option,
         }) => match option {
+            plan::PlannedAlterRoleOption::Attributes(attributes)
+                if attributes.superuser.unwrap_or(false) =>
+            {
+                RbacRequirements {
+                    superuser_action: Some("alter superuser role".to_string()),
+                    ..Default::default()
+                }
+            }
             // Roles are allowed to change their own variables.
             plan::PlannedAlterRoleOption::Variable(_) if role_id == *id => {
                 RbacRequirements::default()
