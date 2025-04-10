@@ -39,7 +39,7 @@ test_cases = [
 ]
 
 
-def basic_test(c: Composition) -> None:
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     materialized = Materialized(
         ports=[
             "6875:6875",
@@ -68,7 +68,3 @@ def basic_test(c: Composition) -> None:
             "postgres://mz_system@localhost:6877/materialize",
         ]
     )
-
-
-def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    basic_test(c)
