@@ -945,7 +945,7 @@ steps:
         agents:
           # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
           # queue: hetzner-aarch64-8cpu-16gb
-          queue: linux-aarch64-medium
+          queue: builder-linux-aarch64
         plugins:
           - ./ci/plugins/cloudtest:
               args: [-m=long, test/cloudtest/test_upgrade.py]
