@@ -12,14 +12,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 use std::ops::DerefMut;
 use std::rc::Rc;
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use bytesize::ByteSize;
-use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::{Cursor, TraceReader};
 use differential_dataflow::Hashable;
 use differential_dataflow::IntoOwned;
+use differential_dataflow::lattice::Lattice;
+use differential_dataflow::trace::{Cursor, TraceReader};
 use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::protocol::command::{
     ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
@@ -30,30 +30,30 @@ use mz_compute_client::protocol::response::{
     StatusResponse, SubscribeResponse,
 };
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_compute_types::plan::LirId;
+use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigSet;
-use mz_expr::row::RowCollection;
 use mz_expr::SafeMfpPlan;
+use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::UIntGauge;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
+use mz_persist_client::Diagnostics;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::read::ReadHandle;
-use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_operators::stats::StatsCursor;
+use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs::ORE_OVERFLOWING_BEHAVIOR;
 use mz_storage_types::sources::SourceData;
 use mz_storage_types::time_dependence::TimeDependence;
-use mz_storage_types::StorageDiff;
 use mz_txn_wal::operator::TxnsContext;
 use mz_txn_wal::txn_cache::TxnsCache;
 use timely::communication::Allocate;
@@ -63,7 +63,7 @@ use timely::progress::frontier::Antichain;
 use timely::scheduling::Scheduler;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{oneshot, watch};
-use tracing::{debug, error, info, span, warn, Level};
+use tracing::{Level, debug, error, info, span, warn};
 use uuid::Uuid;
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
@@ -394,7 +394,102 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     pub fn handle_compute_command(&mut self, cmd: ComputeCommand) {
         use ComputeCommand::*;
 
-        self.compute_state.command_history.push(cmd.clone());
+        let cmd2 = mz_ore::panic::catch_unwind_str(|| cmd.clone()).unwrap_or_else(|panic| {
+            error!("allocation error cloning compute command: {panic}");
+            match &cmd {
+                CreateTimely { config, epoch } => {
+                    error!("  type=CreateTimely");
+                    error!("  config={config:?}");
+                    error!("  epoch={epoch:?}");
+                }
+                CreateInstance(instance_config) => {
+                    error!("  type=CreateInstance");
+                    error!("  instance_config={instance_config:?}");
+                }
+                InitializationComplete => {
+                    error!("  type=InitializationComplete");
+                }
+                AllowWrites => {
+                    error!("  type=AllowWrites");
+                }
+                UpdateConfiguration(compute_parameters) => {
+                    error!("  type=UpdateConfiguration");
+                    let ComputeParameters {
+                        workload_class,
+                        max_result_size,
+                        tracing,
+                        grpc_client,
+                        dyncfg_updates,
+                    } = compute_parameters;
+                    error!("  workload_class={workload_class:?}");
+                    error!("  max_result_size={max_result_size:?}");
+                    error!("  tracing={tracing:?}");
+                    error!("  grpc_client={grpc_client:?}");
+                    error!("  dyncfg_updates={dyncfg_updates:?}");
+                }
+                CreateDataflow(dataflow_description) => {
+                    error!("  type=CreateDataflow");
+                    let DataflowDescription {
+                        source_imports,
+                        index_imports,
+                        objects_to_build,
+                        index_exports,
+                        sink_exports,
+                        as_of,
+                        until,
+                        initial_storage_as_of,
+                        refresh_schedule,
+                        debug_name,
+                        time_dependence,
+                    } = dataflow_description;
+                    error!("  source_imports={source_imports:?}");
+                    error!("  index_imports={index_imports:?}");
+                    error!("  objects_to_build={objects_to_build:?}");
+                    error!("  index_exports={index_exports:?}");
+                    error!("  sink_exports={sink_exports:?}");
+                    error!("  as_of={as_of:?}");
+                    error!("  until={until:?}");
+                    error!("  initial_storage_as_of={initial_storage_as_of:?}");
+                    error!("  refresh_schedule={refresh_schedule:?}");
+                    error!("  debug_name={debug_name:?}");
+                    error!("  time_dependence={time_dependence:?}");
+                }
+                Schedule(global_id) => {
+                    error!("  type=Schedule");
+                    error!("  global_id={global_id:?}")
+                }
+                AllowCompaction { id, frontier } => {
+                    error!("  type=AllowCompaction");
+                    error!("  id={id:?}");
+                    error!("  frontier={frontier:?}");
+                }
+                Peek(peek) => {
+                    error!("  type=Peek");
+                    let mz_compute_client::protocol::command::Peek {
+                        target,
+                        literal_constraints,
+                        uuid,
+                        timestamp,
+                        finishing,
+                        map_filter_project,
+                        otel_ctx,
+                    } = peek;
+                    error!("  target={target:?}");
+                    error!("  literal_constraints={literal_constraints:?}");
+                    error!("  uuid={uuid:?}");
+                    error!("  timestamp={timestamp:?}");
+                    error!("  finishing={finishing:?}");
+                    error!("  map_filter_project={map_filter_project:?}");
+                    error!("  otel_ctx={otel_ctx:?}");
+                }
+                CancelPeek { uuid } => {
+                    error!("  type=CancelPeek");
+                    error!("  uuid={uuid:?}");
+                }
+            }
+            panic!("abort");
+        });
+        self.compute_state.command_history.push(cmd2);
 
         // Record the command duration, per worker and command kind.
         let timer = self
@@ -1500,8 +1595,7 @@ impl IndexPeek {
                     let copies: usize = if copies.is_negative() {
                         return Err(format!(
                             "Invalid data in source, saw retractions ({}) for row that does not exist: {:?}",
-                            -copies,
-                            &*borrow,
+                            -copies, &*borrow,
                         ));
                     } else {
                         copies.into_inner().try_into().unwrap()
