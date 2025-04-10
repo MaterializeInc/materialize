@@ -1259,6 +1259,7 @@ Trace {
                             RoleAttributes {
                                 inherit: true,
                                 superuser: None,
+                                login: None,
                             },
                         ),
                         membership: Some(
@@ -1298,6 +1299,7 @@ Trace {
                             RoleAttributes {
                                 inherit: true,
                                 superuser: None,
+                                login: None,
                             },
                         ),
                         membership: Some(
@@ -1337,6 +1339,7 @@ Trace {
                             RoleAttributes {
                                 inherit: true,
                                 superuser: None,
+                                login: None,
                             },
                         ),
                         membership: Some(
@@ -1376,6 +1379,7 @@ Trace {
                             RoleAttributes {
                                 inherit: true,
                                 superuser: None,
+                                login: None,
                             },
                         ),
                         membership: Some(
@@ -1415,6 +1419,7 @@ Trace {
                             RoleAttributes {
                                 inherit: true,
                                 superuser: None,
+                                login: None,
                             },
                         ),
                         membership: Some(
@@ -1454,6 +1459,7 @@ Trace {
                             RoleAttributes {
                                 inherit: true,
                                 superuser: None,
+                                login: None,
                             },
                         ),
                         membership: Some(
