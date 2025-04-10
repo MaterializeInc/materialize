@@ -975,21 +975,17 @@ async fn purify_create_source(
             // guidance as to which system settings need to be enabled.
             let mut replication_errors = vec![];
             for error in [
-                mz_sql_server_util::inspect::ensure_database_cdc_enabled(&mut client)
-                    .await
-                    .err(),
-                mz_sql_server_util::inspect::ensure_snapshot_isolation_enabled(&mut client)
-                    .await
-                    .err(),
+                mz_sql_server_util::inspect::ensure_database_cdc_enabled(&mut client).await,
+                mz_sql_server_util::inspect::ensure_snapshot_isolation_enabled(&mut client).await,
             ] {
                 match error {
-                    Some(mz_sql_server_util::SqlServerError::InvalidSystemSetting {
+                    Err(mz_sql_server_util::SqlServerError::InvalidSystemSetting {
                         name,
                         expected,
                         actual,
                     }) => replication_errors.push((name, expected, actual)),
-                    Some(other) => Err(other)?,
-                    None => (),
+                    Err(other) => Err(other)?,
+                    Ok(()) => (),
                 }
             }
             if !replication_errors.is_empty() {
@@ -1617,7 +1613,7 @@ async fn purify_alter_source_refresh_references(
             reference_client.get_source_references().await?
         }
         GenericSourceConnection::SqlServer(sql_server_source) => {
-            // Open a connetion to the upstream SQL Server instance.
+            // Open a connection to the upstream SQL Server instance.
             let sql_server_connection = &sql_server_source.connection;
             let config = sql_server_connection
                 .resolve_config(

@@ -176,28 +176,6 @@ pub async fn ensure_database_cdc_enabled(client: &mut Client) -> Result<(), SqlS
     Ok(())
 }
 
-/// Ensure change data capture (CDC) is enabled for the specified table.
-///
-/// See: <https://learn.microsoft.com/en-us/sql/relational-databases/track-changes/enable-and-disable-change-data-capture-sql-server?view=sql-server-ver16#enable-for-a-table>
-pub async fn ensure_table_cdc_enabled(
-    client: &mut Client,
-    schema: &str,
-    table: &str,
-) -> Result<(), SqlServerError> {
-    static TABLE_CDC_ENABLED_QUERY: &str = "
-SELECT is_tracked_by_cdc FROM sys.tables tables
-JOIN sys.schemas schemas
-ON tables.schema_id = schemas.schema_id
-WHERE schemas.name = @P1 AND tables.name = @P2;
-";
-    let result = client
-        .query(TABLE_CDC_ENABLED_QUERY, &[&schema, &table])
-        .await?;
-
-    check_system_result(&result, "table CDC".to_string(), true)?;
-    Ok(())
-}
-
 /// Ensure the `SNAPSHOT` transaction isolation level is enabled for the
 /// database the provided `client` is currently connected to.
 ///
@@ -275,7 +253,6 @@ JOIN cdc.change_tables ch ON t.object_id = ch.source_object_id
                 name,
                 capture_instance,
                 columns: columns.into(),
-                is_cdc_enabled: true,
             })
         })
         .collect::<Result<_, _>>()?;

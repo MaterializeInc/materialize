@@ -15,10 +15,11 @@ import "google/protobuf/empty.proto";
 import "repr/src/relation_and_scalar.proto";
 
 message ProtoSqlServerTableDesc {
+  reserved 4;
+
   string name = 1;
   string schema_name = 2;
   repeated ProtoSqlServerColumnDesc columns = 3;
-  bool is_cdc_enabled = 4;
 }
 
 message ProtoSqlServerColumnDesc {
