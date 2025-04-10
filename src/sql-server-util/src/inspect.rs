@@ -262,7 +262,7 @@ JOIN cdc.change_tables ch ON t.object_id = ch.source_object_id
                 Arc::clone(&table_name),
                 Arc::clone(&capture_instance),
             ))
-            .or_insert_with(|| Vec::default());
+            .or_default();
         columns.push(column);
     }
 
