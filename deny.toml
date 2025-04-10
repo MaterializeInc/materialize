@@ -144,6 +144,9 @@ skip = [
     { name = "rustix", version = "0.38.44" },
     # Used by ahash
     { name = "zerocopy", version = "0.7.23" },
+    # used by aws-lc-rs and aws-config, we can tolerate these seperate versions.
+    { name = "untrusted", version = "0.7.1" },
+    { name = "untrusted", version = "0.9.0" },
 ]
 
 [[bans.deny]]
@@ -204,6 +207,7 @@ wrappers = [
     "want",
     "wasm-bindgen-backend",
     "workspace-hack",
+    "bindgen",
 ]
 
 # We prefer the system's native TLS or OpenSSL to Rustls, since they are more
@@ -284,6 +288,7 @@ allow = [
     "Zlib",
     "Unicode-3.0",
     "Unicode-DFS-2016",
+    "OpenSSL",
 ]
 # copyleft is denied by default
 private = { ignore = true }
