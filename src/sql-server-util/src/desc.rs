@@ -49,8 +49,6 @@ pub struct SqlServerTableDesc {
     pub name: Arc<str>,
     /// Columns for the table.
     pub columns: Arc<[SqlServerColumnDesc]>,
-    /// Is CDC enabled for this table, required to replicate into Materialize.
-    pub is_cdc_enabled: bool,
 }
 
 impl SqlServerTableDesc {
@@ -67,7 +65,6 @@ impl SqlServerTableDesc {
             schema_name: raw.schema_name,
             name: raw.name,
             columns,
-            is_cdc_enabled: raw.is_cdc_enabled,
         })
     }
 
@@ -85,7 +82,6 @@ impl RustType<ProtoSqlServerTableDesc> for SqlServerTableDesc {
             name: self.name.to_string(),
             schema_name: self.schema_name.to_string(),
             columns: self.columns.iter().map(|c| c.into_proto()).collect(),
-            is_cdc_enabled: self.is_cdc_enabled,
         }
     }
 
@@ -99,7 +95,6 @@ impl RustType<ProtoSqlServerTableDesc> for SqlServerTableDesc {
             schema_name: proto.schema_name.into(),
             name: proto.name.into(),
             columns,
-            is_cdc_enabled: proto.is_cdc_enabled,
         })
     }
 }
@@ -114,10 +109,10 @@ pub struct SqlServerTableRaw {
     pub schema_name: Arc<str>,
     /// Name of the table.
     pub name: Arc<str>,
+    /// The capture instance replicating changes.
+    pub capture_instance: Arc<str>,
     /// Columns for the table.
     pub columns: Arc<[SqlServerColumnRaw]>,
-    /// Whether or not CDC is enabled for this table.
-    pub is_cdc_enabled: bool,
 }
 
 /// Description of a column from a table in Microsoft SQL Server.
@@ -543,6 +538,7 @@ impl RustType<proto_sql_server_column_desc::DecodeType> for SqlServerColumnDecod
 ///
 /// The goal of this type is to perform any expensive "downcasts" so in the hot
 /// path of decoding rows we do the minimal amount of work.
+#[derive(Debug)]
 pub struct SqlServerRowDecoder {
     decoders: Vec<(Arc<str>, ColumnType, SqlServerColumnDecodeType)>,
 }
@@ -701,8 +697,8 @@ mod tests {
         let sql_server_desc = SqlServerTableRaw {
             schema_name: "my_schema".into(),
             name: "my_table".into(),
+            capture_instance: "my_table_CT".into(),
             columns: sql_server_columns.into(),
-            is_cdc_enabled: true,
         };
         let sql_server_desc = SqlServerTableDesc::try_new(sql_server_desc).expect("known valid");
 
