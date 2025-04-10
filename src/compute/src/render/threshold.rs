@@ -11,20 +11,20 @@
 //!
 //! Consult [ThresholdPlan] documentation for details.
 
+use differential_dataflow::Data;
+use differential_dataflow::IntoOwned;
 use differential_dataflow::containers::Columnation;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::{Batch, Builder, Trace, TraceReader};
-use differential_dataflow::Data;
-use differential_dataflow::IntoOwned;
 use mz_compute_types::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
 use mz_expr::MirScalarExpr;
 use mz_repr::Diff;
+use timely::Container;
 use timely::container::PushInto;
 use timely::dataflow::Scope;
-use timely::progress::timestamp::Refines;
 use timely::progress::Timestamp;
-use timely::Container;
+use timely::progress::timestamp::Refines;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;

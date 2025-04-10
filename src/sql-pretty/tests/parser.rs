@@ -11,7 +11,7 @@ use datadriven::walk;
 use mz_sql_parser::ast::display::{AstDisplay, FormatMode};
 use mz_sql_parser::datadriven_testcase;
 use mz_sql_parser::parser::{parse_expr, parse_statements};
-use mz_sql_pretty::{to_pretty, Pretty, PrettyConfig};
+use mz_sql_pretty::{Pretty, PrettyConfig, to_pretty};
 
 // Use the parser's datadriven tests to get a comprehensive set of SQL statements. Assert they all
 // generate identical ASTs when pretty printed. Output the same output as the parser so datadriven

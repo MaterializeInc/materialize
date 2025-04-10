@@ -42,9 +42,9 @@ use crate::names::{
 use crate::parse;
 use crate::plan::scope::Scope;
 use crate::plan::statement::ddl::unplan_create_cluster;
-use crate::plan::statement::{dml, StatementContext, StatementDesc};
+use crate::plan::statement::{StatementContext, StatementDesc, dml};
 use crate::plan::{
-    query, transform_ast, HirRelationExpr, Params, Plan, PlanError, ShowColumnsPlan, ShowCreatePlan,
+    HirRelationExpr, Params, Plan, PlanError, ShowColumnsPlan, ShowCreatePlan, query, transform_ast,
 };
 
 pub fn describe_show_create_view(
@@ -1103,8 +1103,9 @@ fn humanize_sql_for_show_create(
                     });
                 }
                 CreateSourceConnection::SqlServer { .. } => {
+                    // TODO(sql_server1): Handle SHOW CREATE CONNECTION for SQL Server.
                     return Err(PlanError::Unsupported {
-                        feature: "SQL SERVER".to_string(),
+                        feature: "SHOW CREATE CONNECTION SQL SERVER".to_string(),
                         discussion_no: None,
                     });
                 }

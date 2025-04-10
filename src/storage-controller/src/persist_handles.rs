@@ -21,20 +21,20 @@ use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_persist_client::write::WriteHandle;
 use mz_persist_client::ShardId;
+use mz_persist_client::write::WriteHandle;
 use mz_persist_types::Codec64;
 use mz_repr::{GlobalId, TimestampManipulation};
 use mz_storage_client::client::{TableData, Update};
+use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::{InvalidUpper, TxnsCodecRow};
 use mz_storage_types::sources::SourceData;
-use mz_storage_types::StorageDiff;
 use mz_txn_wal::txns::{Tidy, TxnsHandle};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
-use tracing::{debug, info_span, Instrument, Span};
+use tracing::{Instrument, Span, debug, info_span};
 
 use crate::{PersistEpoch, StorageError};
 

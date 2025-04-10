@@ -111,24 +111,24 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use columnar::Columnar;
+use differential_dataflow::IntoOwned;
 use differential_dataflow::containers::Columnation;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, ShutdownButton};
 use differential_dataflow::trace::TraceReader;
-use differential_dataflow::IntoOwned;
 use differential_dataflow::{AsCollection, Collection, Data};
-use futures::channel::oneshot;
 use futures::FutureExt;
+use futures::channel::oneshot;
 use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
 use mz_compute_types::dyncfgs::{
     COMPUTE_APPLY_COLUMN_DEMANDS, COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK,
     COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES, ENABLE_COMPUTE_LOGICAL_BACKPRESSURE,
 };
+use mz_compute_types::plan::LirId;
 use mz_compute_types::plan::render_plan::{
     self, BindStage, LetBind, LetFreePlan, RecBind, RenderPlan,
 };
-use mz_compute_types::plan::LirId;
 use mz_expr::{EvalError, Id};
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::explain::DummyHumanizer;
@@ -138,10 +138,11 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
+use timely::PartialOrder;
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::to_stream::ToStream;
-use timely::dataflow::operators::{probe, BranchWhen, Capability, Operator, Probe};
+use timely::dataflow::operators::{BranchWhen, Capability, Operator, Probe, probe};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream, StreamCore};
 use timely::order::Product;
@@ -149,7 +150,6 @@ use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::ActivateOnDrop;
 use timely::worker::Worker as TimelyWorker;
-use timely::PartialOrder;
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
@@ -1096,10 +1096,11 @@ where
                 match plan {
                     mz_compute_types::plan::GetPlan::PassArrangements => {
                         // Assert that each of `keys` are present in `collection`.
-                        assert!(keys
-                            .arranged
-                            .iter()
-                            .all(|(key, _, _)| collection.arranged.contains_key(key)));
+                        assert!(
+                            keys.arranged
+                                .iter()
+                                .all(|(key, _, _)| collection.arranged.contains_key(key))
+                        );
                         assert!(keys.raw <= collection.collection.is_some());
                         // Retain only those keys we want to import.
                         collection.arranged.retain(|key, _value| {

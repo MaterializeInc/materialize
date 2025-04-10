@@ -15,8 +15,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::UIntGauge;
 use mz_ore::{assert_none, soft_assert_or_log};
-use timely::progress::Antichain;
 use timely::PartialOrder;
+use timely::progress::Antichain;
 
 use crate::controller::StorageCollections;
 use crate::metrics::HistoryMetrics;

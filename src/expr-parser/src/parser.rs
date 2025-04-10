@@ -18,9 +18,9 @@
 
 use mz_ore::collections::CollectionExt;
 use proc_macro2::LineColumn;
+use syn::Error;
 use syn::parse::{Parse, ParseStream, Parser};
 use syn::spanned::Spanned;
-use syn::Error;
 
 use super::TestCatalog;
 
@@ -206,7 +206,10 @@ mod relation {
         ctes.reverse();
         let cte_ids = ctes.iter().map(|(id, _, _)| id);
         if !cte_ids.clone().is_sorted() {
-            let msg = format!("Error parsing Let/LetRec: seen Return before With, but cte ids are not ordered descending: {:?}", cte_ids.collect::<Vec<_>>());
+            let msg = format!(
+                "Error parsing Let/LetRec: seen Return before With, but cte ids are not ordered descending: {:?}",
+                cte_ids.collect::<Vec<_>>()
+            );
             Err(Error::new(input.span(), msg))?
         }
         build_let_or_let_rec(ctes, body, recursive, with)
@@ -230,7 +233,10 @@ mod relation {
 
         let cte_ids = ctes.iter().map(|(id, _, _)| id);
         if !cte_ids.clone().is_sorted() {
-            let msg = format!("Error parsing Let/LetRec: seen With before Return, but cte ids are not ordered ascending: {:?}", cte_ids.collect::<Vec<_>>());
+            let msg = format!(
+                "Error parsing Let/LetRec: seen With before Return, but cte ids are not ordered ascending: {:?}",
+                cte_ids.collect::<Vec<_>>()
+            );
             Err(Error::new(input.span(), msg))?
         }
         build_let_or_let_rec(ctes, body, recursive, with)
@@ -854,11 +860,7 @@ mod scalar {
                         Err(lookahead.error())?
                     };
 
-                    if negate {
-                        Op::Neg(func)
-                    } else {
-                        Op::Unr(func)
-                    }
+                    if negate { Op::Neg(func) } else { Op::Unr(func) }
                 } else {
                     // We were expecting an optional operator but didn't find
                     // anything. Exit the parsing loop and process the postfix

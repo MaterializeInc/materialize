@@ -17,7 +17,7 @@ use std::error::Error;
 use std::net::SocketAddr as InetSocketAddr;
 use std::pin::Pin;
 use std::str::FromStr;
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll, ready};
 use std::{fmt, io};
 
 use async_trait::async_trait;
@@ -507,10 +507,31 @@ mod tests {
     #[crate::test]
     fn test_parse() {
         for (input, expected) in [
-            ("/valid/path", Ok(SocketAddr::Unix(UnixSocketAddr::from_pathname("/valid/path").unwrap()))),
-            ("/", Ok(SocketAddr::Unix(UnixSocketAddr::from_pathname("/").unwrap()))),
-            ("/\0", Err("invalid unix socket address syntax: paths must not contain interior null bytes")),
-            ("1.2.3.4:5678", Ok(SocketAddr::Inet(InetSocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(1, 2, 3, 4), 5678))))),
+            (
+                "/valid/path",
+                Ok(SocketAddr::Unix(
+                    UnixSocketAddr::from_pathname("/valid/path").unwrap(),
+                )),
+            ),
+            (
+                "/",
+                Ok(SocketAddr::Unix(
+                    UnixSocketAddr::from_pathname("/").unwrap(),
+                )),
+            ),
+            (
+                "/\0",
+                Err(
+                    "invalid unix socket address syntax: paths must not contain interior null bytes",
+                ),
+            ),
+            (
+                "1.2.3.4:5678",
+                Ok(SocketAddr::Inet(InetSocketAddr::V4(SocketAddrV4::new(
+                    Ipv4Addr::new(1, 2, 3, 4),
+                    5678,
+                )))),
+            ),
             ("1.2.3.4", Err("invalid internet socket address syntax")),
             ("bad", Err("invalid internet socket address syntax")),
         ] {

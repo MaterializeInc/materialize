@@ -16,10 +16,10 @@ use mz_repr::Diff;
 use serde::{Deserialize, Serialize};
 use serde_plain::{derive_display_from_serialize, derive_fromstr_from_deserialize};
 
+use crate::durable::CatalogError;
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::state_update::StateUpdateKind;
 use crate::durable::persist::{Timestamp, UnopenedPersistCatalogState};
-use crate::durable::CatalogError;
 
 /// The contents of the catalog are logically separated into separate [`Collection`]s, which
 /// describe the category of data that the content belongs to.

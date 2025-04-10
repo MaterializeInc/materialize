@@ -26,18 +26,18 @@ use mz_ore::error::ErrorExt;
 use mz_persist::location::Blob;
 use mz_persist_types::part::Part;
 use mz_persist_types::{Codec, Codec64};
-use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
+use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc::Sender;
-use tokio::sync::{mpsc, oneshot, TryAcquireError};
-use tracing::{debug, debug_span, error, trace, warn, Instrument, Span};
+use tokio::sync::{TryAcquireError, mpsc, oneshot};
+use tracing::{Instrument, Span, debug, debug_span, error, trace, warn};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::{BatchBuilderConfig, BatchBuilderInternal, BatchParts, PartDeletes};
 use crate::cfg::{
-    MiB, COMPACTION_HEURISTIC_MIN_INPUTS, COMPACTION_HEURISTIC_MIN_PARTS,
+    COMPACTION_HEURISTIC_MIN_INPUTS, COMPACTION_HEURISTIC_MIN_PARTS,
     COMPACTION_HEURISTIC_MIN_UPDATES, COMPACTION_MEMORY_BOUND_BYTES,
-    GC_BLOB_DELETE_CONCURRENCY_LIMIT,
+    GC_BLOB_DELETE_CONCURRENCY_LIMIT, MiB,
 };
 use crate::fetch::FetchBatchFilter;
 use crate::internal::encoding::Schemas;
@@ -943,9 +943,9 @@ mod tests {
     use timely::order::Product;
     use timely::progress::Antichain;
 
+    use crate::PersistLocation;
     use crate::batch::BLOB_TARGET_SIZE;
     use crate::tests::{all_ok, expect_fetch_part, new_test_client_cache};
-    use crate::PersistLocation;
 
     use super::*;
 

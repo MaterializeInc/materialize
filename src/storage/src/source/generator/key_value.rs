@@ -475,12 +475,12 @@ impl UpdateProducer {
     ) -> (
         u64,
         impl Iterator<
-                Item = (
-                    (usize, Result<SourceMessage, DataflowError>),
-                    MzOffset,
-                    Diff,
-                ),
-            > + 'a,
+            Item = (
+                (usize, Result<SourceMessage, DataflowError>),
+                MzOffset,
+                Diff,
+            ),
+        > + 'a,
     ) {
         let mut rng = create_consistent_rng(self.seed, self.next_offset, self.pi.partition);
 

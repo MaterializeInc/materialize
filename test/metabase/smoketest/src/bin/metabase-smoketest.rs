@@ -9,7 +9,7 @@
 
 use std::time::Duration;
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use itertools::Itertools;
 use tokio::net::TcpStream;
 use tokio_postgres::NoTls;

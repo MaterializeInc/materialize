@@ -18,7 +18,7 @@ use mysql_async::prelude::{FromRow, Queryable};
 use mysql_async::{FromRowError, Row};
 
 use mz_repr::adt::char::CharLength;
-use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
+use mz_repr::adt::numeric::{NUMERIC_DATUM_MAX_PRECISION, NumericMaxScale};
 use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::adt::varchar::VarCharMaxLength;
 use mz_repr::{ColumnType, ScalarType};

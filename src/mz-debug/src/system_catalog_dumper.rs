@@ -41,8 +41,8 @@ use mz_ore::task::{self, JoinHandle};
 use postgres_openssl::{MakeTlsConnector, TlsStream};
 use tracing::{error, info};
 
-use crate::utils::format_base_path;
 use crate::Context;
+use crate::utils::format_base_path;
 
 #[derive(Debug, Clone)]
 pub enum RelationCategory {

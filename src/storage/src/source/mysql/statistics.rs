@@ -19,12 +19,12 @@ use timely::progress::Antichain;
 
 use mz_mysql_util::query_sys_var;
 use mz_ore::future::InTask;
-use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition, GtidState};
 use mz_storage_types::sources::MySqlSourceConnection;
+use mz_storage_types::sources::mysql::{GtidPartition, GtidState, gtid_set_frontier};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 
 use crate::source::types::{Probe, ProgressStatisticsUpdate};
-use crate::source::{probe, RawSourceCreationConfig};
+use crate::source::{RawSourceCreationConfig, probe};
 
 use super::{ReplicationError, TransientError};
 

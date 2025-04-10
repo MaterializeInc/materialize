@@ -19,8 +19,9 @@ use std::sync::Arc;
 use futures::future;
 use itertools::{Either, Itertools};
 use mz_adapter_types::connection::ConnectionId;
+use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
-    Builtin, BuiltinLog, BuiltinTable, BuiltinView, BUILTIN_LOG_LOOKUP, BUILTIN_LOOKUP,
+    BUILTIN_LOG_LOOKUP, BUILTIN_LOOKUP, Builtin, BuiltinLog, BuiltinTable, BuiltinView,
 };
 use mz_catalog::durable::objects::{
     ClusterKey, DatabaseKey, DurableType, ItemKey, NetworkPolicyKey, RoleAuthKey, RoleKey,
@@ -33,7 +34,6 @@ use mz_catalog::memory::objects::{
     NetworkPolicy, Role, RoleAuth, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table,
     TableDataSource, TemporaryItem, Type, UpdateFrom,
 };
-use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller::clusters::{ReplicaConfig, ReplicaLogging};
 use mz_controller_types::ClusterId;
@@ -55,12 +55,12 @@ use mz_sql::session::vars::{VarError, VarInput};
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::Expr;
 use mz_storage_types::sources::Timeline;
-use tracing::{info_span, warn, Instrument};
+use tracing::{Instrument, info_span, warn};
 
+use crate::AdapterError;
 use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{BuiltinTableUpdate, CatalogState};
 use crate::util::index_sql;
-use crate::AdapterError;
 
 /// Maintains the state of retractions while applying catalog state updates for a single timestamp.
 /// [`CatalogState`] maintains denormalized state for certain catalog objects. Updating an object
@@ -726,7 +726,10 @@ impl CatalogState {
                         )
                     });
                 let CatalogItem::Index(_) = item else {
-                    panic!("internal error: builtin index {}'s SQL does not begin with \"CREATE INDEX\".", index.name);
+                    panic!(
+                        "internal error: builtin index {}'s SQL does not begin with \"CREATE INDEX\".",
+                        index.name
+                    );
                 };
 
                 self.insert_item(
@@ -868,7 +871,10 @@ impl CatalogState {
                         )
                     });
                 let CatalogItem::ContinualTask(_) = &item else {
-                    panic!("internal error: builtin continual task {}'s SQL does not begin with \"CREATE CONTINUAL TASK\".", ct.name);
+                    panic!(
+                        "internal error: builtin continual task {}'s SQL does not begin with \"CREATE CONTINUAL TASK\".",
+                        ct.name
+                    );
                 };
 
                 self.insert_item(
@@ -905,7 +911,10 @@ impl CatalogState {
                         )
                     });
                 let CatalogItem::Connection(_) = &mut item else {
-                    panic!("internal error: builtin connection {}'s SQL does not begin with \"CREATE CONNECTION\".", connection.name);
+                    panic!(
+                        "internal error: builtin connection {}'s SQL does not begin with \"CREATE CONNECTION\".",
+                        connection.name
+                    );
                 };
 
                 let mut acl_items = vec![rbac::owner_privilege(
@@ -1259,9 +1268,10 @@ impl CatalogState {
                 self.pack_source_references_update(&source_references, diff)
             }
             StateUpdateKind::AuditLog(audit_log) => {
-                vec![self
-                    .pack_audit_log_update(&audit_log.event, diff)
-                    .expect("could not pack audit log update")]
+                vec![
+                    self.pack_audit_log_update(&audit_log.event, diff)
+                        .expect("could not pack audit log update"),
+                ]
             }
             StateUpdateKind::NetworkPolicy(policy) => self
                 .pack_network_policy_update(&policy.id, diff)

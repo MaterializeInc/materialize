@@ -31,10 +31,10 @@ use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::replication::WalLevel;
 use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_proto::RustType;
-use mz_repr::{strconv, CatalogItemId, RelationDesc, RelationVersionSelector, Timestamp};
+use mz_repr::{CatalogItemId, RelationDesc, RelationVersionSelector, Timestamp, strconv};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::visit::{visit_function, Visit};
-use mz_sql_parser::ast::visit_mut::{visit_expr_mut, VisitMut};
+use mz_sql_parser::ast::visit::{Visit, visit_function};
+use mz_sql_parser::ast::visit_mut::{VisitMut, visit_expr_mut};
 use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceAddSubsourceOptionName, AlterSourceStatement, AvroDocOn,
     ColumnName, CreateMaterializedViewStatement, CreateSinkConnection, CreateSinkOptionName,
@@ -60,8 +60,8 @@ use mz_storage_types::sources::{
     SourceExportStatementDetails,
 };
 use prost::Message;
-use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
+use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use rdkafka::admin::AdminClient;
 use references::{RetrievedSourceReferences, SourceReferenceClient};
 use uuid::Uuid;
@@ -912,10 +912,13 @@ async fn purify_create_source(
                 )))),
             })
         }
-        CreateSourceConnection::SqlServer { .. } => {
-            // TODO(sql_server1)
+        CreateSourceConnection::SqlServer {
+            connection: _,
+            options: _,
+        } => {
+            // TODO(sql_server1): Support CREATE SOURCE ... FROM SQL SERVER.
             return Err(PlanError::Unsupported {
-                feature: "SQL SERVER".to_string(),
+                feature: "CREATE SOURCE ... FROM SQL SERVER".to_string(),
                 discussion_no: None,
             });
         }
@@ -1512,6 +1515,13 @@ async fn purify_alter_source_refresh_references(
             };
             reference_client.get_source_references().await?
         }
+        GenericSourceConnection::SqlServer(_sql_server_source) => {
+            // TODO(sql_server1): Support refereshing source references.
+            return Err(PlanError::Unsupported {
+                feature: "SQL SERVER".to_string(),
+                discussion_no: None,
+            });
+        }
         GenericSourceConnection::LoadGenerator(load_gen_connection) => {
             let reference_client = SourceReferenceClient::LoadGenerator {
                 generator: &load_gen_connection.load_generator,
@@ -1739,6 +1749,13 @@ async fn purify_create_table_from_source(
             // There should be exactly one source_export returned for this statement
             let (_, purified_export) = source_exports.into_iter().next().unwrap();
             purified_export
+        }
+        GenericSourceConnection::SqlServer(_sql_server_source) => {
+            // TODO(sql_server1): Support CREATE TABLE ... FROM SOURCE.
+            return Err(PlanError::Unsupported {
+                feature: "CREATE TABLE ... FROM SQL SERVER SOURCE".to_string(),
+                discussion_no: None,
+            });
         }
         GenericSourceConnection::LoadGenerator(load_gen_connection) => {
             let reference_client = SourceReferenceClient::LoadGenerator {

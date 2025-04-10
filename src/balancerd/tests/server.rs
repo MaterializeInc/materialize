@@ -19,14 +19,14 @@ use chrono::Utc;
 use futures::StreamExt;
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use mz_balancerd::{
-    BalancerConfig, BalancerService, CancellationResolver, FronteggResolver, Resolver, BUILD_INFO,
+    BUILD_INFO, BalancerConfig, BalancerService, CancellationResolver, FronteggResolver, Resolver,
 };
-use mz_environmentd::test_util::{self, make_pg_tls, Ca};
+use mz_environmentd::test_util::{self, Ca, make_pg_tls};
 use mz_frontegg_auth::{
     Authenticator as FronteggAuthentication, AuthenticatorConfig as FronteggConfig,
     DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
 };
-use mz_frontegg_mock::{models::ApiToken, models::UserConfig, FronteggMockServer};
+use mz_frontegg_mock::{FronteggMockServer, models::ApiToken, models::UserConfig};
 use mz_ore::cast::CastFrom;
 use mz_ore::id_gen::{conn_id_org_uuid, org_id_conn_bits};
 use mz_ore::metrics::MetricsRegistry;

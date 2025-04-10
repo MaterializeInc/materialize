@@ -14,9 +14,9 @@ use mz_catalog::durable::debug::{CollectionTrace, ConfigCollection, SettingColle
 use mz_catalog::durable::initialize::USER_VERSION_KEY;
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::{
-    test_bootstrap_args, CatalogError, DurableCatalogError, DurableCatalogState, Epoch, FenceError,
-    TestCatalogStateBuilder, BUILTIN_MIGRATION_SHARD_KEY, CATALOG_VERSION,
-    EXPRESSION_CACHE_SHARD_KEY,
+    BUILTIN_MIGRATION_SHARD_KEY, CATALOG_VERSION, CatalogError, DurableCatalogError,
+    DurableCatalogState, EXPRESSION_CACHE_SHARD_KEY, Epoch, FenceError, TestCatalogStateBuilder,
+    test_bootstrap_args,
 };
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_ore::{assert_none, assert_ok};

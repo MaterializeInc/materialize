@@ -210,8 +210,8 @@ use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::{GenericSourceConnection, IngestionDescription, SourceConnection};
 use mz_timely_util::antichain::AntichainExt;
 use timely::communication::Allocate;
-use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback, Leave, Map};
 use timely::dataflow::Scope;
+use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback, Leave, Map};
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::Semaphore;
@@ -318,6 +318,15 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     base_source_config,
                 ),
                 GenericSourceConnection::MySql(c) => crate::render::sources::render_source(
+                    mz_scope,
+                    &debug_name,
+                    c,
+                    description.clone(),
+                    &feedback,
+                    storage_state,
+                    base_source_config,
+                ),
+                GenericSourceConnection::SqlServer(c) => crate::render::sources::render_source(
                     mz_scope,
                     &debug_name,
                     c,

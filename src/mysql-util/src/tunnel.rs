@@ -16,15 +16,15 @@ use std::time::Duration;
 
 use mz_ore::future::{InTask, TimeoutError};
 use mz_ore::option::OptionExt;
-use mz_ore::task::{spawn, JoinHandleExt};
+use mz_ore::task::{JoinHandleExt, spawn};
 use mz_repr::CatalogItemId;
 use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig};
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 
-use crate::aws_rds::rds_auth_token;
 use crate::MySqlError;
+use crate::aws_rds::rds_auth_token;
 
 /// Configures an optional tunnel for use when connecting to a MySQL
 /// database.

@@ -9,8 +9,8 @@
 
 //! Remove TopK operators with both an offset of zero and no limit.
 
-use mz_expr::visit::Visit;
 use mz_expr::MirRelationExpr;
+use mz_expr::visit::Visit;
 
 use crate::TransformCtx;
 

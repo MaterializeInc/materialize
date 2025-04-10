@@ -13,7 +13,7 @@ use aws_sdk_kms::config::Region;
 use clap::Parser;
 use uuid::Uuid;
 
-use mz_license_keys::{make_license_key, ExpirationBehavior};
+use mz_license_keys::{ExpirationBehavior, make_license_key};
 
 #[derive(clap::Parser)]
 struct Opt {

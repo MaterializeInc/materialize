@@ -9,13 +9,13 @@
 
 //! See documentation on [[restore_blob]].
 
+use crate::ShardId;
 use crate::internal::encoding::UntypedState;
 use crate::internal::paths::BlobKey;
 use crate::internal::state::{BatchPart, RunPart, State};
 use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
 use crate::internal::state_versions::StateVersions;
 use crate::metrics::Metrics;
-use crate::ShardId;
 use anyhow::anyhow;
 use mz_persist::location::Blob;
 use timely::Container;

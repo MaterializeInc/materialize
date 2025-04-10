@@ -11,16 +11,16 @@
 
 use std::sync::Arc;
 
+use axum::Extension;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::Extension;
-use http::header::HOST;
 use http::HeaderValue;
+use http::header::HOST;
 use hyper::Uri;
 use hyper_tls::HttpsConnector;
-use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
+use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 
 pub(crate) struct ConsoleProxyConfig {

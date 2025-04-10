@@ -9,8 +9,8 @@
 
 //! A client for replicas of a compute instance.
 
-use std::sync::atomic::{self, AtomicBool};
 use std::sync::Arc;
+use std::sync::atomic::{self, AtomicBool};
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
@@ -25,7 +25,7 @@ use mz_service::client::GenericClient;
 use mz_service::params::GrpcClientParameters;
 use tokio::select;
 use tokio::sync::mpsc::error::SendError;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tracing::{debug, info, trace, warn};
 
 use crate::controller::instance::ReplicaResponse;

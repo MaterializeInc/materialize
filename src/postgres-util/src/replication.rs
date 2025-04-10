@@ -8,11 +8,11 @@
 // by the Apache License, Version 2.0.
 
 use std::str::FromStr;
-use tokio_postgres::{types::PgLsn, Client};
+use tokio_postgres::{Client, types::PgLsn};
 
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
 
-use crate::{simple_query_opt, Config, PostgresError};
+use crate::{Config, PostgresError, simple_query_opt};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum WalLevel {
@@ -133,7 +133,7 @@ pub async fn drop_replication_slots(
                 return Err(PostgresError::Generic(anyhow::anyhow!(
                     "multiple pg_replication_slots entries for slot {}",
                     &slot
-                )))
+                )));
             }
         }
     }

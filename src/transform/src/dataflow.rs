@@ -24,8 +24,8 @@ use mz_expr::{
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_ore::{assert_none, soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log};
-use mz_repr::explain::{DeltaJoinIndexUsageType, IndexUsageType, UsedIndexes};
 use mz_repr::GlobalId;
+use mz_repr::explain::{DeltaJoinIndexUsageType, IndexUsageType, UsedIndexes};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -562,7 +562,9 @@ fn prune_and_annotate_dataflow_index_imports(
                 // `objects_to_build` that will have a Get of the object that the index is on (see
                 // `DataflowDescription::export_index`). Therefore, we should have already requested
                 // an index usage when seeing that Get in `CollectIndexRequests`.
-                soft_panic_or_log!("We are seeing an index export on an id that's not mentioned in `objects_to_build`");
+                soft_panic_or_log!(
+                    "We are seeing an index export on an id that's not mentioned in `objects_to_build`"
+                );
                 requested_idxs.push((
                     idx_id,
                     arbitrary_index_key.to_owned(),
@@ -676,11 +678,13 @@ id: {}, key: {:?}",
     ) in dataflow.index_imports.iter_mut()
     {
         // A sanity check that we are not importing an index that we are also exporting.
-        assert!(!dataflow
-            .index_exports
-            .iter()
-            .map(|(exported_index_id, _)| exported_index_id)
-            .any(|exported_index_id| exported_index_id == index_id));
+        assert!(
+            !dataflow
+                .index_exports
+                .iter()
+                .map(|(exported_index_id, _)| exported_index_id)
+                .any(|exported_index_id| exported_index_id == index_id)
+        );
 
         let mut new_usage_types = Vec::new();
         // Let's see whether something has requested an index on this object that this imported

@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use differential_dataflow::lattice::Lattice;
-use futures::{future::Either, StreamExt};
+use futures::{StreamExt, future::Either};
 use mz_expr::{ColumnSpecs, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
@@ -29,38 +29,38 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::{PersistConfig, RetryParameters};
 use mz_persist_client::fetch::{FetchedBlob, FetchedPart};
 use mz_persist_client::fetch::{SerdeLeasedBatchPart, ShardSourcePart};
-use mz_persist_client::operators::shard_source::{shard_source, FilterResult, SnapshotMode};
+use mz_persist_client::operators::shard_source::{FilterResult, SnapshotMode, shard_source};
+use mz_persist_types::Codec64;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::columnar::{ColumnEncoder, Schema};
-use mz_persist_types::Codec64;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
+use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::{CollectionMetadata, TxnsCodecRow};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_storage_types::stats::RelationPartStats;
-use mz_storage_types::StorageDiff;
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use mz_timely_util::probe::ProbeNotify;
-use mz_txn_wal::operator::{txns_progress, TxnsContext};
+use mz_txn_wal::operator::{TxnsContext, txns_progress};
 use serde::{Deserialize, Serialize};
+use timely::PartialOrder;
 use timely::communication::Push;
-use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::ScopeParent;
 use timely::dataflow::channels::Message;
-use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::OutputHandleCore;
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Capability, Leave, OkErr};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
 use timely::dataflow::scopes::Child;
-use timely::dataflow::ScopeParent;
 use timely::dataflow::{Scope, Stream};
 use timely::order::TotalOrder;
-use timely::progress::timestamp::PathSummary;
 use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
+use timely::progress::timestamp::PathSummary;
 use timely::scheduling::Activator;
-use timely::PartialOrder;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::trace;
 
@@ -966,9 +966,7 @@ where
                     });
                 trace!(
                     "returning {} parts with {} bytes, frontier: {:?}",
-                    retired_count,
-                    retired_size,
-                    flow_control_frontier,
+                    retired_count, retired_size, flow_control_frontier,
                 );
 
                 if let Some(metrics) = &metrics {

@@ -18,17 +18,17 @@
 //! not create any new stateful operators.
 
 use mz_expr::{
-    join_permutations, permutation_for_arrangement, JoinInputCharacteristics, JoinInputMapper,
-    MapFilterProject, MirScalarExpr,
+    JoinInputCharacteristics, JoinInputMapper, MapFilterProject, MirScalarExpr, join_permutations,
+    permutation_for_arrangement,
 };
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::plan::AvailableCollections;
 use crate::plan::join::{
     JoinBuildState, JoinClosure, ProtoDeltaJoinPlan, ProtoDeltaPathPlan, ProtoDeltaStagePlan,
 };
-use crate::plan::AvailableCollections;
 
 /// A delta query is implemented by a set of paths, one for each input.
 ///

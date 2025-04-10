@@ -14,7 +14,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use camino::Utf8PathBuf;
 use guppy::graph::{BuildTargetId, PackageMetadata};
 use quote::ToTokens;

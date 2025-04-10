@@ -18,8 +18,8 @@ use mz_dyncfg::ConfigSet;
 use mz_ore::url::SensitiveUrl;
 use tracing::warn;
 
-use mz_postgres_client::metrics::PostgresClientMetrics;
 use mz_postgres_client::PostgresClientKnobs;
+use mz_postgres_client::metrics::PostgresClientMetrics;
 
 use crate::azure::{AzureBlob, AzureBlobConfig};
 use crate::file::{FileBlob, FileBlobConfig};

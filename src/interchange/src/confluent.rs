@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use byteorder::{BigEndian, ByteOrder};
 
 /// Extracts the schema_id placed in front of the serialized message by the confluent stack

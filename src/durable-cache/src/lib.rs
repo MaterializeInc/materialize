@@ -391,8 +391,8 @@ impl<C: DurableCacheCodec> DurableCache<C> {
 mod tests {
     use mz_ore::assert_none;
     use mz_persist_client::cache::PersistClientCache;
-    use mz_persist_types::codec_impls::StringSchema;
     use mz_persist_types::PersistLocation;
+    use mz_persist_types::codec_impls::StringSchema;
 
     use super::*;
 

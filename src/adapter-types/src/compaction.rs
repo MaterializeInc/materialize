@@ -71,7 +71,7 @@ impl From<CompactionWindow> for ReadPolicy<Timestamp> {
             CompactionWindow::Default => DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
             CompactionWindow::Duration(time) => time,
             CompactionWindow::DisableCompaction => {
-                return ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum()))
+                return ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum()));
             }
         };
         ReadPolicy::lag_writes_by(time, SINCE_GRANULARITY)

@@ -148,7 +148,7 @@ impl Format for Base64Format {
                     buf.push((s2 & 0b001111) << 4 | (s3 & 0b111100) >> 2);
                 }
                 (Some(b'='), _, _, _) | (_, Some(b'='), _, _) | (_, _, Some(b'='), _) => {
-                    return Err(EvalError::InvalidBase64Equals)
+                    return Err(EvalError::InvalidBase64Equals);
                 }
                 (Some(c1), Some(c2), Some(c3), Some(c4)) => {
                     let s1 = Self::decode_sextet(c1)?;

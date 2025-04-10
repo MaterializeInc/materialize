@@ -344,7 +344,7 @@ impl<R> Operation<R> {
 /// functions for details.
 pub fn sql_impl(
     expr: &str,
-) -> impl Fn(&QueryContext, Vec<ScalarType>) -> Result<HirScalarExpr, PlanError> {
+) -> impl Fn(&QueryContext, Vec<ScalarType>) -> Result<HirScalarExpr, PlanError> + use<> {
     let expr = mz_sql_parser::parser::parse_expr(expr).unwrap_or_else(|e| {
         panic!(
             "static function definition failed to parse {}: {}",
@@ -807,7 +807,8 @@ impl ParamType {
     fn name(&self) -> &'static str {
         match self {
             ParamType::Plain(t) => {
-                assert!(!t.is_custom_type(),
+                assert!(
+                    !t.is_custom_type(),
                     "custom types cannot currently be used as parameters; use a polymorphic parameter that accepts the custom type instead"
                 );
                 let t: mz_pgrepr::Type = t.into();
@@ -1384,11 +1385,7 @@ impl PolymorphicSolution {
             r.track_seen(&params[i], scalar_type);
         }
 
-        if !r.determine_key(ecx) {
-            None
-        } else {
-            Some(r)
-        }
+        if !r.determine_key(ecx) { None } else { Some(r) }
     }
 
     /// Determines the desired type of polymorphic compatibility, as well as the
@@ -1719,7 +1716,7 @@ macro_rules! privilege_fn {
             let fn_name = $fn_name;
             let catalog_tbl = $catalog_tbl;
             let public_role = RoleId::Public;
-            &format!(
+            format!(
                 "
                     CASE
                     -- We need to validate the privileges to return a proper error before anything
@@ -1758,7 +1755,7 @@ macro_rules! privilege_fn {
                     END
                 ",
             )
-    }
+        }
     };
 }
 
@@ -2104,7 +2101,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(String, String, String) => sql_impl_func("has_schema_privilege(mz_internal.mz_role_oid($1), mz_internal.mz_schema_oid($2), $3)") => Bool, 2268;
             params!(String, Oid, String) => sql_impl_func("has_schema_privilege(mz_internal.mz_role_oid($1), $2, $3)") => Bool, 2269;
             params!(Oid, String, String) => sql_impl_func("has_schema_privilege($1, mz_internal.mz_schema_oid($2), $3)") => Bool, 2270;
-            params!(Oid, Oid, String) => sql_impl_func(privilege_fn!("has_schema_privilege", "mz_schemas")) => Bool, 2271;
+            params!(Oid, Oid, String) => sql_impl_func(&privilege_fn!("has_schema_privilege", "mz_schemas")) => Bool, 2271;
             params!(String, String) => sql_impl_func("has_schema_privilege(current_user, $1, $2)") => Bool, 2272;
             params!(Oid, String) => sql_impl_func("has_schema_privilege(current_user, $1, $2)") => Bool, 2273;
         },
@@ -2112,7 +2109,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(String, String, String) => sql_impl_func("has_database_privilege(mz_internal.mz_role_oid($1), mz_internal.mz_database_oid($2), $3)") => Bool, 2250;
             params!(String, Oid, String) => sql_impl_func("has_database_privilege(mz_internal.mz_role_oid($1), $2, $3)") => Bool, 2251;
             params!(Oid, String, String) => sql_impl_func("has_database_privilege($1, mz_internal.mz_database_oid($2), $3)") => Bool, 2252;
-            params!(Oid, Oid, String) => sql_impl_func(privilege_fn!("has_database_privilege", "mz_databases")) => Bool, 2253;
+            params!(Oid, Oid, String) => sql_impl_func(&privilege_fn!("has_database_privilege", "mz_databases")) => Bool, 2253;
             params!(String, String) => sql_impl_func("has_database_privilege(current_user, $1, $2)") => Bool, 2254;
             params!(Oid, String) => sql_impl_func("has_database_privilege(current_user, $1, $2)") => Bool, 2255;
         },
@@ -2120,7 +2117,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(String, String, String) => sql_impl_func("has_table_privilege(mz_internal.mz_role_oid($1), $2::regclass::oid, $3)") => Bool, 1922;
             params!(String, Oid, String) => sql_impl_func("has_table_privilege(mz_internal.mz_role_oid($1), $2, $3)") => Bool, 1923;
             params!(Oid, String, String) => sql_impl_func("has_table_privilege($1, $2::regclass::oid, $3)") => Bool, 1924;
-            params!(Oid, Oid, String) => sql_impl_func(privilege_fn!("has_table_privilege", "mz_relations")) => Bool, 1925;
+            params!(Oid, Oid, String) => sql_impl_func(&privilege_fn!("has_table_privilege", "mz_relations")) => Bool, 1925;
             params!(String, String) => sql_impl_func("has_table_privilege(current_user, $1, $2)") => Bool, 1926;
             params!(Oid, String) => sql_impl_func("has_table_privilege(current_user, $1, $2)") => Bool, 1927;
         },
@@ -3641,7 +3638,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(String, String, String) => sql_impl_func("has_connection_privilege(mz_internal.mz_role_oid($1), mz_internal.mz_connection_oid($2), $3)") => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_TEXT_TEXT_TEXT_OID;
             params!(String, Oid, String) => sql_impl_func("has_connection_privilege(mz_internal.mz_role_oid($1), $2, $3)") => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_TEXT_OID_TEXT_OID;
             params!(Oid, String, String) => sql_impl_func("has_connection_privilege($1, mz_internal.mz_connection_oid($2), $3)") => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_OID_TEXT_TEXT_OID;
-            params!(Oid, Oid, String) => sql_impl_func(privilege_fn!("has_connection_privilege", "mz_connections")) => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_OID_OID_TEXT_OID;
+            params!(Oid, Oid, String) => sql_impl_func(&privilege_fn!("has_connection_privilege", "mz_connections")) => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_OID_OID_TEXT_OID;
             params!(String, String) => sql_impl_func("has_connection_privilege(current_user, $1, $2)") => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_TEXT_TEXT_OID;
             params!(Oid, String) => sql_impl_func("has_connection_privilege(current_user, $1, $2)") => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_OID_TEXT_OID;
         },
@@ -3657,7 +3654,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(String, String, String) => sql_impl_func("has_secret_privilege(mz_internal.mz_role_oid($1), mz_internal.mz_secret_oid($2), $3)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_TEXT_TEXT_TEXT_OID;
             params!(String, Oid, String) => sql_impl_func("has_secret_privilege(mz_internal.mz_role_oid($1), $2, $3)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_TEXT_OID_TEXT_OID;
             params!(Oid, String, String) => sql_impl_func("has_secret_privilege($1, mz_internal.mz_secret_oid($2), $3)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_OID_TEXT_TEXT_OID;
-            params!(Oid, Oid, String) => sql_impl_func(privilege_fn!("has_secret_privilege", "mz_secrets")) => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_OID_OID_TEXT_OID;
+            params!(Oid, Oid, String) => sql_impl_func(&privilege_fn!("has_secret_privilege", "mz_secrets")) => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_OID_OID_TEXT_OID;
             params!(String, String) => sql_impl_func("has_secret_privilege(current_user, $1, $2)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_TEXT_TEXT_OID;
             params!(Oid, String) => sql_impl_func("has_secret_privilege(current_user, $1, $2)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_OID_TEXT_OID;
         },
@@ -3695,7 +3692,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(String, String, String) => sql_impl_func("has_type_privilege(mz_internal.mz_role_oid($1), $2::regtype::oid, $3)") => Bool, 3138;
             params!(String, Oid, String) => sql_impl_func("has_type_privilege(mz_internal.mz_role_oid($1), $2, $3)") => Bool, 3139;
             params!(Oid, String, String) => sql_impl_func("has_type_privilege($1, $2::regtype::oid, $3)") => Bool, 3140;
-            params!(Oid, Oid, String) => sql_impl_func(privilege_fn!("has_type_privilege", "mz_types")) => Bool, 3141;
+            params!(Oid, Oid, String) => sql_impl_func(&privilege_fn!("has_type_privilege", "mz_types")) => Bool, 3141;
             params!(String, String) => sql_impl_func("has_type_privilege(current_user, $1, $2)") => Bool, 3142;
             params!(Oid, String) => sql_impl_func("has_type_privilege(current_user, $1, $2)") => Bool, 3143;
         },

@@ -25,6 +25,9 @@ const ANY_ENVIRONMENT_AUD: &str = "00000000-0000-0000-0000-000000000000";
 // list of public keys which are allowed to validate license keys. this is a
 // list to allow for key rotation if necessary.
 const PUBLIC_KEYS: &[&str] = &[include_str!("license_keys/production.pub")];
+// keys which we have issued but need to be revoked before their expiration
+// (due to being accidentally exposed or similar).
+const REVOKED_KEYS: &[&str] = &["eddaf004-dc1e-48cf-9cc1-41d1543d940a"];
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum ExpirationBehavior {
@@ -80,19 +83,23 @@ impl Default for ValidatedLicenseKey {
 }
 
 pub fn validate(license_key: &str, environment_id: &str) -> anyhow::Result<ValidatedLicenseKey> {
-    let mut err = anyhow!("no public key found");
+    let mut err = None;
     for pubkey in PUBLIC_KEYS {
         match validate_with_pubkey(license_key, pubkey, environment_id) {
             Ok(key) => {
                 return Ok(key);
             }
             Err(e) => {
-                err = e;
+                err = Some(e);
             }
         }
     }
 
-    Err(err)
+    if let Some(err) = err {
+        Err(err)
+    } else {
+        Err(anyhow!("no public key found"))
+    }
 }
 
 fn validate_with_pubkey(
@@ -182,6 +189,10 @@ fn validate_with_pubkey_v1(
 
     if !(jwt.claims.nbf..=jwt.claims.exp).contains(&jwt.claims.iat) {
         bail!("invalid issuance time");
+    }
+
+    if REVOKED_KEYS.contains(&jwt.claims.jti.as_str()) {
+        bail!("revoked license key");
     }
 
     Ok(ValidatedLicenseKey {

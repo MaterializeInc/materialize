@@ -29,8 +29,8 @@ use std::str::FromStr;
 use std::sync::LazyLock;
 
 use chrono::DateTime;
-use mz_avro::types::{DecimalValue, Value};
 use mz_avro::Schema;
+use mz_avro::types::{DecimalValue, Value};
 
 static UNPARSEABLE_SCHEMAS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
     vec![

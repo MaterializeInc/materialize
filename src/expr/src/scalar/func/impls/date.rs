@@ -15,13 +15,13 @@ use mz_repr::adt::date::Date;
 use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::{CheckedTimestamp, DateLike, TimestampPrecision};
-use mz_repr::{strconv, ColumnType, ScalarType};
+use mz_repr::{ColumnType, ScalarType, strconv};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use crate::EvalError;
 use crate::func::most_significant_unit;
 use crate::scalar::func::EagerUnaryFunc;
-use crate::EvalError;
 
 sqlfunc!(
     #[sqlname = "date_to_text"]

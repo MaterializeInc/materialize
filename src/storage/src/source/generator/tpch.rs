@@ -20,8 +20,8 @@ use mz_ore::now::NowFn;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric};
 use mz_repr::{Datum, Diff, Row};
-use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorOutput, TpchView};
 use mz_storage_types::sources::MzOffset;
+use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorOutput, TpchView};
 use rand::distributions::{Alphanumeric, DistString};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -159,7 +159,7 @@ impl Generator for Tpch {
                         row.clone()
                     }
                     TpchView::Orders => {
-                        let seed = rng.gen();
+                        let seed = rng.r#gen();
                         let (order, lineitems) = ctx.order_row(seed, key);
                         for row in lineitems {
                             pending.push_back((
@@ -217,7 +217,7 @@ impl Generator for Tpch {
                         Event::Message(MzOffset::from(offset), (row, Diff::MINUS_ONE)),
                     ));
                 }
-                let new_seed = rng.gen();
+                let new_seed = rng.r#gen();
                 let (new_order, new_lineitems) = ctx.order_row(new_seed, key);
                 for row in new_lineitems {
                     pending.push_back((

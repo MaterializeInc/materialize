@@ -16,7 +16,7 @@ use std::ops::BitOrAssign;
 use std::str::FromStr;
 
 use crate::adt::system::Oid;
-use anyhow::{anyhow, Error};
+use anyhow::{Error, anyhow};
 use bitflags::bitflags;
 use columnation::{Columnation, CopyRegion};
 use mz_ore::soft_assert_no_log;

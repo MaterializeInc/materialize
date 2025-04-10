@@ -21,8 +21,8 @@
 pub mod error;
 pub mod metrics;
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use deadpool_postgres::tokio_postgres::Config;

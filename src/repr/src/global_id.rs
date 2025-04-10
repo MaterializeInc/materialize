@@ -10,7 +10,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use anyhow::{anyhow, Error};
+use anyhow::{Error, anyhow};
 use columnar::Columnar;
 use columnation::{Columnation, CopyRegion};
 use mz_lowertest::MzReflect;

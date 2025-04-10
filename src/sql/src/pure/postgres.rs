@@ -12,8 +12,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mz_expr::MirScalarExpr;
-use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::Config;
+use mz_postgres_util::desc::PostgresTableDesc;
 use mz_proto::RustType;
 use mz_repr::{ColumnType, RelationType, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -21,16 +21,16 @@ use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement,
     ExternalReferences, Ident, TableConstraint, UnresolvedItemName, Value, WithOptionValue,
 };
-use mz_storage_types::sources::postgres::CastType;
 use mz_storage_types::sources::SourceExportStatementDetails;
+use mz_storage_types::sources::postgres::CastType;
 use prost::Message;
-use tokio_postgres::types::Oid;
 use tokio_postgres::Client;
+use tokio_postgres::types::Oid;
 
 use crate::names::{Aug, ResolvedItemName};
 use crate::normalize;
 use crate::plan::hir::ColumnRef;
-use crate::plan::typeconv::{plan_cast, CastContext};
+use crate::plan::typeconv::{CastContext, plan_cast};
 use crate::plan::{
     ExprContext, HirScalarExpr, PlanError, QueryContext, QueryLifetime, Scope, StatementContext,
 };
@@ -432,11 +432,7 @@ pub(super) async fn purify_source_exports(
                 .iter()
                 .find_map(|reference| {
                     let desc = reference.postgres_desc().expect("is postgres");
-                    if desc.oid == *id {
-                        Some(desc)
-                    } else {
-                        None
-                    }
+                    if desc.oid == *id { Some(desc) } else { None }
                 })
                 .expect("validated when generating text columns");
 

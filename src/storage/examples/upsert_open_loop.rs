@@ -108,7 +108,7 @@ use anyhow::bail;
 use differential_dataflow::Hashable;
 use futures::StreamExt;
 use itertools::Itertools;
-use mz_build_info::{build_info, BuildInfo};
+use mz_build_info::{BuildInfo, build_info};
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cast::CastFrom;
 use mz_ore::cli::{self, CliConfig};
@@ -117,16 +117,16 @@ use mz_ore::task;
 use mz_persist::indexed::columnar::ColumnarRecords;
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::probe::{Handle, ProbeNotify};
+use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
-use timely::PartialOrder;
 use tokio::net::TcpListener;
-use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::UnboundedReceiver;
-use tracing::{debug, error, info, info_span, trace, warn, Instrument};
+use tokio::sync::mpsc::error::SendError;
+use tracing::{Instrument, debug, error, info, info_span, trace, warn};
 
 // TODO(aljoscha): Make workload configurable: cardinality of keyspace, hot vs. cold keys, the
 // works.
@@ -1121,8 +1121,8 @@ impl Map for BTreeMap<Vec<u8>, Vec<u8>> {
 
 use std::path::{Path, PathBuf};
 
-use rocksdb::{Error, DB};
-use tokio::sync::oneshot::{channel, Sender};
+use rocksdb::{DB, Error};
+use tokio::sync::oneshot::{Sender, channel};
 
 #[derive(Clone)]
 struct IoThreadRocksDB {
@@ -1198,7 +1198,9 @@ impl IoThreadRocksDB {
                         continue 'batch;
                     }
                 }
-                debug!("finished writing batch size({size}) for worker {worker_id}, source {source_id}");
+                debug!(
+                    "finished writing batch size({size}) for worker {worker_id}, source {source_id}"
+                );
 
                 let _ = resp.send(Ok(previous));
             }

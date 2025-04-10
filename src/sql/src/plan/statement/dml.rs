@@ -34,8 +34,8 @@ use mz_sql_parser::ast::{
 };
 use mz_sql_parser::ident;
 use mz_storage_types::sinks::{
-    KafkaSinkConnection, KafkaSinkFormat, KafkaSinkFormatType, S3SinkFormat, StorageSinkConnection,
-    MAX_S3_SINK_FILE_SIZE, MIN_S3_SINK_FILE_SIZE,
+    KafkaSinkConnection, KafkaSinkFormat, KafkaSinkFormatType, MAX_S3_SINK_FILE_SIZE,
+    MIN_S3_SINK_FILE_SIZE, S3SinkFormat, StorageSinkConnection,
 };
 
 use crate::ast::display::AstDisplay;
@@ -48,18 +48,18 @@ use crate::ast::{
 use crate::catalog::CatalogItemType;
 use crate::names::{Aug, ResolvedItemName};
 use crate::normalize;
-use crate::plan::query::{plan_expr, plan_up_to, ExprContext, QueryLifetime};
+use crate::plan::query::{ExprContext, QueryLifetime, plan_expr, plan_up_to};
 use crate::plan::scope::Scope;
-use crate::plan::statement::{ddl, StatementContext, StatementDesc};
+use crate::plan::statement::{StatementContext, StatementDesc, ddl};
 use crate::plan::{
-    self, side_effecting_func, transform_ast, CopyFromFilter, CopyToPlan, CreateSinkPlan,
-    ExplainPushdownPlan, ExplainSinkSchemaPlan, ExplainTimestampPlan,
+    self, CopyFromFilter, CopyToPlan, CreateSinkPlan, ExplainPushdownPlan, ExplainSinkSchemaPlan,
+    ExplainTimestampPlan, side_effecting_func, transform_ast,
 };
 use crate::plan::{
-    query, CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan,
-    PlanError, QueryContext, ReadThenWritePlan, SelectPlan, SubscribeFrom, SubscribePlan,
+    CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan, PlanError,
+    QueryContext, ReadThenWritePlan, SelectPlan, SubscribeFrom, SubscribePlan, query,
 };
-use crate::plan::{with_options, CopyFromSource};
+use crate::plan::{CopyFromSource, with_options};
 use crate::session::vars::{self, ENABLE_COPY_FROM_REMOTE};
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
@@ -1330,7 +1330,9 @@ pub fn plan_copy(
                 CopyRelation::Named { name, columns } => {
                     if !columns.is_empty() {
                         // TODO(mouli): Add support for this
-                        sql_bail!("specifying columns for COPY <table_name> TO commands not yet supported; use COPY (SELECT...) TO ... instead");
+                        sql_bail!(
+                            "specifying columns for COPY <table_name> TO commands not yet supported; use COPY (SELECT...) TO ... instead"
+                        );
                     }
                     // Generate a synthetic SELECT query that just gets the table
                     let query = Query {

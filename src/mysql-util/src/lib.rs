@@ -14,8 +14,9 @@ use std::time::Duration;
 
 use aws_rds::RdsTokenError;
 pub use tunnel::{
-    Config, MySqlConn, TimeoutConfig, TunnelConfig, DEFAULT_CONNECT_TIMEOUT,
-    DEFAULT_SNAPSHOT_LOCK_WAIT_TIMEOUT, DEFAULT_SNAPSHOT_MAX_EXECUTION_TIME, DEFAULT_TCP_KEEPALIVE,
+    Config, DEFAULT_CONNECT_TIMEOUT, DEFAULT_SNAPSHOT_LOCK_WAIT_TIMEOUT,
+    DEFAULT_SNAPSHOT_MAX_EXECUTION_TIME, DEFAULT_TCP_KEEPALIVE, MySqlConn, TimeoutConfig,
+    TunnelConfig,
 };
 
 mod desc;
@@ -32,7 +33,7 @@ pub use replication::{
 
 pub mod schemas;
 pub use schemas::{
-    schema_info, MySqlTableSchema, QualifiedTableRef, SchemaRequest, SYSTEM_SCHEMAS,
+    MySqlTableSchema, QualifiedTableRef, SYSTEM_SCHEMAS, SchemaRequest, schema_info,
 };
 
 pub mod privileges;

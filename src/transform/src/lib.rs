@@ -30,8 +30,8 @@ use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_ore::id_gen::IdGen;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
-use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::GlobalId;
+use mz_repr::optimize::OptimizerFeatures;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use tracing::error;
 

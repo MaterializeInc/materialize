@@ -50,6 +50,7 @@ pub enum StatusNamespace {
     Kafka,
     Postgres,
     MySql,
+    SqlServer,
     Ssh,
     Upsert,
     Decode,
@@ -70,6 +71,7 @@ impl fmt::Display for StatusNamespace {
             Kafka => write!(f, "kafka"),
             Postgres => write!(f, "postgres"),
             MySql => write!(f, "mysql"),
+            SqlServer => write!(f, "sql-server"),
             Ssh => write!(f, "ssh"),
             Upsert => write!(f, "upsert"),
             Decode => write!(f, "decode"),
@@ -958,9 +960,9 @@ mod tests {
 
     use mz_ore::assert_err;
     use timely::container::CapacityContainerBuilder;
-    use timely::dataflow::operators::exchange::Exchange;
     use timely::dataflow::Scope;
-    use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+    use timely::dataflow::operators::exchange::Exchange;
+    use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
     /// A status to assert.
     #[derive(Debug, Clone, PartialEq, Eq)]

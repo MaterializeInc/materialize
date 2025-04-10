@@ -16,7 +16,7 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 
 use action::Run;
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use mz_ore::error::ErrorExt;
 use tempfile::NamedTempFile;
 use tracing::debug;

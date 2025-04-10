@@ -23,8 +23,8 @@ use mz_repr::Timestamp;
 use mz_sql::catalog::EnvironmentId;
 use tracing::info;
 
-use crate::deployment::state::DeploymentState;
 use crate::BUILD_INFO;
+use crate::deployment::state::DeploymentState;
 
 /// The necessary input for preflight checks.
 pub struct PreflightInput {
@@ -67,13 +67,17 @@ pub async fn preflight_legacy(
     tracing::info!("Requested deploy generation {deploy_generation}");
 
     if !openable_adapter_storage.is_initialized().await? {
-        tracing::info!("Catalog storage doesn't exist so there's no current deploy generation. We won't wait to be leader");
+        tracing::info!(
+            "Catalog storage doesn't exist so there's no current deploy generation. We won't wait to be leader"
+        );
         return Ok(openable_adapter_storage);
     }
     let catalog_generation = openable_adapter_storage.get_deployment_generation().await?;
     tracing::info!("Found catalog generation {catalog_generation:?}");
     if catalog_generation < deploy_generation {
-        tracing::info!("Catalog generation {catalog_generation:?} is less than deploy generation {deploy_generation}. Performing pre-flight checks");
+        tracing::info!(
+            "Catalog generation {catalog_generation:?} is less than deploy generation {deploy_generation}. Performing pre-flight checks"
+        );
         match openable_adapter_storage
             .open_savepoint(boot_ts.clone(), &bootstrap_args)
             .await
@@ -86,7 +90,9 @@ pub async fn preflight_legacy(
                 // initializing all implementations, regardless of the target
                 // implementation. Still it's easy to protect against this and worth it in
                 // case things change in the future.
-                tracing::warn!("Unable to perform upgrade test because the target implementation is uninitialized");
+                tracing::warn!(
+                    "Unable to perform upgrade test because the target implementation is uninitialized"
+                );
                 return Ok(mz_catalog::durable::persist_backed_catalog_state(
                     persist_client,
                     environment_id.organization_id(),
@@ -116,10 +122,14 @@ pub async fn preflight_legacy(
         )
         .await?)
     } else if catalog_generation == deploy_generation {
-        tracing::info!("Server requested generation {deploy_generation} which is equal to catalog's generation");
+        tracing::info!(
+            "Server requested generation {deploy_generation} which is equal to catalog's generation"
+        );
         Ok(openable_adapter_storage)
     } else {
-        mz_ore::halt!("Server started with requested generation {deploy_generation} but catalog was already at {catalog_generation:?}. Deploy generations must increase monotonically");
+        mz_ore::halt!(
+            "Server started with requested generation {deploy_generation} but catalog was already at {catalog_generation:?}. Deploy generations must increase monotonically"
+        );
     }
 }
 

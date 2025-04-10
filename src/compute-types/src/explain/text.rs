@@ -23,10 +23,10 @@
 use std::fmt;
 use std::ops::Deref;
 
-use itertools::{izip, Itertools};
-use mz_expr::explain::{fmt_text_constant_rows, HumanizedExplain, HumanizerMode};
+use itertools::{Itertools, izip};
+use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
 use mz_expr::{Id, MirScalarExpr};
-use mz_ore::str::{separated, IndentLike, StrExt};
+use mz_ore::str::{IndentLike, StrExt, separated};
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{
     CompactScalarSeq, CompactScalars, ExplainConfig, Indices, PlanRenderingContext,

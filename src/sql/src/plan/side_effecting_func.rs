@@ -157,17 +157,19 @@ fn extract_sef_call(
     if !from.is_empty() || !group_by.is_empty() || !options.is_empty() || projection.len() != 1 {
         return Ok(None);
     }
-    let [SelectItem::Expr {
-        expr:
-            Expr::Function(Function {
-                name,
-                args: FunctionArgs::Args { args, order_by },
-                filter: None,
-                over: None,
-                distinct: false,
-            }),
-        alias: None,
-    }] = &projection[..]
+    let [
+        SelectItem::Expr {
+            expr:
+                Expr::Function(Function {
+                    name,
+                    args: FunctionArgs::Args { args, order_by },
+                    filter: None,
+                    over: None,
+                    distinct: false,
+                }),
+            alias: None,
+        },
+    ] = &projection[..]
     else {
         return Ok(None);
     };

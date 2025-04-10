@@ -17,12 +17,12 @@ use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use crate::AlterCompatible;
 use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
 use crate::controller::AlterError;
-use crate::AlterCompatible;
 
 include!(concat!(
     env!("OUT_DIR"),

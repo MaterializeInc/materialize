@@ -41,14 +41,14 @@ use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use mz_avro::error::Error as AvroError;
-use mz_avro::schema::{resolve_schemas, Schema, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
+use mz_avro::schema::{Schema, SchemaNode, SchemaPiece, SchemaPieceOrNamed, resolve_schemas};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::future::OreFutureExt;
 use mz_ore::retry::Retry;
-use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
+use mz_repr::adt::numeric::{NUMERIC_DATUM_MAX_PRECISION, NumericMaxScale};
 use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::{ColumnName, ColumnType, RelationDesc, ScalarType};
 use tracing::warn;

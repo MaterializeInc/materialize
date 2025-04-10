@@ -21,13 +21,13 @@ use mz_ore::collections::HashMap;
 use mz_sql_lexer::keywords::Keyword;
 use mz_sql_lexer::lexer::{self, Token};
 use mz_sql_parser::ast::display::FormatMode;
-use mz_sql_parser::ast::{statement_kind_label_value, Raw, Statement};
+use mz_sql_parser::ast::{Raw, Statement, statement_kind_label_value};
 use mz_sql_parser::parser::parse_statements;
 use mz_sql_pretty::PrettyConfig;
 use regex::Regex;
 use ropey::Rope;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use tower_lsp::jsonrpc::{Error, ErrorCode, Result};
 use tower_lsp::lsp_types::*;
@@ -450,7 +450,7 @@ impl LanguageServer for Backend {
                         None
                     }
                 })
-                .last();
+                .next_back();
 
             if let Some(keyword) = last_keyword {
                 return match keyword {

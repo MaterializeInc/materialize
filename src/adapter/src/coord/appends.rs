@@ -31,8 +31,8 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::client::TableData;
 use mz_timestamp_oracle::WriteTimestamp;
 use smallvec::SmallVec;
-use tokio::sync::{oneshot, Notify, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
-use tracing::{debug_span, info, warn, Instrument, Span};
+use tokio::sync::{Notify, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore, oneshot};
+use tracing::{Instrument, Span, debug_span, info, warn};
 
 use crate::catalog::{BuiltinTableUpdate, Catalog};
 use crate::coord::{Coordinator, Message, PendingTxn, PlanValidity};
@@ -367,9 +367,7 @@ impl Coordinator {
                         let writes: Vec<_> = writes.keys().collect();
                         panic!(
                             "got to group commit with partial set of locks!\nmissing: {:?}, writes: {:?}, txn: {:?}",
-                            missing,
-                            writes,
-                            pending_txn,
+                            missing, writes, pending_txn,
                         );
                     }
                 },
@@ -551,7 +549,9 @@ impl Coordinator {
             })
             .collect();
         if !modified_tables.is_empty() {
-            info!("Appending to tables, {modified_tables:?}, at {timestamp}, advancing to {advance_to}");
+            info!(
+                "Appending to tables, {modified_tables:?}, at {timestamp}, advancing to {advance_to}"
+            );
         }
         // Instrument our table writes since they can block the coordinator.
         let histogram = self

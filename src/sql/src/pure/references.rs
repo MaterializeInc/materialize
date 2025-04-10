@@ -19,7 +19,7 @@ use mz_storage_types::sources::{ExternalReferenceResolutionError, SourceReferenc
 use crate::names::{FullItemName, RawDatabaseSpecifier};
 use crate::plan::{PlanError, SourceReference, SourceReferences};
 
-use super::{error::PgSourcePurificationError, RequestedSourceExport};
+use super::{RequestedSourceExport, error::PgSourcePurificationError};
 
 /// A client that allows determining all available source references and resolving
 /// them to a user-specified source reference during purification.

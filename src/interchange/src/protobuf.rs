@@ -9,7 +9,7 @@
 
 use std::collections::BTreeSet;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use mz_ore::str::StrExt;
 use mz_repr::{ColumnName, ColumnType, Datum, Row, RowPacker, ScalarType};
 use prost_reflect::{

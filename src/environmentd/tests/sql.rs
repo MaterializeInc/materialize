@@ -21,17 +21,17 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use axum::response::{IntoResponse, Response};
-use axum::{routing, Json, Router};
+use axum::{Json, Router, routing};
 use chrono::{DateTime, Utc};
 use http::StatusCode;
 use mz_adapter::{TimestampContext, TimestampExplanation};
 use mz_catalog::builtin::BUILTINS;
 use mz_environmentd::test_util::{
-    self, get_explain_timestamp, get_explain_timestamp_determination, try_get_explain_timestamp,
-    MzTimestamp, PostgresErrorExt, TestServerWithRuntime, KAFKA_ADDRS,
+    self, KAFKA_ADDRS, MzTimestamp, PostgresErrorExt, TestServerWithRuntime, get_explain_timestamp,
+    get_explain_timestamp_determination, try_get_explain_timestamp,
 };
 use mz_ore::collections::CollectionExt;
-use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
+use mz_ore::now::{EpochMillis, NOW_ZERO, NowFn};
 use mz_ore::result::ResultExt;
 use mz_ore::retry::Retry;
 use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
@@ -42,8 +42,8 @@ use mz_sql::catalog::BuiltinsConfig;
 use mz_sql::session::user::{INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, SUPPORT_USER, SYSTEM_USER};
 use mz_storage_types::sources::Timeline;
 use postgres::Row;
-use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::ClientConfig;
+use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka_sys::RDKafkaErrorCode;
 use regex::Regex;
 use serde_json::json;
@@ -565,7 +565,7 @@ fn test_subscribe_basic() {
             ))
             .unwrap();
 
-        for (mut expected_ts, expected_data) in events.iter() {
+        for &(mut expected_ts, ref expected_data) in events.iter() {
             if expected_ts < ts - 1 {
                 // If the thing we initially got was before the timestamp, it should have gotten
                 // fast-forwarded up to the timestamp.
@@ -636,10 +636,11 @@ fn test_subscribe_basic() {
         }
     };
 
-    assert!(err
-        .unwrap_db_error()
-        .message()
-        .starts_with("Timestamp (1) is not valid for all inputs"));
+    assert!(
+        err.unwrap_db_error()
+            .message()
+            .starts_with("Timestamp (1) is not valid for all inputs")
+    );
 }
 
 /// Test the done messages by sending inserting a single row and waiting to
@@ -1349,8 +1350,10 @@ fn test_transactional_explain_timestamps() {
         .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM s.t2;", &[])
         .unwrap_err();
 
-    assert!(format!("{}", error)
-        .contains("Transactions can only reference objects in the same timedomain"));
+    assert!(
+        format!("{}", error)
+            .contains("Transactions can only reference objects in the same timedomain")
+    );
 
     client_reads.batch_execute("COMMIT").unwrap();
 
@@ -1877,26 +1880,34 @@ async fn test_session_linearizability(isolation_level: &str) {
 fn test_internal_users() {
     let server = test_util::TestHarness::default().start_blocking();
 
-    assert!(server
-        .pg_config()
-        .user(&SYSTEM_USER.name)
-        .connect(postgres::NoTls)
-        .is_err());
-    assert!(server
-        .pg_config_internal()
-        .user(&SYSTEM_USER.name)
-        .connect(postgres::NoTls)
-        .is_ok());
-    assert!(server
-        .pg_config_internal()
-        .user(&SUPPORT_USER.name)
-        .connect(postgres::NoTls)
-        .is_ok());
-    assert!(server
-        .pg_config_internal()
-        .user("mz_something_else")
-        .connect(postgres::NoTls)
-        .is_err());
+    assert!(
+        server
+            .pg_config()
+            .user(&SYSTEM_USER.name)
+            .connect(postgres::NoTls)
+            .is_err()
+    );
+    assert!(
+        server
+            .pg_config_internal()
+            .user(&SYSTEM_USER.name)
+            .connect(postgres::NoTls)
+            .is_ok()
+    );
+    assert!(
+        server
+            .pg_config_internal()
+            .user(&SUPPORT_USER.name)
+            .connect(postgres::NoTls)
+            .is_ok()
+    );
+    assert!(
+        server
+            .pg_config_internal()
+            .user("mz_something_else")
+            .connect(postgres::NoTls)
+            .is_err()
+    );
 }
 
 #[mz_ore::test]
@@ -1993,15 +2004,17 @@ fn test_alter_system_invalid_param() {
     let res = mz_client
         .batch_execute("ALTER SYSTEM SET invalid_param TO 42")
         .unwrap_err();
-    assert!(res
-        .to_string()
-        .contains("unrecognized configuration parameter \"invalid_param\""));
+    assert!(
+        res.to_string()
+            .contains("unrecognized configuration parameter \"invalid_param\"")
+    );
     let res = mz_client
         .batch_execute("ALTER SYSTEM RESET invalid_param")
         .unwrap_err();
-    assert!(res
-        .to_string()
-        .contains("unrecognized configuration parameter \"invalid_param\""));
+    assert!(
+        res.to_string()
+            .contains("unrecognized configuration parameter \"invalid_param\"")
+    );
 }
 
 #[mz_ore::test]
@@ -2246,10 +2259,11 @@ fn test_peek_on_dropped_cluster() {
             &SqlState::INTERNAL_ERROR,
             "error code should match INTERNAL_ERROR"
         );
-        assert!(err
-            .message()
-            .contains("query could not complete because cluster \"quickstart\" was dropped"),
-                "error message should contain 'query could not complete because cluster \"quickstart\" was dropped'");
+        assert!(
+            err.message()
+                .contains("query could not complete because cluster \"quickstart\" was dropped"),
+            "error message should contain 'query could not complete because cluster \"quickstart\" was dropped'"
+        );
     });
 
     // Wait for asynchronous query to start.
@@ -2306,16 +2320,19 @@ fn test_emit_timestamp_notice() {
 
     // Wait until there's a query timestamp notice.
     let first_timestamp = Retry::default()
-        .retry(|_| loop {
-            match rx.try_next() {
-                Ok(Some(msg)) => {
-                    if let Some(caps) = timestamp_re.captures(msg.detail().unwrap_or_default()) {
-                        let ts: u64 = caps.get(1).unwrap().as_str().parse().unwrap();
-                        return Ok(mz_repr::Timestamp::from(ts));
+        .retry(|_| {
+            loop {
+                match rx.try_next() {
+                    Ok(Some(msg)) => {
+                        if let Some(caps) = timestamp_re.captures(msg.detail().unwrap_or_default())
+                        {
+                            let ts: u64 = caps.get(1).unwrap().as_str().parse().unwrap();
+                            return Ok(mz_repr::Timestamp::from(ts));
+                        }
                     }
+                    Ok(None) => panic!("unexpected channel close"),
+                    Err(e) => return Err(e),
                 }
-                Ok(None) => panic!("unexpected channel close"),
-                Err(e) => return Err(e),
             }
         })
         .unwrap();
@@ -2489,10 +2506,11 @@ fn test_subscribe_on_dropped_source() {
 
     fn assert_subscribe_error(res: Result<(), tokio_postgres::error::Error>) {
         assert_err!(res);
-        assert!(res
-            .unwrap_db_error()
-            .message()
-            .contains("subscribe has been terminated because underlying relation"));
+        assert!(
+            res.unwrap_db_error()
+                .message()
+                .contains("subscribe has been terminated because underlying relation")
+        );
     }
 
     let server = test_util::TestHarness::default().start_blocking();
@@ -3288,18 +3306,22 @@ async fn test_retain_history() {
         .unwrap();
 
     // Must fail before flag set.
-    assert!(client
-        .batch_execute(
-            "CREATE MATERIALIZED VIEW v WITH (RETAIN HISTORY = FOR '2s') AS SELECT * FROM t",
-        )
-        .await
-        .is_err());
-    assert!(client
-        .batch_execute(
-            "CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY = FOR '2s')",
-        )
-        .await
-        .is_err());
+    assert!(
+        client
+            .batch_execute(
+                "CREATE MATERIALIZED VIEW v WITH (RETAIN HISTORY = FOR '2s') AS SELECT * FROM t",
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        client
+            .batch_execute(
+                "CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY = FOR '2s')",
+            )
+            .await
+            .is_err()
+    );
 
     sys_client
         .batch_execute("ALTER SYSTEM SET enable_logical_compaction_window = true")

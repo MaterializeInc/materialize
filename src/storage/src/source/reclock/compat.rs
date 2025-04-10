@@ -18,25 +18,25 @@ use std::time::Duration;
 use anyhow::Context;
 use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
-use futures::stream::LocalBoxStream;
 use futures::StreamExt;
+use futures::stream::LocalBoxStream;
 use mz_ore::soft_panic_or_log;
 use mz_ore::vec::VecExt;
+use mz_persist_client::Diagnostics;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::read::ListenEvent;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::Diagnostics;
-use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec64;
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, RelationDesc};
 use mz_storage_client::util::remap_handle::{RemapHandle, RemapHandleReader};
+use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::{SourceData, SourceTimestamp};
-use mz_storage_types::StorageDiff;
 use timely::order::PartialOrder;
-use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp;
+use timely::progress::frontier::Antichain;
 use tokio::sync::watch;
 
 /// A handle to a persist shard that stores remap bindings
@@ -88,7 +88,10 @@ where
         let remap_shard = if let Some(remap_shard) = metadata.remap_shard {
             remap_shard
         } else {
-            panic!("cannot create remap PersistHandle for collection without remap shard: {id}, metadata: {:?}", metadata);
+            panic!(
+                "cannot create remap PersistHandle for collection without remap shard: {id}, metadata: {:?}",
+                metadata
+            );
         };
 
         let persist_client = persist_clients
@@ -143,7 +146,9 @@ where
 
             // If we're still here after 5 hours, something has gone wrong and
             // we complain.
-            soft_panic_or_log!("since of remap shard is the empty antichain, source_id = {id}, worker_id = {worker_id}");
+            soft_panic_or_log!(
+                "since of remap shard is the empty antichain, source_id = {id}, worker_id = {worker_id}"
+            );
         }
 
         if !PartialOrder::less_equal(since, &as_of) {

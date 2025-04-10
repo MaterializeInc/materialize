@@ -9,11 +9,11 @@
 
 use crate::models::*;
 use crate::server::Context;
-use crate::utils::{generate_access_token, generate_refresh_token, RefreshTokenTarget};
-use axum::{extract::State, http::StatusCode, Json};
+use crate::utils::{RefreshTokenTarget, generate_access_token, generate_refresh_token};
+use axum::{Json, extract::State, http::StatusCode};
 use mz_frontegg_auth::{ApiTokenResponse, ClaimTokenType};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 pub async fn handle_post_auth_api_token(
     State(context): State<Arc<Context>>,

@@ -30,7 +30,7 @@ use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{AstInfo, Expr, Ident, Raw, RawDataType, RawItemName};
 use mz_sql_parser::datadriven_testcase;
 use mz_sql_parser::parser::{
-    self, parse_statements, parse_statements_with_limit, MAX_STATEMENT_BATCH_SIZE,
+    self, MAX_STATEMENT_BATCH_SIZE, parse_statements, parse_statements_with_limit,
 };
 
 #[mz_ore::test]

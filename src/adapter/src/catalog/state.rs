@@ -22,8 +22,9 @@ use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent};
 use mz_build_info::DUMMY_BUILD_INFO;
+use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
-    Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, BUILTINS,
+    BUILTINS, Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType,
 };
 use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
 use mz_catalog::expr_cache::LocalExpressions;
@@ -34,7 +35,6 @@ use mz_catalog::memory::objects::{
     NetworkPolicy, Role, RoleAuth, Schema, Secret, Sink, Source, SourceReferences, Table,
     TableDataSource, Type, View,
 };
-use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
     ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaAllocation, ReplicaLocation,
     UnmanagedReplicaLocation,
@@ -78,24 +78,24 @@ use mz_sql::plan::{
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
-use mz_sql::session::vars::{SystemVars, Var, VarInput, DEFAULT_DATABASE_NAME};
+use mz_sql::session::vars::{DEFAULT_DATABASE_NAME, SystemVars, Var, VarInput};
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_client::controller::StorageMetadata;
+use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::connections::inline::{
     ConnectionResolver, InlinedConnection, IntoInlineConnection,
 };
-use mz_storage_types::connections::ConnectionContext;
 use serde::Serialize;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
+use crate::AdapterError;
 use crate::catalog::{Catalog, ConnCatalog};
 use crate::coord::ConnMeta;
 use crate::optimize::{self, Optimize, OptimizerCatalog};
 use crate::session::Session;
-use crate::AdapterError;
 
 /// The in-memory representation of the Catalog. This struct is not directly used to persist
 /// metadata to persistent storage. For persistent metadata see
@@ -764,7 +764,9 @@ impl CatalogState {
             if let Some(global_id) = schema.types.get(name) {
                 match res {
                     None => res = Some(self.get_entry(global_id)),
-                    Some(_) => panic!("only call get_system_type on objects uniquely identifiable in one system schema"),
+                    Some(_) => panic!(
+                        "only call get_system_type on objects uniquely identifiable in one system schema"
+                    ),
                 }
             }
         }
@@ -1132,7 +1134,7 @@ impl CatalogState {
                                         "unsupported data source for table"
                                     )),
                                     cached_expr,
-                                ))
+                                ));
                             }
                         },
                     },
@@ -1157,7 +1159,7 @@ impl CatalogState {
                                             "ingestion-based sources must have cluster specified"
                                         )),
                                         cached_expr,
-                                    ))
+                                    ));
                                 }
                             },
                         }
@@ -1410,7 +1412,7 @@ impl CatalogState {
                     })
                     .into(),
                     cached_expr,
-                ))
+                ));
             }
         };
 
@@ -2644,6 +2646,7 @@ impl ConnectionResolver for CatalogState {
             Aws(conn) => Aws(conn),
             AwsPrivatelink(conn) => AwsPrivatelink(conn),
             MySql(conn) => MySql(conn.into_inline_connection(self)),
+            SqlServer(conn) => SqlServer(conn.into_inline_connection(self)),
         }
     }
 }

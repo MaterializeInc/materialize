@@ -54,11 +54,11 @@ use mz_timely_util::capture::PusherCapture;
 use mz_timely_util::reclock::reclock;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::Concatenate;
 use timely::dataflow::operators::capture::capture::Capture;
 use timely::dataflow::operators::capture::{Event, EventPusher};
 use timely::dataflow::operators::core::Map as _;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
-use timely::dataflow::operators::Concatenate;
 use timely::dataflow::operators::{Broadcast, CapabilitySet, Inspect, Leave};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
@@ -66,14 +66,14 @@ use timely::order::TotalOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
 use timely::{Container, PartialOrder};
-use tokio::sync::{watch, Semaphore};
+use tokio::sync::{Semaphore, watch};
 use tokio_stream::wrappers::WatchStream;
 use tracing::trace;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate};
 use crate::internal_control::InternalStorageCommand;
-use crate::metrics::source::SourceMetrics;
 use crate::metrics::StorageMetrics;
+use crate::metrics::source::SourceMetrics;
 use crate::source::probe;
 use crate::source::reclock::ReclockOperator;
 use crate::source::types::{Probe, SourceMessage, SourceOutput, SourceRender, StackedCollection};
@@ -373,12 +373,12 @@ where
 
                 while let Some((cap, data)) = input.next() {
                     for (message, _, _) in data.iter() {
-                        let status = match message {
+                        let status = match &message {
                             Ok(_) => HealthStatusUpdate::running(),
                             // All errors coming into the data stream are definite.
                             // Downstream consumers of this data will preserve this
                             // status.
-                            Err(ref error) => HealthStatusUpdate::stalled(
+                            Err(error) => HealthStatusUpdate::stalled(
                                 error.to_string(),
                                 Some(
                                     "retracting the errored value may resume the source"

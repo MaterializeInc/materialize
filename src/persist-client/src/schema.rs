@@ -18,7 +18,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::cast::CastFrom;
 use mz_persist_types::columnar::data_type;
-use mz_persist_types::schema::{backward_compatible, Migration, SchemaId};
+use mz_persist_types::schema::{Migration, SchemaId, backward_compatible};
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
 
@@ -405,23 +405,23 @@ impl<K: Codec, V: Codec> PartMigration<K, V> {
 #[cfg(test)]
 mod tests {
     use arrow::array::{
-        as_string_array, Array, ArrayBuilder, StringArray, StringBuilder, StructArray,
+        Array, ArrayBuilder, StringArray, StringBuilder, StructArray, as_string_array,
     };
     use arrow::datatypes::{DataType, Field};
     use bytes::BufMut;
     use futures::StreamExt;
     use mz_dyncfg::ConfigUpdates;
+    use mz_persist_types::ShardId;
     use mz_persist_types::arrow::ArrayOrd;
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema};
     use mz_persist_types::stats::{NoneStats, StructStats};
-    use mz_persist_types::ShardId;
     use timely::progress::Antichain;
 
+    use crate::Diagnostics;
     use crate::cli::admin::info_log_non_zero_metrics;
     use crate::read::ReadHandle;
     use crate::tests::new_test_client;
-    use crate::Diagnostics;
 
     use super::*;
 

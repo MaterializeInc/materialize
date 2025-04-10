@@ -195,8 +195,8 @@ macro_rules! sqlfunc {
 mod test {
     use mz_repr::ScalarType;
 
-    use crate::scalar::func::LazyUnaryFunc;
     use crate::EvalError;
+    use crate::scalar::func::LazyUnaryFunc;
 
     sqlfunc!(
         #[sqlname = "INFALLIBLE"]

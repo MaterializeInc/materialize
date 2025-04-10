@@ -17,14 +17,14 @@ use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigUpdates;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError, any_uuid};
 use mz_repr::{GlobalId, Row};
 use mz_service::params::GrpcClientParameters;
 use mz_storage_client::client::ProtoCompaction;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::progress::any_antichain;
 use mz_tracing::params::TracingParameters;
-use proptest::prelude::{any, Arbitrary};
+use proptest::prelude::{Arbitrary, any};
 use proptest::strategy::{BoxedStrategy, Strategy, Union};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -644,11 +644,7 @@ impl RustType<ProtoPeek> for Peek {
         Ok(Self {
             literal_constraints: {
                 let vec: Vec<Row> = x.key.into_rust()?;
-                if vec.is_empty() {
-                    None
-                } else {
-                    Some(vec)
-                }
+                if vec.is_empty() { None } else { Some(vec) }
             },
             uuid: x.uuid.into_rust_if_some("ProtoPeek::uuid")?,
             timestamp: x.timestamp.into(),

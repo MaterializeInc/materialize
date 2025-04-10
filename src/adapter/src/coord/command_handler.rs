@@ -19,11 +19,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use std::sync::Arc;
 
-use futures::future::LocalBoxFuture;
 use futures::FutureExt;
+use futures::future::LocalBoxFuture;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
-use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source, Table, TableDataSource};
 use mz_catalog::SYSTEM_CONN_ID;
+use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source, Table, TableDataSource};
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{instrument, soft_panic_or_log};
@@ -46,7 +46,7 @@ use mz_sql::rbac;
 use mz_sql::rbac::CREATE_ITEM_USAGE;
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{
-    EndTransactionAction, OwnedVarInput, Value, Var, NETWORK_POLICY, STATEMENT_LOGGING_SAMPLE_RATE,
+    EndTransactionAction, NETWORK_POLICY, OwnedVarInput, STATEMENT_LOGGING_SAMPLE_RATE, Value, Var,
 };
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
@@ -56,14 +56,14 @@ use mz_sql_parser::ast::{
 use mz_storage_types::sources::Timeline;
 use opentelemetry::trace::TraceContextExt;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug_span, info, warn, Instrument};
+use tracing::{Instrument, debug_span, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::command::{AuthResponse, CatalogSnapshot, Command, ExecuteResponse, StartupResponse};
 use crate::coord::appends::PendingWriteTxn;
 use crate::coord::{
-    validate_ip_with_policy_rules, ConnMeta, Coordinator, DeferredPlanStatement, Message,
-    PendingTxn, PlanStatement, PlanValidity, PurifiedStatementReady,
+    ConnMeta, Coordinator, DeferredPlanStatement, Message, PendingTxn, PlanStatement, PlanValidity,
+    PurifiedStatementReady, validate_ip_with_policy_rules,
 };
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
@@ -72,7 +72,7 @@ use crate::util::{ClientTransmitter, ResultExt};
 use crate::webhook::{
     AppendWebhookResponse, AppendWebhookValidator, WebhookAppender, WebhookAppenderInvalidator,
 };
-use crate::{catalog, metrics, AppendWebhookError, ExecuteContext, TimestampProvider};
+use crate::{AppendWebhookError, ExecuteContext, TimestampProvider, catalog, metrics};
 
 use super::ExecuteContextExtra;
 

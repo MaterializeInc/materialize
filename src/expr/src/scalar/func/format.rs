@@ -865,9 +865,7 @@ impl DateTimeFormatNode {
                 }
 
                 macro_rules! write_str {
-                    ($s:expr, $width:expr) => {{
-                        write!(buf, "{:width$}", $s, width = if *fill { $width } else { 0 })
-                    }};
+                    ($s:expr, $width:expr) => {{ write!(buf, "{:width$}", $s, width = if *fill { $width } else { 0 }) }};
                     ($s:expr) => {
                         write_str!($s, 0)
                     };

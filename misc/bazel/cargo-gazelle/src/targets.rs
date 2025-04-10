@@ -10,12 +10,12 @@
 //! Definitions for the "rules_rust" Bazel targets.
 
 use convert_case::{Case, Casing};
+use guppy::DependencyKind;
 use guppy::graph::feature::{FeatureLabel, FeatureSet, StandardFeatures};
 use guppy::graph::{
     BuildTarget, BuildTargetId, BuildTargetKind, DependencyDirection, PackageMetadata,
 };
 use guppy::platform::EnabledTernary;
-use guppy::DependencyKind;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write};

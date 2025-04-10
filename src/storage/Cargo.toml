@@ -23,7 +23,7 @@ bincode = "1"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive", "env"] }
 columnation = "0.1.0"
-crossbeam-channel = "0.5.8"
+crossbeam-channel = "0.5.15"
 csv-core = { version = "0.1.12" }
 dec = "0.4.8"
 differential-dataflow = "0.14.0"
@@ -52,6 +52,7 @@ mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }
 mz-rocksdb = { path = "../rocksdb" }
 mz-sql-parser = { path = "../sql-parser" }
+mz-sql-server-util = { path = "../sql-server-util" }
 mz-ssh-util = { path = "../ssh-util" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-operators = { path = "../storage-operators" }

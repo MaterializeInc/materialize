@@ -15,7 +15,7 @@ use std::time::Instant;
 use std::{iter, mem};
 
 use byteorder::{ByteOrder, NetworkEndian};
-use futures::future::{pending, BoxFuture, FutureExt};
+use futures::future::{BoxFuture, FutureExt, pending};
 use itertools::izip;
 use mz_adapter::client::RecordFirstRowStream;
 use mz_adapter::session::{
@@ -23,8 +23,8 @@ use mz_adapter::session::{
 };
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_adapter::{
-    verify_datum_desc, AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse,
-    PeekResponseUnary, RowsFuture,
+    AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary,
+    RowsFuture, verify_datum_desc,
 };
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_ore::cast::CastFrom;
@@ -33,7 +33,7 @@ use mz_ore::str::StrExt;
 use mz_ore::{assert_none, assert_ok, instrument};
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_pgwire_common::{
-    ConnectionCounter, ErrorResponse, Format, FrontendMessage, Severity, VERSIONS, VERSION_3,
+    ConnectionCounter, ErrorResponse, Format, FrontendMessage, Severity, VERSION_3, VERSIONS,
 };
 use mz_repr::user::InternalUserMetadata;
 use mz_repr::{
@@ -47,14 +47,14 @@ use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::INTERNAL_USER_NAMES;
-use mz_sql::session::vars::{Var, VarInput, MAX_COPY_FROM_SIZE};
+use mz_sql::session::vars::{MAX_COPY_FROM_SIZE, Var, VarInput};
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{self};
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::{debug, debug_span, warn, Instrument};
+use tracing::{Instrument, debug, debug_span, warn};
 use uuid::Uuid;
 
 use crate::codec::FramedConn;
@@ -180,7 +180,7 @@ where
                         SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
                         "expected Password message",
                     ))
-                    .await
+                    .await;
             }
         };
 
@@ -815,7 +815,7 @@ where
                                 SqlState::INVALID_PARAMETER_VALUE,
                                 err.to_string(),
                             ))
-                            .await
+                            .await;
                     }
                 },
                 Err(_) if oid == 0 => param_types.push(None),
@@ -930,7 +930,7 @@ where
             Err(msg) => {
                 return self
                     .error(ErrorResponse::error(SqlState::PROTOCOL_VIOLATION, msg))
-                    .await
+                    .await;
             }
         };
         if aborted_txn && !is_txn_exit_stmt(stmt.stmt()) {
@@ -967,7 +967,7 @@ where
             Err(msg) => {
                 return self
                     .error(ErrorResponse::error(SqlState::PROTOCOL_VIOLATION, msg))
-                    .await
+                    .await;
             }
         };
 

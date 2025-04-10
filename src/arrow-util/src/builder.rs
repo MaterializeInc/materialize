@@ -15,9 +15,9 @@ use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use arrow::array::{builder::*, ArrayRef};
+use arrow::array::{ArrayRef, builder::*};
 use arrow::datatypes::{
-    DataType, Field, Schema, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL_DEFAULT_SCALE,
+    DECIMAL_DEFAULT_SCALE, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DataType, Field, Schema,
 };
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;

@@ -45,8 +45,8 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistLocation;
+use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use mz_repr::{Datum, GlobalId, Row, TimestampManipulation};
@@ -205,6 +205,14 @@ pub struct Controller<T: ComputeControllerTimestamp = mz_repr::Timestamp> {
 impl<T: ComputeControllerTimestamp> Controller<T> {
     pub fn set_arrangement_exert_proportionality(&mut self, value: u32) {
         self.compute.set_arrangement_exert_proportionality(value);
+    }
+
+    /// Start sinking the compute controller's introspection data into storage.
+    ///
+    /// This method should be called once the introspection collections have been registered with
+    /// the storage controller. It will panic if invoked earlier than that.
+    pub fn start_compute_introspection_sink(&mut self) {
+        self.compute.start_introspection_sink(&*self.storage);
     }
 
     /// Returns the connection context installed in the controller.
@@ -470,7 +478,7 @@ where
     /// Process a pending response from the compute controller. If necessary,
     /// return a higher-level response to our client.
     fn process_compute_response(&mut self) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
-        let response = self.compute.process(&mut *self.storage);
+        let response = self.compute.process();
 
         let response = response.and_then(|r| match r {
             ComputeControllerResponse::PeekNotification(uuid, peek, otel_ctx) => {

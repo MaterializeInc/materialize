@@ -12,20 +12,20 @@
 use std::cmp;
 use std::fmt::{Debug, Formatter};
 use std::ops::Range;
-use std::sync::atomic::{self, AtomicU64};
 use std::sync::Arc;
+use std::sync::atomic::{self, AtomicU64};
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use async_trait::async_trait;
 use aws_config::sts::AssumeRoleProvider;
 use aws_config::timeout::TimeoutConfig;
 use aws_credential_types::Credentials;
+use aws_sdk_s3::Client as S3Client;
 use aws_sdk_s3::config::{AsyncSleep, Sleep};
 use aws_sdk_s3::error::{ProvideErrorMetadata, SdkError};
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
-use aws_sdk_s3::Client as S3Client;
 use aws_types::region::Region;
 use bytes::Bytes;
 use futures_util::stream::FuturesOrdered;
@@ -37,7 +37,7 @@ use mz_ore::lgbytes::MetricsRegion;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::RuntimeExt;
 use tokio::runtime::Handle as AsyncHandle;
-use tracing::{debug, debug_span, trace, trace_span, Instrument};
+use tracing::{Instrument, debug, debug_span, trace, trace_span};
 use uuid::Uuid;
 
 use crate::cfg::BlobKnobs;
@@ -602,7 +602,7 @@ impl Blob for S3Blob {
                                 None => {
                                     return Err(ExternalError::from(anyhow!(
                                         "object missing size: {key}"
-                                    )))
+                                    )));
                                 }
                                 Some(size) => size
                                     .try_into()
@@ -663,7 +663,7 @@ impl Blob for S3Blob {
                 None => {
                     return Err(ExternalError::from(anyhow!(
                         "s3 delete content length was none"
-                    )))
+                    )));
                 }
                 Some(content_length) => {
                     u64::try_from(content_length).expect("file in S3 cannot have negative size")

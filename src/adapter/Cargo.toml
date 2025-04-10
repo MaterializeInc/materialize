@@ -49,7 +49,7 @@ mz-kafka-util = { path = "../kafka-util" }
 mz-metrics = { path = "../metrics" }
 mz-mysql-util = { path = "../mysql-util" }
 mz-orchestrator = { path = "../orchestrator" }
-mz-ore = { path = "../ore", features = ["chrono", "async", "process", "tracing"] }
+mz-ore = { path = "../ore", features = ["chrono", "async", "process", "tracing", "id_gen"] }
 mz-persist-types = { path = "../persist-types" }
 mz-persist-client = { path = "../persist-client" }
 mz-pgcopy = { path = "../pgcopy" }
@@ -92,7 +92,7 @@ tracing-opentelemetry = { version = "0.25.0" }
 tracing-subscriber = "0.3.19"
 thiserror = "2.0.12"
 url = "2.3.1"
-uuid = { version = "1.16.0", features = ["v4"] }
+uuid = { version = "1.16.0" }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]

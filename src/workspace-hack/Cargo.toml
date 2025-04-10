@@ -120,9 +120,9 @@ reqwest-a6292c17cd707f01 = { package = "reqwest", version = "0.11.24", features 
 ring = { version = "0.17.14", features = ["std"] }
 schemars = { version = "0.8.22", features = ["uuid1"] }
 scopeguard = { version = "1.2.0" }
-semver = { version = "1.0.23", features = ["serde"] }
+semver = { version = "1.0.26", features = ["serde"] }
 serde = { version = "1.0.219", features = ["alloc", "derive", "rc"] }
-serde_json = { version = "1.0.127", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
+serde_json = { version = "1.0.140", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
 sha2 = { version = "0.10.8", features = ["asm"] }
 similar = { version = "2.7.0", features = ["inline", "unicode"] }
 smallvec = { version = "1.14.0", default-features = false, features = ["const_new", "serde", "union"] }
@@ -137,6 +137,7 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", feat
 tokio-stream = { version = "0.1.17", features = ["net", "sync"] }
 tokio-util = { version = "0.7.13", features = ["codec", "compat", "io", "time"] }
 toml_datetime = { version = "0.6.8", default-features = false, features = ["serde"] }
+toml_edit = { version = "0.22.24", features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
 tower = { version = "0.4.13", features = ["balance", "buffer", "filter", "limit", "load-shed", "retry", "timeout", "util"] }
 tower-http = { version = "0.5.2", features = ["auth", "cors", "map-response-body", "trace", "util"] }
@@ -148,7 +149,7 @@ uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.24" }
 url = { version = "2.5.4", features = ["serde"] }
-uuid = { version = "1.16.0", features = ["serde", "v4", "v5"] }
+uuid = { version = "1.16.0", features = ["serde", "v4", "v5", "v7"] }
 zeroize = { version = "1.8.1", features = ["serde"] }
 zstd = { version = "0.13.3" }
 zstd-safe = { version = "7.2.1", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
@@ -260,9 +261,9 @@ reqwest-a6292c17cd707f01 = { package = "reqwest", version = "0.11.24", features 
 ring = { version = "0.17.14", features = ["std"] }
 schemars = { version = "0.8.22", features = ["uuid1"] }
 scopeguard = { version = "1.2.0" }
-semver = { version = "1.0.23", features = ["serde"] }
+semver = { version = "1.0.26", features = ["serde"] }
 serde = { version = "1.0.219", features = ["alloc", "derive", "rc"] }
-serde_json = { version = "1.0.127", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
+serde_json = { version = "1.0.140", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
 sha2 = { version = "0.10.8", features = ["asm"] }
 similar = { version = "2.7.0", features = ["inline", "unicode"] }
 smallvec = { version = "1.14.0", default-features = false, features = ["const_new", "serde", "union"] }
@@ -278,6 +279,7 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", feat
 tokio-stream = { version = "0.1.17", features = ["net", "sync"] }
 tokio-util = { version = "0.7.13", features = ["codec", "compat", "io", "time"] }
 toml_datetime = { version = "0.6.8", default-features = false, features = ["serde"] }
+toml_edit = { version = "0.22.24", features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
 tower = { version = "0.4.13", features = ["balance", "buffer", "filter", "limit", "load-shed", "retry", "timeout", "util"] }
 tower-http = { version = "0.5.2", features = ["auth", "cors", "map-response-body", "trace", "util"] }
@@ -289,7 +291,7 @@ uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.24" }
 url = { version = "2.5.4", features = ["serde"] }
-uuid = { version = "1.16.0", features = ["serde", "v4", "v5"] }
+uuid = { version = "1.16.0", features = ["serde", "v4", "v5", "v7"] }
 zeroize = { version = "1.8.1", features = ["serde"] }
 zstd = { version = "0.13.3" }
 zstd-safe = { version = "7.2.1", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }

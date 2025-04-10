@@ -16,7 +16,7 @@ use crate::fivetran_sdk::data_type_params::Params;
 use crate::fivetran_sdk::{DataType, DataTypeParams, DecimalParams, Table};
 
 use csv_async::ByteRecord;
-use futures::{ready, Sink, Stream, StreamExt};
+use futures::{Sink, Stream, StreamExt, ready};
 use mz_pgrepr::Type;
 use tokio::io::AsyncRead;
 
@@ -269,11 +269,12 @@ impl<'a> tokio::io::AsyncWrite for CopyIntoAsyncWrite<'a> {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<Result<usize, std::io::Error>> {
-        ready!(self
-            .inner
-            .as_mut()
-            .poll_ready(cx)
-            .map_err(std::io::Error::other))?;
+        ready!(
+            self.inner
+                .as_mut()
+                .poll_ready(cx)
+                .map_err(std::io::Error::other)
+        )?;
 
         let len = buf.len();
         let buf = bytes::Bytes::from(buf.to_vec());

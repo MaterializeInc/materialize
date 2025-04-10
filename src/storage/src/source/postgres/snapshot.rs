@@ -145,9 +145,9 @@ use futures::{StreamExt as _, TryStreamExt};
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_postgres_util::tunnel::PostgresFlavor;
-use mz_postgres_util::{simple_query_opt, Client, PostgresError};
+use mz_postgres_util::{Client, PostgresError, simple_query_opt};
 use mz_repr::{Datum, DatumVec, Diff, Row};
-use mz_sql_parser::ast::{display::AstDisplay, Ident};
+use mz_sql_parser::ast::{Ident, display::AstDisplay};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{
@@ -165,14 +165,14 @@ use tokio_postgres::types::{Oid, PgLsn};
 use tracing::{error, trace};
 
 use crate::metrics::source::postgres::PgSnapshotMetrics;
+use crate::source::RawSourceCreationConfig;
 use crate::source::postgres::replication::RewindRequest;
 use crate::source::postgres::{
-    verify_schema, DefiniteError, ReplicationError, SourceOutputInfo, TransientError,
+    DefiniteError, ReplicationError, SourceOutputInfo, TransientError, verify_schema,
 };
 use crate::source::types::{
     ProgressStatisticsUpdate, SignaledFuture, SourceMessage, StackedCollection,
 };
-use crate::source::RawSourceCreationConfig;
 
 /// Renders the snapshot dataflow. See the module documentation for more information.
 pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
@@ -630,7 +630,7 @@ async fn export_snapshot_inner(
     let row = match simple_query_opt(client, &query).await {
         Ok(row) => Ok(row.unwrap()),
         Err(PostgresError::Postgres(err)) if err.code() == Some(&SqlState::DUPLICATE_OBJECT) => {
-            return Err(TransientError::ReplicationSlotAlreadyExists)
+            return Err(TransientError::ReplicationSlotAlreadyExists);
         }
         Err(err) => Err(err),
     }?;

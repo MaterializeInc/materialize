@@ -12,8 +12,8 @@
 //! TODO: eliminate macros in favor of using `walkabout`?
 
 use proc_macro::TokenStream;
-use quote::{quote, ToTokens};
-use syn::{parse, Data, DeriveInput, Fields};
+use quote::{ToTokens, quote};
+use syn::{Data, DeriveInput, Fields, parse};
 
 /// Types defined outside of Materialize used to build test objects.
 const EXTERNAL_TYPES: &[&str] = &["String", "FixedOffset", "Tz", "NaiveDateTime", "Regex"];
@@ -93,7 +93,7 @@ pub fn mzreflect_derive(input: TokenStream) -> TokenStream {
         .map(|typ| quote! { #typ::add_to_reflected_type_info(rti); })
         .collect::<Vec<_>>();
 
-    let gen = quote! {
+    let generated = quote! {
       impl mz_lowertest::MzReflect for #object_name {
         fn add_to_reflected_type_info(
             rti: &mut mz_lowertest::ReflectedTypeInfo
@@ -104,7 +104,7 @@ pub fn mzreflect_derive(input: TokenStream) -> TokenStream {
         }
       }
     };
-    gen.into()
+    generated.into()
 }
 
 /* #region Helper methods */

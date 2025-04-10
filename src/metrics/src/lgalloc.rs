@@ -10,7 +10,7 @@ use std::ops::AddAssign;
 
 use lgalloc::{FileStats, SizeClassStats};
 use mz_ore::cast::CastFrom;
-use mz_ore::metrics::{raw, MetricsRegistry};
+use mz_ore::metrics::{MetricsRegistry, raw};
 use paste::paste;
 use prometheus::core::{AtomicU64, GenericGauge};
 use tracing::error;

@@ -27,7 +27,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::soft_panic_or_log;
 use mz_persist_types::arrow::{ArrayBound, ArrayOrd};
 use mz_persist_types::columnar::{
-    codec_to_schema, data_type, schema_to_codec, ColumnEncoder, Schema,
+    ColumnEncoder, Schema, codec_to_schema, data_type, schema_to_codec,
 };
 use mz_persist_types::parquet::EncodingConfig;
 use mz_persist_types::part::Part;
@@ -39,13 +39,13 @@ use proptest::prelude::*;
 use proptest::strategy::{BoxedStrategy, Just};
 use prost::Message;
 use serde::Serialize;
-use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
+use timely::progress::{Antichain, Timestamp};
 use tracing::error;
 
 use crate::error::Error;
-use crate::gen::persist::proto_batch_part_inline::FormatMetadata as ProtoFormatMetadata;
-use crate::gen::persist::{
+use crate::generated::persist::proto_batch_part_inline::FormatMetadata as ProtoFormatMetadata;
+use crate::generated::persist::{
     ProtoBatchFormat, ProtoBatchPartInline, ProtoColumnarRecords, ProtoU64Antichain,
     ProtoU64Description,
 };
@@ -418,7 +418,7 @@ impl BlobTraceUpdates {
                     },
                     timestamps: Int64Array::from_iter_values(vec![]),
                     diffs: Int64Array::from_iter_values(vec![]),
-                })
+                });
             }
             1 => return Ok(updates.into_iter().into_element()),
             _ => {}
@@ -515,7 +515,7 @@ impl BlobTraceUpdates {
                     k.is_some(),
                     v.is_some(),
                     ext.is_some(),
-                )))
+                )));
             }
         };
 
@@ -904,7 +904,12 @@ mod tests {
             index: 0,
             updates: columnar_records(vec![update_with_key(0, "0")]),
         };
-        assert_eq!(b.validate(), Err(Error::from("timestamp 0 is less than the batch lower: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } }")));
+        assert_eq!(
+            b.validate(),
+            Err(Error::from(
+                "timestamp 0 is less than the batch lower: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } }"
+            ))
+        );
 
         // Update "after" desc
         let b = BlobTraceBatchPart {
@@ -912,7 +917,12 @@ mod tests {
             index: 0,
             updates: columnar_records(vec![update_with_key(2, "0")]),
         };
-        assert_eq!(b.validate(), Err(Error::from("timestamp 2 is greater than or equal to the batch upper: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } }")));
+        assert_eq!(
+            b.validate(),
+            Err(Error::from(
+                "timestamp 2 is greater than or equal to the batch upper: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } }"
+            ))
+        );
 
         // Normal case: update "after" desc and within since
         let b = BlobTraceBatchPart {
@@ -958,7 +968,8 @@ mod tests {
 
         // Empty interval
         let b = batch_meta(0, 0);
-        assert_eq!(b.validate(),
+        assert_eq!(
+            b.validate(),
             Err(Error::from(
                 "invalid desc: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [0] }, since: Antichain { elements: [0] } }"
             )),
@@ -966,7 +977,8 @@ mod tests {
 
         // Invalid interval
         let b = batch_meta(2, 0);
-        assert_eq!(b.validate(),
+        assert_eq!(
+            b.validate(),
             Err(Error::from(
                 "invalid desc: Description { lower: Antichain { elements: [2] }, upper: Antichain { elements: [0] }, since: Antichain { elements: [0] } }"
             )),
@@ -1038,7 +1050,12 @@ mod tests {
             level: 0,
             size_bytes,
         };
-        assert_eq!(batch_meta.validate_data(blob.as_ref(), &metrics).await, Err(Error::from("invalid trace batch part desc expected Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } } got Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } }")));
+        assert_eq!(
+            batch_meta.validate_data(blob.as_ref(), &metrics).await,
+            Err(Error::from(
+                "invalid trace batch part desc expected Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } } got Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } }"
+            ))
+        );
         // Key with no corresponding batch part
         let batch_meta = TraceBatchMeta {
             keys: vec!["b0".into(), "b1".into(), "b2".into()],

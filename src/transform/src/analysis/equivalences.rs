@@ -396,8 +396,8 @@ impl EquivalenceClasses {
         e1: &MirScalarExpr,
         e2: &MirScalarExpr,
     ) -> std::cmp::Ordering {
-        use std::cmp::Ordering::*;
         use MirScalarExpr::*;
+        use std::cmp::Ordering::*;
         match (e1, e2) {
             (Literal(_, _), Literal(_, _)) => e1.cmp(e2),
             (Literal(_, _), _) => Less,

@@ -12,14 +12,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 use std::ops::DerefMut;
 use std::rc::Rc;
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use bytesize::ByteSize;
-use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::{Cursor, TraceReader};
 use differential_dataflow::Hashable;
 use differential_dataflow::IntoOwned;
+use differential_dataflow::lattice::Lattice;
+use differential_dataflow::trace::{Cursor, TraceReader};
 use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::protocol::command::{
     ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
@@ -30,30 +30,30 @@ use mz_compute_client::protocol::response::{
     StatusResponse, SubscribeResponse,
 };
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_compute_types::plan::LirId;
+use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigSet;
-use mz_expr::row::RowCollection;
 use mz_expr::SafeMfpPlan;
+use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::UIntGauge;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
+use mz_persist_client::Diagnostics;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::read::ReadHandle;
-use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_operators::stats::StatsCursor;
+use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs::ORE_OVERFLOWING_BEHAVIOR;
 use mz_storage_types::sources::SourceData;
 use mz_storage_types::time_dependence::TimeDependence;
-use mz_storage_types::StorageDiff;
 use mz_txn_wal::operator::TxnsContext;
 use mz_txn_wal::txn_cache::TxnsCache;
 use timely::communication::Allocate;
@@ -63,7 +63,7 @@ use timely::progress::frontier::Antichain;
 use timely::scheduling::Scheduler;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{oneshot, watch};
-use tracing::{debug, error, info, span, warn, Level};
+use tracing::{Level, debug, error, info, span, warn};
 use uuid::Uuid;
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
@@ -1500,8 +1500,7 @@ impl IndexPeek {
                     let copies: usize = if copies.is_negative() {
                         return Err(format!(
                             "Invalid data in source, saw retractions ({}) for row that does not exist: {:?}",
-                            -copies,
-                            &*borrow,
+                            -copies, &*borrow,
                         ));
                     } else {
                         copies.into_inner().try_into().unwrap()

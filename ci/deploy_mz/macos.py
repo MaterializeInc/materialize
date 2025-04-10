@@ -10,6 +10,7 @@
 import os
 from pathlib import Path
 
+from ci import tarball_uploader
 from materialize import spawn
 from materialize.xcompile import Arch
 
@@ -27,7 +28,11 @@ def main() -> None:
     )
 
     print(f"--- Uploading {target} binary tarball")
-    deploy_util.deploy_tarball(target, Path("target") / "release" / "mz")
+    uploader = tarball_uploader.TarballUploader(
+        package_name="mz",
+        version=deploy_util.MZ_CLI_VERSION,
+    )
+    uploader.deploy_tarball(target, Path("target") / "release" / "mz")
 
 
 if __name__ == "__main__":

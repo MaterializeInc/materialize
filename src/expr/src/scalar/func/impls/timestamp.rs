@@ -19,14 +19,14 @@ use mz_repr::adt::date::Date;
 use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{DecimalLike, Numeric};
-use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampPrecision, MAX_PRECISION};
-use mz_repr::{strconv, ColumnType, ScalarType};
+use mz_repr::adt::timestamp::{CheckedTimestamp, MAX_PRECISION, TimestampPrecision};
+use mz_repr::{ColumnType, ScalarType, strconv};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use crate::EvalError;
 use crate::scalar::func::format::DateTimeFormat;
 use crate::scalar::func::{EagerUnaryFunc, TimestampLike};
-use crate::EvalError;
 
 sqlfunc!(
     #[sqlname = "timestamp_to_text"]

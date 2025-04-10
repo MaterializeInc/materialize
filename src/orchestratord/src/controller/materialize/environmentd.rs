@@ -28,9 +28,9 @@ use k8s_openapi::{
     },
     apimachinery::pkg::{apis::meta::v1::LabelSelector, util::intstr::IntOrString},
 };
-use kube::{api::ObjectMeta, runtime::controller::Action, Api, Client, ResourceExt};
+use kube::{Api, Client, ResourceExt, api::ObjectMeta, runtime::controller::Action};
 use maplit::btreemap;
-use rand::{thread_rng, Rng};
+use rand::{Rng, thread_rng};
 use semver::{BuildMetadata, Prerelease, Version};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -40,7 +40,7 @@ use super::matching_image_from_environmentd_image_ref;
 use crate::controller::materialize::tls::{create_certificate, issuer_ref_defined};
 use crate::k8s::{apply_resource, delete_resource, get_resource};
 use mz_cloud_provider::CloudProvider;
-use mz_cloud_resources::crd::gen::cert_manager::certificates::Certificate;
+use mz_cloud_resources::crd::generated::cert_manager::certificates::Certificate;
 use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::instrument;

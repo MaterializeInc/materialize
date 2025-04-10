@@ -1138,7 +1138,7 @@ fn fill_pdt_date(
 
     // Check for one number that represents YYYYMMDDD.
     match actual.front() {
-        Some(Num(mut val, digits)) if 6 <= *digits && *digits <= 8 => {
+        Some(&Num(mut val, ref digits)) if 6 <= *digits && *digits <= 8 => {
             let unit = i64::try_from(val % 100)
                 .expect("modulo between u64 and constant 100 should fit signed 64-bit integer");
             pdt.day = Some(DateTimeFieldValue::new(unit, 0));
@@ -1273,7 +1273,7 @@ fn fill_pdt_interval_sql(
             return Err(format!(
                 "Cannot specify {} field for SQL standard-style interval parts",
                 leading_field
-            ))
+            ));
         }
     }
 
@@ -1315,7 +1315,7 @@ fn fill_pdt_interval_sql(
             return Err(format!(
                 "Cannot specify {} field for SQL standard-style interval parts",
                 leading_field
-            ))
+            ));
         }
     }
 
@@ -1407,11 +1407,9 @@ fn fill_pdt_from_tokens<'a, E: IntoIterator<Item = &'a TimeStrToken>>(
             (TimeUnit(f), TimeUnit(_)) => {
                 if unit_buf.is_some() && *f != current_field {
                     return Err(format!(
-                            "Invalid syntax at offset {}: provided TimeUnit({}) but expected TimeUnit({})",
-                            i,
-                            f,
-                            current_field
-                        ));
+                        "Invalid syntax at offset {}: provided TimeUnit({}) but expected TimeUnit({})",
+                        i, f, current_field
+                    ));
                 }
             }
             // If we got a DateTimeUnits, attempt to convert it to a TimeUnit.
@@ -1426,11 +1424,9 @@ fn fill_pdt_from_tokens<'a, E: IntoIterator<Item = &'a TimeStrToken>>(
                 };
                 if unit_buf.is_some() && f != current_field {
                     return Err(format!(
-                            "Invalid syntax at offset {}: provided DateTimeUnit({}) but expected TimeUnit({})",
-                            u,
-                            f,
-                            current_field
-                        ));
+                        "Invalid syntax at offset {}: provided DateTimeUnit({}) but expected TimeUnit({})",
+                        u, f, current_field
+                    ));
                 }
             }
             (Dot, Dot) => {}
@@ -1438,7 +1434,7 @@ fn fill_pdt_from_tokens<'a, E: IntoIterator<Item = &'a TimeStrToken>>(
                 Some(_) => {
                     return Err(
                         "Invalid syntax; parts must be separated by '-', ':', or ' '".to_string(),
-                    )
+                    );
                 }
                 None => {
                     // create signed copy of *val
@@ -1506,7 +1502,7 @@ fn fill_pdt_from_tokens<'a, E: IntoIterator<Item = &'a TimeStrToken>>(
             (provided, expected) => {
                 return Err(format!(
                     "Invalid syntax at offset {i}: provided {provided:?} but expected {expected:?}",
-                ))
+                ));
             }
         }
         i += 1;
@@ -1638,7 +1634,7 @@ fn expected_dur_like_tokens(from: DateTimeField) -> Result<&'static [TimeStrToke
             return Err(format!(
                 "expected_dur_like_tokens can only be called with HOUR, MINUTE, SECOND; got {}",
                 from
-            ))
+            ));
         }
     };
 
@@ -1849,7 +1845,7 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>, S
                 return Err(format!(
                     "Invalid character at offset {} in {}: {:?}",
                     i, value, chr
-                ))
+                ));
             }
         }
     }
@@ -3336,72 +3332,24 @@ mod tests {
     fn test_build_parsed_datetime_interval_errors() {
         use DateTimeField::*;
         let test_cases = [
-            (
-                "1 year 2 years",
-                Second,
-                "YEAR field set twice",
-            ),
-            (
-                "1-2 3-4",
-                Second,
-                "YEAR or MONTH field set twice",
-            ),
-            (
-                "1-2 3 year",
-                Second,
-                "YEAR field set twice",
-            ),
-            (
-                "1-2 3",
-                Month,
-                "MONTH field set twice",
-            ),
-            (
-                "1-2 3:4 5",
-                Second,
-                "SECOND field set twice",
-            ),
-            (
-                "1:2:3.4 5-6 7",
-                Year,
-                "YEAR field set twice",
-            ),
-            (
-                "-:::::1.27",
-                Second,
-                "have unprocessed tokens 1.270000000",
-            ),
+            ("1 year 2 years", Second, "YEAR field set twice"),
+            ("1-2 3-4", Second, "YEAR or MONTH field set twice"),
+            ("1-2 3 year", Second, "YEAR field set twice"),
+            ("1-2 3", Month, "MONTH field set twice"),
+            ("1-2 3:4 5", Second, "SECOND field set twice"),
+            ("1:2:3.4 5-6 7", Year, "YEAR field set twice"),
+            ("-:::::1.27", Second, "have unprocessed tokens 1.270000000"),
             (
                 "-1 ::.27",
                 Second,
                 "Cannot determine format of all parts. Add explicit time components, e.g. \
                 INTERVAL '1 day' or INTERVAL '1' DAY",
             ),
-            (
-                "1:2:3.4.5",
-                Second,
-                "have unprocessed tokens .500000000",
-            ),
-            (
-                "1+2:3.4",
-                Second,
-                "Cannot determine format of all parts",
-            ),
-            (
-                "1x2:3.4",
-                Second,
-                "unknown units x",
-            ),
-            (
-                "0 foo",
-                Second,
-                "unknown units foo",
-            ),
-            (
-                "1-2 3:4 5 second",
-                Second,
-                "SECOND field set twice",
-            ),
+            ("1:2:3.4.5", Second, "have unprocessed tokens .500000000"),
+            ("1+2:3.4", Second, "Cannot determine format of all parts"),
+            ("1x2:3.4", Second, "unknown units x"),
+            ("0 foo", Second, "unknown units foo"),
+            ("1-2 3:4 5 second", Second, "SECOND field set twice"),
             (
                 "1-2 5 second 3:4",
                 Second,
@@ -3459,10 +3407,7 @@ mod tests {
                 Err(e) => assert_eq!(e.to_string(), test.2),
                 Ok(pdt) => panic!(
                     "Test INTERVAL '{}' {} passed when expected to fail with {}, generated ParsedDateTime {:?}",
-                    test.0,
-                    test.1,
-                    test.2,
-                    pdt,
+                    test.0, test.1, test.2, pdt,
                 ),
             }
         }

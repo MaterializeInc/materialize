@@ -16,12 +16,12 @@ use mz_repr::adt::datetime::{DateTimeField, DateTimeUnits};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{DecimalLike, Numeric};
 use mz_repr::adt::timestamp::TimeLike;
-use mz_repr::{strconv, ColumnType, ScalarType};
+use mz_repr::{ColumnType, ScalarType, strconv};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use crate::scalar::func::EagerUnaryFunc;
 use crate::EvalError;
+use crate::scalar::func::EagerUnaryFunc;
 
 sqlfunc!(
     #[sqlname = "time_to_text"]

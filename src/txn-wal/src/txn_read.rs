@@ -34,8 +34,8 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
 use uuid::Uuid;
 
-use crate::txn_cache::{TxnsCache, TxnsCacheState};
 use crate::TxnsCodecDefault;
+use crate::txn_cache::{TxnsCache, TxnsCacheState};
 
 /// A token exchangeable for a data shard snapshot.
 ///
@@ -176,7 +176,10 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64 + Sync> DataSnapshot<T> {
     pub async fn snapshot_and_stream<K, V, D>(
         &self,
         data_read: &mut ReadHandle<K, V, T, D>,
-    ) -> Result<impl Stream<Item = ((Result<K, String>, Result<V, String>), T, D)>, Since<T>>
+    ) -> Result<
+        impl Stream<Item = ((Result<K, String>, Result<V, String>), T, D)> + use<K, V, T, D>,
+        Since<T>,
+    >
     where
         K: Debug + Codec + Ord,
         V: Debug + Codec + Ord,

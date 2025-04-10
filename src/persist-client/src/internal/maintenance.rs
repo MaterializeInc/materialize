@@ -17,8 +17,8 @@ use std::sync::Arc;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use futures_util::future::BoxFuture;
 use futures_util::FutureExt;
+use futures_util::future::BoxFuture;
 use mz_persist::location::SeqNo;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;

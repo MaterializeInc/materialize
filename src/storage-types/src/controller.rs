@@ -324,7 +324,10 @@ impl<T: fmt::Display + 'static> fmt::Display for StorageError<T> {
                 shard_id,
                 ..
             } => {
-                write!(f, "persist raced when trying to evolve the schema of a shard: {global_id}, {shard_id}")
+                write!(
+                    f,
+                    "persist raced when trying to evolve the schema of a shard: {global_id}, {shard_id}"
+                )
             }
             Self::PersistInvalidSchemaEvolve {
                 global_id,
@@ -347,7 +350,10 @@ impl<T: fmt::Display + 'static> fmt::Display for StorageError<T> {
                 reference
             ),
             Self::RtrTimeout(_) => {
-                write!(f, "timed out before ingesting the source's visible frontier when real-time-recency query issued")
+                write!(
+                    f,
+                    "timed out before ingesting the source's visible frontier when real-time-recency query issued"
+                )
             }
             Self::RtrDropFailure(_) => write!(
                 f,

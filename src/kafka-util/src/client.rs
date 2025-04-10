@@ -12,7 +12,7 @@
 use anyhow::bail;
 use aws_config::SdkConfig;
 use fancy_regex::Regex;
-use std::collections::{btree_map, BTreeMap};
+use std::collections::{BTreeMap, btree_map};
 use std::error::Error;
 use std::io;
 use std::net::{SocketAddr, ToSocketAddrs};
@@ -22,8 +22,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::watch;
 
-use anyhow::{anyhow, Context};
-use crossbeam::channel::{unbounded, Receiver, Sender};
+use anyhow::{Context, anyhow};
+use crossbeam::channel::{Receiver, Sender, unbounded};
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
@@ -39,7 +39,7 @@ use rdkafka::util::Timeout;
 use rdkafka::{ClientContext, Statistics, TopicPartitionList};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Handle;
-use tracing::{debug, error, info, trace, warn, Level};
+use tracing::{Level, debug, error, info, trace, warn};
 
 use crate::aws;
 

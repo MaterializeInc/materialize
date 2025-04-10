@@ -578,13 +578,13 @@ impl<'a> TestDeserializeContext for MirRelationExprDeserializeContext<'a> {
                         if punct.as_char() == '#' {
                             match rest_of_stream.next() {
                                 Some(TokenTree::Literal(literal)) => {
-                                    return Ok(Some(literal.to_string()))
+                                    return Ok(Some(literal.to_string()));
                                 }
                                 invalid => {
                                     return Err(format!(
                                         "invalid column value {:?}",
                                         invalid.map(|token_tree| format!("`{}`", token_tree))
-                                    ))
+                                    ));
                                 }
                             }
                         }

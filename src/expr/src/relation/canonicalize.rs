@@ -17,7 +17,7 @@ use mz_ore::soft_assert_or_log;
 use mz_repr::{ColumnType, ScalarType};
 
 use crate::visit::Visit;
-use crate::{func, MirScalarExpr, UnaryFunc, VariadicFunc};
+use crate::{MirScalarExpr, UnaryFunc, VariadicFunc, func};
 
 /// Canonicalize equivalence classes of a join and expressions contained in them.
 ///
@@ -53,11 +53,7 @@ pub fn canonicalize_equivalences<'a, I>(
                 .collect::<Vec<_>>();
             result.sort();
             result.dedup();
-            if result.len() > 1 {
-                Some(result)
-            } else {
-                None
-            }
+            if result.len() > 1 { Some(result) } else { None }
         })
         .collect::<Vec<_>>();
 

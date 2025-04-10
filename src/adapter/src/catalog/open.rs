@@ -19,9 +19,10 @@ use futures::future::{BoxFuture, FutureExt};
 use itertools::{Either, Itertools};
 use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
 use mz_adapter_types::dyncfgs::{ENABLE_CONTINUAL_TASK_BUILTINS, ENABLE_EXPRESSION_CACHE};
+use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
-    Builtin, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES,
-    BUILTIN_ROLES, MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
+    BUILTIN_CLUSTER_REPLICAS, BUILTIN_CLUSTERS, BUILTIN_PREFIXES, BUILTIN_ROLES, BUILTINS, Builtin,
+    Fingerprint, MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
 };
 use mz_catalog::config::{ClusterReplicaSizeMap, StateConfig};
 use mz_catalog::durable::objects::{
@@ -35,7 +36,6 @@ use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     BootstrapStateUpdateKind, CommentsMap, DefaultPrivileges, StateUpdate,
 };
-use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{ReplicaAllocation, ReplicaLogging};
 use mz_controller_types::ClusterId;
 use mz_ore::cast::usize_to_u64;
@@ -55,18 +55,18 @@ use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SYSTEM_USER};
 use mz_sql::session::vars::{SessionVars, SystemVars, VarError, VarInput};
 use mz_storage_client::storage_collections::StorageCollections;
 use timely::Container;
-use tracing::{info, warn, Instrument};
+use tracing::{Instrument, info, warn};
 use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
+use crate::AdapterError;
 use crate::catalog::open::builtin_item_migration::{
-    migrate_builtin_items, BuiltinItemMigrationResult,
+    BuiltinItemMigrationResult, migrate_builtin_items,
 };
 use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{
-    is_reserved_name, migrate, BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config,
+    BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config, is_reserved_name, migrate,
 };
-use crate::AdapterError;
 
 pub struct InitializeStateResult {
     /// An initialized [`CatalogState`].
@@ -119,10 +119,10 @@ impl Catalog {
         }
         for builtin_cluster in BUILTIN_CLUSTERS {
             assert!(
-                    is_reserved_name(builtin_cluster.name),
-                    "builtin cluster {builtin_cluster:?} must start with one of the following prefixes {}",
-                    BUILTIN_PREFIXES.join(", ")
-                );
+                is_reserved_name(builtin_cluster.name),
+                "builtin cluster {builtin_cluster:?} must start with one of the following prefixes {}",
+                BUILTIN_PREFIXES.join(", ")
+            );
         }
 
         let mut system_configuration = SystemVars::new().set_unsafe(config.unsafe_mode);

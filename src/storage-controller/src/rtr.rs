@@ -10,24 +10,24 @@
 //! Implementation of real-time recency.
 
 use std::cmp::Reverse;
-use std::collections::binary_heap::PeekMut;
 use std::collections::BinaryHeap;
+use std::collections::binary_heap::PeekMut;
 
 use differential_dataflow::lattice::Lattice;
 use mz_ore::now::EpochMillis;
 use mz_persist_client::read::{ListenEvent, Subscribe};
 use mz_persist_types::Codec64;
 use mz_repr::{GlobalId, Row};
+use mz_storage_types::StorageDiff;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::sources::{
     GenericSourceConnection, SourceConnection, SourceData, SourceTimestamp,
 };
-use mz_storage_types::StorageDiff;
 use mz_timely_util::antichain::AntichainExt;
-use timely::order::TotalOrder;
-use timely::progress::frontier::MutableAntichain;
-use timely::progress::Antichain;
 use timely::PartialOrder;
+use timely::order::TotalOrder;
+use timely::progress::Antichain;
+use timely::progress::frontier::MutableAntichain;
 
 use crate::StorageError;
 use crate::Timestamp;
@@ -84,6 +84,20 @@ pub(super) async fn real_time_recency_ts<
         }
         GenericSourceConnection::MySql(my_sql) => {
             let external_frontier = my_sql
+                .fetch_write_frontier(&config)
+                .await
+                .map_err(StorageError::Generic)?;
+
+            decode_remap_data_until_geq_external_frontier(
+                id,
+                external_frontier,
+                as_of,
+                remap_subscribe,
+            )
+            .await
+        }
+        GenericSourceConnection::SqlServer(sql_server) => {
+            let external_frontier = sql_server
                 .fetch_write_frontier(&config)
                 .await
                 .map_err(StorageError::Generic)?;
@@ -172,7 +186,7 @@ async fn decode_remap_data_until_geq_external_frontier<
                 // binding_ts
                 let binding_updates = std::iter::from_fn(|| {
                     let update = pending_remap.peek_mut()?;
-                    if PartialOrder::less_equal(&update.0 .0, &binding_ts) {
+                    if PartialOrder::less_equal(&update.0.0, &binding_ts) {
                         let Reverse((_, from_ts, diff)) = PeekMut::pop(update);
                         Some((from_ts, diff))
                     } else {

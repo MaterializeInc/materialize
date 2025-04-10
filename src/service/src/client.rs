@@ -205,5 +205,5 @@ pub trait PartitionedState<C, R>: fmt::Debug + Send {
     /// If responses from all partitions have been absorbed, returns an
     /// amalgamated response.
     fn absorb_response(&mut self, shard_id: usize, response: R)
-        -> Option<Result<R, anyhow::Error>>;
+    -> Option<Result<R, anyhow::Error>>;
 }

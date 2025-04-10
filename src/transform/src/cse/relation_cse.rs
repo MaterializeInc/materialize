@@ -16,8 +16,8 @@
 
 use mz_expr::MirRelationExpr;
 
-use crate::normalize_lets::NormalizeLets;
 use crate::TransformCtx;
+use crate::normalize_lets::NormalizeLets;
 
 use super::anf::ANF;
 

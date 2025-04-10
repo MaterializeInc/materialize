@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 
 pub use mz_lowertest_derive::MzReflect;
 use mz_ore::result::ResultExt;
-use mz_ore::str::{separated, StrExt};
+use mz_ore::str::{StrExt, separated};
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use serde::de::DeserializeOwned;
 use serde_json::Value;

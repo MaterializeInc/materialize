@@ -24,11 +24,11 @@ use clap::Parser;
 use futures::future::FutureExt;
 use mz_adapter::catalog::{Catalog, InitializeStateResult};
 use mz_adapter_types::bootstrap_builtin_cluster_config::{
-    BootstrapBuiltinClusterConfig, ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR, BootstrapBuiltinClusterConfig,
     CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
     SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
 };
-use mz_build_info::{build_info, BuildInfo};
+use mz_build_info::{BuildInfo, build_info};
 use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, StateConfig};
 use mz_catalog::durable::debug::{
     AuditLogCollection, ClusterCollection, ClusterIntrospectionSourceIndexCollection,
@@ -41,7 +41,7 @@ use mz_catalog::durable::debug::{
     UnfinalizedShardsCollection,
 };
 use mz_catalog::durable::{
-    persist_backed_catalog_state, BootstrapArgs, OpenableDurableCatalogState,
+    BootstrapArgs, OpenableDurableCatalogState, persist_backed_catalog_state,
 };
 use mz_catalog::memory::objects::CatalogItem;
 use mz_cloud_resources::AwsExternalIdPrefix;
@@ -59,12 +59,12 @@ use mz_persist_client::{Diagnostics, PersistClient, PersistLocation};
 use mz_repr::{Diff, Timestamp};
 use mz_service::secrets::SecretsReaderCliArgs;
 use mz_sql::catalog::EnvironmentId;
+use mz_storage_types::StorageDiff;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::StorageError;
 use mz_storage_types::sources::SourceData;
-use mz_storage_types::StorageDiff;
 use serde::{Deserialize, Serialize};
-use tracing::{error, Instrument};
+use tracing::{Instrument, error};
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
@@ -415,7 +415,9 @@ async fn dump(
         let name = T::name();
 
         if consolidate && retraction_count != 0 {
-            error!("{name} catalog collection has corrupt entries, there should be no retractions in a consolidated catalog, but there are {retraction_count} retractions");
+            error!(
+                "{name} catalog collection has corrupt entries, there should be no retractions in a consolidated catalog, but there are {retraction_count} retractions"
+            );
         }
 
         data.insert(name, dumped_col);

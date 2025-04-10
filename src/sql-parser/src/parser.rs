@@ -24,6 +24,8 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
+use IsLateral::*;
+use IsOptional::*;
 use bytesize::ByteSize;
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
@@ -34,8 +36,6 @@ use mz_sql_lexer::keywords::*;
 use mz_sql_lexer::lexer::{self, IdentString, LexerError, PosToken, Token};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
-use IsLateral::*;
-use IsOptional::*;
 
 use crate::ast::display::AstDisplay;
 use crate::ast::*;
@@ -611,7 +611,7 @@ impl<'a> Parser<'a> {
                         Err(_) => {
                             return Err(
                                 self.error(self.peek_prev_pos(), format!("invalid number {}", n))
-                            )
+                            );
                         }
                     };
                     if n != 0.0 {
@@ -2587,7 +2587,7 @@ impl<'a> Parser<'a> {
                             self.peek_prev_pos(),
                             "unexpected keyword {}",
                             other
-                        )
+                        );
                     }
                 }
             }
@@ -3715,7 +3715,7 @@ impl<'a> Parser<'a> {
                     self,
                     self.peek_prev_pos(),
                     "CREATE CONTINUAL TASK with options in both new and legacy locations"
-                )
+                );
             }
         };
 
@@ -6414,7 +6414,7 @@ impl<'a> Parser<'a> {
                 Statement::Subscribe(stmt) => CopyRelation::Subscribe(stmt),
                 _ => {
                     return parser_err!(self, self.peek_prev_pos(), "unsupported query in COPY")
-                        .map_parser_err(StatementKind::Copy)
+                        .map_parser_err(StatementKind::Copy);
                 }
             }
         } else {
@@ -6740,7 +6740,7 @@ impl<'a> Parser<'a> {
                         return Err(self.error(
                             self.peek_prev_pos(),
                             "precision for type float must be within ([1-53])".into(),
-                        ))
+                        ));
                     }
                     v if v < 25 => other(ident!("float4")),
                     _ => other(ident!("float8")),
@@ -7846,7 +7846,7 @@ impl<'a> Parser<'a> {
                         self,
                         self.peek_prev_pos(),
                         format!("Unsupported SHOW on {object_type}")
-                    )
+                    );
                 }
             };
             Ok(ShowStatement::ShowObjects(ShowObjectsStatement {
@@ -8053,7 +8053,7 @@ impl<'a> Parser<'a> {
                             self.peek_pos(),
                             "LEFT, RIGHT, or FULL",
                             self.peek_token(),
-                        )
+                        );
                     }
                     None if natural => {
                         return self.expected(
@@ -9171,10 +9171,12 @@ impl<'a> Parser<'a> {
             | ObjectType::Source
             | ObjectType::ContinualTask => {
                 parser_err!(
-                            self,
-                            self.peek_prev_pos(),
-                            format!("For object type {object_type}, you must specify 'TABLE' or omit the object type")
-                        )
+                    self,
+                    self.peek_prev_pos(),
+                    format!(
+                        "For object type {object_type}, you must specify 'TABLE' or omit the object type"
+                    )
+                )
             }
             ObjectType::Sink
             | ObjectType::Index

@@ -1829,6 +1829,7 @@ service_names = [
     "materialized",
     "balancerd",
     "frontegg-mock",
+    "cockroach",
     "clusterd_1_1_1",
     "clusterd_1_2_1",
     "clusterd_2_1_1",

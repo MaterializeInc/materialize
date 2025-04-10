@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use mz_build_info::{build_info, BuildInfo};
+use mz_build_info::{BuildInfo, build_info};
 use mz_dyncfg::ConfigSet;
 use mz_ore::{instrument, soft_assert_or_log};
 use mz_persist::location::{Blob, Consensus, ExternalError};
@@ -36,12 +36,12 @@ use crate::critical::{CriticalReaderId, SinceHandle};
 use crate::error::InvalidUsage;
 use crate::fetch::{BatchFetcher, BatchFetcherConfig};
 use crate::internal::compact::Compactor;
-use crate::internal::encoding::{parse_id, Schemas};
+use crate::internal::encoding::{Schemas, parse_id};
 use crate::internal::gc::GarbageCollector;
-use crate::internal::machine::{retry_external, Machine};
+use crate::internal::machine::{Machine, retry_external};
 use crate::internal::state_versions::StateVersions;
 use crate::metrics::Metrics;
-use crate::read::{LeasedReaderId, ReadHandle, READER_LEASE_DURATION};
+use crate::read::{LeasedReaderId, READER_LEASE_DURATION, ReadHandle};
 use crate::rpc::PubSubSender;
 use crate::schema::CaESchema;
 use crate::write::{WriteHandle, WriterId};
@@ -65,7 +65,7 @@ pub mod iter;
 pub mod metrics {
     //! Utilities related to metrics.
     pub use crate::internal::metrics::{
-        encode_ts_metric, Metrics, SinkMetrics, SinkWorkerMetrics, UpdateDelta,
+        Metrics, SinkMetrics, SinkWorkerMetrics, UpdateDelta, encode_ts_metric,
     };
 }
 pub mod operators {

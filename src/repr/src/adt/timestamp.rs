@@ -38,11 +38,11 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize, Serializer};
 use thiserror::Error;
 
+use crate::Datum;
 use crate::adt::datetime::DateTimePart;
 use crate::adt::interval::Interval;
 use crate::adt::numeric::DecimalLike;
 use crate::scalar::{arb_naive_date_time, arb_utc_date_time};
-use crate::Datum;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.timestamp.rs"));
 
@@ -544,11 +544,7 @@ impl TimestampLike for chrono::DateTime<chrono::Utc> {
     }
 
     fn timezone_name(&self, caps: bool) -> &'static str {
-        if caps {
-            "UTC"
-        } else {
-            "utc"
-        }
+        if caps { "UTC" } else { "utc" }
     }
 
     fn checked_add_signed(self, rhs: Duration) -> Option<Self> {

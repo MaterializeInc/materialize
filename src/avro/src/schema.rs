@@ -904,7 +904,7 @@ impl SchemaParser {
                     "Sub-schema with name {:?} encountered multiple times",
                     oe.key()
                 ))
-                .into())
+                .into());
             }
         };
         self.named.push(None);
@@ -929,7 +929,7 @@ impl SchemaParser {
                     "{} may not be used as a custom type name",
                     name.name
                 ))
-                .into())
+                .into());
             }
             _ => {}
         };
@@ -1212,7 +1212,7 @@ impl SchemaParser {
                         precision,
                         scale,
                         fixed_size: None,
-                    })
+                    });
                 }
                 Err(e) => warn!(
                     "parsing decimal as regular bytes due to parse error: {:?}, {:?}",
@@ -1341,7 +1341,10 @@ impl SchemaParser {
                 Ok((precision, scale)) => {
                     let max = ((2_usize.pow((8 * size - 1) as u32) - 1) as f64).log10() as usize;
                     if precision > max {
-                        warn!("Decimal precision {} requires more than {} bytes of space, parsing as fixed", precision, size);
+                        warn!(
+                            "Decimal precision {} requires more than {} bytes of space, parsing as fixed",
+                            precision, size
+                        );
                     } else {
                         return Ok(SchemaPiece::Decimal {
                             precision,
@@ -1763,7 +1766,7 @@ impl<'a> SchemaNode<'a> {
                         return Err(ParseSchemaError(format!(
                             "Unexpected number in default: {}",
                             n
-                        )))
+                        )));
                     }
                 }
             }
@@ -1854,7 +1857,7 @@ impl<'a> SchemaNode<'a> {
                 return Err(ParseSchemaError(format!(
                     "Json default value {} does not match schema",
                     json
-                )))
+                )));
             }
         };
         Ok(val)
@@ -2010,7 +2013,7 @@ impl<'a> Serialize for SchemaSerContext<'a> {
                         if self.enclosing_ns != &name.namespace {
                             map.serialize_entry("namespace", &name.namespace)?;
                         }
-                        if let Some(ref docstr) = doc {
+                        if let Some(docstr) = doc {
                             map.serialize_entry("doc", docstr)?;
                         }
                         // TODO (brennan) - serialize aliases
@@ -2845,23 +2848,29 @@ mod tests {
 
         // The name portion of a fullname, record field names, and enum symbols must:
         // start with [A-Za-z_] and subsequently contain only [A-Za-z0-9_]
-        assert!(Schema::from_str(
-            r#"{"type": "record", "name": "99 problems but a name aint one",
+        assert!(
+            Schema::from_str(
+                r#"{"type": "record", "name": "99 problems but a name aint one",
             "fields": [{"name": "name", "type": "string"}]}"#
-        )
-        .is_err());
+            )
+            .is_err()
+        );
 
-        assert!(Schema::from_str(
-            r#"{"type": "record", "name": "!!!",
+        assert!(
+            Schema::from_str(
+                r#"{"type": "record", "name": "!!!",
             "fields": [{"name": "name", "type": "string"}]}"#
-        )
-        .is_err());
+            )
+            .is_err()
+        );
 
-        assert!(Schema::from_str(
-            r#"{"type": "record", "name": "_valid_until_©",
+        assert!(
+            Schema::from_str(
+                r#"{"type": "record", "name": "_valid_until_©",
             "fields": [{"name": "name", "type": "string"}]}"#
-        )
-        .is_err());
+            )
+            .is_err()
+        );
 
         // Use previously defined names and namespaces as type.
         let schema = Schema::from_str(r#"{"type": "record", "name": "org.apache.avro.tests.Hello", "fields": [

@@ -775,7 +775,10 @@ impl fmt::Display for AdapterError {
                 )
             }
             AdapterError::RtrTimeout(_) => {
-                write!(f, "timed out before ingesting the source's visible frontier when real-time-recency query issued")
+                write!(
+                    f,
+                    "timed out before ingesting the source's visible frontier when real-time-recency query issued"
+                )
             }
             AdapterError::RtrDropFailure(_) => write!(
                 f,

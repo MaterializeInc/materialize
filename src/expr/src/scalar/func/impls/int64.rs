@@ -12,11 +12,11 @@ use std::fmt;
 use mz_lowertest::MzReflect;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::adt::system::Oid;
-use mz_repr::{strconv, ColumnType, ScalarType};
+use mz_repr::{ColumnType, ScalarType, strconv};
 use serde::{Deserialize, Serialize};
 
-use crate::scalar::func::EagerUnaryFunc;
 use crate::EvalError;
+use crate::scalar::func::EagerUnaryFunc;
 
 sqlfunc!(
     #[sqlname = "-"]

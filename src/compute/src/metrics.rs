@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use mz_compute_client::metrics::{CommandMetrics, HistoryMetrics};
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
-use mz_ore::metrics::{raw, MetricsRegistry, UIntGauge};
+use mz_ore::metrics::{MetricsRegistry, UIntGauge, raw};
 use mz_repr::{GlobalId, SharedRow};
 use prometheus::core::{AtomicF64, GenericCounter};
 use prometheus::proto::LabelPair;

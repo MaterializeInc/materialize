@@ -21,14 +21,14 @@ use mz_expr::OptimizedMirRelationExpr;
 use mz_ore::channel::trigger;
 use mz_ore::soft_panic_or_log;
 use mz_ore::task::spawn;
+use mz_persist_client::PersistClient;
 use mz_persist_client::cli::admin::{
     EXPRESSION_CACHE_FORCE_COMPACTION_FUEL, EXPRESSION_CACHE_FORCE_COMPACTION_WAIT,
 };
-use mz_persist_client::PersistClient;
 use mz_persist_types::codec_impls::VecU8Schema;
 use mz_persist_types::{Codec, ShardId};
-use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::GlobalId;
+use mz_repr::optimize::OptimizerFeatures;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 use proptest_derive::Arbitrary;
@@ -163,7 +163,7 @@ impl ExpressionCache {
                 .await
             {
                 Ok((local_expressions, global_expressions)) => {
-                    return (cache, local_expressions, global_expressions)
+                    return (cache, local_expressions, global_expressions);
                 }
                 Err(err) => debug!("failed to open cache: {err} ... retrying"),
             }
@@ -405,7 +405,7 @@ impl ExpressionCacheHandle {
         new_local_expressions: Vec<(GlobalId, LocalExpressions)>,
         new_global_expressions: Vec<(GlobalId, GlobalExpressions)>,
         invalidate_ids: BTreeSet<GlobalId>,
-    ) -> impl Future<Output = ()> {
+    ) -> impl Future<Output = ()> + use<> {
         let (trigger, trigger_rx) = trigger::channel();
         let op = CacheOperation::Update {
             new_local_expressions,
@@ -434,11 +434,11 @@ mod tests {
     use mz_ore::test::timeout;
     use mz_persist_client::PersistClient;
     use mz_persist_types::ShardId;
-    use mz_repr::optimize::OptimizerFeatures;
     use mz_repr::GlobalId;
+    use mz_repr::optimize::OptimizerFeatures;
     use mz_transform::dataflow::DataflowMetainfo;
     use mz_transform::notice::OptimizerNotice;
-    use proptest::arbitrary::{any, Arbitrary};
+    use proptest::arbitrary::{Arbitrary, any};
     use proptest::prelude::{BoxedStrategy, ProptestConfig};
     use proptest::proptest;
     use proptest::strategy::{Strategy, ValueTree};

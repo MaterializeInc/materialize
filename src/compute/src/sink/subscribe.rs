@@ -20,15 +20,15 @@ use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::probe::{Handle, ProbeNotify};
+use timely::PartialOrder;
+use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::Scope;
-use timely::progress::timestamp::Timestamp as TimelyTimestamp;
 use timely::progress::Antichain;
-use timely::PartialOrder;
+use timely::progress::timestamp::Timestamp as TimelyTimestamp;
 
-use crate::render::sinks::SinkRender;
 use crate::render::StartSignal;
+use crate::render::sinks::SinkRender;
 
 impl<G> SinkRender<G> for SubscribeSinkConnection
 where

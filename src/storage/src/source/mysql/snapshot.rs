@@ -94,7 +94,7 @@ use itertools::Itertools;
 use mysql_async::prelude::Queryable;
 use mysql_async::{IsolationLevel, Row as MySqlRow, TxOpts};
 use mz_mysql_util::{
-    pack_mysql_row, query_sys_var, quote_identifier, MySqlError, ER_NO_SUCH_TABLE,
+    ER_NO_SUCH_TABLE, MySqlError, pack_mysql_row, query_sys_var, quote_identifier,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
@@ -102,8 +102,8 @@ use mz_ore::iter::IteratorExt;
 use mz_ore::metrics::MetricsFutureExt;
 use mz_repr::{Diff, Row};
 use mz_storage_types::errors::DataflowError;
-use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition};
 use mz_storage_types::sources::MySqlSourceConnection;
+use mz_storage_types::sources::mysql::{GtidPartition, gtid_set_frontier};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use mz_timely_util::containers::stack::AccountedStackBuilder;
@@ -114,15 +114,15 @@ use timely::progress::Timestamp;
 use tracing::{error, trace};
 
 use crate::metrics::source::mysql::MySqlSnapshotMetrics;
+use crate::source::RawSourceCreationConfig;
 use crate::source::types::{
     ProgressStatisticsUpdate, SignaledFuture, SourceMessage, StackedCollection,
 };
-use crate::source::RawSourceCreationConfig;
 
 use super::schemas::verify_schemas;
 use super::{
-    return_definite_error, validate_mysql_repl_settings, DefiniteError, MySqlTableName,
-    ReplicationError, RewindRequest, SourceOutputInfo, TransientError,
+    DefiniteError, MySqlTableName, ReplicationError, RewindRequest, SourceOutputInfo,
+    TransientError, return_definite_error, validate_mysql_repl_settings,
 };
 
 /// Renders the snapshot dataflow. See the module documentation for more information.
@@ -173,8 +173,12 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
         builder.build_fallible(move |caps| {
             let busy_signal = Arc::clone(&config.busy_signal);
             Box::pin(SignaledFuture::new(busy_signal, async move {
-                let [data_cap_set, rewind_cap_set, definite_error_cap_set, stats_cap]: &mut [_; 4] =
-                    caps.try_into().unwrap();
+                let [
+                    data_cap_set,
+                    rewind_cap_set,
+                    definite_error_cap_set,
+                    stats_cap,
+                ]: &mut [_; 4] = caps.try_into().unwrap();
 
                 let id = config.id;
                 let worker_id = config.worker_id;

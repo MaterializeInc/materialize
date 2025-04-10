@@ -28,7 +28,9 @@ pub async fn create_client(context: String) -> Result<(Client, String), anyhow::
         Err(kubeconfig_err) => match Config::incluster_env() {
             Ok(config) => config,
             Err(in_cluster_err) => {
-                bail!("failed to infer config: in-cluster: ({in_cluster_err}), kubeconfig: ({kubeconfig_err})");
+                bail!(
+                    "failed to infer config: in-cluster: ({in_cluster_err}), kubeconfig: ({kubeconfig_err})"
+                );
             }
         },
     };

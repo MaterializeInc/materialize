@@ -19,19 +19,19 @@
 //! [`mz_catalog_server`]: https://materialize.com/docs/sql/show-clusters/#mz_catalog_server-system-cluster
 
 use mz_expr::CollectionPlan;
-use mz_repr::namespaces::is_system_schema;
 use mz_repr::GlobalId;
+use mz_repr::namespaces::is_system_schema;
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::{
     ExplainPlanPlan, ExplainTimestampPlan, Explainee, ExplaineeStatement, Plan, SubscribeFrom,
 };
 use smallvec::SmallVec;
 
+use crate::AdapterError;
 use crate::catalog::ConnCatalog;
 use crate::coord::TargetCluster;
 use crate::notice::AdapterNotice;
 use crate::session::Session;
-use crate::AdapterError;
 use mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER;
 
 /// Checks whether or not we should automatically run a query on the `mz_catalog_server`

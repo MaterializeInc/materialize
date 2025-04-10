@@ -10,7 +10,7 @@
 use std::cmp;
 use std::time::Duration;
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use rdkafka::admin::NewPartitions;

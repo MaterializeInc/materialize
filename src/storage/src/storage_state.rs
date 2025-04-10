@@ -94,6 +94,7 @@ use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_storage_client::client::{
     RunIngestionCommand, StatusUpdate, StorageCommand, StorageResponse,
 };
+use mz_storage_types::AlterCompatible;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::CollectionMetadata;
@@ -101,13 +102,12 @@ use mz_storage_types::dyncfgs::STORAGE_SERVER_MAINTENANCE_INTERVAL;
 use mz_storage_types::oneshot_sources::OneshotIngestionDescription;
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::IngestionDescription;
-use mz_storage_types::AlterCompatible;
 use mz_timely_util::builder_async::PressOnDropButton;
 use mz_txn_wal::operator::TxnsContext;
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
-use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp as _;
+use timely::progress::frontier::Antichain;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
@@ -637,7 +637,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     // two commands get sufficiently delayed- then it's possible to receive a
                     // SuspendAndRestart command for an unknown source. We cannot assert that this
                     // never happens but we log an error here to track how often this happens.
-                    warn!("got InternalStorageCommand::SuspendAndRestart for something that is not a source or sink: {id}");
+                    warn!(
+                        "got InternalStorageCommand::SuspendAndRestart for something that is not a source or sink: {id}"
+                    );
                 }
             }
             InternalStorageCommand::CreateIngestionDataflow {

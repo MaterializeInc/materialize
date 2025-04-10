@@ -15,6 +15,6 @@ pub mod crd;
 pub mod vpc_endpoint;
 #[cfg(feature = "vpc-endpoints")]
 pub use vpc_endpoint::{
-    id_from_vpc_endpoint_name, vpc_endpoint_host, vpc_endpoint_name, AwsExternalIdPrefix,
-    CloudResourceController, CloudResourceReader, VpcEndpointConfig, VpcEndpointEvent,
+    AwsExternalIdPrefix, CloudResourceController, CloudResourceReader, VpcEndpointConfig,
+    VpcEndpointEvent, id_from_vpc_endpoint_name, vpc_endpoint_host, vpc_endpoint_name,
 };

@@ -10,13 +10,13 @@
 //! An `UpsertStateBackend` that stores values in RocksDB.
 
 use mz_rocksdb::{KeyUpdate, RocksDBInstance};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 
+use super::UpsertKey;
 use super::types::{
     GetStats, MergeStats, MergeValue, PutStats, PutValue, StateValue, UpsertStateBackend,
     UpsertValueAndSize, ValueMetadata,
 };
-use super::UpsertKey;
 
 /// A `UpsertStateBackend` implementation backed by RocksDB.
 /// This is currently untested, and simply compiles.

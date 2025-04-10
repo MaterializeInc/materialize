@@ -258,9 +258,11 @@ impl UpsertMetricDefs {
             }
         }
         let shared_metrics = Arc::new(UpsertSharedMetrics::new(self, *source_id));
-        assert!(shared
-            .insert(source_id.clone(), Arc::downgrade(&shared_metrics))
-            .is_none());
+        assert!(
+            shared
+                .insert(source_id.clone(), Arc::downgrade(&shared_metrics))
+                .is_none()
+        );
         shared_metrics
     }
 
@@ -291,9 +293,11 @@ impl UpsertMetricDefs {
         };
 
         let rocksdb_metrics = Arc::new(rocksdb_metrics);
-        assert!(rocksdb
-            .insert(source_id.clone(), Arc::downgrade(&rocksdb_metrics))
-            .is_none());
+        assert!(
+            rocksdb
+                .insert(source_id.clone(), Arc::downgrade(&rocksdb_metrics))
+                .is_none()
+        );
         rocksdb_metrics
     }
 }

@@ -61,9 +61,9 @@ use mz_ore::cast::CastFrom;
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
 use serde::{Serialize, Serializer};
+use timely::PartialOrder;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
 
 use crate::internal::state::HollowBatch;
 

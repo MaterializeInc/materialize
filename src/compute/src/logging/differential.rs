@@ -21,7 +21,7 @@ use differential_dataflow::logging::{
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Timestamp};
 use mz_timely_util::containers::{
-    columnar_exchange, Col2ValBatcher, ColumnBuilder, ProvidedBuilder,
+    Col2ValBatcher, ColumnBuilder, ProvidedBuilder, columnar_exchange,
 };
 use mz_timely_util::replay::MzReplay;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
@@ -33,8 +33,8 @@ use timely::dataflow::{Scope, Stream};
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::compute::{ArrangementHeapSizeOperatorDrop, ComputeEvent};
 use crate::logging::{
-    consolidate_and_pack, DifferentialLog, EventQueue, LogCollection, LogVariant,
-    SharedLoggingState,
+    DifferentialLog, EventQueue, LogCollection, LogVariant, SharedLoggingState,
+    consolidate_and_pack,
 };
 use crate::row_spine::RowRowBuilder;
 use crate::typedefs::{KeyBatcher, RowRowSpine};

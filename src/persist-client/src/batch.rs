@@ -23,7 +23,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::stream::StreamExt;
-use futures_util::{stream, FutureExt};
+use futures_util::{FutureExt, stream};
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
@@ -35,20 +35,20 @@ use mz_persist_types::parquet::{CompressionFormat, EncodingConfig};
 use mz_persist_types::part::{Part, PartBuilder};
 use mz_persist_types::schema::SchemaId;
 use mz_persist_types::stats::{
-    trim_to_budget, truncate_bytes, PartStats, TruncateBound, TRUNCATE_LEN,
+    PartStats, TRUNCATE_LEN, TruncateBound, trim_to_budget, truncate_bytes,
 };
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::RustType;
 use mz_timely_util::order::Reverse;
 use proptest_derive::Arbitrary;
 use semver::Version;
+use timely::PartialOrder;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
-use tracing::{debug_span, trace_span, warn, Instrument};
+use tracing::{Instrument, debug_span, trace_span, warn};
 
 use crate::async_runtime::IsolatedRuntime;
-use crate::cfg::{MiB, BATCH_BUILDER_MAX_OUTSTANDING_PARTS};
+use crate::cfg::{BATCH_BUILDER_MAX_OUTSTANDING_PARTS, MiB};
 use crate::error::InvalidUsage;
 use crate::internal::compact::{CompactConfig, Compactor};
 use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, Schemas};
@@ -60,7 +60,7 @@ use crate::internal::state::{
     BatchPart, HollowBatch, HollowBatchPart, HollowRun, HollowRunRef, ProtoInlineBatchPart,
     RunMeta, RunOrder, RunPart,
 };
-use crate::stats::{untrimmable_columns, STATS_BUDGET_BYTES, STATS_COLLECTION_ENABLED};
+use crate::stats::{STATS_BUDGET_BYTES, STATS_COLLECTION_ENABLED, untrimmable_columns};
 use crate::{PersistConfig, ShardId};
 
 include!(concat!(env!("OUT_DIR"), "/mz_persist_client.batch.rs"));
@@ -1417,11 +1417,11 @@ mod tests {
     use timely::order::Product;
 
     use super::*;
+    use crate::PersistLocation;
     use crate::cache::PersistClientCache;
     use crate::cfg::BATCH_BUILDER_MAX_OUTSTANDING_PARTS;
     use crate::internal::paths::{BlobKey, PartialBlobKey};
     use crate::tests::{all_ok, new_test_client};
-    use crate::PersistLocation;
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented

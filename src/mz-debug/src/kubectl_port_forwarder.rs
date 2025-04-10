@@ -167,7 +167,9 @@ pub async fn create_kubectl_port_forwarder(
         }
     }
 
-    Err(anyhow::anyhow!("No SQL port forwarding info found"))
+    Err(anyhow::anyhow!(
+        "No SQL port forwarding info found. Set --auto-port-forward to false and point --mz-connection-url to a Materialize instance."
+    ))
 }
 
 pub fn create_mz_connection_url(

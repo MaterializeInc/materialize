@@ -575,48 +575,59 @@ mod tests {
         )
         .unwrap();
 
-        assert!(Value::Record(vec![
-            ("a".to_string(), Value::Long(42i64)),
-            ("b".to_string(), Value::String("foo".to_string())),
-        ])
-        .validate(schema.top_node()));
+        assert!(
+            Value::Record(vec![
+                ("a".to_string(), Value::Long(42i64)),
+                ("b".to_string(), Value::String("foo".to_string())),
+            ])
+            .validate(schema.top_node())
+        );
 
-        assert!(!Value::Record(vec![
-            ("b".to_string(), Value::String("foo".to_string())),
-            ("a".to_string(), Value::Long(42i64)),
-        ])
-        .validate(schema.top_node()));
+        assert!(
+            !Value::Record(vec![
+                ("b".to_string(), Value::String("foo".to_string())),
+                ("a".to_string(), Value::Long(42i64)),
+            ])
+            .validate(schema.top_node())
+        );
 
-        assert!(!Value::Record(vec![
-            ("a".to_string(), Value::Boolean(false)),
-            ("b".to_string(), Value::String("foo".to_string())),
-        ])
-        .validate(schema.top_node()));
+        assert!(
+            !Value::Record(vec![
+                ("a".to_string(), Value::Boolean(false)),
+                ("b".to_string(), Value::String("foo".to_string())),
+            ])
+            .validate(schema.top_node())
+        );
 
-        assert!(!Value::Record(vec![
-            ("a".to_string(), Value::Long(42i64)),
-            ("c".to_string(), Value::String("foo".to_string())),
-        ])
-        .validate(schema.top_node()));
+        assert!(
+            !Value::Record(vec![
+                ("a".to_string(), Value::Long(42i64)),
+                ("c".to_string(), Value::String("foo".to_string())),
+            ])
+            .validate(schema.top_node())
+        );
 
-        assert!(!Value::Record(vec![
-            ("a".to_string(), Value::Long(42i64)),
-            ("b".to_string(), Value::String("foo".to_string())),
-            ("c".to_string(), Value::Null),
-        ])
-        .validate(schema.top_node()));
+        assert!(
+            !Value::Record(vec![
+                ("a".to_string(), Value::Long(42i64)),
+                ("b".to_string(), Value::String("foo".to_string())),
+                ("c".to_string(), Value::Null),
+            ])
+            .validate(schema.top_node())
+        );
     }
 
     #[mz_ore::test]
     fn validate_decimal() {
-        assert!(Value::Decimal(DecimalValue {
-            unscaled: vec![7],
-            precision: 12,
-            scale: 5
-        })
-        .validate(
-            Schema::from_str(
-                r#"
+        assert!(
+            Value::Decimal(DecimalValue {
+                unscaled: vec![7],
+                precision: 12,
+                scale: 5
+            })
+            .validate(
+                Schema::from_str(
+                    r#"
             {
                 "type": "bytes",
                 "logicalType": "decimal",
@@ -624,19 +635,21 @@ mod tests {
                 "scale": 5
             }
         "#
+                )
+                .unwrap()
+                .top_node()
             )
-            .unwrap()
-            .top_node()
-        ));
+        );
 
-        assert!(!Value::Decimal(DecimalValue {
-            unscaled: vec![7],
-            precision: 13,
-            scale: 5
-        })
-        .validate(
-            Schema::from_str(
-                r#"
+        assert!(
+            !Value::Decimal(DecimalValue {
+                unscaled: vec![7],
+                precision: 13,
+                scale: 5
+            })
+            .validate(
+                Schema::from_str(
+                    r#"
             {
                 "type": "bytes",
                 "logicalType": "decimal",
@@ -644,9 +657,10 @@ mod tests {
                 "scale": 5
             }
         "#
+                )
+                .unwrap()
+                .top_node()
             )
-            .unwrap()
-            .top_node()
-        ));
+        );
     }
 }

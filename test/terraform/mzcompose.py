@@ -218,27 +218,6 @@ class AWS:
         )
 
         spawn.runv(["kubectl", "get", "nodes"])
-        # Not working yet?
-        # spawn.runv(
-        #     ["helm", "repo", "add", "openebs", "https://openebs.github.io/openebs"]
-        # )
-        # spawn.runv(["helm", "repo", "update"])
-        # spawn.runv(
-        #     [
-        #         "helm",
-        #         "install",
-        #         "openebs",
-        #         "--namespace",
-        #         "openebs",
-        #         "openebs/openebs",
-        #         "--set",
-        #         "engines.replicated.mayastor.enabled=false",
-        #         "--create-namespace",
-        #     ]
-        # )
-        # spawn.runv(
-        #     ["kubectl", "get", "pods", "-n", "openebs", "-l", "role=openebs-lvm"]
-        # )
 
         spawn.capture(
             [
@@ -289,6 +268,7 @@ class AWS:
             "stringData": {
                 "metadata_backend_url": metadata_backend_url,
                 "persist_backend_url": persist_backend_url,
+                "license_key": os.getenv("MZ_CI_LICENSE_KEY"),
             },
         }
 
@@ -366,6 +346,28 @@ class AWS:
             except subprocess.CalledProcessError:
                 time.sleep(1)
         else:
+            print("Getting all pods:")
+            spawn.runv(
+                [
+                    "kubectl",
+                    "get",
+                    "pods",
+                    "-n",
+                    "materialize-environment",
+                ],
+                cwd=self.path,
+            )
+            print("Describing all pods in materialize-environment:")
+            spawn.runv(
+                [
+                    "kubectl",
+                    "describe",
+                    "pods",
+                    "-n",
+                    "materialize-environment",
+                ],
+                cwd=self.path,
+            )
             raise ValueError("Never completed")
 
         # Can take a while for balancerd to come up
@@ -390,6 +392,28 @@ class AWS:
             except subprocess.CalledProcessError:
                 time.sleep(1)
         else:
+            print("Getting all pods:")
+            spawn.runv(
+                [
+                    "kubectl",
+                    "get",
+                    "pods",
+                    "-n",
+                    "materialize-environment",
+                ],
+                cwd=self.path,
+            )
+            print("Describing all pods in materialize-environment:")
+            spawn.runv(
+                [
+                    "kubectl",
+                    "describe",
+                    "pods",
+                    "-n",
+                    "materialize-environment",
+                ],
+                cwd=self.path,
+            )
             raise ValueError("Never completed")
 
     def connect(self, c: Composition) -> None:
@@ -800,12 +824,23 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
             ],
         )
 
+        vars = [
+            "-var",
+            "operator_version=v25.2.0-beta.1",
+            "-var",
+            f"orchestratord_version={tag}",
+        ]
+
         if args.setup:
             print("--- Setup")
+            spawn.runv(
+                ["helm", "package", "../../../misc/helm-charts/operator/"],
+                cwd=path,
+            )
             spawn.runv(["terraform", "init"], cwd=path)
             spawn.runv(["terraform", "validate"], cwd=path)
             spawn.runv(["terraform", "plan"], cwd=path)
-            spawn.runv(["terraform", "apply", "-auto-approve"], cwd=path)
+            spawn.runv(["terraform", "apply", "-auto-approve", *vars], cwd=path)
 
         gke_cluster = json.loads(
             spawn.capture(
@@ -872,6 +907,7 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                 "stringData": {
                     "metadata_backend_url": connection_strings["metadata_backend_url"],
                     "persist_backend_url": connection_strings["persist_backend_url"],
+                    "license_key": os.getenv("MZ_CI_LICENSE_KEY"),
                 },
             }
 
@@ -949,6 +985,28 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                 except subprocess.CalledProcessError:
                     time.sleep(1)
             else:
+                print("Getting all pods:")
+                spawn.runv(
+                    [
+                        "kubectl",
+                        "get",
+                        "pods",
+                        "-n",
+                        "materialize-environment",
+                    ],
+                    cwd=path,
+                )
+                print("Describing all pods in materialize-environment:")
+                spawn.runv(
+                    [
+                        "kubectl",
+                        "describe",
+                        "pods",
+                        "-n",
+                        "materialize-environment",
+                    ],
+                    cwd=path,
+                )
                 raise ValueError("Never completed")
 
             # Can take a while for balancerd to come up
@@ -973,6 +1031,60 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                 except subprocess.CalledProcessError:
                     time.sleep(1)
             else:
+                print("Getting all pods:")
+                spawn.runv(
+                    [
+                        "kubectl",
+                        "get",
+                        "pods",
+                        "-n",
+                        "materialize-environment",
+                    ],
+                    cwd=path,
+                )
+                print("Describing all pods in materialize-environment:")
+                spawn.runv(
+                    [
+                        "kubectl",
+                        "describe",
+                        "pods",
+                        "-n",
+                        "materialize-environment",
+                    ],
+                    cwd=path,
+                )
+                pod_names = (
+                    spawn.capture(
+                        [
+                            "kubectl",
+                            "get",
+                            "pods",
+                            "-n",
+                            "materialize-environment",
+                            "-o",
+                            "name",
+                        ],
+                        cwd=path,
+                    )
+                    .strip()
+                    .split("\n")
+                )
+                print("Logging all pods in materialize-environment:")
+                for pod_name in pod_names:
+                    try:
+                        spawn.runv(
+                            [
+                                "kubectl",
+                                "logs",
+                                pod_name,
+                                "-n",
+                                "materialize-environment",
+                                "--all-containers=true",
+                            ],
+                            cwd=path,
+                        )
+                    except subprocess.CalledProcessError:
+                        print(f"Failed to get logs for {pod_name}")
                 raise ValueError("Never completed")
 
         print("--- Running tests")
@@ -1080,11 +1192,10 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                         MZ_ROOT / "misc" / "helm-charts" / "operator" / "Chart.yaml"
                     ) as f:
                         content = yaml.load(f, Loader=yaml.Loader)
-                        content["version"]
-                    # TODO: Reenable when we can pass the helm-chart path in directly
-                    # assert version.endswith(
-                    #     f", helm chart: {helm_chart_version})"
-                    # ), f"Actual version: {version}, expected to contain {helm_chart_version}"
+                        helm_chart_version = content["version"]
+                    assert version.endswith(
+                        f", helm chart: {helm_chart_version})"
+                    ), f"Actual version: {version}, expected to contain {helm_chart_version}"
 
             c.run_testdrive_files(*args.files)
     finally:
@@ -1185,19 +1296,34 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                 env=venv_env,
             )
 
+        vars = [
+            "-var",
+            "operator_version=v25.2.0-beta.1",
+            "-var",
+            f"orchestratord_version={tag}",
+        ]
+
         if args.setup:
             print("--- Setup")
+            spawn.runv(
+                ["helm", "package", "../../../misc/helm-charts/operator/"],
+                cwd=path,
+            )
             spawn.runv(["terraform", "init"], cwd=path, env=venv_env)
             spawn.runv(["terraform", "validate"], cwd=path, env=venv_env)
             spawn.runv(["terraform", "plan"], cwd=path, env=venv_env)
             try:
                 spawn.runv(
-                    ["terraform", "apply", "-auto-approve"], cwd=path, env=venv_env
+                    ["terraform", "apply", "-auto-approve", *vars],
+                    cwd=path,
+                    env=venv_env,
                 )
             except:
                 print("terraform apply failed, retrying")
                 spawn.runv(
-                    ["terraform", "apply", "-auto-approve"], cwd=path, env=venv_env
+                    ["terraform", "apply", "-auto-approve", *vars],
+                    cwd=path,
+                    env=venv_env,
                 )
 
         aks_cluster = json.loads(
@@ -1287,6 +1413,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                 "stringData": {
                     "metadata_backend_url": connection_strings["metadata_backend_url"],
                     "persist_backend_url": connection_strings["persist_backend_url"],
+                    "license_key": os.getenv("MZ_CI_LICENSE_KEY"),
                 },
             }
 
@@ -1369,6 +1496,30 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                 except subprocess.CalledProcessError:
                     time.sleep(1)
             else:
+                print("Getting all pods:")
+                spawn.runv(
+                    [
+                        "kubectl",
+                        "get",
+                        "pods",
+                        "-n",
+                        "materialize-environment",
+                    ],
+                    cwd=path,
+                    env=venv_env,
+                )
+                print("Describing all pods in materialize-environment:")
+                spawn.runv(
+                    [
+                        "kubectl",
+                        "describe",
+                        "pods",
+                        "-n",
+                        "materialize-environment",
+                    ],
+                    cwd=path,
+                    env=venv_env,
+                )
                 raise ValueError("Never completed")
 
             # Can take a while for balancerd to come up
@@ -1394,6 +1545,30 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                 except subprocess.CalledProcessError:
                     time.sleep(1)
             else:
+                print("Getting all pods:")
+                spawn.runv(
+                    [
+                        "kubectl",
+                        "get",
+                        "pods",
+                        "-n",
+                        "materialize-environment",
+                    ],
+                    cwd=path,
+                    env=venv_env,
+                )
+                print("Describing all pods in materialize-environment:")
+                spawn.runv(
+                    [
+                        "kubectl",
+                        "describe",
+                        "pods",
+                        "-n",
+                        "materialize-environment",
+                    ],
+                    cwd=path,
+                    env=venv_env,
+                )
                 raise ValueError("Never completed")
 
         print("--- Running tests")
@@ -1506,11 +1681,10 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                         MZ_ROOT / "misc" / "helm-charts" / "operator" / "Chart.yaml"
                     ) as f:
                         content = yaml.load(f, Loader=yaml.Loader)
-                        content["version"]
-                    # TODO: Reenable when we can pass the helm-chart path in directly
-                    # assert version.endswith(
-                    #     f", helm chart: {helm_chart_version})"
-                    # ), f"Actual version: {version}, expected to contain {helm_chart_version}"
+                        helm_chart_version = content["version"]
+                    assert version.endswith(
+                        f", helm chart: {helm_chart_version})"
+                    ), f"Actual version: {version}, expected to contain {helm_chart_version}"
 
             c.run_testdrive_files(*args.files)
     finally:

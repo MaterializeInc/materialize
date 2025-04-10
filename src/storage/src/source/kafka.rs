@@ -7,8 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 use std::convert::Infallible;
 use std::str::{self};
 use std::sync::{Arc, Mutex};
@@ -22,7 +22,7 @@ use futures::StreamExt;
 use itertools::Itertools;
 use maplit::btreemap;
 use mz_kafka_util::client::{
-    get_partitions, GetPartitionsError, MzClientContext, PartitionId, TunnelingClientContext,
+    GetPartitionsError, MzClientContext, PartitionId, TunnelingClientContext, get_partitions,
 };
 use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
@@ -30,7 +30,7 @@ use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
 use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::{adt::jsonb::Jsonb, Datum, Diff, GlobalId, Row};
+use mz_repr::{Datum, Diff, GlobalId, Row, adt::jsonb::Jsonb};
 use mz_ssh_util::tunnel::SshTunnelStatus;
 use mz_storage_types::dyncfgs::KAFKA_METADATA_FETCH_INTERVAL;
 use mz_storage_types::errors::{
@@ -54,6 +54,7 @@ use rdkafka::statistics::Statistics;
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientContext, Message, TopicPartitionList};
 use serde::{Deserialize, Serialize};
+use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::Partition;
@@ -61,8 +62,7 @@ use timely::dataflow::operators::{Broadcast, Capability};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::progress::Timestamp;
-use timely::PartialOrder;
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::{Notify, mpsc};
 use tracing::{error, info, trace};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
@@ -70,7 +70,7 @@ use crate::metrics::source::kafka::KafkaSourceMetrics;
 use crate::source::types::{
     Probe, ProgressStatisticsUpdate, SignaledFuture, SourceRender, StackedCollection,
 };
-use crate::source::{probe, RawSourceCreationConfig, SourceMessage};
+use crate::source::{RawSourceCreationConfig, SourceMessage, probe};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 struct HealthStatus {
@@ -1117,11 +1117,12 @@ impl KafkaSourceReader {
 
         // Given the explicit consumer to partition assignment, we should never receive a message
         // for a partition for which we have no metadata
-        assert!(self
-            .last_offsets
-            .get(output_index)
-            .unwrap()
-            .contains_key(&partition));
+        assert!(
+            self.last_offsets
+                .get(output_index)
+                .unwrap()
+                .contains_key(&partition)
+        );
 
         let last_offset_ref = self
             .last_offsets
@@ -1406,7 +1407,9 @@ mod tests {
                         let _payload =
                             std::str::from_utf8(msg.payload().expect("missing payload"))?;
                         if partition_queue_count > 0 {
-                            anyhow::bail!("Got message from common queue after we internally switched to partition queue.");
+                            anyhow::bail!(
+                                "Got message from common queue after we internally switched to partition queue."
+                            );
                         }
 
                         common_queue_count += 1;
@@ -1518,7 +1521,9 @@ impl MetadataUpdate {
 pub enum KafkaHeaderParseError {
     #[error("A header with key '{key}' was not found in the message headers")]
     KeyNotFound { key: String },
-    #[error("Found ill-formed byte sequence in header '{key}' that cannot be decoded as valid utf-8 (original bytes: {raw:x?})")]
+    #[error(
+        "Found ill-formed byte sequence in header '{key}' that cannot be decoded as valid utf-8 (original bytes: {raw:x?})"
+    )]
     Utf8Error { key: String, raw: Vec<u8> },
 }
 

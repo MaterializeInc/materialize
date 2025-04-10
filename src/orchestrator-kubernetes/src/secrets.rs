@@ -14,14 +14,14 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::ByteString;
-use kube::api::{DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
+use k8s_openapi::api::core::v1::Secret;
 use kube::Api;
+use kube::api::{DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
 use mz_repr::CatalogItemId;
 use mz_secrets::{SecretsController, SecretsReader};
 
-use crate::{util, KubernetesOrchestrator, FIELD_MANAGER};
+use crate::{FIELD_MANAGER, KubernetesOrchestrator, util};
 
 #[async_trait]
 impl SecretsController for KubernetesOrchestrator {

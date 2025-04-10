@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use std::iter;
 use std::sync::Arc;
 
-use differential_dataflow::{collection, AsCollection, Collection};
+use differential_dataflow::{AsCollection, Collection, collection};
 use mz_ore::cast::CastLossy;
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
@@ -34,10 +34,10 @@ use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::order::refine_antichain;
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
+use timely::dataflow::Stream;
 use timely::dataflow::operators::generic::operator::empty;
 use timely::dataflow::operators::{Concat, ConnectLoop, Feedback, Leave, Map, OkErr};
 use timely::dataflow::scopes::{Child, Scope};
-use timely::dataflow::Stream;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::decode::{render_decode_cdcv2, render_decode_delimited};

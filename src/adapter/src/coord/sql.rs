@@ -24,7 +24,7 @@ use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::{Coordinator, Message};
 use crate::session::{Session, TransactionStatus};
 use crate::util::describe;
-use crate::{metrics, AdapterError, ExecuteContext, ExecuteResponse};
+use crate::{AdapterError, ExecuteContext, ExecuteResponse, metrics};
 
 impl Coordinator {
     pub(crate) fn plan_statement(

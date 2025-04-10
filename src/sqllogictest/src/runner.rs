@@ -44,7 +44,7 @@ use futures::sink::SinkExt;
 use itertools::Itertools;
 use md5::{Digest, Md5};
 use mz_adapter_types::bootstrap_builtin_cluster_config::{
-    BootstrapBuiltinClusterConfig, ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR, BootstrapBuiltinClusterConfig,
     CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
     SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
 };
@@ -64,17 +64,17 @@ use mz_ore::task;
 use mz_ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use mz_ore::tracing::TracingHandle;
 use mz_ore::url::SensitiveUrl;
+use mz_persist_client::PersistLocation;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::{
     MetricsSameProcessPubSubSender, PersistGrpcPubSubServer, PubSubClientConnection, PubSubSender,
 };
-use mz_persist_client::PersistLocation;
-use mz_pgrepr::{oid, Interval, Jsonb, Numeric, UInt2, UInt4, UInt8, Value};
+use mz_pgrepr::{Interval, Jsonb, Numeric, UInt2, UInt4, UInt8, Value, oid};
+use mz_repr::ColumnName;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::mz_acl_item::{AclItem, MzAclItem};
 use mz_repr::adt::numeric;
-use mz_repr::ColumnName;
 use mz_secrets::SecretsController;
 use mz_sql::ast::{Expr, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
@@ -98,8 +98,8 @@ use tokio_postgres::{NoTls, Row, SimpleQueryMessage};
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::AllowOrigin;
 use tracing::{error, info};
-use uuid::fmt::Simple;
 use uuid::Uuid;
+use uuid::fmt::Simple;
 
 use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};
 use crate::util;
@@ -662,7 +662,7 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
         (Type::Integer, Value::Text(_)) => "0".to_string(),
         (Type::Integer, Value::Bool(b)) => i8::from(b).to_string(),
         (Type::Integer, Value::Numeric(d)) => {
-            let mut d = d.0 .0.clone();
+            let mut d = d.0.0.clone();
             let mut cx = numeric::cx_datum();
             // Truncate the decimal to match sqlite.
             if mode == Mode::Standard {
@@ -686,14 +686,14 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
         },
         (Type::Real, Value::Numeric(d)) => match mode {
             Mode::Standard => {
-                let mut d = d.0 .0.clone();
+                let mut d = d.0.0.clone();
                 if d.exponent() < -3 {
                     numeric::rescale(&mut d, 3).unwrap();
                 }
                 numeric::munge_numeric(&mut d).unwrap();
                 d.to_standard_notation_string()
             }
-            Mode::Cockroach => d.0 .0.to_standard_notation_string(),
+            Mode::Cockroach => d.0.0.to_standard_notation_string(),
         },
 
         (Type::Text, Value::Text(s)) => {
@@ -715,7 +715,7 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
             Ok(s) => s.to_string(),
             Err(_) => format!("{:?}", b),
         },
-        (Type::Text, Value::Numeric(d)) => d.0 .0.to_standard_notation_string(),
+        (Type::Text, Value::Numeric(d)) => d.0.0.to_standard_notation_string(),
         // Everything else gets normal text encoding. This correctly handles things
         // like arrays, tuples, and strings that need to be quoted.
         (Type::Text, d) => {

@@ -29,8 +29,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
-use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
+use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_controller_types::dyncfgs::WALLCLOCK_LAG_HISTOGRAM_PERIOD_INTERVAL;
 use mz_dyncfg::ConfigSet;
 use mz_ore::soft_panic_or_log;
@@ -52,8 +52,8 @@ use mz_storage_types::sources::{
     SourceExportDetails, Timeline,
 };
 use serde::{Deserialize, Serialize};
-use timely::progress::frontier::MutableAntichain;
 use timely::progress::Timestamp as TimelyTimestamp;
+use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::{mpsc, oneshot};
 
@@ -665,7 +665,7 @@ pub trait StorageController: Debug {
     /// want to make the type public. In the meantime, move the `serde_json`
     /// call from the single user into this method.
     async fn inspect_persist_state(&self, id: GlobalId)
-        -> Result<serde_json::Value, anyhow::Error>;
+    -> Result<serde_json::Value, anyhow::Error>;
 
     /// Records append-only updates for the given introspection type.
     ///
@@ -685,6 +685,32 @@ pub trait StorageController: Debug {
     /// Rows passed in `op` MUST have the correct schema for the given
     /// introspection type, as readers rely on this and might panic otherwise.
     fn update_introspection_collection(&mut self, type_: IntrospectionType, op: StorageWriteOp);
+
+    /// Returns a sender for updates to the specified append-only introspection collection.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the given introspection type is not associated with an append-only collection.
+    fn append_only_introspection_tx(
+        &self,
+        type_: IntrospectionType,
+    ) -> mpsc::UnboundedSender<(
+        Vec<AppendOnlyUpdate>,
+        oneshot::Sender<Result<(), StorageError<Self::Timestamp>>>,
+    )>;
+
+    /// Returns a sender for updates to the specified differential introspection collection.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the given introspection type is not associated with a differential collection.
+    fn differential_introspection_tx(
+        &self,
+        type_: IntrospectionType,
+    ) -> mpsc::UnboundedSender<(
+        StorageWriteOp,
+        oneshot::Sender<Result<(), StorageError<Self::Timestamp>>>,
+    )>;
 
     async fn real_time_recent_timestamp(
         &self,

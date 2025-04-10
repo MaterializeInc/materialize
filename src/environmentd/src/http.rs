@@ -31,14 +31,14 @@ use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ConnectInfo, DefaultBodyLimit, FromRequestParts, Query, Request, State};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::{routing, Extension, Json, Router};
+use axum::{Extension, Json, Router, routing};
 use futures::future::{FutureExt, Shared, TryFutureExt};
 use headers::authorization::{Authorization, Basic, Bearer};
 use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Method, StatusCode};
-use hyper_openssl::client::legacy::MaybeHttpsStream;
 use hyper_openssl::SslStream;
+use hyper_openssl::client::legacy::MaybeHttpsStream;
 use hyper_util::rt::TokioIo;
 use mz_adapter::session::{Session, SessionConfig};
 use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient, WebhookAppenderCache};
@@ -68,9 +68,9 @@ use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
 use uuid::Uuid;
 
+use crate::BUILD_INFO;
 use crate::deployment::state::DeploymentStateHandle;
 use crate::http::sql::SqlError;
-use crate::BUILD_INFO;
 
 mod catalog;
 mod console;
@@ -482,8 +482,8 @@ async fn internal_http_auth(mut req: Request, next: Next) -> impl IntoResponse {
         Ok(name @ (SUPPORT_USER_NAME | SYSTEM_USER_NAME)) => name.to_string(),
         _ => {
             return Err(AuthError::MismatchedUser(format!(
-            "user specified in x-materialize-user must be {SUPPORT_USER_NAME} or {SYSTEM_USER_NAME}"
-        )));
+                "user specified in x-materialize-user must be {SUPPORT_USER_NAME} or {SYSTEM_USER_NAME}"
+            )));
         }
     };
     req.extensions_mut().insert(AuthedUser {
@@ -710,7 +710,7 @@ async fn http_auth(
     next: Next,
     tls_mode: TlsMode,
     frontegg: Option<&FronteggAuthentication>,
-) -> impl IntoResponse {
+) -> impl IntoResponse + use<> {
     // First, extract the username from the certificate, validating that the
     // connection matches the TLS configuration along the way.
     let conn_protocol = req.extensions().get::<ConnProtocol>().unwrap();
@@ -901,7 +901,7 @@ async fn auth(
                 (claims.user, Some(external_metadata_rx))
             }
             Credentials::DefaultUser | Credentials::User(_) => {
-                return Err(AuthError::MissingHttpAuthentication)
+                return Err(AuthError::MissingHttpAuthentication);
             }
         },
     };

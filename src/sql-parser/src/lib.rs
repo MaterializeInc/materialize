@@ -134,9 +134,9 @@ pub fn datadriven_testcase(tc: &datadriven::TestCase) -> String {
                             if !matches!(parsed, Expr::Cast { .. }) {
                                 if parsed != s {
                                     panic!(
-                                  "reparse comparison failed: {input} != {s}\n{:?}\n!=\n{:?}\n{printed}\n",
-                                  s, parsed
-                              );
+                                        "reparse comparison failed: {input} != {s}\n{:?}\n!=\n{:?}\n{printed}\n",
+                                        s, parsed
+                                    );
                                 }
                             }
                         }

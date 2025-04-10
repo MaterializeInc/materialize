@@ -246,7 +246,7 @@ pub const STORAGE_SINK_SNAPSHOT_FRONTIER: Config<bool> = Config::new(
 pub const STORAGE_RECLOCK_TO_LATEST: Config<bool> = Config::new(
     "storage_reclock_to_latest",
     false,
-    "Whether to mint reclock bindings based on the latest probed offset or the latest ingested offset."
+    "Whether to mint reclock bindings based on the latest probed offset or the latest ingested offset.",
 );
 
 /// Whether to use the new continual feedback upsert operator.

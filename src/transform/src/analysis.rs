@@ -85,8 +85,8 @@ pub mod common {
     use mz_ore::assert_none;
     use mz_repr::optimize::OptimizerFeatures;
 
-    use super::subtree::SubtreeSize;
     use super::Analysis;
+    use super::subtree::SubtreeSize;
 
     /// Container for analysis state and binding context.
     #[derive(Default)]
@@ -941,8 +941,8 @@ mod column_names {
 
     use super::Analysis;
     use mz_expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr};
-    use mz_repr::explain::ExprHumanizer;
     use mz_repr::GlobalId;
+    use mz_repr::explain::ExprHumanizer;
 
     /// An abstract type denoting an inferred column name.
     #[derive(Debug, Clone)]
@@ -1203,8 +1203,8 @@ mod explain {
 
     use std::collections::BTreeMap;
 
-    use mz_expr::explain::{ExplainContext, HumanizedExplain, HumanizerMode};
     use mz_expr::MirRelationExpr;
+    use mz_expr::explain::{ExplainContext, HumanizedExplain, HumanizerMode};
     use mz_ore::stack::RecursionLimitError;
     use mz_repr::explain::{Analyses, AnnotatedPlan};
 

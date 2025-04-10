@@ -40,23 +40,23 @@ use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::time::Instant;
 
+use differential_dataflow::Data;
+use differential_dataflow::IntoOwned;
 use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 use differential_dataflow::difference::Multiply;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
-use differential_dataflow::Data;
-use differential_dataflow::IntoOwned;
 use mz_repr::Diff;
+use timely::PartialOrder;
 use timely::container::{CapacityContainerBuilder, PushInto, SizableContainer};
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::Tee;
+use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::operators::generic::OutputHandleCore;
 use timely::dataflow::operators::{Capability, Operator};
 use timely::dataflow::{Scope, StreamCore};
 use timely::progress::timestamp::Timestamp;
-use timely::PartialOrder;
 use tracing::trace;
 
 use crate::render::context::ShutdownToken;

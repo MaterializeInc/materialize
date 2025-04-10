@@ -171,21 +171,21 @@
 //!     * _Proof: By <1>5 and <1>10_
 
 use std::cmp::{Ordering, Reverse};
-use std::collections::binary_heap::{BinaryHeap, PeekMut};
 use std::collections::VecDeque;
+use std::collections::binary_heap::{BinaryHeap, PeekMut};
 use std::iter::FromIterator;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::{consolidation, AsCollection, Collection, ExchangeData};
-use mz_ore::collections::CollectionExt;
+use differential_dataflow::{AsCollection, Collection, ExchangeData, consolidation};
 use mz_ore::Overflowing;
+use mz_ore::collections::CollectionExt;
 use timely::communication::{Pull, Push};
+use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::operators::capture::Event;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::CapabilitySet;
-use timely::dataflow::Scope;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, Timestamp};
@@ -293,7 +293,7 @@ where
             let prev_remap_upper =
                 std::mem::replace(&mut remap_upper, frontiers[0].frontier().to_owned());
             while let Some(update) = pending_remap.peek_mut() {
-                if !remap_upper.less_equal(&update.0 .0) {
+                if !remap_upper.less_equal(&update.0.0) {
                     let Reverse((into, from, diff)) = PeekMut::pop(update);
                     remap_trace.push((from, into, diff));
                 } else {
@@ -556,8 +556,8 @@ mod test {
     use timely::dataflow::operators::capture::{Event, Extract};
     use timely::dataflow::operators::unordered_input::UnorderedHandle;
     use timely::dataflow::operators::{ActivateCapability, Capture, UnorderedInput};
-    use timely::progress::timestamp::Refines;
     use timely::progress::PathSummary;
+    use timely::progress::timestamp::Refines;
     use timely::worker::Worker;
 
     use crate::capture::PusherCapture;

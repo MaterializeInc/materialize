@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use mz_repr::adt::interval::Interval;
 use mz_repr::bytes::ByteSize;
-use mz_repr::{strconv, CatalogItemId, RelationVersionSelector};
+use mz_repr::{CatalogItemId, RelationVersionSelector, strconv};
 use mz_sql_parser::ast::{
     ClusterAlterOptionValue, ClusterScheduleOptionValue, ConnectionDefaultAwsPrivatelink, Expr,
     Ident, KafkaBroker, NetworkPolicyRuleDefinition, RefreshOptionValue, ReplicaDefinition,
@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use crate::ast::{AstInfo, UnresolvedItemName, Value, WithOptionValue};
 use crate::catalog::SessionCatalog;
 use crate::names::{ResolvedDataType, ResolvedItemName};
-use crate::plan::{literal, Aug, PlanError};
+use crate::plan::{Aug, PlanError, literal};
 
 pub trait TryFromValue<T>: Sized {
     fn try_from_value(v: T) -> Result<Self, PlanError>;

@@ -69,6 +69,11 @@ done
 # can be huge, clean up
 rm -rf cores
 
+echo "Removing mz-debug files"
+if find mz_debug*; then
+    rm -rf mz_debug*
+fi
+
 echo "Compressing parallel-workload-queries.log"
 bin/ci-builder run stable zstd --rm parallel-workload-queries.log || true
 
@@ -142,9 +147,15 @@ ci_unimportant_heading ":docker: Cleaning up after mzcompose"
 # docker-compose kill may fail attempting to kill containers
 # that have just exited on their own because of the
 # "shared-fate" mechanism employed by Mz clusters
-run kill || true
-run rm --force -v
-run down --volumes
+sudo systemctl restart docker
+killall -9 clusterd || true # There might be remaining processes from a cargo-test run
+if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
+  find . -name '*.profraw' -delete # Remove remaining profraw files from coverage runs
+fi
+
+ci_collapsed_heading ":docker: Purging all existing docker containers and volumes, regardless of origin"
+docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
+rm -f services.log
 
 if [[ "$BUILDKITE_LABEL" =~ Terraform\ .* ]]; then
   ci_unimportant_heading "terraform: Destroying leftover state in case job was cancelled or timed out..."
@@ -152,3 +163,4 @@ if [[ "$BUILDKITE_LABEL" =~ Terraform\ .* ]]; then
   bin/ci-builder run stable terraform -chdir=test/terraform/gcp-temporary destroy || true
   bin/ci-builder run stable terraform -chdir=test/terraform/azure-temporary destroy || true
 fi
+rm -rf ~/.kube # Remove potential state from E2E Terraform tests

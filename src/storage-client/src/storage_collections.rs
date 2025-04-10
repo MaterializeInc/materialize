@@ -36,13 +36,14 @@ use mz_persist_client::schema::CaESchema;
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
+use mz_persist_types::Codec64;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::txn::TxnsCodec;
-use mz_persist_types::Codec64;
 use mz_repr::{GlobalId, RelationDesc, RelationVersion, Row, TimestampManipulation};
+use mz_storage_types::StorageDiff;
 use mz_storage_types::configuration::StorageConfiguration;
-use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{CollectionMetadata, StorageError, TxnsCodecRow};
 use mz_storage_types::dyncfgs::STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION;
 use mz_storage_types::parameters::StorageParameters;
@@ -53,14 +54,13 @@ use mz_storage_types::sources::{
     SourceExport, SourceExportDataConfig, Timeline,
 };
 use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
-use mz_storage_types::StorageDiff;
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use mz_txn_wal::txn_read::{DataSnapshot, TxnsRead};
 use mz_txn_wal::txns::TxnsHandle;
+use timely::PartialOrder;
 use timely::order::TotalOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp as TimelyTimestamp};
-use timely::PartialOrder;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, trace, warn};
@@ -184,11 +184,11 @@ pub trait StorageCollections: Debug {
     ) -> Result<Vec<Row>, StorageError<Self::Timestamp>>;
 
     /// Returns a snapshot of the contents of collection `id` at `as_of`.
-    async fn snapshot_cursor(
-        &mut self,
+    fn snapshot_cursor(
+        &self,
         id: GlobalId,
         as_of: Self::Timestamp,
-    ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError<Self::Timestamp>>
+    ) -> BoxFuture<'static, Result<SnapshotCursor<Self::Timestamp>, StorageError<Self::Timestamp>>>
     where
         Self::Timestamp: Codec64 + TimelyTimestamp + Lattice;
 
@@ -367,13 +367,13 @@ impl<T: Codec64 + TimelyTimestamp + Lattice + Sync> SnapshotCursor<T> {
         &mut self,
     ) -> Option<
         impl Iterator<
-                Item = (
-                    (Result<SourceData, String>, Result<(), String>),
-                    T,
-                    StorageDiff,
-                ),
-            > + Sized
-            + '_,
+            Item = (
+                (Result<SourceData, String>, Result<(), String>),
+                T,
+                StorageDiff,
+            ),
+        > + Sized
+        + '_,
     > {
         self.cursor.next().await
     }
@@ -1605,51 +1605,59 @@ where
         Ok(res)
     }
 
-    async fn snapshot_cursor(
-        &mut self,
+    fn snapshot_cursor(
+        &self,
         id: GlobalId,
         as_of: Self::Timestamp,
-    ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError<Self::Timestamp>>
+    ) -> BoxFuture<'static, Result<SnapshotCursor<Self::Timestamp>, StorageError<Self::Timestamp>>>
     where
         Self::Timestamp: TimelyTimestamp + Lattice + Codec64,
     {
-        let metadata = &self.collection_metadata(id)?;
+        let metadata = match self.collection_metadata(id) {
+            Ok(metadata) => metadata.clone(),
+            Err(e) => return async { Err(e) }.boxed(),
+        };
+        let txns_read = metadata.txns_shard.as_ref().map(|txns_id| {
+            // Ensure the txn's shard the controller has is the same that this
+            // collection is registered to.
+            assert_eq!(txns_id, self.txns_read.txns_id());
+            self.txns_read.clone()
+        });
+        let persist = Arc::clone(&self.persist);
 
         // See the comments in Self::snapshot for what's going on here.
-        let cursor = match metadata.txns_shard.as_ref() {
-            None => {
-                let persist = Arc::clone(&self.persist);
-                let mut handle = Self::read_handle_for_snapshot(persist, metadata, id).await?;
-                let cursor = handle
-                    .snapshot_cursor(Antichain::from_elem(as_of), |_| true)
-                    .await
-                    .map_err(|_| StorageError::ReadBeforeSince(id))?;
-                SnapshotCursor {
-                    _read_handle: handle,
-                    cursor,
+        async move {
+            let mut handle = Self::read_handle_for_snapshot(persist, &metadata, id).await?;
+            let cursor = match txns_read {
+                None => {
+                    let cursor = handle
+                        .snapshot_cursor(Antichain::from_elem(as_of), |_| true)
+                        .await
+                        .map_err(|_| StorageError::ReadBeforeSince(id))?;
+                    SnapshotCursor {
+                        _read_handle: handle,
+                        cursor,
+                    }
                 }
-            }
-            Some(txns_id) => {
-                assert_eq!(txns_id, self.txns_read.txns_id());
-                self.txns_read.update_gt(as_of.clone()).await;
-                let data_snapshot = self
-                    .txns_read
-                    .data_snapshot(metadata.data_shard, as_of.clone())
-                    .await;
-                let persist = Arc::clone(&self.persist);
-                let mut handle = Self::read_handle_for_snapshot(persist, metadata, id).await?;
-                let cursor = data_snapshot
-                    .snapshot_cursor(&mut handle, |_| true)
-                    .await
-                    .map_err(|_| StorageError::ReadBeforeSince(id))?;
-                SnapshotCursor {
-                    _read_handle: handle,
-                    cursor,
+                Some(txns_read) => {
+                    txns_read.update_gt(as_of.clone()).await;
+                    let data_snapshot = txns_read
+                        .data_snapshot(metadata.data_shard, as_of.clone())
+                        .await;
+                    let cursor = data_snapshot
+                        .snapshot_cursor(&mut handle, |_| true)
+                        .await
+                        .map_err(|_| StorageError::ReadBeforeSince(id))?;
+                    SnapshotCursor {
+                        _read_handle: handle,
+                        cursor,
+                    }
                 }
-            }
-        };
+            };
 
-        Ok(cursor)
+            Ok(cursor)
+        }
+        .boxed()
     }
 
     fn snapshot_and_stream(
@@ -2589,8 +2597,9 @@ where
                 Ingestion(ingestion) => {
                     use GenericSourceConnection::*;
                     match ingestion.desc.connection {
-                        // Kafka, Postgres, MySql sources follow wall clock.
-                        Kafka(_) | Postgres(_) | MySql(_) => {
+                        // Kafka, Postgres, MySql, and SQL Server sources all
+                        // follow wall clock.
+                        Kafka(_) | Postgres(_) | MySql(_) | SqlServer(_) => {
                             result = Some(TimeDependence::default())
                         }
                         // Load generators not further specified.
@@ -3042,7 +3051,9 @@ where
             let collection = if let Some(c) = self_collections.get_mut(id) {
                 c
             } else {
-                trace!("Reference to absent collection {id}, due to concurrent removal of that collection");
+                trace!(
+                    "Reference to absent collection {id}, due to concurrent removal of that collection"
+                );
                 continue;
             };
 
@@ -3132,7 +3143,9 @@ where
                     .parameters
                     .finalize_shards
                 {
-                    info!("not triggering shard finalization due to dropped storage object because enable_storage_shard_finalization parameter is false");
+                    info!(
+                        "not triggering shard finalization due to dropped storage object because enable_storage_shard_finalization parameter is false"
+                    );
                     return;
                 }
 
@@ -3195,7 +3208,9 @@ async fn finalize_shards_task<T>(
             .parameters
             .finalize_shards
         {
-            debug!("not triggering shard finalization due to dropped storage object because enable_storage_shard_finalization parameter is false");
+            debug!(
+                "not triggering shard finalization due to dropped storage object because enable_storage_shard_finalization parameter is false"
+            );
             continue;
         }
 

@@ -16,8 +16,8 @@ mod tests {
     use std::sync::LazyLock;
 
     use mz_lsp_server::backend::{
-        Completions, ExecuteCommandParseResponse, ExecuteCommandParseStatement,
-        DEFAULT_FORMATTING_WIDTH,
+        Completions, DEFAULT_FORMATTING_WIDTH, ExecuteCommandParseResponse,
+        ExecuteCommandParseStatement,
     };
     use mz_lsp_server::{PKG_NAME, PKG_VERSION};
     use mz_ore::collections::HashMap;
@@ -27,7 +27,7 @@ mod tests {
     use tokio::sync::Mutex;
     use tower_lsp::jsonrpc::Error;
     use tower_lsp::lsp_types::*;
-    use tower_lsp::{lsp_types::InitializeResult, LspService, Server};
+    use tower_lsp::{LspService, Server, lsp_types::InitializeResult};
 
     /// This structure defines the message received from the
     /// [Backend](mz_lsp::backend::Backend).

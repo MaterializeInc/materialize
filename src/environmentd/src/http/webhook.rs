@@ -416,7 +416,7 @@ mod tests {
     use proptest::prelude::*;
     use proptest::strategy::Union;
 
-    use super::{filter_headers, pack_rows, WebhookError};
+    use super::{WebhookError, filter_headers, pack_rows};
 
     // TODO(parkmycar): Move this strategy to `ore`?
     fn arbitrary_json() -> impl Strategy<Value = serde_json::Value> {
@@ -425,13 +425,6 @@ mod tests {
             any::<bool>().prop_map(serde_json::Value::Bool).boxed(),
             any::<i64>()
                 .prop_map(|x| serde_json::Value::Number(x.into()))
-                .boxed(),
-            any::<f64>()
-                .prop_map(|x| {
-                    let x: serde_json::value::Number =
-                        x.to_string().parse().expect("failed to parse f64");
-                    serde_json::Value::Number(x)
-                })
                 .boxed(),
             any::<String>().prop_map(serde_json::Value::String).boxed(),
         ]);

@@ -17,15 +17,15 @@ use std::time::Duration;
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Row, Timestamp};
-use mz_timely_util::containers::{columnar_exchange, Col2ValBatcher, Column, ColumnBuilder};
+use mz_timely_util::containers::{Col2ValBatcher, Column, ColumnBuilder, columnar_exchange};
 use mz_timely_util::replay::MzReplay;
-use timely::dataflow::channels::pact::ExchangeCore;
-use timely::dataflow::Scope;
 use timely::Container;
+use timely::dataflow::Scope;
+use timely::dataflow::channels::pact::ExchangeCore;
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::initialize::ReachabilityEvent;
-use crate::logging::{consolidate_and_pack, EventQueue, LogCollection, LogVariant, TimelyLog};
+use crate::logging::{EventQueue, LogCollection, LogVariant, TimelyLog, consolidate_and_pack};
 use crate::row_spine::RowRowBuilder;
 use crate::typedefs::RowRowSpine;
 

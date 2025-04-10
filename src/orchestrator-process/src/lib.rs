@@ -22,12 +22,12 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use async_stream::stream;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use futures::stream::{BoxStream, FuturesUnordered};
 use futures::StreamExt;
+use futures::stream::{BoxStream, FuturesUnordered};
 use itertools::Itertools;
 use libc::{SIGABRT, SIGBUS, SIGILL, SIGSEGV, SIGTRAP};
 use maplit::btreemap;
@@ -782,7 +782,7 @@ impl OrchestratorWorker {
             disk,
             launch_spec,
         }: ServiceProcessConfig,
-    ) -> impl Future<Output = ()> {
+    ) -> impl Future<Output = ()> + use<> {
         let suppress_output = self.config.suppress_output;
         let propagate_crashes = self.config.propagate_crashes;
         let command_wrapper = self.config.command_wrapper.clone();
@@ -811,7 +811,9 @@ impl OrchestratorWorker {
             if let Some(scratch) = &scratch_dir {
                 args.push(format!("--scratch-directory={}", scratch.display()));
             } else {
-                panic!("internal error: service requested disk but no scratch directory was configured");
+                panic!(
+                    "internal error: service requested disk but no scratch directory was configured"
+                );
             }
         }
 
@@ -865,7 +867,9 @@ impl OrchestratorWorker {
                 {
                     Ok(status) => {
                         if propagate_crashes && did_process_crash(status) {
-                            panic!("{full_id}-{i} crashed; aborting because propagate_crashes is enabled");
+                            panic!(
+                                "{full_id}-{i} crashed; aborting because propagate_crashes is enabled"
+                            );
                         }
                         error!("{full_id}-{i} exited: {:?}; relaunching in 5s", status);
                     }

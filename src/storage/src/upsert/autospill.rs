@@ -14,15 +14,15 @@ use std::sync::Arc;
 
 use mz_ore::metrics::DeleteOnDropGauge;
 use prometheus::core::AtomicU64;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 
+use super::UpsertKey;
 use super::memory::InMemoryHashMap;
 use super::rocksdb::RocksDB;
 use super::types::{
     GetStats, MergeStats, MergeValue, PutStats, PutValue, StateValue, UpsertStateBackend,
     UpsertValueAndSize,
 };
-use super::UpsertKey;
 
 pub enum BackendType<T, O> {
     InMemory(InMemoryHashMap<T, O>),

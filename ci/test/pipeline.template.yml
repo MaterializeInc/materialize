@@ -484,15 +484,18 @@ steps:
     steps:
       - id: sql-server-cdc
         label: "SQL Server CDC tests"
-        parallelism: 2
-        depends_on: build-aarch64
+        parallelism: 1
+        depends_on: build-x86_64
         timeout_in_minutes: 30
         inputs: [test/sql-server-cdc]
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sql-server-cdc
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          # The SQL Server Docker image isn't available on ARM.
+          #
+          # See: <https://github.com/microsoft/mssql-docker/issues/864>
+          queue: hetzner-x86-64-4cpu-8gb
 
   - group: "Connection tests"
     key: connection-tests
@@ -755,6 +758,16 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
     skip: "Version upgrade skips are allowed for LTS releases now"
+
+  - id: mz-debug
+    label: "mz-debug tool"
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: mz-debug
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
 
   - id: deploy-website
     label: Deploy website

@@ -69,4 +69,8 @@ primary_text="Get Started">}}
 
 ## Learn more
 
--   Check out the [**Materialize blog**](https://www.materialize.com/blog/) for the latest updates and Materialize deep-dives.
+- To find out about new features and improvements, see also the
+  [Changelog](https://materialize.com/changelog/).
+
+- Check out the [**Materialize blog**](https://www.materialize.com/blog/) for
+  the latest updates and Materialize deep-dives.

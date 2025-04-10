@@ -62,7 +62,7 @@ use mz_storage_types::connections::aws::AwsConnection;
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{
     AwsPrivatelinkConnection, CsrConnection, KafkaConnection, MySqlConnection, PostgresConnection,
-    SshConnection,
+    SqlServerConnectionDetails, SshConnection,
 };
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::sinks::{S3SinkFormat, SinkEnvelope, StorageSinkConnection};
@@ -120,8 +120,8 @@ pub use statement::ddl::{
     PlannedAlterRoleOption, PlannedRoleVariable,
 };
 pub use statement::{
-    describe, plan, plan_copy_from, resolve_cluster_for_materialized_view, StatementClassification,
-    StatementContext, StatementDesc,
+    StatementClassification, StatementContext, StatementDesc, describe, plan, plan_copy_from,
+    resolve_cluster_for_materialized_view,
 };
 
 use self::statement::ddl::ClusterAlterOptionExtracted;
@@ -1613,6 +1613,7 @@ pub enum ConnectionDetails {
     Aws(AwsConnection),
     AwsPrivatelink(AwsPrivatelinkConnection),
     MySql(MySqlConnection<ReferencedConnection>),
+    SqlServer(SqlServerConnectionDetails<ReferencedConnection>),
 }
 
 impl ConnectionDetails {
@@ -1634,6 +1635,9 @@ impl ConnectionDetails {
             }
             ConnectionDetails::MySql(c) => {
                 mz_storage_types::connections::Connection::MySql(c.clone())
+            }
+            ConnectionDetails::SqlServer(c) => {
+                mz_storage_types::connections::Connection::SqlServer(c.clone())
             }
         }
     }

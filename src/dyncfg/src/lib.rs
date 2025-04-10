@@ -489,7 +489,7 @@ mod impls {
     use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
     use crate::{
-        proto_config_val, ConfigDefault, ConfigSet, ConfigType, ConfigVal, ProtoOptionU64,
+        ConfigDefault, ConfigSet, ConfigType, ConfigVal, ProtoOptionU64, proto_config_val,
     };
 
     impl ConfigType for bool {
@@ -695,7 +695,7 @@ mod impls {
                 None => {
                     return Err(TryFromProtoError::unknown_enum_variant(
                         "ProtoConfigVal::Val",
-                    ))
+                    ));
                 }
             };
             Ok(val)

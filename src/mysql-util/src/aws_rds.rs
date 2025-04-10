@@ -8,13 +8,13 @@
 // by the Apache License, Version 2.0.
 
 use aws_config::{Region, SdkConfig};
-use aws_credential_types::provider::error::CredentialsError;
 use aws_credential_types::provider::ProvideCredentials;
+use aws_credential_types::provider::error::CredentialsError;
 use aws_sigv4::http_request::{
     self, SignableBody, SignableRequest, SignatureLocation, SigningError, SigningSettings,
 };
-use aws_sigv4::sign::v4::signing_params::BuildError;
 use aws_sigv4::sign::v4::SigningParams;
+use aws_sigv4::sign::v4::signing_params::BuildError;
 use std::time::Duration;
 
 const AWS_TOKEN_EXPIRATION_SECONDS: u64 = 900;
@@ -127,6 +127,9 @@ mod test {
         let signature = rds_auth_token("mysql", 3306, "root", &aws_config)
             .await
             .unwrap();
-        assert_eq!(&signature, "mysql:3306/?Action=connect&DBUser=root&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=drjekyll%2F20250227%2Fus-east-1%2Frds-db%2Faws4_request&X-Amz-Date=20250227T210000Z&X-Amz-Expires=900&X-Amz-SignedHeaders=host&X-Amz-Signature=6eb04929394feeb9e070621ecafc731145914cc53e542d5302c251b705c4ac72");
+        assert_eq!(
+            &signature,
+            "mysql:3306/?Action=connect&DBUser=root&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=drjekyll%2F20250227%2Fus-east-1%2Frds-db%2Faws4_request&X-Amz-Date=20250227T210000Z&X-Amz-Expires=900&X-Amz-SignedHeaders=host&X-Amz-Signature=6eb04929394feeb9e070621ecafc731145914cc53e542d5302c251b705c4ac72"
+        );
     }
 }

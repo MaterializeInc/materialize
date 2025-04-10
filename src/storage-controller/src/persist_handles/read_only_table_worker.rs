@@ -19,15 +19,15 @@ use mz_persist_client::write::WriteHandle;
 use mz_persist_types::Codec64;
 use mz_repr::{GlobalId, TimestampManipulation};
 use mz_storage_client::client::{TableData, Update};
+use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::InvalidUpper;
 use mz_storage_types::sources::SourceData;
-use mz_storage_types::StorageDiff;
-use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
+use timely::progress::{Antichain, Timestamp};
 use tracing::Span;
 
-use crate::persist_handles::{append_work, PersistTableWriteCmd};
 use crate::StorageError;
+use crate::persist_handles::{PersistTableWriteCmd, append_work};
 
 /// Handles table updates in read only mode.
 ///

@@ -20,18 +20,18 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::task::{ready, Context, Poll, Waker};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{Context, Poll, Waker, ready};
 
 use differential_dataflow::containers::{Columnation, TimelyStack};
-use futures_util::task::ArcWake;
 use futures_util::Stream;
+use futures_util::task::ArcWake;
 use timely::communication::{Pull, Push};
 use timely::container::{CapacityContainerBuilder, ContainerBuilder, PushInto};
+use timely::dataflow::channels::Message;
 use timely::dataflow::channels::pact::ParallelizationContract;
 use timely::dataflow::channels::pushers::Tee;
-use timely::dataflow::channels::Message;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::generic::{
     InputHandleCore, OperatorInfo, OutputHandleCore, OutputWrapper,
@@ -782,10 +782,10 @@ impl Drop for PressOnDropButton {
 #[cfg(test)]
 mod test {
     use futures_util::StreamExt;
+    use timely::WorkerConfig;
     use timely::dataflow::channels::pact::Pipeline;
     use timely::dataflow::operators::capture::Extract;
     use timely::dataflow::operators::{Capture, ToStream};
-    use timely::WorkerConfig;
 
     use super::*;
 

@@ -13,7 +13,7 @@ use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use mz_controller::clusters::ClusterStatus;
 use mz_orchestrator::{OfflineReason, ServiceStatus};
-use mz_ore::str::{separated, StrExt};
+use mz_ore::str::{StrExt, separated};
 use mz_pgwire_common::{ErrorResponse, Severity};
 use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::strconv;
@@ -377,7 +377,10 @@ impl fmt::Display for AdapterNotice {
             }
             AdapterNotice::QueryTimestamp { .. } => write!(f, "EXPLAIN TIMESTAMP for query"),
             AdapterNotice::EqualSubscribeBounds { bound } => {
-                write!(f, "subscribe as of {bound} (inclusive) up to the same bound {bound} (exclusive) is guaranteed to be empty")
+                write!(
+                    f,
+                    "subscribe as of {bound} (inclusive) up to the same bound {bound} (exclusive) is guaranteed to be empty"
+                )
             }
             AdapterNotice::QueryTrace { trace_id } => {
                 write!(f, "trace id: {}", trace_id)
@@ -452,10 +455,18 @@ impl fmt::Display for AdapterNotice {
                 index_name,
                 dependant_objects,
             }) => {
-                write!(f, "The dropped index {index_name} is being used by the following objects: {}. The index is now dropped from the catalog, but it will continue to be maintained and take up resources until all dependent objects are dropped, altered, or Materialize is restarted!", separated(", ", dependant_objects))
+                write!(
+                    f,
+                    "The dropped index {index_name} is being used by the following objects: {}. The index is now dropped from the catalog, but it will continue to be maintained and take up resources until all dependent objects are dropped, altered, or Materialize is restarted!",
+                    separated(", ", dependant_objects)
+                )
             }
             AdapterNotice::PerReplicaLogRead { log_names } => {
-                write!(f, "Queried introspection relations: {}. Unlike other objects in Materialize, results from querying these objects depend on the current values of the `cluster` and `cluster_replica` session variables.", log_names.join(", "))
+                write!(
+                    f,
+                    "Queried introspection relations: {}. Unlike other objects in Materialize, results from querying these objects depend on the current values of the `cluster` and `cluster_replica` session variables.",
+                    log_names.join(", ")
+                )
             }
             AdapterNotice::VarDefaultUpdated { role, var_name } => {
                 let vars = match var_name {

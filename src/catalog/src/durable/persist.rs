@@ -38,11 +38,11 @@ use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::{Diff, RelationDesc, ScalarType};
-use mz_storage_types::sources::SourceData;
 use mz_storage_types::StorageDiff;
+use mz_storage_types::sources::SourceData;
 use sha2::Digest;
-use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use timely::Container;
+use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
@@ -61,9 +61,9 @@ use crate::durable::objects::{AuditLogKey, FenceToken, Snapshot};
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::upgrade::upgrade;
 use crate::durable::{
-    initialize, AuditLogIterator, BootstrapArgs, CatalogError, DurableCatalogError,
-    DurableCatalogState, Epoch, OpenableDurableCatalogState, ReadOnlyDurableCatalogState,
-    Transaction, CATALOG_CONTENT_VERSION_KEY,
+    AuditLogIterator, BootstrapArgs, CATALOG_CONTENT_VERSION_KEY, CatalogError,
+    DurableCatalogError, DurableCatalogState, Epoch, OpenableDurableCatalogState,
+    ReadOnlyDurableCatalogState, Transaction, initialize,
 };
 use crate::memory;
 
@@ -1898,7 +1898,7 @@ async fn snapshot_binary(
     read_handle: &mut ReadHandle<SourceData, (), Timestamp, StorageDiff>,
     as_of: Timestamp,
     metrics: &Arc<Metrics>,
-) -> impl Iterator<Item = StateUpdate<StateUpdateKindJson>> + DoubleEndedIterator {
+) -> impl Iterator<Item = StateUpdate<StateUpdateKindJson>> + DoubleEndedIterator + use<> {
     metrics.snapshots_taken.inc();
     let counter = metrics.snapshot_latency_seconds.clone();
     snapshot_binary_inner(read_handle, as_of)
@@ -1915,7 +1915,7 @@ async fn snapshot_binary(
 async fn snapshot_binary_inner(
     read_handle: &mut ReadHandle<SourceData, (), Timestamp, StorageDiff>,
     as_of: Timestamp,
-) -> impl Iterator<Item = StateUpdate<StateUpdateKindJson>> + DoubleEndedIterator {
+) -> impl Iterator<Item = StateUpdate<StateUpdateKindJson>> + DoubleEndedIterator + use<> {
     let snapshot = read_handle
         .snapshot_and_fetch(Antichain::from_elem(as_of))
         .await

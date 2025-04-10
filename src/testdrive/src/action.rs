@@ -15,7 +15,7 @@ use std::sync::LazyLock;
 use std::time::Duration;
 use std::{env, fs};
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use async_trait::async_trait;
 use aws_credential_types::provider::ProvideCredentials;
 use aws_types::SdkConfig;
@@ -26,7 +26,7 @@ use mz_adapter::session::Session;
 use mz_build_info::BuildInfo;
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_catalog::durable::BootstrapArgs;
-use mz_kafka_util::client::{create_new_client_config_simple, MzClientContext};
+use mz_kafka_util::client::{MzClientContext, create_new_client_config_simple};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -40,8 +40,8 @@ use mz_persist_client::{PersistClient, PersistLocation};
 use mz_sql::catalog::EnvironmentId;
 use mz_tls_util::make_tls;
 use rand::Rng;
-use rdkafka::producer::Producer;
 use rdkafka::ClientConfig;
+use rdkafka::producer::Producer;
 use regex::{Captures, Regex};
 use semver::Version;
 use tokio_postgres::error::{DbError, SqlState};
@@ -50,7 +50,7 @@ use url::Url;
 
 use crate::error::PosError;
 use crate::parser::{
-    validate_ident, Command, PosCommand, SqlExpectedError, SqlOutput, VersionConstraint,
+    Command, PosCommand, SqlExpectedError, SqlOutput, VersionConstraint, validate_ident,
 };
 use crate::util;
 use crate::util::postgres::postgres_client;
@@ -918,7 +918,7 @@ fn substitute_vars(
 pub async fn create_state(
     config: &Config,
 ) -> Result<(State, impl Future<Output = Result<(), anyhow::Error>>), anyhow::Error> {
-    let seed = config.seed.unwrap_or_else(|| rand::thread_rng().gen());
+    let seed = config.seed.unwrap_or_else(|| rand::thread_rng().r#gen());
 
     let (_tempfile, temp_path) = match &config.temp_dir {
         Some(temp_dir) => {

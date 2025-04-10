@@ -16,14 +16,14 @@ use chrono::{DateTime, Utc};
 use clap::Parser;
 use kube::config::KubeConfigOptions;
 use kube::{Client, Config};
-use mz_build_info::{build_info, BuildInfo};
+use mz_build_info::{BuildInfo, build_info};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::task;
 use tracing::{error, info};
+use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::EnvFilter;
 
 use crate::docker_dumper::DockerDumper;
 use crate::k8s_dumper::K8sDumper;
@@ -49,7 +49,13 @@ pub struct SelfManagedDebugMode {
     #[clap(long, default_value = "true", action = clap::ArgAction::Set)]
     dump_k8s: bool,
     /// A list of namespaces to dump.
-    #[clap(long = "k8s-namespace", required_if_eq("dump_k8s", "true"), action = clap::ArgAction::Append)]
+    #[clap(
+        long = "k8s-namespace",
+        // We require both `require`s because `required_if_eq` doesn't work for default values.
+        required_unless_present = "dump_k8s",
+        required_if_eq("dump_k8s", "true"),
+        action = clap::ArgAction::Append
+    )]
     k8s_namespaces: Vec<String>,
     /// The kubernetes context to use.
     #[clap(long, env = "KUBERNETES_CONTEXT")]
@@ -69,8 +75,7 @@ pub struct SelfManagedDebugMode {
     port_forward_local_port: i32,
     /// The URL of the Materialize SQL connection used to dump the system catalog.
     /// An example URL is `postgres://root@127.0.0.1:6875/materialize?sslmode=disable`.
-    /// By default, we will create use the connection URL based on `port_forward_local_address` and `port_forward_local_port`.
-    /// and port_forward_local_port.
+    /// By default, we will create a connection URL based on `port_forward_local_address` and `port_forward_local_port`.
     // TODO(debug_tool3): Allow users to specify the pgconfig via separate variables
     #[clap(
         long,
@@ -86,7 +91,12 @@ pub struct EmulatorDebugMode {
     #[clap(long, default_value = "true", action = clap::ArgAction::Set)]
     dump_docker: bool,
     /// The ID of the docker container to dump.
-    #[clap(long, required_if_eq("dump_docker", "true"))]
+    #[clap(
+        long,
+        // We require both `require`s because `required_if_eq` doesn't work for default values.
+        required_unless_present = "dump_docker",
+        required_if_eq("dump_docker", "true")
+    )]
     docker_container_id: Option<String>,
     /// The URL of the Materialize SQL connection used to dump the system catalog.
     /// An example URL is `postgres://root@127.0.0.1:6875/materialize?sslmode=disable`.
@@ -115,7 +125,7 @@ pub struct Args {
     #[clap(subcommand)]
     debug_mode: DebugMode,
     /// If true, the tool will dump the system catalog in Materialize.
-    #[clap(long, default_value = "true", action = clap::ArgAction::Set)]
+    #[clap(long, default_value = "true", action = clap::ArgAction::Set, global = true)]
     dump_system_catalog: bool,
 }
 

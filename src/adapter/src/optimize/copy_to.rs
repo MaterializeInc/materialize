@@ -13,11 +13,11 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, CopyToS3OneshotSinkConnection,
 };
-use mz_compute_types::ComputeInstanceId;
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_repr::explain::trace_plan;
 use mz_repr::{GlobalId, Timestamp};
@@ -28,22 +28,22 @@ use mz_storage_types::connections::Connection;
 use mz_storage_types::sinks::S3UploadInfo;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
-use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
+use mz_transform::typecheck::{SharedContext as TypecheckContext, empty_context};
 use mz_transform::{StatisticsOracle, TransformCtx};
 use timely::progress::Antichain;
 use tracing::warn;
 
+use crate::TimestampContext;
 use crate::catalog::Catalog;
 use crate::coord::CopyToContext;
 use crate::optimize::dataflows::{
-    prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, EvalTime,
-    ExprPrepStyle,
+    ComputeInstanceSnapshot, DataflowBuilder, EvalTime, ExprPrepStyle, prep_relation_expr,
+    prep_scalar_expr,
 };
 use crate::optimize::{
-    optimize_mir_local, trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize,
-    OptimizeMode, OptimizerConfig, OptimizerError,
+    LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode, OptimizerConfig,
+    OptimizerError, optimize_mir_local, trace_plan,
 };
-use crate::TimestampContext;
 
 pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.

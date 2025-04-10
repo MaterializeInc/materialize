@@ -9,8 +9,8 @@
 
 use mz_ore::now::NowFn;
 use mz_repr::{Datum, Diff, Row};
-use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorOutput};
 use mz_storage_types::sources::MzOffset;
+use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorOutput};
 
 pub struct Counter {
     /// How many values will be emitted before old ones are retracted,

@@ -32,10 +32,10 @@ use mz_persist_client::read::ReadHandle;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
+use mz_timestamp_oracle::TimestampOracle;
 use mz_timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
 };
-use mz_timestamp_oracle::TimestampOracle;
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use mz_txn_wal::operator::DataSubscribeTask;
 use mz_txn_wal::txns::{Tidy, TxnsHandle};
@@ -43,12 +43,12 @@ use timely::progress::Timestamp;
 use tokio::sync::Mutex;
 use tracing::{debug, info};
 
+use crate::maelstrom::Args;
 use crate::maelstrom::api::{Body, MaelstromError, NodeId, ReqTxnOp, ResTxnOp};
 use crate::maelstrom::node::{Handle, Service};
 use crate::maelstrom::services::{
     CachingBlob, MaelstromBlob, MaelstromConsensus, MemTimestampOracle,
 };
-use crate::maelstrom::Args;
 
 #[derive(Debug)]
 pub struct Transactor {

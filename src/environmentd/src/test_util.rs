@@ -20,13 +20,13 @@ use std::time::Duration;
 use std::{env, fs, iter};
 
 use anyhow::anyhow;
-use futures::future::{BoxFuture, LocalBoxFuture};
 use futures::Future;
+use futures::future::{BoxFuture, LocalBoxFuture};
 use headers::{Header, HeaderMapExt};
 use hyper::http::header::HeaderMap;
 use mz_adapter::TimestampExplanation;
 use mz_adapter_types::bootstrap_builtin_cluster_config::{
-    BootstrapBuiltinClusterConfig, ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR, BootstrapBuiltinClusterConfig,
     CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
     SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
 };
@@ -45,10 +45,10 @@ use mz_ore::tracing::{
     OpenTelemetryConfig, StderrLogConfig, StderrLogFormat, TracingConfig, TracingGuard,
     TracingHandle,
 };
-use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::cfg::{PersistConfig, CONSENSUS_CONNECTION_POOL_MAX_SIZE};
-use mz_persist_client::rpc::PersistGrpcPubSubServer;
 use mz_persist_client::PersistLocation;
+use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::cfg::{CONSENSUS_CONNECTION_POOL_MAX_SIZE, PersistConfig};
+use mz_persist_client::rpc::PersistGrpcPubSubServer;
 use mz_secrets::SecretsController;
 use mz_server_core::{ReloadTrigger, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
@@ -62,7 +62,7 @@ use openssl::pkey::{PKey, Private};
 use openssl::rsa::Rsa;
 use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslOptions};
 use openssl::x509::extension::{BasicConstraints, SubjectAlternativeName};
-use openssl::x509::{X509Name, X509NameBuilder, X509};
+use openssl::x509::{X509, X509Name, X509NameBuilder};
 use postgres::error::DbError;
 use postgres::tls::{MakeTlsConnect, TlsConnect};
 use postgres::types::{FromSql, Type};
@@ -1002,7 +1002,7 @@ pub struct MzTimestamp(pub u64);
 impl<'a> FromSql<'a> for MzTimestamp {
     fn from_sql(ty: &Type, raw: &'a [u8]) -> Result<MzTimestamp, Box<dyn Error + Sync + Send>> {
         let n = mz_pgrepr::Numeric::from_sql(ty, raw)?;
-        Ok(MzTimestamp(u64::try_from(n.0 .0)?))
+        Ok(MzTimestamp(u64::try_from(n.0.0)?))
     }
 
     fn accepts(ty: &Type) -> bool {
@@ -1320,7 +1320,7 @@ pub fn auth_with_ws_impl(
             Message::Ping(_) => continue,
             Message::Close(None) => return Err(anyhow!("ws closed after auth")),
             Message::Close(Some(close_frame)) => {
-                return Err(anyhow!("ws closed after auth").context(close_frame))
+                return Err(anyhow!("ws closed after auth").context(close_frame));
             }
             _ => panic!("unexpected response: {:?}", resp),
         }

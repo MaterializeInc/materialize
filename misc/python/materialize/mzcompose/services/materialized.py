@@ -10,6 +10,8 @@
 
 import json
 import os
+import shutil
+import tempfile
 from enum import Enum
 from typing import Any
 
@@ -46,7 +48,7 @@ class MaterializeEmulator(Service):
                 "test": ["CMD", "curl", "-f", "localhost:6878/api/readyz"],
                 "interval": "1s",
                 # A fully loaded Materialize can take a long time to start.
-                "start_period": "1200s",
+                "start_period": "600s",
             },
         }
 
@@ -293,8 +295,14 @@ class Materialized(Service):
 
         if image_version is None or image_version >= "v0.140.0-dev":
             if "MZ_CI_LICENSE_KEY" in os.environ:
-                with open("license_key", "w") as f:
-                    f.write(os.environ["MZ_CI_LICENSE_KEY"])
+                # We have to take care to write the license_key file atomically
+                # so that it is always valid, even if multiple Materialized
+                # objects are created concurrently.
+                with tempfile.NamedTemporaryFile("w", delete=False) as tmp_file:
+                    tmp_path = tmp_file.name
+                    tmp_file.write(os.environ["MZ_CI_LICENSE_KEY"])
+                os.chmod(tmp_path, 0o644)
+                shutil.move(tmp_path, "license_key")
 
                 environment += ["MZ_LICENSE_KEY=/license_key/license_key"]
 

@@ -8,13 +8,13 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::ToOwned;
-use std::collections::{btree_map, BTreeMap};
+use std::collections::{BTreeMap, btree_map};
 use std::error::Error;
 use std::fmt::Write;
 use std::str::FromStr;
 use std::sync::LazyLock;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use regex::Regex;
 
 use crate::error::PosError;
@@ -305,7 +305,7 @@ fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, PosError> {
                         },
                         expected_start: 0,
                         expected_end: 0,
-                    })
+                    });
                 }
                 Err(err) => {
                     return Err(PosError {
@@ -391,11 +391,11 @@ fn parse_fail_sql(line_reader: &mut LineReader) -> Result<FailSqlCommand, PosErr
         SqlExpectedError::Timeout
     } else {
         return Err(PosError {
-                pos: Some(err_pos),
-                source: anyhow!(
-                    "Query error must start with match specifier (`regex:`|`contains:`|`exact:`|`timeout`)"
-                ),
-            });
+            pos: Some(err_pos),
+            source: anyhow!(
+                "Query error must start with match specifier (`regex:`|`contains:`|`exact:`|`timeout`)"
+            ),
+        });
     };
 
     let extra_error = |line_reader: &mut LineReader, prefix| {
@@ -494,7 +494,7 @@ fn slurp_one(line_reader: &mut LineReader) -> Option<(usize, String)> {
                 return line_reader.next().map(|(pos, mut line)| {
                     line.remove(0);
                     (pos, line)
-                })
+                });
             }
             _ => return line_reader.next(),
         }

@@ -30,7 +30,7 @@ pub use crate::relation_and_scalar::{
     ProtoColumnMetadata, ProtoColumnName, ProtoColumnType, ProtoRelationDesc, ProtoRelationType,
     ProtoRelationVersion,
 };
-use crate::{arb_datum_for_column, Datum, Row, ScalarType};
+use crate::{Datum, Row, ScalarType, arb_datum_for_column};
 
 /// The type of a [`Datum`].
 ///
@@ -985,11 +985,12 @@ impl IntoIterator for RelationDesc {
 }
 
 /// Returns a [`Strategy`] that yields arbitrary [`Row`]s for the provided [`RelationDesc`].
-pub fn arb_row_for_relation(desc: &RelationDesc) -> impl Strategy<Value = Row> {
+pub fn arb_row_for_relation(desc: &RelationDesc) -> impl Strategy<Value = Row> + use<> {
     let datums: Vec<_> = desc
         .typ()
         .columns()
         .iter()
+        .cloned()
         .map(arb_datum_for_column)
         .collect();
     datums.prop_map(|x| Row::pack(x.iter().map(Datum::from)))
@@ -1411,7 +1412,7 @@ impl PropRelationDescDiff {
 /// Generates a set of [`PropRelationDescDiff`]s based on some source [`RelationDesc`].
 pub fn arb_relation_desc_diff(
     source: &RelationDesc,
-) -> impl Strategy<Value = Vec<PropRelationDescDiff>> {
+) -> impl Strategy<Value = Vec<PropRelationDescDiff>> + use<> {
     let source = Rc::new(source.clone());
     let num_source_columns = source.typ.columns().len();
 

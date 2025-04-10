@@ -255,8 +255,8 @@ exclude = [
 resolver = "2"
 
 [workspace.package]
-edition = "2021"
-rust-version = "1.83.0"
+edition = "2024"
+rust-version = "1.86.0"
 
 [profile.dev]
 split-debuginfo = "unpacked"
@@ -382,7 +382,7 @@ useless_asref = "warn"
 useless_conversion = "warn"
 builtin_type_shadow = "warn"
 duplicate_underscore_argument = "warn"
-double_neg = "warn"
+double_negations = "warn"
 unnecessary_mut_passed = "warn"
 wildcard_in_or_patterns = "warn"
 crosspointer_transmute = "warn"

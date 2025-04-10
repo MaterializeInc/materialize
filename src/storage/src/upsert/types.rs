@@ -93,7 +93,7 @@ use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_repr::Diff;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 
 use crate::metrics::upsert::{UpsertMetrics, UpsertSharedMetrics};
 use crate::statistics::SourceStatistics;

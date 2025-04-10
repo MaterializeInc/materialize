@@ -49,9 +49,9 @@ use crate::names::{
     QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId,
     SchemaSpecifier, SystemObjectId,
 };
-use crate::plan::statement::ddl::PlannedRoleAttributes;
 use crate::plan::statement::StatementDesc;
-use crate::plan::{query, ClusterSchedule, CreateClusterPlan, PlanError, PlanNotice};
+use crate::plan::statement::ddl::PlannedRoleAttributes;
+use crate::plan::{ClusterSchedule, CreateClusterPlan, PlanError, PlanNotice, query};
 use crate::session::vars::{OwnedVarInput, SystemVars};
 
 /// A catalog keeps track of SQL objects and session state available to the
@@ -79,8 +79,8 @@ use crate::session::vars::{OwnedVarInput, SystemVars};
 ///   * Session management, such as managing variables' states and adding
 ///     notices to the session.
 ///
-/// [`list_databases`]: Catalog::list_databases
-/// [`get_item`]: Catalog::resolve_item
+/// [`get_databases`]: SessionCatalog::get_databases
+/// [`get_item`]: SessionCatalog::get_item
 /// [`resolve_item`]: SessionCatalog::resolve_item
 pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionResolver {
     /// Returns the id of the role that is issuing the query.
@@ -1326,11 +1326,17 @@ impl fmt::Display for CatalogError {
             Self::SchemaAlreadyExists(name) => write!(f, "schema '{name}' already exists"),
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
             Self::RoleAlreadyExists(name) => write!(f, "role '{name}' already exists"),
-            Self::NetworkPolicyAlreadyExists(name) => write!(f, "network policy '{name}' already exists"),
+            Self::NetworkPolicyAlreadyExists(name) => {
+                write!(f, "network policy '{name}' already exists")
+            }
             Self::UnknownCluster(name) => write!(f, "unknown cluster '{}'", name),
             Self::UnknownNetworkPolicy(name) => write!(f, "unknown network policy '{}'", name),
-            Self::UnexpectedBuiltinCluster(name) => write!(f, "Unexpected builtin cluster '{}'", name),
-            Self::UnexpectedBuiltinClusterType(name) => write!(f, "Unexpected builtin cluster type'{}'", name),
+            Self::UnexpectedBuiltinCluster(name) => {
+                write!(f, "Unexpected builtin cluster '{}'", name)
+            }
+            Self::UnexpectedBuiltinClusterType(name) => {
+                write!(f, "Unexpected builtin cluster type'{}'", name)
+            }
             Self::ClusterAlreadyExists(name) => write!(f, "cluster '{name}' already exists"),
             Self::UnknownClusterReplica(name) => {
                 write!(f, "unknown cluster replica '{}'", name)
@@ -1338,9 +1344,14 @@ impl fmt::Display for CatalogError {
             Self::UnknownClusterReplicaSize(name) => {
                 write!(f, "unknown cluster replica size '{}'", name)
             }
-            Self::DuplicateReplica(replica_name, cluster_name) => write!(f, "cannot create multiple replicas named '{replica_name}' on cluster '{cluster_name}'"),
+            Self::DuplicateReplica(replica_name, cluster_name) => write!(
+                f,
+                "cannot create multiple replicas named '{replica_name}' on cluster '{cluster_name}'"
+            ),
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
-            Self::ItemAlreadyExists(_gid, name) => write!(f, "catalog item '{name}' already exists"),
+            Self::ItemAlreadyExists(_gid, name) => {
+                write!(f, "catalog item '{name}' already exists")
+            }
             Self::UnexpectedType {
                 name,
                 actual_type,
@@ -1362,9 +1373,13 @@ impl fmt::Display for CatalogError {
             Self::IdExhaustion => write!(f, "id counter overflows i64"),
             Self::OidExhaustion => write!(f, "oid counter overflows u32"),
             Self::TimelineAlreadyExists(name) => write!(f, "timeline '{name}' already exists"),
-            Self::IdAllocatorAlreadyExists(name) => write!(f, "ID allocator '{name}' already exists"),
+            Self::IdAllocatorAlreadyExists(name) => {
+                write!(f, "ID allocator '{name}' already exists")
+            }
             Self::ConfigAlreadyExists(key) => write!(f, "config '{key}' already exists"),
-            Self::FailedBuiltinSchemaMigration(objects) => write!(f, "failed to migrate schema of builtin objects: {objects}"),
+            Self::FailedBuiltinSchemaMigration(objects) => {
+                write!(f, "failed to migrate schema of builtin objects: {objects}")
+            }
             Self::StorageCollectionMetadataAlreadyExists(key) => {
                 write!(f, "storage metadata for '{key}' already exists")
             }

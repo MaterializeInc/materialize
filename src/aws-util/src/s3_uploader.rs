@@ -8,19 +8,19 @@
 // by the Apache License, Version 2.0.
 
 use anyhow::anyhow;
+use aws_sdk_s3::Client;
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::complete_multipart_upload::CompleteMultipartUploadError;
 use aws_sdk_s3::operation::create_multipart_upload::CreateMultipartUploadError;
 use aws_sdk_s3::operation::upload_part::UploadPartError;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
-use aws_sdk_s3::Client;
 use aws_types::sdk_config::SdkConfig;
 use bytes::{Bytes, BytesMut};
 use bytesize::ByteSize;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
-use mz_ore::task::{spawn, JoinHandle, JoinHandleExt};
+use mz_ore::task::{JoinHandle, JoinHandleExt, spawn};
 
 /// A multi part uploader which can upload a single object across multiple parts
 /// and keeps track of state to eventually finish the upload process.
@@ -130,8 +130,7 @@ impl S3MultiPartUploaderConfig {
         if estimated_parts_count > max_parts_count {
             return Err(anyhow!(format!(
                 "total number of possible parts (file_size_limit / part_size_limit): {}, cannot exceed {}",
-                estimated_parts_count,
-                AWS_S3_MAX_PART_COUNT
+                estimated_parts_count, AWS_S3_MAX_PART_COUNT
             )));
         }
         Ok(())
@@ -541,7 +540,8 @@ mod tests {
         };
         let error = config.validate().unwrap_err();
         assert_eq!(
-            error.to_string(), "total number of possible parts (file_size_limit / part_size_limit): 10001, cannot exceed 10000",
+            error.to_string(),
+            "total number of possible parts (file_size_limit / part_size_limit): 10001, cannot exceed 10000",
         );
     }
 }

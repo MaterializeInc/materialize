@@ -26,8 +26,8 @@ use mz_tracing::{CloneableEnvFilter, SerializableDirective};
 use serde::{Deserialize, Serialize};
 use uncased::UncasedStr;
 
-use super::errors::VarParseError;
 use super::VarInput;
+use super::errors::VarParseError;
 
 /// Defines a value that get stored as part of a System or Session variable.
 ///
@@ -314,7 +314,7 @@ impl Value for Duration {
                 return Err(VarParseError::InvalidParameterValue {
                     invalid_values: vec![o.to_string()],
                     reason: "expected us, ms, s, min, h, or d but got {o:?}".to_string(),
-                })
+                });
             }
         };
 

@@ -31,19 +31,19 @@ use mz_persist_client::read::{Listen, ListenEvent};
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+use timely::PartialOrder;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
 use tokio::sync::Mutex;
 use tracing::{debug, info, trace};
 
+use crate::maelstrom::Args;
 use crate::maelstrom::api::{Body, ErrorCode, MaelstromError, NodeId, ReqTxnOp, ResTxnOp};
 use crate::maelstrom::node::{Handle, Service};
 use crate::maelstrom::services::{CachingBlob, MaelstromBlob, MaelstromConsensus};
 use crate::maelstrom::txn_list_append_single::codec_impls::{
     MaelstromKeySchema, MaelstromValSchema,
 };
-use crate::maelstrom::Args;
 
 /// Key of the persist shard used by [Transactor]
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -336,15 +336,12 @@ impl Transactor {
 
             trace!(
                 "read updates from snapshot as_of {}: {:?}",
-                snap_ts,
-                updates
+                snap_ts, updates
             );
             let listen_updates = Self::listen_through(listen, &as_of).await?;
             trace!(
                 "read updates from listener as_of {} through {}: {:?}",
-                snap_ts,
-                self.read_ts,
-                listen_updates
+                snap_ts, self.read_ts, listen_updates
             );
             updates.extend(listen_updates);
 
@@ -710,12 +707,12 @@ mod codec_impls {
     use arrow::array::{BinaryArray, BinaryBuilder, UInt64Array, UInt64Builder};
     use arrow::datatypes::ToByteSlice;
     use bytes::Bytes;
+    use mz_persist_types::Codec;
     use mz_persist_types::codec_impls::{
         SimpleColumnarData, SimpleColumnarDecoder, SimpleColumnarEncoder,
     };
     use mz_persist_types::columnar::Schema;
     use mz_persist_types::stats::NoneStats;
-    use mz_persist_types::Codec;
 
     use crate::maelstrom::txn_list_append_single::{MaelstromKey, MaelstromVal};
 

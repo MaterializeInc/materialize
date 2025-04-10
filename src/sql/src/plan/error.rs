@@ -19,27 +19,28 @@ use mz_expr::EvalError;
 use mz_mysql_util::MySqlError;
 use mz_ore::error::ErrorExt;
 use mz_ore::stack::RecursionLimitError;
-use mz_ore::str::{separated, StrExt};
+use mz_ore::str::{StrExt, separated};
 use mz_postgres_util::PostgresError;
 use mz_repr::adt::char::InvalidCharLengthError;
 use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::adt::numeric::InvalidNumericMaxScaleError;
 use mz_repr::adt::timestamp::InvalidTimestampPrecisionError;
 use mz_repr::adt::varchar::InvalidVarCharMaxLengthError;
-use mz_repr::{strconv, CatalogItemId, ColumnName};
+use mz_repr::{CatalogItemId, ColumnName, strconv};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{IdentError, UnresolvedItemName};
 use mz_sql_parser::parser::{ParserError, ParserStatementError};
+use mz_sql_server_util::SqlServerError;
 use mz_storage_types::sources::ExternalReferenceResolutionError;
 
 use crate::catalog::{
     CatalogError, CatalogItemType, ErrorMessageObjectDescription, SystemObjectType,
 };
 use crate::names::{PartialItemName, ResolvedItemName};
+use crate::plan::ObjectType;
 use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
 use crate::plan::typeconv::CastContext;
-use crate::plan::ObjectType;
 use crate::pure::error::{
     CsrPurificationError, KafkaSinkPurificationError, KafkaSourcePurificationError,
     LoadGeneratorSourcePurificationError, MySqlSourcePurificationError, PgSourcePurificationError,
@@ -162,6 +163,9 @@ pub enum PlanError {
     },
     MySqlConnectionErr {
         cause: Arc<MySqlError>,
+    },
+    SqlServerConnectionErr {
+        cause: Arc<SqlServerError>,
     },
     SubsourceNameConflict {
         name: UnresolvedItemName,
@@ -619,6 +623,9 @@ impl fmt::Display for PlanError {
             Self::MySqlConnectionErr { cause } => {
                 write!(f, "failed to connect to MySQL database: {}", cause)
             }
+            Self::SqlServerConnectionErr { cause } => {
+                write!(f, "failed to connect to SQL Server database: {}", cause)
+            }
             Self::SubsourceNameConflict {
                 name , upstream_references: _,
             } => {
@@ -882,6 +889,12 @@ impl From<PostgresError> for PlanError {
 impl From<MySqlError> for PlanError {
     fn from(e: MySqlError) -> PlanError {
         PlanError::MySqlConnectionErr { cause: Arc::new(e) }
+    }
+}
+
+impl From<SqlServerError> for PlanError {
+    fn from(e: SqlServerError) -> PlanError {
+        PlanError::SqlServerConnectionErr { cause: Arc::new(e) }
     }
 }
 
