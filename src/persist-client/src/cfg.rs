@@ -33,6 +33,7 @@ use crate::internal::machine::{
 };
 use crate::internal::state::ROLLUP_THRESHOLD;
 use crate::operators::STORAGE_SOURCE_DECODE_FUEL;
+use crate::project::OPTIMIZE_IGNORED_DATA_DECODE;
 use crate::read::READER_LEASE_DURATION;
 
 const LTS_VERSIONS: &[Version] = &[
@@ -220,6 +221,12 @@ impl PersistConfig {
         STORAGE_SOURCE_DECODE_FUEL.get(self)
     }
 
+    /// CYA to allow opt-out of a performance optimization to skip decoding
+    /// ignored data.
+    pub fn optimize_ignored_data_decode(&self) -> bool {
+        OPTIMIZE_IGNORED_DATA_DECODE.get(self)
+    }
+
     /// Overrides the value for "persist_reader_lease_duration".
     pub fn set_reader_lease_duration(&self, val: Duration) {
         self.set_config(&READER_LEASE_DURATION, val);
@@ -312,7 +319,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::cli::admin::EXPRESSION_CACHE_FORCE_COMPACTION_WAIT)
         .add(&crate::fetch::FETCH_SEMAPHORE_COST_ADJUSTMENT)
         .add(&crate::fetch::FETCH_SEMAPHORE_PERMIT_ADJUSTMENT)
-        .add(&crate::fetch::OPTIMIZE_IGNORED_DATA_FETCH)
         .add(&crate::internal::cache::BLOB_CACHE_MEM_LIMIT_BYTES)
         .add(&crate::internal::cache::BLOB_CACHE_SCALE_WITH_THREADS)
         .add(&crate::internal::cache::BLOB_CACHE_SCALE_FACTOR_BYTES)
@@ -329,6 +335,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::internal::machine::RECORD_COMPACTIONS)
         .add(&crate::internal::state::ROLLUP_THRESHOLD)
         .add(&crate::operators::STORAGE_SOURCE_DECODE_FUEL)
+        .add(&crate::project::OPTIMIZE_IGNORED_DATA_DECODE)
+        .add(&crate::project::OPTIMIZE_IGNORED_DATA_FETCH)
         .add(&crate::read::READER_LEASE_DURATION)
         .add(&crate::rpc::PUBSUB_CLIENT_ENABLED)
         .add(&crate::rpc::PUBSUB_PUSH_DIFF_ENABLED)

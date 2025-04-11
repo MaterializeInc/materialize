@@ -164,8 +164,8 @@ impl<K, KS: Schema<K>, V, VS: Schema<V>> PartBuilder<K, KS, V, VS> {
     pub fn push<T: Codec64, D: Codec64>(&mut self, key: &K, val: &V, t: T, d: D) {
         self.key.append(key);
         self.val.append(val);
-        self.time.push(&t);
-        self.diff.push(&d);
+        self.time.push(t);
+        self.diff.push(d);
     }
 
     /// Finishes the builder returning a [`Part`].
@@ -202,11 +202,6 @@ impl<K, KS: Schema<K>, V, VS: Schema<V>> PartBuilder<K, KS, V, VS> {
 pub struct Codec64Mut(Vec<i64>);
 
 impl Codec64Mut {
-    /// Create a builder, pre-sized to an expected number of elements.
-    pub fn with_capacity(capacity: usize) -> Self {
-        Codec64Mut(Vec::with_capacity(capacity))
-    }
-
     /// Returns the overall size of the stored data in bytes.
     pub fn goodbytes(&self) -> usize {
         self.0.len() * size_of::<i64>()
@@ -218,18 +213,8 @@ impl Codec64Mut {
     }
 
     /// Pushes the given value into this column.
-    pub fn push(&mut self, val: &impl Codec64) {
-        self.push_raw(val.encode());
-    }
-
-    /// Pushes the given encoded value into this column.
-    pub fn push_raw(&mut self, val: [u8; 8]) {
-        self.0.push(i64::from_le_bytes(val));
-    }
-
-    /// Return the allocated array.
-    pub fn finish(self) -> Int64Array {
-        self.0.into()
+    pub fn push<X: Codec64>(&mut self, val: X) {
+        self.0.push(i64::from_le_bytes(Codec64::encode(&val)));
     }
 }
 

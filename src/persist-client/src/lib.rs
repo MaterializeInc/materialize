@@ -84,6 +84,7 @@ pub mod operators {
         operator before yielding.",
     );
 }
+pub mod project;
 pub mod read;
 pub mod rpc;
 pub mod schema;

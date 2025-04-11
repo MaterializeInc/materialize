@@ -11,6 +11,7 @@
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use mz_dyncfg::ConfigSet;
+use mz_persist_client::project::{ProjectionPushdown, error_free};
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::Future;
@@ -29,10 +30,10 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::{PersistConfig, RetryParameters};
 use mz_persist_client::fetch::{FetchedBlob, FetchedPart};
 use mz_persist_client::fetch::{SerdeLeasedBatchPart, ShardSourcePart};
-use mz_persist_client::operators::shard_source::{FilterResult, SnapshotMode, shard_source};
-use mz_persist_types::Codec64;
+use mz_persist_client::operators::shard_source::{SnapshotMode, shard_source};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::columnar::{ColumnEncoder, Schema};
+use mz_persist_types::{Codec, Codec64};
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::{CollectionMetadata, TxnsCodecRow};
@@ -303,6 +304,18 @@ where
 {
     let cfg = persist_clients.cfg().clone();
     let name = source_id.to_string();
+    let ignores_data = map_filter_project
+        .as_ref()
+        .map_or(false, |x| x.ignores_input());
+    let project = if ignores_data {
+        ProjectionPushdown::IgnoreAllNonErr {
+            err_col_name: "err",
+            key_bytes: SourceData(Ok(Row::default())).encode_to_vec(),
+            val_bytes: ().encode_to_vec(),
+        }
+    } else {
+        ProjectionPushdown::FetchAll
+    };
     let filter_plan = map_filter_project.as_ref().map(|p| (*p).clone());
 
     // N.B. `read_schema` may be a subset of the total columns for this shard.
@@ -353,13 +366,13 @@ where
             let Some(lower) = frontier.as_option().copied() else {
                 // If the frontier has advanced to the empty antichain,
                 // we'll never emit any rows from any part.
-                return FilterResult::Discard;
+                return false;
             };
 
             if lower > upper {
                 // The frontier timestamp is larger than the until of the dataflow:
                 // anything from this part will necessarily be filtered out.
-                return FilterResult::Discard;
+                return false;
             }
 
             let time_range =
@@ -367,30 +380,34 @@ where
             if let Some(plan) = &filter_plan {
                 let metrics = &metrics.pushdown.part_stats;
                 let stats = RelationPartStats::new(&filter_name, metrics, &read_desc, stats);
-                filter_result(&read_desc, time_range, stats, plan)
+                filter_may_match(&read_desc, time_range, stats, plan)
             } else {
-                FilterResult::Keep
+                true
             }
         },
         listen_sleep,
         start_signal,
         error_handler,
+        project,
     );
     let rows = decode_and_mfp(cfg, &fetched, &name, until, map_filter_project);
     (rows, token)
 }
 
-fn filter_result(
+fn filter_may_match(
     relation_desc: &RelationDesc,
     time_range: ResultSpec,
     stats: RelationPartStats,
     plan: &MfpPlan,
-) -> FilterResult {
+) -> bool {
     let arena = RowArena::new();
     let mut ranges = ColumnSpecs::new(relation_desc.typ(), &arena);
     ranges.push_unmaterializable(UnmaterializableFunc::MzNow, time_range);
 
-    let may_error = stats.err_count().map_or(true, |count| count > 0);
+    if stats.err_count().into_iter().any(|count| count > 0) {
+        // If the error collection is nonempty, we always keep the part.
+        return true;
+    }
 
     // N.B. We may have pushed down column "demands" into Persist, so this
     // relation desc may have a different set of columns than the stats.
@@ -399,30 +416,7 @@ fn filter_result(
         ranges.push_column(pos, result_spec);
     }
     let result = ranges.mfp_plan_filter(plan).range;
-    let may_error = may_error || result.may_fail();
-    let may_keep = result.may_contain(Datum::True);
-    let may_skip = result.may_contain(Datum::False) || result.may_contain(Datum::Null);
-    if relation_desc.len() == 0 && !may_error && !may_skip {
-        let Ok(mut key) = <RelationDesc as Schema<Row>>::encoder(relation_desc) else {
-            return FilterResult::Keep;
-        };
-        key.append(&Row::default());
-        let key = key.finish();
-        let Ok(mut val) = <UnitSchema as Schema<()>>::encoder(&UnitSchema) else {
-            return FilterResult::Keep;
-        };
-        val.append(&());
-        let val = val.finish();
-
-        FilterResult::ReplaceWith {
-            key: Arc::new(key),
-            val: Arc::new(val),
-        }
-    } else if may_error || may_keep {
-        FilterResult::Keep
-    } else {
-        FilterResult::Discard
-    }
+    result.may_contain(Datum::True) || result.may_fail()
 }
 
 pub fn decode_and_mfp<G>(
@@ -476,6 +470,7 @@ where
             // loading the atomics.
             let yield_fuel = cfg.storage_source_decode_fuel();
             let yield_fn = |_, work| work >= yield_fuel;
+            let optimize_ignored_data_decode = cfg.optimize_ignored_data_decode();
 
             let mut work = 0;
             let start_time = Instant::now();
@@ -484,6 +479,7 @@ where
                 let done = pending_work.front_mut().unwrap().do_work(
                     &mut work,
                     &name,
+                    optimize_ignored_data_decode,
                     start_time,
                     yield_fn,
                     &until,
@@ -517,6 +513,7 @@ enum PendingPart {
     Unparsed(FetchedBlob<SourceData, (), Timestamp, StorageDiff>),
     Parsed {
         part: ShardSourcePart<SourceData, (), Timestamp, StorageDiff>,
+        error_free: bool,
     },
 }
 
@@ -527,14 +524,23 @@ impl PendingPart {
     /// Also returns a bool, which is true if the part is known (from pushdown
     /// stats) to be free of `SourceData(Err(_))`s. It will be false if the part
     /// is known to contain errors or if it's unknown.
-    fn part_mut(&mut self) -> &mut FetchedPart<SourceData, (), Timestamp, StorageDiff> {
+    fn part_mut(
+        &mut self,
+    ) -> (
+        &mut FetchedPart<SourceData, (), Timestamp, StorageDiff>,
+        bool,
+    ) {
         match self {
             PendingPart::Unparsed(x) => {
-                *self = PendingPart::Parsed { part: x.parse() };
+                let error_free = error_free(x.stats(), "err").unwrap_or(false);
+                *self = PendingPart::Parsed {
+                    part: x.parse(),
+                    error_free,
+                };
                 // Won't recurse any further.
                 self.part_mut()
             }
-            PendingPart::Parsed { part } => &mut part.part,
+            PendingPart::Parsed { part, error_free } => (&mut part.part, *error_free),
         }
     }
 }
@@ -546,6 +552,7 @@ impl PendingWork {
         &mut self,
         work: &mut usize,
         name: &str,
+        optimize_ignored_data_decode: bool,
         start_time: Instant,
         yield_fn: YFn,
         until: &Antichain<Timestamp>,
@@ -579,11 +586,16 @@ impl PendingWork {
         YFn: Fn(Instant, usize) -> bool,
     {
         let mut session = output.session_with_builder(&self.capability);
-        let fetched_part = self.part.part_mut();
+        let (fetched_part, part_is_error_free) = self.part.part_mut();
         let is_filter_pushdown_audit = fetched_part.is_filter_pushdown_audit();
         let mut row_buf = None;
+        let row_override = map_filter_project
+            .as_ref()
+            .map(|p| optimize_ignored_data_decode && part_is_error_free && p.ignores_input())
+            .unwrap_or(false)
+            .then(|| (SourceData(Ok(Row::default())), ()));
         while let Some(((key, val), time, diff)) =
-            fetched_part.next_with_storage(&mut row_buf, &mut None)
+            fetched_part.next_with_storage(&mut row_buf, &mut None, row_override.clone())
         {
             if until.less_equal(&time) {
                 continue;

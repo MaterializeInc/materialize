@@ -545,9 +545,11 @@ where
                                 None,
                             );
 
-                            while let Some(((k, v), t, d)) =
-                                fetched_part.next_with_storage(&mut key_storage, &mut val_storage)
-                            {
+                            while let Some(((k, v), t, d)) = fetched_part.next_with_storage(
+                                &mut key_storage,
+                                &mut val_storage,
+                                None,
+                            ) {
                                 builder
                                     .add(
                                         &k.expect("decoded just-encoded key data"),
