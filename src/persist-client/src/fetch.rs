@@ -156,7 +156,7 @@ where
         }
 
         let migration = PartMigration::new(
-            part.part.schema_id(),
+            &part.part,
             self.read_schemas.clone(),
             &mut self.schema_cache,
         )
@@ -366,7 +366,7 @@ where
         panic!("{} could not fetch batch part: {}", reader_id, blob_key)
     });
     let part_cfg = BatchFetcherConfig::new(cfg);
-    let migration = PartMigration::new(part.part.schema_id(), read_schemas, schema_cache)
+    let migration = PartMigration::new(&part.part, read_schemas, schema_cache)
         .await
         .unwrap_or_else(|read_schemas| {
             panic!(
