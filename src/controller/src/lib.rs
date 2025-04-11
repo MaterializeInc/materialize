@@ -36,7 +36,6 @@ use mz_compute_client::controller::{
     ComputeController, ComputeControllerResponse, ComputeControllerTimestamp, PeekNotification,
 };
 use mz_compute_client::protocol::response::SubscribeBatch;
-use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_controller_types::WatchSetId;
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, ServiceProcessMetrics};
 use mz_ore::id_gen::Gen;
@@ -48,12 +47,8 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::PersistLocation;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::Codec64;
-use mz_proto::RustType;
 use mz_repr::{Datum, GlobalId, Row, TimestampManipulation};
 use mz_service::secrets::SecretsReaderCliArgs;
-use mz_storage_client::client::{
-    ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
-};
 use mz_storage_client::controller::{
     IntrospectionType, StorageController, StorageMetadata, StorageTxn,
 };
@@ -295,7 +290,6 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
 impl<T> Controller<T>
 where
     T: ComputeControllerTimestamp,
-    ComputeGrpcClient: ComputeClient<T>,
 {
     pub fn update_orchestrator_scheduling_config(
         &self,
@@ -626,9 +620,6 @@ where
         + TimestampManipulation
         + std::fmt::Display
         + Into<mz_repr::Timestamp>,
-    StorageCommand<T>: RustType<ProtoStorageCommand>,
-    StorageResponse<T>: RustType<ProtoStorageResponse>,
-    ComputeGrpcClient: ComputeClient<T>,
     // Bounds needed by `ComputeController`:
     T: ComputeControllerTimestamp,
 {

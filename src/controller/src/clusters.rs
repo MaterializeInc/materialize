@@ -22,7 +22,6 @@ use futures::stream::{BoxStream, StreamExt};
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_compute_client::controller::ComputeControllerTimestamp;
 use mz_compute_client::logging::LogVariant;
-use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_compute_types::config::{ComputeReplicaConfig, ComputeReplicaLogging};
 use mz_controller_types::dyncfgs::CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -340,7 +339,6 @@ pub struct ClusterEvent {
 impl<T> Controller<T>
 where
     T: ComputeControllerTimestamp,
-    ComputeGrpcClient: ComputeClient<T>,
 {
     /// Creates a cluster with the specified identifier and configuration.
     ///

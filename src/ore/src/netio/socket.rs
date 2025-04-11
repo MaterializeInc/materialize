@@ -23,8 +23,7 @@ use std::{fmt, io};
 use async_trait::async_trait;
 use tokio::fs;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::net::{self, TcpListener, TcpStream, UnixListener, UnixStream};
-use tonic::transport::server::{Connected, TcpConnectInfo, UdsConnectInfo};
+use tokio::net::{self, TcpListener, TcpStream, UnixListener, UnixStream, tcp, unix};
 use tracing::warn;
 
 use crate::error::ErrorExt;
@@ -440,6 +439,21 @@ impl Stream {
             Stream::Unix(stream) => stream,
         }
     }
+
+    /// Splits a stream into a read half and a write half, which can be used to read and write the
+    /// stream concurrently.
+    pub fn split(self) -> (StreamReadHalf, StreamWriteHalf) {
+        match self {
+            Stream::Tcp(stream) => {
+                let (rx, tx) = stream.into_split();
+                (StreamReadHalf::Tcp(rx), StreamWriteHalf::Tcp(tx))
+            }
+            Stream::Unix(stream) => {
+                let (rx, tx) = stream.into_split();
+                (StreamReadHalf::Unix(rx), StreamWriteHalf::Unix(tx))
+            }
+        }
+    }
 }
 
 impl AsyncRead for Stream {
@@ -478,24 +492,54 @@ impl AsyncWrite for Stream {
     }
 }
 
-impl Connected for Stream {
-    type ConnectInfo = ConnectInfo;
+/// Read half of a [`Stream`], created by [`Stream::split`].
+#[derive(Debug)]
+pub enum StreamReadHalf {
+    Tcp(tcp::OwnedReadHalf),
+    Unix(unix::OwnedReadHalf),
+}
 
-    fn connect_info(&self) -> Self::ConnectInfo {
-        match self {
-            Stream::Tcp(stream) => ConnectInfo::Tcp(stream.connect_info()),
-            Stream::Unix(stream) => ConnectInfo::Unix(stream.connect_info()),
+impl AsyncRead for StreamReadHalf {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &mut ReadBuf,
+    ) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            Self::Tcp(rx) => Pin::new(rx).poll_read(cx, buf),
+            Self::Unix(rx) => Pin::new(rx).poll_read(cx, buf),
         }
     }
 }
 
-/// Connection information for a [`Stream`].
-#[derive(Debug, Clone)]
-pub enum ConnectInfo {
-    /// TCP connection information.
-    Tcp(TcpConnectInfo),
-    /// Unix domain socket connection information.
-    Unix(UdsConnectInfo),
+/// Write half of a [`Stream`], created by [`Stream::split`].
+#[derive(Debug)]
+pub enum StreamWriteHalf {
+    Tcp(tcp::OwnedWriteHalf),
+    Unix(unix::OwnedWriteHalf),
+}
+
+impl AsyncWrite for StreamWriteHalf {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<io::Result<usize>> {
+        match self.get_mut() {
+            Self::Tcp(tx) => Pin::new(tx).poll_write(cx, buf),
+            Self::Unix(tx) => Pin::new(tx).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            Self::Tcp(tx) => Pin::new(tx).poll_flush(cx),
+            Self::Unix(tx) => Pin::new(tx).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            Self::Tcp(tx) => Pin::new(tx).poll_shutdown(cx),
+            Self::Unix(tx) => Pin::new(tx).poll_shutdown(cx),
+        }
+    }
 }
 
 #[cfg(test)]
