@@ -156,7 +156,7 @@ macro_rules! sqlfunc {
 
             mod $fn_name {
                 #[cfg(test)]
-                #[test]
+                #[mz_ore::test]
                 fn test_sqlfunc_macro() {
                     use crate::func::EagerUnaryFunc;
                     let f = super::[<$fn_name:camel>];
