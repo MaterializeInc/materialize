@@ -10,7 +10,7 @@
 # by the Apache License, Version 2.0.
 
 load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
-load("@rules_rust//cargo:defs.bzl", "cargo_build_script", "extract_cargo_lints")
+load("@rules_rust//cargo:defs.bzl", "extract_cargo_lints")
 load("@rules_rust//rust:defs.bzl", "rust_doc_test", "rust_library", "rust_test")
 
 package(default_visibility = ["//visibility:public"])
@@ -31,7 +31,6 @@ rust_library(
     rustc_flags = [],
     version = "0.0.0",
     deps = [
-        ":mz_service_build_script",
         "//src/aws-secrets-controller:mz_aws_secrets_controller",
         "//src/build-info:mz_build_info",
         "//src/orchestrator-kubernetes:mz_orchestrator_kubernetes",
@@ -101,26 +100,6 @@ rust_doc_test(
         normal = True,
         normal_dev = True,
     ),
-)
-
-filegroup(
-    name = "all_protos",
-    srcs = [
-        "src/params.proto",
-        "//src/proto:all_protos",
-    ],
-)
-
-cargo_build_script(
-    name = "mz_service_build_script",
-    srcs = ["build.rs"],
-    build_script_env = {},
-    compile_data = [],
-    data = [":all_protos"],
-    proc_macro_deps = [] + all_crate_deps(build_proc_macro = True),
-    rustc_env = {},
-    rustc_flags = [],
-    deps = ["//src/build-tools:mz_build_tools"] + all_crate_deps(build = True),
 )
 
 extract_cargo_lints(

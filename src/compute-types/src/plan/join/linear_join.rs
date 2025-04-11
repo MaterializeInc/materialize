@@ -13,16 +13,13 @@ use mz_expr::{
     JoinInputCharacteristics, MapFilterProject, MirScalarExpr, join_permutations,
     permutation_for_arrangement,
 };
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::*;
 use proptest::result::Probability;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::plan::AvailableCollections;
-use crate::plan::join::{
-    JoinBuildState, JoinClosure, ProtoLinearJoinPlan, ProtoLinearStagePlan, ProtoMirScalarVec,
-};
+use crate::plan::join::{JoinBuildState, JoinClosure};
 
 /// A plan for the execution of a linear join.
 ///
@@ -73,40 +70,6 @@ impl Arbitrary for LinearJoinPlan {
     }
 }
 
-impl RustType<ProtoLinearJoinPlan> for LinearJoinPlan {
-    fn into_proto(&self) -> ProtoLinearJoinPlan {
-        ProtoLinearJoinPlan {
-            source_relation: self.source_relation.into_proto(),
-            source_key: self.source_key.into_proto(),
-            initial_closure: self.initial_closure.into_proto(),
-            stage_plans: self.stage_plans.into_proto(),
-            final_closure: self.final_closure.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoLinearJoinPlan) -> Result<Self, TryFromProtoError> {
-        Ok(LinearJoinPlan {
-            source_relation: proto.source_relation.into_rust()?,
-            source_key: proto.source_key.into_rust()?,
-            initial_closure: proto.initial_closure.into_rust()?,
-            stage_plans: proto.stage_plans.into_rust()?,
-            final_closure: proto.final_closure.into_rust()?,
-        })
-    }
-}
-
-impl RustType<ProtoMirScalarVec> for Vec<MirScalarExpr> {
-    fn into_proto(&self) -> ProtoMirScalarVec {
-        ProtoMirScalarVec {
-            values: self.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoMirScalarVec) -> Result<Self, TryFromProtoError> {
-        proto.values.into_rust()
-    }
-}
-
 /// A plan for the execution of one stage of a linear join.
 ///
 /// Each stage is a binary join between the current accumulated
@@ -127,30 +90,6 @@ pub struct LinearStagePlan {
     /// The closure to apply to the concatenation of the key columns,
     /// the stream value columns, and the lookup value colunms.
     pub closure: JoinClosure,
-}
-
-impl RustType<ProtoLinearStagePlan> for LinearStagePlan {
-    fn into_proto(&self) -> ProtoLinearStagePlan {
-        ProtoLinearStagePlan {
-            lookup_relation: self.lookup_relation.into_proto(),
-            stream_key: self.stream_key.into_proto(),
-            stream_thinning: self.stream_thinning.into_proto(),
-            lookup_key: self.lookup_key.into_proto(),
-            closure: Some(self.closure.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoLinearStagePlan) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            lookup_relation: proto.lookup_relation.into_rust()?,
-            stream_key: proto.stream_key.into_rust()?,
-            stream_thinning: proto.stream_thinning.into_rust()?,
-            lookup_key: proto.lookup_key.into_rust()?,
-            closure: proto
-                .closure
-                .into_rust_if_some("ProtoLinearStagePlan::closure")?,
-        })
-    }
 }
 
 impl LinearJoinPlan {

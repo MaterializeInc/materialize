@@ -13,15 +13,12 @@ use std::time::Duration;
 
 use columnar::Columnar;
 use dec::TryFromDecimalError;
-use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize, Serializer};
 
 use crate::adt::numeric::Numeric;
 use crate::refresh_schedule::RefreshSchedule;
 use crate::strconv::parse_timestamptz;
-
-include!(concat!(env!("OUT_DIR"), "/mz_repr.timestamp.rs"));
 
 /// System-wide timestamp type.
 #[derive(
@@ -52,18 +49,6 @@ impl PartialEq<&Timestamp> for Timestamp {
 impl PartialEq<Timestamp> for &Timestamp {
     fn eq(&self, other: &Timestamp) -> bool {
         self.internal.eq(&other.internal)
-    }
-}
-
-impl RustType<ProtoTimestamp> for Timestamp {
-    fn into_proto(&self) -> ProtoTimestamp {
-        ProtoTimestamp {
-            internal: self.into(),
-        }
-    }
-
-    fn from_proto(proto: ProtoTimestamp) -> Result<Self, TryFromProtoError> {
-        Ok(Timestamp::new(proto.internal))
     }
 }
 

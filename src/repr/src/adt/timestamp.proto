@@ -14,14 +14,3 @@ package mz_repr.adt.timestamp;
 message ProtoTimestampPrecision {
   uint32 value = 1;
 }
-
-// Helper struct for representing `Option<TimestampPrecision>`.
-message ProtoOptionalTimestampPrecision {
-  ProtoTimestampPrecision value = 1;
-}
-
-// Helper struct for representing from and to precisions each of type `Option<TimestampPrecision>`.
-message ProtoFromToTimestampPrecisions {
-  optional ProtoTimestampPrecision from = 1;
-  optional ProtoTimestampPrecision to = 2;
-}

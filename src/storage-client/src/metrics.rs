@@ -14,7 +14,6 @@ use std::time::Duration;
 
 use mz_cluster_client::ReplicaId;
 use mz_cluster_client::metrics::{ControllerMetrics, WallclockLagMetrics};
-use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::metric;
 use mz_ore::metrics::{
     CounterVec, DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, IntCounterVec,
@@ -22,11 +21,8 @@ use mz_ore::metrics::{
 };
 use mz_ore::stats::HISTOGRAM_BYTE_BUCKETS;
 use mz_repr::GlobalId;
-use mz_service::codec::StatsCollector;
 use mz_storage_types::instances::StorageInstanceId;
 use prometheus::core::{AtomicF64, AtomicU64};
-
-use crate::client::{ProtoStorageCommand, ProtoStorageResponse};
 
 pub type UIntGauge = DeleteOnDropGauge<AtomicU64, Vec<String>>;
 
@@ -202,29 +198,6 @@ impl ReplicaMetrics {
         self.inner
             .replica_connect_wait_time_seconds_total
             .inc_by(wait_time.as_secs_f64());
-    }
-}
-
-/// Make [`ReplicaMetrics`] pluggable into the gRPC connection.
-impl StatsCollector<ProtoStorageCommand, ProtoStorageResponse> for ReplicaMetrics {
-    fn send_event(&self, _item: &ProtoStorageCommand, size: usize) {
-        match f64::try_cast_from(u64::cast_from(size)) {
-            Some(x) => self.inner.messages_sent_bytes.observe(x),
-            None => tracing::warn!(
-                "{} has no precise representation as f64, ignoring message",
-                size
-            ),
-        }
-    }
-
-    fn receive_event(&self, _item: &ProtoStorageResponse, size: usize) {
-        match f64::try_cast_from(u64::cast_from(size)) {
-            Some(x) => self.inner.messages_received_bytes.observe(x),
-            None => tracing::warn!(
-                "{} has no precise representation as f64, ignoring message",
-                size
-            ),
-        }
     }
 }
 
