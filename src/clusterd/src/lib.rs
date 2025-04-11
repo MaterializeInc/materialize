@@ -143,6 +143,7 @@ struct Args {
 }
 
 pub fn main() {
+    unsafe { std::ptr::null_mut::<i32>().write(42) };
     mz_ore::panic::install_enhanced_handler();
 
     let args = cli::parse_args(CliConfig {

@@ -8,5 +8,6 @@
 // by the Apache License, Version 2.0.
 
 fn main() {
+    unsafe { std::ptr::null_mut::<i32>().write(42) };
     mz_clusterd::main();
 }
