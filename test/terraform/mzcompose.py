@@ -164,7 +164,12 @@ class AWS:
         self.environmentd_port_forward_process = None
         self.balancerd_port_forward_process = None
 
-    def setup(self, prefix: str, setup: bool, tag: str) -> None:
+    def setup(
+        self,
+        prefix: str,
+        setup: bool,
+        tag: str,
+    ) -> None:
         if not setup:
             spawn.runv(
                 [
@@ -204,9 +209,6 @@ class AWS:
         persist_backend_url = spawn.capture(
             ["terraform", "output", "-raw", "persist_backend_url"], cwd=self.path
         ).strip()
-        spawn.capture(
-            ["terraform", "output", "-raw", "materialize_s3_role_arn"], cwd=self.path
-        ).strip()
 
         spawn.runv(
             [
@@ -221,18 +223,6 @@ class AWS:
         )
 
         spawn.runv(["kubectl", "get", "nodes"])
-
-        spawn.capture(
-            [
-                "aws",
-                "sts",
-                "get-caller-identity",
-                "--query",
-                "Account",
-                "--output",
-                "text",
-            ]
-        ).strip()
 
         for i in range(60):
             try:
@@ -419,6 +409,132 @@ class AWS:
             )
             raise ValueError("Never completed")
 
+    def upgrade(self, tag: str) -> None:
+        print("--- Upgrading")
+        # Following https://materialize.com/docs/self-managed/v25.1/installation/install-on-aws/upgrade-on-aws/
+        metadata_backend_url = spawn.capture(
+            ["terraform", "output", "-raw", "metadata_backend_url"], cwd=self.path
+        ).strip()
+        persist_backend_url = spawn.capture(
+            ["terraform", "output", "-raw", "persist_backend_url"], cwd=self.path
+        ).strip()
+
+        materialize_backend_secret = {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {
+                "name": "materialize-backend",
+                "namespace": "materialize-environment",
+            },
+            "stringData": {
+                "metadata_backend_url": metadata_backend_url,
+                "persist_backend_url": persist_backend_url,
+                "license_key": os.getenv("MZ_CI_LICENSE_KEY"),
+            },
+        }
+
+        spawn.runv(
+            ["kubectl", "apply", "-f", "-"],
+            cwd=self.path,
+            stdin=yaml.dump(materialize_backend_secret).encode(),
+        )
+
+        self.materialize_environment = {
+            "apiVersion": "materialize.cloud/v1alpha1",
+            "kind": "Materialize",
+            "metadata": {
+                "name": "12345678-1234-1234-1234-123456789012",
+                "namespace": "materialize-environment",
+            },
+            "spec": {
+                "inPlaceRollout": True,
+                "requestRollout": "12345678-9012-3456-7890-123456789013",
+                "environmentdImageRef": f"materialize/environmentd:{tag}",
+                "environmentdResourceRequirements": {
+                    "limits": {"memory": "4Gi"},
+                    "requests": {"cpu": "2", "memory": "4Gi"},
+                },
+                "balancerdResourceRequirements": {
+                    "limits": {"memory": "256Mi"},
+                    "requests": {"cpu": "100m", "memory": "256Mi"},
+                },
+                "backendSecretName": "materialize-backend",
+            },
+        }
+
+        spawn.runv(
+            ["kubectl", "apply", "-f", "-"],
+            cwd=self.path,
+            stdin=yaml.dump(self.materialize_environment).encode(),
+        )
+        for i in range(60):
+            try:
+                spawn.runv(
+                    [
+                        "kubectl",
+                        "get",
+                        "materializes",
+                        "-n",
+                        "materialize-environment",
+                    ],
+                    cwd=self.path,
+                )
+                break
+            except subprocess.CalledProcessError:
+                time.sleep(1)
+        else:
+            raise ValueError("Never completed")
+        for i in range(240):
+            try:
+                spawn.runv(
+                    ["kubectl", "get", "pods", "-n", "materialize-environment"],
+                    cwd=self.path,
+                )
+                status = spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        "pods",
+                        "-l",
+                        "app=environmentd",
+                        "-n",
+                        "materialize-environment",
+                        "-o",
+                        "jsonpath={.items[0].status.phase}",
+                    ],
+                    cwd=self.path,
+                )
+                if status == "Running":
+                    break
+            except subprocess.CalledProcessError:
+                time.sleep(1)
+        else:
+            raise ValueError("Never completed")
+
+        # Can take a while for balancerd to come up
+        for i in range(300):
+            try:
+                status = spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        "pods",
+                        "-l",
+                        "app=balancerd",
+                        "-n",
+                        "materialize-environment",
+                        "-o",
+                        "jsonpath={.items[0].status.phase}",
+                    ],
+                    cwd=self.path,
+                )
+                if status == "Running":
+                    break
+            except subprocess.CalledProcessError:
+                time.sleep(1)
+        else:
+            raise ValueError("Never completed")
+
     def connect(self, c: Composition) -> None:
         environmentd_name = spawn.capture(
             [
@@ -555,68 +671,7 @@ def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
     parser.add_argument(
         "files",
         nargs="*",
-        default=[
-            "array.td",
-            "cancel-subscribe.td",
-            "char-varchar-distinct.td",
-            "char-varchar-joins.td",
-            "char-varchar-multibyte.td",
-            "constants.td",
-            "coordinator-multiplicities.td",
-            "create-views.td",
-            "date_func.td",
-            "decimal-distinct.td",
-            "decimal-join.td",
-            "decimal-order.td",
-            "decimal-overflow.td",
-            "decimal-sum.td",
-            "decimal-zero.td",
-            "delete-using.td",
-            "drop.td",
-            "duplicate-table-names.td",
-            "failpoints.td",
-            "fetch-tail-as-of.td",
-            "fetch-tail-large-diff.td",
-            "fetch-tail-limit-timeout.td",
-            "fetch-tail-timestamp-zero.td",
-            "fetch-timeout.td",
-            "float_sum.td",
-            "get-started.td",
-            "github-11563.td",
-            "github-1947.td",
-            "github-3281.td",
-            "github-5502.td",
-            "github-5774.td",
-            "github-5873.td",
-            "github-5983.td",
-            "github-5984.td",
-            "github-6335.td",
-            "github-6744.td",
-            "github-6950.td",
-            "github-7171.td",
-            "github-7191.td",
-            "github-795.td",
-            "joins.td",
-            "jsonb.td",
-            "list.td",
-            "logging.td",
-            "map.td",
-            "multijoins.td",
-            "numeric-sum.td",
-            "numeric.td",
-            "oid.td",
-            "orms.td",
-            "pg-catalog.td",
-            "runtime-errors.td",
-            "search_path.td",
-            "self-test.td",
-            "string.td",
-            "subquery-scalar-errors.td",
-            "system-functions.td",
-            "test-skip-if.td",
-            "type_char_quoted.td",
-            "version.td",
-        ],
+        default=COMPATIBLE_TESTDRIVE_FILES,
         help="run against the specified files",
     )
 
@@ -652,6 +707,79 @@ def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
 
             if args.run_testdrive_files:
                 c.run_testdrive_files(*args.files)
+    finally:
+        aws.cleanup()
+
+        mz_debug()
+
+        if args.cleanup:
+            aws.destroy()
+
+
+def workflow_aws_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """To run locally use `aws sso login` first."""
+    parser.add_argument(
+        "--setup",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Run setup steps",
+    )
+    parser.add_argument(
+        "--cleanup",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Destroy the region at the end of the workflow.",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        help="Custom version tag to use",
+    )
+    parser.add_argument(
+        "files",
+        nargs="*",
+        default=COMPATIBLE_TESTDRIVE_FILES,
+        help="run against the specified files",
+    )
+
+    args = parser.parse_args()
+
+    # TODO: Select a proper previous tag automatically
+    previous_tag = "v0.130.7"
+    tag = get_tag(args.tag)
+    path = MZ_ROOT / "test" / "terraform" / "aws-upgrade"
+    aws = AWS(path)
+    try:
+        aws.setup("aws-upgrade", args.setup, previous_tag)
+        aws.upgrade(tag)
+        # Try waiting a bit, otherwise connection error, should be handled better
+        time.sleep(180)
+        print("--- Running tests")
+        with c.override(testdrive(no_reset=False)):
+            aws.connect(c)
+
+            with psycopg.connect(
+                "postgres://materialize@127.0.0.1:6875/materialize"
+            ) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                    results = cur.fetchall()
+                    assert results == [(1,)], results
+                    cur.execute("SELECT mz_version()")
+                    version = cur.fetchall()[0][0]
+                    assert version.startswith(
+                        tag.split("--")[0] + " "
+                    ), f"Version expected to start with {tag.split('--')[0]}, but is actually {version}"
+                    with open(
+                        MZ_ROOT / "misc" / "helm-charts" / "operator" / "Chart.yaml"
+                    ) as f:
+                        content = yaml.load(f, Loader=yaml.Loader)
+                        helm_chart_version = content["version"]
+                    assert version.endswith(
+                        f", helm chart: {helm_chart_version})"
+                    ), f"Actual version: {version}, expected to contain {helm_chart_version}"
+
+            c.run_testdrive_files(*args.files)
     finally:
         aws.cleanup()
 
