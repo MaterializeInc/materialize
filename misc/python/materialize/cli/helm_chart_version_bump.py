@@ -39,12 +39,14 @@ def main() -> int:
     mods = [
         (
             MZ_ROOT / "misc" / "helm-charts" / "operator" / "Chart.yaml",
-            lambda docs: docs[0].update({"appVersion": args.version}),
+            lambda docs: docs[0].update({"appVersion": args.environmentd_version}),
         ),
         (
             MZ_ROOT / "misc" / "helm-charts" / "testing" / "materialize.yaml",
             lambda docs: docs[2]["spec"].update(
-                {"environmentdImageRef": f"materialize/environmentd:{args.version}"}
+                {
+                    "environmentdImageRef": f"materialize/environmentd:{args.environmentd_version}"
+                }
             ),
         ),
     ]
