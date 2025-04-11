@@ -408,12 +408,25 @@ mod test {
     }
 
     #[mz_ore::test]
-    fn test_equivalence() {
+    fn test_equivalence_nullable() {
+        test_equivalence_inner(true);
+    }
+
+    #[mz_ore::test]
+    fn test_equivalence_non_nullable() {
+        test_equivalence_inner(false);
+    }
+
+    /// Test the equivalence of the binary functions in the `func` module with their
+    /// derived sqlfunc implementation. The `input_nullable` parameter determines
+    /// whether the input colum is marked nullable or not.
+    fn test_equivalence_inner(input_nullable: bool) {
         #[track_caller]
         fn check<T: LazyBinaryFunc + std::fmt::Display>(
             new: T,
             old: BinaryFunc,
-            column_ty: ColumnType,
+            column_a_ty: &ColumnType,
+            column_b_ty: &ColumnType,
         ) {
             assert_eq!(
                 new.propagates_nulls(),
@@ -429,34 +442,213 @@ mod test {
             assert_eq!(new.is_monotone(), old.is_monotone(), "is_monotone mismatch");
             assert_eq!(new.is_infix_op(), old.is_infix_op(), "is_infix_op mismatch");
             assert_eq!(
-                new.output_type(column_ty.clone(), column_ty.clone()),
-                old.output_type(column_ty.clone(), column_ty.clone()),
+                new.output_type(column_a_ty.clone(), column_b_ty.clone()),
+                old.output_type(column_a_ty.clone(), column_b_ty.clone()),
                 "output_type mismatch"
             );
             assert_eq!(format!("{}", new), format!("{}", old), "format mismatch");
         }
         let i32_ty = ColumnType {
-            nullable: true,
+            nullable: input_nullable,
             scalar_type: ScalarType::Int32,
         };
         let ts_tz_ty = ColumnType {
-            nullable: true,
+            nullable: input_nullable,
             scalar_type: ScalarType::TimestampTz { precision: None },
+        };
+        let time_ty = ColumnType {
+            nullable: input_nullable,
+            scalar_type: ScalarType::Time,
+        };
+        let interval_ty = ColumnType {
+            nullable: input_nullable,
+            scalar_type: ScalarType::Interval,
         };
 
         use BinaryFunc as BF;
 
-        check(func::AddInt16, BF::AddInt16, i32_ty.clone());
-        check(func::AddInt32, BF::AddInt32, i32_ty.clone());
-        check(func::AddInt64, BF::AddInt64, i32_ty.clone());
-        check(func::AddUint16, BF::AddUInt16, i32_ty.clone());
-        check(func::AddUint32, BF::AddUInt32, i32_ty.clone());
-        check(func::AddUint64, BF::AddUInt64, i32_ty.clone());
-        check(func::AddFloat32, BF::AddFloat32, i32_ty.clone());
-        check(func::AddFloat64, BF::AddFloat64, i32_ty.clone());
-        check(func::AddDateTime, BF::AddDateTime, i32_ty.clone());
-        check(func::AddDateInterval, BF::AddDateInterval, i32_ty.clone());
-        check(func::AddTimeInterval, BF::AddTimeInterval, ts_tz_ty.clone());
-        check(func::RoundNumericBinary, BF::RoundNumeric, i32_ty.clone());
+        // TODO: We're passing unexpected column types to the functions here,
+        //   which works because most don't look at the type. We should fix this
+        //   and pass expected column types.
+
+        check(func::AddInt16, BF::AddInt16, &i32_ty, &i32_ty);
+        check(func::AddInt32, BF::AddInt32, &i32_ty, &i32_ty);
+        check(func::AddInt64, BF::AddInt64, &i32_ty, &i32_ty);
+        check(func::AddUint16, BF::AddUInt16, &i32_ty, &i32_ty);
+        check(func::AddUint32, BF::AddUInt32, &i32_ty, &i32_ty);
+        check(func::AddUint64, BF::AddUInt64, &i32_ty, &i32_ty);
+        check(func::AddFloat32, BF::AddFloat32, &i32_ty, &i32_ty);
+        check(func::AddFloat64, BF::AddFloat64, &i32_ty, &i32_ty);
+        check(func::AddDateTime, BF::AddDateTime, &i32_ty, &i32_ty);
+        check(func::AddDateInterval, BF::AddDateInterval, &i32_ty, &i32_ty);
+        check(
+            func::AddTimeInterval,
+            BF::AddTimeInterval,
+            &ts_tz_ty,
+            &i32_ty,
+        );
+        check(func::RoundNumericBinary, BF::RoundNumeric, &i32_ty, &i32_ty);
+        check(func::ConvertFrom, BF::ConvertFrom, &i32_ty, &i32_ty);
+        check(func::Encode, BF::Encode, &i32_ty, &i32_ty);
+        check(
+            func::EncodedBytesCharLength,
+            BF::EncodedBytesCharLength,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(func::AddNumeric, BF::AddNumeric, &i32_ty, &i32_ty);
+        check(func::AddInterval, BF::AddInterval, &i32_ty, &i32_ty);
+        check(func::BitAndInt16, BF::BitAndInt16, &i32_ty, &i32_ty);
+        check(func::BitAndInt32, BF::BitAndInt32, &i32_ty, &i32_ty);
+        check(func::BitAndInt64, BF::BitAndInt64, &i32_ty, &i32_ty);
+        check(func::BitAndUint16, BF::BitAndUInt16, &i32_ty, &i32_ty);
+        check(func::BitAndUint32, BF::BitAndUInt32, &i32_ty, &i32_ty);
+        check(func::BitAndUint64, BF::BitAndUInt64, &i32_ty, &i32_ty);
+        check(func::BitOrInt16, BF::BitOrInt16, &i32_ty, &i32_ty);
+        check(func::BitOrInt32, BF::BitOrInt32, &i32_ty, &i32_ty);
+        check(func::BitOrInt64, BF::BitOrInt64, &i32_ty, &i32_ty);
+        check(func::BitOrUint16, BF::BitOrUInt16, &i32_ty, &i32_ty);
+        check(func::BitOrUint32, BF::BitOrUInt32, &i32_ty, &i32_ty);
+        check(func::BitOrUint64, BF::BitOrUInt64, &i32_ty, &i32_ty);
+        check(func::BitXorInt16, BF::BitXorInt16, &i32_ty, &i32_ty);
+        check(func::BitXorInt32, BF::BitXorInt32, &i32_ty, &i32_ty);
+        check(func::BitXorInt64, BF::BitXorInt64, &i32_ty, &i32_ty);
+        check(func::BitXorUint16, BF::BitXorUInt16, &i32_ty, &i32_ty);
+        check(func::BitXorUint32, BF::BitXorUInt32, &i32_ty, &i32_ty);
+        check(func::BitXorUint64, BF::BitXorUInt64, &i32_ty, &i32_ty);
+
+        check(
+            func::BitShiftLeftInt16,
+            BF::BitShiftLeftInt16,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::BitShiftLeftInt32,
+            BF::BitShiftLeftInt32,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::BitShiftLeftInt64,
+            BF::BitShiftLeftInt64,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::BitShiftLeftUint16,
+            BF::BitShiftLeftUInt16,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::BitShiftLeftUint32,
+            BF::BitShiftLeftUInt32,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::BitShiftLeftUint64,
+            BF::BitShiftLeftUInt64,
+            &i32_ty,
+            &i32_ty,
+        );
+
+        check(
+            func::BitShiftRightInt16,
+            BF::BitShiftRightInt16,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::BitShiftRightInt32,
+            BF::BitShiftRightInt32,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::BitShiftRightInt64,
+            BF::BitShiftRightInt64,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::BitShiftRightUint16,
+            BF::BitShiftRightUInt16,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::BitShiftRightUint32,
+            BF::BitShiftRightUInt32,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::BitShiftRightUint64,
+            BF::BitShiftRightUInt64,
+            &i32_ty,
+            &i32_ty,
+        );
+
+        check(func::SubInt16, BF::SubInt16, &i32_ty, &i32_ty);
+        check(func::SubInt32, BF::SubInt32, &i32_ty, &i32_ty);
+        check(func::SubInt64, BF::SubInt64, &i32_ty, &i32_ty);
+        check(func::SubUint16, BF::SubUInt16, &i32_ty, &i32_ty);
+        check(func::SubUint32, BF::SubUInt32, &i32_ty, &i32_ty);
+        check(func::SubUint64, BF::SubUInt64, &i32_ty, &i32_ty);
+        check(func::SubFloat32, BF::SubFloat32, &i32_ty, &i32_ty);
+        check(func::SubFloat64, BF::SubFloat64, &i32_ty, &i32_ty);
+        check(func::SubNumeric, BF::SubNumeric, &i32_ty, &i32_ty);
+
+        check(func::AgeTimestamp, BF::AgeTimestamp, &i32_ty, &i32_ty);
+        check(func::AgeTimestamptz, BF::AgeTimestampTz, &i32_ty, &i32_ty);
+
+        check(func::SubTimestamp, BF::SubTimestamp, &ts_tz_ty, &i32_ty);
+        check(func::SubTimestamptz, BF::SubTimestampTz, &ts_tz_ty, &i32_ty);
+        check(func::SubDate, BF::SubDate, &i32_ty, &i32_ty);
+        check(func::SubTime, BF::SubTime, &i32_ty, &i32_ty);
+        check(func::SubInterval, BF::SubInterval, &i32_ty, &i32_ty);
+        check(func::SubDateInterval, BF::SubDateInterval, &i32_ty, &i32_ty);
+        check(
+            func::SubTimeInterval,
+            BF::SubTimeInterval,
+            &time_ty,
+            &interval_ty,
+        );
+
+        check(func::MulInt16, BF::MulInt16, &i32_ty, &i32_ty);
+        check(func::MulInt32, BF::MulInt32, &i32_ty, &i32_ty);
+        check(func::MulInt64, BF::MulInt64, &i32_ty, &i32_ty);
+        check(func::MulUint16, BF::MulUInt16, &i32_ty, &i32_ty);
+        check(func::MulUint32, BF::MulUInt32, &i32_ty, &i32_ty);
+        check(func::MulUint64, BF::MulUInt64, &i32_ty, &i32_ty);
+        check(func::MulFloat32, BF::MulFloat32, &i32_ty, &i32_ty);
+        check(func::MulFloat64, BF::MulFloat64, &i32_ty, &i32_ty);
+        check(func::MulNumeric, BF::MulNumeric, &i32_ty, &i32_ty);
+        check(func::MulInterval, BF::MulInterval, &i32_ty, &i32_ty);
+
+        check(func::DivInt16, BF::DivInt16, &i32_ty, &i32_ty);
+        check(func::DivInt32, BF::DivInt32, &i32_ty, &i32_ty);
+        check(func::DivInt64, BF::DivInt64, &i32_ty, &i32_ty);
+        check(func::DivUint16, BF::DivUInt16, &i32_ty, &i32_ty);
+        check(func::DivUint32, BF::DivUInt32, &i32_ty, &i32_ty);
+        check(func::DivUint64, BF::DivUInt64, &i32_ty, &i32_ty);
+        check(func::DivFloat32, BF::DivFloat32, &i32_ty, &i32_ty);
+        check(func::DivFloat64, BF::DivFloat64, &i32_ty, &i32_ty);
+        check(func::DivNumeric, BF::DivNumeric, &i32_ty, &i32_ty);
+        check(func::DivInterval, BF::DivInterval, &i32_ty, &i32_ty);
+
+        check(func::ModInt16, BF::ModInt16, &i32_ty, &i32_ty);
+        check(func::ModInt32, BF::ModInt32, &i32_ty, &i32_ty);
+        check(func::ModInt64, BF::ModInt64, &i32_ty, &i32_ty);
+        check(func::ModUint16, BF::ModUInt16, &i32_ty, &i32_ty);
+        check(func::ModUint32, BF::ModUInt32, &i32_ty, &i32_ty);
+        check(func::ModUint64, BF::ModUInt64, &i32_ty, &i32_ty);
+        check(func::ModFloat32, BF::ModFloat32, &i32_ty, &i32_ty);
+        check(func::ModFloat64, BF::ModFloat64, &i32_ty, &i32_ty);
+        check(func::ModNumeric, BF::ModNumeric, &i32_ty, &i32_ty);
+
+        check(func::ArrayLength, BF::ArrayLength, &i32_ty, &i32_ty);
     }
 }
