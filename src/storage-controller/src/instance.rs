@@ -22,7 +22,8 @@ use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::ReplicaId;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
-use mz_dyncfg::ConfigValHandle;
+use mz_controller_types::dyncfgs::ENABLE_CREATE_SOCKETS_V2;
+use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_ore::retry::{Retry, RetryState};
@@ -35,6 +36,7 @@ use mz_storage_client::client::{
     StorageGrpcClient, StorageResponse,
 };
 use mz_storage_client::metrics::{InstanceMetrics, ReplicaMetrics};
+use mz_storage_types::dyncfgs::STORAGE_SINK_SNAPSHOT_FRONTIER;
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::{IngestionDescription, SourceConnection};
 use timely::order::TotalOrder;
@@ -86,6 +88,8 @@ pub(crate) struct Instance<T> {
     epoch: ClusterStartupEpoch,
     /// Metrics tracked for this storage instance.
     metrics: InstanceMetrics,
+    /// Dynamic system configuration.
+    dyncfg: Arc<ConfigSet>,
     /// A function that returns the current time.
     now: NowFn,
     /// A sender for responses from replicas.
@@ -117,10 +121,11 @@ where
     pub fn new(
         envd_epoch: NonZeroI64,
         metrics: InstanceMetrics,
+        dyncfg: Arc<ConfigSet>,
         now: NowFn,
         instance_response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse<T>)>,
-        enable_snapshot_frontier: ConfigValHandle<bool>,
     ) -> Self {
+        let enable_snapshot_frontier = STORAGE_SINK_SNAPSHOT_FRONTIER.handle(&dyncfg);
         let history = CommandHistory::new(metrics.for_history(), enable_snapshot_frontier);
         let epoch = ClusterStartupEpoch::new(envd_epoch, 0);
 
@@ -133,6 +138,7 @@ where
             history,
             epoch,
             metrics,
+            dyncfg,
             now,
             response_tx: instance_response_tx,
         };
@@ -158,7 +164,14 @@ where
 
         self.epoch.bump_replica();
         let metrics = self.metrics.for_replica(id);
-        let replica = Replica::new(id, config, self.epoch, metrics, self.response_tx.clone());
+        let replica = Replica::new(
+            id,
+            config,
+            self.epoch,
+            metrics,
+            Arc::clone(&self.dyncfg),
+            self.response_tx.clone(),
+        );
 
         self.replicas.insert(id, replica);
 
@@ -791,6 +804,7 @@ where
         config: ReplicaConfig,
         epoch: ClusterStartupEpoch,
         metrics: ReplicaMetrics,
+        dyncfg: Arc<ConfigSet>,
         response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse<T>)>,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
@@ -806,6 +820,7 @@ where
                 connected: Arc::clone(&connected),
                 command_rx,
                 response_tx,
+                dyncfg,
             }
             .run(),
         );
@@ -854,6 +869,8 @@ struct ReplicaTask<T> {
     command_rx: mpsc::UnboundedReceiver<StorageCommand<T>>,
     /// A channel upon which responses from the replica are delivered.
     response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse<T>)>,
+    /// Dynamic system configuration.
+    dyncfg: Arc<ConfigSet>,
 }
 
 impl<T> ReplicaTask<T>
@@ -980,6 +997,7 @@ where
                 enable_zero_copy_lgalloc: false,
                 // No limit; zero-copy is disabled.
                 zero_copy_limit: None,
+                enable_create_sockets_v2: ENABLE_CREATE_SOCKETS_V2.get(&self.dyncfg),
             };
             *epoch = self.epoch;
         }

@@ -36,20 +36,24 @@ pub enum SocketAddrType {
     Inet,
     /// A Unix domain socket address.
     Unix,
+    /// A `turmoil` socket address.
+    Turmoil,
 }
 
 impl SocketAddrType {
     /// Guesses the type of socket address specified by `s`.
     ///
-    /// Socket addresses that are absolute paths, as determined by a leading `/`
-    /// character, are determined to be Unix socket addresses. All other
-    /// addresses are declared to be internet socket addresses. This behavior
-    /// follows PostgreSQL, except that no attempt is made to handle Windows or
-    /// the Unix abstract namespace.
+    /// * Socket addresses that are absolute paths, as determined by a leading `/` character, are
+    ///   determined to be Unix socket addresses.
+    /// * Addresses with a "turmoil:" prefix are determined to be `turmoil` socket addresses.
+    /// * All other addresses are assumed to be internet socket addresses.
     pub fn guess(s: &str) -> SocketAddrType {
-        match s.starts_with('/') {
-            true => SocketAddrType::Unix,
-            false => SocketAddrType::Inet,
+        if s.starts_with('/') {
+            SocketAddrType::Unix
+        } else if s.starts_with("turmoil:") {
+            SocketAddrType::Turmoil
+        } else {
+            SocketAddrType::Inet
         }
     }
 }
@@ -61,6 +65,8 @@ pub enum SocketAddr {
     Inet(InetSocketAddr),
     /// A Unix domain socket address.
     Unix(UnixSocketAddr),
+    /// A `turmoil` socket address.
+    Turmoil(String),
 }
 
 impl PartialEq for SocketAddr {
@@ -71,6 +77,7 @@ impl PartialEq for SocketAddr {
                 SocketAddr::Unix(UnixSocketAddr { path: Some(path1) }),
                 SocketAddr::Unix(UnixSocketAddr { path: Some(path2) }),
             ) => path1 == path2,
+            (SocketAddr::Turmoil(addr1), SocketAddr::Turmoil(addr2)) => addr1 == addr2,
             _ => false,
         }
     }
@@ -81,6 +88,7 @@ impl fmt::Display for SocketAddr {
         match &self {
             SocketAddr::Inet(addr) => addr.fmt(f),
             SocketAddr::Unix(addr) => addr.fmt(f),
+            SocketAddr::Turmoil(addr) => write!(f, "turmoil:{addr}"),
         }
     }
 }
@@ -107,6 +115,12 @@ impl FromStr for SocketAddr {
                     kind: AddrParseErrorKind::Inet,
                 })?;
                 Ok(SocketAddr::Inet(addr))
+            }
+            SocketAddrType::Turmoil => {
+                let addr = s.strip_prefix("turmoil:").ok_or(AddrParseError {
+                    kind: AddrParseErrorKind::Turmoil,
+                })?;
+                Ok(SocketAddr::Turmoil(addr.into()))
             }
         }
     }
@@ -171,6 +185,7 @@ pub struct AddrParseError {
 pub enum AddrParseErrorKind {
     Inet,
     Unix(io::Error),
+    Turmoil,
 }
 
 impl fmt::Display for AddrParseError {
@@ -181,6 +196,7 @@ impl fmt::Display for AddrParseError {
                 f.write_str("invalid unix socket address syntax: ")?;
                 e.fmt(f)
             }
+            AddrParseErrorKind::Turmoil => f.write_str("missing 'turmoil:' prefix"),
         }
     }
 }
@@ -253,12 +269,14 @@ where
 }
 
 /// A listener bound to either a TCP socket or Unix domain socket.
-#[derive(Debug)]
 pub enum Listener {
     /// A TCP listener.
     Tcp(TcpListener),
     /// A Unix domain socket listener.
     Unix(UnixListener),
+    /// A `turmoil` socket listener.
+    #[cfg(feature = "turmoil")]
+    Turmoil(turmoil::net::TcpListener),
 }
 
 impl Listener {
@@ -311,6 +329,13 @@ impl Listener {
                 io::ErrorKind::Other,
                 "cannot bind to unnamed Unix socket",
             )),
+            #[cfg(feature = "turmoil")]
+            SocketAddr::Turmoil(addr) => {
+                let listener = turmoil::net::TcpListener::bind(addr).await?;
+                Ok(Listener::Turmoil(listener))
+            }
+            #[cfg(not(feature = "turmoil"))]
+            SocketAddr::Turmoil(_) => panic!("`turmoil` feature not enabled"),
         }
     }
 
@@ -331,6 +356,13 @@ impl Listener {
                 let addr = SocketAddr::Unix(UnixSocketAddr::unnamed());
                 Ok((stream, addr))
             }
+            #[cfg(feature = "turmoil")]
+            Listener::Turmoil(listener) => {
+                let (stream, addr) = listener.accept().await?;
+                let stream = Stream::Turmoil(stream);
+                let addr = SocketAddr::Inet(addr);
+                Ok((stream, addr))
+            }
         }
     }
 
@@ -348,6 +380,21 @@ impl Listener {
                 let (stream, _addr) = ready!(listener.poll_accept(cx))?;
                 Poll::Ready(Some(Ok(Stream::Unix(stream))))
             }
+            #[cfg(feature = "turmoil")]
+            Listener::Turmoil(_) => {
+                unimplemented!("`turmoil::net::TcpListener::poll_accept`");
+            }
+        }
+    }
+}
+
+impl fmt::Debug for Listener {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Tcp(inner) => f.debug_tuple("Tcp").field(inner).finish(),
+            Self::Unix(inner) => f.debug_tuple("Unix").field(inner).finish(),
+            #[cfg(feature = "turmoil")]
+            Self::Turmoil(_) => f.debug_tuple("Turmoil").finish(),
         }
     }
 }
@@ -367,6 +414,9 @@ pub enum Stream {
     Tcp(TcpStream),
     /// A Unix domain socket stream.
     Unix(UnixStream),
+    /// A `turmoil` socket stream.
+    #[cfg(feature = "turmoil")]
+    Turmoil(turmoil::net::TcpStream),
 }
 
 impl Stream {
@@ -404,6 +454,13 @@ impl Stream {
                 io::ErrorKind::Other,
                 "cannot connected to unnamed Unix socket",
             )),
+            #[cfg(feature = "turmoil")]
+            SocketAddr::Turmoil(addr) => {
+                let stream = turmoil::net::TcpStream::connect(addr).await?;
+                Ok(Stream::Turmoil(stream))
+            }
+            #[cfg(not(feature = "turmoil"))]
+            SocketAddr::Turmoil(_) => panic!("`turmoil` feature not enabled"),
         }
     }
 
@@ -426,6 +483,8 @@ impl Stream {
         match self {
             Stream::Tcp(stream) => stream,
             Stream::Unix(_) => panic!("Stream::unwrap_tcp called on a Unix stream"),
+            #[cfg(feature = "turmoil")]
+            Stream::Turmoil(_) => panic!("Stream::unwrap_tcp called on a `turmoil` stream"),
         }
     }
 
@@ -438,6 +497,8 @@ impl Stream {
         match self {
             Stream::Tcp(_) => panic!("Stream::unwrap_unix called on a TCP stream"),
             Stream::Unix(stream) => stream,
+            #[cfg(feature = "turmoil")]
+            Stream::Turmoil(_) => panic!("Stream::unwrap_unix called on a `turmoil` stream"),
         }
     }
 }
@@ -451,6 +512,8 @@ impl AsyncRead for Stream {
         match self.get_mut() {
             Stream::Tcp(stream) => Pin::new(stream).poll_read(cx, buf),
             Stream::Unix(stream) => Pin::new(stream).poll_read(cx, buf),
+            #[cfg(feature = "turmoil")]
+            Stream::Turmoil(stream) => Pin::new(stream).poll_read(cx, buf),
         }
     }
 }
@@ -460,6 +523,8 @@ impl AsyncWrite for Stream {
         match self.get_mut() {
             Stream::Tcp(stream) => Pin::new(stream).poll_write(cx, buf),
             Stream::Unix(stream) => Pin::new(stream).poll_write(cx, buf),
+            #[cfg(feature = "turmoil")]
+            Stream::Turmoil(stream) => Pin::new(stream).poll_write(cx, buf),
         }
     }
 
@@ -467,6 +532,8 @@ impl AsyncWrite for Stream {
         match self.get_mut() {
             Stream::Tcp(stream) => Pin::new(stream).poll_flush(cx),
             Stream::Unix(stream) => Pin::new(stream).poll_flush(cx),
+            #[cfg(feature = "turmoil")]
+            Stream::Turmoil(stream) => Pin::new(stream).poll_flush(cx),
         }
     }
 
@@ -474,6 +541,8 @@ impl AsyncWrite for Stream {
         match self.get_mut() {
             Stream::Tcp(stream) => Pin::new(stream).poll_shutdown(cx),
             Stream::Unix(stream) => Pin::new(stream).poll_shutdown(cx),
+            #[cfg(feature = "turmoil")]
+            Stream::Turmoil(stream) => Pin::new(stream).poll_shutdown(cx),
         }
     }
 }
@@ -485,6 +554,11 @@ impl Connected for Stream {
         match self {
             Stream::Tcp(stream) => ConnectInfo::Tcp(stream.connect_info()),
             Stream::Unix(stream) => ConnectInfo::Unix(stream.connect_info()),
+            #[cfg(feature = "turmoil")]
+            Stream::Turmoil(stream) => ConnectInfo::Turmoil(TcpConnectInfo {
+                local_addr: stream.local_addr().ok(),
+                remote_addr: stream.peer_addr().ok(),
+            }),
         }
     }
 }
@@ -496,6 +570,8 @@ pub enum ConnectInfo {
     Tcp(TcpConnectInfo),
     /// Unix domain socket connection information.
     Unix(UdsConnectInfo),
+    /// `turmoil` socket conection information.
+    Turmoil(TcpConnectInfo),
 }
 
 #[cfg(test)]
@@ -534,6 +610,10 @@ mod tests {
             ),
             ("1.2.3.4", Err("invalid internet socket address syntax")),
             ("bad", Err("invalid internet socket address syntax")),
+            (
+                "turmoil:1.2.3.4:5678",
+                Ok(SocketAddr::Turmoil("1.2.3.4:5678".into())),
+            ),
         ] {
             let actual = SocketAddr::from_str(input).map_err(|e| e.to_string());
             let expected = expected.map_err(|e| e.to_string());
