@@ -1,6 +1,6 @@
 # Materialize Kubernetes Operator Helm Chart
 
-![Version: v25.2.0-beta.1](https://img.shields.io/badge/Version-v25.2.0--beta.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.141.0-dev.0](https://img.shields.io/badge/AppVersion-v0.141.0--dev.0-informational?style=flat-square)
+![Version: v25.2.0-beta.1](https://img.shields.io/badge/Version-v25.2.0--beta.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.141.0](https://img.shields.io/badge/AppVersion-v0.141.0-informational?style=flat-square)
 
 Materialize Kubernetes Operator Helm Chart
 
@@ -168,7 +168,7 @@ Specify each parameter using the `--set key=value[,key=value]` argument to `helm
 
 ```shell
 helm install my-materialize-operator \
-  --set operator.image.tag=v0.141.0-dev.0 \
+  --set operator.image.tag=v0.141.0 \
   materialize/materialize-operator
 ```
 
@@ -203,7 +203,7 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v0.141.0-dev.0
+  environmentdImageRef: materialize/environmentd:v0.141.0
   backendSecretName: materialize-backend
   environmentdResourceRequirements:
     limits:
