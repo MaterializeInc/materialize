@@ -373,7 +373,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// See [`Client::query_streaming`]
-    pub fn query_streaming<'c, 'p, 'q, Q>(
+    pub fn query_streaming<'c, 'q, Q>(
         &'c mut self,
         query: Q,
         params: &[&dyn tiberius::ToSql],

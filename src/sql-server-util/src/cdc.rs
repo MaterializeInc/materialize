@@ -189,6 +189,8 @@ impl<'a> CdcStream<'a> {
                             // TODO(sql_server3): Can we maybe re-use this BTreeMap or these Vec
                             // allocations? Something to be careful of is shrinking the allocations
                             // if/when they grow to large, e.g. from a large spike of changes.
+                            // Alternatively we could also use a single Vec here since we know the
+                            // changes are ordered by LSN.
                             let mut events: BTreeMap<Lsn, Vec<Operation>> = BTreeMap::default();
                             for change in chunk {
                                 let (lsn, operation) = change.and_then(Operation::try_parse)?;
