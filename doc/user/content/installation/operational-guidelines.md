@@ -78,10 +78,13 @@ In addition, the default [`node_group_instance_types`] has changed from
 
 ## Storage bucket versioning
 
-Starting in v0.2.1 of Materialize on GCP Terraform, storage bucket versioning is
-disabled to facilitate cleanup of resources during testing. When running in
-production, versioning should be turned on with a sufficient TTL to meet any
-data-recovery requirements.
+Starting in v0.3.1 of Materialize on GCP Terraform, storage bucket versioning is
+disabled (i.e.,
+[`storage_bucket_versioning`](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#input_storage_bucket_versioning)
+is set to `false` by default) to facilitate cleanup of resources during testing.
+When running in production, versioning should be turned on with a sufficient TTL
+([`storage_bucket_version_ttl`](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#input_storage_bucket_version_ttl))
+to meet any data-recovery requirements.
 
 ## See also
 
