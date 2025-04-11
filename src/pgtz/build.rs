@@ -31,15 +31,6 @@ enum TimezoneAbbrevSpec<'a> {
 fn main() -> Result<()> {
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").context("Cannot read OUT_DIR env var")?);
 
-    // Build protobufs.
-    {
-        prost_build::Config::new()
-            .protoc_executable(mz_build_tools::protoc())
-            .btree_map(["."])
-            .extern_path(".mz_proto", "::mz_proto")
-            .compile_protos(&["pgtz/src/timezone.proto"], &[".."])?;
-    }
-
     // Convert the default PostgreSQL timezone abbreviation file into a Rust
     // constants, one for each abbrevation in the file, and the SQL definition
     // of the `pg_timezone_abbrevs` view.

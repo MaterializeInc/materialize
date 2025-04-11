@@ -15,7 +15,7 @@ use mz_compute_types::plan::LirId;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError, any_uuid};
+use mz_proto::any_uuid;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_timely_util::progress::any_antichain;
 use proptest::prelude::{Arbitrary, any};
@@ -24,11 +24,6 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use uuid::Uuid;
-
-include!(concat!(
-    env!("OUT_DIR"),
-    "/mz_compute_client.protocol.response.rs"
-));
 
 /// Compute protocol responses, sent by replicas to the compute controller.
 ///
@@ -149,71 +144,6 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     Status(StatusResponse),
 }
 
-impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
-    fn into_proto(&self) -> ProtoComputeResponse {
-        use proto_compute_response::Kind::*;
-        use proto_compute_response::*;
-        ProtoComputeResponse {
-            kind: Some(match self {
-                ComputeResponse::Frontiers(id, resp) => Frontiers(ProtoFrontiersKind {
-                    id: Some(id.into_proto()),
-                    resp: Some(resp.into_proto()),
-                }),
-                ComputeResponse::PeekResponse(id, resp, otel_ctx) => {
-                    PeekResponse(ProtoPeekResponseKind {
-                        id: Some(id.into_proto()),
-                        resp: Some(resp.into_proto()),
-                        otel_ctx: otel_ctx.clone().into(),
-                    })
-                }
-                ComputeResponse::SubscribeResponse(id, resp) => {
-                    SubscribeResponse(ProtoSubscribeResponseKind {
-                        id: Some(id.into_proto()),
-                        resp: Some(resp.into_proto()),
-                    })
-                }
-                ComputeResponse::CopyToResponse(id, resp) => {
-                    CopyToResponse(ProtoCopyToResponseKind {
-                        id: Some(id.into_proto()),
-                        resp: Some(resp.into_proto()),
-                    })
-                }
-                ComputeResponse::Status(resp) => Status(resp.into_proto()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoComputeResponse) -> Result<Self, TryFromProtoError> {
-        use proto_compute_response::Kind::*;
-        match proto.kind {
-            Some(Frontiers(resp)) => Ok(ComputeResponse::Frontiers(
-                resp.id.into_rust_if_some("ProtoFrontiersKind::id")?,
-                resp.resp.into_rust_if_some("ProtoFrontiersKind::resp")?,
-            )),
-            Some(PeekResponse(resp)) => Ok(ComputeResponse::PeekResponse(
-                resp.id.into_rust_if_some("ProtoPeekResponseKind::id")?,
-                resp.resp.into_rust_if_some("ProtoPeekResponseKind::resp")?,
-                resp.otel_ctx.into(),
-            )),
-            Some(SubscribeResponse(resp)) => Ok(ComputeResponse::SubscribeResponse(
-                resp.id
-                    .into_rust_if_some("ProtoSubscribeResponseKind::id")?,
-                resp.resp
-                    .into_rust_if_some("ProtoSubscribeResponseKind::resp")?,
-            )),
-            Some(CopyToResponse(resp)) => Ok(ComputeResponse::CopyToResponse(
-                resp.id.into_rust_if_some("ProtoCopyToResponseKind::id")?,
-                resp.resp
-                    .into_rust_if_some("ProtoCopyToResponseKind::resp")?,
-            )),
-            Some(Status(resp)) => Ok(ComputeResponse::Status(resp.into_rust()?)),
-            None => Err(TryFromProtoError::missing_field(
-                "ProtoComputeResponse::kind",
-            )),
-        }
-    }
-}
-
 impl Arbitrary for ComputeResponse<mz_repr::Timestamp> {
     type Strategy = Union<BoxedStrategy<Self>>;
     type Parameters = ();
@@ -283,24 +213,6 @@ impl<T> FrontiersResponse<T> {
     }
 }
 
-impl RustType<ProtoFrontiersResponse> for FrontiersResponse {
-    fn into_proto(&self) -> ProtoFrontiersResponse {
-        ProtoFrontiersResponse {
-            write_frontier: self.write_frontier.into_proto(),
-            input_frontier: self.input_frontier.into_proto(),
-            output_frontier: self.output_frontier.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoFrontiersResponse) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            write_frontier: proto.write_frontier.into_rust()?,
-            input_frontier: proto.input_frontier.into_rust()?,
-            output_frontier: proto.output_frontier.into_rust()?,
-        })
-    }
-}
-
 impl Arbitrary for FrontiersResponse {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
@@ -328,29 +240,6 @@ pub enum PeekResponse {
     Error(String),
     /// The peek was canceled.
     Canceled,
-}
-
-impl RustType<ProtoPeekResponse> for PeekResponse {
-    fn into_proto(&self) -> ProtoPeekResponse {
-        use proto_peek_response::Kind::*;
-        ProtoPeekResponse {
-            kind: Some(match self {
-                PeekResponse::Rows(rows) => Rows(rows.into_proto()),
-                PeekResponse::Error(err) => proto_peek_response::Kind::Error(err.clone()),
-                PeekResponse::Canceled => Canceled(()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoPeekResponse) -> Result<Self, TryFromProtoError> {
-        use proto_peek_response::Kind::*;
-        match proto.kind {
-            Some(Rows(rows)) => Ok(PeekResponse::Rows(rows.into_rust()?)),
-            Some(proto_peek_response::Kind::Error(err)) => Ok(PeekResponse::Error(err)),
-            Some(Canceled(())) => Ok(PeekResponse::Canceled),
-            None => Err(TryFromProtoError::missing_field("ProtoPeekResponse::kind")),
-        }
-    }
 }
 
 impl Arbitrary for PeekResponse {
@@ -385,31 +274,6 @@ pub enum CopyToResponse {
     Dropped,
 }
 
-impl RustType<ProtoCopyToResponse> for CopyToResponse {
-    fn into_proto(&self) -> ProtoCopyToResponse {
-        use proto_copy_to_response::Kind::*;
-        ProtoCopyToResponse {
-            kind: Some(match self {
-                CopyToResponse::RowCount(rows) => Rows(*rows),
-                CopyToResponse::Error(error) => Error(error.clone()),
-                CopyToResponse::Dropped => Dropped(()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoCopyToResponse) -> Result<Self, TryFromProtoError> {
-        use proto_copy_to_response::Kind::*;
-        match proto.kind {
-            Some(Rows(rows)) => Ok(CopyToResponse::RowCount(rows)),
-            Some(Error(error)) => Ok(CopyToResponse::Error(error)),
-            Some(Dropped(())) => Ok(CopyToResponse::Dropped),
-            None => Err(TryFromProtoError::missing_field(
-                "ProtoCopyToResponse::kind",
-            )),
-        }
-    }
-}
-
 /// Various responses that can be communicated about the progress of a SUBSCRIBE command.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SubscribeResponse<T = mz_repr::Timestamp> {
@@ -424,31 +288,6 @@ impl<T> SubscribeResponse<T> {
     pub fn to_error_if_exceeds(&mut self, max_result_size: usize) {
         if let SubscribeResponse::Batch(batch) = self {
             batch.to_error_if_exceeds(max_result_size);
-        }
-    }
-}
-
-impl RustType<ProtoSubscribeResponse> for SubscribeResponse<mz_repr::Timestamp> {
-    fn into_proto(&self) -> ProtoSubscribeResponse {
-        use proto_subscribe_response::Kind::*;
-        ProtoSubscribeResponse {
-            kind: Some(match self {
-                SubscribeResponse::Batch(subscribe_batch) => Batch(subscribe_batch.into_proto()),
-                SubscribeResponse::DroppedAt(antichain) => DroppedAt(antichain.into_proto()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoSubscribeResponse) -> Result<Self, TryFromProtoError> {
-        use proto_subscribe_response::Kind::*;
-        match proto.kind {
-            Some(Batch(subscribe_batch)) => {
-                Ok(SubscribeResponse::Batch(subscribe_batch.into_rust()?))
-            }
-            Some(DroppedAt(antichain)) => Ok(SubscribeResponse::DroppedAt(antichain.into_rust()?)),
-            None => Err(TryFromProtoError::missing_field(
-                "ProtoSubscribeResponse::kind",
-            )),
         }
     }
 }
@@ -501,67 +340,6 @@ impl<T> SubscribeBatch<T> {
     }
 }
 
-impl RustType<ProtoSubscribeBatch> for SubscribeBatch<mz_repr::Timestamp> {
-    fn into_proto(&self) -> ProtoSubscribeBatch {
-        use proto_subscribe_batch::ProtoUpdate;
-        ProtoSubscribeBatch {
-            lower: Some(self.lower.into_proto()),
-            upper: Some(self.upper.into_proto()),
-            updates: Some(proto_subscribe_batch::ProtoSubscribeBatchContents {
-                kind: match &self.updates {
-                    Ok(updates) => {
-                        let updates = updates
-                            .iter()
-                            .map(|(t, r, d)| ProtoUpdate {
-                                timestamp: t.into(),
-                                row: Some(r.into_proto()),
-                                diff: d.into_proto(),
-                            })
-                            .collect();
-
-                        Some(
-                            proto_subscribe_batch::proto_subscribe_batch_contents::Kind::Updates(
-                                proto_subscribe_batch::ProtoSubscribeUpdates { updates },
-                            ),
-                        )
-                    }
-                    Err(text) => Some(
-                        proto_subscribe_batch::proto_subscribe_batch_contents::Kind::Error(
-                            text.clone(),
-                        ),
-                    ),
-                },
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoSubscribeBatch) -> Result<Self, TryFromProtoError> {
-        Ok(SubscribeBatch {
-            lower: proto.lower.into_rust_if_some("ProtoTailUpdate::lower")?,
-            upper: proto.upper.into_rust_if_some("ProtoTailUpdate::upper")?,
-            updates: match proto.updates.unwrap().kind {
-                Some(proto_subscribe_batch::proto_subscribe_batch_contents::Kind::Updates(
-                    updates,
-                )) => Ok(updates
-                    .updates
-                    .into_iter()
-                    .map(|update| {
-                        Ok((
-                            update.timestamp.into(),
-                            update.row.into_rust_if_some("ProtoUpdate::row")?,
-                            update.diff.into(),
-                        ))
-                    })
-                    .collect::<Result<Vec<_>, TryFromProtoError>>()?),
-                Some(proto_subscribe_batch::proto_subscribe_batch_contents::Kind::Error(text)) => {
-                    Err(text)
-                }
-                None => Err(TryFromProtoError::missing_field("ProtoPeekResponse::kind"))?,
-            },
-        })
-    }
-}
-
 impl Arbitrary for SubscribeBatch<mz_repr::Timestamp> {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
@@ -591,30 +369,6 @@ pub enum StatusResponse {
     OperatorHydration(OperatorHydrationStatus),
 }
 
-impl RustType<ProtoStatusResponse> for StatusResponse {
-    fn into_proto(&self) -> ProtoStatusResponse {
-        use proto_status_response::Kind;
-
-        let kind = match self {
-            Self::OperatorHydration(status) => Kind::OperatorHydration(status.into_proto()),
-        };
-        ProtoStatusResponse { kind: Some(kind) }
-    }
-
-    fn from_proto(proto: ProtoStatusResponse) -> Result<Self, TryFromProtoError> {
-        use proto_status_response::Kind;
-
-        match proto.kind {
-            Some(Kind::OperatorHydration(status)) => {
-                Ok(Self::OperatorHydration(status.into_rust()?))
-            }
-            None => Err(TryFromProtoError::missing_field(
-                "ProtoStatusResponse::kind",
-            )),
-        }
-    }
-}
-
 /// An update about the hydration status of a set of dataflow operators.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct OperatorHydrationStatus {
@@ -626,47 +380,4 @@ pub struct OperatorHydrationStatus {
     pub worker_id: usize,
     /// Whether the node is hydrated on the worker.
     pub hydrated: bool,
-}
-
-impl RustType<ProtoOperatorHydrationStatus> for OperatorHydrationStatus {
-    fn into_proto(&self) -> ProtoOperatorHydrationStatus {
-        ProtoOperatorHydrationStatus {
-            collection_id: Some(self.collection_id.into_proto()),
-            lir_id: self.lir_id.into_proto(),
-            worker_id: self.worker_id.into_proto(),
-            hydrated: self.hydrated.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoOperatorHydrationStatus) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            collection_id: proto
-                .collection_id
-                .into_rust_if_some("ProtoOperatorHydrationStatus::collection_id")?,
-            lir_id: proto.lir_id.into_rust()?,
-            worker_id: proto.worker_id.into_rust()?,
-            hydrated: proto.hydrated.into_rust()?,
-        })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use mz_ore::assert_ok;
-    use mz_proto::protobuf_roundtrip;
-    use proptest::prelude::ProptestConfig;
-    use proptest::proptest;
-
-    use super::*;
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(32))]
-
-        #[mz_ore::test]
-        fn compute_response_protobuf_roundtrip(expect in any::<ComputeResponse<mz_repr::Timestamp>>() ) {
-            let actual = protobuf_roundtrip::<_, ProtoComputeResponse>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
-    }
 }

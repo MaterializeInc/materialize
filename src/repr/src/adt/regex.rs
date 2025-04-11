@@ -15,15 +15,12 @@ use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 
 use mz_lowertest::MzReflect;
-use mz_proto::{RustType, TryFromProtoError};
 use proptest::prelude::any;
 use proptest::prop_compose;
 use regex::{Error, RegexBuilder};
 use serde::de::Error as DeError;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
-
-include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.regex.rs"));
 
 /// A hashable, comparable, and serializable regular expression type.
 ///
@@ -134,24 +131,6 @@ impl Deref for Regex {
 
     fn deref(&self) -> &regex::Regex {
         &self.regex
-    }
-}
-
-impl RustType<ProtoRegex> for Regex {
-    fn into_proto(&self) -> ProtoRegex {
-        ProtoRegex {
-            pattern: self.pattern().to_owned(),
-            case_insensitive: self.case_insensitive,
-            dot_matches_new_line: self.dot_matches_new_line,
-        }
-    }
-
-    fn from_proto(proto: ProtoRegex) -> Result<Self, TryFromProtoError> {
-        Ok(Regex::new_dot_matches_new_line(
-            &proto.pattern,
-            proto.case_insensitive,
-            proto.dot_matches_new_line,
-        )?)
     }
 }
 
@@ -315,21 +294,7 @@ prop_compose! {
 
 #[cfg(test)]
 mod tests {
-    use mz_ore::assert_ok;
-    use mz_proto::protobuf_roundtrip;
-    use proptest::prelude::*;
-
     use super::*;
-
-    proptest! {
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // too slow
-        fn regex_protobuf_roundtrip( expect in any_regex() ) {
-            let actual =  protobuf_roundtrip::<_, ProtoRegex>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
-    }
 
     /// This was failing before due to the derived serde serialization being incorrect, because of
     /// <https://github.com/tailhook/serde-regex/issues/14>.

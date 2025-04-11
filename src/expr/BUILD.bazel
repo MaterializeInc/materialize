@@ -117,16 +117,7 @@ rust_doc_test(
 filegroup(
     name = "all_protos",
     srcs = [
-        "src/id.proto",
-        "src/linear.proto",
-        "src/relation.proto",
-        "src/relation/func.proto",
-        "src/row/collection.proto",
         "src/scalar.proto",
-        "src/scalar/func/format.proto",
-        "src/scalar/like_pattern.proto",
-        "//src/pgtz:all_protos",
-        "//src/proto:all_protos",
         "//src/repr:all_protos",
     ],
 )

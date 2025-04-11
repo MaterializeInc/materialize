@@ -24,7 +24,6 @@ use async_trait::async_trait;
 use tokio::fs;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{self, TcpListener, TcpStream, UnixListener, UnixStream, tcp, unix};
-use tonic::transport::server::{Connected, TcpConnectInfo, UdsConnectInfo};
 use tracing::warn;
 
 use crate::error::ErrorExt;
@@ -493,17 +492,6 @@ impl AsyncWrite for Stream {
     }
 }
 
-impl Connected for Stream {
-    type ConnectInfo = ConnectInfo;
-
-    fn connect_info(&self) -> Self::ConnectInfo {
-        match self {
-            Stream::Tcp(stream) => ConnectInfo::Tcp(stream.connect_info()),
-            Stream::Unix(stream) => ConnectInfo::Unix(stream.connect_info()),
-        }
-    }
-}
-
 /// Read half of a [`Stream`], created by [`Stream::split`].
 #[derive(Debug)]
 pub enum StreamReadHalf {
@@ -552,15 +540,6 @@ impl AsyncWrite for StreamWriteHalf {
             Self::Unix(tx) => Pin::new(tx).poll_shutdown(cx),
         }
     }
-}
-
-/// Connection information for a [`Stream`].
-#[derive(Debug, Clone)]
-pub enum ConnectInfo {
-    /// TCP connection information.
-    Tcp(TcpConnectInfo),
-    /// Unix domain socket connection information.
-    Unix(UdsConnectInfo),
 }
 
 #[cfg(test)]

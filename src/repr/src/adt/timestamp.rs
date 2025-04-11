@@ -112,18 +112,6 @@ impl RustType<ProtoTimestampPrecision> for TimestampPrecision {
     }
 }
 
-impl RustType<ProtoOptionalTimestampPrecision> for Option<TimestampPrecision> {
-    fn into_proto(&self) -> ProtoOptionalTimestampPrecision {
-        ProtoOptionalTimestampPrecision {
-            value: self.into_proto(),
-        }
-    }
-
-    fn from_proto(precision: ProtoOptionalTimestampPrecision) -> Result<Self, TryFromProtoError> {
-        precision.value.into_rust()
-    }
-}
-
 /// The error returned when constructing a [`VarCharMaxLength`] from an invalid
 /// value.
 ///

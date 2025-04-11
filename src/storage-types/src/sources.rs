@@ -33,7 +33,7 @@ use mz_persist_types::stats::{
     ColumnNullStats, ColumnStatKinds, ColumnarStats, ColumnarStatsBuilder, PrimitiveStats,
     StructStats,
 };
-use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{
     CatalogItemId, Datum, GlobalId, ProtoRelationDesc, ProtoRow, RelationDesc, Row,
     RowColumnarDecoder, RowColumnarEncoder, arb_row_for_relation,
@@ -53,10 +53,9 @@ use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
-use crate::controller::{AlterError, CollectionMetadata};
+use crate::controller::AlterError;
 use crate::errors::{DataflowError, ProtoDataflowError};
 use crate::instances::StorageInstanceId;
-use crate::sources::proto_ingestion_description::{ProtoSourceExport, ProtoSourceImport};
 use crate::sources::sql_server::SqlServerSourceExportDetails;
 
 pub mod encoding;
@@ -255,83 +254,6 @@ pub struct SourceExport<S = (), C: ConnectionAccess = InlinedConnection> {
     pub data_config: SourceExportDataConfig<C>,
 }
 
-impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMetadata> {
-    fn into_proto(&self) -> ProtoIngestionDescription {
-        ProtoIngestionDescription {
-            source_exports: self.source_exports.into_proto(),
-            ingestion_metadata: Some(self.ingestion_metadata.into_proto()),
-            desc: Some(self.desc.into_proto()),
-            instance_id: Some(self.instance_id.into_proto()),
-            remap_collection_id: Some(self.remap_collection_id.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoIngestionDescription) -> Result<Self, TryFromProtoError> {
-        Ok(IngestionDescription {
-            source_exports: proto.source_exports.into_rust()?,
-            desc: proto
-                .desc
-                .into_rust_if_some("ProtoIngestionDescription::desc")?,
-            ingestion_metadata: proto
-                .ingestion_metadata
-                .into_rust_if_some("ProtoIngestionDescription::ingestion_metadata")?,
-            instance_id: proto
-                .instance_id
-                .into_rust_if_some("ProtoIngestionDescription::instance_id")?,
-            remap_collection_id: proto
-                .remap_collection_id
-                .into_rust_if_some("ProtoIngestionDescription::remap_collection_id")?,
-        })
-    }
-}
-
-impl ProtoMapEntry<GlobalId, CollectionMetadata> for ProtoSourceImport {
-    fn from_rust<'a>(entry: (&'a GlobalId, &'a CollectionMetadata)) -> Self {
-        ProtoSourceImport {
-            id: Some(entry.0.into_proto()),
-            storage_metadata: Some(entry.1.into_proto()),
-        }
-    }
-
-    fn into_rust(self) -> Result<(GlobalId, CollectionMetadata), TryFromProtoError> {
-        Ok((
-            self.id.into_rust_if_some("ProtoSourceImport::id")?,
-            self.storage_metadata
-                .into_rust_if_some("ProtoSourceImport::storage_metadata")?,
-        ))
-    }
-}
-
-impl ProtoMapEntry<GlobalId, SourceExport<CollectionMetadata>> for ProtoSourceExport {
-    fn from_rust<'a>(
-        (id, source_export): (&'a GlobalId, &'a SourceExport<CollectionMetadata>),
-    ) -> Self {
-        ProtoSourceExport {
-            id: Some(id.into_proto()),
-            storage_metadata: Some(source_export.storage_metadata.into_proto()),
-            details: Some(source_export.details.into_proto()),
-            data_config: Some(source_export.data_config.into_proto()),
-        }
-    }
-
-    fn into_rust(self) -> Result<(GlobalId, SourceExport<CollectionMetadata>), TryFromProtoError> {
-        Ok((
-            self.id.into_rust_if_some("ProtoSourceExport::id")?,
-            SourceExport {
-                storage_metadata: self
-                    .storage_metadata
-                    .into_rust_if_some("ProtoSourceExport::storage_metadata")?,
-                details: self
-                    .details
-                    .into_rust_if_some("ProtoSourceExport::details")?,
-                data_config: self
-                    .data_config
-                    .into_rust_if_some("ProtoSourceExport::data_config")?,
-            },
-        ))
-    }
-}
-
 pub trait SourceTimestamp:
     Timestamp + Columnation + Refines<()> + std::fmt::Display + Sync
 {
@@ -404,20 +326,6 @@ impl mz_persist_types::Codec64 for MzOffset {
 
 impl columnation::Columnation for MzOffset {
     type InnerRegion = columnation::CopyRegion<MzOffset>;
-}
-
-impl RustType<ProtoMzOffset> for MzOffset {
-    fn into_proto(&self) -> ProtoMzOffset {
-        ProtoMzOffset {
-            offset: self.offset,
-        }
-    }
-
-    fn from_proto(proto: ProtoMzOffset) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            offset: proto.offset,
-        })
-    }
 }
 
 impl MzOffset {
@@ -557,31 +465,6 @@ impl Timeline {
     }
 }
 
-impl RustType<ProtoTimeline> for Timeline {
-    fn into_proto(&self) -> ProtoTimeline {
-        use proto_timeline::Kind;
-        ProtoTimeline {
-            kind: Some(match self {
-                Timeline::EpochMilliseconds => Kind::EpochMilliseconds(()),
-                Timeline::External(s) => Kind::External(s.clone()),
-                Timeline::User(s) => Kind::User(s.clone()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoTimeline) -> Result<Self, TryFromProtoError> {
-        use proto_timeline::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoTimeline::kind"))?;
-        Ok(match kind {
-            Kind::EpochMilliseconds(()) => Timeline::EpochMilliseconds,
-            Kind::External(s) => Timeline::External(s),
-            Kind::User(s) => Timeline::User(s),
-        })
-    }
-}
-
 impl ToString for Timeline {
     fn to_string(&self) -> String {
         match self {
@@ -662,31 +545,6 @@ pub enum Compression {
     None,
 }
 
-impl RustType<ProtoCompression> for Compression {
-    fn into_proto(&self) -> ProtoCompression {
-        use proto_compression::Kind;
-        ProtoCompression {
-            kind: Some(match self {
-                Compression::Gzip => Kind::Gzip(()),
-                Compression::None => Kind::None(()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoCompression) -> Result<Self, TryFromProtoError> {
-        use proto_compression::Kind;
-        Ok(match proto.kind {
-            Some(Kind::Gzip(())) => Compression::Gzip,
-            Some(Kind::None(())) => Compression::None,
-            None => {
-                return Err(TryFromProtoError::MissingField(
-                    "ProtoCompression::kind".into(),
-                ));
-            }
-        })
-    }
-}
-
 /// Defines the configuration for how to handle data that is exported for a given
 /// Source Export.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
@@ -705,24 +563,6 @@ impl<R: ConnectionResolver> IntoInlineConnection<SourceExportDataConfig, R>
             encoding: encoding.map(|e| e.into_inline_connection(r)),
             envelope,
         }
-    }
-}
-
-impl RustType<ProtoSourceExportDataConfig> for SourceExportDataConfig {
-    fn into_proto(&self) -> ProtoSourceExportDataConfig {
-        ProtoSourceExportDataConfig {
-            encoding: self.encoding.into_proto(),
-            envelope: Some(self.envelope.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoSourceExportDataConfig) -> Result<Self, TryFromProtoError> {
-        Ok(SourceExportDataConfig {
-            encoding: proto.encoding.into_rust()?,
-            envelope: proto
-                .envelope
-                .into_rust_if_some("ProtoSourceExportDataConfig::envelope")?,
-        })
     }
 }
 
@@ -818,34 +658,6 @@ impl<R: ConnectionResolver> IntoInlineConnection<SourceDesc, R>
             primary_export_details,
             timestamp_interval,
         }
-    }
-}
-
-impl RustType<ProtoSourceDesc> for SourceDesc {
-    fn into_proto(&self) -> ProtoSourceDesc {
-        ProtoSourceDesc {
-            connection: Some(self.connection.into_proto()),
-            primary_export: Some(self.primary_export.into_proto()),
-            primary_export_details: Some(self.primary_export_details.into_proto()),
-            timestamp_interval: Some(self.timestamp_interval.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoSourceDesc) -> Result<Self, TryFromProtoError> {
-        Ok(SourceDesc {
-            connection: proto
-                .connection
-                .into_rust_if_some("ProtoSourceDesc::connection")?,
-            primary_export: proto
-                .primary_export
-                .into_rust_if_some("ProtoSourceDesc::primary_export")?,
-            primary_export_details: proto
-                .primary_export_details
-                .into_rust_if_some("ProtoSourceDesc::primary_export_details")?,
-            timestamp_interval: proto
-                .timestamp_interval
-                .into_rust_if_some("ProtoSourceDesc::timestamp_interval")?,
-        })
     }
 }
 
@@ -1091,43 +903,6 @@ impl<C: ConnectionAccess> crate::AlterCompatible for GenericSourceConnection<C> 
     }
 }
 
-impl RustType<ProtoSourceConnection> for GenericSourceConnection<InlinedConnection> {
-    fn into_proto(&self) -> ProtoSourceConnection {
-        use proto_source_connection::Kind;
-        ProtoSourceConnection {
-            kind: Some(match self {
-                GenericSourceConnection::Kafka(kafka) => Kind::Kafka(kafka.into_proto()),
-                GenericSourceConnection::Postgres(postgres) => {
-                    Kind::Postgres(postgres.into_proto())
-                }
-                GenericSourceConnection::MySql(mysql) => Kind::Mysql(mysql.into_proto()),
-                GenericSourceConnection::SqlServer(sql_server) => {
-                    Kind::SqlServer(sql_server.into_proto())
-                }
-                GenericSourceConnection::LoadGenerator(loadgen) => {
-                    Kind::Loadgen(loadgen.into_proto())
-                }
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoSourceConnection) -> Result<Self, TryFromProtoError> {
-        use proto_source_connection::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoSourceConnection::kind"))?;
-        Ok(match kind {
-            Kind::Kafka(kafka) => GenericSourceConnection::Kafka(kafka.into_rust()?),
-            Kind::Postgres(postgres) => GenericSourceConnection::Postgres(postgres.into_rust()?),
-            Kind::Mysql(mysql) => GenericSourceConnection::MySql(mysql.into_rust()?),
-            Kind::SqlServer(sql_server) => {
-                GenericSourceConnection::SqlServer(sql_server.into_rust()?)
-            }
-            Kind::Loadgen(loadgen) => GenericSourceConnection::LoadGenerator(loadgen.into_rust()?),
-        })
-    }
-}
-
 /// Details necessary for each source export to allow the source implementations
 /// to export data to the export's collection.
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1165,42 +940,6 @@ impl crate::AlterCompatible for SourceExportDetails {
         }
 
         r
-    }
-}
-
-impl RustType<ProtoSourceExportDetails> for SourceExportDetails {
-    fn into_proto(&self) -> ProtoSourceExportDetails {
-        use proto_source_export_details::Kind;
-        ProtoSourceExportDetails {
-            kind: match self {
-                SourceExportDetails::None => None,
-                SourceExportDetails::Kafka(details) => Some(Kind::Kafka(details.into_proto())),
-                SourceExportDetails::Postgres(details) => {
-                    Some(Kind::Postgres(details.into_proto()))
-                }
-                SourceExportDetails::MySql(details) => Some(Kind::Mysql(details.into_proto())),
-                SourceExportDetails::SqlServer(details) => {
-                    Some(Kind::SqlServer(details.into_proto()))
-                }
-                SourceExportDetails::LoadGenerator(details) => {
-                    Some(Kind::Loadgen(details.into_proto()))
-                }
-            },
-        }
-    }
-
-    fn from_proto(proto: ProtoSourceExportDetails) -> Result<Self, TryFromProtoError> {
-        use proto_source_export_details::Kind;
-        Ok(match proto.kind {
-            None => SourceExportDetails::None,
-            Some(Kind::Kafka(details)) => SourceExportDetails::Kafka(details.into_rust()?),
-            Some(Kind::Postgres(details)) => SourceExportDetails::Postgres(details.into_rust()?),
-            Some(Kind::Mysql(details)) => SourceExportDetails::MySql(details.into_rust()?),
-            Some(Kind::SqlServer(details)) => SourceExportDetails::SqlServer(details.into_rust()?),
-            Some(Kind::Loadgen(details)) => {
-                SourceExportDetails::LoadGenerator(details.into_rust()?)
-            }
-        })
     }
 }
 

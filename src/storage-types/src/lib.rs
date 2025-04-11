@@ -12,7 +12,6 @@
 
 //! Shared types for the `mz-storage*` crates
 
-pub mod collections;
 pub mod configuration;
 pub mod connections;
 pub mod controller;

@@ -17,26 +17,19 @@ use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigUpdates;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError, any_uuid};
+use mz_proto::any_uuid;
 use mz_repr::{GlobalId, Row};
 use mz_service::params::GrpcClientParameters;
-use mz_storage_client::client::ProtoCompaction;
 use mz_storage_types::controller::CollectionMetadata;
-use mz_timely_util::progress::any_antichain;
 use mz_tracing::params::TracingParameters;
-use proptest::prelude::{Arbitrary, any};
-use proptest::strategy::{BoxedStrategy, Strategy, Union};
+use proptest::prelude::any;
+use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use uuid::Uuid;
 
 use crate::logging::LoggingConfig;
-
-include!(concat!(
-    env!("OUT_DIR"),
-    "/mz_compute_client.protocol.command.rs"
-));
 
 /// Compute protocol commands, sent by the compute controller to replicas.
 ///
@@ -271,100 +264,6 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     },
 }
 
-impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
-    fn into_proto(&self) -> ProtoComputeCommand {
-        use proto_compute_command::Kind::*;
-        use proto_compute_command::*;
-        ProtoComputeCommand {
-            kind: Some(match self {
-                ComputeCommand::CreateTimely { config, epoch } => CreateTimely(ProtoCreateTimely {
-                    config: Some(config.into_proto()),
-                    epoch: Some(epoch.into_proto()),
-                }),
-                ComputeCommand::CreateInstance(config) => CreateInstance(config.into_proto()),
-                ComputeCommand::InitializationComplete => InitializationComplete(()),
-                ComputeCommand::UpdateConfiguration(params) => {
-                    UpdateConfiguration(params.into_proto())
-                }
-                ComputeCommand::CreateDataflow(dataflow) => CreateDataflow(dataflow.into_proto()),
-                ComputeCommand::Schedule(id) => Schedule(id.into_proto()),
-                ComputeCommand::AllowCompaction { id, frontier } => {
-                    AllowCompaction(ProtoCompaction {
-                        id: Some(id.into_proto()),
-                        frontier: Some(frontier.into_proto()),
-                    })
-                }
-                ComputeCommand::Peek(peek) => Peek(peek.into_proto()),
-                ComputeCommand::CancelPeek { uuid } => CancelPeek(uuid.into_proto()),
-                ComputeCommand::AllowWrites => AllowWrites(()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoComputeCommand) -> Result<Self, TryFromProtoError> {
-        use proto_compute_command::Kind::*;
-        use proto_compute_command::*;
-        match proto.kind {
-            Some(CreateTimely(ProtoCreateTimely { config, epoch })) => {
-                Ok(ComputeCommand::CreateTimely {
-                    config: config.into_rust_if_some("ProtoCreateTimely::config")?,
-                    epoch: epoch.into_rust_if_some("ProtoCreateTimely::epoch")?,
-                })
-            }
-            Some(CreateInstance(config)) => Ok(ComputeCommand::CreateInstance(config.into_rust()?)),
-            Some(InitializationComplete(())) => Ok(ComputeCommand::InitializationComplete),
-            Some(UpdateConfiguration(params)) => {
-                Ok(ComputeCommand::UpdateConfiguration(params.into_rust()?))
-            }
-            Some(CreateDataflow(dataflow)) => {
-                Ok(ComputeCommand::CreateDataflow(dataflow.into_rust()?))
-            }
-            Some(Schedule(id)) => Ok(ComputeCommand::Schedule(id.into_rust()?)),
-            Some(AllowCompaction(ProtoCompaction { id, frontier })) => {
-                Ok(ComputeCommand::AllowCompaction {
-                    id: id.into_rust_if_some("ProtoAllowCompaction::id")?,
-                    frontier: frontier.into_rust_if_some("ProtoAllowCompaction::frontier")?,
-                })
-            }
-            Some(Peek(peek)) => Ok(ComputeCommand::Peek(peek.into_rust()?)),
-            Some(CancelPeek(uuid)) => Ok(ComputeCommand::CancelPeek {
-                uuid: uuid.into_rust()?,
-            }),
-            Some(AllowWrites(())) => Ok(ComputeCommand::AllowWrites),
-            None => Err(TryFromProtoError::missing_field(
-                "ProtoComputeCommand::kind",
-            )),
-        }
-    }
-}
-
-impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
-    type Strategy = Union<BoxedStrategy<Self>>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        Union::new(vec![
-            any::<InstanceConfig>()
-                .prop_map(ComputeCommand::CreateInstance)
-                .boxed(),
-            any::<ComputeParameters>()
-                .prop_map(ComputeCommand::UpdateConfiguration)
-                .boxed(),
-            any::<DataflowDescription<RenderPlan, CollectionMetadata, mz_repr::Timestamp>>()
-                .prop_map(ComputeCommand::CreateDataflow)
-                .boxed(),
-            any::<GlobalId>().prop_map(ComputeCommand::Schedule).boxed(),
-            (any::<GlobalId>(), any_antichain())
-                .prop_map(|(id, frontier)| ComputeCommand::AllowCompaction { id, frontier })
-                .boxed(),
-            any::<Peek>().prop_map(ComputeCommand::Peek).boxed(),
-            any_uuid()
-                .prop_map(|uuid| ComputeCommand::CancelPeek { uuid })
-                .boxed(),
-        ])
-    }
-}
-
 /// Configuration for a replica, passed with the `CreateInstance`. Replicas should halt
 /// if the controller attempt to reconcile them with different values
 /// for anything in this struct.
@@ -408,29 +307,11 @@ impl InstanceConfig {
     }
 }
 
-impl RustType<ProtoInstanceConfig> for InstanceConfig {
-    fn into_proto(&self) -> ProtoInstanceConfig {
-        ProtoInstanceConfig {
-            logging: Some(self.logging.into_proto()),
-            expiration_offset: self.expiration_offset.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoInstanceConfig) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            logging: proto
-                .logging
-                .into_rust_if_some("ProtoCreateInstance::logging")?,
-            expiration_offset: proto.expiration_offset.into_rust()?,
-        })
-    }
-}
-
 /// Compute instance configuration parameters.
 ///
 /// Parameters can be set (`Some`) or unset (`None`).
 /// Unset parameters should be interpreted to mean "use the previous value".
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ComputeParameters {
     /// An optional arbitrary string that describes the class of the workload
     /// this compute instance is running (e.g., `production` or `staging`).
@@ -485,46 +366,6 @@ impl ComputeParameters {
     /// Return whether all parameters are unset.
     pub fn all_unset(&self) -> bool {
         *self == Self::default()
-    }
-}
-
-impl RustType<ProtoComputeParameters> for ComputeParameters {
-    fn into_proto(&self) -> ProtoComputeParameters {
-        ProtoComputeParameters {
-            workload_class: self.workload_class.into_proto(),
-            max_result_size: self.max_result_size.into_proto(),
-            tracing: Some(self.tracing.into_proto()),
-            grpc_client: Some(self.grpc_client.into_proto()),
-            dyncfg_updates: Some(self.dyncfg_updates.clone()),
-        }
-    }
-
-    fn from_proto(proto: ProtoComputeParameters) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            workload_class: proto.workload_class.into_rust()?,
-            max_result_size: proto.max_result_size.into_rust()?,
-            tracing: proto
-                .tracing
-                .into_rust_if_some("ProtoComputeParameters::tracing")?,
-            grpc_client: proto
-                .grpc_client
-                .into_rust_if_some("ProtoComputeParameters::grpc_client")?,
-            dyncfg_updates: proto.dyncfg_updates.ok_or_else(|| {
-                TryFromProtoError::missing_field("ProtoComputeParameters::dyncfg_updates")
-            })?,
-        })
-    }
-}
-
-impl RustType<ProtoWorkloadClass> for Option<String> {
-    fn into_proto(&self) -> ProtoWorkloadClass {
-        ProtoWorkloadClass {
-            value: self.clone(),
-        }
-    }
-
-    fn from_proto(proto: ProtoWorkloadClass) -> Result<Self, TryFromProtoError> {
-        Ok(proto.value)
     }
 }
 
@@ -608,67 +449,6 @@ pub struct Peek<T = mz_repr::Timestamp> {
     pub otel_ctx: OpenTelemetryContext,
 }
 
-impl RustType<ProtoPeek> for Peek {
-    fn into_proto(&self) -> ProtoPeek {
-        ProtoPeek {
-            key: match &self.literal_constraints {
-                // In the Some case, the vector is never empty, so it's safe to encode None as an
-                // empty vector, and Some(vector) as just the vector.
-                Some(vec) => {
-                    assert!(!vec.is_empty());
-                    vec.into_proto()
-                }
-                None => Vec::<Row>::new().into_proto(),
-            },
-            uuid: Some(self.uuid.into_proto()),
-            timestamp: self.timestamp.into(),
-            finishing: Some(self.finishing.into_proto()),
-            map_filter_project: Some(self.map_filter_project.into_proto()),
-            otel_ctx: self.otel_ctx.clone().into(),
-            target: Some(match &self.target {
-                PeekTarget::Index { id } => proto_peek::Target::Index(ProtoIndexTarget {
-                    id: Some(id.into_proto()),
-                }),
-
-                PeekTarget::Persist { id, metadata } => {
-                    proto_peek::Target::Persist(ProtoPersistTarget {
-                        id: Some(id.into_proto()),
-                        metadata: Some(metadata.into_proto()),
-                    })
-                }
-            }),
-        }
-    }
-
-    fn from_proto(x: ProtoPeek) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            literal_constraints: {
-                let vec: Vec<Row> = x.key.into_rust()?;
-                if vec.is_empty() { None } else { Some(vec) }
-            },
-            uuid: x.uuid.into_rust_if_some("ProtoPeek::uuid")?,
-            timestamp: x.timestamp.into(),
-            finishing: x.finishing.into_rust_if_some("ProtoPeek::finishing")?,
-            map_filter_project: x
-                .map_filter_project
-                .into_rust_if_some("ProtoPeek::map_filter_project")?,
-            otel_ctx: x.otel_ctx.into(),
-            target: match x.target {
-                Some(proto_peek::Target::Index(target)) => PeekTarget::Index {
-                    id: target.id.into_rust_if_some("ProtoIndexTarget::id")?,
-                },
-                Some(proto_peek::Target::Persist(target)) => PeekTarget::Persist {
-                    id: target.id.into_rust_if_some("ProtoPersistTarget::id")?,
-                    metadata: target
-                        .metadata
-                        .into_rust_if_some("ProtoPersistTarget::metadata")?,
-                },
-                None => return Err(TryFromProtoError::missing_field("ProtoPeek::target")),
-            },
-        })
-    }
-}
-
 fn empty_otel_ctx() -> impl Strategy<Value = OpenTelemetryContext> {
     (0..1).prop_map(|_| OpenTelemetryContext::empty())
 }
@@ -678,35 +458,6 @@ impl TryIntoTimelyConfig for ComputeCommand {
         match self {
             ComputeCommand::CreateTimely { config, epoch } => Ok((config, epoch)),
             cmd => Err(cmd),
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use mz_ore::assert_ok;
-    use mz_proto::protobuf_roundtrip;
-    use proptest::prelude::ProptestConfig;
-    use proptest::proptest;
-
-    use super::*;
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(32))]
-
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
-        fn peek_protobuf_roundtrip(expect in any::<Peek>() ) {
-            let actual = protobuf_roundtrip::<_, ProtoPeek>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
-
-        #[mz_ore::test]
-        fn compute_command_protobuf_roundtrip(expect in any::<ComputeCommand<mz_repr::Timestamp>>() ) {
-            let actual = protobuf_roundtrip::<_, ProtoComputeCommand>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
         }
     }
 }

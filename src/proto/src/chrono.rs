@@ -14,8 +14,6 @@
 //!
 //! [^1]: <https://altsysrq.github.io/proptest-book/proptest-derive/modifiers.html#strategy>
 
-use std::str::FromStr;
-
 use chrono::{
     DateTime, Datelike, Duration, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc,
 };
@@ -105,37 +103,6 @@ impl RustType<ProtoNaiveDateTime> for DateTime<Utc> {
     }
 }
 
-impl RustType<ProtoFixedOffset> for FixedOffset {
-    fn into_proto(&self) -> ProtoFixedOffset {
-        ProtoFixedOffset {
-            local_minus_utc: self.local_minus_utc(),
-        }
-    }
-
-    fn from_proto(proto: ProtoFixedOffset) -> Result<Self, TryFromProtoError> {
-        FixedOffset::east_opt(proto.local_minus_utc).ok_or_else(|| {
-            TryFromProtoError::DateConversionError(format!(
-                "FixedOffset::east_opt({}) failed.",
-                proto.local_minus_utc
-            ))
-        })
-    }
-}
-
-/// Encode a Tz as string representation. This is not the most space efficient solution, but
-/// it is immune to changes in the chrono_tz (and is fully compatible with its public API).
-impl RustType<ProtoTz> for chrono_tz::Tz {
-    fn into_proto(&self) -> ProtoTz {
-        ProtoTz {
-            name: self.name().into(),
-        }
-    }
-
-    fn from_proto(proto: ProtoTz) -> Result<Self, TryFromProtoError> {
-        Tz::from_str(&proto.name).map_err(TryFromProtoError::DateConversionError)
-    }
-}
-
 pub fn any_naive_date() -> impl Strategy<Value = NaiveDate> {
     (0..1000000).prop_map(|d| NaiveDate::from_num_days_from_ce_opt(d).unwrap())
 }
@@ -188,14 +155,6 @@ mod tests {
         #[cfg_attr(miri, ignore)] // too slow
         fn date_time_protobuf_roundtrip(expect in any_datetime() ) {
             let actual = protobuf_roundtrip::<_, ProtoNaiveDateTime>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
-
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // too slow
-        fn fixed_offset_protobuf_roundtrip(expect in any_fixed_offset() ) {
-            let actual = protobuf_roundtrip::<_, ProtoFixedOffset>(&expect);
             assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }

@@ -15,7 +15,6 @@ use std::time::Duration;
 use mz_ore::future::{InTask, OreFutureExt};
 use mz_ore::option::OptionExt;
 use mz_ore::task;
-use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::CatalogItemId;
 use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig};
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
@@ -28,8 +27,6 @@ use tokio_postgres::tls::MakeTlsConnect;
 use tracing::{info, warn};
 
 use crate::PostgresError;
-
-include!(concat!(env!("OUT_DIR"), "/mz_postgres_util.tunnel.rs"));
 
 macro_rules! bail_generic {
     ($fmt:expr, $($arg:tt)*) => {
@@ -125,26 +122,6 @@ pub enum PostgresFlavor {
     Vanilla,
     /// A Yugabyte server.
     Yugabyte,
-}
-
-impl RustType<ProtoPostgresFlavor> for PostgresFlavor {
-    fn into_proto(&self) -> ProtoPostgresFlavor {
-        let kind = match self {
-            PostgresFlavor::Vanilla => proto_postgres_flavor::Kind::Vanilla(()),
-            PostgresFlavor::Yugabyte => proto_postgres_flavor::Kind::Yugabyte(()),
-        };
-        ProtoPostgresFlavor { kind: Some(kind) }
-    }
-
-    fn from_proto(proto: ProtoPostgresFlavor) -> Result<Self, TryFromProtoError> {
-        let flavor = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("kind"))?;
-        Ok(match flavor {
-            proto_postgres_flavor::Kind::Vanilla(()) => PostgresFlavor::Vanilla,
-            proto_postgres_flavor::Kind::Yugabyte(()) => PostgresFlavor::Yugabyte,
-        })
-    }
 }
 
 /// Configuration for PostgreSQL connections.

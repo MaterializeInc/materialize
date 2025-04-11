@@ -12,7 +12,6 @@
 #![warn(missing_debug_implementations)]
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::num::NonZeroU64;
 
 use columnar::Columnar;
 use mz_expr::{
@@ -21,7 +20,6 @@ use mz_expr::{
 };
 use mz_ore::soft_assert_eq_no_log;
 use mz_ore::str::Indent;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::explain::text::text_string_at;
 use mz_repr::explain::{DummyHumanizer, ExplainConfig, ExprHumanizer, PlanRenderingContext};
 use mz_repr::optimize::OptimizerFeatures;
@@ -34,7 +32,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::dataflows::DataflowDescription;
 use crate::plan::join::JoinPlan;
-use crate::plan::proto_available_collections::ProtoColumnTypes;
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
@@ -49,8 +46,6 @@ pub mod render_plan;
 pub mod threshold;
 pub mod top_k;
 pub mod transform;
-
-include!(concat!(env!("OUT_DIR"), "/mz_compute_types.plan.rs"));
 
 /// The forms in which an operator's output is available.
 ///
@@ -89,38 +84,6 @@ pub(crate) fn any_arranged_thin()
         Vec::<usize>::arbitrary(),
         Vec::<usize>::arbitrary(),
     )
-}
-
-impl RustType<ProtoColumnTypes> for Vec<ColumnType> {
-    fn into_proto(&self) -> ProtoColumnTypes {
-        ProtoColumnTypes {
-            types: self.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoColumnTypes) -> Result<Self, TryFromProtoError> {
-        proto.types.into_rust()
-    }
-}
-
-impl RustType<ProtoAvailableCollections> for AvailableCollections {
-    fn into_proto(&self) -> ProtoAvailableCollections {
-        ProtoAvailableCollections {
-            raw: self.raw,
-            arranged: self.arranged.into_proto(),
-            types: self.types.into_proto(),
-        }
-    }
-
-    fn from_proto(x: ProtoAvailableCollections) -> Result<Self, TryFromProtoError> {
-        Ok({
-            Self {
-                raw: x.raw,
-                arranged: x.arranged.into_rust()?,
-                types: x.types.into_rust()?,
-            }
-        })
-    }
 }
 
 impl AvailableCollections {
@@ -180,16 +143,6 @@ impl From<LirId> for u64 {
 impl std::fmt::Display for LirId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
-    }
-}
-
-impl RustType<u64> for LirId {
-    fn into_proto(&self) -> u64 {
-        self.0
-    }
-
-    fn from_proto(proto: u64) -> Result<Self, mz_proto::TryFromProtoError> {
-        Ok(Self(proto))
     }
 }
 
@@ -716,59 +669,6 @@ pub enum GetPlan {
     Collection(MapFilterProject),
 }
 
-impl RustType<ProtoGetPlan> for GetPlan {
-    fn into_proto(&self) -> ProtoGetPlan {
-        use proto_get_plan::Kind::*;
-
-        ProtoGetPlan {
-            kind: Some(match self {
-                GetPlan::PassArrangements => PassArrangements(()),
-                GetPlan::Arrangement(k, s, m) => {
-                    Arrangement(proto_get_plan::ProtoGetPlanArrangement {
-                        key: k.into_proto(),
-                        seek: s.into_proto(),
-                        mfp: Some(m.into_proto()),
-                    })
-                }
-                GetPlan::Collection(mfp) => Collection(mfp.into_proto()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoGetPlan) -> Result<Self, TryFromProtoError> {
-        use proto_get_plan::Kind::*;
-        use proto_get_plan::ProtoGetPlanArrangement;
-        match proto.kind {
-            Some(PassArrangements(())) => Ok(GetPlan::PassArrangements),
-            Some(Arrangement(ProtoGetPlanArrangement { key, seek, mfp })) => {
-                Ok(GetPlan::Arrangement(
-                    key.into_rust()?,
-                    seek.into_rust()?,
-                    mfp.into_rust_if_some("ProtoGetPlanArrangement::mfp")?,
-                ))
-            }
-            Some(Collection(mfp)) => Ok(GetPlan::Collection(mfp.into_rust()?)),
-            None => Err(TryFromProtoError::missing_field("ProtoGetPlan::kind")),
-        }
-    }
-}
-
-impl RustType<ProtoLetRecLimit> for LetRecLimit {
-    fn into_proto(&self) -> ProtoLetRecLimit {
-        ProtoLetRecLimit {
-            max_iters: self.max_iters.get(),
-            return_at_limit: self.return_at_limit,
-        }
-    }
-
-    fn from_proto(proto: ProtoLetRecLimit) -> Result<Self, TryFromProtoError> {
-        Ok(LetRecLimit {
-            max_iters: NonZeroU64::new(proto.max_iters).expect("max_iters > 0"),
-            return_at_limit: proto.return_at_limit,
-        })
-    }
-}
-
 impl<T: timely::progress::Timestamp> Plan<T> {
     /// Convert the dataflow description into one that uses render plans.
     #[mz_ore::instrument(
@@ -1122,34 +1022,4 @@ fn bucketing_of_expected_group_size(expected_group_size: Option<u64>) -> Vec<u64
 
     buckets.reverse();
     buckets
-}
-
-#[cfg(test)]
-mod tests {
-    use mz_ore::assert_ok;
-    use mz_proto::protobuf_roundtrip;
-
-    use super::*;
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(10))]
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
-        fn available_collections_protobuf_roundtrip(expect in any::<AvailableCollections>() ) {
-            let actual = protobuf_roundtrip::<_, ProtoAvailableCollections>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(10))]
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
-        fn get_plan_protobuf_roundtrip(expect in any::<GetPlan>()) {
-            let actual = protobuf_roundtrip::<_, ProtoGetPlan>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
-    }
 }

@@ -15,8 +15,6 @@ use mz_dyncfg::ConfigSet;
 
 use crate::{connections::ConnectionContext, parameters::StorageParameters};
 
-include!(concat!(env!("OUT_DIR"), "/mz_storage_types.parameters.rs"));
-
 /// A struct representing the _entirety_ of configuration required for interacting with storage APIs.
 ///
 /// Portions of this struct are mutable, but it remains _clone-able_ so it can be moved between

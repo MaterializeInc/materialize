@@ -12,7 +12,6 @@
 use std::sync::{Arc, LazyLock};
 
 use mz_ore::future::InTask;
-use mz_proto::{IntoRustIfSome, RustType};
 use mz_repr::{CatalogItemId, Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_server_util::cdc::Lsn;
 use proptest_derive::Arbitrary;
@@ -166,30 +165,6 @@ impl<C: ConnectionAccess> AlterCompatible for SqlServerSource<C> {
     }
 }
 
-impl RustType<ProtoSqlServerSource> for SqlServerSource {
-    fn into_proto(&self) -> ProtoSqlServerSource {
-        ProtoSqlServerSource {
-            catalog_id: Some(self.catalog_id.into_proto()),
-            connection: Some(self.connection.into_proto()),
-            extras: Some(self.extras.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoSqlServerSource) -> Result<Self, mz_proto::TryFromProtoError> {
-        Ok(SqlServerSource {
-            catalog_id: proto
-                .catalog_id
-                .into_rust_if_some("ProtoSqlServerSource::catalog_id")?,
-            connection: proto
-                .connection
-                .into_rust_if_some("ProtoSqlServerSource::connection")?,
-            extras: proto
-                .extras
-                .into_rust_if_some("ProtoSqlServerSource::extras")?,
-        })
-    }
-}
-
 /// Extra information that is pertinent to creating a SQL Server specific
 /// Materialize source.
 ///
@@ -208,16 +183,6 @@ impl AlterCompatible for SqlServerSourceExtras {
     }
 }
 
-impl RustType<ProtoSqlServerSourceExtras> for SqlServerSourceExtras {
-    fn into_proto(&self) -> ProtoSqlServerSourceExtras {
-        ProtoSqlServerSourceExtras {}
-    }
-
-    fn from_proto(_proto: ProtoSqlServerSourceExtras) -> Result<Self, mz_proto::TryFromProtoError> {
-        Ok(SqlServerSourceExtras {})
-    }
-}
-
 /// Specifies the details of a SQL Server source export.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct SqlServerSourceExportDetails {
@@ -229,30 +194,6 @@ pub struct SqlServerSourceExportDetails {
     pub text_columns: Vec<String>,
     /// Columns from the upstream source that should be excluded.
     pub exclude_columns: Vec<String>,
-}
-
-impl RustType<ProtoSqlServerSourceExportDetails> for SqlServerSourceExportDetails {
-    fn into_proto(&self) -> ProtoSqlServerSourceExportDetails {
-        ProtoSqlServerSourceExportDetails {
-            capture_instance: self.capture_instance.to_string(),
-            table: Some(self.table.into_proto()),
-            text_columns: self.text_columns.clone(),
-            exclude_columns: self.exclude_columns.clone(),
-        }
-    }
-
-    fn from_proto(
-        proto: ProtoSqlServerSourceExportDetails,
-    ) -> Result<Self, mz_proto::TryFromProtoError> {
-        Ok(SqlServerSourceExportDetails {
-            capture_instance: proto.capture_instance.into(),
-            table: proto
-                .table
-                .into_rust_if_some("ProtoSqlServerSourceExportDetails::table")?,
-            text_columns: proto.text_columns,
-            exclude_columns: proto.exclude_columns,
-        })
-    }
 }
 
 impl SourceTimestamp for Lsn {

@@ -24,64 +24,17 @@
 //!     if a potential downstream operator does not expect its input to be arranged.
 
 use mz_expr::{MirScalarExpr, permutation_for_arrangement};
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::ColumnType;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::plan::{AvailableCollections, any_arranged_thin};
 
-include!(concat!(
-    env!("OUT_DIR"),
-    "/mz_compute_types.plan.threshold.rs"
-));
-
 /// A plan describing how to compute a threshold operation.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub enum ThresholdPlan {
     /// Basic threshold maintains all positive inputs.
     Basic(BasicThresholdPlan),
-}
-
-impl RustType<ProtoThresholdPlan> for ThresholdPlan {
-    fn into_proto(&self) -> ProtoThresholdPlan {
-        use proto_threshold_plan::Kind::*;
-        ProtoThresholdPlan {
-            kind: Some(match self {
-                ThresholdPlan::Basic(p) => Basic(p.ensure_arrangement.into_proto()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoThresholdPlan) -> Result<Self, TryFromProtoError> {
-        use proto_threshold_plan::Kind::*;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoThresholdPlan::kind"))?;
-        Ok(match kind {
-            Basic(p) => ThresholdPlan::Basic(BasicThresholdPlan {
-                ensure_arrangement: p.into_rust()?,
-            }),
-        })
-    }
-}
-
-impl RustType<ProtoArrangement> for (Vec<MirScalarExpr>, Vec<usize>, Vec<usize>) {
-    fn into_proto(&self) -> ProtoArrangement {
-        ProtoArrangement {
-            all_columns: self.0.into_proto(),
-            permutation: self.1.iter().map(|x| x.into_proto()).collect(),
-            thinning: self.2.iter().map(|x| x.into_proto()).collect(),
-        }
-    }
-
-    fn from_proto(proto: ProtoArrangement) -> Result<Self, TryFromProtoError> {
-        Ok((
-            proto.all_columns.into_rust()?,
-            proto.permutation.into_rust()?,
-            proto.thinning.into_rust()?,
-        ))
-    }
 }
 
 impl ThresholdPlan {
@@ -134,23 +87,5 @@ impl ThresholdPlan {
             ensure_arrangement: ensure_arrangement.clone(),
         });
         (plan, ensure_arrangement)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use mz_ore::assert_ok;
-    use mz_proto::protobuf_roundtrip;
-    use proptest::prelude::*;
-
-    use super::*;
-
-    proptest! {
-       #[mz_ore::test]
-        fn threshold_plan_protobuf_roundtrip(expect in any::<ThresholdPlan>() ) {
-            let actual = protobuf_roundtrip::<_, ProtoThresholdPlan>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
     }
 }

@@ -9,13 +9,9 @@
 
 //! Types for describing dataflow sources.
 
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::RelationType;
-use mz_storage_types::controller::CollectionMetadata;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-
-include!(concat!(env!("OUT_DIR"), "/mz_compute_types.sources.rs"));
 
 /// A description of an instantiation of a source.
 ///
@@ -32,47 +28,9 @@ pub struct SourceInstanceDesc<M> {
     pub typ: RelationType,
 }
 
-impl RustType<ProtoSourceInstanceDesc> for SourceInstanceDesc<CollectionMetadata> {
-    fn into_proto(&self) -> ProtoSourceInstanceDesc {
-        ProtoSourceInstanceDesc {
-            arguments: Some(self.arguments.into_proto()),
-            storage_metadata: Some(self.storage_metadata.into_proto()),
-            typ: Some(self.typ.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoSourceInstanceDesc) -> Result<Self, TryFromProtoError> {
-        Ok(SourceInstanceDesc {
-            arguments: proto
-                .arguments
-                .into_rust_if_some("ProtoSourceInstanceDesc::arguments")?,
-            storage_metadata: proto
-                .storage_metadata
-                .into_rust_if_some("ProtoSourceInstanceDesc::storage_metadata")?,
-            typ: proto
-                .typ
-                .into_rust_if_some("ProtoSourceInstanceDesc::typ")?,
-        })
-    }
-}
-
 /// Per-source construction arguments.
 #[derive(Arbitrary, Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceInstanceArguments {
     /// Linear operators to be applied record-by-record.
     pub operators: Option<mz_expr::MapFilterProject>,
-}
-
-impl RustType<ProtoSourceInstanceArguments> for SourceInstanceArguments {
-    fn into_proto(&self) -> ProtoSourceInstanceArguments {
-        ProtoSourceInstanceArguments {
-            operators: self.operators.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoSourceInstanceArguments) -> Result<Self, TryFromProtoError> {
-        Ok(SourceInstanceArguments {
-            operators: proto.operators.into_rust()?,
-        })
-    }
 }

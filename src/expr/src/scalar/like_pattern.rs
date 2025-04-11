@@ -13,14 +13,11 @@ use std::str::FromStr;
 use derivative::Derivative;
 use mz_lowertest::MzReflect;
 use mz_ore::fmt::FormatBuffer;
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::regex::Regex;
 use proptest::prelude::{Arbitrary, Strategy};
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::EvalError;
-
-include!(concat!(env!("OUT_DIR"), "/mz_expr.scalar.like_pattern.rs"));
 
 /// The number of subpatterns after which using regexes would be more efficient.
 const MAX_SUBPATTERNS: usize = 5;
@@ -130,21 +127,6 @@ mod matcher {
                 MatcherImpl::String(subpatterns) => is_match_subpatterns(subpatterns, text),
                 MatcherImpl::Regex(r) => r.is_match(text),
             }
-        }
-    }
-
-    impl RustType<ProtoMatcher> for Matcher {
-        fn into_proto(&self) -> ProtoMatcher {
-            ProtoMatcher {
-                pattern: self.pattern.clone(),
-                case_insensitive: self.case_insensitive,
-            }
-        }
-
-        fn from_proto(proto: ProtoMatcher) -> Result<Self, TryFromProtoError> {
-            compile(proto.pattern.as_str(), proto.case_insensitive).map_err(|eval_err| {
-                TryFromProtoError::LikePatternDeserializationError(eval_err.to_string())
-            })
         }
     }
 
@@ -261,24 +243,6 @@ impl Subpattern {
             }
         }
         regex_syntax::escape_into(&self.suffix, r);
-    }
-}
-
-impl RustType<ProtoSubpattern> for Subpattern {
-    fn into_proto(&self) -> ProtoSubpattern {
-        ProtoSubpattern {
-            consume: self.consume.into_proto(),
-            many: self.many,
-            suffix: self.suffix.clone(),
-        }
-    }
-
-    fn from_proto(proto: ProtoSubpattern) -> Result<Self, TryFromProtoError> {
-        Ok(Subpattern {
-            consume: proto.consume.into_rust()?,
-            many: proto.many,
-            suffix: proto.suffix,
-        })
     }
 }
 

@@ -23,7 +23,6 @@ hyper-util = "0.1.10"
 itertools = "0.12.1"
 mz-aws-secrets-controller = { path = "../aws-secrets-controller", default-features = false }
 mz-build-info = { path = "../build-info", default-features = false }
-mz-proto = { path = "../proto", default-features = false }
 mz-repr = { path = "../repr", default-features = false }
 mz-secrets = { path = "../secrets", default-features = false }
 mz-orchestrator-process = { path = "../orchestrator-process", default-features = false }
@@ -33,26 +32,19 @@ os_info = "3.10.0"
 prometheus = { version = "0.13.4", default-features = false }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
-prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 semver = "1.0.26"
 serde = { version = "1.0.219", features = ["derive"] }
 sysinfo = "0.29.11"
 timely = "0.20.0"
 tokio = "1.44.1"
 tokio-stream = "0.1.17"
-tonic = "0.12.1"
 tower = "0.4.13"
 tracing = "0.1.37"
 sentry-tracing = "0.29.1"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
-[build-dependencies]
-mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.13.5"
-tonic-build = "0.12.3"
-
 [features]
-default = ["mz-build-tools/default", "workspace-hack"]
+default = ["workspace-hack"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

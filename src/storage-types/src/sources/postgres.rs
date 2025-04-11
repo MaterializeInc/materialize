@@ -11,7 +11,7 @@
 
 use mz_expr::MirScalarExpr;
 use mz_postgres_util::desc::PostgresTableDesc;
-use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
+use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::{CatalogItemId, GlobalId, RelationDesc, ScalarType};
 use proptest::prelude::any;
 use proptest_derive::Arbitrary;
@@ -188,57 +188,6 @@ pub enum CastType {
     Text,
 }
 
-impl RustType<ProtoCastType> for CastType {
-    fn into_proto(&self) -> ProtoCastType {
-        use proto_cast_type::Kind::*;
-        ProtoCastType {
-            kind: Some(match self {
-                CastType::Natural => Natural(()),
-                CastType::Text => Text(()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoCastType) -> Result<Self, TryFromProtoError> {
-        use proto_cast_type::Kind::*;
-        Ok(match proto.kind {
-            Some(Natural(())) => CastType::Natural,
-            Some(Text(())) => CastType::Text,
-            None => {
-                return Err(TryFromProtoError::missing_field(
-                    "ProtoWindowFrameUnits::kind",
-                ));
-            }
-        })
-    }
-}
-
-impl RustType<ProtoPostgresSourceConnection> for PostgresSourceConnection {
-    fn into_proto(&self) -> ProtoPostgresSourceConnection {
-        ProtoPostgresSourceConnection {
-            connection: Some(self.connection.into_proto()),
-            connection_id: Some(self.connection_id.into_proto()),
-            publication: self.publication.clone(),
-            details: Some(self.publication_details.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoPostgresSourceConnection) -> Result<Self, TryFromProtoError> {
-        Ok(PostgresSourceConnection {
-            connection: proto
-                .connection
-                .into_rust_if_some("ProtoPostgresSourceConnection::connection")?,
-            connection_id: proto
-                .connection_id
-                .into_rust_if_some("ProtoPostgresSourceConnection::connection_id")?,
-            publication: proto.publication,
-            publication_details: proto
-                .details
-                .into_rust_if_some("ProtoPostgresSourceConnection::details")?,
-        })
-    }
-}
-
 /// The details of a source export from a postgres source.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct PostgresSourceExportDetails {
@@ -260,45 +209,6 @@ impl AlterCompatible for PostgresSourceExportDetails {
             table: _,
         } = self;
         Ok(())
-    }
-}
-
-impl RustType<ProtoPostgresSourceExportDetails> for PostgresSourceExportDetails {
-    fn into_proto(&self) -> ProtoPostgresSourceExportDetails {
-        let mut column_casts = Vec::with_capacity(self.column_casts.len());
-
-        for (col_type, cast) in self.column_casts.iter() {
-            column_casts.push(ProtoPostgresColumnCast {
-                cast: Some(cast.into_proto()),
-                cast_type: Some(col_type.into_proto()),
-            });
-        }
-
-        ProtoPostgresSourceExportDetails {
-            table: Some(self.table.into_proto()),
-            column_casts,
-        }
-    }
-
-    fn from_proto(proto: ProtoPostgresSourceExportDetails) -> Result<Self, TryFromProtoError> {
-        let mut column_casts = vec![];
-        for column_cast in proto.column_casts.into_iter() {
-            column_casts.push((
-                column_cast
-                    .cast_type
-                    .into_rust_if_some("ProtoPostgresColumnCast::cast_type")?,
-                column_cast
-                    .cast
-                    .into_rust_if_some("ProtoPostgresColumnCast::cast")?,
-            ));
-        }
-
-        Ok(PostgresSourceExportDetails {
-            table: proto
-                .table
-                .into_rust_if_some("ProtoPostgresSourceExportDetails::table")?,
-            column_casts,
-        })
     }
 }
 
