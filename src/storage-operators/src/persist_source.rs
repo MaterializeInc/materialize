@@ -32,7 +32,6 @@ use mz_persist_client::fetch::{FetchedBlob, FetchedPart};
 use mz_persist_client::fetch::{SerdeLeasedBatchPart, ShardSourcePart};
 use mz_persist_client::operators::shard_source::{SnapshotMode, shard_source};
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_persist_types::columnar::{ColumnEncoder, Schema};
 use mz_persist_types::{Codec, Codec64};
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_storage_types::StorageDiff;
