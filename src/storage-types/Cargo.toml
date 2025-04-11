@@ -14,11 +14,11 @@ name = "row"
 harness = false
 
 [dependencies]
-anyhow = "1.0.95"
+anyhow = "1.0.97"
 arrow = { version = "53.3.0", default-features = false }
-async-trait = "0.1.83"
+async-trait = "0.1.88"
 aws-config = { version = "1.2.0", default-features = false, features = ["sso"] }
-aws-credential-types = { version = "1.2.1", features = ["hardcoded-credentials"] }
+aws-credential-types = { version = "1.2.2", features = ["hardcoded-credentials"] }
 aws-sdk-sts = { version = "1.7.0", default-features = false, features = ["rt-tokio"] }
 aws-types = "1.1.1"
 bytes = "1.10.1"
@@ -64,7 +64,7 @@ prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = "1.10.6"
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = { version = "1.0.125", features = ["preserve_order"] }
+serde_json = { version = "1.0.127", features = ["preserve_order"] }
 thiserror = "2.0.12"
 tiberius = { version = "0.12", features = ["sql-browser-tokio", "tds73"], default-features = false }
 timely = "0.20.0"
@@ -84,7 +84,7 @@ rand = "0.8.5"
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.13.4"
+prost-build = "0.13.5"
 tonic-build = "0.12.3"
 
 [features]

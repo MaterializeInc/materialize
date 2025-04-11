@@ -10,10 +10,10 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.95"
+anyhow = "1.0.97"
 arrow = { version = "53.3.0", default-features = false }
 async-compression = { version = "0.4.11", features = ["bzip2", "gzip", "tokio", "xz", "zstd"] }
-async-stream = "0.3.3"
+async-stream = "0.3.6"
 aws-types = "1.1.1"
 aws-smithy-types = "1.1.8"
 aws-sdk-s3 = { version = "1.23.0", default-features = false }
@@ -41,7 +41,7 @@ mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
 parquet = { version = "53.3.0", default-features = false, features = ["arrow", "async", "snap"] }
-prometheus = { version = "0.13.3", default-features = false }
+prometheus = { version = "0.13.4", default-features = false }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 prost = "0.13.5"
 reqwest = { version = "0.11.13", features = ["stream"] }
@@ -52,7 +52,7 @@ timely = "0.20.0"
 thiserror = "2.0.12"
 tokio = { version = "1.44.1", features = ["fs", "rt", "sync", "test-util", "time"] }
 tokio-stream = "0.1.17"
-tokio-util = { version = "0.7.13", features = ["io"] }
+tokio-util = { version = "0.7.14", features = ["io"] }
 tracing = "0.1.37"
 url = "2.3.1"
 uuid = { version = "1.16.0", features = ["v4"] }

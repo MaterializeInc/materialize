@@ -10,8 +10,8 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.95"
-async-stream = "0.3.3"
+anyhow = "1.0.97"
+async-stream = "0.3.6"
 bytesize = "1.3.0"
 columnar = "0.4.1"
 crossbeam-channel = "0.5.15"
@@ -36,7 +36,7 @@ mz-storage-operators = { path = "../storage-operators" }
 mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
-prometheus = { version = "0.13.3", default-features = false }
+prometheus = { version = "0.13.4", default-features = false }
 scopeguard = "1.2.0"
 serde = { version = "1.0.219", features = ["derive"] }
 smallvec = { version = "1.14.0", features = ["serde", "union"] }
@@ -47,7 +47,7 @@ uuid = { version = "1.16.0", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-core_affinity = "0.8.0"
+core_affinity = "0.8.3"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

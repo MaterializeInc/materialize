@@ -561,7 +561,7 @@ crates_repository(
         # builds, since otherwise backtraces can take 20s+ to symbolize. With optimizations
         # enabled, symbolizing a backtrace takes less than 1s.
         "addr2line": [crate.annotation(rustc_flags = ["-Copt-level=3"])],
-        "adler": [crate.annotation(rustc_flags = ["-Copt-level=3"])],
+        "adler2": [crate.annotation(rustc_flags = ["-Copt-level=3"])],
         "backtrace": [crate.annotation(rustc_flags = ["-Copt-level=3"])],
         "gimli": [crate.annotation(rustc_flags = ["-Copt-level=3"])],
         "miniz_oxide": [crate.annotation(rustc_flags = ["-Copt-level=3"])],

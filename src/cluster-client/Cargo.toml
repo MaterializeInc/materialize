@@ -10,11 +10,11 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.95"
+anyhow = "1.0.97"
 http = "1.2.0"
 mz-ore = { path = "../ore", features = ["tracing"] }
 mz-proto = { path = "../proto" }
-prometheus = { version = "0.13.3", default-features = false }
+prometheus = { version = "0.13.4", default-features = false }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
@@ -25,7 +25,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.13.4"
+prost-build = "0.13.5"
 tonic-build = "0.12.3"
 
 [features]

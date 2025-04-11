@@ -132,7 +132,6 @@ skip = [
     { name = "thiserror", version = "1.0.61" },
     { name = "thiserror-impl", version = "1.0.61" },
     { name = "twox-hash", version = "1.6.3" },
-    { name = "miniz_oxide", version = "0.5.4" },
     { name = "unicode-width", version = "0.1.10" },
     # Used by rdkafka-sys
     { name = "num_enum", version = "0.5.11" },
@@ -144,6 +143,9 @@ skip = [
     { name = "rustix", version = "0.38.44" },
     # Used by ahash
     { name = "zerocopy", version = "0.7.23" },
+    # Used by guppy
+    { name = "fixedbitset", version = "0.4.2" },
+    { name = "petgraph", version = "0.6.5" },
 ]
 
 [[bans.deny]]
@@ -217,7 +219,6 @@ name = "rustls"
 name = "lazy_static"
 wrappers = [
     "bindgen",
-    "bstr",
     "dynfmt",
     "findshlibs",
     "jsonpath-rust",
