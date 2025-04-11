@@ -17,7 +17,7 @@ name = "persistcli"
 bench = false
 
 [dependencies]
-anyhow = { version = "1.0.97", features = ["backtrace"] }
+anyhow = "1.0.97"
 arrow = { version = "53.3.0", default-features = false }
 async-trait = "0.1.88"
 axum = "0.7.5"

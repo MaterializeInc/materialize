@@ -625,7 +625,7 @@ where
                     self.leased_seqnos.keys().take(10).collect::<Vec<_>>(),
                     // The Debug impl of backtrace is less aesthetic, but will put the trace
                     // on a single line and play more nicely with our Honeycomb quota
-                    Backtrace::capture(),
+                    Backtrace::force_capture(),
                 );
             }
         }
