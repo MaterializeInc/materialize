@@ -6,6 +6,7 @@ rows:
   - Component: "Google Kubernetes Engine (GKE) cluster"
     Version: "All"
   - Component: "Cloud Storage bucket for blob storage"
+
     Version: "All"
   - Component: "Cloud SQL PostgreSQL database for metadata storage"
     Version: "All"
