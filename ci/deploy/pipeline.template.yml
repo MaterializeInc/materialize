@@ -43,6 +43,7 @@ steps:
     concurrency_group: deploy/npm
     agents:
       queue: linux-x86_64-small
+    skip: "Token is currently broken, see https://status.npmjs.org/"
 
   - label: ":bulb: Full SQL Logic Tests"
     trigger: slt
