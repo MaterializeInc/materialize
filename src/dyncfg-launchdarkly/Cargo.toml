@@ -11,7 +11,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = { version = "1.0.97", features = ["backtrace"] }
+anyhow = "1.0.97"
 humantime = "2.2.0"
 hyper-tls = "0.5.0"
 launchdarkly-server-sdk = { version = "2.5.1", default-features = false }
