@@ -31,8 +31,9 @@ use mz_persist::indexed::encoding::{BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::arrow::ArrayOrd;
-use mz_persist_types::columnar::{ColumnDecoder, Schema};
+use mz_persist_types::columnar::{ColumnDecoder, Schema, data_type};
 use mz_persist_types::part::Codec64Mut;
+use mz_persist_types::schema::backward_compatible;
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -818,7 +819,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
         let part_len = u64::cast_from(part.part.updates.len());
         match &migration {
             PartMigration::SameSchema { .. } => metrics.schema.migration_count_same.inc(),
-            PartMigration::Codec { .. } => {
+            PartMigration::Schemaless { .. } => {
                 metrics.schema.migration_count_codec.inc();
                 metrics.schema.migration_len_legacy_codec.inc_by(part_len);
             }
@@ -852,8 +853,20 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
 
             let structured = match &migration {
                 PartMigration::SameSchema { .. } => structured,
-                PartMigration::Codec { .. } => {
-                    return None;
+                PartMigration::Schemaless { read } => {
+                    // We don't know the source schema, but we do know the source datatype; migrate it directly.
+                    let start = Instant::now();
+                    let read_key = data_type::<K>(&*read.key).ok()?;
+                    let read_val = data_type::<V>(&*read.val).ok()?;
+                    let key_migration = backward_compatible(structured.key.data_type(), &read_key)?;
+                    let val_migration = backward_compatible(structured.val.data_type(), &read_val)?;
+                    let key = key_migration.migrate(structured.key);
+                    let val = val_migration.migrate(structured.val);
+                    metrics
+                        .schema
+                        .migration_migrate_seconds
+                        .inc_by(start.elapsed().as_secs_f64());
+                    ColumnarRecordsStructuredExt { key, val }
                 }
                 PartMigration::Either {
                     write: _,

@@ -299,9 +299,8 @@ impl MigrationCacheMap {
 pub(crate) enum PartMigration<K: Codec, V: Codec> {
     /// No-op!
     SameSchema { both: Schemas<K, V> },
-    /// This part predates writing down schema ids, so we have to decode and
-    /// potentially migrate it to the target schema via the legacy Codec path.
-    Codec { read: Schemas<K, V> },
+    /// We don't have a schema id for write schema.
+    Schemaless { read: Schemas<K, V> },
     /// We have both write and read schemas, and they don't match.
     Either {
         write: Schemas<K, V>,
@@ -315,7 +314,7 @@ impl<K: Codec, V: Codec> Clone for PartMigration<K, V> {
     fn clone(&self) -> Self {
         match self {
             Self::SameSchema { both } => Self::SameSchema { both: both.clone() },
-            Self::Codec { read } => Self::Codec { read: read.clone() },
+            Self::Schemaless { read } => Self::Schemaless { read: read.clone() },
             Self::Either {
                 write,
                 read,
@@ -346,7 +345,7 @@ where
         D: Semigroup + Codec64,
     {
         match (write, read.id) {
-            (None, _) => Ok(PartMigration::Codec { read }),
+            (None, _) => Ok(PartMigration::Schemaless { read }),
             (Some(w), Some(r)) if w == r => Ok(PartMigration::SameSchema { both: read }),
             (Some(w), _) => {
                 let write = schema_cache
@@ -396,7 +395,7 @@ impl<K: Codec, V: Codec> PartMigration<K, V> {
     pub(crate) fn codec_read(&self) -> &Schemas<K, V> {
         match self {
             PartMigration::SameSchema { both } => both,
-            PartMigration::Codec { read } => read,
+            PartMigration::Schemaless { read } => read,
             PartMigration::Either { read, .. } => read,
         }
     }
