@@ -12,7 +12,7 @@ menu:
 - Docker logs and resource information.
 - Snapshots of system catalog tables from your Materialize instance.
 
-### Requirements
+## Requirements
 
 - Docker installed and running. If [Docker](https://www.docker.com/) is not installed, refer to its
 [official documentation](https://docs.docker.com/get-docker/) to install
@@ -56,9 +56,9 @@ sub-directory,  the following Docker resource debug files are generated:
 
 {{% integrations/mz-debug/system-catalog-files %}}
 
-## Examples
+## Example
 
-**Debug a running local emulator container:**
+### Debug a running local emulator container
 ```console
 mz-debug emulator \
     --docker-container-id 123abc456def
