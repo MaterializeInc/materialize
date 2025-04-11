@@ -649,6 +649,86 @@ mod test {
         check(func::ModFloat64, BF::ModFloat64, &i32_ty, &i32_ty);
         check(func::ModNumeric, BF::ModNumeric, &i32_ty, &i32_ty);
 
+        check(func::LogBaseNumeric, BF::LogNumeric, &i32_ty, &i32_ty);
+        check(func::Power, BF::Power, &i32_ty, &i32_ty);
+        check(func::PowerNumeric, BF::PowerNumeric, &i32_ty, &i32_ty);
+
+        check(func::UuidGenerateV5, BF::UuidGenerateV5, &i32_ty, &i32_ty);
+
+        check(func::GetBit, BF::GetBit, &i32_ty, &i32_ty);
+        check(func::GetByte, BF::GetByte, &i32_ty, &i32_ty);
+
+        check(
+            func::ConstantTimeEqBytes,
+            BF::ConstantTimeEqBytes,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::ConstantTimeEqString,
+            BF::ConstantTimeEqString,
+            &i32_ty,
+            &i32_ty,
+        );
+
+        // check(
+        //     func::RangeContainsRange,
+        //     BF::RangeContainsRange { rev: false },
+        //     &i32_ty,
+        //     &i32_ty,
+        // );
+        check(func::RangeOverlaps, BF::RangeOverlaps, &i32_ty, &i32_ty);
+        check(func::RangeAfter, BF::RangeAfter, &i32_ty, &i32_ty);
+        check(func::RangeBefore, BF::RangeBefore, &i32_ty, &i32_ty);
+        check(func::RangeOverleft, BF::RangeOverleft, &i32_ty, &i32_ty);
+        check(func::RangeOverright, BF::RangeOverright, &i32_ty, &i32_ty);
+        check(func::RangeAdjacent, BF::RangeAdjacent, &i32_ty, &i32_ty);
+
+        // check(func::RangeUnion, BF::RangeUnion, &i32_ty, &i32_ty);
+
+        check(func::Eq, BF::Eq, &i32_ty, &i32_ty);
+        check(func::NotEq, BF::NotEq, &i32_ty, &i32_ty);
+        check(func::Lt, BF::Lt, &i32_ty, &i32_ty);
+        check(func::Lte, BF::Lte, &i32_ty, &i32_ty);
+        check(func::Gt, BF::Gt, &i32_ty, &i32_ty);
+        check(func::Gte, BF::Gte, &i32_ty, &i32_ty);
+
+        check(
+            func::JsonbContainsString,
+            BF::JsonbContainsString,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(func::MapContainsKey, BF::MapContainsKey, &i32_ty, &i32_ty);
+        check(
+            func::MapContainsAllKeys,
+            BF::MapContainsAllKeys,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::MapContainsAnyKeys,
+            BF::MapContainsAnyKeys,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(func::MapContainsMap, BF::MapContainsMap, &i32_ty, &i32_ty);
+
+        check(
+            func::JsonbContainsJsonb,
+            BF::JsonbContainsJsonb,
+            &i32_ty,
+            &i32_ty,
+        );
+
+        check(func::ExtractDateUnits, BF::ExtractDate, &i32_ty, &i32_ty);
+        check(
+            func::DateTruncInterval,
+            BF::DateTruncInterval,
+            &i32_ty,
+            &i32_ty,
+        );
+
         check(func::ArrayLength, BF::ArrayLength, &i32_ty, &i32_ty);
     }
 }
