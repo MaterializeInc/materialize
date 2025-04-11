@@ -509,17 +509,19 @@ where
                     let start_index = parts.len();
                     for part in run {
                         if let (
-                            RunPart::Single(BatchPart::Inline {
-                                updates,
-                                ts_rewrite,
-                                schema_id,
-                                deprecated_schema_id: _,
-                            }),
+                            RunPart::Single(
+                                batch_part @ BatchPart::Inline {
+                                    updates,
+                                    ts_rewrite,
+                                    schema_id: _,
+                                    deprecated_schema_id: _,
+                                },
+                            ),
                             Some((schema_cache, builder)),
                         ) = (part, &mut inline_batch_builder)
                         {
                             let schema_migration = PartMigration::new(
-                                *schema_id,
+                                batch_part,
                                 self.write_schemas.clone(),
                                 schema_cache,
                             )

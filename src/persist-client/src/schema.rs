@@ -25,7 +25,7 @@ use timely::progress::Timestamp;
 use crate::internal::apply::Applier;
 use crate::internal::encoding::Schemas;
 use crate::internal::metrics::{SchemaCacheMetrics, SchemaMetrics};
-use crate::internal::state::EncodedSchemas;
+use crate::internal::state::{BatchPart, EncodedSchemas};
 
 /// The result returned by [crate::PersistClient::compare_and_evolve_schema].
 #[derive(Debug)]
@@ -337,7 +337,7 @@ where
     V: Debug + Codec,
 {
     pub(crate) async fn new<T, D>(
-        write: Option<SchemaId>,
+        part: &BatchPart<T>,
         read: Schemas<K, V>,
         schema_cache: &mut SchemaCache<K, V, T, D>,
     ) -> Result<Self, Schemas<K, V>>
@@ -345,6 +345,27 @@ where
         T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Codec64,
     {
+        // At one point in time during our structured data migration, we deprecated the
+        // already written schema IDs because we made all columns at the Arrow/Parquet
+        // level nullable, thus changing the schema parts were written with.
+        //
+        // _After_ this deprecation, we've observed at least one instance where a
+        // structured only Part was written with the schema ID in the _old_ deprecated
+        // field. While unexpected, given the ordering of our releases it is safe to
+        // use the deprecated schema ID if we have a structured only part.
+        let write = match part.schema_id() {
+            Some(write_id) => Some(write_id),
+            None => {
+                if part.is_structured_only(&schema_cache.applier.metrics.columnar) {
+                    let deprecated_id = part.deprecated_schema_id();
+                    tracing::warn!(?deprecated_id, "falling back to deprecated schema ID");
+                    deprecated_id
+                } else {
+                    None
+                }
+            }
+        };
+
         match (write, read.id) {
             (None, _) => Ok(PartMigration::Codec { read }),
             (Some(w), Some(r)) if w == r => Ok(PartMigration::SameSchema { both: read }),

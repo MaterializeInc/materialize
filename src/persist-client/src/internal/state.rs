@@ -9,6 +9,7 @@
 
 use anyhow::ensure;
 use async_stream::{stream, try_stream};
+use mz_persist::metrics::ColumnarMetrics;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -32,7 +33,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
 use mz_ore::soft_panic_or_log;
 use mz_ore::vec::PartialOrdVecExt;
-use mz_persist::indexed::encoding::BatchColumnarFormat;
+use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceUpdates};
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::arrow::{ArrayBound, ProtoArrayData};
 use mz_persist_types::columnar::{ColumnEncoder, Schema};
@@ -309,6 +310,28 @@ impl<T> BatchPart<T> {
         match self {
             BatchPart::Hollow(x) => x.schema_id,
             BatchPart::Inline { schema_id, .. } => *schema_id,
+        }
+    }
+
+    pub fn deprecated_schema_id(&self) -> Option<SchemaId> {
+        match self {
+            BatchPart::Hollow(x) => x.deprecated_schema_id,
+            BatchPart::Inline {
+                deprecated_schema_id,
+                ..
+            } => *deprecated_schema_id,
+        }
+    }
+}
+
+impl<T: Timestamp + Codec64> BatchPart<T> {
+    pub fn is_structured_only(&self, metrics: &ColumnarMetrics) -> bool {
+        match self {
+            BatchPart::Hollow(x) => matches!(x.format, Some(BatchColumnarFormat::Structured)),
+            BatchPart::Inline { updates, .. } => {
+                let inline_part = updates.decode::<T>(metrics).expect("valid inline part");
+                matches!(inline_part.updates, BlobTraceUpdates::Structured { .. })
+            }
         }
     }
 }
