@@ -1,0 +1,20 @@
+columns:
+  - column: "Resource Type"
+  - column: "Files"
+rows:
+  - "Resource Type": "Container Logs"
+    "Files": |
+      - `logs-stdout.txt`
+      - `logs-stderr.txt`
+
+  - "Resource Type": "Container Inspection"
+    "Files": |
+      - `inspect.txt`
+
+  - "Resource Type": "Container Stats"
+    "Files": |
+      - `stats.txt`
+
+  - "Resource Type": "Container Processes"
+    "Files": |
+      - `top.txt`

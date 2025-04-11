@@ -1,0 +1,65 @@
+---
+title: "mz-debug emulator"
+description: Use mz-debug to debug Materialize Emulator environments running in Docker.
+menu:
+  main:
+    parent: mz-debug
+    weight: 20
+---
+
+`mz-debug emulator` debugs Docker-based Materialize deployments. It collects:
+
+- Docker logs and resource information.
+- Snapshots of system catalog tables from your Materialize instance.
+
+### Requirements
+
+- Docker installed and running. If [Docker](https://www.docker.com/) is not installed, refer to its
+[official documentation](https://docs.docker.com/get-docker/) to install
+- A valid Materialize SQL connection URL for your local emulator.
+
+## Syntax
+
+```shell
+mz-debug [--dump-system-catalog <boolean>] emulator [OPTIONS]
+```
+
+## Options
+
+### `mz-debug` option
+
+The following option is available at the `mz-debug` level; i.e., if you decide
+to specify the option, the option comes **before** the `emulator` keyword.
+
+{{< yaml-table data="mz-debug/mz_debug_option" >}}
+
+### `mz-debug emulator` options
+
+{{< yaml-table data="mz-debug/emulator_options" >}}
+
+## Output
+
+The `mz-debug` outputs its log file (`tracing.log`) and the generated debug
+files into a directory named `mz_debug_YYYY-MM-DD-HH-TMM-SSZ/` as well as zips
+the directory and its contents `mz_debug_YYYY-MM-DD-HH-TMM-SSZ.zip`.
+
+The generated debug files are in two main categories: [Docker resource
+files](#docker-resource-files) and [system catalog
+files](#system-catalog-files).
+
+### Docker resource files
+
+In `mz_debug_YYYY-MM-DD-HH-TMM-SSZ/`, under the `docker/<CONTAINER-ID>`
+sub-directory,  the following Docker resource debug files are generated:
+
+{{< yaml-table data="mz-debug/docker_resource_files" >}}
+
+{{% integrations/mz-debug/system-catalog-files %}}
+
+## Examples
+
+**Debug a running local emulator container:**
+```console
+mz-debug emulator \
+    --docker-container-id 123abc456def
+```
