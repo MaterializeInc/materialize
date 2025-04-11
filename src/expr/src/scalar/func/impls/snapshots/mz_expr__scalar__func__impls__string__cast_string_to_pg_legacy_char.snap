@@ -1,0 +1,50 @@
+---
+source: src/expr/src/scalar/func/impls/string.rs
+expression: "#[sqlfunc(\n    sqlname = \"text_to_\\\"char\\\"\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastPgLegacyCharToString),\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_string_to_pg_legacy_char<'a>(a: &'a str) -> PgLegacyChar {\n    { PgLegacyChar(a.as_bytes().get(0).copied().unwrap_or(0)) }\n}\n"
+---
+#[derive(
+    proptest_derive::Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    mz_lowertest::MzReflect
+)]
+pub struct CastStringToPgLegacyChar;
+impl<'a> crate::func::EagerUnaryFunc<'a> for CastStringToPgLegacyChar {
+    type Input = &'a str;
+    type Output = PgLegacyChar;
+    fn call(&self, a: Self::Input) -> Self::Output {
+        cast_string_to_pg_legacy_char(a)
+    }
+    fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && input_type.nullable))
+    }
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        to_unary!(super::CastPgLegacyCharToString)
+    }
+    fn is_monotone(&self) -> bool {
+        false
+    }
+    fn preserves_uniqueness(&self) -> bool {
+        true
+    }
+}
+impl std::fmt::Display for CastStringToPgLegacyChar {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("text_to_\"char\"")
+    }
+}
+#[allow(clippy::extra_unused_lifetimes)]
+pub fn cast_string_to_pg_legacy_char<'a>(a: &'a str) -> PgLegacyChar {
+    { PgLegacyChar(a.as_bytes().get(0).copied().unwrap_or(0)) }
+}
