@@ -16,14 +16,10 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use mz_ore::cast::CastFrom;
-use mz_proto::RustType;
 use mz_repr::{DatumVec, IntoRowIterator, Row, RowIterator, RowRef};
 use serde::{Deserialize, Serialize};
 
 use crate::ColumnOrder;
-
-include!(concat!(env!("OUT_DIR"), "/mz_expr.row.collection.rs"));
 
 /// Collection of runs of sorted [`Row`]s represented as a single blob.
 ///
@@ -213,32 +209,6 @@ impl RowCollection {
     }
 }
 
-impl RustType<ProtoRowCollection> for RowCollection {
-    fn into_proto(&self) -> ProtoRowCollection {
-        ProtoRowCollection {
-            encoded: Bytes::clone(&self.encoded),
-            metadata: self
-                .metadata
-                .iter()
-                .map(EncodedRowMetadata::into_proto)
-                .collect(),
-            runs: self.runs.iter().copied().map(u64::cast_from).collect(),
-        }
-    }
-
-    fn from_proto(proto: ProtoRowCollection) -> Result<Self, mz_proto::TryFromProtoError> {
-        Ok(RowCollection {
-            encoded: proto.encoded,
-            metadata: proto
-                .metadata
-                .into_iter()
-                .map(EncodedRowMetadata::from_proto)
-                .collect::<Result<_, _>>()?,
-            runs: proto.runs.into_iter().map(usize::cast_from).collect(),
-        })
-    }
-}
-
 /// Inner type of [`RowCollection`], describes a single Row.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct EncodedRowMetadata {
@@ -252,22 +222,6 @@ pub struct EncodedRowMetadata {
     /// collections, e.g. `mz_scheduling_elapsed_raw`, encodes nano seconds in the diff field which
     /// requires a u64.
     diff: NonZeroUsize,
-}
-
-impl RustType<ProtoEncodedRowMetadata> for EncodedRowMetadata {
-    fn into_proto(&self) -> ProtoEncodedRowMetadata {
-        ProtoEncodedRowMetadata {
-            offset: u64::cast_from(self.offset),
-            diff: self.diff.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoEncodedRowMetadata) -> Result<Self, mz_proto::TryFromProtoError> {
-        Ok(EncodedRowMetadata {
-            offset: usize::cast_from(proto.offset),
-            diff: NonZeroUsize::from_proto(proto.diff)?,
-        })
-    }
 }
 
 /// Provides a sorted view of a [`RowCollection`].
