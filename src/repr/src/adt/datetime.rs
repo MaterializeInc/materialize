@@ -873,12 +873,22 @@ impl ParsedDateTime {
     /// # Arguments
     ///
     /// * `value` is a SQL-formatted TIMESTAMP string.
-    pub fn build_parsed_datetime_timestamp(value: &str) -> Result<ParsedDateTime, String> {
+    pub fn build_parsed_datetime_timestamp(
+        value: &str,
+        era: CalendarEra,
+    ) -> Result<ParsedDateTime, String> {
         let mut pdt = ParsedDateTime::default();
 
         let mut ts_actual = tokenize_time_str(value)?;
 
         fill_pdt_date(&mut pdt, &mut ts_actual)?;
+
+        if let CalendarEra::BC = era {
+            pdt.year = pdt.year.map(|mut y| {
+                y.unit = -y.unit;
+                y
+            });
+        }
 
         if let Some(TimeStrToken::DateTimeDelimiter) = ts_actual.front() {
             ts_actual.pop_front();
@@ -1858,17 +1868,36 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>, S
     Ok(toks)
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum CalendarEra {
+    BC,
+    AD,
+}
+
+impl CalendarEra {
+    fn as_str(&self) -> &'static str {
+        match self {
+            CalendarEra::BC => "BC",
+            CalendarEra::AD => "AD",
+        }
+    }
+}
+
 /// Takes a 'date timezone' 'date time timezone' string and splits it into 'date
-/// {time}' and 'timezone' components
-pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str) {
+/// {time}' and 'timezone' components then checks for a 'CalenderEra' defaulting
+/// to 'AD'.
+pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str, CalendarEra) {
     // First we need to see if the string contains " +" or " -" because
     // timestamps can come in a format YYYY-MM-DD {+|-}<tz> (where the timezone
     // string can have colons)
     let cut = value.find(" +").or_else(|| value.find(" -"));
 
     if let Some(cut) = cut {
-        let (first, second) = value.split_at(cut);
-        return (first.trim(), second.trim());
+        let (datetime, timezone) = value.split_at(cut);
+
+        let (timezone, era) = strip_era_from_timezone(timezone);
+
+        return (datetime.trim(), timezone.trim(), era);
     }
 
     // If we have a hh:mm:dd component, we need to go past that to see if we can
@@ -1882,23 +1911,45 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str) {
                 .find(|c: char| (c == '-') || (c == '+') || (c == ' ') || c.is_ascii_alphabetic());
 
             if let Some(tz) = tz {
-                let (first, second) = value.split_at(colon + tz);
-                return (first.trim(), second.trim());
+                let (datetime, timezone) = value.split_at(colon + tz);
+
+                let (timezone, era) = strip_era_from_timezone(timezone);
+
+                return (datetime.trim(), timezone.trim(), era);
             }
         }
-        (value.trim(), "")
+
+        (value.trim(), "", CalendarEra::AD)
     } else {
         // We don't have a time, so the only formats available are YYY-mm-dd<tz>
         // or YYYY-MM-dd <tz> Numeric offset timezones need to be separated from
-        // the ymd by a space
+        // the ymd by a space.
         let cut = value.find(|c: char| c.is_ascii_alphabetic());
 
         if let Some(cut) = cut {
-            let (first, second) = value.split_at(cut);
-            return (first.trim(), second.trim());
+            let (datetime, timezone) = value.split_at(cut);
+
+            let (timezone, era) = strip_era_from_timezone(timezone);
+
+            return (datetime.trim(), timezone.trim(), era);
         }
 
-        (value.trim(), "")
+        (value.trim(), "", CalendarEra::AD)
+    }
+}
+
+fn strip_era_from_timezone(timezone: &str) -> (&str, CalendarEra) {
+    use CalendarEra::{AD, BC};
+    let timezone = timezone.trim();
+    let timezone_upper = timezone.to_uppercase();
+
+    match (
+        timezone_upper.strip_suffix(BC.as_str()),
+        timezone_upper.strip_suffix(AD.as_str()),
+    ) {
+        (Some(remainder), None) => (&timezone[..remainder.len()], BC),
+        (None, Some(remainder)) => (&timezone[..remainder.len()], AD),
+        _ => (timezone, AD),
     }
 }
 
@@ -2810,7 +2861,7 @@ mod tests {
 
         fn run_test_build_parsed_datetime_timestamp(test: &str, res: ParsedDateTime) {
             assert_eq!(
-                ParsedDateTime::build_parsed_datetime_timestamp(test).unwrap(),
+                ParsedDateTime::build_parsed_datetime_timestamp(test, CalendarEra::AD).unwrap(),
                 res
             );
         }
@@ -3494,10 +3545,11 @@ mod tests {
         ];
 
         for test in test_cases.iter() {
-            let (ts, tz) = split_timestamp_string(test.0);
+            let (ts, tz, era) = split_timestamp_string(test.0);
 
             assert_eq!(ts, test.1);
             assert_eq!(tz, test.2);
+            assert_eq!(era, CalendarEra::AD);
         }
     }
 
