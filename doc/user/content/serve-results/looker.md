@@ -34,19 +34,15 @@ Database password      | App-specific password.
 
 ## Configure a custom cluster
 
-To configure a custom Materialize [cluster](/sql/create-cluster), follow these steps:
+To direct queries to a specific cluster, [set the cluster at the role level](/sql/alter-role) using the following SQL statement:
 
-* Edit the Materialize connection.
+```sql
+ALTER ROLE <your_user> SET CLUSTER = <custom_cluster>;
+```
 
-* Expand the 'Additional Settings' section.
+Replace `<your_user>` with the name of your Materialize role and `<custom_cluster>` with the name of the cluster you want to use.
 
-* In the 'Additional JDBC parameters' section, input:
-
-    ```
-    options=--cluster%3D<cluster_name>
-    ```
-
-    Make sure to replace `<cluster_name>` with the actual name of your cluster.
+Once set, all new sessions for that user will automatically run in the specified cluster, eliminating the need to manually specify it in each query or connection.
 
 ## Known limitations
 

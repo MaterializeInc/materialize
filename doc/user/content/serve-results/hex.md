@@ -13,7 +13,7 @@ menu:
 
 This guide walks you through the steps required to use the collaborative data notebook [Hex](https://hex.tech/) with Materialize.
 
-## Step 1. Create an integration
+## Create an integration
 
 1. Sign in to **[Hex](https://hex.tech/)**.
 
@@ -36,7 +36,19 @@ This guide walks you through the steps required to use the collaborative data no
 
 6. Click the **Create connection** button.
 
-## Step 2. Execute and visualize a query
+## Configure a custom cluster
+
+To direct queries to a specific cluster, [set the cluster at the role level](/sql/alter-role) using the following SQL statement:
+
+```sql
+ALTER ROLE <your_user> SET CLUSTER = <custom_cluster>;
+```
+
+Replace `<your_user>` with the name of your Materialize role and `<custom_cluster>` with the name of the cluster you want to use.
+
+Once set, all new sessions for that user will automatically run in the specified cluster, eliminating the need to manually specify it in each query or connection.
+
+## Execute and visualize a query
 
 1. Create a new SQL cell.
 

@@ -31,6 +31,18 @@ Database password      | App-specific password.
 
 ![Connect using the credentials provided in the Materialize console](https://github-production-user-asset-6210df.s3.amazonaws.com/21223421/266625944-de7dfdc6-7a94-4e87-ac0a-01e104512ffe.png)
 
+## Configure a custom cluster
+
+To direct queries to a specific cluster, [set the cluster at the role level](/sql/alter-role) using the following SQL statement:
+
+```sql
+ALTER ROLE <your_user> SET CLUSTER = <custom_cluster>;
+```
+
+Replace `<your_user>` with the name of your Materialize role and `<custom_cluster>` with the name of the cluster you want to use.
+
+Once set, all new sessions for that user will automatically run in the specified cluster, eliminating the need to manually specify it in each query or connection.
+
 ## Troubleshooting
 
 Errors like the following indicate that there is a problem with the connection settings:
