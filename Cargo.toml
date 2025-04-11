@@ -6,7 +6,7 @@ members = [
     "src/alloc",
     "src/alloc-default",
     "src/arrow-util",
-    "src/audit-log",
+    "src/audit-log", "src/auth",
     "src/avro",
     "src/aws-secrets-controller",
     "src/aws-util",
