@@ -1,0 +1,24 @@
+---
+source: src/expr/src/scalar/func/impls/uint64.rs
+expression: info
+---
+Info {
+    output_type_nullable: ColumnType {
+        scalar_type: UInt32,
+        nullable: true,
+    },
+    output_type_nonnullable: ColumnType {
+        scalar_type: UInt32,
+        nullable: false,
+    },
+    preserves_uniqueness: true,
+    inverse: Some(
+        CastUint32ToUint64(
+            CastUint32ToUint64,
+        ),
+    ),
+    is_monotone: true,
+    propagates_nulls: true,
+    introduces_nulls: false,
+    could_error: true,
+}

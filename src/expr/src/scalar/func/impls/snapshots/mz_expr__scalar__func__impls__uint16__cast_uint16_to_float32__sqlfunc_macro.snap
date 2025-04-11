@@ -1,0 +1,24 @@
+---
+source: src/expr/src/scalar/func/impls/uint16.rs
+expression: info
+---
+Info {
+    output_type_nullable: ColumnType {
+        scalar_type: Float32,
+        nullable: true,
+    },
+    output_type_nonnullable: ColumnType {
+        scalar_type: Float32,
+        nullable: false,
+    },
+    preserves_uniqueness: true,
+    inverse: Some(
+        CastFloat32ToUint16(
+            CastFloat32ToUint16,
+        ),
+    ),
+    is_monotone: true,
+    propagates_nulls: true,
+    introduces_nulls: false,
+    could_error: false,
+}
