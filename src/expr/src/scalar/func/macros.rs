@@ -143,46 +143,12 @@ macro_rules! sqlfunc {
             $body:block
     ) => {
         paste::paste! {
-            #[derive(proptest_derive::Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize, Hash, mz_lowertest::MzReflect)]
-            pub struct [<$fn_name:camel>];
-
-            impl<'a> crate::func::EagerUnaryFunc<'a> for [<$fn_name:camel>] {
-                type Input = $input_ty;
-                type Output = $output_ty;
-
-                fn call(&self, a: Self::Input) -> Self::Output {
-                    $fn_name(a)
-                }
-
-                fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
-                    use mz_repr::AsColumnType;
-                    let output = Self::Output::as_column_type();
-                    let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
-                    let nullable = output.nullable;
-                    // The output is nullable if it is nullable by itself or the input is nullable
-                    // and this function propagates nulls
-                    output.nullable(nullable || (propagates_nulls && input_type.nullable))
-                }
-
-                fn preserves_uniqueness(&self) -> bool {
-                    $preserves_uniqueness
-                }
-
-                fn inverse(&self) -> Option<crate::UnaryFunc> {
-                    $inverse
-                }
-
-                fn is_monotone(&self) -> bool {
-                    $is_monotone
-                }
-            }
-
-            impl std::fmt::Display for [<$fn_name:camel>] {
-                fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                    f.write_str($name)
-                }
-            }
-
+            #[mz_expr_derive::sqlfunc(
+                sqlname = $name,
+                preserves_uniqueness = $preserves_uniqueness,
+                inverse = $inverse,
+                is_monotone = $is_monotone,
+            )]
             #[allow(clippy::extra_unused_lifetimes)]
             pub fn $fn_name<$lt>($param_name: $input_ty) -> $output_ty {
                 $body
