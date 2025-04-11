@@ -1,0 +1,20 @@
+---
+source: src/expr/src/scalar/func/impls/interval.rs
+expression: info
+---
+Info {
+    output_type_nullable: ColumnType {
+        scalar_type: Interval,
+        nullable: true,
+    },
+    output_type_nonnullable: ColumnType {
+        scalar_type: Interval,
+        nullable: false,
+    },
+    preserves_uniqueness: false,
+    inverse: None,
+    is_monotone: false,
+    propagates_nulls: true,
+    introduces_nulls: false,
+    could_error: true,
+}

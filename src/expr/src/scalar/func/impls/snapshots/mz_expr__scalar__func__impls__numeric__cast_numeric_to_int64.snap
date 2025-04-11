@@ -1,0 +1,58 @@
+---
+source: src/expr/src/scalar/func/impls/numeric.rs
+expression: "#[sqlfunc(\n    sqlname = \"numeric_to_bigint\",\n    preserves_uniqueness = false,\n    inverse = to_unary!(super::CastInt64ToNumeric(None)),\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_numeric_to_int64<'a>(a: Numeric) -> Result<i64, EvalError> {\n    {\n        let mut a = a;\n        {\n            let mut cx = numeric::cx_datum();\n            cx.round(&mut a);\n            cx.clear_status();\n            cx.try_into_i64(a).or(Err(EvalError::Int64OutOfRange(a.to_string().into())))\n        }\n    }\n}\n"
+---
+#[derive(
+    proptest_derive::Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    mz_lowertest::MzReflect
+)]
+pub struct CastNumericToInt64;
+impl<'a> crate::func::EagerUnaryFunc<'a> for CastNumericToInt64 {
+    type Input = Numeric;
+    type Output = Result<i64, EvalError>;
+    fn call(&self, a: Self::Input) -> Self::Output {
+        cast_numeric_to_int64(a)
+    }
+    fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && input_type.nullable))
+    }
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        to_unary!(super::CastInt64ToNumeric(None))
+    }
+    fn is_monotone(&self) -> bool {
+        true
+    }
+    fn preserves_uniqueness(&self) -> bool {
+        false
+    }
+}
+impl std::fmt::Display for CastNumericToInt64 {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("numeric_to_bigint")
+    }
+}
+#[allow(clippy::extra_unused_lifetimes)]
+pub fn cast_numeric_to_int64<'a>(a: Numeric) -> Result<i64, EvalError> {
+    {
+        let mut a = a;
+        {
+            let mut cx = numeric::cx_datum();
+            cx.round(&mut a);
+            cx.clear_status();
+            cx.try_into_i64(a).or(Err(EvalError::Int64OutOfRange(a.to_string().into())))
+        }
+    }
+}

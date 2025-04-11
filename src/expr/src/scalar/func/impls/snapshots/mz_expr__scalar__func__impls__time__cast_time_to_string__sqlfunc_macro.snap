@@ -1,0 +1,24 @@
+---
+source: src/expr/src/scalar/func/impls/time.rs
+expression: info
+---
+Info {
+    output_type_nullable: ColumnType {
+        scalar_type: String,
+        nullable: true,
+    },
+    output_type_nonnullable: ColumnType {
+        scalar_type: String,
+        nullable: false,
+    },
+    preserves_uniqueness: true,
+    inverse: Some(
+        CastStringToTime(
+            CastStringToTime,
+        ),
+    ),
+    is_monotone: false,
+    propagates_nulls: true,
+    introduces_nulls: false,
+    could_error: false,
+}

@@ -1,0 +1,24 @@
+---
+source: src/expr/src/scalar/func/impls/string.rs
+expression: info
+---
+Info {
+    output_type_nullable: ColumnType {
+        scalar_type: Uuid,
+        nullable: true,
+    },
+    output_type_nonnullable: ColumnType {
+        scalar_type: Uuid,
+        nullable: false,
+    },
+    preserves_uniqueness: false,
+    inverse: Some(
+        CastUuidToString(
+            CastUuidToString,
+        ),
+    ),
+    is_monotone: false,
+    propagates_nulls: true,
+    introduces_nulls: false,
+    could_error: true,
+}
