@@ -187,6 +187,62 @@ macro_rules! sqlfunc {
             pub fn $fn_name<$lt>($param_name: $input_ty) -> $output_ty {
                 $body
             }
+
+            mod $fn_name {
+                #[cfg(test)]
+                #[mz_ore::test]
+                // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+                #[cfg_attr(miri, ignore)]
+                fn test_sqlfunc_macro() {
+                    use crate::func::EagerUnaryFunc;
+                    let f = super::[<$fn_name:camel>];
+                    let input_type = mz_repr::ColumnType {
+                        scalar_type: mz_repr::ScalarType::Float32,
+                        nullable: true,
+                    };
+                    let output_type_nullable = f.output_type(input_type);
+
+                    let input_type = mz_repr::ColumnType {
+                        scalar_type: mz_repr::ScalarType::Float32,
+                        nullable: false,
+                    };
+                    let output_type_nonnullable = f.output_type(input_type);
+
+                    let preserves_uniqueness = f.preserves_uniqueness();
+                    let inverse = f.inverse();
+                    let is_monotone = f.is_monotone();
+                    let propagates_nulls = f.propagates_nulls();
+                    let introduces_nulls = f.introduces_nulls();
+                    let could_error = f.could_error();
+
+                    #[derive(Debug)]
+                    #[allow(unused)]
+                    struct Info {
+                        output_type_nullable: mz_repr::ColumnType,
+                        output_type_nonnullable: mz_repr::ColumnType,
+                        preserves_uniqueness: bool,
+                        inverse: Option<crate::UnaryFunc>,
+                        is_monotone: bool,
+                        propagates_nulls: bool,
+                        introduces_nulls: bool,
+                        could_error: bool,
+                    }
+
+                    let info = Info {
+                        output_type_nullable,
+                        output_type_nonnullable,
+                        preserves_uniqueness,
+                        inverse,
+                        is_monotone,
+                        propagates_nulls,
+                        introduces_nulls,
+                        could_error,
+                    };
+
+                    insta::assert_debug_snapshot!(info);
+                }
+
+            }
         }
     };
 }
