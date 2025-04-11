@@ -13,7 +13,7 @@ menu:
 
 This guide walks you through the steps required to use the collaborative data notebook [Deepnote](https://deepnote.com/) with Materialize.
 
-## Step 1. Create an integration
+## Create an integration
 
 1. Sign in to **[Deepnote](https://deepnote.com/)**.
 2. Go to the **Workspace integrations** page.
@@ -35,7 +35,11 @@ This guide walks you through the steps required to use the collaborative data no
 4. Click the **Create Integration** button.
 5. After a successful test, in the popup dialog, you can either select an existing project or create a new one to continue.
 
-## Step 2. Execute and visualize a query
+## Configure a custom cluster
+
+{{% alter-cluster/configure-cluster %}}
+
+## Execute and visualize a query
 
 1. Create a new SQL block.
 

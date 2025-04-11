@@ -104,6 +104,10 @@ For more details and troubleshooting, check the
 [//]: # "TODO(morsapaes) Clarify minimum refresh rate and details about live
 connections"
 
+## Configure a custom cluster
+
+{{% alter-cluster/configure-cluster %}}
+
 ### Troubleshooting
 
 Errors like the following indicate that the JDBC driver was not successfully
