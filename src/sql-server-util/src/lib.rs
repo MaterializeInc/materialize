@@ -199,11 +199,14 @@ impl Client {
     /// resulting rows.
     ///
     /// Passthrough method for [`tiberius::Client::query`].
-    pub fn query_streaming<'a>(
-        &mut self,
-        query: impl Into<Cow<'a, str>>,
+    pub fn query_streaming<'c, 'q, Q>(
+        &'c mut self,
+        query: Q,
         params: &[&dyn tiberius::ToSql],
-    ) -> impl Stream<Item = Result<tiberius::Row, SqlServerError>> + Send + '_ {
+    ) -> impl Stream<Item = Result<tiberius::Row, SqlServerError>> + Send + use<'c, Q>
+    where
+        Q: Into<Cow<'q, str>>,
+    {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let params = params
             .iter()
@@ -370,11 +373,14 @@ impl<'a> Transaction<'a> {
     }
 
     /// See [`Client::query_streaming`]
-    pub fn query_streaming<'q>(
-        &mut self,
-        query: impl Into<Cow<'q, str>>,
+    pub fn query_streaming<'c, 'p, 'q, Q>(
+        &'c mut self,
+        query: Q,
         params: &[&dyn tiberius::ToSql],
-    ) -> impl Stream<Item = Result<tiberius::Row, SqlServerError>> + Send + '_ {
+    ) -> impl Stream<Item = Result<tiberius::Row, SqlServerError>> + Send + use<'c, Q>
+    where
+        Q: Into<Cow<'q, str>>,
+    {
         self.client.query_streaming(query, params)
     }
 
