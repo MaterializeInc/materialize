@@ -422,7 +422,7 @@ mod test {
     /// whether the input colum is marked nullable or not.
     fn test_equivalence_inner(input_nullable: bool) {
         #[track_caller]
-        fn check<T: LazyBinaryFunc + std::fmt::Display>(
+        fn check<T: LazyBinaryFunc + std::fmt::Display + std::fmt::Debug>(
             new: T,
             old: BinaryFunc,
             column_a_ty: &ColumnType,
@@ -431,23 +431,40 @@ mod test {
             assert_eq!(
                 new.propagates_nulls(),
                 old.propagates_nulls(),
-                "propagates_nulls mismatch"
+                "{new:?} propagates_nulls mismatch"
             );
             assert_eq!(
                 new.introduces_nulls(),
                 old.introduces_nulls(),
-                "introduces_nulls mismatch"
+                "{new:?} introduces_nulls mismatch"
             );
-            assert_eq!(new.could_error(), old.could_error(), "could_error mismatch");
-            assert_eq!(new.is_monotone(), old.is_monotone(), "is_monotone mismatch");
-            assert_eq!(new.is_infix_op(), old.is_infix_op(), "is_infix_op mismatch");
+            assert_eq!(
+                new.could_error(),
+                old.could_error(),
+                "{new:?} could_error mismatch"
+            );
+            assert_eq!(
+                new.is_monotone(),
+                old.is_monotone(),
+                "{new:?} is_monotone mismatch"
+            );
+            assert_eq!(
+                new.is_infix_op(),
+                old.is_infix_op(),
+                "{new:?} is_infix_op mismatch"
+            );
             assert_eq!(
                 new.output_type(column_a_ty.clone(), column_b_ty.clone()),
                 old.output_type(column_a_ty.clone(), column_b_ty.clone()),
-                "output_type mismatch"
+                "{new:?} output_type mismatch"
             );
-            assert_eq!(format!("{}", new), format!("{}", old), "format mismatch");
+            assert_eq!(
+                format!("{}", new),
+                format!("{}", old),
+                "{new:?} format mismatch"
+            );
         }
+
         let i32_ty = ColumnType {
             nullable: input_nullable,
             scalar_type: ScalarType::Int32,
@@ -648,6 +665,90 @@ mod test {
         check(func::ModFloat32, BF::ModFloat32, &i32_ty, &i32_ty);
         check(func::ModFloat64, BF::ModFloat64, &i32_ty, &i32_ty);
         check(func::ModNumeric, BF::ModNumeric, &i32_ty, &i32_ty);
+
+        check(func::LogBaseNumeric, BF::LogNumeric, &i32_ty, &i32_ty);
+        check(func::Power, BF::Power, &i32_ty, &i32_ty);
+        check(func::PowerNumeric, BF::PowerNumeric, &i32_ty, &i32_ty);
+
+        check(func::UuidGenerateV5, BF::UuidGenerateV5, &i32_ty, &i32_ty);
+
+        check(func::GetBit, BF::GetBit, &i32_ty, &i32_ty);
+        check(func::GetByte, BF::GetByte, &i32_ty, &i32_ty);
+
+        check(
+            func::ConstantTimeEqBytes,
+            BF::ConstantTimeEqBytes,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::ConstantTimeEqString,
+            BF::ConstantTimeEqString,
+            &i32_ty,
+            &i32_ty,
+        );
+
+        check(
+            func::RangeContainsRange,
+            BF::RangeContainsRange { rev: false },
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::RangeContainsRangeRev,
+            BF::RangeContainsRange { rev: true },
+            &i32_ty,
+            &i32_ty,
+        );
+        check(func::RangeOverlaps, BF::RangeOverlaps, &i32_ty, &i32_ty);
+        check(func::RangeAfter, BF::RangeAfter, &i32_ty, &i32_ty);
+        check(func::RangeBefore, BF::RangeBefore, &i32_ty, &i32_ty);
+        check(func::RangeOverleft, BF::RangeOverleft, &i32_ty, &i32_ty);
+        check(func::RangeOverright, BF::RangeOverright, &i32_ty, &i32_ty);
+        check(func::RangeAdjacent, BF::RangeAdjacent, &i32_ty, &i32_ty);
+
+        check(func::Eq, BF::Eq, &i32_ty, &i32_ty);
+        check(func::NotEq, BF::NotEq, &i32_ty, &i32_ty);
+        check(func::Lt, BF::Lt, &i32_ty, &i32_ty);
+        check(func::Lte, BF::Lte, &i32_ty, &i32_ty);
+        check(func::Gt, BF::Gt, &i32_ty, &i32_ty);
+        check(func::Gte, BF::Gte, &i32_ty, &i32_ty);
+
+        check(
+            func::JsonbContainsString,
+            BF::JsonbContainsString,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(func::MapContainsKey, BF::MapContainsKey, &i32_ty, &i32_ty);
+        check(
+            func::MapContainsAllKeys,
+            BF::MapContainsAllKeys,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::MapContainsAnyKeys,
+            BF::MapContainsAnyKeys,
+            &i32_ty,
+            &i32_ty,
+        );
+        check(func::MapContainsMap, BF::MapContainsMap, &i32_ty, &i32_ty);
+
+        check(
+            func::JsonbContainsJsonb,
+            BF::JsonbContainsJsonb,
+            &i32_ty,
+            &i32_ty,
+        );
+
+        check(func::ExtractDateUnits, BF::ExtractDate, &i32_ty, &i32_ty);
+        check(
+            func::DateTruncInterval,
+            BF::DateTruncInterval,
+            &i32_ty,
+            &i32_ty,
+        );
 
         check(func::ArrayLength, BF::ArrayLength, &i32_ty, &i32_ty);
     }
