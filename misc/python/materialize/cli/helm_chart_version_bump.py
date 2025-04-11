@@ -27,7 +27,7 @@ def main() -> int:
         help="Helm-chart version to bump to, no change if not set.",
     )
     parser.add_argument(
-        "environmentd-version", type=str, help="environmentd version to bump to."
+        "environmentd_version", type=str, help="environmentd version to bump to."
     )
     args = parser.parse_args()
 
