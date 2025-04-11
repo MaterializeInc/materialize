@@ -1,0 +1,50 @@
+---
+source: src/expr/src/scalar/func/macros.rs
+expression: "#[sqlfunc(\n    sqlname = stringify!(infallible2),\n    preserves_uniqueness = false,\n    inverse = None,\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn infallible2<'a>(a: Option<f32>) -> f32 {\n    { a.unwrap_or_default() }\n}\n"
+---
+#[derive(
+    proptest_derive::Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    mz_lowertest::MzReflect
+)]
+pub struct Infallible2;
+impl<'a> crate::func::EagerUnaryFunc<'a> for Infallible2 {
+    type Input = Option<f32>;
+    type Output = f32;
+    fn call(&self, a: Self::Input) -> Self::Output {
+        infallible2(a)
+    }
+    fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && input_type.nullable))
+    }
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        None
+    }
+    fn is_monotone(&self) -> bool {
+        false
+    }
+    fn preserves_uniqueness(&self) -> bool {
+        false
+    }
+}
+impl std::fmt::Display for Infallible2 {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(stringify!(infallible2))
+    }
+}
+#[allow(clippy::extra_unused_lifetimes)]
+pub fn infallible2<'a>(a: Option<f32>) -> f32 {
+    { a.unwrap_or_default() }
+}
