@@ -36,7 +36,7 @@ include!(concat!(
 /// from the compute controller.
 ///
 /// [`ComputeCommand`]: super::command::ComputeCommand
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeResponse<T = mz_repr::Timestamp> {
     /// `Frontiers` announces the advancement of the various frontiers of the specified compute
     /// collection.
@@ -320,7 +320,7 @@ impl Arbitrary for FrontiersResponse {
 ///
 /// Note that each `Peek` expects to generate exactly one `PeekResponse`, i.e.
 /// we expect a 1:1 contract between `Peek` and `PeekResponse`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum PeekResponse {
     /// Returned rows of a successful peek.
     Rows(RowCollection),

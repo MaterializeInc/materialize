@@ -29,7 +29,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_expr.row.collection.rs"));
 ///
 /// Note: the encoding format we use to represent [`Row`]s in this struct is
 /// not stable, and thus should never be persisted durably.
-#[derive(Default, Debug, Clone, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RowCollection {
     /// Contiguous blob of encoded Rows.
     encoded: Bytes,

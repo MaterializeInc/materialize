@@ -12,6 +12,7 @@
 use crate::CollectionMetadata;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroI64;
+use std::str::FromStr;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, atomic};
 use std::time::{Duration, Instant};
@@ -24,15 +25,16 @@ use mz_cluster_client::ReplicaId;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
 use mz_dyncfg::ConfigValHandle;
 use mz_ore::cast::CastFrom;
+use mz_ore::netio::SocketAddr;
 use mz_ore::now::NowFn;
 use mz_ore::retry::{Retry, RetryState};
 use mz_ore::task::AbortOnDropHandle;
 use mz_repr::GlobalId;
 use mz_service::client::{GenericClient, Partitioned};
 use mz_service::params::GrpcClientParameters;
+use mz_service::transport;
 use mz_storage_client::client::{
-    RunIngestionCommand, RunSinkCommand, Status, StatusUpdate, StorageClient, StorageCommand,
-    StorageGrpcClient, StorageResponse,
+    RunIngestionCommand, RunSinkCommand, Status, StatusUpdate, StorageCommand, StorageResponse,
 };
 use mz_storage_client::metrics::{InstanceMetrics, ReplicaMetrics};
 use mz_storage_types::sinks::StorageSinkDesc;
@@ -111,7 +113,6 @@ struct ActiveExport {
 impl<T> Instance<T>
 where
     T: Timestamp + Lattice + TotalOrder,
-    StorageGrpcClient: StorageClient<T>,
 {
     /// Creates a new [`Instance`].
     pub fn new(
@@ -783,7 +784,6 @@ pub struct Replica<T> {
 impl<T> Replica<T>
 where
     T: Timestamp + Lattice,
-    StorageGrpcClient: StorageClient<T>,
 {
     /// Creates a new [`Replica`].
     fn new(
@@ -836,7 +836,9 @@ where
     }
 }
 
-type ReplicaClient<T> = Partitioned<StorageGrpcClient, StorageCommand<T>, StorageResponse<T>>;
+type StorageTransportClient<T> = transport::Client<StorageCommand<T>, StorageResponse<T>>;
+type ReplicaClient<T> =
+    Partitioned<StorageTransportClient<T>, StorageCommand<T>, StorageResponse<T>>;
 
 /// A task handling communication with a replica.
 struct ReplicaTask<T> {
@@ -859,7 +861,6 @@ struct ReplicaTask<T> {
 impl<T> ReplicaTask<T>
 where
     T: Timestamp + Lattice,
-    StorageGrpcClient: StorageClient<T>,
 {
     /// Runs the replica task.
     async fn run(self) {
@@ -880,17 +881,15 @@ where
     async fn connect(&self) -> ReplicaClient<T> {
         let try_connect = |retry: RetryState| {
             let addrs = &self.config.location.ctl_addrs;
-            let dests = addrs
+            let addrs = addrs
                 .iter()
-                .map(|addr| (addr.clone(), self.metrics.clone()))
+                .map(|addr| SocketAddr::from_str(addr).unwrap())
                 .collect();
             let version = self.config.build_info.semver_version();
-            let client_params = &self.config.grpc_client;
 
             async move {
                 let connect_start = Instant::now();
-                let connect_result =
-                    StorageGrpcClient::connect_partitioned(dests, version, client_params).await;
+                let connect_result = transport::Client::connect_partitioned(addrs, version).await;
                 self.metrics.observe_connect_time(connect_start.elapsed());
 
                 connect_result.inspect_err(|error| {

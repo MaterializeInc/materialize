@@ -9,6 +9,7 @@
 
 //! A client for replicas of a compute instance.
 
+use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{self, AtomicBool};
 use std::time::{Duration, Instant};
@@ -19,10 +20,12 @@ use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, Tim
 use mz_compute_types::dyncfgs::ENABLE_COMPUTE_REPLICA_EXPIRATION;
 use mz_dyncfg::ConfigSet;
 use mz_ore::channel::InstrumentedUnboundedSender;
+use mz_ore::netio::SocketAddr;
 use mz_ore::retry::{Retry, RetryState};
 use mz_ore::task::AbortOnDropHandle;
 use mz_service::client::GenericClient;
 use mz_service::params::GrpcClientParameters;
+use mz_service::transport;
 use tokio::select;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -36,7 +39,6 @@ use crate::metrics::IntCounter;
 use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::{ComputeCommand, InitialComputeParameters, InstanceConfig};
 use crate::protocol::response::ComputeResponse;
-use crate::service::{ComputeClient, ComputeGrpcClient};
 
 type Client<T> = SequentialHydration<T>;
 
@@ -69,7 +71,6 @@ pub(super) struct ReplicaClient<T> {
 impl<T> ReplicaClient<T>
 where
     T: ComputeControllerTimestamp,
-    ComputeGrpcClient: ComputeClient<T>,
 {
     pub(super) fn spawn(
         id: ReplicaId,
@@ -160,7 +161,6 @@ struct ReplicaTask<T> {
 impl<T> ReplicaTask<T>
 where
     T: ComputeControllerTimestamp,
-    ComputeGrpcClient: ComputeClient<T>,
 {
     /// Asynchronously forwards commands to and responses from a single replica.
     async fn run(self) {
@@ -181,17 +181,15 @@ where
     async fn connect(&self) -> Client<T> {
         let try_connect = |retry: RetryState| {
             let addrs = &self.config.location.ctl_addrs;
-            let dests = addrs
+            let addrs = addrs
                 .iter()
-                .map(|addr| (addr.clone(), self.metrics.clone()))
+                .map(|addr| SocketAddr::from_str(addr).unwrap())
                 .collect();
             let version = self.build_info.semver_version();
-            let client_params = &self.config.grpc_client;
 
             async move {
                 let connect_start = Instant::now();
-                let connect_result =
-                    ComputeGrpcClient::connect_partitioned(dests, version, client_params).await;
+                let connect_result = transport::Client::connect_partitioned(addrs, version).await;
                 self.metrics.observe_connect_time(connect_start.elapsed());
 
                 connect_result.inspect_err(|error| {
@@ -233,7 +231,6 @@ where
     async fn run_message_loop(mut self, mut client: Client<T>) -> Result<(), anyhow::Error>
     where
         T: ComputeControllerTimestamp,
-        ComputeGrpcClient: ComputeClient<T>,
     {
         let id = self.replica_id;
         let incarnation = self.epoch.replica();
