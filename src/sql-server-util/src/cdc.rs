@@ -170,43 +170,41 @@ impl<'a> CdcStream<'a> {
                             continue;
                         }
 
-                        // List all the changes for the current instance.
-                        let changes = crate::inspect::get_changes(
+                        // Get a stream of all the changes for the current instance.
+                        let changes = crate::inspect::get_changes_asc(
                             self.client,
                             &*instance,
                             *instance_lsn,
                             new_lsn,
                             RowFilterOption::AllUpdateOld,
                         )
-                        .await?;
+                        // TODO(sql_server3): Make this chunk size configurable.
+                        .ready_chunks(64);
+                        let mut changes = std::pin::pin!(changes);
 
-                        // TODO(sql_server1): For very large changes it feels bad collecting
-                        // them all in memory, it would be best if we streamed them to the
-                        // caller.
+                        // Map and stream all the rows to our listener.
+                        while let Some(chunk) = changes.next().await {
+                            // Group events by LSN.
+                            //
+                            // TODO(sql_server3): Can we maybe re-use this BTreeMap or these Vec
+                            // allocations? Something to be careful of is shrinking the allocations
+                            // if/when they grow to large, e.g. from a large spike of changes.
+                            // Alternatively we could also use a single Vec here since we know the
+                            // changes are ordered by LSN.
+                            let mut events: BTreeMap<Lsn, Vec<Operation>> = BTreeMap::default();
+                            for change in chunk {
+                                let (lsn, operation) = change.and_then(Operation::try_parse)?;
+                                events.entry(lsn).or_default().push(operation);
+                            }
 
-                        let mut events: BTreeMap<Lsn, Vec<Operation>> = BTreeMap::default();
-                        for change in changes {
-                            let (lsn, operation) = Operation::try_parse(change)?;
-                            // Group all the operations by their LSN.
-                            events.entry(lsn).or_default().push(operation);
-                        }
-
-                        for (lsn, changes) in events {
-                            // TODO(sql_server1): Handle these events and notify the upstream
-                            // that we can cleanup this LSN.
-                            let capture_instance = Arc::clone(instance);
-                            let mark_complete = Box::new(move || {
-                                let _capture_isntance = capture_instance;
-                                let _completed_lsn = lsn;
-                            });
-                            let event = CdcEvent::Data {
-                                capture_instance: Arc::clone(instance),
-                                lsn,
-                                changes,
-                                mark_complete,
-                            };
-
-                            yield event;
+                            // Emit the groups of events.
+                            for (lsn, changes) in events {
+                                yield CdcEvent::Data {
+                                    capture_instance: Arc::clone(instance),
+                                    lsn,
+                                    changes,
+                                };
+                            }
                         }
                     }
 
@@ -278,9 +276,6 @@ pub enum CdcEvent {
         lsn: Lsn,
         /// The change itself.
         changes: Vec<Operation>,
-        /// When called marks `lsn` as complete allowing the upstream DB to clean up the record.
-        #[derivative(Debug = "ignore")]
-        mark_complete: Box<dyn FnOnce() + Send + Sync>,
     },
     /// We've made progress and observed all the changes less than `next_lsn`.
     Progress {
