@@ -1,7 +1,7 @@
 [
   {
     "name": "objects.proto",
-    "md5": "65c8ec9661c8a207bc9eb5af098fa98f"
+    "md5": "1ee448278aa47b301388844a9a8e58c0"
   },
   {
     "name": "objects_v67.proto",
@@ -30,5 +30,9 @@
   {
     "name": "objects_v73.proto",
     "md5": "d5d1a8c6b1aa8212245cfd343a3b8417"
+  },
+  {
+    "name": "objects_v74.proto",
+    "md5": "f8dd1defd3b20c13ecca54b0321d5d25"
   }
 ]

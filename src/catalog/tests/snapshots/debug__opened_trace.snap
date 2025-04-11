@@ -1258,6 +1258,8 @@ Trace {
                         attributes: Some(
                             RoleAttributes {
                                 inherit: true,
+                                superuser: None,
+                                login: None,
                             },
                         ),
                         membership: Some(
@@ -1296,6 +1298,8 @@ Trace {
                         attributes: Some(
                             RoleAttributes {
                                 inherit: true,
+                                superuser: None,
+                                login: None,
                             },
                         ),
                         membership: Some(
@@ -1334,6 +1338,8 @@ Trace {
                         attributes: Some(
                             RoleAttributes {
                                 inherit: true,
+                                superuser: None,
+                                login: None,
                             },
                         ),
                         membership: Some(
@@ -1372,6 +1378,8 @@ Trace {
                         attributes: Some(
                             RoleAttributes {
                                 inherit: true,
+                                superuser: None,
+                                login: None,
                             },
                         ),
                         membership: Some(
@@ -1410,6 +1418,8 @@ Trace {
                         attributes: Some(
                             RoleAttributes {
                                 inherit: true,
+                                superuser: None,
+                                login: None,
                             },
                         ),
                         membership: Some(
@@ -1448,6 +1458,8 @@ Trace {
                         attributes: Some(
                             RoleAttributes {
                                 inherit: true,
+                                superuser: None,
+                                login: None,
                             },
                         ),
                         membership: Some(
@@ -1469,6 +1481,9 @@ Trace {
                 ),
             ),
         ],
+    },
+    role_auth: CollectionTrace {
+        values: [],
     },
     schemas: CollectionTrace {
         values: [

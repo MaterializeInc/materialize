@@ -21,6 +21,7 @@ use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
+use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
 use mz_cloud_provider::{CloudProvider, InvalidCloudProviderError};
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -485,6 +486,12 @@ pub trait CatalogSchema {
 pub struct RoleAttributes {
     /// Indicates whether the role has inheritance of privileges.
     pub inherit: bool,
+    /// The raw password of the role. This is for self managed auth, not cloud.
+    pub password: Option<Password>,
+    /// Whether or not this user is a superuser.
+    pub superuser: Option<bool>,
+    /// Whether this role is login
+    pub login: Option<bool>,
     // Force use of constructor.
     _private: (),
 }
@@ -494,11 +501,14 @@ impl RoleAttributes {
     pub const fn new() -> RoleAttributes {
         RoleAttributes {
             inherit: true,
+            password: None,
+            superuser: None,
+            login: None,
             _private: (),
         }
     }
 
-    /// Adds all attributes.
+    /// Adds all attributes except password.
     pub const fn with_all(mut self) -> RoleAttributes {
         self.inherit = true;
         self
@@ -508,13 +518,40 @@ impl RoleAttributes {
     pub const fn is_inherit(&self) -> bool {
         self.inherit
     }
+
+    /// Returns whether or not the role has a password.
+    pub const fn has_password(&self) -> bool {
+        self.password.is_some()
+    }
+
+    /// Returns self without the password.
+    pub fn without_password(self) -> RoleAttributes {
+        RoleAttributes {
+            inherit: self.inherit,
+            password: None,
+            superuser: self.superuser,
+            login: self.login,
+            _private: (),
+        }
+    }
 }
 
 impl From<PlannedRoleAttributes> for RoleAttributes {
-    fn from(PlannedRoleAttributes { inherit }: PlannedRoleAttributes) -> RoleAttributes {
+    fn from(
+        PlannedRoleAttributes {
+            inherit,
+            password,
+            superuser,
+            login,
+            ..
+        }: PlannedRoleAttributes,
+    ) -> RoleAttributes {
         let default_attributes = RoleAttributes::new();
         RoleAttributes {
             inherit: inherit.unwrap_or(default_attributes.inherit),
+            password,
+            superuser,
+            login,
             _private: (),
         }
     }

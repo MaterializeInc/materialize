@@ -292,6 +292,46 @@ impl UpdateFrom<durable::Role> for Role {
     }
 }
 
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+pub struct RoleAuth {
+    pub role_id: RoleId,
+    pub password_hash: Option<String>,
+    pub updated_at: u64,
+}
+
+impl From<RoleAuth> for durable::RoleAuth {
+    fn from(role_auth: RoleAuth) -> durable::RoleAuth {
+        durable::RoleAuth {
+            role_id: role_auth.role_id,
+            password_hash: role_auth.password_hash,
+            updated_at: role_auth.updated_at,
+        }
+    }
+}
+
+impl From<durable::RoleAuth> for RoleAuth {
+    fn from(
+        durable::RoleAuth {
+            role_id,
+            password_hash,
+            updated_at,
+        }: durable::RoleAuth,
+    ) -> RoleAuth {
+        RoleAuth {
+            role_id,
+            password_hash,
+            updated_at,
+        }
+    }
+}
+
+impl UpdateFrom<durable::RoleAuth> for RoleAuth {
+    fn update_from(&mut self, from: durable::RoleAuth) {
+        self.role_id = from.role_id;
+        self.password_hash = from.password_hash;
+    }
+}
+
 #[derive(Debug, Serialize, Clone, PartialEq)]
 pub struct Cluster {
     pub name: String,
@@ -3341,6 +3381,7 @@ pub struct StateUpdate {
 #[derive(Debug, Clone)]
 pub enum StateUpdateKind {
     Role(durable::objects::Role),
+    RoleAuth(durable::objects::RoleAuth),
     Database(durable::objects::Database),
     Schema(durable::objects::Schema),
     DefaultPrivilege(durable::objects::DefaultPrivilege),
@@ -3418,6 +3459,7 @@ impl From<CatalogEntry> for TemporaryItem {
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub enum BootstrapStateUpdateKind {
     Role(durable::objects::Role),
+    RoleAuth(durable::objects::RoleAuth),
     Database(durable::objects::Database),
     Schema(durable::objects::Schema),
     DefaultPrivilege(durable::objects::DefaultPrivilege),
@@ -3441,6 +3483,7 @@ impl From<BootstrapStateUpdateKind> for StateUpdateKind {
     fn from(value: BootstrapStateUpdateKind) -> Self {
         match value {
             BootstrapStateUpdateKind::Role(kind) => StateUpdateKind::Role(kind),
+            BootstrapStateUpdateKind::RoleAuth(kind) => StateUpdateKind::RoleAuth(kind),
             BootstrapStateUpdateKind::Database(kind) => StateUpdateKind::Database(kind),
             BootstrapStateUpdateKind::Schema(kind) => StateUpdateKind::Schema(kind),
             BootstrapStateUpdateKind::DefaultPrivilege(kind) => {
@@ -3483,6 +3526,7 @@ impl TryFrom<StateUpdateKind> for BootstrapStateUpdateKind {
     fn try_from(value: StateUpdateKind) -> Result<Self, Self::Error> {
         match value {
             StateUpdateKind::Role(kind) => Ok(BootstrapStateUpdateKind::Role(kind)),
+            StateUpdateKind::RoleAuth(kind) => Ok(BootstrapStateUpdateKind::RoleAuth(kind)),
             StateUpdateKind::Database(kind) => Ok(BootstrapStateUpdateKind::Database(kind)),
             StateUpdateKind::Schema(kind) => Ok(BootstrapStateUpdateKind::Schema(kind)),
             StateUpdateKind::DefaultPrivilege(kind) => {

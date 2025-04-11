@@ -21,6 +21,7 @@ use derivative::Derivative;
 use futures::{Stream, StreamExt};
 use itertools::Itertools;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
+use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
 use mz_compute_types::ComputeInstanceId;
 use mz_ore::channel::OneshotReceiverExt;
@@ -47,7 +48,9 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
-use crate::command::{CatalogDump, CatalogSnapshot, Command, ExecuteResponse, Response};
+use crate::command::{
+    AuthResponse, CatalogDump, CatalogSnapshot, Command, ExecuteResponse, Response,
+};
 use crate::coord::{Coordinator, ExecuteContextExtra};
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
@@ -146,6 +149,22 @@ impl Client {
         // intended to be 100% accurate and correct, so we don't burden the timestamp oracle with
         // generating a more correct timestamp.
         Session::new(self.build_info, config, self.metrics().session_metrics())
+    }
+
+    /// Preforms an authentication check for the given user.
+    pub async fn authenticate(
+        &self,
+        user: &String,
+        password: &Password,
+    ) -> Result<AuthResponse, AdapterError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::AuthenticatePassword {
+            role_name: user.to_string(),
+            password: Some(password.clone()),
+            tx,
+        });
+        let response = rx.await.expect("sender dropped")?;
+        Ok(response)
     }
 
     /// Upgrades this client to a session client.
@@ -366,6 +385,7 @@ Issue a SQL query to get started. Need help?
             user: SUPPORT_USER.name.clone(),
             client_ip: None,
             external_metadata_rx: None,
+            internal_user_metadata: None,
             helm_chart_version: None,
         });
         let mut session_client = self.startup(session).await?;
@@ -872,6 +892,7 @@ impl SessionClient {
                 Command::Execute { .. } => typ = Some("execute"),
                 Command::GetWebhook { .. } => typ = Some("webhook"),
                 Command::Startup { .. }
+                | Command::AuthenticatePassword { .. }
                 | Command::CatalogSnapshot { .. }
                 | Command::Commit { .. }
                 | Command::CancelRequest { .. }

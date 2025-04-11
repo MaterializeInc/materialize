@@ -24,6 +24,7 @@ ipnet = "2.11.0"
 itertools = "0.12.1"
 mz-adapter-types = { path = "../adapter-types" }
 mz-audit-log = { path = "../audit-log" }
+mz-auth = { path = "../auth" }
 mz-build-info = { path = "../build-info" }
 mz-catalog-protos = { path = "../catalog-protos" }
 mz-cloud-resources = { path = "../cloud-resources" }

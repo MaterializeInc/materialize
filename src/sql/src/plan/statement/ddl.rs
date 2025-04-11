@@ -20,6 +20,7 @@ use std::time::Duration;
 use itertools::{Either, Itertools};
 use mz_adapter_types::compaction::{CompactionWindow, DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION};
 use mz_adapter_types::dyncfgs::ENABLE_MULTI_REPLICA_SOURCES;
+use mz_auth::password::Password;
 use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL, ReplicaId};
 use mz_expr::{CollectionPlan, UnmaterializableFunc};
 use mz_interchange::avro::{AvroSchemaGenerator, DocTarget};
@@ -4189,22 +4190,29 @@ pub enum PlannedAlterRoleOption {
     Variable(PlannedRoleVariable),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PlannedRoleAttributes {
     pub inherit: Option<bool>,
+    pub password: Option<Password>,
+    /// `nopassword` is set to true if the password is from the parser is None.
+    /// This is semantically different than not supplying a password at all,
+    /// to allow for unsetting a password.
+    pub nopassword: Option<bool>,
+    pub superuser: Option<bool>,
+    pub login: Option<bool>,
 }
 
 fn plan_role_attributes(options: Vec<RoleAttribute>) -> Result<PlannedRoleAttributes, PlanError> {
-    let mut planned_attributes = PlannedRoleAttributes { inherit: None };
+    let mut planned_attributes = PlannedRoleAttributes {
+        inherit: None,
+        password: None,
+        superuser: None,
+        login: None,
+        nopassword: None,
+    };
 
     for option in options {
         match option {
-            RoleAttribute::Login | RoleAttribute::NoLogin => {
-                bail_never_supported!("LOGIN attribute", "sql/create-role/#details");
-            }
-            RoleAttribute::SuperUser | RoleAttribute::NoSuperUser => {
-                bail_never_supported!("SUPERUSER attribute", "sql/create-role/#details");
-            }
             RoleAttribute::Inherit | RoleAttribute::NoInherit
                 if planned_attributes.inherit.is_some() =>
             {
@@ -4231,9 +4239,43 @@ fn plan_role_attributes(options: Vec<RoleAttribute>) -> Result<PlannedRoleAttrib
                     "Use system privileges instead."
                 );
             }
+            RoleAttribute::Password(_) if planned_attributes.password.is_some() => {
+                sql_bail!("conflicting or redundant options");
+            }
 
             RoleAttribute::Inherit => planned_attributes.inherit = Some(true),
             RoleAttribute::NoInherit => planned_attributes.inherit = Some(false),
+            RoleAttribute::Password(password) => {
+                if let Some(password) = password {
+                    planned_attributes.password = Some(password.into());
+                } else {
+                    planned_attributes.nopassword = Some(true);
+                }
+            }
+            RoleAttribute::SuperUser => {
+                if planned_attributes.superuser == Some(false) {
+                    sql_bail!("conflicting or redundant options");
+                }
+                planned_attributes.superuser = Some(true);
+            }
+            RoleAttribute::NoSuperUser => {
+                if planned_attributes.superuser == Some(true) {
+                    sql_bail!("conflicting or redundant options");
+                }
+                planned_attributes.superuser = Some(false);
+            }
+            RoleAttribute::Login => {
+                if planned_attributes.login == Some(false) {
+                    sql_bail!("conflicting or redundant options");
+                }
+                planned_attributes.login = Some(true);
+            }
+            RoleAttribute::NoLogin => {
+                if planned_attributes.login == Some(true) {
+                    sql_bail!("conflicting or redundant options");
+                }
+                planned_attributes.login = Some(false);
+            }
         }
     }
     if planned_attributes.inherit == Some(false) {

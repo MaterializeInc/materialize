@@ -41,7 +41,7 @@ use mz_catalog::expr_cache::{ExpressionCacheHandle, GlobalExpressions, LocalExpr
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database,
-    NetworkPolicy, Role, Schema,
+    NetworkPolicy, Role, RoleAuth, Schema,
 };
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::ReplicaLocation;
@@ -1112,6 +1112,10 @@ impl Catalog {
 
     pub fn try_get_role_by_name(&self, role_name: &str) -> Option<&Role> {
         self.state.try_get_role_by_name(role_name)
+    }
+
+    pub fn try_get_role_auth_by_id(&self, id: &RoleId) -> Option<&RoleAuth> {
+        self.state.try_get_role_auth_by_id(id)
     }
 
     /// Creates a new schema in the `Catalog` for temporary items

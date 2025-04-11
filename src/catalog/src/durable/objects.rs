@@ -210,6 +210,44 @@ impl DurableType for Role {
 }
 
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct RoleAuth {
+    pub role_id: RoleId,
+    pub password_hash: Option<String>,
+    pub updated_at: u64,
+}
+
+impl DurableType for RoleAuth {
+    type Key = RoleAuthKey;
+    type Value = RoleAuthValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            RoleAuthKey {
+                role_id: self.role_id,
+            },
+            RoleAuthValue {
+                password_hash: self.password_hash,
+                updated_at: self.updated_at,
+            },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            role_id: key.role_id,
+            password_hash: value.password_hash,
+            updated_at: value.updated_at,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        RoleAuthKey {
+            role_id: self.role_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct NetworkPolicy {
     pub name: String,
     pub id: NetworkPolicyId,
@@ -1112,6 +1150,7 @@ pub struct Snapshot {
     pub databases: BTreeMap<proto::DatabaseKey, proto::DatabaseValue>,
     pub schemas: BTreeMap<proto::SchemaKey, proto::SchemaValue>,
     pub roles: BTreeMap<proto::RoleKey, proto::RoleValue>,
+    pub role_auth: BTreeMap<proto::RoleAuthKey, proto::RoleAuthValue>,
     pub items: BTreeMap<proto::ItemKey, proto::ItemValue>,
     pub comments: BTreeMap<proto::CommentKey, proto::CommentValue>,
     pub clusters: BTreeMap<proto::ClusterKey, proto::ClusterValue>,
@@ -1441,6 +1480,20 @@ pub struct SystemPrivilegesKey {
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct SystemPrivilegesValue {
     pub(crate) acl_mode: AclMode,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct RoleAuthKey {
+    // TODO(auth): Depending on what the future holds, here is where
+    // we might also want to key by a `version` field.
+    // That way we can store password versions or what have you.
+    pub(crate) role_id: RoleId,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct RoleAuthValue {
+    pub(crate) password_hash: Option<String>,
+    pub(crate) updated_at: u64,
 }
 
 #[cfg(test)]

@@ -73,6 +73,7 @@ impl Debug for StableSnapshot<'_> {
             databases,
             schemas,
             roles,
+            role_auth,
             items,
             comments,
             clusters,
@@ -100,6 +101,7 @@ impl Debug for StableSnapshot<'_> {
             .field("databases", databases)
             .field("schemas", schemas)
             .field("roles", roles)
+            .field("role_auth", role_auth)
             .field("items", items)
             .field("comments", comments)
             .field("clusters", clusters)

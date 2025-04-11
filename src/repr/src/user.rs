@@ -18,3 +18,8 @@ pub struct ExternalUserMetadata {
     /// Indicates if the user is an admin in the external system.
     pub admin: bool,
 }
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InternalUserMetadata {
+    pub superuser: bool,
+}
