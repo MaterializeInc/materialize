@@ -165,6 +165,8 @@ IGNORE_RE = re.compile(
     | there\ have\ been\ DDL\ that\ we\ need\ to\ react\ to;\ rebooting\ in\ read-only\ mode
     # Don't care for ssh problems
     | fatal:\ userauth_pubkey
+    # Expected in Terraform tests if something else failed during the setup
+    | mz-debug:\ fatal:\ failed\ to\ read\ kubeconfig
     # Fences without incrementing deploy generation
     | txn-wal-fencing-mz_first-.* \| .* unable\ to\ confirm\ leadership
     | txn-wal-fencing-mz_first-.* \| .* fenced\ by\ envd

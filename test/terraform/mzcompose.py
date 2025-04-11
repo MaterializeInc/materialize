@@ -182,8 +182,6 @@ class AWS:
         vars = [
             "-var",
             "operator_version=v25.2.0-beta.1",
-            "-var",
-            f"orchestratord_version={tag}",
         ]
 
         print("--- Setup")
@@ -193,7 +191,12 @@ class AWS:
         spawn.runv(["terraform", "init"], cwd=self.path)
         spawn.runv(["terraform", "validate"], cwd=self.path)
         spawn.runv(["terraform", "plan", *vars], cwd=self.path)
-        spawn.runv(["terraform", "apply", "-auto-approve", *vars], cwd=self.path)
+        try:
+            spawn.runv(["terraform", "apply", "-auto-approve", *vars], cwd=self.path)
+        except:
+            # Sometimes fails for unknown reason, so just retry:
+            # > Error: namespaces is forbidden: User "arn:aws:sts::400121260767:assumed-role/ci/ci" cannot create resource "namespaces" in API group "" at the cluster scope
+            spawn.runv(["terraform", "apply", "-auto-approve", *vars], cwd=self.path)
 
         metadata_backend_url = spawn.capture(
             ["terraform", "output", "-raw", "metadata_backend_url"], cwd=self.path
@@ -539,6 +542,12 @@ def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
         help="Destroy the region at the end of the workflow.",
     )
     parser.add_argument(
+        "--run-testdrive-files",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Run testdrive files",
+    )
+    parser.add_argument(
         "--tag",
         type=str,
         help="Custom version tag to use",
@@ -641,7 +650,8 @@ def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                         f", helm chart: {helm_chart_version})"
                     ), f"Actual version: {version}, expected to contain {helm_chart_version}"
 
-            c.run_testdrive_files(*args.files)
+            if args.run_testdrive_files:
+                c.run_testdrive_files(*args.files)
     finally:
         aws.cleanup()
 
@@ -783,6 +793,12 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
         help="Destroy the region at the end of the workflow.",
     )
     parser.add_argument(
+        "--run-testdrive-files",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Run testdrive files",
+    )
+    parser.add_argument(
         "--tag",
         type=str,
         help="Custom version tag to use",
@@ -827,8 +843,6 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
         vars = [
             "-var",
             "operator_version=v25.2.0-beta.1",
-            "-var",
-            f"orchestratord_version={tag}",
         ]
 
         if args.setup:
@@ -1197,7 +1211,8 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                         f", helm chart: {helm_chart_version})"
                     ), f"Actual version: {version}, expected to contain {helm_chart_version}"
 
-            c.run_testdrive_files(*args.files)
+            if args.run_testdrive_files:
+                c.run_testdrive_files(*args.files)
     finally:
         if environmentd_port_forward_process:
             os.killpg(os.getpgid(environmentd_port_forward_process.pid), signal.SIGTERM)
@@ -1241,6 +1256,12 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
         default=True,
         action=argparse.BooleanOptionalAction,
         help="Destroy the region at the end of the workflow.",
+    )
+    parser.add_argument(
+        "--run-testdrive-files",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Run testdrive files",
     )
     parser.add_argument(
         "--tag",
@@ -1299,8 +1320,6 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
         vars = [
             "-var",
             "operator_version=v25.2.0-beta.1",
-            "-var",
-            f"orchestratord_version={tag}",
         ]
 
         if args.setup:
@@ -1686,7 +1705,8 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                         f", helm chart: {helm_chart_version})"
                     ), f"Actual version: {version}, expected to contain {helm_chart_version}"
 
-            c.run_testdrive_files(*args.files)
+            if args.run_testdrive_files:
+                c.run_testdrive_files(*args.files)
     finally:
         if environmentd_port_forward_process:
             os.killpg(os.getpgid(environmentd_port_forward_process.pid), signal.SIGTERM)
