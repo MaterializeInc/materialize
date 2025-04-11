@@ -33,7 +33,6 @@ use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::arrow::ArrayOrd;
 use mz_persist_types::columnar::{ColumnDecoder, Schema};
 use mz_persist_types::part::Codec64Mut;
-use mz_persist_types::schema::SchemaId;
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
