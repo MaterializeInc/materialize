@@ -258,8 +258,10 @@ so it is executed.""",
 
     set_parallelism_name(pipeline)
 
-    if test_selection := os.getenv("CI_TEST_SELECTION"):
-        trim_test_selection(pipeline, set(test_selection.split(",")))
+    if test_selection := os.getenv("CI_TEST_IDS"):
+        trim_test_selection_id(pipeline, {int(i) for i in test_selection.split(",")})
+    elif test_selection := os.getenv("CI_TEST_SELECTION"):
+        trim_test_selection_name(pipeline, set(test_selection.split(",")))
 
     check_depends_on(pipeline, args.pipeline)
 
@@ -558,7 +560,30 @@ def add_version_to_preflight_tests(pipeline: Any) -> None:
             step["build"]["branch"] = str(version)
 
 
-def trim_test_selection(pipeline: Any, steps_to_run: set[str]) -> None:
+def trim_test_selection_id(pipeline: Any, step_ids_to_run: set[int]) -> None:
+    for i, step in enumerate(steps(pipeline)):
+        ident = step.get("id") or step.get("command")
+        if (
+            (i not in step_ids_to_run or len(step_ids_to_run) == 0)
+            and "prompt" not in step
+            and "wait" not in step
+            and "group" not in step
+            and ident
+            not in (
+                "coverage-pr-analyze",
+                "analyze",
+                "build-x86_64",
+                "build-aarch64",
+                "rust-build-x86_64",
+                "rust-build-aarch64",
+                "build-wasm",
+            )
+            and not step.get("async")
+        ):
+            step["skip"] = True
+
+
+def trim_test_selection_name(pipeline: Any, steps_to_run: set[str]) -> None:
     for step in steps(pipeline):
         ident = step.get("id") or step.get("command")
         if (
