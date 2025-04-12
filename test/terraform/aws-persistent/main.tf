@@ -21,6 +21,11 @@ variable "operator_version" {
   default = "v25.2.0-beta.1.tgz"
 }
 
+variable "orchestratord_version" {
+  type    = string
+  default = null
+}
+
 module "materialize_infrastructure" {
   source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=v0.2.7"
 
@@ -31,6 +36,7 @@ module "materialize_infrastructure" {
   use_local_chart = true
   helm_chart = "materialize-operator-v25.2.0-beta.1.tgz"
   operator_version = var.operator_version
+  orchestratord_version = var.orchestratord_version
 
   # VPC Configuration
   vpc_cidr             = "10.0.0.0/16"
