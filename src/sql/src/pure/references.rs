@@ -14,7 +14,6 @@ use std::sync::Arc;
 use mz_ore::now::SYSTEM_TIME;
 use mz_repr::RelationDesc;
 use mz_sql_parser::ast::{ExternalReferences, Ident, IdentError, UnresolvedItemName};
-use mz_sql_server_util::SqlServerError;
 use mz_storage_types::sources::load_generator::{LoadGenerator, LoadGeneratorOutput};
 use mz_storage_types::sources::{ExternalReferenceResolutionError, SourceReferenceResolver};
 
@@ -264,14 +263,14 @@ impl<'a> SourceReferenceClient<'a> {
                     .map(|raw| {
                         let capture_instance = Arc::clone(&raw.capture_instance);
                         let database = Arc::clone(database);
-                        let table = mz_sql_server_util::desc::SqlServerTableDesc::try_new(raw)?;
-                        Ok::<_, SqlServerError>(ReferenceMetadata::SqlServer {
+                        let table = mz_sql_server_util::desc::SqlServerTableDesc::new(raw);
+                        ReferenceMetadata::SqlServer {
                             table,
                             database,
                             capture_instance,
-                        })
+                        }
                     })
-                    .collect::<Result<_, _>>()?
+                    .collect()
             }
             SourceReferenceClient::Kafka { topic } => {
                 vec![ReferenceMetadata::Kafka(topic.to_string())]

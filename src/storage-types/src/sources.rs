@@ -1480,6 +1480,16 @@ impl ExternalCatalogReference for mz_postgres_util::desc::PostgresTableDesc {
     }
 }
 
+impl ExternalCatalogReference for &mz_sql_server_util::desc::SqlServerTableDesc {
+    fn schema_name(&self) -> &str {
+        &*self.schema_name
+    }
+
+    fn item_name(&self) -> &str {
+        &*self.name
+    }
+}
+
 // This implementation provides a means of converting arbitrary objects into a
 // `SubsourceCatalogReference`, e.g. load generator view names.
 impl<'a> ExternalCatalogReference for (&'a str, &'a str) {

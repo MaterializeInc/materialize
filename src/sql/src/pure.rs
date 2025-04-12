@@ -46,8 +46,9 @@ use mz_sql_parser::ast::{
     KafkaSourceConfigOptionName, LoadGenerator, LoadGeneratorOption, LoadGeneratorOptionName,
     MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName,
     PgConfigOption, PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy,
-    RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, SourceEnvelope, Statement,
-    TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName, UnresolvedItemName,
+    RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, SourceEnvelope,
+    SqlServerConfigOption, SqlServerConfigOptionName, Statement, TableFromSourceColumns,
+    TableFromSourceOption, TableFromSourceOptionName, UnresolvedItemName,
 };
 use mz_sql_server_util::desc::SqlServerTableDesc;
 use mz_storage_types::configuration::StorageConfiguration;
@@ -59,7 +60,7 @@ use mz_storage_types::sources::mysql::MySqlSourceDetails;
 use mz_storage_types::sources::postgres::PostgresSourcePublicationDetails;
 use mz_storage_types::sources::{
     GenericSourceConnection, PostgresSourceConnection, SourceConnection, SourceDesc,
-    SourceExportStatementDetails,
+    SourceExportStatementDetails, SqlServerSourceExtras,
 };
 use prost::Message;
 use protobuf_native::MessageLite;
@@ -257,6 +258,8 @@ pub enum PurifiedExportDetails {
     },
     SqlServer {
         table: SqlServerTableDesc,
+        text_columns: Option<Vec<Ident>>,
+        excl_columns: Option<Vec<Ident>>,
         capture_instance: Arc<str>,
     },
     Kafka {},
@@ -950,8 +953,12 @@ async fn purify_create_source(
                     scx.catalog.resolve_full_name(connection_item.name()),
                 ))?,
             };
-            let crate::plan::statement::ddl::SqlServerConfigOptionExtracted { details, seen: _ } =
-                options.clone().try_into()?;
+            let crate::plan::statement::ddl::SqlServerConfigOptionExtracted {
+                details,
+                text_columns,
+                exclude_columns,
+                seen: _,
+            } = options.clone().try_into()?;
 
             if details.is_some() {
                 Err(SqlServerSourcePurificationError::UserSpecifiedDetails)?;
@@ -994,20 +1001,18 @@ async fn purify_create_source(
                 ))?;
             }
 
-            // TODO(sql_server1): Support text and exclude columns.
-            let text_columns = vec![];
-            let exclude_columns = vec![];
-
             // We've validated that CDC is configured for the system, now let's
             // purify the individual exports (i.e. subsources).
+            let database: Arc<str> = connection.database.into();
             let reference_client = SourceReferenceClient::SqlServer {
                 client: &mut client,
-                database: connection.database.into(),
+                database: Arc::clone(&database),
             };
             retrieved_source_references = reference_client.get_source_references().await?;
             tracing::debug!(?retrieved_source_references, "got source references");
 
-            let subsources = sql_server::purify_source_exports(
+            let purified_source_exports = sql_server::purify_source_exports(
+                &*database,
                 &mut client,
                 &retrieved_source_references,
                 external_references,
@@ -1017,7 +1022,42 @@ async fn purify_create_source(
                 &reference_policy,
             )
             .await?;
-            requested_subsource_map.extend(subsources);
+
+            let sql_server::PurifiedSourceExports {
+                source_exports,
+                normalized_text_columns,
+                normalized_excl_columns,
+            } = purified_source_exports;
+
+            // Update our set of requested source exports.
+            requested_subsource_map.extend(source_exports);
+
+            // Reset the 'DETAILS' to ensure they're empty, we don't use them
+            // in the SQL Server source.
+            let details = SqlServerSourceExtras {};
+            options.retain(|SqlServerConfigOption { name, .. }| {
+                name != &SqlServerConfigOptionName::Details
+            });
+            options.push(SqlServerConfigOption {
+                name: SqlServerConfigOptionName::Details,
+                value: Some(WithOptionValue::Value(Value::String(hex::encode(
+                    details.into_proto().encode_to_vec(),
+                )))),
+            });
+
+            // Update our 'TEXT' and 'EXCLUDE' column options with the purified and normalized set.
+            if let Some(text_cols_option) = options
+                .iter_mut()
+                .find(|option| option.name == SqlServerConfigOptionName::TextColumns)
+            {
+                text_cols_option.value = Some(WithOptionValue::Sequence(normalized_text_columns));
+            }
+            if let Some(excl_cols_option) = options
+                .iter_mut()
+                .find(|option| option.name == SqlServerConfigOptionName::ExcludeColumns)
+            {
+                excl_cols_option.value = Some(WithOptionValue::Sequence(normalized_excl_columns));
+            }
         }
         CreateSourceConnection::MySql {
             connection,

@@ -749,12 +749,6 @@ pub enum SqlServerError {
     CdcError(#[from] crate::cdc::CdcError),
     #[error("expected column '{0}' to be present")]
     MissingColumn(&'static str),
-    #[error("'{column_type}' from column '{column_name}' is not supported: {reason}")]
-    UnsupportedDataType {
-        column_name: String,
-        column_type: String,
-        reason: String,
-    },
     #[error("sql server client encountered I/O error: {0}")]
     IO(#[from] tokio::io::Error),
     #[error("found invalid data in the column '{column_name}': {error}")]

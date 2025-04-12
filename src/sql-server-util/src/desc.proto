@@ -25,6 +25,7 @@ message ProtoSqlServerTableDesc {
 message ProtoSqlServerColumnDesc {
   string name = 1;
   mz_repr.relation_and_scalar.ProtoColumnType column_type = 2;
+
   oneof decode_type {
     google.protobuf.Empty bool = 4;
     google.protobuf.Empty u8 = 5;
@@ -42,5 +43,6 @@ message ProtoSqlServerColumnDesc {
     google.protobuf.Empty naive_time = 17;
     google.protobuf.Empty date_time = 18;
     google.protobuf.Empty naive_date_time = 19;
+    string unsupported = 20;
   }
 }

@@ -34,7 +34,7 @@ EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't3_text', @
 
 # Exercise Materialize.
 
-> CREATE SECRET sql_server_pass AS '${arg.default-sql-server-password}'
+> CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}'
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_sql_server_source = true;
@@ -49,7 +49,7 @@ ALTER SYSTEM SET enable_sql_server_source = true;
 
 > VALIDATE CONNECTION sql_server_test_connection;
 
-> SELECT name, type from mz_connections WHERE id LIKE 'u%';
+> SELECT name, type from mz_connections WHERE name = 'sql_server_test_connection';
 name                         type
 ---------------------------------------
 sql_server_test_connection   sql-server
