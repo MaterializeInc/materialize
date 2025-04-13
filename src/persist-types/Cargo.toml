@@ -15,7 +15,7 @@ workspace = true
 anyhow = { version = "1.0.97", features = ["backtrace"] }
 arrow = { version = "53.3.0", default-features = false }
 bytes = { version = "1.10.1", features = ["serde"] }
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+chrono = { version = "0.4.40", default-features = false, features = ["std"] }
 hex = "0.4.3"
 itertools = "0.12.1"
 mz-ore = { path = "../ore", features = ["metrics", "test"], default-features = false }

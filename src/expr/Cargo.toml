@@ -22,11 +22,11 @@ aho-corasick = "1.1.3"
 anyhow = "1.0.97"
 bytes = "1.10.1"
 bytesize = "1.3.0"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+chrono = { version = "0.4.40", default-features = false, features = ["std"] }
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
 crc32fast = "1.4.2"
 csv = "1.3.1"
-differential-dataflow = "0.14.0"
+differential-dataflow = "0.14.2"
 dec = "0.4.8"
 derivative = "2.2.0"
 encoding = "0.2.0"

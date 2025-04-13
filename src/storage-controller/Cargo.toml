@@ -13,9 +13,9 @@ workspace = true
 anyhow = "1.0.97"
 async-trait = "0.1.88"
 bytes = "1.10.1"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+chrono = { version = "0.4.40", default-features = false, features = ["std"] }
 derivative = "2.2.0"
-differential-dataflow = "0.14.0"
+differential-dataflow = "0.14.2"
 futures = "0.3.31"
 itertools = { version = "0.12.1" }
 mz-build-info = { path = "../build-info" }

@@ -15,7 +15,7 @@ async-trait = "0.1.88"
 bytesize = "1.3.0"
 crossbeam-channel = "0.5.15"
 derivative = "2.2.0"
-differential-dataflow = "0.14.0"
+differential-dataflow = "0.14.2"
 futures = "0.3.31"
 http = "1.2.0"
 mz-build-info = { path = "../build-info" }

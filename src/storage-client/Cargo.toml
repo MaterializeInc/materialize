@@ -12,8 +12,8 @@ workspace = true
 [dependencies]
 anyhow = "1.0.97"
 async-trait = "0.1.88"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
-differential-dataflow = "0.14.0"
+chrono = { version = "0.4.40", default-features = false, features = ["std"] }
+differential-dataflow = "0.14.2"
 futures = "0.3.31"
 http = "1.2.0"
 itertools = { version = "0.12.1" }

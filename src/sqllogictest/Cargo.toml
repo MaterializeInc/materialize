@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 anyhow = "1.0.97"
 bytes = "1.10.1"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+chrono = { version = "0.4.40", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive"] }
 dec = "0.4.8"
 fallible-iterator = "0.2.0"

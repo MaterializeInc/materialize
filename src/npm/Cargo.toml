@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.97"
-flate2 = "1.1.0"
+flate2 = "1.1.1"
 hex = "0.4.3"
 hex-literal = "0.3.4"
 reqwest = { version = "0.11.13", features = ["blocking", "native-tls-vendored"] }

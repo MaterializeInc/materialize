@@ -28,7 +28,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 
 [dev-dependencies]
 hyper = { version = "1.4.1", features = ["server"] }
-hyper-util = "0.1.10"
+hyper-util = "0.1.11"
 mz-ore = { path = "../ore", features = ["async", "test"] }
 serde_json = "1.0.127"
 tokio = { version = "1.44.1", features = ["macros"] }

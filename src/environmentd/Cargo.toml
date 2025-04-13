@@ -20,7 +20,7 @@ axum-extra = { version = "0.9.3", features = ["typed-header"] }
 base64 = "0.13.1"
 bytes = "1.10.1"
 bytesize = "1.3.0"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+chrono = { version = "0.4.40", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["wrap_help", "env", "derive"] }
 derivative = "2.2.0"
 fail = { version = "0.5.1", features = ["failpoints"] }
@@ -31,7 +31,7 @@ humantime = "2.2.0"
 hyper = { version = "1.4.1", features = ["http1", "server"] }
 hyper-openssl = "0.10.2"
 hyper-tls = "0.6.0"
-hyper-util = "0.1.10"
+hyper-util = "0.1.11"
 include_dir = "0.7.4"
 ipnet = "2.11.0"
 itertools = "0.12.1"
@@ -119,7 +119,7 @@ uuid = "1.16.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-assert_cmd = "2.0.8"
+assert_cmd = "2.0.16"
 bytes = "1.10.1"
 datadriven = "0.8.0"
 fallible-iterator = "0.2.0"
@@ -152,7 +152,7 @@ tokio-postgres = { version = "0.7.8", features = ["with-chrono-0_4"] }
 
 [build-dependencies]
 anyhow = "1.0.97"
-cc = "1.2.17"
+cc = "1.2.19"
 mz-npm = { path = "../npm" }
 
 [features]

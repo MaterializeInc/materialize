@@ -13,11 +13,11 @@ workspace = true
 anyhow = "1.0.97"
 async-trait = "0.1.88"
 axum = "0.7.5"
-chrono = { version = "0.4.39", default-features = false }
+chrono = { version = "0.4.40", default-features = false }
 clap = { version = "4.5.23", features = ["derive"] }
 futures = "0.3.31"
 http = "1.2.0"
-k8s-controller = "0.4.0"
+k8s-controller = "0.4.1"
 k8s-openapi = { version = "0.22.0", features = ["v1_30"] }
 kube = { version = "0.92.1", default-features = false, features = ["client", "runtime", "ws"] }
 maplit = "1.0.2"

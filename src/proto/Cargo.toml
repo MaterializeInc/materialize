@@ -12,7 +12,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.97"
-chrono = { version = "0.4.39", default-features = false, features = ["serde", "std"], optional = true }
+chrono = { version = "0.4.40", default-features = false, features = ["serde", "std"], optional = true }
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"], optional = true }
 globset = "0.4.16"
 http = "1.2.0"

@@ -14,7 +14,7 @@ anyhow = { version = "1.0.97", features = ["backtrace"] }
 axum = "0.7.5"
 axum-extra = { version = "0.9.3", features = ["typed-header"] }
 base64 = "0.22.0"
-chrono = { version = "0.4.39", default-features = false, features = ["serde"] }
+chrono = { version = "0.4.40", default-features = false, features = ["serde"] }
 clap = { version = "4.5.23", features = ["derive", "env"] }
 hyper = { version = "1.4.1", features = ["http1", "server"] }
 jsonwebtoken = "9.3.1"
