@@ -210,6 +210,8 @@ pub struct Args {
     /// Frontegg arguments.
     #[clap(flatten)]
     frontegg: FronteggCliArgs,
+    // TODO(auth): we probably want to consolidate all these auth options
+    // into something cleaner.
     /// Self hosted auth
     #[clap(long, env = "ENABLE_SELF_HOSTED_AUTH")]
     enable_self_hosted_auth: bool,

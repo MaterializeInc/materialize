@@ -217,7 +217,6 @@ wrappers = [
     "want",
     "wasm-bindgen-backend",
     "workspace-hack",
-    "bindgen",
 ]
 
 # We prefer the system's native TLS or OpenSSL to Rustls, since they are more
@@ -297,7 +296,6 @@ allow = [
     "Zlib",
     "Unicode-3.0",
     "Unicode-DFS-2016",
-    "OpenSSL",
 ]
 # copyleft is denied by default
 private = { ignore = true }

@@ -175,7 +175,9 @@ pub enum AdapterError {
     Unstructured(anyhow::Error),
     /// The named feature is not supported and will (probably) not be.
     Unsupported(&'static str),
-    /// Some
+    /// Some feature isn't available for a (potentially opaque) reason.
+    /// For example, in cloud Self-Managed auth features aren't available,
+    /// but we don't want to mention self managed auth.
     UnavailableFeature {
         feature: String,
         docs: Option<String>,
@@ -236,7 +238,12 @@ pub enum AdapterError {
     /// read-only mode.
     ReadOnly,
     AlterClusterTimeout,
-    /// Authentication error.
+    /// Authentication error. This is specifically for self-managed auth
+    /// and can generally encompass things like "incorrect password" or
+    /// what have you. We intentionally limit the fidelity of the error
+    /// we return to avoid allowing an attacker to, for example,
+    /// enumerate users by spraying login attempts and differentiating
+    /// between a "no such user" and "incorrect password" error.
     AuthenticationError,
 }
 

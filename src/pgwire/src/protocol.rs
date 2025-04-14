@@ -26,6 +26,7 @@ use mz_adapter::{
     AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary,
     RowsFuture, verify_datum_desc,
 };
+use mz_auth::password::Password;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
@@ -221,7 +222,7 @@ where
             .await?;
         conn.flush().await?;
         let password = match conn.recv().await? {
-            Some(FrontendMessage::Password { password }) => password,
+            Some(FrontendMessage::Password { password }) => Password(password),
             _ => {
                 return conn
                     .send(ErrorResponse::fatal(
@@ -231,7 +232,7 @@ where
                     .await;
             }
         };
-        let auth_response = match adapter_client.authenticate(&user, &password.into()).await {
+        let auth_response = match adapter_client.authenticate(&user, &password).await {
             Ok(resp) => resp,
             Err(err) => {
                 warn!(?err, "pgwire connection failed authentication");

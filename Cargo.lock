@@ -6584,6 +6584,7 @@ dependencies = [
  "itertools 0.12.1",
  "mz-adapter",
  "mz-adapter-types",
+ "mz-auth",
  "mz-frontegg-auth",
  "mz-ore",
  "mz-pgcopy",
