@@ -132,50 +132,35 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     let sql_server_row = data.map_err(TransientError::from)?;
 
                     // Decode the SQL Server row into an MZ one.
-                    let Some((partition_idx, decoder)) = capture_instances.get(&capture_instance)
-                    else {
-                        let definite_error = DefiniteError::ProgrammingError(format!(
-                            "capture instance didn't exist: '{capture_instance}'"
-                        ));
-                        let () = return_definite_error(
-                            definite_error,
-                            &output_indexes[..],
-                            data_output,
-                            data_cap_set,
-                            definite_error_handle,
-                            definite_error_cap_set,
-                        )
-                        .await;
-                        return Ok(());
-                    };
+                    let (partition_idx, decoder) =
+                        capture_instances.get(&capture_instance).ok_or_else(|| {
+                            let msg =
+                                format!("capture instance didn't exist: '{capture_instance}'");
+                            TransientError::ProgrammingError(msg)
+                        })?;
 
-                    // Failing to decode data is a permanent failure.
+                    // Try to decode a row, returning a SourceError if it fails.
                     let mut mz_row = Row::default();
-                    let decode_result = decoder.decode(&sql_server_row, &mut mz_row);
-                    tracing::info!(?decode_result, ?mz_row, "snapshotted row");
-                    if let Err(err) = decode_result {
-                        let definite_error = DefiniteError::Decoding(err.to_string());
-                        let () = return_definite_error(
-                            definite_error,
-                            &output_indexes[..],
-                            data_output,
-                            data_cap_set,
-                            definite_error_handle,
-                            definite_error_cap_set,
-                        )
-                        .await;
-                        return Ok(());
-                    }
-
-                    let message = SourceMessage {
-                        key: Row::default(),
-                        value: mz_row,
-                        metadata: Row::default(),
+                    let message = match decoder.decode(&sql_server_row, &mut mz_row) {
+                        Ok(()) => Ok(SourceMessage {
+                            key: Row::default(),
+                            value: mz_row,
+                            metadata: Row::default(),
+                        }),
+                        Err(e) => {
+                            let kind = DecodeErrorKind::Text(e.to_string().into());
+                            // TODO(sql_server2): Get the raw bytes from `tiberius`.
+                            let raw = format!("{sql_server_row:?}");
+                            Err(DataflowError::DecodeError(Box::new(DecodeError {
+                                kind,
+                                raw: raw.as_bytes().to_vec(),
+                            })))
+                        }
                     };
                     data_output
                         .give_fueled(
                             &snapshot_cap,
-                            ((*partition_idx, Ok(message)), snapshot_lsn, Diff::ONE),
+                            ((*partition_idx, message), snapshot_lsn, Diff::ONE),
                         )
                         .await;
                 }
@@ -260,30 +245,29 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                         }
                     };
 
-                    // Failing to decode data is a permanent failure.
+                    // Try to decode a row, returning a SourceError if it fails.
                     let mut mz_row = Row::default();
-                    let decode_result = decoder.decode(&sql_server_row, &mut mz_row);
-                    if let Err(err) = decode_result {
-                        let definite_error = DefiniteError::Decoding(err.to_string());
-                        let () = return_definite_error(
-                            definite_error,
-                            &output_indexes[..],
-                            data_output,
-                            data_cap_set,
-                            definite_error_handle,
-                            definite_error_cap_set,
-                        )
-                        .await;
-                        return Ok(());
-                    }
-
-                    let message = SourceMessage {
-                        key: Row::default(),
-                        value: mz_row,
-                        metadata: Row::default(),
+                    let message = match decoder.decode(&sql_server_row, &mut mz_row) {
+                        Ok(()) => Ok(SourceMessage {
+                            key: Row::default(),
+                            value: mz_row,
+                            metadata: Row::default(),
+                        }),
+                        Err(e) => {
+                            let kind = DecodeErrorKind::Text(e.to_string().into());
+                            // TODO(sql_server2): Get the raw bytes from `tiberius`.
+                            let raw = format!("{sql_server_row:?}");
+                            Err(DataflowError::DecodeError(Box::new(DecodeError {
+                                kind,
+                                raw: raw.as_bytes().to_vec(),
+                            })))
+                        }
                     };
                     data_output
-                        .give_fueled(&data_cap, ((*partition_idx, Ok(message)), commit_lsn, diff))
+                        .give_fueled(
+                            &data_cap_set[0],
+                            ((*partition_idx, message), commit_lsn, diff),
+                        )
                         .await;
                 }
             }

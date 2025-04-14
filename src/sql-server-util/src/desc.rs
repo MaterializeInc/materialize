@@ -22,7 +22,6 @@
 //! create a [`SqlServerRowDecoder`] which will be used when running a source
 //! to efficiently decode [`tiberius::Row`]s into [`mz_repr::Row`]s.
 
-use anyhow::Context;
 use dec::OrderedDecimal;
 use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType};
@@ -33,7 +32,7 @@ use serde::{Deserialize, Serialize};
 
 use std::sync::Arc;
 
-use crate::SqlServerError;
+use crate::{SqlServerDecodeError, SqlServerError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_sql_server_util.rs"));
 
@@ -363,63 +362,71 @@ impl SqlServerColumnDecodeType {
         data: &'a tiberius::Row,
         name: &'a str,
         column: &'a ColumnType,
-    ) -> Result<Datum<'a>, SqlServerError> {
+    ) -> Result<Datum<'a>, SqlServerDecodeError> {
         let maybe_datum = match (&column.scalar_type, self) {
             (ScalarType::Bool, SqlServerColumnDecodeType::Bool) => data
                 .try_get(name)
-                .context("bool")?
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "bool"))?
                 .map(|val: bool| if val { Datum::True } else { Datum::False }),
             (ScalarType::Int16, SqlServerColumnDecodeType::U8) => data
                 .try_get(name)
-                .context("u8")?
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "u8"))?
                 .map(|val: u8| Datum::Int16(i16::cast_from(val))),
-            (ScalarType::Int16, SqlServerColumnDecodeType::I16) => {
-                data.try_get(name).context("i16")?.map(Datum::Int16)
-            }
-            (ScalarType::Int32, SqlServerColumnDecodeType::I32) => {
-                data.try_get(name).context("i32")?.map(Datum::Int32)
-            }
-            (ScalarType::Int64, SqlServerColumnDecodeType::I64) => {
-                data.try_get(name).context("i64")?.map(Datum::Int64)
-            }
+            (ScalarType::Int16, SqlServerColumnDecodeType::I16) => data
+                .try_get(name)
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "i16"))?
+                .map(Datum::Int16),
+            (ScalarType::Int32, SqlServerColumnDecodeType::I32) => data
+                .try_get(name)
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "i32"))?
+                .map(Datum::Int32),
+            (ScalarType::Int64, SqlServerColumnDecodeType::I64) => data
+                .try_get(name)
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "i64"))?
+                .map(Datum::Int64),
             (ScalarType::Float32, SqlServerColumnDecodeType::F32) => data
                 .try_get(name)
-                .context("f32")?
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "f32"))?
                 .map(|val: f32| Datum::Float32(ordered_float::OrderedFloat(val))),
             (ScalarType::Float64, SqlServerColumnDecodeType::F64) => data
                 .try_get(name)
-                .context("f64")?
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "f64"))?
                 .map(|val: f64| Datum::Float64(ordered_float::OrderedFloat(val))),
-            (ScalarType::String, SqlServerColumnDecodeType::String) => {
-                data.try_get(name).context("string")?.map(Datum::String)
-            }
-            (ScalarType::Bytes, SqlServerColumnDecodeType::Bytes) => {
-                data.try_get(name).context("bytes")?.map(Datum::Bytes)
-            }
-            (ScalarType::Uuid, SqlServerColumnDecodeType::Uuid) => {
-                data.try_get(name).context("uuid")?.map(Datum::Uuid)
-            }
+            (ScalarType::String, SqlServerColumnDecodeType::String) => data
+                .try_get(name)
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "string"))?
+                .map(Datum::String),
+            (ScalarType::Bytes, SqlServerColumnDecodeType::Bytes) => data
+                .try_get(name)
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "bytes"))?
+                .map(Datum::Bytes),
+            (ScalarType::Uuid, SqlServerColumnDecodeType::Uuid) => data
+                .try_get(name)
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "uuid"))?
+                .map(Datum::Uuid),
             (ScalarType::Numeric { .. }, SqlServerColumnDecodeType::Numeric) => data
                 .try_get(name)
-                .context("numeric")?
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "numeric"))?
                 .map(|val: tiberius::numeric::Numeric| {
                     // TODO(sql_server3): Make decimal parsing more performant.
                     let numeric = Numeric::context()
                         .parse(val.to_string())
-                        .context("parsing")?;
-                    Ok::<_, SqlServerError>(Datum::Numeric(OrderedDecimal(numeric)))
+                        .map_err(|err| SqlServerDecodeError::invalid_decimal(name, err))?;
+                    Ok::<_, SqlServerDecodeError>(Datum::Numeric(OrderedDecimal(numeric)))
                 })
                 .transpose()?,
             (ScalarType::String, SqlServerColumnDecodeType::Xml) => data
                 .try_get(name)
-                .context("xml")?
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "xml"))?
                 .map(|val: &tiberius::xml::XmlData| Datum::String(val.as_ref())),
             (ScalarType::Date, SqlServerColumnDecodeType::NaiveDate) => data
                 .try_get(name)
-                .context("date")?
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "date"))?
                 .map(|val: chrono::NaiveDate| {
-                    let date = val.try_into().context("parse date")?;
-                    Ok::<_, SqlServerError>(Datum::Date(date))
+                    let date = val
+                        .try_into()
+                        .map_err(|e| SqlServerDecodeError::invalid_date(name, e))?;
+                    Ok::<_, SqlServerDecodeError>(Datum::Date(date))
                 })
                 .transpose()?,
             // TODO(sql_server1): SQL Server's time related types support a resolution
@@ -427,36 +434,44 @@ impl SqlServerColumnDecodeType {
             //
             // Internally we can support 1 nanosecond precision, but we should exercise
             // this case and see what breaks.
-            (ScalarType::Time, SqlServerColumnDecodeType::NaiveTime) => {
-                data.try_get(name).context("time")?.map(Datum::Time)
-            }
+            (ScalarType::Time, SqlServerColumnDecodeType::NaiveTime) => data
+                .try_get(name)
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "time"))?
+                .map(Datum::Time),
             (ScalarType::Timestamp { .. }, SqlServerColumnDecodeType::NaiveDateTime) => data
                 .try_get(name)
-                .context("timestamp")?
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "timestamp"))?
                 .map(|val: chrono::NaiveDateTime| {
-                    let ts = val.try_into().context("parse timestamp")?;
-                    Ok::<_, SqlServerError>(Datum::Timestamp(ts))
+                    let ts = val
+                        .try_into()
+                        .map_err(|e| SqlServerDecodeError::invalid_timestamp(name, e))?;
+                    Ok::<_, SqlServerDecodeError>(Datum::Timestamp(ts))
                 })
                 .transpose()?,
             (ScalarType::TimestampTz { .. }, SqlServerColumnDecodeType::DateTime) => data
                 .try_get(name)
-                .context("timestamptz")?
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "timestamptz"))?
                 .map(|val: chrono::DateTime<chrono::Utc>| {
-                    let ts = val.try_into().context("parse timestamptz")?;
-                    Ok::<_, SqlServerError>(Datum::TimestampTz(ts))
+                    let ts = val
+                        .try_into()
+                        .map_err(|e| SqlServerDecodeError::invalid_timestamp(name, e))?;
+                    Ok::<_, SqlServerDecodeError>(Datum::TimestampTz(ts))
                 })
                 .transpose()?,
             (column_type, decode_type) => {
-                let msg = format!("don't know how to parse {decode_type:?} as {column_type:?}");
-                return Err(SqlServerError::ProgrammingError(msg));
+                return Err(SqlServerDecodeError::Unsupported {
+                    sql_server_type: decode_type,
+                    mz_type: column_type.clone(),
+                });
             }
         };
 
         match (maybe_datum, column.nullable) {
             (Some(datum), _) => Ok(datum),
             (None, true) => Ok(Datum::Null),
-            (None, false) => Err(SqlServerError::InvalidData {
+            (None, false) => Err(SqlServerDecodeError::InvalidData {
                 column_name: name.to_string(),
+                // Note: This error string is durably recorded in Persist, do not change.
                 error: "found Null in non-nullable column".to_string(),
             }),
         }
@@ -585,7 +600,7 @@ impl SqlServerRowDecoder {
     }
 
     /// Decode data from the provided [`tiberius::Row`] into the provided [`Row`].
-    pub fn decode(&self, data: &tiberius::Row, row: &mut Row) -> Result<(), SqlServerError> {
+    pub fn decode(&self, data: &tiberius::Row, row: &mut Row) -> Result<(), SqlServerDecodeError> {
         let mut packer = row.packer();
         for (col_name, col_type, decoder) in &self.decoders {
             let datum = decoder.decode(data, col_name, col_type)?;
