@@ -4060,7 +4060,7 @@ def workflow_test_refresh_mv_restart(
 
         after_restart = dedent(
             """
-            > ALTER CLUSTER cluster_b SET (REPLICATION FACTOR 1);
+            > ALTER CLUSTER cluster_b SET (REPLICATION FACTOR 2);
 
             > SET TRANSACTION_ISOLATION TO 'STRICT SERIALIZABLE';
 
@@ -4236,7 +4236,7 @@ def workflow_test_refresh_mv_restart(
         c.testdrive(
             input=dedent(
                 """
-                > ALTER CLUSTER cluster_defgh SET (REPLICATION FACTOR 1);
+                > ALTER CLUSTER cluster_defgh SET (REPLICATION FACTOR 2);
 
                 > CREATE CLUSTER serving SIZE '1';
 

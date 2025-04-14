@@ -18,10 +18,12 @@ class CreateManagedCluster(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                > CREATE CLUSTER create_managed_cluster1 SIZE '2-2', REPLICATION FACTOR 2;
+                >[version>=13800] CREATE CLUSTER create_managed_cluster1 SIZE '2-2', REPLICATION FACTOR 2;
+                >[version<13800] CREATE CLUSTER create_managed_cluster1 SIZE '2-2', REPLICATION FACTOR 1;
                 """,
                 """
-                > CREATE CLUSTER create_managed_cluster2 SIZE '2-2', REPLICATION FACTOR 2;
+                >[version>=13800] CREATE CLUSTER create_managed_cluster2 SIZE '2-2', REPLICATION FACTOR 2;
+                >[version<13800] CREATE CLUSTER create_managed_cluster2 SIZE '2-2', REPLICATION FACTOR 1;
                 """,
             ]
         ]
@@ -73,8 +75,10 @@ class DropManagedCluster(Check):
                 > INSERT INTO drop_managed_cluster1_table VALUES (123);
                 > INSERT INTO drop_managed_cluster2_table VALUES (234);
 
-                > CREATE CLUSTER drop_managed_cluster1 SIZE '2-2', REPLICATION FACTOR 2;
-                > CREATE CLUSTER drop_managed_cluster2 SIZE '2-2', REPLICATION FACTOR 2;
+                >[version>=13800] CREATE CLUSTER drop_managed_cluster1 SIZE '2-2', REPLICATION FACTOR 2;
+                >[version<13800] CREATE CLUSTER drop_managed_cluster1 SIZE '2-2', REPLICATION FACTOR 1;
+                >[version>=13800] CREATE CLUSTER drop_managed_cluster2 SIZE '2-2', REPLICATION FACTOR 2;
+                >[version<13800] CREATE CLUSTER drop_managed_cluster2 SIZE '2-2', REPLICATION FACTOR 1;
 
                 > SET cluster=drop_managed_cluster1
                 > CREATE DEFAULT INDEX ON drop_managed_cluster1_table;
