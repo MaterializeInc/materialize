@@ -10,7 +10,7 @@
 # Stage 1: Build a minimum CI Builder image that we can use for the initial
 # steps like `mkpipeline` and `Build`, as well as any tests that are self
 # contained and use other Docker images.
-FROM ubuntu:noble-20250127 AS ci-builder-min
+FROM ubuntu:noble-20250404 AS ci-builder-min
 
 WORKDIR /workdir
 
@@ -111,7 +111,7 @@ ENTRYPOINT ["autouseradd", "--user", "materialize"]
 # Linux that we support.
 #
 # TODO(parkmycar): This shouldn't be necessary anymore with Bazel.
-FROM ubuntu:noble-20250127 as crosstool
+FROM ubuntu:noble-20250404 as crosstool
 
 ARG ARCH_GCC
 ARG ARCH_GO
