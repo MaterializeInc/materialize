@@ -24,7 +24,7 @@ mz-build-info = { path = "../build-info", default-features = false }
 mz-http-util = { path = "../http-util", default-features = false }
 mz-ore = { path = "../ore", default-features = false }
 mz-prof = { path = "../prof", default-features = false }
-jemalloc_pprof = { version = "0.6", optional = true }
+jemalloc_pprof = { version = "0.7", optional = true }
 pprof_util = "0.6"
 serde = { version = "1.0.219", features = ["derive"] }
 tokio = { version = "1.44.1", features = ["time"] }
