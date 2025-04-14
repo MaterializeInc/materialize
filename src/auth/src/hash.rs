@@ -13,10 +13,6 @@
 use std::fmt::Display;
 use std::num::NonZeroU32;
 
-use aws_lc_rs::digest::SHA256_OUTPUT_LEN;
-use aws_lc_rs::hmac::{self, HMAC_SHA256, Key};
-use aws_lc_rs::pbkdf2::{self, PBKDF2_HMAC_SHA256 as SHA256};
-use aws_lc_rs::rand::SecureRandom;
 use base64::prelude::*;
 
 use crate::password::Password;
@@ -27,6 +23,8 @@ const DEFAULT_ITERATIONS: NonZeroU32 = NonZeroU32::new(600_000).unwrap();
 
 /// The default salt size, which isn't currently configurable.
 const DEFAULT_SALT_SIZE: usize = 32;
+
+const SHA256_OUTPUT_LEN: usize = 32;
 
 /// The options for hashing a password
 pub struct HashOpts {
@@ -52,15 +50,19 @@ pub struct PasswordHash {
 pub enum VerifyError {
     MalformedHash,
     InvalidPassword,
+    Hash(HashError),
+}
+
+#[derive(Debug)]
+pub enum HashError {
+    Openssl(openssl::error::ErrorStack),
 }
 
 /// Hashes a password using PBKDF2 with SHA256
 /// and a random salt.
-pub fn hash_password(password: &Password) -> PasswordHash {
+pub fn hash_password(password: &Password) -> Result<PasswordHash, HashError> {
     let mut salt = [0u8; DEFAULT_SALT_SIZE];
-    aws_lc_rs::rand::SystemRandom::new()
-        .fill(&mut salt)
-        .unwrap();
+    openssl::rand::rand_bytes(&mut salt).map_err(HashError::Openssl)?;
 
     let hash = hash_password_inner(
         &HashOpts {
@@ -68,39 +70,42 @@ pub fn hash_password(password: &Password) -> PasswordHash {
             salt,
         },
         password.to_string().as_bytes(),
-    );
+    )?;
 
-    PasswordHash {
+    Ok(PasswordHash {
         salt,
         iterations: DEFAULT_ITERATIONS,
         hash,
-    }
+    })
 }
 
 /// Hashes a password using PBKDF2 with SHA256
 /// and the given options.
-pub fn hash_password_with_opts(opts: &HashOpts, password: &Password) -> PasswordHash {
-    let hash = hash_password_inner(opts, password.to_string().as_bytes());
+pub fn hash_password_with_opts(
+    opts: &HashOpts,
+    password: &Password,
+) -> Result<PasswordHash, HashError> {
+    let hash = hash_password_inner(opts, password.to_string().as_bytes())?;
 
-    PasswordHash {
+    Ok(PasswordHash {
         salt: opts.salt,
         iterations: opts.iterations,
         hash,
-    }
+    })
 }
 
 /// Hashes a password using PBKDF2 with SHA256,
 /// and returns it in the SCRAM-SHA-256 format.
 /// The format is SCRAM-SHA-256$<iterations>:<salt>$<client_key>:<server_key>
-pub fn scram256_hash(password: &Password) -> String {
-    let hashed_password = hash_password(password);
-    scram256_hash_inner(hashed_password).to_string()
+pub fn scram256_hash(password: &Password) -> Result<String, HashError> {
+    let hashed_password = hash_password(password)?;
+    Ok(scram256_hash_inner(hashed_password).to_string())
 }
 
 /// Verifies a password against a SCRAM-SHA-256 hash.
 pub fn scram256_verify(password: &Password, hashed_password: &str) -> Result<(), VerifyError> {
     let opts = scram256_parse_opts(hashed_password)?;
-    let hashed = hash_password_with_opts(&opts, password);
+    let hashed = hash_password_with_opts(&opts, password).map_err(VerifyError::Hash)?;
     let scram = scram256_hash_inner(hashed);
     if *hashed_password == scram.to_string() {
         Ok(())
@@ -170,28 +175,38 @@ impl Display for ScramSha256Hash {
 }
 
 fn scram256_hash_inner(hashed_password: PasswordHash) -> ScramSha256Hash {
-    let signing_key = Key::new(HMAC_SHA256, &hashed_password.hash);
-    let client_key = hmac::sign(&signing_key, b"Client Key");
-    let server_key = hmac::sign(&signing_key, b"Server Key");
+    let signing_key = openssl::pkey::PKey::hmac(&hashed_password.hash).unwrap();
+    let mut signer =
+        openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), &signing_key).unwrap();
+    signer.update(b"Client Key").unwrap();
+    let client_key = signer.sign_to_vec().unwrap();
+    let mut signer =
+        openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), &signing_key).unwrap();
+    signer.update(b"Server Key").unwrap();
+    let server_key = signer.sign_to_vec().unwrap();
 
     ScramSha256Hash {
         iterations: hashed_password.iterations,
         salt: hashed_password.salt,
-        server_key: server_key.as_ref().try_into().unwrap(),
-        client_key: client_key.as_ref().try_into().unwrap(),
+        server_key: server_key.try_into().unwrap(),
+        client_key: client_key.try_into().unwrap(),
     }
 }
 
-fn hash_password_inner(opts: &HashOpts, password: &[u8]) -> [u8; SHA256_OUTPUT_LEN] {
+fn hash_password_inner(
+    opts: &HashOpts,
+    password: &[u8],
+) -> Result<[u8; SHA256_OUTPUT_LEN], HashError> {
     let mut salted_password = [0u8; SHA256_OUTPUT_LEN];
-    pbkdf2::derive(
-        SHA256,
-        opts.iterations,
-        &opts.salt,
+    openssl::pkcs5::pbkdf2_hmac(
         password,
+        &opts.salt,
+        opts.iterations.get().try_into().unwrap(),
+        openssl::hash::MessageDigest::sha256(),
         &mut salted_password,
-    );
-    salted_password
+    )
+    .map_err(HashError::Openssl)?;
+    Ok(salted_password)
 }
 
 #[cfg(test)]
@@ -201,7 +216,7 @@ mod tests {
     #[mz_ore::test]
     fn test_hash_password() {
         let password = "password".to_string();
-        let hashed_password = hash_password(&password.into());
+        let hashed_password = hash_password(&password.into()).expect("Failed to hash password");
         assert_eq!(hashed_password.iterations, DEFAULT_ITERATIONS);
         assert_eq!(hashed_password.salt.len(), DEFAULT_SALT_SIZE);
         assert_eq!(hashed_password.hash.len(), SHA256_OUTPUT_LEN);
@@ -210,7 +225,7 @@ mod tests {
     #[mz_ore::test]
     fn test_scram256_hash() {
         let password = "password".into();
-        let scram_hash = scram256_hash(&password);
+        let scram_hash = scram256_hash(&password).expect("Failed to hash password");
 
         let res = scram256_verify(&password, &scram_hash);
         assert!(res.is_ok());

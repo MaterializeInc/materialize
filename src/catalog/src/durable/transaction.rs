@@ -355,7 +355,8 @@ impl<'a> Transaction<'a> {
         oid: u32,
     ) -> Result<(), CatalogError> {
         if let Some(ref password) = attributes.password {
-            let hash = mz_auth::hash::scram256_hash(password);
+            let hash =
+                mz_auth::hash::scram256_hash(password).expect("password hash should be valid");
             match self.role_auth.insert(
                 RoleAuthKey { role_id: id },
                 RoleAuthValue {
@@ -1479,7 +1480,8 @@ impl<'a> Transaction<'a> {
             let auth_key = RoleAuthKey { role_id: id };
 
             if let Some(ref password) = role.attributes.password {
-                let hash = mz_auth::hash::scram256_hash(password);
+                let hash =
+                    mz_auth::hash::scram256_hash(password).expect("password hash should be valid");
                 let value = RoleAuthValue {
                     password_hash: Some(hash),
                     updated_at: SYSTEM_TIME(),
