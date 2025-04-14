@@ -389,9 +389,9 @@ fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, Timezone), S
         ));
     }
 
-    let (ts_string, tz_string) = datetime::split_timestamp_string(s);
+    let (ts_string, tz_string, era) = datetime::split_timestamp_string(s);
 
-    let pdt = ParsedDateTime::build_parsed_datetime_timestamp(ts_string)?;
+    let pdt = ParsedDateTime::build_parsed_datetime_timestamp(ts_string, era)?;
     let d: NaiveDate = pdt.compute_date()?;
     let t: NaiveTime = pdt.compute_time()?;
 

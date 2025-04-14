@@ -27,11 +27,11 @@ unicode-width = { version = "0.2.0", optional = true }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-mz-ore = { path = "../ore", default-features = false, features = ["test"] }
+mz-ore = { path = "../ore", default-features = false, features = ["test", "tracing"] }
 mz-sql-parser = { path = ".", default-features = false, features = ["test"] }
 
 [build-dependencies]
-anyhow = "1.0.95"
+anyhow = "1.0.97"
 mz-ore-build = { path = "../ore-build", default-features = false }
 mz-walkabout = { path = "../walkabout", default-features = false }
 

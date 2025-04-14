@@ -17,6 +17,25 @@ CHARTS_DIR=misc/helm-charts
 GITHUB_PAGES_BRANCH=gh-pages
 RELEASE_DIR=.cr-release-packages
 
+export GIT_AUTHOR_NAME=Materialize Bot
+export GIT_AUTHOR_EMAIL=infra+bot@materialize.com
+export GIT_COMMITTER_NAME=$GIT_AUTHOR_NAME
+export GIT_COMMITTER_EMAIL=$GIT_AUTHOR_EMAIL
+
+: "${CI_HELM_CHART_VERSION:=}"
+: "${CI_MZ_VERSION:=}"
+if [[ -z "$CI_HELM_CHART_VERSION" || -z "$CI_MZ_VERSION" ]]; then
+  echo "\$CI_HELM_CHART_VERSION and \$CI_MZ_VERSION have to be set, use https://trigger-ci.dev.materialize.com to trigger this pipeline"
+  exit 1
+fi
+
+echo "--- Publishing Helm Chart $CI_HELM_CHART_VERSION with Materialize $CI_MZ_VERSION"
+bin/helm-chart-version-bump --helm-chart-version "$CI_HELM_CHART_VERSION" "$CI_MZ_VERSION"
+git commit -a -m "Bumping helm-chart version to $CI_HELM_CHART_VERSION with Materialize $CI_MZ_VERSION"
+TAG="self-managed-$CI_HELM_CHART_VERSION"
+git tag "$TAG"
+git push "https://materializebot:$GITHUB_TOKEN@github.com/MaterializeInc/materialize.git" "$TAG"
+
 # Find directories containing Chart.yaml
 CHARTS=""
 for dir in "$CHARTS_DIR"/*/; do

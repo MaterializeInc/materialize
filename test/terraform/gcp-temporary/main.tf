@@ -75,7 +75,6 @@ module "materialize" {
   use_local_chart = true
   helm_chart = "materialize-operator-v25.2.0-beta.1.tgz"
   operator_version = var.operator_version
-  orchestratord_version = var.orchestratord_version
 
   install_cert_manager = false
   use_self_signed_cluster_issuer = false
@@ -120,11 +119,6 @@ variable "database_password" {
 variable "operator_version" {
   type    = string
   default = "v25.2.0-beta.1.tgz"
-}
-
-variable "orchestratord_version" {
-  type    = string
-  default = null
 }
 
 output "gke_cluster" {

@@ -1094,7 +1094,7 @@ class Composition:
             CREATE CLUSTER quickstart REPLICAS ({replica_string});
             GRANT ALL PRIVILEGES ON CLUSTER quickstart TO materialize;
             DROP CLUSTER IF EXISTS singlereplica;
-            CREATE CLUSTER singlereplica SIZE '4', REPLICATION FACTOR 1;
+            CREATE CLUSTER singlereplica SIZE '4', REPLICATION FACTOR 2;
             GRANT ALL PRIVILEGES ON CLUSTER singlereplica TO materialize;
             """,
             user="mz_system",

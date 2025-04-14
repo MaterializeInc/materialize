@@ -3469,11 +3469,8 @@ impl<'a> Parser<'a> {
     fn parse_sql_server_connection_option(
         &mut self,
     ) -> Result<SqlServerConfigOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[CAPTURE])? {
-            CAPTURE => {
-                self.expect_keyword(INSTANCE)?;
-                SqlServerConfigOptionName::CaptureInstance
-            }
+        let name = match self.expect_one_of_keywords(&[DETAILS])? {
+            DETAILS => SqlServerConfigOptionName::Details,
             _ => unreachable!(),
         };
 

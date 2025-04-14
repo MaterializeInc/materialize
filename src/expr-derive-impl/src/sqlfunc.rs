@@ -11,7 +11,7 @@ use darling::FromMeta;
 use proc_macro2::{Ident, TokenStream};
 use quote::quote;
 use syn::spanned::Spanned;
-use syn::{Expr, Lifetime};
+use syn::{Expr, Lifetime, Lit};
 
 /// Modifiers passed as key-value pairs to the `#[sqlfunc]` macro.
 #[derive(Debug, Default, darling::FromMeta)]
@@ -20,7 +20,7 @@ pub(crate) struct Modifiers {
     /// monotone with respect to its arguments. Defined for unary and binary functions.
     is_monotone: Option<Expr>,
     /// The SQL name for the function. Applies to all functions.
-    sqlname: Option<String>,
+    sqlname: Option<SqlName>,
     /// Whether the function preserves uniqueness. Applies to unary functions.
     preserves_uniqueness: Option<Expr>,
     /// The inverse of the function, if it exists. Applies to unary functions.
@@ -41,6 +41,42 @@ pub(crate) struct Modifiers {
     introduces_nulls: Option<Expr>,
 }
 
+/// A name for the SQL function. It can be either a literal or a macro, thus we
+/// can't use `String` or `syn::Expr` directly.
+#[derive(Debug)]
+enum SqlName {
+    /// A literal string.
+    Literal(syn::Lit),
+    /// A macro expression.
+    Macro(syn::ExprMacro),
+}
+
+impl quote::ToTokens for SqlName {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let name = match self {
+            SqlName::Literal(lit) => quote! { #lit },
+            SqlName::Macro(mac) => quote! { #mac },
+        };
+        tokens.extend(name);
+    }
+}
+
+impl darling::FromMeta for SqlName {
+    fn from_value(value: &Lit) -> darling::Result<Self> {
+        Ok(Self::Literal(value.clone()))
+    }
+    fn from_expr(expr: &Expr) -> darling::Result<Self> {
+        match expr {
+            Expr::Lit(lit) => Self::from_value(&lit.lit),
+            Expr::Macro(mac) => Ok(Self::Macro(mac.clone())),
+            // Syn sometimes inserts groups, see `FromMeta::from_expr` for
+            // details.
+            Expr::Group(mac) => Self::from_expr(&mac.expr),
+            _ => Err(darling::Error::unexpected_expr_type(expr)),
+        }
+    }
+}
+
 /// Implementation for the `#[sqlfunc]` macro. The first parameter is the attribute
 /// arguments, the second is the function body. The third parameter indicates
 /// whether to include the test function in the output.
@@ -52,7 +88,7 @@ pub fn sqlfunc(
     include_test: bool,
 ) -> darling::Result<TokenStream> {
     let attr_args = darling::ast::NestedMeta::parse_meta_list(attr.clone())?;
-    let modifiers = Modifiers::from_list(&attr_args)?;
+    let modifiers = Modifiers::from_list(&attr_args).unwrap();
     let func = syn::parse2::<syn::ItemFn>(item.clone())?;
 
     let tokens = match determine_parameters_arena(&func) {
@@ -235,15 +271,9 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
         }
     });
 
-    let name = if let Some(sqlname) = sqlname {
-        quote! {
-            #sqlname
-        }
-    } else {
-        quote! {
-            stringify!(#fn_name)
-        }
-    };
+    let name = sqlname
+        .as_ref()
+        .map_or_else(|| quote! { stringify!(#fn_name) }, |name| quote! { #name });
 
     let (output_type, mut introduces_nulls_fn) = if let Some(output_type) = output_type {
         let introduces_nulls_fn = quote! {
@@ -365,15 +395,9 @@ fn binary_func(
         }
     });
 
-    let name = if let Some(sqlname) = sqlname {
-        quote! {
-            #sqlname
-        }
-    } else {
-        quote! {
-            stringify!(#fn_name)
-        }
-    };
+    let name = sqlname
+        .as_ref()
+        .map_or_else(|| quote! { stringify!(#fn_name) }, |name| quote! { #name });
 
     let (output_type, mut introduces_nulls_fn) = if let Some(output_type) = output_type {
         let introduces_nulls_fn = quote! {

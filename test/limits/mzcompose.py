@@ -1587,6 +1587,8 @@ class PostgresTables(Generator):
 
 
 class PostgresTablesOldSyntax(Generator):
+    MAX_COUNT = 2000  # Too long-running with count=3000
+
     @classmethod
     def body(cls) -> None:
         print("> SET statement_timeout='300s'")

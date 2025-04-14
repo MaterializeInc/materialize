@@ -34,19 +34,7 @@ Database password      | App-specific password.
 
 ## Configure a custom cluster
 
-To configure a custom Materialize [cluster](/sql/create-cluster), follow these steps:
-
-* Edit the Materialize connection.
-
-* Expand the 'Additional Settings' section.
-
-* In the 'Additional JDBC parameters' section, input:
-
-    ```
-    options=--cluster%3D<cluster_name>
-    ```
-
-    Make sure to replace `<cluster_name>` with the actual name of your cluster.
+{{% alter-cluster/configure-cluster %}}
 
 ## Known limitations
 

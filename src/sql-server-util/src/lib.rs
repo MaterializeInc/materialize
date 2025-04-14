@@ -199,11 +199,14 @@ impl Client {
     /// resulting rows.
     ///
     /// Passthrough method for [`tiberius::Client::query`].
-    pub fn query_streaming<'a>(
-        &mut self,
-        query: impl Into<Cow<'a, str>>,
+    pub fn query_streaming<'c, 'q, Q>(
+        &'c mut self,
+        query: Q,
         params: &[&dyn tiberius::ToSql],
-    ) -> impl Stream<Item = Result<tiberius::Row, SqlServerError>> + Send + '_ {
+    ) -> impl Stream<Item = Result<tiberius::Row, SqlServerError>> + Send + use<'c, Q>
+    where
+        Q: Into<Cow<'q, str>>,
+    {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let params = params
             .iter()
@@ -370,11 +373,14 @@ impl<'a> Transaction<'a> {
     }
 
     /// See [`Client::query_streaming`]
-    pub fn query_streaming<'q>(
-        &mut self,
-        query: impl Into<Cow<'q, str>>,
+    pub fn query_streaming<'c, 'q, Q>(
+        &'c mut self,
+        query: Q,
         params: &[&dyn tiberius::ToSql],
-    ) -> impl Stream<Item = Result<tiberius::Row, SqlServerError>> + Send + '_ {
+    ) -> impl Stream<Item = Result<tiberius::Row, SqlServerError>> + Send + use<'c, Q>
+    where
+        Q: Into<Cow<'q, str>>,
+    {
         self.client.query_streaming(query, params)
     }
 
@@ -739,6 +745,8 @@ pub enum SqlServerError {
     SqlServer(#[from] tiberius::error::Error),
     #[error(transparent)]
     CdcError(#[from] crate::cdc::CdcError),
+    #[error("expected column '{0}' to be present")]
+    MissingColumn(&'static str),
     #[error("'{column_type}' from column '{column_name}' is not supported: {reason}")]
     UnsupportedDataType {
         column_name: String,
@@ -749,6 +757,12 @@ pub enum SqlServerError {
     IO(#[from] tokio::io::Error),
     #[error("found invalid data in the column '{column_name}': {error}")]
     InvalidData { column_name: String, error: String },
+    #[error("invalid SQL Server system setting '{name}'. Expected '{expected}'. Got '{actual}'.")]
+    InvalidSystemSetting {
+        name: String,
+        expected: String,
+        actual: String,
+    },
     #[error("invariant was violated: {0}")]
     InvariantViolated(String),
     #[error(transparent)]

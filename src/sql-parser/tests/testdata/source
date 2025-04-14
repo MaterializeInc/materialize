@@ -29,8 +29,8 @@ CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("my
 parse-statement
 CREATE SOURCE "no_such_table"
   IN CLUSTER cdc_cluster
-  FROM SQL SERVER CONNECTION sql_server (CAPTURE INSTANCE 'no_such_mz_capture_1');
+  FROM SQL SERVER CONNECTION sql_server;
 ----
-CREATE SOURCE no_such_table IN CLUSTER cdc_cluster FROM SQL SERVER CONNECTION sql_server (CAPTURE INSTANCE = 'no_such_mz_capture_1')
+CREATE SOURCE no_such_table IN CLUSTER cdc_cluster FROM SQL SERVER CONNECTION sql_server
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("no_such_table")]), in_cluster: Some(Unresolved(Ident("cdc_cluster"))), col_names: [], connection: SqlServer { connection: Name(UnresolvedItemName([Ident("sql_server")])), options: [SqlServerConfigOption { name: CaptureInstance, value: Some(Value(String("no_such_mz_capture_1"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], external_references: None, progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("no_such_table")]), in_cluster: Some(Unresolved(Ident("cdc_cluster"))), col_names: [], connection: SqlServer { connection: Name(UnresolvedItemName([Ident("sql_server")])), options: [] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], external_references: None, progress_subsource: None })

@@ -1,0 +1,20 @@
+---
+source: src/expr/src/scalar/func/impls/jsonb.rs
+expression: info
+---
+Info {
+    output_type_nullable: ColumnType {
+        scalar_type: Jsonb,
+        nullable: true,
+    },
+    output_type_nonnullable: ColumnType {
+        scalar_type: Jsonb,
+        nullable: false,
+    },
+    preserves_uniqueness: false,
+    inverse: None,
+    is_monotone: false,
+    propagates_nulls: true,
+    introduces_nulls: false,
+    could_error: false,
+}

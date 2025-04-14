@@ -61,6 +61,7 @@ copyright_files=$(grep -vE \
     -e '^src/catalog/src/durable/upgrade/snapshots/.*' \
     -e '^src/catalog/src/durable/upgrade/persist/snapshots/.*\.snap' \
     -e '^src/expr-derive-impl/src/snapshots.*' \
+    -e '^src/expr/src/scalar/func/impls/snapshots/.*' \
     -e '^src/expr/src/scalar/func/snapshots/.*' \
     -e '^src/expr/src/scalar/snapshots/.*' \
     -e '^src/license-keys/src/license_keys/.*\.pub' \

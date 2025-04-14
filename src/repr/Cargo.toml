@@ -26,7 +26,7 @@ name = "data_types"
 harness = false
 
 [dependencies]
-anyhow = "1.0.95"
+anyhow = "1.0.97"
 arrow = { version = "53.3.0", default-features = false }
 bitflags = "1.3.2"
 bytes = "1.10.1"
@@ -36,7 +36,7 @@ columnation = "0.1.0"
 chrono = { version = "0.4.39", default-features = false, features = ["serde", "std"] }
 compact_bytes = "0.1.3"
 dec = "0.4.8"
-differential-dataflow = "0.14.0"
+differential-dataflow = "0.14.2"
 enum-kinds = "0.5.1"
 hex = "0.4.3"
 itertools = "0.12.1"
@@ -62,7 +62,7 @@ prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 regex = "1.10.6"
 ryu = "1.0.20"
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = { version = "1.0.125", features = ["arbitrary_precision", "preserve_order"] }
+serde_json = { version = "1.0.127", features = ["arbitrary_precision", "preserve_order"] }
 smallvec = { version = "1.14.0", features = ["serde", "union"] }
 static_assertions = "1.1"
 strsim = "0.11.1"
@@ -88,7 +88,7 @@ rand = "0.8.5"
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.13.4"
+prost-build = "0.13.5"
 
 [features]
 default = [

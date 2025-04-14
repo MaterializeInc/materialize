@@ -533,7 +533,7 @@ generate_extracted_config!(
     (ExcludeColumns, Vec::<UnresolvedItemName>, Default(vec![]))
 );
 
-generate_extracted_config!(SqlServerConfigOption, (CaptureInstance, String));
+generate_extracted_config!(SqlServerConfigOption, (Details, String));
 
 pub fn plan_create_webhook_source(
     scx: &StatementContext,

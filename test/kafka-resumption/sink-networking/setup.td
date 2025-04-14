@@ -35,7 +35,7 @@ New York,NY,10004
   );
 
 > CREATE SINK output
-  IN CLUSTER singlereplica
+  IN CLUSTER quickstart
   FROM input_tbl
   INTO KAFKA CONNECTION kafka_conn2 (TOPIC 'output-byo-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

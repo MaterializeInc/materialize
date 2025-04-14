@@ -9,11 +9,15 @@
 
 //! Useful queries to inspect the state of a SQL Server instance.
 
+use futures::Stream;
 use itertools::Itertools;
 use smallvec::SmallVec;
+use std::collections::BTreeMap;
+use std::fmt;
 use std::sync::Arc;
 
 use crate::cdc::{Lsn, RowFilterOption};
+use crate::desc::{SqlServerColumnRaw, SqlServerTableRaw};
 use crate::{Client, SqlServerError};
 
 /// Returns the minimum log sequence number for the specified `capture_instance`.
@@ -80,26 +84,24 @@ fn parse_lsn(result: &[tiberius::Row]) -> Result<Lsn, SqlServerError> {
     }
 }
 
-/// Queries the specified capture instance and returns all changes from `start_lsn` to `end_lsn`.
+/// Queries the specified capture instance and returns all changes from `start_lsn` to
+/// `end_lsn`, ordered by `start_lsn` in an ascending fashion.
 ///
 /// TODO(sql_server1): This presents an opportunity for SQL injection. We should create a stored
 /// procedure using `QUOTENAME` to sanitize the input for the capture instance provided by the
 /// user.
-pub async fn get_changes(
+pub fn get_changes_asc(
     client: &mut Client,
     capture_instance: &str,
     start_lsn: Lsn,
     end_lsn: Lsn,
     filter: RowFilterOption,
-) -> Result<SmallVec<[tiberius::Row; 1]>, SqlServerError> {
+) -> impl Stream<Item = Result<tiberius::Row, SqlServerError>> + Send {
+    const START_LSN_COLUMN: &str = "__$start_lsn";
     let query = format!(
-        "SELECT * FROM cdc.fn_cdc_get_all_changes_{capture_instance}(@P1, @P2, N'{filter}');"
+        "SELECT * FROM cdc.fn_cdc_get_all_changes_{capture_instance}(@P1, @P2, N'{filter}') ORDER BY {START_LSN_COLUMN} ASC;"
     );
-    let results = client
-        .query(&query, &[&start_lsn.as_bytes(), &end_lsn.as_bytes()])
-        .await?;
-
-    Ok(results)
+    client.query_streaming(query, &[&start_lsn.as_bytes(), &end_lsn.as_bytes()])
 }
 
 /// Returns the `(capture_instance, schema_name, table_name)` for the tables
@@ -158,4 +160,129 @@ WHERE c.capture_instance IN ({param_indexes});"
         .collect::<Result<_, _>>()?;
 
     Ok(tables)
+}
+
+/// Ensure change data capture (CDC) is enabled for the database the provided
+/// `client` is currently connected to.
+///
+/// See: <https://learn.microsoft.com/en-us/sql/relational-databases/track-changes/enable-and-disable-change-data-capture-sql-server?view=sql-server-ver16>
+pub async fn ensure_database_cdc_enabled(client: &mut Client) -> Result<(), SqlServerError> {
+    static DATABASE_CDC_ENABLED_QUERY: &str =
+        "SELECT is_cdc_enabled FROM sys.databases WHERE database_id = DB_ID();";
+    let result = client.simple_query(DATABASE_CDC_ENABLED_QUERY).await?;
+
+    check_system_result(&result, "database CDC".to_string(), true)?;
+    Ok(())
+}
+
+/// Ensure the `SNAPSHOT` transaction isolation level is enabled for the
+/// database the provided `client` is currently connected to.
+///
+/// See: <https://learn.microsoft.com/en-us/sql/t-sql/statements/set-transaction-isolation-level-transact-sql?view=sql-server-ver16>
+pub async fn ensure_snapshot_isolation_enabled(client: &mut Client) -> Result<(), SqlServerError> {
+    static SNAPSHOT_ISOLATION_QUERY: &str =
+        "SELECT snapshot_isolation_state FROM sys.databases WHERE database_id = DB_ID();";
+    let result = client.simple_query(SNAPSHOT_ISOLATION_QUERY).await?;
+
+    check_system_result(&result, "snapshot isolation".to_string(), 1u8)?;
+    Ok(())
+}
+
+pub async fn get_tables(client: &mut Client) -> Result<Vec<SqlServerTableRaw>, SqlServerError> {
+    static GET_TABLES_QUERY: &str = "
+SELECT
+    s.name as schema_name,
+    t.name as table_name,
+    ch.capture_instance as capture_instance,
+    c.name as col_name,
+    ty.name as col_type,
+    c.is_nullable as col_nullable,
+    c.max_length as col_max_length,
+    c.precision as col_precision,
+    c.scale as col_scale
+FROM sys.tables t
+JOIN sys.schemas s ON t.schema_id = s.schema_id
+JOIN sys.columns c ON t.object_id = c.object_id
+JOIN sys.types ty ON c.system_type_id = ty.system_type_id
+JOIN cdc.change_tables ch ON t.object_id = ch.source_object_id
+";
+    fn get_value<'a, T: tiberius::FromSql<'a>>(
+        row: &'a tiberius::Row,
+        name: &'static str,
+    ) -> Result<T, SqlServerError> {
+        row.try_get(name)?
+            .ok_or(SqlServerError::MissingColumn(name))
+    }
+
+    let result = client.simple_query(GET_TABLES_QUERY).await?;
+
+    // Group our columns by (schema, name).
+    let mut tables = BTreeMap::default();
+    for row in result {
+        let schema_name: Arc<str> = get_value::<&str>(&row, "schema_name")?.into();
+        let table_name: Arc<str> = get_value::<&str>(&row, "table_name")?.into();
+        let capture_instance: Arc<str> = get_value::<&str>(&row, "capture_instance")?.into();
+
+        let column_name = get_value::<&str>(&row, "col_name")?.into();
+        let column = SqlServerColumnRaw {
+            name: Arc::clone(&column_name),
+            data_type: get_value::<&str>(&row, "col_type")?.into(),
+            is_nullable: get_value(&row, "col_nullable")?,
+            max_length: get_value(&row, "col_max_length")?,
+            precision: get_value(&row, "col_precision")?,
+            scale: get_value(&row, "col_scale")?,
+        };
+
+        let columns: &mut Vec<_> = tables
+            .entry((
+                Arc::clone(&schema_name),
+                Arc::clone(&table_name),
+                Arc::clone(&capture_instance),
+            ))
+            .or_default();
+        columns.push(column);
+    }
+
+    // Flatten into our raw Table description.
+    let tables = tables
+        .into_iter()
+        .map(|((schema, name, capture_instance), columns)| {
+            Ok::<_, SqlServerError>(SqlServerTableRaw {
+                schema_name: schema,
+                name,
+                capture_instance,
+                columns: columns.into(),
+            })
+        })
+        .collect::<Result<_, _>>()?;
+
+    Ok(tables)
+}
+
+/// Helper function to parse an expected result from a "system" query.
+fn check_system_result<'a, T>(
+    result: &'a SmallVec<[tiberius::Row; 1]>,
+    name: String,
+    expected: T,
+) -> Result<(), SqlServerError>
+where
+    T: tiberius::FromSql<'a> + Copy + fmt::Debug + fmt::Display + PartialEq,
+{
+    match &result[..] {
+        [row] => {
+            let result: Option<T> = row.try_get(0)?;
+            if result == Some(expected) {
+                Ok(())
+            } else {
+                Err(SqlServerError::InvalidSystemSetting {
+                    name,
+                    expected: expected.to_string(),
+                    actual: format!("{result:?}"),
+                })
+            }
+        }
+        other => Err(SqlServerError::InvariantViolated(format!(
+            "expected 1 row, got {other:?}"
+        ))),
+    }
 }

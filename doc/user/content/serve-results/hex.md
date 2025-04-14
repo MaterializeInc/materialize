@@ -13,7 +13,7 @@ menu:
 
 This guide walks you through the steps required to use the collaborative data notebook [Hex](https://hex.tech/) with Materialize.
 
-## Step 1. Create an integration
+## Create an integration
 
 1. Sign in to **[Hex](https://hex.tech/)**.
 
@@ -36,7 +36,11 @@ This guide walks you through the steps required to use the collaborative data no
 
 6. Click the **Create connection** button.
 
-## Step 2. Execute and visualize a query
+## Configure a custom cluster
+
+{{% alter-cluster/configure-cluster %}}
+
+## Execute and visualize a query
 
 1. Create a new SQL cell.
 

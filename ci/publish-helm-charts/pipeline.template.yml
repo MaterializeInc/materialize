@@ -15,20 +15,54 @@
 dag: true
 
 steps:
+  - id: terraform-aws-tag
+    label: "Terraform + Helm Chart E2E on AWS (tagged)"
+    artifact_paths: [test/terraform/aws-temporary/terraform.tfstate, "mz-debug/**/*"]
+    timeout_in_minutes: 120
+    concurrency: 1
+    concurrency_group: 'terraform-aws'
+    agents:
+      queue: linux-aarch64-small
+    plugins:
+      - ./ci/plugins/scratch-aws-access: ~
+      - ./ci/plugins/mzcompose:
+          composition: terraform
+          run: aws-temporary
+          args: ["--tag=$CI_MZ_VERSION", --no-run-testdrive-files]
+
+  - id: terraform-gcp-tag
+    label: "Terraform + Helm Chart E2E on GCP (tagged)"
+    artifact_paths: [test/terraform/gcp-temporary/terraform.tfstate, "mz-debug/**/*"]
+    timeout_in_minutes: 120
+    concurrency: 1
+    concurrency_group: 'terraform-gcp'
+    agents:
+      queue: linux-aarch64-small
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: terraform
+          run: gcp-temporary
+          args: ["--tag=$CI_MZ_VERSION", --no-run-testdrive-files]
+
+  - id: terraform-azure-tag
+    label: "Terraform + Helm Chart E2E on Azure (tagged)"
+    artifact_paths: [test/terraform/azure-temporary/terraform.tfstate, "mz-debug/**/*"]
+    timeout_in_minutes: 120
+    concurrency: 1
+    concurrency_group: 'terraform-azure'
+    agents:
+      queue: linux-aarch64-small
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: terraform
+          run: azure-temporary
+          args: ["--tag=$CI_MZ_VERSION", --no-run-testdrive-files]
+
+  - wait: ~
+
   - id: helm-charts-publish
     label: Publish Helm Charts
     command: bin/ci-builder run stable misc/helm-charts/publish.sh
-    timeout_in_minutes: 10
-    inputs:
-      - misc/helm-charts
-    depends_on: []
+    timeout_in_minutes: 30
     agents:
       queue: linux-aarch64-small
-
-  - id: nightly
-    label: Nightly
-    trigger: nightly
-    async: true
-    build:
-      commit: "$BUILDKITE_COMMIT"
-      branch: "$BUILDKITE_BRANCH"
