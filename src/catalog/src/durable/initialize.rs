@@ -783,7 +783,7 @@ fn default_cluster_config(args: &BootstrapArgs) -> Result<ClusterConfig, Catalog
     Ok(ClusterConfig {
         variant: ClusterVariant::Managed(ClusterVariantManaged {
             size: cluster_size,
-            replication_factor: 1,
+            replication_factor: args.default_cluster_replication_factor,
             availability_zones: vec![],
             logging: ReplicaLogging {
                 log_logging: false,

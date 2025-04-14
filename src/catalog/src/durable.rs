@@ -76,6 +76,7 @@ pub const EXPRESSION_CACHE_SHARD_KEY: &str = "expression_cache_shard";
 pub struct BootstrapArgs {
     pub cluster_replica_size_map: ClusterReplicaSizeMap,
     pub default_cluster_replica_size: String,
+    pub default_cluster_replication_factor: u32,
     pub bootstrap_role: Option<String>,
 }
 
@@ -528,6 +529,7 @@ pub async fn persist_backed_catalog_state(
 pub fn test_bootstrap_args() -> BootstrapArgs {
     BootstrapArgs {
         default_cluster_replica_size: "1".into(),
+        default_cluster_replication_factor: 2,
         bootstrap_role: None,
         cluster_replica_size_map: ClusterReplicaSizeMap::for_tests(),
     }

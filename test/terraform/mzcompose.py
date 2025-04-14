@@ -600,7 +600,7 @@ class AWS:
         ) as conn:
             with conn.cursor() as cur:
                 # Required for some testdrive tests
-                cur.execute("ALTER CLUSTER mz_system SET (REPLICATION FACTOR 1)")
+                cur.execute("ALTER CLUSTER mz_system SET (REPLICATION FACTOR 2)")
 
         c.up("testdrive", persistent=True)
         c.testdrive(
@@ -1294,7 +1294,7 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
         ) as conn:
             with conn.cursor() as cur:
                 # Required for some testdrive tests
-                cur.execute("ALTER CLUSTER mz_system SET (REPLICATION FACTOR 1)")
+                cur.execute("ALTER CLUSTER mz_system SET (REPLICATION FACTOR 2)")
 
         with c.override(
             Testdrive(
@@ -1788,7 +1788,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
         ) as conn:
             with conn.cursor() as cur:
                 # Required for some testdrive tests
-                cur.execute("ALTER CLUSTER mz_system SET (REPLICATION FACTOR 1)")
+                cur.execute("ALTER CLUSTER mz_system SET (REPLICATION FACTOR 2)")
 
         with c.override(
             Testdrive(

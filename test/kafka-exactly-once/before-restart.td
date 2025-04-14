@@ -98,7 +98,7 @@ $ kafka-create-topic topic=input
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
 > CREATE SINK output
-  IN CLUSTER singlereplica
+  IN CLUSTER quickstart
   FROM input_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

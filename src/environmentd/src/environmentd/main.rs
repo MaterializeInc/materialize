@@ -30,8 +30,9 @@ use itertools::Itertools;
 use mz_adapter::ResultExt;
 use mz_adapter_types::bootstrap_builtin_cluster_config::{
     ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR, BootstrapBuiltinClusterConfig,
-    CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
-    SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, DEFAULT_REPLICATION_FACTOR,
+    PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR, SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
 };
 use mz_aws_secrets_controller::AwsSecretsController;
 use mz_build_info::BuildInfo;
@@ -550,6 +551,13 @@ pub struct Args {
         default_value = "1"
     )]
     bootstrap_builtin_analytics_cluster_replica_size: String,
+    #[clap(
+        long,
+        env = "BOOTSTRAP_DEFAULT_CLUSTER_REPLICATION_FACTOR",
+        default_value = DEFAULT_REPLICATION_FACTOR.to_string(),
+        value_parser = clap::value_parser!(u32).range(0..=2)
+    )]
+    bootstrap_default_cluster_replication_factor: u32,
     /// The replication factor of the builtin system cluster replicas if bootstrapping.
     #[clap(
         long,
@@ -1121,6 +1129,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 environment_id: args.environment_id,
                 bootstrap_role: args.bootstrap_role,
                 bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
+                bootstrap_default_cluster_replication_factor: args
+                    .bootstrap_default_cluster_replication_factor,
                 bootstrap_builtin_system_cluster_config: BootstrapBuiltinClusterConfig {
                     size: args.bootstrap_builtin_system_cluster_replica_size,
                     replication_factor: args.bootstrap_builtin_system_cluster_replication_factor,

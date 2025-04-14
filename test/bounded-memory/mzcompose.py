@@ -706,7 +706,7 @@ SCENARIOS = [
             > INSERT INTO t (a, b) VALUES (0, 0);
 
             > DROP CLUSTER IF EXISTS idx_cluster CASCADE;
-            > CREATE CLUSTER idx_cluster SIZE '1-8G', REPLICATION FACTOR 1;
+            > CREATE CLUSTER idx_cluster SIZE '1-8G', REPLICATION FACTOR 2;
 
             > CREATE VIEW accumulable AS
               SELECT
