@@ -12,6 +12,7 @@ import logging
 
 import pytest
 
+from materialize import buildkite
 from materialize.checks.actions import Action, Initialize, Manipulate, Validate
 from materialize.checks.all_checks import *  # noqa: F401 F403
 from materialize.checks.all_checks.alter_connection import (
@@ -91,5 +92,10 @@ def test_upgrade(aws_region: str | None, log_filter: str | None, dev: bool) -> N
             AlterConnectionHost,
         }
     )
+    checks = buildkite.shard_list(checks, lambda ch: ch.__name__)
+    if buildkite.get_parallelism_index() != 0 or buildkite.get_parallelism_count() != 1:
+        print(
+            f"Checks in shard with index {buildkite.get_parallelism_index()}: {[c.__name__ for c in checks]}"
+        )
     scenario = CloudtestUpgrade(checks=checks, executor=executor, azurite=False)
     scenario.run()

@@ -940,6 +940,7 @@ steps:
         label: "Platform checks upgrade in Cloudtest/K8s"
         depends_on: build-aarch64
         timeout_in_minutes: 240
+        parallelism: 2
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
         agents:
