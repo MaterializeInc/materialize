@@ -1,0 +1,20 @@
+---
+source: src/expr/src/scalar/func/impls/timestamp.rs
+expression: info
+---
+Info {
+    output_type_nullable: ColumnType {
+        scalar_type: Time,
+        nullable: true,
+    },
+    output_type_nonnullable: ColumnType {
+        scalar_type: Time,
+        nullable: false,
+    },
+    preserves_uniqueness: false,
+    inverse: None,
+    is_monotone: false,
+    propagates_nulls: true,
+    introduces_nulls: false,
+    could_error: false,
+}

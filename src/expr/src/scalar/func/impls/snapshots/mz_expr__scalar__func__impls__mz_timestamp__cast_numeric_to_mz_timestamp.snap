@@ -1,0 +1,50 @@
+---
+source: src/expr/src/scalar/func/impls/mz_timestamp.rs
+expression: "#[sqlfunc(\n    sqlname = \"numeric_to_mz_timestamp\",\n    preserves_uniqueness = true,\n    inverse = None,\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_numeric_to_mz_timestamp<'a>(a: Numeric) -> Result<Timestamp, EvalError> {\n    { a.try_into().map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string().into())) }\n}\n"
+---
+#[derive(
+    proptest_derive::Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    mz_lowertest::MzReflect
+)]
+pub struct CastNumericToMzTimestamp;
+impl<'a> crate::func::EagerUnaryFunc<'a> for CastNumericToMzTimestamp {
+    type Input = Numeric;
+    type Output = Result<Timestamp, EvalError>;
+    fn call(&self, a: Self::Input) -> Self::Output {
+        cast_numeric_to_mz_timestamp(a)
+    }
+    fn output_type(&self, input_type: mz_repr::ColumnType) -> mz_repr::ColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && input_type.nullable))
+    }
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        None
+    }
+    fn is_monotone(&self) -> bool {
+        true
+    }
+    fn preserves_uniqueness(&self) -> bool {
+        true
+    }
+}
+impl std::fmt::Display for CastNumericToMzTimestamp {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("numeric_to_mz_timestamp")
+    }
+}
+#[allow(clippy::extra_unused_lifetimes)]
+pub fn cast_numeric_to_mz_timestamp<'a>(a: Numeric) -> Result<Timestamp, EvalError> {
+    { a.try_into().map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string().into())) }
+}
