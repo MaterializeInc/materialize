@@ -543,8 +543,14 @@ def run_once(
                 print(
                     "~~~ Resetting materialized to prevent interference between scenarios"
                 )
-                c.kill("cockroach", "materialized", "testdrive")
-                c.rm("cockroach", "materialized", "testdrive")
+                c.kill("cockroach", "materialized", "testdrive", "minio")
+                c.rm(
+                    "cockroach",
+                    "materialized",
+                    "testdrive",
+                    "minio",
+                    destroy_volumes=True,
+                )
                 c.rm_volumes("mzdata")
 
     return stats, failures
