@@ -153,6 +153,7 @@ def cargo(
         "-Clink-arg=-Wl,--compress-debug-sections=zlib",
         "-Clink-arg=-Wl,-O3",
         "-Csymbol-mangling-version=v0",
+        "-Cforce-frame-pointers=yes",
         "--cfg=tokio_unstable",
     ]
 
