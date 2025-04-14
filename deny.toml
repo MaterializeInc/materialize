@@ -77,7 +77,6 @@ skip = [
     # be its own PR.
     { name = "itertools", version = "0.10.5" },
     { name = "itertools", version = "0.12.1" },
-    { name = "itertools", version = "0.13.0" },
 
     # A few crates -> `num_enum_derive` -> `proc-macro-crate` -> `toml_edit v0.19.14`.
     { name = "toml_edit", version = "0.19.14" },
@@ -128,7 +127,6 @@ skip = [
     { name = "rand_core", version = "0.6.2" },
     { name = "reqwest", version = "0.11.24" },
     { name = "rustls-pemfile", version = "1.0.4" },
-    { name = "winreg", version = "0.50.0" },
     { name = "thiserror", version = "1.0.61" },
     { name = "thiserror-impl", version = "1.0.61" },
     { name = "twox-hash", version = "1.6.3" },
@@ -143,9 +141,22 @@ skip = [
     { name = "rustix", version = "0.38.44" },
     # Used by ahash
     { name = "zerocopy", version = "0.7.23" },
-    # Used by guppy
-    { name = "fixedbitset", version = "0.4.2" },
-    { name = "petgraph", version = "0.6.5" },
+    # Used by axum
+    { name = "tower", version = "0.4.13" },
+    # Used by tracing-capture
+    { name = "predicates", version = "2.1.5" },
+    # Used by launchdarkly-server-sdk (via moka)
+    { name = "windows-result", version = "0.2.0" },
+    { name = "windows-strings", version = "0.1.0" },
+    { name = "windows-targets", version = "0.52.6" },
+    { name = "windows_aarch64_gnullvm", version = "0.52.6" },
+    { name = "windows_aarch64_msvc", version = "0.52.6" },
+    { name = "windows_i686_gnu", version = "0.52.6" },
+    { name = "windows_i686_gnullvm", version = "0.52.6" },
+    { name = "windows_i686_msvc", version = "0.52.6" },
+    { name = "windows_x86_64_gnu", version = "0.52.6" },
+    { name = "windows_x86_64_gnullvm", version = "0.52.6" },
+    { name = "windows_x86_64_msvc", version = "0.52.6" },
 ]
 
 [[bans.deny]]

@@ -36,7 +36,7 @@ columnation = "0.1.0"
 chrono = { version = "0.4.39", default-features = false, features = ["serde", "std"] }
 compact_bytes = "0.1.3"
 dec = "0.4.8"
-differential-dataflow = "0.14.0"
+differential-dataflow = "0.14.2"
 enum-kinds = "0.5.1"
 hex = "0.4.3"
 itertools = "0.12.1"

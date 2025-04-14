@@ -17,7 +17,7 @@ clap = { version = "4.5.23", features = ["env", "derive"] }
 crossbeam-channel = "0.5.15"
 futures = "0.3.31"
 http = "1.2.0"
-hyper-util = "0.1.10"
+hyper-util = "0.1.11"
 itertools = "0.12.1"
 mz-aws-secrets-controller = { path = "../aws-secrets-controller", default-features = false }
 mz-build-info = { path = "../build-info", default-features = false }

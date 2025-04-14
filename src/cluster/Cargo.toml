@@ -13,7 +13,7 @@ workspace = true
 anyhow = "1.0.97"
 async-trait = "0.1.88"
 crossbeam-channel = "0.5.15"
-differential-dataflow = "0.14.1"
+differential-dataflow = "0.14.2"
 futures = "0.3.31"
 lgalloc = "0.5.0"
 mz-cluster-client = { path = "../cluster-client" }

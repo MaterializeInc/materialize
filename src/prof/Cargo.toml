@@ -13,7 +13,7 @@ workspace = true
 [dependencies]
 anyhow = "1.0.97"
 backtrace = "0.3.74"
-flate2 = "1.1.0"
+flate2 = "1.1.1"
 jemalloc_pprof = { version = "0.6", optional = true }
 pprof_util = "0.6"
 mz-ore = { path = "../ore", default-features = false }

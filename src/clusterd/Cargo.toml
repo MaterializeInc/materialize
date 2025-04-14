@@ -16,7 +16,7 @@ clap = { version = "4.5.23", features = ["derive", "env"] }
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.31"
 hyper = "1.4.1"
-hyper-util = "0.1.10"
+hyper-util = "0.1.11"
 mz-alloc = { path = "../alloc" }
 mz-alloc-default = { path = "../alloc-default", optional = true }
 mz-build-info = { path = "../build-info" }

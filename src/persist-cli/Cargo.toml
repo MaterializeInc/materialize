@@ -23,7 +23,7 @@ async-trait = "0.1.88"
 axum = "0.7.5"
 bytes = { version = "1.10.1", features = ["serde"] }
 clap = { version = "4.5.23", features = ["derive", "env"] }
-differential-dataflow = "0.14.0"
+differential-dataflow = "0.14.2"
 futures = "0.3.31"
 humantime = "2.2.0"
 mz-http-util = { path = "../http-util" }

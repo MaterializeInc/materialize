@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 async-trait = "0.1.88"
 bytes = { version = "1.10.1" }
-differential-dataflow = "0.14.0"
+differential-dataflow = "0.14.2"
 futures = "0.3.31"
 itertools = { version = "0.12.1" }
 mz-ore = { path = "../ore", features = ["process"] }
