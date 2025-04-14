@@ -18,7 +18,7 @@ use base64::prelude::*;
 use crate::password::Password;
 
 /// The default iteration count as suggested by
-/// https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
+/// <https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html>
 const DEFAULT_ITERATIONS: NonZeroU32 = NonZeroU32::new(600_000).unwrap();
 
 /// The default salt size, which isn't currently configurable.
