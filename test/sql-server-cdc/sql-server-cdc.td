@@ -8,6 +8,8 @@
 # by the Apache License, Version 2.0.
 
 # Setup SQL Server state.
+#
+# Create a table that has CDC enabled.
 
 $ sql-server-connect name=sql-server
 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=${arg.default-sql-server-user};Password=${arg.default-sql-server-password}
@@ -17,6 +19,18 @@ DROP DATABASE IF EXISTS test;
 CREATE DATABASE test;
 USE test;
 
+EXEC sys.sp_cdc_enable_db;
+ALTER DATABASE test SET ALLOW_SNAPSHOT_ISOLATION ON;
+
+CREATE TABLE t1_pk (key_col VARCHAR(20) PRIMARY KEY, val_col VARCHAR(1024));
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't1_pk', @role_name = 'SA', @supports_net_changes = 0;
+
+INSERT INTO t1_pk VALUES ('a', 'hello world'), ('b', 'foobar');
+
+CREATE TABLE t2_no_cdc (key_col VARCHAR(20) PRIMARY KEY, val_col VARCHAR(1024));
+
+CREATE TABLE t3_text (value VARCHAR(100));
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't3_text', @role_name = 'SA', @supports_net_changes = 0;
 
 # Exercise Materialize.
 
@@ -42,3 +56,59 @@ sql_server_test_connection   sql-server
 
 > SHOW CONNECTIONS;
 sql_server_test_connection sql-server ""
+
+# Create a SQL Server Source.
+
+> CREATE SOURCE t1_pk_sql_server
+  FROM SQL SERVER CONNECTION sql_server_test_connection
+  FOR ALL TABLES;
+
+> SHOW SOURCES
+t1_pk subsource quickstart ""
+t1_pk_sql_server sql-server quickstart ""
+t1_pk_sql_server_progress progress <null> ""
+t3_text subsource quickstart ""
+
+> SELECT * FROM t1_pk;
+a "hello world"
+b "foobar"
+
+$ sql-server-execute name=sql-server
+UPDATE t1_pk SET val_col = 'I am an updated value' WHERE key_col = 'a';
+
+> SELECT * FROM t1_pk;
+a "I am an updated value"
+b "foobar"
+
+$ sql-server-execute name=sql-server
+DELETE t1_pk WHERE key_col = 'a';
+
+> SELECT * FROM t1_pk;
+b "foobar"
+
+$ sql-server-execute name=sql-server
+INSERT INTO t1_pk VALUES ('😊', 'lets see what happens');
+
+# Note: VARCHAR columns in SQL Server do not support emojis, hence the '??'.
+> SELECT * FROM t1_pk;
+b "foobar"
+"??" "lets see what happens"
+
+
+# Insert a lot of data upstream.
+
+$ sql-server-execute name=sql-server
+WITH Tally(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM Tally WHERE n < 1000) INSERT INTO t3_text (value) SELECT 'a longer string that will be a bit of data, cool ' + CAST(n AS VARCHAR) FROM Tally OPTION (MAXRECURSION 1000);
+
+> SELECT COUNT(*) FROM t3_text;
+1000
+
+$ sql-server-execute name=sql-server
+INSERT INTO t3_text (value) SELECT value FROM t3_text;
+INSERT INTO t3_text (value) SELECT value FROM t3_text;
+INSERT INTO t3_text (value) SELECT value FROM t3_text;
+INSERT INTO t3_text (value) SELECT value FROM t3_text;
+INSERT INTO t3_text (value) SELECT value FROM t3_text;
+
+> SELECT COUNT(*) FROM t3_text;
+32000

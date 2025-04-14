@@ -18,6 +18,7 @@ use derivative::Derivative;
 use futures::future::BoxFuture;
 use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
 use mz_ore::result::ResultExt;
+use mz_repr::ScalarType;
 use smallvec::{SmallVec, smallvec};
 use tiberius::ToSql;
 use tokio::net::TcpStream;
@@ -34,6 +35,7 @@ pub use config::Config;
 pub use desc::{ProtoSqlServerColumnDesc, ProtoSqlServerTableDesc};
 
 use crate::config::TunnelConfig;
+use crate::desc::SqlServerColumnDecodeType;
 
 /// Higher level wrapper around a [`tiberius::Client`] that models transaction
 /// management like other database clients.
@@ -757,6 +759,8 @@ pub enum SqlServerError {
     IO(#[from] tokio::io::Error),
     #[error("found invalid data in the column '{column_name}': {error}")]
     InvalidData { column_name: String, error: String },
+    #[error("got back a null value when querying for the max LSN")]
+    NullMaxLsn,
     #[error("invalid SQL Server system setting '{name}'. Expected '{expected}'. Got '{actual}'.")]
     InvalidSystemSetting {
         name: String,
@@ -769,4 +773,73 @@ pub enum SqlServerError {
     Generic(#[from] anyhow::Error),
     #[error("programming error! {0}")]
     ProgrammingError(String),
+}
+
+/// Errors returned from decoding SQL Server rows.
+///
+/// **PLEASE READ**
+///
+/// The string representation of this error type is **durably stored** in a source and thus this
+/// error type needs to be **stable** across releases. For example, if in v11 of Materialize we
+/// fail to decode `Row(["foo bar"])` from SQL Server, we will record the error in the source's
+/// Persist shard. If in v12 of Materialize the user deletes the `Row(["foo bar"])` from their
+/// upstream instance, we need to perfectly retract the error we previously committed.
+///
+/// This means be **very** careful when changing this type.
+#[derive(Debug, thiserror::Error)]
+pub enum SqlServerDecodeError {
+    #[error("column '{column_name}' was invalid when getting as type '{as_type}'")]
+    InvalidColumn {
+        column_name: String,
+        as_type: &'static str,
+    },
+    #[error("found invalid data in the column '{column_name}': {error}")]
+    InvalidData { column_name: String, error: String },
+    #[error("can't decode {sql_server_type:?} as {mz_type:?}")]
+    Unsupported {
+        sql_server_type: SqlServerColumnDecodeType,
+        mz_type: ScalarType,
+    },
+}
+
+impl SqlServerDecodeError {
+    fn invalid_timestamp(name: &str, error: mz_repr::adt::timestamp::TimestampError) -> Self {
+        // These error messages need to remain stable, do not change them.
+        let error = match error {
+            mz_repr::adt::timestamp::TimestampError::OutOfRange => "out of range",
+        };
+        SqlServerDecodeError::InvalidData {
+            column_name: name.to_string(),
+            error: error.to_string(),
+        }
+    }
+
+    fn invalid_date(name: &str, error: mz_repr::adt::date::DateError) -> Self {
+        // These error messages need to remain stable, do not change them.
+        let error = match error {
+            mz_repr::adt::date::DateError::OutOfRange => "out of range",
+        };
+        SqlServerDecodeError::InvalidData {
+            column_name: name.to_string(),
+            error: error.to_string(),
+        }
+    }
+
+    fn invalid_decimal(name: &str, error: dec::ParseDecimalError) -> Self {
+        // These error messages need to remain stable. We're using our own message here
+        // but it's worthwhile to know if `dec` changes the message it returns.
+        let msg = "invalid decimal syntax";
+        mz_ore::soft_assert_eq_or_log!(error.to_string(), msg);
+        SqlServerDecodeError::InvalidData {
+            column_name: name.to_string(),
+            error: msg.to_string(),
+        }
+    }
+
+    fn invalid_column(name: &str, as_type: &'static str) -> Self {
+        SqlServerDecodeError::InvalidColumn {
+            column_name: name.to_string(),
+            as_type,
+        }
+    }
 }

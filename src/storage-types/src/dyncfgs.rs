@@ -319,4 +319,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&SUSPENDABLE_SOURCES)
         .add(&WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL)
         .add(&WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL)
+        .add(&crate::sources::sql_server::CDC_POLL_INTERVAL)
+        .add(&crate::sources::sql_server::SNAPSHOT_MAX_LSN_WAIT)
 }
