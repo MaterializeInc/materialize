@@ -430,16 +430,16 @@ fn generate_rbac_requirements(
             attributes,
         }) => {
             if attributes.superuser.unwrap_or(false) {
-                return RbacRequirements {
+                RbacRequirements {
                     superuser_action: Some("create superuser role".to_string()),
                     ..Default::default()
-                };
+                }
             } else {
-                return RbacRequirements {
+                RbacRequirements {
                     privileges: vec![(SystemObjectId::System, AclMode::CREATE_ROLE, role_id)],
                     item_usage: &CREATE_ITEM_USAGE,
                     ..Default::default()
-                };
+                }
             }
         }
         Plan::CreateNetworkPolicy(plan::CreateNetworkPolicyPlan { .. }) => RbacRequirements {
