@@ -38,6 +38,5 @@ def workflow_default(c: Composition) -> None:
         f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
         f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
         f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
-        "--default-timeout=10s",
         "sql-server-cdc.td",
     )
