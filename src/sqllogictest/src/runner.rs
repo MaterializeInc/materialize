@@ -1080,6 +1080,7 @@ impl<'a> RunnerInner<'a> {
             environment_id,
             cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
             bootstrap_default_cluster_replica_size: config.replicas.to_string(),
+            bootstrap_default_cluster_replication_factor: 2,
             bootstrap_builtin_system_cluster_config: BootstrapBuiltinClusterConfig {
                 replication_factor: SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
                 size: config.replicas.to_string(),

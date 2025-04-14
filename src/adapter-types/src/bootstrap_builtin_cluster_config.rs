@@ -15,6 +15,7 @@ pub struct BootstrapBuiltinClusterConfig {
     pub replication_factor: u32,
 }
 
+pub const DEFAULT_REPLICATION_FACTOR: u32 = 1;
 pub const SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR: u32 = 1;
 pub const CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR: u32 = 1;
 pub const PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR: u32 = 1;

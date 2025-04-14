@@ -155,6 +155,8 @@ pub struct Config {
     pub bootstrap_role: Option<String>,
     /// The size of the default cluster replica if bootstrapping.
     pub bootstrap_default_cluster_replica_size: String,
+    /// The default number of replicas if bootstrapping.
+    pub bootstrap_default_cluster_replication_factor: u32,
     /// The config of the builtin system cluster replicas if bootstrapping.
     pub bootstrap_builtin_system_cluster_config: BootstrapBuiltinClusterConfig,
     /// The config of the builtin catalog server cluster replicas if bootstrapping.
@@ -553,6 +555,7 @@ impl Listeners {
         let mut caught_up_trigger = None;
         let bootstrap_args = BootstrapArgs {
             default_cluster_replica_size: config.bootstrap_default_cluster_replica_size.clone(),
+            default_cluster_replication_factor: config.bootstrap_default_cluster_replication_factor,
             bootstrap_role: config.bootstrap_role.clone(),
             cluster_replica_size_map: config.cluster_replica_sizes.clone(),
         };
@@ -590,6 +593,7 @@ impl Listeners {
 
         let bootstrap_args = BootstrapArgs {
             default_cluster_replica_size: config.bootstrap_default_cluster_replica_size.clone(),
+            default_cluster_replication_factor: config.bootstrap_default_cluster_replication_factor,
             bootstrap_role: config.bootstrap_role,
             cluster_replica_size_map: config.cluster_replica_sizes.clone(),
         };

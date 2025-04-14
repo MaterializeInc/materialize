@@ -100,6 +100,7 @@ pub struct TestHarness {
     storage_usage_collection_interval: Duration,
     storage_usage_retention_period: Option<Duration>,
     default_cluster_replica_size: String,
+    default_cluster_replication_factor: u32,
     builtin_system_cluster_config: BootstrapBuiltinClusterConfig,
     builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig,
     builtin_probe_cluster_config: BootstrapBuiltinClusterConfig,
@@ -134,6 +135,7 @@ impl Default for TestHarness {
             storage_usage_collection_interval: Duration::from_secs(3600),
             storage_usage_retention_period: None,
             default_cluster_replica_size: "1".to_string(),
+            default_cluster_replication_factor: 2,
             builtin_system_cluster_config: BootstrapBuiltinClusterConfig {
                 size: "1".to_string(),
                 replication_factor: SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
@@ -546,6 +548,8 @@ impl Listeners {
                 cors_allowed_origin: AllowOrigin::list([]),
                 cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
                 bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
+                bootstrap_default_cluster_replication_factor: config
+                    .default_cluster_replication_factor,
                 bootstrap_builtin_system_cluster_config: config.builtin_system_cluster_config,
                 bootstrap_builtin_catalog_server_cluster_config: config
                     .builtin_catalog_server_cluster_config,

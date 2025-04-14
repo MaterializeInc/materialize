@@ -81,7 +81,6 @@ def workflow_default(c: Composition) -> None:
         with c.override(Redpanda(version=redpanda_version)):
             c.down(destroy_volumes=True)
             c.up("redpanda", "materialized")
-            c.setup_quickstart_cluster()
             c.run_testdrive_files(*TD_CMD)
 
     confluent_versions = buildkite.shard_list(CONFLUENT_PLATFORM_VERSIONS, lambda v: v)
@@ -98,5 +97,4 @@ def workflow_default(c: Composition) -> None:
         ):
             c.down(destroy_volumes=True)
             c.up("zookeeper", "kafka", "schema-registry", "materialized")
-            c.setup_quickstart_cluster()
             c.run_testdrive_files(*TD_CMD)
