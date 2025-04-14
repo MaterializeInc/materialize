@@ -151,9 +151,6 @@ name = "anyhow"
 version = "1.0.97"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dcfed56ad506cb2c684a14971b8861fdc3baaaae314b9e5f9bb532cbe3ba7a4f"
-dependencies = [
- "backtrace",
-]
 
 [[package]]
 name = "arbitrary"
@@ -4220,8 +4217,7 @@ dependencies = [
 [[package]]
 name = "lgalloc"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76a3c66aab975ca357cdecbc25eb804168ff50a9242a3d03e6087c91f3824dd0"
+source = "git+https://github.com/antiguru/rust-lgalloc?branch=buddy_alloc#104e823ffd73e7af1491314e2573c6c1979359d6"
 dependencies = [
  "crossbeam-deque",
  "libc",
@@ -12330,7 +12326,6 @@ version = "0.0.0"
 dependencies = [
  "ahash",
  "aho-corasick",
- "anyhow",
  "async-compression",
  "aws-config",
  "aws-credential-types",
