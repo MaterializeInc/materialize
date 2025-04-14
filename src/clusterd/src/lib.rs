@@ -20,7 +20,6 @@ use hyper_util::rt::TokioIo;
 use mz_build_info::{BuildInfo, build_info};
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_compute::server::ComputeInstanceContext;
-use mz_compute_client::service::proto_compute_server::ProtoComputeServer;
 use mz_http_util::DynamicFilterTarget;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
@@ -32,10 +31,9 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::{GrpcPubSubClient, PersistPubSubClient, PersistPubSubClientConfig};
 use mz_service::emit_boot_diagnostics;
-use mz_service::grpc::{GrpcServer, GrpcServerMetrics, MAX_GRPC_MESSAGE_SIZE};
 use mz_service::secrets::SecretsReaderCliArgs;
+use mz_service::transport;
 use mz_storage::storage_state::StorageInstanceContext;
-use mz_storage_client::client::proto_storage_server::ProtoStorageServer;
 use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
 use tokio::runtime::Handle;
@@ -316,9 +314,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         None,
     );
 
-    let grpc_host = args.grpc_host.and_then(|h| (!h.is_empty()).then_some(h));
-    let grpc_server_metrics = GrpcServerMetrics::register_with(&metrics_registry);
-
     // Start storage server.
     let storage_client_builder = mz_storage::serve(
         &metrics_registry,
@@ -335,13 +330,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     );
     mz_ore::task::spawn(
         || "storage_server",
-        GrpcServer::serve(
-            &grpc_server_metrics,
+        transport::serve(
             args.storage_controller_listen_addr,
             BUILD_INFO.semver_version(),
-            grpc_host.clone(),
             storage_client_builder,
-            |svc| ProtoStorageServer::new(svc).max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
         ),
     );
 
@@ -363,13 +355,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     );
     mz_ore::task::spawn(
         || "compute_server",
-        GrpcServer::serve(
-            &grpc_server_metrics,
+        transport::serve(
             args.compute_controller_listen_addr,
             BUILD_INFO.semver_version(),
-            grpc_host,
             compute_client_builder,
-            |svc| ProtoComputeServer::new(svc).max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
         ),
     );
 

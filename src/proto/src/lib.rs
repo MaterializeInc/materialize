@@ -503,30 +503,6 @@ impl RustType<i32> for i16 {
     }
 }
 
-impl RustType<ProtoU128> for u128 {
-    // TODO(benesch): add a trait for explicitly performing truncating casts.
-    #[allow(clippy::as_conversions)]
-    fn into_proto(&self) -> ProtoU128 {
-        let lo = (self & u128::from(u64::MAX)) as u64;
-        let hi = (self >> 64) as u64;
-        ProtoU128 { hi, lo }
-    }
-
-    fn from_proto(proto: ProtoU128) -> Result<Self, TryFromProtoError> {
-        Ok(u128::from(proto.hi) << 64 | u128::from(proto.lo))
-    }
-}
-
-impl RustType<ProtoU128> for Uuid {
-    fn into_proto(&self) -> ProtoU128 {
-        self.as_u128().into_proto()
-    }
-
-    fn from_proto(proto: ProtoU128) -> Result<Self, TryFromProtoError> {
-        Ok(Uuid::from_u128(u128::from_proto(proto)?))
-    }
-}
-
 impl RustType<u64> for std::num::NonZeroUsize {
     fn into_proto(&self) -> u64 {
         usize::from(*self).into_proto()

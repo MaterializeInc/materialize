@@ -11,31 +11,7 @@ syntax = "proto3";
 
 package mz_storage_types.sources.postgres;
 
-import "expr/src/scalar.proto";
-import "google/protobuf/empty.proto";
 import "postgres-util/src/desc.proto";
-import "repr/src/catalog_item_id.proto";
-import "storage-types/src/connections.proto";
-
-message ProtoCastType {
-  oneof kind {
-    google.protobuf.Empty natural = 1;
-    google.protobuf.Empty text = 2;
-  }
-}
-
-message ProtoPostgresColumnCast {
-  mz_expr.scalar.ProtoMirScalarExpr cast = 1;
-  ProtoCastType cast_type = 2;
-}
-
-message ProtoPostgresSourceConnection {
-  reserved 5, 7;
-  mz_repr.catalog_item_id.ProtoCatalogItemId connection_id = 6;
-  mz_storage_types.connections.ProtoPostgresConnection connection = 1;
-  string publication = 2;
-  ProtoPostgresSourcePublicationDetails details = 4;
-}
 
 message ProtoPostgresSourcePublicationDetails {
   reserved 1;
@@ -43,11 +19,6 @@ message ProtoPostgresSourcePublicationDetails {
   string slot = 2;
   optional uint64 timeline_id = 3;
   string database = 4;
-}
-
-message ProtoPostgresSourceExportDetails {
-  mz_postgres_util.desc.ProtoPostgresTableDesc table = 1;
-  repeated ProtoPostgresColumnCast column_casts = 2;
 }
 
 // NOTE: this message is encoded and stored as part of source export

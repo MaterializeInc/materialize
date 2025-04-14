@@ -21,10 +21,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
-use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc, Row, ScalarType};
-
-include!(concat!(env!("OUT_DIR"), "/mz_storage_client.statistics.rs"));
 
 pub static MZ_SOURCE_STATISTICS_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::builder()
@@ -671,52 +668,6 @@ impl PackableStats for SourceStatisticsUpdate {
     }
 }
 
-impl RustType<ProtoSourceStatisticsUpdate> for SourceStatisticsUpdate {
-    fn into_proto(&self) -> ProtoSourceStatisticsUpdate {
-        ProtoSourceStatisticsUpdate {
-            id: Some(self.id.into_proto()),
-
-            messages_received: self.messages_received.0,
-            bytes_received: self.bytes_received.0,
-            updates_staged: self.updates_staged.0,
-            updates_committed: self.updates_committed.0,
-
-            records_indexed: self.records_indexed.0.0,
-            bytes_indexed: self.bytes_indexed.0.0,
-            rehydration_latency_ms: self.rehydration_latency_ms.0.0,
-            snapshot_records_known: self.snapshot_records_known.0.0,
-            snapshot_records_staged: self.snapshot_records_staged.0.0,
-
-            snapshot_committed: self.snapshot_committed.0.0,
-            offset_known: self.offset_known.0.total,
-            offset_committed: self.offset_committed.0.total,
-        }
-    }
-
-    fn from_proto(proto: ProtoSourceStatisticsUpdate) -> Result<Self, TryFromProtoError> {
-        Ok(SourceStatisticsUpdate {
-            id: proto
-                .id
-                .into_rust_if_some("ProtoSourceStatisticsUpdate::id")?,
-
-            messages_received: Counter(proto.messages_received),
-            bytes_received: Counter(proto.bytes_received),
-            updates_staged: Counter(proto.updates_staged),
-            updates_committed: Counter(proto.updates_committed),
-
-            records_indexed: Gauge::gauge(proto.records_indexed),
-            bytes_indexed: Gauge::gauge(proto.bytes_indexed),
-            rehydration_latency_ms: Gauge::gauge(proto.rehydration_latency_ms),
-            snapshot_records_known: Gauge::gauge(proto.snapshot_records_known),
-            snapshot_records_staged: Gauge::gauge(proto.snapshot_records_staged),
-
-            snapshot_committed: Gauge::gauge(proto.snapshot_committed),
-            offset_known: Gauge::gauge(proto.offset_known),
-            offset_committed: Gauge::gauge(proto.offset_committed),
-        })
-    }
-}
-
 /// An update as reported from a storage instance. The semantics
 /// of each field are documented above in `MZ_SINK_STATISTICS_RAW_DESC`,
 /// and encoded in the field types.
@@ -824,32 +775,6 @@ impl PackableStats for SinkStatisticsUpdate {
         };
 
         (s.id, s)
-    }
-}
-
-impl RustType<ProtoSinkStatisticsUpdate> for SinkStatisticsUpdate {
-    fn into_proto(&self) -> ProtoSinkStatisticsUpdate {
-        ProtoSinkStatisticsUpdate {
-            id: Some(self.id.into_proto()),
-
-            messages_staged: self.messages_staged.0,
-            messages_committed: self.messages_committed.0,
-            bytes_staged: self.bytes_staged.0,
-            bytes_committed: self.bytes_committed.0,
-        }
-    }
-
-    fn from_proto(proto: ProtoSinkStatisticsUpdate) -> Result<Self, TryFromProtoError> {
-        Ok(SinkStatisticsUpdate {
-            id: proto
-                .id
-                .into_rust_if_some("ProtoSinkStatisticsUpdate::id")?,
-
-            messages_staged: Counter(proto.messages_staged),
-            messages_committed: Counter(proto.messages_committed),
-            bytes_staged: Counter(proto.bytes_staged),
-            bytes_committed: Counter(proto.bytes_committed),
-        })
     }
 }
 

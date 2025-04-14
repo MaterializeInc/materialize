@@ -21,7 +21,6 @@ fn main() {
             &[
                 "proto/src/chrono.proto",
                 "proto/src/proto.proto",
-                "proto/src/tokio_postgres.proto",
             ],
             &[PathBuf::from(".."), mz_build_tools::protoc_include()],
         )

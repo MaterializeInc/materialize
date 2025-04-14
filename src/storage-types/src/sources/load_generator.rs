@@ -13,7 +13,7 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use mz_ore::now::NowFn;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, Row, ScalarType};
 use proptest_derive::Arbitrary;
@@ -728,22 +728,6 @@ pub struct LoadGeneratorSourceExportDetails {
     pub output: LoadGeneratorOutput,
 }
 
-impl RustType<ProtoLoadGeneratorSourceExportDetails> for LoadGeneratorSourceExportDetails {
-    fn into_proto(&self) -> ProtoLoadGeneratorSourceExportDetails {
-        ProtoLoadGeneratorSourceExportDetails {
-            output: self.output.into_proto().into(),
-        }
-    }
-
-    fn from_proto(proto: ProtoLoadGeneratorSourceExportDetails) -> Result<Self, TryFromProtoError> {
-        Ok(LoadGeneratorSourceExportDetails {
-            output: proto
-                .output
-                .into_rust_if_some("ProtoLoadGeneratorSourceExportDetails::output")?,
-        })
-    }
-}
-
 impl AlterCompatible for LoadGeneratorSourceExportDetails {
     fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         let Self { output } = self;
@@ -767,77 +751,6 @@ pub trait Generator {
         seed: Option<u64>,
         resume_offset: MzOffset,
     ) -> Box<dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>)>>;
-}
-
-impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnection {
-    fn into_proto(&self) -> ProtoLoadGeneratorSourceConnection {
-        use proto_load_generator_source_connection::Kind;
-        ProtoLoadGeneratorSourceConnection {
-            kind: Some(match &self.load_generator {
-                LoadGenerator::Auction => Kind::Auction(()),
-                LoadGenerator::Clock => Kind::Clock(()),
-                LoadGenerator::Counter { max_cardinality } => {
-                    Kind::Counter(ProtoCounterLoadGenerator {
-                        max_cardinality: *max_cardinality,
-                    })
-                }
-                LoadGenerator::Marketing => Kind::Marketing(()),
-                LoadGenerator::Tpch {
-                    count_supplier,
-                    count_part,
-                    count_customer,
-                    count_orders,
-                    count_clerk,
-                } => Kind::Tpch(ProtoTpchLoadGenerator {
-                    count_supplier: *count_supplier,
-                    count_part: *count_part,
-                    count_customer: *count_customer,
-                    count_orders: *count_orders,
-                    count_clerk: *count_clerk,
-                }),
-                LoadGenerator::Datums => Kind::Datums(()),
-                LoadGenerator::KeyValue(kv) => Kind::KeyValue(kv.into_proto()),
-            }),
-            tick_micros: self.tick_micros,
-            as_of: self.as_of,
-            up_to: self.up_to,
-        }
-    }
-
-    fn from_proto(proto: ProtoLoadGeneratorSourceConnection) -> Result<Self, TryFromProtoError> {
-        use proto_load_generator_source_connection::Kind;
-        let kind = proto.kind.ok_or_else(|| {
-            TryFromProtoError::missing_field("ProtoLoadGeneratorSourceConnection::kind")
-        })?;
-        Ok(LoadGeneratorSourceConnection {
-            load_generator: match kind {
-                Kind::Auction(()) => LoadGenerator::Auction,
-                Kind::Clock(()) => LoadGenerator::Clock,
-                Kind::Counter(ProtoCounterLoadGenerator { max_cardinality }) => {
-                    LoadGenerator::Counter { max_cardinality }
-                }
-                Kind::Marketing(()) => LoadGenerator::Marketing,
-                Kind::Tpch(ProtoTpchLoadGenerator {
-                    count_supplier,
-                    count_part,
-                    count_customer,
-                    count_orders,
-                    count_clerk,
-                }) => LoadGenerator::Tpch {
-                    count_supplier,
-                    count_part,
-                    count_customer,
-                    count_orders,
-                    count_clerk,
-                },
-                Kind::Datums(()) => LoadGenerator::Datums,
-                Kind::KeyValue(kv) => LoadGenerator::KeyValue(kv.into_rust()?),
-            },
-            tick_micros: proto.tick_micros,
-            as_of: proto.as_of,
-            up_to: proto.up_to,
-        })
-    }
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
@@ -885,35 +798,5 @@ impl KeyValueLoadGenerator {
         } else {
             self.snapshot_rounds
         }
-    }
-}
-
-impl RustType<ProtoKeyValueLoadGenerator> for KeyValueLoadGenerator {
-    fn into_proto(&self) -> ProtoKeyValueLoadGenerator {
-        ProtoKeyValueLoadGenerator {
-            keys: self.keys,
-            snapshot_rounds: self.snapshot_rounds,
-            transactional_snapshot: self.transactional_snapshot,
-            value_size: self.value_size,
-            partitions: self.partitions,
-            tick_interval: self.tick_interval.into_proto(),
-            batch_size: self.batch_size,
-            seed: self.seed,
-            include_offset: self.include_offset.clone(),
-        }
-    }
-
-    fn from_proto(proto: ProtoKeyValueLoadGenerator) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            keys: proto.keys,
-            snapshot_rounds: proto.snapshot_rounds,
-            transactional_snapshot: proto.transactional_snapshot,
-            value_size: proto.value_size,
-            partitions: proto.partitions,
-            tick_interval: proto.tick_interval.into_rust()?,
-            batch_size: proto.batch_size,
-            seed: proto.seed,
-            include_offset: proto.include_offset,
-        })
     }
 }

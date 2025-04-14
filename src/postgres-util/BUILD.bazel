@@ -127,10 +127,7 @@ rust_doc_test(
 
 filegroup(
     name = "all_protos",
-    srcs = [
-        "src/desc.proto",
-        "src/tunnel.proto",
-    ],
+    srcs = ["src/desc.proto"],
 )
 
 cargo_build_script(
