@@ -92,6 +92,7 @@ impl Debug for StableTrace<'_> {
             items,
             network_policies,
             roles,
+            role_auth,
             schemas,
             settings,
             source_references,
@@ -134,6 +135,7 @@ impl Debug for StableTrace<'_> {
             .field("items", items)
             .field("network_policies", network_policies)
             .field("roles", roles)
+            .field("role_auth", role_auth)
             .field("schemas", schemas)
             .field("settings", &settings)
             .field("source_references", source_references)

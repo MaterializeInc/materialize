@@ -142,6 +142,7 @@ impl Catalog {
             roles_by_name: BTreeMap::new(),
             roles_by_id: BTreeMap::new(),
             network_policies_by_id: BTreeMap::new(),
+            role_auth_by_id: BTreeMap::new(),
             network_policies_by_name: BTreeMap::new(),
             system_configuration,
             default_privileges: DefaultPrivileges::default(),
@@ -266,6 +267,7 @@ impl Catalog {
         for (kind, ts, diff) in updates {
             match kind {
                 BootstrapStateUpdateKind::Role(_)
+                | BootstrapStateUpdateKind::RoleAuth(_)
                 | BootstrapStateUpdateKind::Database(_)
                 | BootstrapStateUpdateKind::Schema(_)
                 | BootstrapStateUpdateKind::DefaultPrivilege(_)

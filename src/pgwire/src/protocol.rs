@@ -26,6 +26,7 @@ use mz_adapter::{
     AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary,
     RowsFuture, verify_datum_desc,
 };
+use mz_auth::password::Password;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
@@ -35,6 +36,7 @@ use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_pgwire_common::{
     ConnectionCounter, ErrorResponse, Format, FrontendMessage, Severity, VERSION_3, VERSIONS,
 };
+use mz_repr::user::InternalUserMetadata;
 use mz_repr::{
     CatalogItemId, ColumnIndex, Datum, RelationDesc, RelationType, RowArena, RowIterator, RowRef,
     ScalarType,
@@ -95,6 +97,8 @@ pub struct RunParams<'a, A> {
     pub params: BTreeMap<String, String>,
     /// Frontegg authentication.
     pub frontegg: Option<&'a FronteggAuthentication>,
+    /// Whether to use self hosted auth.
+    pub use_self_hosted_auth: bool,
     /// Whether this is an internal server that permits access to restricted
     /// system resources.
     pub internal: bool,
@@ -123,6 +127,7 @@ pub async fn run<'a, A>(
         version,
         mut params,
         frontegg,
+        use_self_hosted_auth,
         internal,
         active_connection_counter,
         helm_chart_version,
@@ -196,6 +201,7 @@ where
                     user: auth_session.user().into(),
                     client_ip: conn.peer_addr().clone(),
                     external_metadata_rx: Some(auth_session.external_metadata_rx()),
+                    internal_user_metadata: None,
                     helm_chart_version,
                 });
                 let expired = async move { auth_session.expired().await };
@@ -211,6 +217,47 @@ where
                     .await;
             }
         }
+    } else if use_self_hosted_auth {
+        conn.send(BackendMessage::AuthenticationCleartextPassword)
+            .await?;
+        conn.flush().await?;
+        let password = match conn.recv().await? {
+            Some(FrontendMessage::Password { password }) => Password(password),
+            _ => {
+                return conn
+                    .send(ErrorResponse::fatal(
+                        SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+                        "expected Password message",
+                    ))
+                    .await;
+            }
+        };
+        let auth_response = match adapter_client.authenticate(&user, &password).await {
+            Ok(resp) => resp,
+            Err(err) => {
+                warn!(?err, "pgwire connection failed authentication");
+                return conn
+                    .send(ErrorResponse::fatal(
+                        SqlState::INVALID_PASSWORD,
+                        "invalid password",
+                    ))
+                    .await;
+            }
+        };
+        let session = adapter_client.new_session(SessionConfig {
+            conn_id: conn.conn_id().clone(),
+            uuid: conn_uuid,
+            user,
+            client_ip: conn.peer_addr().clone(),
+            external_metadata_rx: None,
+            internal_user_metadata: Some(InternalUserMetadata {
+                superuser: auth_response.superuser,
+            }),
+            helm_chart_version,
+        });
+        // No frontegg check, so auth session lasts indefinitely.
+        let auth_session = pending().right_future();
+        (session, auth_session)
     } else {
         let session = adapter_client.new_session(SessionConfig {
             conn_id: conn.conn_id().clone(),
@@ -218,6 +265,7 @@ where
             user,
             client_ip: conn.peer_addr().clone(),
             external_metadata_rx: None,
+            internal_user_metadata: None,
             helm_chart_version,
         });
         // No frontegg check, so auth session lasts indefinitely.

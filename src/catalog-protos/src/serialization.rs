@@ -116,6 +116,8 @@ impl RustType<crate::objects::RoleAttributes> for RoleAttributes {
     fn into_proto(&self) -> crate::objects::RoleAttributes {
         crate::objects::RoleAttributes {
             inherit: self.inherit,
+            superuser: self.superuser,
+            login: self.login,
         }
     }
 
@@ -123,6 +125,8 @@ impl RustType<crate::objects::RoleAttributes> for RoleAttributes {
         let mut attributes = RoleAttributes::new();
 
         attributes.inherit = proto.inherit;
+        attributes.superuser = proto.superuser;
+        attributes.login = proto.login;
 
         Ok(attributes)
     }

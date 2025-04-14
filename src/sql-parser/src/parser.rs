@@ -4141,11 +4141,11 @@ impl<'a> Parser<'a> {
         self.expect_keyword(ROLE)?;
         let name = self.parse_identifier()?;
         let _ = self.parse_keyword(WITH);
-        let options = self.parse_role_attributes();
+        let options = self.parse_role_attributes()?;
         Ok(Statement::CreateRole(CreateRoleStatement { name, options }))
     }
 
-    fn parse_role_attributes(&mut self) -> Vec<RoleAttribute> {
+    fn parse_role_attributes(&mut self) -> Result<Vec<RoleAttribute>, ParserError> {
         let mut options = vec![];
         loop {
             match self.parse_one_of_keywords(&[
@@ -4161,6 +4161,7 @@ impl<'a> Parser<'a> {
                 NOCREATEDB,
                 CREATEROLE,
                 NOCREATEROLE,
+                PASSWORD,
             ]) {
                 None => break,
                 Some(SUPERUSER) => options.push(RoleAttribute::SuperUser),
@@ -4175,10 +4176,18 @@ impl<'a> Parser<'a> {
                 Some(NOCREATEDB) => options.push(RoleAttribute::NoCreateDB),
                 Some(CREATEROLE) => options.push(RoleAttribute::CreateRole),
                 Some(NOCREATEROLE) => options.push(RoleAttribute::NoCreateRole),
+                Some(PASSWORD) => {
+                    if self.parse_keyword(NULL) {
+                        options.push(RoleAttribute::Password(None));
+                        continue;
+                    }
+                    let password = self.parse_literal_string()?;
+                    options.push(RoleAttribute::Password(Some(password)));
+                }
                 Some(_) => unreachable!(),
             }
         }
-        options
+        Ok(options)
     }
 
     fn parse_create_secret(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -6115,7 +6124,7 @@ impl<'a> Parser<'a> {
             }
             Some(WITH) | None => {
                 let _ = self.parse_keyword(WITH);
-                let attrs = self.parse_role_attributes();
+                let attrs = self.parse_role_attributes()?;
                 AlterRoleOption::Attributes(attrs)
             }
             Some(k) => unreachable!("unmatched keyword: {k}"),

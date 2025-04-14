@@ -107,6 +107,10 @@ pub struct Config {
     /// The URL of the Materialize console to proxy from the /internal-console
     /// endpoint on the internal HTTP server.
     pub internal_console_redirect_url: Option<String>,
+    /// Whether to enable self hosted auth
+    pub self_hosted_auth: bool,
+    /// Whether to enable self hosted auth on the internal pg port
+    pub self_hosted_auth_internal: bool,
 
     // === Controller options. ===
     /// Storage and compute controller configuration.
@@ -735,6 +739,7 @@ impl Listeners {
                 tls: pgwire_tls.clone(),
                 adapter_client: adapter_client.clone(),
                 frontegg: config.frontegg.clone(),
+                use_self_hosted_auth: config.self_hosted_auth,
                 metrics: metrics.clone(),
                 internal: false,
                 active_connection_counter: active_connection_counter.clone(),
@@ -765,6 +770,7 @@ impl Listeners {
                 }),
                 adapter_client: adapter_client.clone(),
                 frontegg: None,
+                use_self_hosted_auth: config.self_hosted_auth_internal,
                 metrics: metrics.clone(),
                 internal: true,
                 active_connection_counter: active_connection_counter.clone(),

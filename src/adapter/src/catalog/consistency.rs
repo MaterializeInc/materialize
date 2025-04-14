@@ -186,6 +186,11 @@ impl CatalogState {
                 }
             }
         }
+        for (role_id, _) in &self.role_auth_by_id {
+            if !self.roles_by_id.contains_key(role_id) {
+                inconsistencies.push(RoleInconsistency::RoleAuth(role_id.clone()));
+            }
+        }
         for (default_priv, privileges) in self.default_privileges.iter() {
             if !self.roles_by_id.contains_key(&default_priv.role_id) {
                 inconsistencies.push(RoleInconsistency::DefaultPrivilege(default_priv.clone()));
@@ -647,6 +652,7 @@ enum RoleInconsistency {
     Cluster(ClusterId, RoleId),
     ClusterReplica(ClusterId, ReplicaId, RoleId),
     DefaultPrivilege(DefaultPrivilegeObject),
+    RoleAuth(RoleId),
     DefaultPrivilegeItem {
         grantor: RoleId,
         grantee: RoleId,

@@ -16,6 +16,7 @@ use std::sync::Arc;
 use derivative::Derivative;
 use enum_kinds::EnumKind;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
+use mz_auth::password::Password;
 use mz_compute_types::ComputeInstanceId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_no_log;
@@ -64,6 +65,12 @@ pub enum Command {
         uuid: Uuid,
         application_name: String,
         notice_tx: mpsc::UnboundedSender<AdapterNotice>,
+    },
+
+    AuthenticatePassword {
+        tx: oneshot::Sender<Result<AuthResponse, AdapterError>>,
+        role_name: String,
+        password: Option<Password>,
     },
 
     Execute {
@@ -140,6 +147,7 @@ impl Command {
             Command::Execute { session, .. } | Command::Commit { session, .. } => Some(session),
             Command::CancelRequest { .. }
             | Command::Startup { .. }
+            | Command::AuthenticatePassword { .. }
             | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::GetWebhook { .. }
@@ -157,6 +165,7 @@ impl Command {
             Command::Execute { session, .. } | Command::Commit { session, .. } => Some(session),
             Command::CancelRequest { .. }
             | Command::Startup { .. }
+            | Command::AuthenticatePassword { .. }
             | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::GetWebhook { .. }
@@ -191,6 +200,16 @@ pub struct StartupResponse {
     /// Map of (name, VarInput::Flat) tuples of session default variables that should be set.
     pub session_defaults: BTreeMap<String, OwnedVarInput>,
     pub catalog: Arc<Catalog>,
+}
+
+/// The response to [`Client::authenticate`](crate::Client::authenticate).
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct AuthResponse {
+    /// RoleId for the user.
+    pub role_id: RoleId,
+    /// If the user is a superuser.
+    pub superuser: bool,
 }
 
 // Facile implementation for `StartupResponse`, which does not use the `allowed`

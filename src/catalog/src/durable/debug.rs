@@ -65,6 +65,7 @@ pub enum CollectionType {
     Item,
     NetworkPolicy,
     Role,
+    RoleAuth,
     Schema,
     Setting,
     SourceReferences,
@@ -216,6 +217,14 @@ collection_impl!({
     update: StateUpdateKind::Role,
 });
 collection_impl!({
+    name: RoleAuthCollection,
+    key: proto::RoleAuthKey,
+    value: proto::RoleAuthValue,
+    collection_type: CollectionType::RoleAuth,
+    trace_field: role_auth,
+    update: StateUpdateKind::RoleAuth,
+});
+collection_impl!({
     name: SchemaCollection,
     key: proto::SchemaKey,
     value: proto::SchemaValue,
@@ -331,6 +340,7 @@ pub struct Trace {
     pub items: CollectionTrace<ItemCollection>,
     pub network_policies: CollectionTrace<NetworkPolicyCollection>,
     pub roles: CollectionTrace<RoleCollection>,
+    pub role_auth: CollectionTrace<RoleAuthCollection>,
     pub schemas: CollectionTrace<SchemaCollection>,
     pub settings: CollectionTrace<SettingCollection>,
     pub source_references: CollectionTrace<SourceReferencesCollection>,
@@ -357,6 +367,7 @@ impl Trace {
             items: CollectionTrace::new(),
             network_policies: CollectionTrace::new(),
             roles: CollectionTrace::new(),
+            role_auth: CollectionTrace::new(),
             schemas: CollectionTrace::new(),
             settings: CollectionTrace::new(),
             source_references: CollectionTrace::new(),
@@ -383,6 +394,7 @@ impl Trace {
             items,
             network_policies,
             roles,
+            role_auth,
             schemas,
             settings,
             source_references,
@@ -405,6 +417,7 @@ impl Trace {
         items.sort();
         network_policies.sort();
         roles.sort();
+        role_auth.sort();
         schemas.sort();
         settings.sort();
         source_references.sort();

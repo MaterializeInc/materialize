@@ -24,13 +24,14 @@ use mz_catalog::builtin::{
     BUILTIN_LOG_LOOKUP, BUILTIN_LOOKUP, Builtin, BuiltinLog, BuiltinTable, BuiltinView,
 };
 use mz_catalog::durable::objects::{
-    ClusterKey, DatabaseKey, DurableType, ItemKey, NetworkPolicyKey, RoleKey, SchemaKey,
+    ClusterKey, DatabaseKey, DurableType, ItemKey, NetworkPolicyKey, RoleAuthKey, RoleKey,
+    SchemaKey,
 };
 use mz_catalog::durable::{CatalogError, SystemObjectMapping};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterReplica, DataSourceDesc, Database, Func, Index, Log,
-    NetworkPolicy, Role, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table,
+    NetworkPolicy, Role, RoleAuth, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table,
     TableDataSource, TemporaryItem, Type, UpdateFrom,
 };
 use mz_compute_types::config::ComputeReplicaConfig;
@@ -75,6 +76,7 @@ use crate::util::index_sql;
 #[derive(Debug, Clone, Default)]
 struct InProgressRetractions {
     roles: BTreeMap<RoleKey, Role>,
+    role_auths: BTreeMap<RoleAuthKey, RoleAuth>,
     databases: BTreeMap<DatabaseKey, Database>,
     schemas: BTreeMap<SchemaKey, Schema>,
     clusters: BTreeMap<ClusterKey, Cluster>,
@@ -214,6 +216,9 @@ impl CatalogState {
             StateUpdateKind::Role(role) => {
                 self.apply_role_update(role, diff, retractions);
             }
+            StateUpdateKind::RoleAuth(role_auth) => {
+                self.apply_role_auth_update(role_auth, diff, retractions);
+            }
             StateUpdateKind::Database(database) => {
                 self.apply_database_update(database, diff, retractions);
             }
@@ -281,6 +286,22 @@ impl CatalogState {
         }
 
         Ok(())
+    }
+
+    #[instrument(level = "debug")]
+    fn apply_role_auth_update(
+        &mut self,
+        role_auth: mz_catalog::durable::RoleAuth,
+        diff: StateDiff,
+        retractions: &mut InProgressRetractions,
+    ) {
+        apply_with_update(
+            &mut self.role_auth_by_id,
+            role_auth,
+            |role_auth| role_auth.role_id,
+            diff,
+            &mut retractions.role_auths,
+        );
     }
 
     #[instrument(level = "debug")]
@@ -1256,7 +1277,8 @@ impl CatalogState {
                 .pack_network_policy_update(&policy.id, diff)
                 .expect("could not pack audit log update"),
             StateUpdateKind::StorageCollectionMetadata(_)
-            | StateUpdateKind::UnfinalizedShard(_) => Vec::new(),
+            | StateUpdateKind::UnfinalizedShard(_)
+            | StateUpdateKind::RoleAuth(_) => Vec::new(),
         }
     }
 
@@ -1814,6 +1836,7 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         let diff = update.diff.clone();
         match update.kind {
             StateUpdateKind::Role(_)
+            | StateUpdateKind::RoleAuth(_)
             | StateUpdateKind::Database(_)
             | StateUpdateKind::Schema(_)
             | StateUpdateKind::DefaultPrivilege(_)

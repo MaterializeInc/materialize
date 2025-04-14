@@ -939,6 +939,8 @@ Snapshot {
             attributes: Some(
                 RoleAttributes {
                     inherit: true,
+                    superuser: None,
+                    login: None,
                 },
             ),
             membership: Some(
@@ -968,6 +970,8 @@ Snapshot {
             attributes: Some(
                 RoleAttributes {
                     inherit: true,
+                    superuser: None,
+                    login: None,
                 },
             ),
             membership: Some(
@@ -997,6 +1001,8 @@ Snapshot {
             attributes: Some(
                 RoleAttributes {
                     inherit: true,
+                    superuser: None,
+                    login: None,
                 },
             ),
             membership: Some(
@@ -1026,6 +1032,8 @@ Snapshot {
             attributes: Some(
                 RoleAttributes {
                     inherit: true,
+                    superuser: None,
+                    login: None,
                 },
             ),
             membership: Some(
@@ -1055,6 +1063,8 @@ Snapshot {
             attributes: Some(
                 RoleAttributes {
                     inherit: true,
+                    superuser: None,
+                    login: None,
                 },
             ),
             membership: Some(
@@ -1084,6 +1094,8 @@ Snapshot {
             attributes: Some(
                 RoleAttributes {
                     inherit: true,
+                    superuser: None,
+                    login: None,
                 },
             ),
             membership: Some(
@@ -1099,6 +1111,7 @@ Snapshot {
             oid: 16664,
         },
     },
+    role_auth: {},
     items: {},
     comments: {},
     clusters: {

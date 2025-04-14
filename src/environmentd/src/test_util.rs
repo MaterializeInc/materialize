@@ -93,6 +93,8 @@ pub struct TestHarness {
     data_directory: Option<PathBuf>,
     tls: Option<TlsCertConfig>,
     frontegg: Option<FronteggAuthentication>,
+    self_hosted_auth: bool,
+    self_hosted_auth_internal: bool,
     unsafe_mode: bool,
     workers: usize,
     now: NowFn,
@@ -128,6 +130,8 @@ impl Default for TestHarness {
             data_directory: None,
             tls: None,
             frontegg: None,
+            self_hosted_auth: false,
+            self_hosted_auth_internal: false,
             unsafe_mode: false,
             workers: 1,
             now: SYSTEM_TIME.clone(),
@@ -244,6 +248,16 @@ impl TestHarness {
 
     pub fn with_frontegg(mut self, frontegg: &FronteggAuthentication) -> Self {
         self.frontegg = Some(frontegg.clone());
+        self
+    }
+
+    pub fn with_self_hosted_auth(mut self, self_hosted_auth: bool) -> Self {
+        self.self_hosted_auth = self_hosted_auth;
+        self
+    }
+
+    pub fn with_self_hosted_auth_internal(mut self, self_hosted_auth_internal: bool) -> Self {
+        self.self_hosted_auth_internal = self_hosted_auth_internal;
         self
     }
 
@@ -540,6 +554,8 @@ impl Listeners {
                 cloud_resource_controller: None,
                 tls: config.tls,
                 frontegg: config.frontegg,
+                self_hosted_auth: config.self_hosted_auth,
+                self_hosted_auth_internal: config.self_hosted_auth_internal,
                 unsafe_mode: config.unsafe_mode,
                 all_features: false,
                 metrics_registry: metrics_registry.clone(),

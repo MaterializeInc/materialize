@@ -19,6 +19,7 @@ use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, Timely
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::cast::{u64_to_usize, usize_to_u64};
 use mz_ore::collections::{CollectionExt, HashSet};
+use mz_ore::now::SYSTEM_TIME;
 use mz_ore::vec::VecExt;
 use mz_ore::{soft_assert_no_log, soft_assert_or_log};
 use mz_persist_types::ShardId;
@@ -82,6 +83,7 @@ pub struct Transaction<'a> {
     items: TableTransaction<ItemKey, ItemValue>,
     comments: TableTransaction<CommentKey, CommentValue>,
     roles: TableTransaction<RoleKey, RoleValue>,
+    role_auth: TableTransaction<RoleAuthKey, RoleAuthValue>,
     clusters: TableTransaction<ClusterKey, ClusterValue>,
     cluster_replicas: TableTransaction<ClusterReplicaKey, ClusterReplicaValue>,
     introspection_sources:
@@ -115,6 +117,7 @@ impl<'a> Transaction<'a> {
             databases,
             schemas,
             roles,
+            role_auth,
             items,
             comments,
             clusters,
@@ -158,6 +161,7 @@ impl<'a> Transaction<'a> {
             roles: TableTransaction::new_with_uniqueness_fn(roles, |a: &RoleValue, b| {
                 a.name == b.name
             })?,
+            role_auth: TableTransaction::new(role_auth)?,
             clusters: TableTransaction::new_with_uniqueness_fn(clusters, |a: &ClusterValue, b| {
                 a.name == b.name
             })?,
@@ -350,6 +354,24 @@ impl<'a> Transaction<'a> {
         vars: RoleVars,
         oid: u32,
     ) -> Result<(), CatalogError> {
+        if let Some(ref password) = attributes.password {
+            let hash =
+                mz_auth::hash::scram256_hash(password).expect("password hash should be valid");
+            match self.role_auth.insert(
+                RoleAuthKey { role_id: id },
+                RoleAuthValue {
+                    password_hash: Some(hash),
+                    updated_at: SYSTEM_TIME(),
+                },
+                self.op_id,
+            ) {
+                Ok(_) => {}
+                Err(_) => {
+                    return Err(SqlCatalogError::RoleAlreadyExists(name).into());
+                }
+            }
+        }
+
         match self.roles.insert(
             RoleKey { id },
             RoleValue {
@@ -1150,17 +1172,41 @@ impl<'a> Transaction<'a> {
             return Ok(());
         }
 
-        let to_remove = roles
+        let to_remove_keys = roles
             .iter()
-            .map(|role_id| (RoleKey { id: *role_id }, None))
+            .map(|role_id| RoleKey { id: *role_id })
+            .collect::<Vec<_>>();
+
+        let to_remove_roles = to_remove_keys
+            .iter()
+            .map(|role_key| (role_key.clone(), None))
             .collect();
-        let mut prev = self.roles.set_many(to_remove, self.op_id)?;
+
+        let mut prev = self.roles.set_many(to_remove_roles, self.op_id)?;
+
+        let to_remove_role_auth = to_remove_keys
+            .iter()
+            .map(|role_key| {
+                (
+                    RoleAuthKey {
+                        role_id: role_key.id,
+                    },
+                    None,
+                )
+            })
+            .collect();
+
+        let mut role_auth_prev = self.role_auth.set_many(to_remove_role_auth, self.op_id)?;
 
         prev.retain(|_k, v| v.is_none());
         if !prev.is_empty() {
             let err = prev.keys().map(|k| k.id.to_string()).join(", ");
             return Err(SqlCatalogError::UnknownRole(err).into());
         }
+
+        role_auth_prev.retain(|_k, v| v.is_none());
+        // The reason we don't to the same check as above is that the role auth table
+        // is not required to have all roles in the role table.
 
         Ok(())
     }
@@ -1429,13 +1475,42 @@ impl<'a> Transaction<'a> {
     /// DO NOT call this function in a loop, implement and use some `Self::update_roles` instead.
     /// You should model it after [`Self::update_items`].
     pub fn update_role(&mut self, id: RoleId, role: Role) -> Result<(), CatalogError> {
-        let updated =
+        let key = RoleKey { id };
+        if self.roles.get(&key).is_some() {
+            let auth_key = RoleAuthKey { role_id: id };
+
+            if let Some(ref password) = role.attributes.password {
+                let hash =
+                    mz_auth::hash::scram256_hash(password).expect("password hash should be valid");
+                let value = RoleAuthValue {
+                    password_hash: Some(hash),
+                    updated_at: SYSTEM_TIME(),
+                };
+
+                if self.role_auth.get(&auth_key).is_some() {
+                    self.role_auth
+                        .update_by_key(auth_key.clone(), value, self.op_id)?;
+                } else {
+                    self.role_auth.insert(auth_key.clone(), value, self.op_id)?;
+                }
+            } else if self.role_auth.get(&auth_key).is_some() {
+                // If the role is being updated to not have a password, we need to
+                // remove the password hash from the role_auth catalog.
+                let value = RoleAuthValue {
+                    password_hash: None,
+                    updated_at: SYSTEM_TIME(),
+                };
+
+                self.role_auth
+                    .update_by_key(auth_key.clone(), value, self.op_id)?;
+            }
+
             self.roles
-                .update_by_key(RoleKey { id }, role.into_key_value().1, self.op_id)?;
-        if updated {
+                .update_by_key(key, role.into_key_value().1, self.op_id)?;
+
             Ok(())
         } else {
-            Err(SqlCatalogError::UnknownItem(id.to_string()).into())
+            Err(SqlCatalogError::UnknownRole(id.to_string()).into())
         }
     }
 
@@ -2193,6 +2268,7 @@ impl<'a> Transaction<'a> {
             items,
             comments,
             roles,
+            role_auth,
             clusters,
             network_policies,
             cluster_replicas,
@@ -2218,6 +2294,11 @@ impl<'a> Transaction<'a> {
             .chain(get_collection_op_updates(
                 roles,
                 StateUpdateKind::Role,
+                self.op_id,
+            ))
+            .chain(get_collection_op_updates(
+                role_auth,
+                StateUpdateKind::RoleAuth,
                 self.op_id,
             ))
             .chain(get_collection_op_updates(
@@ -2339,6 +2420,7 @@ impl<'a> Transaction<'a> {
             items: self.items.pending(),
             comments: self.comments.pending(),
             roles: self.roles.pending(),
+            role_auth: self.role_auth.pending(),
             clusters: self.clusters.pending(),
             cluster_replicas: self.cluster_replicas.pending(),
             network_policies: self.network_policies.pending(),
@@ -2383,6 +2465,7 @@ impl<'a> Transaction<'a> {
             items,
             comments,
             roles,
+            role_auth,
             clusters,
             cluster_replicas,
             network_policies,
@@ -2408,6 +2491,7 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(items);
         differential_dataflow::consolidation::consolidate_updates(comments);
         differential_dataflow::consolidation::consolidate_updates(roles);
+        differential_dataflow::consolidation::consolidate_updates(role_auth);
         differential_dataflow::consolidation::consolidate_updates(clusters);
         differential_dataflow::consolidation::consolidate_updates(cluster_replicas);
         differential_dataflow::consolidation::consolidate_updates(network_policies);
@@ -2477,6 +2561,8 @@ impl<'a> Transaction<'a> {
 }
 
 use crate::durable::async_trait;
+
+use super::objects::{RoleAuthKey, RoleAuthValue};
 
 #[async_trait]
 impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
@@ -2598,6 +2684,7 @@ pub struct TransactionBatch {
     pub(crate) items: Vec<(proto::ItemKey, proto::ItemValue, Diff)>,
     pub(crate) comments: Vec<(proto::CommentKey, proto::CommentValue, Diff)>,
     pub(crate) roles: Vec<(proto::RoleKey, proto::RoleValue, Diff)>,
+    pub(crate) role_auth: Vec<(proto::RoleAuthKey, proto::RoleAuthValue, Diff)>,
     pub(crate) clusters: Vec<(proto::ClusterKey, proto::ClusterValue, Diff)>,
     pub(crate) cluster_replicas: Vec<(proto::ClusterReplicaKey, proto::ClusterReplicaValue, Diff)>,
     pub(crate) network_policies: Vec<(proto::NetworkPolicyKey, proto::NetworkPolicyValue, Diff)>,
@@ -2650,6 +2737,7 @@ impl TransactionBatch {
             items,
             comments,
             roles,
+            role_auth,
             clusters,
             cluster_replicas,
             network_policies,
@@ -2673,6 +2761,7 @@ impl TransactionBatch {
             && items.is_empty()
             && comments.is_empty()
             && roles.is_empty()
+            && role_auth.is_empty()
             && clusters.is_empty()
             && cluster_replicas.is_empty()
             && network_policies.is_empty()
@@ -2761,6 +2850,7 @@ mod unique_name {
         StorageCollectionMetadataValue,
         SystemPrivilegesValue,
         TxnWalShardValue,
+        RoleAuthValue,
     );
 
     #[cfg(test)]

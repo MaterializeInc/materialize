@@ -636,7 +636,6 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                         }
                     }
                     ListenEvent::Updates(batch_updates) => {
-                        debug!("syncing updates {batch_updates:?}");
                         for update in batch_updates {
                             let update: StateUpdate<StateUpdateKindJson> = update.into();
                             updates.entry(update.ts).or_default().push(update);
@@ -859,6 +858,9 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
                     }
                     StateUpdateKind::TxnWalShard((), value) => {
                         apply(&mut snapshot.txn_wal_shard, &(), value, diff);
+                    }
+                    StateUpdateKind::RoleAuth(key, value) => {
+                        apply(&mut snapshot.role_auth, key, value, diff);
                     }
                 }
             }
@@ -1995,6 +1997,7 @@ impl Trace {
                 StateUpdateKind::TxnWalShard((), v) => {
                     trace.txn_wal_shard.values.push((((), v), ts, diff))
                 }
+                StateUpdateKind::RoleAuth(k, v) => trace.role_auth.values.push(((k, v), ts, diff)),
             }
         }
         trace

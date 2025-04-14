@@ -32,6 +32,7 @@ launchdarkly-server-sdk = { version = "2.5.1", default-features = false }
 maplit = "1.0.2"
 mz-adapter-types = { path = "../adapter-types" }
 mz-audit-log = { path = "../audit-log" }
+mz-auth = { path = "../auth" }
 mz-build-info = { path = "../build-info" }
 mz-catalog = { path = "../catalog" }
 mz-cloud-provider = { path = "../cloud-provider", default-features = false }
