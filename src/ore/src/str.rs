@@ -15,8 +15,12 @@
 
 //! String utilities.
 
+use std::convert::Infallible;
 use std::fmt::{self, Write};
 use std::ops::Deref;
+use std::str::FromStr;
+
+use serde::{Deserialize, Serialize};
 
 /// Extension methods for [`str`].
 pub trait StrExt {
@@ -418,6 +422,71 @@ impl<'a, const MAX: usize> TryFrom<&'a str> for MaxLenString<MAX> {
     }
 }
 
+/// A string that redacts its password when formatted.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SensitiveString(pub String);
+
+impl SensitiveString {}
+
+impl fmt::Display for SensitiveString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        "<redacted>".fmt(f)
+    }
+}
+
+impl fmt::Debug for SensitiveString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        "<redacted>".fmt(f)
+    }
+}
+
+impl FromStr for SensitiveString {
+    type Err = Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(s.to_owned()))
+    }
+}
+
+impl Deref for SensitiveString {
+    type Target = String;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[cfg(feature = "cli")]
+#[derive(Clone, Debug)]
+/// clap parser for SensitiveString
+pub struct SensitiveStringParser;
+
+#[cfg(feature = "cli")]
+impl clap::builder::TypedValueParser for SensitiveStringParser {
+    type Value = SensitiveString;
+
+    fn parse_ref(
+        &self,
+        cmd: &clap::Command,
+        _arg: Option<&clap::Arg>,
+        value: &std::ffi::OsStr,
+    ) -> Result<Self::Value, clap::Error> {
+        let s = value
+            .to_str()
+            .ok_or_else(|| clap::Error::new(clap::error::ErrorKind::InvalidUtf8).with_cmd(cmd))?;
+        Ok(SensitiveString::from_str(s).expect("infallible"))
+    }
+}
+
+#[cfg(feature = "cli")]
+impl clap::builder::ValueParserFactory for SensitiveString {
+    type Parser = SensitiveStringParser;
+
+    fn value_parser() -> Self::Parser {
+        SensitiveStringParser
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -435,5 +504,12 @@ mod tests {
         assert_eq!(indent.to_string(), "".to_string());
         indent += 1;
         assert_eq!(indent.to_string(), "~~~".to_string());
+    }
+
+    #[crate::test]
+    fn test_sensitive_string() {
+        let s = SensitiveString::from_str("mypassword");
+        assert_eq!(format!("{}", s), "<redacted>");
+        assert_eq!(format!("{:?}", s), "<redacted>");
     }
 }
