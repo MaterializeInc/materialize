@@ -616,6 +616,24 @@ steps:
                   "--seed=$BUILDKITE_JOB_ID",
                 ]
 
+      - id: checks-restart-environmentd-clusterd-storage-x86_64
+        label: "Checks + restart of environmentd & storage clusterd (x86_64)"
+        depends_on: build-x86_64
+        inputs: [misc/python/materialize/checks]
+        timeout_in_minutes: 45
+        parallelism: 6
+        agents:
+          queue: hetzner-x86-64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args:
+                [
+                  --scenario=RestartEnvironmentdClusterdStorage,
+                  --features=sql_server,
+                  "--seed=$BUILDKITE_JOB_ID",
+                ]
+
       - id: checks-no-restart-no-upgrade
         label: "Checks without restart or upgrade"
         depends_on: build-aarch64

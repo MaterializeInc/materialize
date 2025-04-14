@@ -711,7 +711,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=NoRestartNoUpgrade, "--seed=$BUILDKITE_JOB_ID", --azurite]
+              args: [--scenario=NoRestartNoUpgrade, "--seed=$BUILDKITE_JOB_ID", --features=azurite]
 
       - id: checks-restart-entire-mz
         label: "Checks + restart of the entire Mz"
@@ -725,7 +725,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=RestartEntireMz, "--seed=$BUILDKITE_JOB_ID", --azurite]
+              args: [--scenario=RestartEntireMz, "--seed=$BUILDKITE_JOB_ID", --features=azurite]
 
       - id: checks-restart-environmentd-clusterd-storage-azurite
         label: "Checks + restart of environmentd & storage clusterd with :azure: blob store"
@@ -742,7 +742,7 @@ steps:
                 [
                   --scenario=RestartEnvironmentdClusterdStorage,
                   "--seed=$BUILDKITE_JOB_ID",
-                  --azurite,
+                  --features=azurite,
                 ]
 
       - id: checks-backup-rollback
@@ -768,6 +768,25 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=DropCreateDefaultReplica, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-parallel-drop-create-default-replica-x86_64
+        label: "Checks parallel + DROP/CREATE replica (x86_64)"
+        depends_on: build-x86_64
+        timeout_in_minutes: 180
+        parallelism: 2
+        agents:
+          queue: hetzner-x86-64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args:
+                [
+                  --scenario=DropCreateDefaultReplica,
+                  --execution-mode=parallel,
+                  --features=sql_server,
+                  "--seed=$BUILDKITE_JOB_ID",
+                ]
+
 
       - id: checks-parallel-restart-clusterd-compute
         label: "Checks parallel + restart compute clusterd"
