@@ -119,6 +119,11 @@ pub async fn get_tables_for_capture_instance<'a>(
     // SQL Server does not have support for array types, so we need to manually construct
     // the parameterized query.
     let params: SmallVec<[_; 1]> = capture_instances.into_iter().collect();
+    // If there are no tables to check for just return an empty list.
+    if params.is_empty() {
+        return Ok(Vec::default());
+    }
+
     // TODO(sql_server3): Remove this redundant collection.
     #[allow(clippy::as_conversions)]
     let params_dyn: SmallVec<[_; 1]> = params
