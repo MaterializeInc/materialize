@@ -7,6 +7,25 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Replicate a table from SQL Server using their Change-Data-Capture (CDC) primitives.
+//!
+//! This module provides a [`CdcStream`] type that provides the following API for
+//! replicating a table:
+//!
+//! 1. [`CdcStream::snapshot`] returns an initial snapshot of a table and the [`Lsn`] at
+//!    which the snapshot was taken.
+//! 2. [`CdcStream::into_stream`] returns a [`futures::Stream`] of [`CdcEvent`]s
+//!    optionally from the [`Lsn`] returned in step 1.
+//!
+//! Internally we get a snapshot by setting our transaction isolation level to
+//! [`TransactionIsolationLevel::Snapshot`], getting the current maximum LSN with
+//! [`crate::inspect::get_max_lsn`] and then running a `SELECT *`. We've observed that by
+//! using [`TransactionIsolationLevel::Snapshot`] the LSN remains stable for the entire
+//! transaction.
+//!
+//! After completing the snapshot we use [`crate::inspect::get_changes_asc`] which will return
+//! all changes between a `[lower, upper)` bound of [`Lsn`]s.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
@@ -16,7 +35,6 @@ use derivative::Derivative;
 use futures::{Stream, StreamExt};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-use timely::progress::Timestamp;
 
 use crate::{Client, SqlServerError, TransactionIsolationLevel};
 
@@ -161,7 +179,22 @@ impl<'a> CdcStream<'a> {
         async_stream::try_stream! {
             // Initialize all of our start LSNs.
             self.initialize_start_lsns().await?;
-            let mut max_observed_lsn: Lsn = Lsn::minimum();
+
+            // When starting the stream we'll emit one progress event if we've already observed
+            // everything the DB currently has.
+            if let Some(starting_lsn) = self.capture_instances.values().filter_map(|x| *x).min() {
+                let db_curr_lsn = crate::inspect::get_max_lsn(self.client).await?;
+                let next_lsn = db_curr_lsn.increment();
+                if starting_lsn >= db_curr_lsn {
+                    tracing::debug!(
+                        %starting_lsn,
+                        %db_curr_lsn,
+                        %next_lsn,
+                        "yielding initial progress",
+                    );
+                    yield CdcEvent::Progress { next_lsn };
+                }
+            }
 
             loop {
                 // Measure the tick before we do any operation so the time it takes
@@ -235,7 +268,7 @@ impl<'a> CdcStream<'a> {
                     }
 
                     // Increment our LSN (`get_changes` is inclusive).
-                    max_observed_lsn = db_max_lsn;
+                    //
                     // TODO(sql_server2): We should occassionally check to see how close the LSN we
                     // generate is to the LSN returned from incrementing via SQL Server itself.
                     let next_lsn = db_max_lsn.increment();
@@ -251,16 +284,6 @@ impl<'a> CdcStream<'a> {
                         let instance_lsn = instance_lsn.as_mut().expect("should be initialized");
                         // Ensure LSNs don't go backwards.
                         *instance_lsn = std::cmp::max(*instance_lsn, next_lsn);
-                    }
-                } else if curr_lsn >= db_max_lsn {
-                    // We've ingested everything the DB currently has. Emit a progress
-                    // event in case we haven't already.
-                    //
-                    // Note: Generally this only ever occurs when starting a stream and the LSN
-                    // we're starting with matches the current max of the DB.
-                    if db_max_lsn > max_observed_lsn {
-                        max_observed_lsn = db_max_lsn;
-                        yield CdcEvent::Progress { next_lsn: db_max_lsn.increment() };
                     }
                 }
 
@@ -344,18 +367,16 @@ pub enum CdcError {
 /// This type is used to represent the progress of each SQL Server instance in
 /// the ingestion dataflow.
 ///
-/// A SQL Server LSN is essentially an opaque binary blob that provides a
-/// __total order__ to all transations within a database. Technically though an
-/// LSN has three components:
+/// A SQL Server LSN is a three part "number" that provides a __total order__
+/// to all transations within a database. Interally we don't really care what
+/// these parts mean, but they are:
 ///
 /// 1. A Virtual Log File (VLF) sequence number, bytes [0, 4)
 /// 2. Log block number, bytes [4, 8)
 /// 3. Log record number, bytes [8, 10)
 ///
-/// To increment an LSN you need to call the [`sys.fn_cdc_increment_lsn`] T-SQL
-/// function.
-///
-/// [`sys.fn_cdc_increment_lsn`](https://learn.microsoft.com/en-us/sql/relational-databases/system-functions/sys-fn-cdc-increment-lsn-transact-sql?view=sql-server-ver16)
+/// For more info on log sequence numbers in SQL Server see:
+/// <https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-transaction-log-architecture-and-management-guide?view=sql-server-ver16#Logical_Arch>
 ///
 /// Note: The derived impl of [`PartialOrd`] and [`Ord`] relies on the field
 /// ordering so do not change it.
@@ -418,44 +439,22 @@ impl Lsn {
     /// The returned [`Lsn`] may not exist upstream yet, but it's guaranteed to
     /// sort greater than `self`.
     pub fn increment(self) -> Lsn {
-        let overflow_record_id = match self.record_id.checked_add(1) {
-            Some(new_record_id) => {
-                return Lsn {
-                    vlf_id: self.vlf_id,
-                    block_id: self.block_id,
-                    record_id: new_record_id,
-                };
-            }
-            None => 0,
-        };
-        let overflow_block_id = match self.block_id.checked_add(1) {
-            Some(new_block_id) => {
-                return Lsn {
-                    vlf_id: self.vlf_id,
-                    block_id: new_block_id,
-                    record_id: overflow_record_id,
-                };
-            }
-            None => 0,
-        };
-        match self.vlf_id.checked_add(1) {
-            Some(new_vlf_id) => Lsn {
-                vlf_id: new_vlf_id,
-                block_id: overflow_block_id,
-                record_id: overflow_record_id,
-            },
-            None => panic!("overflowed Lsn, {self:?}"),
+        let (record_id, carry) = self.record_id.overflowing_add(1);
+        let (block_id, carry) = self.block_id.overflowing_add(carry.into());
+        let (vlf_id, overflow) = self.vlf_id.overflowing_add(carry.into());
+        assert!(!overflow, "overflowed Lsn, {self:?}");
+
+        Lsn {
+            vlf_id,
+            block_id,
+            record_id,
         }
     }
 }
 
 impl fmt::Display for Lsn {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Lsn")
-            .field("vlf_id", &self.vlf_id)
-            .field("block_id", &self.block_id)
-            .field("record_id", &self.record_id)
-            .finish()
+        write!(f, "{}:{}:{}", self.vlf_id, self.block_id, self.record_id)
     }
 }
 
