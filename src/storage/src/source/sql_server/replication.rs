@@ -21,8 +21,9 @@ use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_sql_server_util::cdc::{CdcEvent, Lsn, Operation as CdcOperation};
-use mz_storage_types::errors::DataflowError;
+use mz_storage_types::errors::{DataflowError, DecodeError, DecodeErrorKind};
 use mz_storage_types::sources::SqlServerSource;
+use mz_storage_types::sources::sql_server::{CDC_POLL_INTERVAL, SNAPSHOT_MAX_LSN_WAIT};
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
@@ -39,7 +40,7 @@ use crate::source::sql_server::{
 };
 use crate::source::types::{SignaledFuture, SourceMessage, StackedCollection};
 
-/// Used as a partition ID to determint the worker that is responsible for
+/// Used as a partition ID to determine the worker that is responsible for
 /// reading data from SQL Server.
 ///
 /// TODO(sql_server1): It's possible we could have different workers
@@ -118,7 +119,9 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     )
                 })
                 .collect();
-            let mut cdc_handle = client.cdc(capture_instances.keys().cloned());
+            let mut cdc_handle = client
+                .cdc(capture_instances.keys().cloned())
+                .max_lsn_wait(SNAPSHOT_MAX_LSN_WAIT.get(config.config.config_set()));
 
             // Snapshot any instances that require it.
             let snapshot_lsn = {
@@ -191,7 +194,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 
             // Off to the races! Replicate data from SQL Server.
             let cdc_stream = cdc_handle
-                .poll_interval(std::time::Duration::from_millis(500))
+                .poll_interval(CDC_POLL_INTERVAL.get(config.config.config_set()))
                 .into_stream();
             let mut cdc_stream = std::pin::pin!(cdc_stream);
 
@@ -233,7 +236,6 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     .await;
                     return Ok(());
                 };
-                let data_cap = data_cap_set.delayed(&commit_lsn);
 
                 for change in changes {
                     let (sql_server_row, diff): (_, _) = match change {

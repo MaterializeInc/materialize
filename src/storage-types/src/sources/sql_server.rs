@@ -10,7 +10,9 @@
 //! Types related to SQL Server sources
 
 use std::sync::{Arc, LazyLock};
+use std::time::Duration;
 
+use mz_dyncfg::Config;
 use mz_ore::future::InTask;
 use mz_proto::{IntoRustIfSome, RustType};
 use mz_repr::{CatalogItemId, Datum, GlobalId, RelationDesc, Row, ScalarType};
@@ -31,6 +33,19 @@ include!(concat!(
     env!("OUT_DIR"),
     "/mz_storage_types.sources.sql_server.rs"
 ));
+
+pub const SNAPSHOT_MAX_LSN_WAIT: Config<Duration> = Config::new(
+    "sql_server_snapshot_max_lsn_wait",
+    Duration::from_secs(30),
+    "Maximum amount of time we'll wait for SQL Server to report an LSN (in other words for \
+    CDC to be fully enabled) before taking an initial snapshot.",
+);
+
+pub const CDC_POLL_INTERVAL: Config<Duration> = Config::new(
+    "sql_server_cdc_poll_interval",
+    Duration::from_millis(500),
+    "Interval at which we'll poll the upstream SQL Server instance to discover new changes.",
+);
 
 pub static SQL_SERVER_PROGRESS_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::builder()

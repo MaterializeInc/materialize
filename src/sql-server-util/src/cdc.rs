@@ -51,6 +51,13 @@ pub struct CdcStream<'a> {
     capture_instances: BTreeMap<Arc<str>, Option<Lsn>>,
     /// How often we poll the upstream for changes.
     poll_interval: Duration,
+    /// How long we'll wait for SQL Server to return a max LSN before taking a snapshot.
+    ///
+    /// Note: When CDC is first enabled in an instance of SQL Server it can take a moment
+    /// for it to "completely" startup. Before starting a `TRANSACTION` for our snapshot
+    /// we'll wait this duration for SQL Server to report an LSN and thus indicate CDC is
+    /// ready to go.
+    max_lsn_wait: Duration,
 }
 
 impl<'a> CdcStream<'a> {
@@ -62,6 +69,7 @@ impl<'a> CdcStream<'a> {
             client,
             capture_instances,
             poll_interval: Duration::from_secs(1),
+            max_lsn_wait: Duration::from_secs(10),
         }
     }
 
@@ -83,6 +91,18 @@ impl<'a> CdcStream<'a> {
     /// Default is 1 second.
     pub fn poll_interval(mut self, interval: Duration) -> Self {
         self.poll_interval = interval;
+        self
+    }
+
+    /// The max duration we'll wait for SQL Server to return an LSN before taking a
+    /// snapshot.
+    ///
+    /// When CDC is first enabled in SQL Server it can take a moment before it is fully
+    /// setup and starts reporting LSNs.
+    ///
+    /// Default is 10 seconds.
+    pub fn max_lsn_wait(mut self, wait: Duration) -> Self {
+        self.max_lsn_wait = wait;
         self
     }
 
@@ -121,7 +141,7 @@ impl<'a> CdcStream<'a> {
         // the LSN from progressing, we want to wait a bit for SQL Server to
         // become ready.
         let (_client, lsn_result) = mz_ore::retry::Retry::default()
-            .max_duration(std::time::Duration::from_secs(10))
+            .max_duration(self.max_lsn_wait)
             .retry_async_with_state(&mut self.client, |_, client| async {
                 use mz_ore::retry::RetryResult;
                 let result = crate::inspect::get_max_lsn(*client).await;
