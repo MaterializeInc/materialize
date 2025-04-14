@@ -14,6 +14,7 @@ from typing import Any
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, externally_idempotent
 from materialize.checks.executors import Executor
+from materialize.checks.features import Features
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.services.sql_server import SqlServer
 
@@ -21,6 +22,7 @@ from materialize.mzcompose.services.sql_server import SqlServer
 class SqlServerCdcBase:
     base_version: MzVersion
     current_version: MzVersion
+    features: Features
     wait: bool
     suffix: str
     repeats: int
@@ -34,9 +36,10 @@ class SqlServerCdcBase:
         super().__init__(**kwargs)  # forward unused args to Check
 
     def _can_run(self, e: Executor) -> bool:
-        # TODO(sql_server1): The SQL Server Docker image only runs on x86, figure out how we can
-        # reasonably support running this check without switching all of Platform Checks.
-        return False
+        return (
+            self.base_version >= MzVersion.parse_mz("v0.142.0-dev")
+            and self.features.sql_server_enabled()
+        )
 
     def initialize(self) -> Testdrive:
         return Testdrive(
@@ -105,5 +108,9 @@ class SqlServerCdcBase:
 
 @externally_idempotent(False)
 class SqlServerCdc(SqlServerCdcBase, Check):
-    def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
-        super().__init__(wait=True, base_version=base_version, rng=rng)
+    def __init__(
+        self, base_version: MzVersion, rng: Random | None, features: Features | None
+    ) -> None:
+        super().__init__(
+            wait=True, base_version=base_version, rng=rng, features=features
+        )

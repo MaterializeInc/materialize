@@ -20,6 +20,7 @@ from materialize import buildkite
 from materialize.checks.all_checks import *  # noqa: F401 F403
 from materialize.checks.checks import Check
 from materialize.checks.executors import MzcomposeExecutor, MzcomposeExecutorParallel
+from materialize.checks.features import Features
 from materialize.checks.scenarios import *  # noqa: F401 F403
 from materialize.checks.scenarios import Scenario, SystemVarChange
 from materialize.checks.scenarios_backup_restore import *  # noqa: F401 F403
@@ -219,11 +220,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         nargs="*",
         help="System parameters to set in Materialize, i.e. what you would set with `ALTER SYSTEM SET`",
     )
+
     parser.add_argument(
-        "--azurite", action="store_true", help="Use Azurite as blob store instead of S3"
+        "--features",
+        nargs="*",
+        help="A list of features (e.g. azurite, sql_server), to enable.",
     )
 
     args = parser.parse_args()
+    features = Features(args.features)
 
     if args.scenario:
         assert args.scenario in globals(), f"scenario {args.scenario} does not exist"
@@ -253,7 +258,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         assert len(x) == 2, f"--system-param '{val}' should be the format <key>=<val>"
         additional_system_parameter_defaults[x[0]] = x[1]
 
-    with c.override(*create_mzs(args.azurite, additional_system_parameter_defaults)):
+    with c.override(
+        *create_mzs(features.azurite_enabled(), additional_system_parameter_defaults)
+    ):
         executor = MzcomposeExecutor(composition=c)
         for scenario_class in scenarios:
             assert issubclass(
@@ -276,7 +283,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 scenario = scenario_class(
                     checks=checks,
                     executor=executor,
-                    azurite=args.azurite,
+                    features=features,
                     seed=args.seed,
                 )
                 scenario.run()
@@ -293,7 +300,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     scenario = scenario_class(
                         checks=[check],
                         executor=executor,
-                        azurite=args.azurite,
+                        features=features,
                         seed=args.seed,
                     )
                     scenario.run()

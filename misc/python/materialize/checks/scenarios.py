@@ -14,6 +14,7 @@ from materialize.checks.actions import Action, Initialize, Manipulate, Validate
 from materialize.checks.checks import Check
 from materialize.checks.cloudtest_actions import ReplaceEnvironmentdStatefulSet
 from materialize.checks.executors import Executor
+from materialize.checks.features import Features
 from materialize.checks.mzcompose_actions import (
     ConfigureMz,
     KillClusterdCompute,
@@ -48,12 +49,12 @@ class Scenario:
         self,
         checks: list[type[Check]],
         executor: Executor,
-        azurite: bool,
+        features: Features,
         seed: str | None = None,
     ) -> None:
         self._checks = checks
         self.executor = executor
-        self.azurite = azurite
+        self.features = features
         self.rng = None if seed is None else Random(seed)
         self._base_version = MzVersion.parse_cargo()
 
@@ -66,7 +67,7 @@ class Scenario:
         # Use base_version() here instead of _base_version so that overwriting
         # upgrade scenarios can specify another base version.
         self.check_objects = [
-            check_class(self.base_version(), self.rng)
+            check_class(self.base_version(), self.rng, self.features)
             for check_class in filtered_check_classes
         ]
 
@@ -274,11 +275,11 @@ class SystemVarChange(Scenario):
         self,
         checks: list[type[Check]],
         executor: Executor,
-        azurite: bool,
+        features: Features,
         seed: str | None,
         change_entries: list[SystemVarChangeEntry],
     ):
-        super().__init__(checks, executor, azurite, seed)
+        super().__init__(checks, executor, features, seed)
         self.change_entries = change_entries
 
     def actions(self) -> list[Action]:

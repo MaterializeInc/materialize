@@ -27,6 +27,7 @@ from materialize.checks.cloudtest_actions import (
     SetupSshTunnels,
 )
 from materialize.checks.executors import CloudtestExecutor
+from materialize.checks.features import Features
 from materialize.checks.scenarios import Scenario
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.util.wait import wait
@@ -97,5 +98,5 @@ def test_upgrade(aws_region: str | None, log_filter: str | None, dev: bool) -> N
         print(
             f"Checks in shard with index {buildkite.get_parallelism_index()}: {[c.__name__ for c in checks]}"
         )
-    scenario = CloudtestUpgrade(checks=checks, executor=executor, azurite=False)
+    scenario = CloudtestUpgrade(checks=checks, executor=executor, features=Features([]))
     scenario.run()

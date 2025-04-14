@@ -15,6 +15,7 @@ from pg8000.converters import literal  # type: ignore
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
+from materialize.checks.features import Features
 from materialize.mz_version import MzVersion
 from materialize.util import naughty_strings
 
@@ -69,7 +70,9 @@ class Identifiers(Check):
         "comment_column",
     ]
 
-    def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
+    def __init__(
+        self, base_version: MzVersion, rng: Random | None, features: Features | None
+    ) -> None:
         strings = naughty_strings()
         values = (rng or Random(0)).sample(strings, len(self.IDENT_KEYS))
         self.ident = {
@@ -80,7 +83,7 @@ class Identifiers(Check):
         self.ident["secret_value"] = "secret_value"
         # https://github.com/MaterializeInc/database-issues/issues/6813
         self.ident["source"] = "source"
-        super().__init__(base_version, rng)
+        super().__init__(base_version, rng, features)
 
     def initialize(self) -> Testdrive:
         cmds = f"""

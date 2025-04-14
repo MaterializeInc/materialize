@@ -15,6 +15,7 @@ from typing import Any
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, externally_idempotent
 from materialize.checks.executors import Executor
+from materialize.checks.features import Features
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.services.mysql import MySql
 
@@ -249,14 +250,22 @@ class MySqlCdcBase:
 
 @externally_idempotent(False)
 class MySqlCdc(MySqlCdcBase, Check):
-    def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
-        super().__init__(wait=True, base_version=base_version, rng=rng)
+    def __init__(
+        self, base_version: MzVersion, rng: Random | None, features: Features | None
+    ) -> None:
+        super().__init__(
+            wait=True, base_version=base_version, rng=rng, features=features
+        )
 
 
 @externally_idempotent(False)
 class MySqlCdcNoWait(MySqlCdcBase, Check):
-    def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
-        super().__init__(wait=False, base_version=base_version, rng=rng)
+    def __init__(
+        self, base_version: MzVersion, rng: Random | None, features: Features | None
+    ) -> None:
+        super().__init__(
+            wait=False, base_version=base_version, rng=rng, features=features
+        )
 
 
 @externally_idempotent(False)
