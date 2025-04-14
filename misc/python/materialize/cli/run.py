@@ -390,7 +390,7 @@ def main() -> int:
         while True:
             last_start_time = datetime.now()
             proc = subprocess.run(command, env=env)
-            if proc.returncode == 2:
+            if proc.returncode == 166:
                 wait = max(
                     timedelta(seconds=5) - (datetime.now() - last_start_time),
                     timedelta(seconds=0),
