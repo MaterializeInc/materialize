@@ -41,7 +41,7 @@ tokio-stream = "0.1.17"
 tonic = "0.12.1"
 tower = "0.4.13"
 tracing = "0.1.37"
-sentry-tracing = "0.29.1"
+sentry-tracing = "0.37.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [build-dependencies]
