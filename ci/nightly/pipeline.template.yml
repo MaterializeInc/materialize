@@ -1189,7 +1189,7 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: terraform
             run: aws-temporary
-      branches: "main v*.* lts-v* *aws* *tf* *terraform* *helm* *self-managed*"
+      branches: "main v*.* lts-v* *aws* *tf* *terraform* *helm* *self-managed* *orchestratord*"
 
     - id: terraform-aws-upgrade
       label: "Terraform + Helm Chart Upgrade on AWS"
@@ -1205,7 +1205,7 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: terraform
             run: aws-upgrade
-      branches: "main v*.* lts-v* *aws* *tf* *terraform* *helm* *self-managed*"
+      branches: "main v*.* lts-v* *aws* *tf* *terraform* *helm* *self-managed* *orchestratord*"
 
     - id: terraform-gcp
       label: "Terraform + Helm Chart E2E on GCP"
@@ -1220,7 +1220,7 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: terraform
             run: gcp-temporary
-      branches: "main v*.* lts-v* *gcp* *tf* *terraform* *helm* *self-managed*"
+      branches: "main v*.* lts-v* *gcp* *tf* *terraform* *helm* *self-managed* *orchestratord*"
 
     - id: terraform-azure
       label: "Terraform + Helm Chart E2E on Azure"
@@ -1235,7 +1235,7 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: terraform
             run: azure-temporary
-      branches: "main v*.* lts-v* *azure* *tf* *terraform* *helm* *self-managed*"
+      branches: "main v*.* lts-v* *azure* *tf* *terraform* *helm* *self-managed* *orchestratord*"
 
   - group: "Output consistency"
     key: output-consistency

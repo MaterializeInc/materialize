@@ -128,7 +128,7 @@ def testdrive(no_reset: bool) -> Testdrive:
     )
 
 
-def get_tag(tag: str) -> str:
+def get_tag(tag: str | None) -> str:
     return tag or f"v{ci_util.get_mz_version()}--pr.g{git.rev_parse('HEAD')}"
 
 
@@ -188,6 +188,11 @@ class AWS:
             "-var",
             "operator_version=v25.2.0-beta.1",
         ]
+        if not tag:
+            vars += [
+                "-var",
+                f"orchestratord_version={get_tag(tag)}",
+            ]
 
         print("--- Setup")
         spawn.runv(
@@ -412,33 +417,6 @@ class AWS:
     def upgrade(self, tag: str) -> None:
         print("--- Upgrading")
         # Following https://materialize.com/docs/self-managed/v25.1/installation/install-on-aws/upgrade-on-aws/
-        metadata_backend_url = spawn.capture(
-            ["terraform", "output", "-raw", "metadata_backend_url"], cwd=self.path
-        ).strip()
-        persist_backend_url = spawn.capture(
-            ["terraform", "output", "-raw", "persist_backend_url"], cwd=self.path
-        ).strip()
-
-        materialize_backend_secret = {
-            "apiVersion": "v1",
-            "kind": "Secret",
-            "metadata": {
-                "name": "materialize-backend",
-                "namespace": "materialize-environment",
-            },
-            "stringData": {
-                "metadata_backend_url": metadata_backend_url,
-                "persist_backend_url": persist_backend_url,
-                "license_key": os.getenv("MZ_CI_LICENSE_KEY"),
-            },
-        }
-
-        spawn.runv(
-            ["kubectl", "apply", "-f", "-"],
-            cwd=self.path,
-            stdin=yaml.dump(materialize_backend_secret).encode(),
-        )
-
         self.materialize_environment = {
             "apiVersion": "materialize.cloud/v1alpha1",
             "kind": "Materialize",
@@ -940,7 +918,7 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
 
     args = parser.parse_args()
 
-    tag = args.tag or f"v{ci_util.get_mz_version()}--pr.g{git.rev_parse('HEAD')}"
+    tag = get_tag(args.tag)
     materialize_environment = None
     environmentd_port_forward_process = None
     balancerd_port_forward_process = None
@@ -972,6 +950,11 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
             "-var",
             "operator_version=v25.2.0-beta.1",
         ]
+        if not tag:
+            vars += [
+                "-var",
+                f"orchestratord_version={get_tag(tag)}",
+            ]
 
         if args.setup:
             print("--- Setup")
@@ -1405,7 +1388,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
 
     args = parser.parse_args()
 
-    tag = args.tag or f"v{ci_util.get_mz_version()}--pr.g{git.rev_parse('HEAD')}"
+    tag = get_tag(args.tag)
     materialize_environment = None
     environmentd_port_forward_process = None
     balancerd_port_forward_process = None
@@ -1449,6 +1432,11 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
             "-var",
             "operator_version=v25.2.0-beta.1",
         ]
+        if not tag:
+            vars += [
+                "-var",
+                f"orchestratord_version={get_tag(tag)}",
+            ]
 
         if args.setup:
             print("--- Setup")

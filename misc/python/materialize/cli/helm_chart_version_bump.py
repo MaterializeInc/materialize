@@ -7,24 +7,30 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# helm_chart_version_bump — Bump environmentd (appVersion) and helm-chart versions in helm chart
+# helm_chart_version_bump — Bump environmentd (appVersion), orchestratord and helm-chart versions in helm chart
 
 import argparse
 
 from ruamel.yaml import YAML
 
 from materialize import MZ_ROOT
+from materialize.version_list import get_all_mz_versions
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="helm-chart-version-bump",
-        description="Bump environmentd (appVersion) and helm-chart versions in helm chart.",
+        description="Bump environmentd (appVersion), orchestratord and helm-chart versions in helm chart.",
     )
     parser.add_argument(
         "--helm-chart-version",
         type=str,
         help="Helm-chart version to bump to, no change if not set.",
+    )
+    parser.add_argument(
+        "--bump-orchestratord-version",
+        action="store_true",
+        help="Bump the orchestratord version to the last released version",
     )
     parser.add_argument(
         "environmentd_version", type=str, help="environmentd version to bump to."
@@ -34,8 +40,6 @@ def main() -> int:
     yaml = YAML()
     yaml.preserve_quotes = True
 
-    # TODO: The version is currently spread across many yaml files, is that
-    # necessary? Would be nicer to only bump in one place
     mods = [
         (
             MZ_ROOT / "misc" / "helm-charts" / "operator" / "Chart.yaml",
@@ -50,6 +54,28 @@ def main() -> int:
             ),
         ),
     ]
+
+    if args.bump_orchestratord_version:
+        orchestratord_version = str(get_all_mz_versions()[0])
+        mods += [
+            (
+                MZ_ROOT / "misc" / "helm-charts" / "operator" / "values.yaml",
+                lambda docs: docs[0]["operator"]["image"].update(
+                    {"tag": orchestratord_version}
+                ),
+            ),
+            (
+                MZ_ROOT
+                / "misc"
+                / "helm-charts"
+                / "operator"
+                / "tests"
+                / "deployment_test.yaml",
+                lambda docs: docs[0]["tests"][0]["asserts"][1]["equal"].update(
+                    {"value": f"materialize/orchestratord:{orchestratord_version}"}
+                ),
+            ),
+        ]
 
     if args.helm_chart_version:
         mods.append(
