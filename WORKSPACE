@@ -453,6 +453,12 @@ load("@rules_rust//crate_universe:defs.bzl", "crate", "crates_repository")
 crates_repository(
     name = "crates_io",
     annotations = {
+        "aws-lc-sys": [crate.annotation(
+            additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.aws-lc.bazel",
+            gen_build_script = False,
+            # Note: This is a target we add from the additive build file above.
+            deps = [":aws_lc"],
+        )],
         # `crates_repository` fails to automatically add the depenency on `tracing` when
         # `tokio_unstable` is enabled, so we manually specify it.
         "tokio": [
@@ -596,6 +602,7 @@ crates_repository(
         "//:src/alloc/Cargo.toml",
         "//:src/arrow-util/Cargo.toml",
         "//:src/audit-log/Cargo.toml",
+        "//:src/auth/Cargo.toml",
         "//:src/avro/Cargo.toml",
         "//:src/aws-secrets-controller/Cargo.toml",
         "//:src/aws-util/Cargo.toml",
