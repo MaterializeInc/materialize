@@ -444,3 +444,53 @@ NULL
 NULL
 NULL
 NULL
+
+query T
+SELECT '0001-12-31 19:03:58 BC'::timestamp;
+----
+0001-12-31 19:03:58 BC
+
+query T
+SELECT '0001-12-31 19:03:58 EST BC'::timestamp;
+----
+0001-12-31 19:03:58 BC
+
+query T
+SELECT '0001-12-31 19:03:58 bc'::timestamp;
+----
+0001-12-31 19:03:58 BC
+
+query T
+SELECT '0001-12-31 19:03:58 BC '::timestamp;
+----
+0001-12-31 19:03:58 BC
+
+query T
+SELECT '0001-12-31 19:03:58BC '::timestamp;
+----
+0001-12-31 19:03:58 BC
+
+query T
+SELECT '0001-12-31 19:03:58 AD'::timestamp;
+----
+0001-12-31 19:03:58
+
+query T
+SELECT '0001-12-31 19:03:58 EST AD'::timestamp;
+----
+0001-12-31 19:03:58
+
+query T
+SELECT '0001-12-31 19:03:58 ad'::timestamp;
+----
+0001-12-31 19:03:58
+
+query T
+SELECT '0001-12-31 19:03:58 AD '::timestamp;
+----
+0001-12-31 19:03:58
+
+query T
+SELECT '0001-12-31 19:03:58AD '::timestamp;
+----
+0001-12-31 19:03:58
