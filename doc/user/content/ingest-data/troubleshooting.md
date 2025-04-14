@@ -25,8 +25,7 @@ instead.
 
 ## Why isn't my source ingesting data?
 
-First, check the status of your source in the Materialize console by navigating
-to https://console.materialize.com/, clicking the **Sources** tab in the
+First, check the status of your source in the Materialize Console by clicking the **Sources** tab in the
 navigation bar, and clicking the affected source.
 
 Alternatively, you can get this information from the system catalog by querying
