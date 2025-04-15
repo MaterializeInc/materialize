@@ -3469,15 +3469,55 @@ impl<'a> Parser<'a> {
     fn parse_sql_server_connection_option(
         &mut self,
     ) -> Result<SqlServerConfigOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[DETAILS])? {
-            DETAILS => SqlServerConfigOptionName::Details,
-            _ => unreachable!(),
-        };
+        match self.expect_one_of_keywords(&[DETAILS, TEXT, EXCLUDE])? {
+            DETAILS => Ok(SqlServerConfigOption {
+                name: SqlServerConfigOptionName::Details,
+                value: self.parse_optional_option_value()?,
+            }),
+            TEXT => {
+                self.expect_keyword(COLUMNS)?;
 
-        Ok(SqlServerConfigOption {
-            name,
-            value: self.parse_optional_option_value()?,
-        })
+                let _ = self.consume_token(&Token::Eq);
+
+                let value = self
+                    .parse_option_sequence(Parser::parse_item_name)?
+                    .map(|inner| {
+                        WithOptionValue::Sequence(
+                            inner
+                                .into_iter()
+                                .map(WithOptionValue::UnresolvedItemName)
+                                .collect_vec(),
+                        )
+                    });
+
+                Ok(SqlServerConfigOption {
+                    name: SqlServerConfigOptionName::TextColumns,
+                    value,
+                })
+            }
+            EXCLUDE => {
+                self.expect_keyword(COLUMNS)?;
+
+                let _ = self.consume_token(&Token::Eq);
+
+                let value = self
+                    .parse_option_sequence(Parser::parse_item_name)?
+                    .map(|inner| {
+                        WithOptionValue::Sequence(
+                            inner
+                                .into_iter()
+                                .map(WithOptionValue::UnresolvedItemName)
+                                .collect_vec(),
+                        )
+                    });
+
+                Ok(SqlServerConfigOption {
+                    name: SqlServerConfigOptionName::ExcludeColumns,
+                    value,
+                })
+            }
+            _ => unreachable!(),
+        }
     }
 
     fn parse_load_generator_option(&mut self) -> Result<LoadGeneratorOption<Raw>, ParserError> {

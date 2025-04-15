@@ -362,10 +362,21 @@ pub enum SqlServerSourcePurificationError {
     NotSqlServerConnection(FullItemName),
     #[error("CREATE SOURCE specifies DETAILS option")]
     UserSpecifiedDetails,
+    #[error("{0} option is unnecessary when no tables are added")]
+    UnnecessaryOptionsWithoutReferences(String),
     #[error("Invalid SQL Server system replication settings")]
     ReplicationSettingsError(Vec<(String, String, String)>),
     #[error("missing TABLES specification")]
     RequiresExternalReferences,
+    #[error("{option_name} refers to table not currently being added")]
+    DanglingColumns {
+        option_name: String,
+        items: Vec<UnresolvedItemName>,
+    },
+    #[error("No tables found for provided reference")]
+    NoTables,
+    #[error("programming error: {0}")]
+    ProgrammingError(String),
 }
 
 impl SqlServerSourcePurificationError {
@@ -381,6 +392,13 @@ impl SqlServerSourcePurificationError {
                     "; "
                 )
             )),
+            Self::DanglingColumns {
+                option_name: _,
+                items,
+            } => Some(format!(
+                "the following columns are referenced but not added: {}",
+                itertools::join(items, ", ")
+            )),
             _ => None,
         }
     }
@@ -390,6 +408,15 @@ impl SqlServerSourcePurificationError {
             Self::RequiresExternalReferences => {
                 Some("provide a FOR TABLES (..), FOR SCHEMAS (..), or FOR ALL TABLES clause".into())
             }
+            Self::UnnecessaryOptionsWithoutReferences(option) => Some(format!(
+                "Remove the {} option, as no tables are being added.",
+                option
+            )),
+            Self::NoTables => Some(
+                "No tables were found to replicate. This could be because \
+                the user does not have privileges on the intended tables."
+                    .into(),
+            ),
             _ => None,
         }
     }

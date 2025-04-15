@@ -1188,12 +1188,30 @@ pub enum SqlServerConfigOptionName {
     /// Hex encoded string of binary serialization of
     /// `mz_storage_types::sources::sql_server::SqlServerSourceDetails`.
     Details,
+    /// Columns whose types you want to unconditionally format as text.
+    ///
+    /// NOTE(roshan): This value is kept around to allow round-tripping a
+    /// `CREATE SOURCE` statement while we still allow creating implicit
+    /// subsources from `CREATE SOURCE`, but will be removed once
+    /// fully deprecating that feature and forcing users to use explicit
+    /// `CREATE TABLE .. FROM SOURCE` statements
+    TextColumns,
+    /// Columns you want to exclude.
+    ///
+    /// NOTE(roshan): This value is kept around to allow round-tripping a
+    /// `CREATE SOURCE` statement while we still allow creating implicit
+    /// subsources from `CREATE SOURCE`, but will be removed once
+    /// fully deprecating that feature and forcing users to use explicit
+    /// `CREATE TABLE .. FROM SOURCE` statements
+    ExcludeColumns,
 }
 
 impl AstDisplay for SqlServerConfigOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
             SqlServerConfigOptionName::Details => "DETAILS",
+            SqlServerConfigOptionName::TextColumns => "TEXT COLUMNS",
+            SqlServerConfigOptionName::ExcludeColumns => "EXCLUDE COLUMNS",
         })
     }
 }
@@ -1207,7 +1225,9 @@ impl WithOptionName for SqlServerConfigOptionName {
     /// on the conservative side and return `true`.
     fn redact_value(&self) -> bool {
         match self {
-            SqlServerConfigOptionName::Details => false,
+            SqlServerConfigOptionName::Details
+            | SqlServerConfigOptionName::TextColumns
+            | SqlServerConfigOptionName::ExcludeColumns => false,
         }
     }
 }

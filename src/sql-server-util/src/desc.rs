@@ -26,10 +26,11 @@ use dec::OrderedDecimal;
 use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType};
 use mz_repr::adt::numeric::{Dec, Numeric, NumericMaxScale};
-use mz_repr::{ColumnType, Datum, RelationDesc, Row, ScalarType};
+use mz_repr::{ColumnType, Datum, RelationDesc, Row, RowArena, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::{SqlServerDecodeError, SqlServerError};
@@ -40,6 +41,11 @@ include!(concat!(env!("OUT_DIR"), "/mz_sql_server_util.rs"));
 ///
 /// See [`SqlServerTableRaw`] for the raw information we read from the upstream
 /// system.
+///
+/// Note: We map a [`SqlServerTableDesc`] to a Materialize [`RelationDesc`] as
+/// part of purification. Specifically we use this description to generate a
+/// SQL statement for subsource and it's the _parsing of that statement_ which
+/// actually generates a [`RelationDesc`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Arbitrary)]
 pub struct SqlServerTableDesc {
     /// Name of the schema that the table belongs to.
@@ -47,24 +53,53 @@ pub struct SqlServerTableDesc {
     /// Name of the table.
     pub name: Arc<str>,
     /// Columns for the table.
-    pub columns: Arc<[SqlServerColumnDesc]>,
+    pub columns: Box<[SqlServerColumnDesc]>,
 }
 
 impl SqlServerTableDesc {
-    /// Try creating a [`SqlServerTableDesc`] from a [`SqlServerTableRaw`] description.
+    /// Creating a [`SqlServerTableDesc`] from a [`SqlServerTableRaw`] description.
     ///
-    /// Returns an error if the raw table description is not compatible with Materialize.
-    pub fn try_new(raw: SqlServerTableRaw) -> Result<Self, SqlServerError> {
-        let columns: Arc<[_]> = raw
+    /// Note: Not all columns from SQL Server can be ingested into Materialize. To determine if a
+    /// column is supported see [`SqlServerColumnDesc::is_supported`].
+    pub fn new(raw: SqlServerTableRaw) -> Self {
+        let columns: Box<[_]> = raw
             .columns
             .into_iter()
-            .map(SqlServerColumnDesc::try_new)
-            .collect::<Result<_, _>>()?;
-        Ok(SqlServerTableDesc {
+            .map(SqlServerColumnDesc::new)
+            .collect();
+        SqlServerTableDesc {
             schema_name: raw.schema_name,
             name: raw.name,
             columns,
-        })
+        }
+    }
+
+    /// Returns the [`SqlServerQualifiedTableName`] for this [`SqlServerTableDesc`].
+    pub fn qualified_name(&self) -> SqlServerQualifiedTableName {
+        SqlServerQualifiedTableName {
+            schema_name: Arc::clone(&self.schema_name),
+            table_name: Arc::clone(&self.name),
+        }
+    }
+
+    /// Update this [`SqlServerTableDesc`] to represent the specified columns
+    /// as text in Materialize.
+    pub fn apply_text_columns(&mut self, text_columns: &BTreeSet<&str>) {
+        for column in &mut self.columns {
+            if text_columns.contains(column.name.as_ref()) {
+                column.represent_as_text();
+            }
+        }
+    }
+
+    /// Update this [`SqlServerTableDesc`] to exclude the specified columns from being
+    /// replicated into Materialize.
+    pub fn apply_excl_columns(&mut self, excl_columns: &BTreeSet<&str>) {
+        for column in &mut self.columns {
+            if excl_columns.contains(column.name.as_ref()) {
+                column.exclude();
+            }
+        }
     }
 
     /// Returns a [`SqlServerRowDecoder`] which can be used to decode [`tiberius::Row`]s into
@@ -98,6 +133,15 @@ impl RustType<ProtoSqlServerTableDesc> for SqlServerTableDesc {
     }
 }
 
+/// Partially qualified name of a table from Microsoft SQL Server.
+///
+/// TODO(sql_server3): Change this to use a &str.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SqlServerQualifiedTableName {
+    pub schema_name: Arc<str>,
+    pub table_name: Arc<str>,
+}
+
 /// Raw metadata for a table from Microsoft SQL Server.
 ///
 /// See [`SqlServerTableDesc`] for a refined description that is compatible
@@ -119,24 +163,64 @@ pub struct SqlServerTableRaw {
 pub struct SqlServerColumnDesc {
     /// Name of the column.
     pub name: Arc<str>,
-    /// The intended data type of the this column in Materialize.
-    pub column_type: ColumnType,
+    /// The intended data type of the this column in Materialize. `None` indicates this
+    /// column should be excluded when replicating into Materialize.
+    ///
+    /// Note: This type might differ from the `decode_type`, e.g. a user can
+    /// specify `TEXT COLUMNS` to decode columns as text.
+    pub column_type: Option<ColumnType>,
     /// Rust type we should parse the data from a [`tiberius::Row`] as.
     pub decode_type: SqlServerColumnDecodeType,
 }
 
 impl SqlServerColumnDesc {
-    /// Try creating a [`SqlServerColumnDesc`] from a [`SqlServerColumnRaw`] description.
-    ///
-    /// Returns an error if the upstream column is not compatible with Materialize, e.g. the
-    /// data type doesn't support CDC.
-    pub fn try_new(raw: &SqlServerColumnRaw) -> Result<Self, SqlServerError> {
-        let (scalar_type, decode_type) = parse_data_type(raw)?;
-        Ok(SqlServerColumnDesc {
+    /// Create a [`SqlServerColumnDesc`] from a [`SqlServerColumnRaw`] description.
+    pub fn new(raw: &SqlServerColumnRaw) -> Self {
+        let (column_type, decode_type) = match parse_data_type(raw) {
+            Ok((scalar_type, decode_type)) => {
+                let column_type = scalar_type.nullable(raw.is_nullable);
+                (Some(column_type), decode_type)
+            }
+            Err(err) => {
+                tracing::warn!(
+                    ?err,
+                    ?raw,
+                    "found an unsupported data type when parsing raw data"
+                );
+                (
+                    None,
+                    SqlServerColumnDecodeType::Unsupported {
+                        context: err.reason,
+                    },
+                )
+            }
+        };
+        SqlServerColumnDesc {
             name: Arc::clone(&raw.name),
-            column_type: scalar_type.nullable(raw.is_nullable),
+            column_type,
             decode_type,
-        })
+        }
+    }
+
+    /// Returns true if this column can be replicated into Materialize.
+    pub fn is_supported(&self) -> bool {
+        !matches!(
+            self.decode_type,
+            SqlServerColumnDecodeType::Unsupported { .. }
+        )
+    }
+
+    /// Change this [`SqlServerColumnDesc`] to be represented as text in Materialize.
+    pub fn represent_as_text(&mut self) {
+        self.column_type = self
+            .column_type
+            .as_ref()
+            .map(|ct| ScalarType::String.nullable(ct.nullable));
+    }
+
+    /// Exclude this [`SqlServerColumnDesc`] from being replicated into Materialize.
+    pub fn exclude(&mut self) {
+        self.column_type = None;
     }
 }
 
@@ -144,7 +228,7 @@ impl RustType<ProtoSqlServerColumnDesc> for SqlServerColumnDesc {
     fn into_proto(&self) -> ProtoSqlServerColumnDesc {
         ProtoSqlServerColumnDesc {
             name: self.name.to_string(),
-            column_type: Some(self.column_type.into_proto()),
+            column_type: self.column_type.into_proto(),
             decode_type: Some(self.decode_type.into_proto()),
         }
     }
@@ -152,14 +236,21 @@ impl RustType<ProtoSqlServerColumnDesc> for SqlServerColumnDesc {
     fn from_proto(proto: ProtoSqlServerColumnDesc) -> Result<Self, mz_proto::TryFromProtoError> {
         Ok(SqlServerColumnDesc {
             name: proto.name.into(),
-            column_type: proto
-                .column_type
-                .into_rust_if_some("ProtoSqlServerColumnDesc::column_type")?,
+            column_type: proto.column_type.into_rust()?,
             decode_type: proto
                 .decode_type
                 .into_rust_if_some("ProtoSqlServerColumnDesc::decode_type")?,
         })
     }
+}
+
+/// The raw datatype from SQL Server is not supported in Materialize.
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct UnsupportedDataType {
+    column_name: String,
+    column_type: String,
+    reason: String,
 }
 
 /// Parse a raw data type from SQL Server into a Materialize [`ScalarType`].
@@ -168,7 +259,7 @@ impl RustType<ProtoSqlServerColumnDesc> for SqlServerColumnDesc {
 /// that we use to decode the raw value.
 fn parse_data_type(
     raw: &SqlServerColumnRaw,
-) -> Result<(ScalarType, SqlServerColumnDecodeType), SqlServerError> {
+) -> Result<(ScalarType, SqlServerColumnDecodeType), UnsupportedDataType> {
     let scalar = match raw.data_type.to_lowercase().as_str() {
         "tinyint" => (ScalarType::Int16, SqlServerColumnDecodeType::U8),
         "smallint" => (ScalarType::Int16, SqlServerColumnDecodeType::I16),
@@ -194,7 +285,7 @@ fn parse_data_type(
                     "precision of {} is greater than our maximum of 39",
                     raw.precision
                 );
-                return Err(SqlServerError::UnsupportedDataType {
+                return Err(UnsupportedDataType {
                     column_name: raw.name.to_string(),
                     column_type: raw.data_type.to_string(),
                     reason,
@@ -202,13 +293,12 @@ fn parse_data_type(
             }
 
             let raw_scale = usize::cast_from(raw.scale);
-            let max_scale = NumericMaxScale::try_from(raw_scale).map_err(|_| {
-                SqlServerError::UnsupportedDataType {
+            let max_scale =
+                NumericMaxScale::try_from(raw_scale).map_err(|_| UnsupportedDataType {
                     column_type: raw.data_type.to_string(),
                     column_name: raw.name.to_string(),
                     reason: format!("scale of {} is too large", raw.scale),
-                }
-            })?;
+                })?;
             let column_type = ScalarType::Numeric {
                 max_scale: Some(max_scale),
             };
@@ -223,7 +313,7 @@ fn parse_data_type(
             //
             // TODO(sql_server3): Support UPSERT semantics for SQL Server.
             if raw.max_length == -1 {
-                return Err(SqlServerError::UnsupportedDataType {
+                return Err(UnsupportedDataType {
                     column_name: raw.name.to_string(),
                     column_type: raw.data_type.to_string(),
                     reason: "columns with unlimited size do not support CDC".to_string(),
@@ -238,7 +328,7 @@ fn parse_data_type(
             mz_ore::soft_assert_eq_no_log!(raw.max_length, 16);
 
             // TODO(sql_server3): Support UPSERT semantics for SQL Server.
-            return Err(SqlServerError::UnsupportedDataType {
+            return Err(UnsupportedDataType {
                 column_name: raw.name.to_string(),
                 column_type: raw.data_type.to_string(),
                 reason: "columns with unlimited size do not support CDC".to_string(),
@@ -250,7 +340,7 @@ fn parse_data_type(
             //
             // TODO(sql_server3): Support UPSERT semantics for SQL Server.
             if raw.max_length == -1 {
-                return Err(SqlServerError::UnsupportedDataType {
+                return Err(UnsupportedDataType {
                     column_name: raw.name.to_string(),
                     column_type: raw.data_type.to_string(),
                     reason: "columns with unlimited size do not support CDC".to_string(),
@@ -265,7 +355,7 @@ fn parse_data_type(
             //
             // TODO(sql_server3): Support UPSERT semantics for SQL Server.
             if raw.max_length == -1 {
-                return Err(SqlServerError::UnsupportedDataType {
+                return Err(UnsupportedDataType {
                     column_name: raw.name.to_string(),
                     column_type: raw.data_type.to_string(),
                     reason: "columns with unlimited size do not support CDC".to_string(),
@@ -290,10 +380,10 @@ fn parse_data_type(
         "uniqueidentifier" => (ScalarType::Uuid, SqlServerColumnDecodeType::Uuid),
         // TODO(sql_server1): Support more data types.
         other => {
-            return Err(SqlServerError::UnsupportedDataType {
+            return Err(UnsupportedDataType {
                 column_type: other.to_string(),
                 column_name: raw.name.to_string(),
-                reason: "unimplemented".to_string(),
+                reason: format!("'{other}' is unimplemented"),
             });
         }
     };
@@ -328,7 +418,7 @@ pub struct SqlServerColumnRaw {
 }
 
 /// Rust type that we should use when reading a column from SQL Server.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Arbitrary)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Arbitrary)]
 pub enum SqlServerColumnDecodeType {
     Bool,
     U8,
@@ -353,15 +443,21 @@ pub enum SqlServerColumnDecodeType {
     DateTime,
     /// [`chrono::NaiveDateTime`].
     NaiveDateTime,
+    /// Decoding this type isn't supported.
+    Unsupported {
+        /// Any additional context as to why this type isn't supported.
+        context: String,
+    },
 }
 
 impl SqlServerColumnDecodeType {
     /// Decode the column with `name` out of the provided `data`.
     pub fn decode<'a>(
-        self,
+        &self,
         data: &'a tiberius::Row,
         name: &'a str,
         column: &'a ColumnType,
+        arena: &'a RowArena,
     ) -> Result<Datum<'a>, SqlServerDecodeError> {
         let maybe_datum = match (&column.scalar_type, self) {
             (ScalarType::Bool, SqlServerColumnDecodeType::Bool) => data
@@ -458,9 +554,99 @@ impl SqlServerColumnDecodeType {
                     Ok::<_, SqlServerDecodeError>(Datum::TimestampTz(ts))
                 })
                 .transpose()?,
+            // We support mapping any type to a string.
+            (ScalarType::String, SqlServerColumnDecodeType::Bool) => data
+                .try_get(name)
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "bool-text"))?
+                .map(|val: bool| {
+                    if val {
+                        Datum::String("true")
+                    } else {
+                        Datum::String("false")
+                    }
+                }),
+            (ScalarType::String, SqlServerColumnDecodeType::U8) => data
+                .try_get(name)
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "u8-text"))?
+                .map(|val: u8| {
+                    arena.make_datum(|packer| packer.push(Datum::String(&val.to_string())))
+                }),
+            (ScalarType::String, SqlServerColumnDecodeType::I16) => data
+                .try_get(name)
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "i16-text"))?
+                .map(|val: i16| {
+                    arena.make_datum(|packer| packer.push(Datum::String(&val.to_string())))
+                }),
+            (ScalarType::String, SqlServerColumnDecodeType::I32) => data
+                .try_get(name)
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "i32-text"))?
+                .map(|val: i32| {
+                    arena.make_datum(|packer| packer.push(Datum::String(&val.to_string())))
+                }),
+            (ScalarType::String, SqlServerColumnDecodeType::I64) => data
+                .try_get(name)
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "i64-text"))?
+                .map(|val: i64| {
+                    arena.make_datum(|packer| packer.push(Datum::String(&val.to_string())))
+                }),
+            (ScalarType::String, SqlServerColumnDecodeType::F32) => data
+                .try_get(name)
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "f32-text"))?
+                .map(|val: f32| {
+                    arena.make_datum(|packer| packer.push(Datum::String(&val.to_string())))
+                }),
+            (ScalarType::String, SqlServerColumnDecodeType::F64) => data
+                .try_get(name)
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "f64-text"))?
+                .map(|val: f64| {
+                    arena.make_datum(|packer| packer.push(Datum::String(&val.to_string())))
+                }),
+            (ScalarType::String, SqlServerColumnDecodeType::Uuid) => data
+                .try_get(name)
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "uuid-text"))?
+                .map(|val: uuid::Uuid| {
+                    arena.make_datum(|packer| packer.push(Datum::String(&val.to_string())))
+                }),
+            (ScalarType::String, SqlServerColumnDecodeType::Bytes) => data
+                .try_get(name)
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "bytes-text"))?
+                .map(|val: &[u8]| {
+                    let encoded = base64::encode(val);
+                    arena.make_datum(|packer| packer.push(Datum::String(&encoded)))
+                }),
+            (ScalarType::String, SqlServerColumnDecodeType::Numeric) => data
+                .try_get(name)
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "numeric-text"))?
+                .map(|val: tiberius::numeric::Numeric| {
+                    arena.make_datum(|packer| packer.push(Datum::String(&val.to_string())))
+                }),
+            (ScalarType::String, SqlServerColumnDecodeType::NaiveDate) => data
+                .try_get(name)
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "naivedate-text"))?
+                .map(|val: chrono::NaiveDate| {
+                    arena.make_datum(|packer| packer.push(Datum::String(&val.to_string())))
+                }),
+            (ScalarType::String, SqlServerColumnDecodeType::NaiveTime) => data
+                .try_get(name)
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "naivetime-text"))?
+                .map(|val: chrono::NaiveTime| {
+                    arena.make_datum(|packer| packer.push(Datum::String(&val.to_string())))
+                }),
+            (ScalarType::String, SqlServerColumnDecodeType::DateTime) => data
+                .try_get(name)
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "datetime-text"))?
+                .map(|val: chrono::DateTime<chrono::Utc>| {
+                    arena.make_datum(|packer| packer.push(Datum::String(&val.to_string())))
+                }),
+            (ScalarType::String, SqlServerColumnDecodeType::NaiveDateTime) => data
+                .try_get(name)
+                .map_err(|_| SqlServerDecodeError::invalid_column(name, "naivedatetime-text"))?
+                .map(|val: chrono::NaiveDateTime| {
+                    arena.make_datum(|packer| packer.push(Datum::String(&val.to_string())))
+                }),
             (column_type, decode_type) => {
                 return Err(SqlServerDecodeError::Unsupported {
-                    sql_server_type: decode_type,
+                    sql_server_type: decode_type.clone(),
                     mz_type: column_type.clone(),
                 });
             }
@@ -509,6 +695,9 @@ impl RustType<proto_sql_server_column_desc::DecodeType> for SqlServerColumnDecod
             SqlServerColumnDecodeType::NaiveDateTime => {
                 proto_sql_server_column_desc::DecodeType::NaiveDateTime(())
             }
+            SqlServerColumnDecodeType::Unsupported { context } => {
+                proto_sql_server_column_desc::DecodeType::Unsupported(context.clone())
+            }
         }
     }
 
@@ -543,6 +732,9 @@ impl RustType<proto_sql_server_column_desc::DecodeType> for SqlServerColumnDecod
             }
             proto_sql_server_column_desc::DecodeType::NaiveDateTime(()) => {
                 SqlServerColumnDecodeType::NaiveDateTime
+            }
+            proto_sql_server_column_desc::DecodeType::Unsupported(context) => {
+                SqlServerColumnDecodeType::Unsupported { context }
             }
         };
         Ok(val)
@@ -582,7 +774,7 @@ impl SqlServerRowDecoder {
                 //
                 // TODO(sql_server2): Maybe allow the Materialize column type to be more nullable
                 // than our decoding type?
-                if &sql_server_col.column_type != col_type {
+                if sql_server_col.column_type.as_ref() != Some(col_type) {
                     return Err(SqlServerError::ProgrammingError(format!(
                         "programming error, {col_name} has mismatched type {:?} vs {:?}",
                         sql_server_col.column_type, col_type
@@ -590,7 +782,7 @@ impl SqlServerRowDecoder {
                 }
 
                 let name = Arc::clone(&sql_server_col.name);
-                let decoder = sql_server_col.decode_type;
+                let decoder = sql_server_col.decode_type.clone();
 
                 Ok::<_, SqlServerError>((name, col_type.clone(), decoder))
             })
@@ -600,10 +792,15 @@ impl SqlServerRowDecoder {
     }
 
     /// Decode data from the provided [`tiberius::Row`] into the provided [`Row`].
-    pub fn decode(&self, data: &tiberius::Row, row: &mut Row) -> Result<(), SqlServerDecodeError> {
+    pub fn decode(
+        &self,
+        data: &tiberius::Row,
+        row: &mut Row,
+        arena: &RowArena,
+    ) -> Result<(), SqlServerDecodeError> {
         let mut packer = row.packer();
         for (col_name, col_type, decoder) in &self.decoders {
-            let datum = decoder.decode(data, col_name, col_type)?;
+            let datum = decoder.decode(data, col_name, col_type, arena)?;
             packer.push(datum);
         }
         Ok(())
@@ -612,14 +809,17 @@ impl SqlServerRowDecoder {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use crate::desc::{
         SqlServerColumnDecodeType, SqlServerColumnDesc, SqlServerTableDesc, SqlServerTableRaw,
     };
 
     use super::SqlServerColumnRaw;
     use mz_ore::assert_contains;
+    use mz_ore::collections::CollectionExt;
     use mz_repr::adt::numeric::NumericMaxScale;
-    use mz_repr::{Datum, RelationDesc, Row, ScalarType};
+    use mz_repr::{Datum, RelationDesc, Row, RowArena, ScalarType};
     use tiberius::RowTestExt;
 
     impl SqlServerColumnRaw {
@@ -660,46 +860,46 @@ mod tests {
     #[mz_ore::test]
     fn smoketest_column_raw() {
         let raw = SqlServerColumnRaw::new("foo", "bit");
-        let col = SqlServerColumnDesc::try_new(&raw).unwrap();
+        let col = SqlServerColumnDesc::new(&raw);
 
         assert_eq!(&*col.name, "foo");
-        assert_eq!(col.column_type, ScalarType::Bool.nullable(false));
+        assert_eq!(col.column_type, Some(ScalarType::Bool.nullable(false)));
         assert_eq!(col.decode_type, SqlServerColumnDecodeType::Bool);
 
         let raw = SqlServerColumnRaw::new("foo", "decimal")
             .precision(20)
             .scale(10);
-        let col = SqlServerColumnDesc::try_new(&raw).unwrap();
+        let col = SqlServerColumnDesc::new(&raw);
 
         let col_type = ScalarType::Numeric {
             max_scale: Some(NumericMaxScale::try_from(10i64).expect("known valid")),
         }
         .nullable(false);
-        assert_eq!(col.column_type, col_type);
+        assert_eq!(col.column_type, Some(col_type));
         assert_eq!(col.decode_type, SqlServerColumnDecodeType::Numeric);
     }
 
     #[mz_ore::test]
     fn smoketest_column_raw_invalid() {
         let raw = SqlServerColumnRaw::new("foo", "bad_data_type");
-        let err = SqlServerColumnDesc::try_new(&raw).unwrap_err();
-        assert_contains!(err.to_string(), "'bad_data_type' from column 'foo'");
+        let desc = SqlServerColumnDesc::new(&raw);
+        let SqlServerColumnDecodeType::Unsupported { context } = desc.decode_type else {
+            panic!("unexpected decode type {desc:?}");
+        };
+        assert_contains!(context, "'bad_data_type' is unimplemented");
 
         let raw = SqlServerColumnRaw::new("foo", "decimal")
             .precision(100)
             .scale(10);
-        let err = SqlServerColumnDesc::try_new(&raw).unwrap_err();
-        assert_contains!(
-            err.to_string(),
-            "precision of 100 is greater than our maximum of 39"
-        );
+        let desc = SqlServerColumnDesc::new(&raw);
+        assert!(!desc.is_supported());
 
         let raw = SqlServerColumnRaw::new("foo", "varchar").max_length(-1);
-        let err = SqlServerColumnDesc::try_new(&raw).unwrap_err();
-        assert_contains!(
-            err.to_string(),
-            "columns with unlimited size do not support CDC"
-        );
+        let desc = SqlServerColumnDesc::new(&raw);
+        let SqlServerColumnDecodeType::Unsupported { context } = desc.decode_type else {
+            panic!("unexpected decode type {desc:?}");
+        };
+        assert_contains!(context, "columns with unlimited size do not support CDC");
     }
 
     #[mz_ore::test]
@@ -715,7 +915,7 @@ mod tests {
             capture_instance: "my_table_CT".into(),
             columns: sql_server_columns.into(),
         };
-        let sql_server_desc = SqlServerTableDesc::try_new(sql_server_desc).expect("known valid");
+        let sql_server_desc = SqlServerTableDesc::new(sql_server_desc);
 
         let relation_desc = RelationDesc::builder()
             .with_column("a", ScalarType::String.nullable(false))
@@ -752,17 +952,82 @@ mod tests {
             tiberius::Row::build(sql_server_columns.into_iter().zip(data_b.into_iter()));
 
         let mut rnd_row = Row::default();
-        decoder.decode(&sql_server_row_a, &mut rnd_row).unwrap();
+        let arena = RowArena::default();
+
+        decoder
+            .decode(&sql_server_row_a, &mut rnd_row, &arena)
+            .unwrap();
         assert_eq!(
             &rnd_row,
             &Row::pack_slice(&[Datum::String("hello world"), Datum::True, Datum::Int32(42)])
         );
 
-        decoder.decode(&sql_server_row_b, &mut rnd_row).unwrap();
+        decoder
+            .decode(&sql_server_row_b, &mut rnd_row, &arena)
+            .unwrap();
         assert_eq!(
             &rnd_row,
             &Row::pack_slice(&[Datum::String("foo bar"), Datum::False, Datum::Null])
         );
+    }
+
+    #[mz_ore::test]
+    fn smoketest_decode_to_string() {
+        #[track_caller]
+        fn testcase(
+            data_type: &'static str,
+            col_type: tiberius::ColumnType,
+            col_data: tiberius::ColumnData<'static>,
+        ) {
+            let columns = [SqlServerColumnRaw::new("a", data_type)];
+            let sql_server_desc = SqlServerTableRaw {
+                schema_name: "my_schema".into(),
+                name: "my_table".into(),
+                capture_instance: "my_table_CT".into(),
+                columns: columns.into(),
+            };
+            let mut sql_server_desc = SqlServerTableDesc::new(sql_server_desc);
+            sql_server_desc.apply_text_columns(&BTreeSet::from(["a"]));
+
+            // We should support decoding every datatype to a string.
+            let relation_desc = RelationDesc::builder()
+                .with_column("a", ScalarType::String.nullable(false))
+                .finish();
+
+            // This decoder should shape the SQL Server Rows into Rows compatible with the RelationDesc.
+            let decoder = sql_server_desc
+                .decoder(&relation_desc)
+                .expect("known valid");
+
+            let sql_server_row = tiberius::Row::build([(
+                tiberius::Column::new("a".to_string(), col_type),
+                col_data,
+            )]);
+            let mut mz_row = Row::default();
+            let arena = RowArena::new();
+            decoder
+                .decode(&sql_server_row, &mut mz_row, &arena)
+                .unwrap();
+
+            let str_datum = mz_row.into_element();
+            assert!(matches!(str_datum, Datum::String(_)));
+        }
+
+        use tiberius::{ColumnData, ColumnType};
+
+        testcase("bit", ColumnType::Bit, ColumnData::Bit(Some(true)));
+        testcase("bit", ColumnType::Bit, ColumnData::Bit(Some(false)));
+        testcase("tinyint", ColumnType::Int1, ColumnData::U8(Some(33)));
+        testcase("smallint", ColumnType::Int2, ColumnData::I16(Some(101)));
+        testcase("int", ColumnType::Int4, ColumnData::I32(Some(-42)));
+        {
+            let datetime = tiberius::time::DateTime::new(10, 300);
+            testcase(
+                "datetime",
+                ColumnType::Datetime,
+                ColumnData::DateTime(Some(datetime)),
+            );
+        }
     }
 
     // TODO(sql_server2): Proptest the decoder.

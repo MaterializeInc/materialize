@@ -19,7 +19,7 @@ use differential_dataflow::containers::TimelyStack;
 use futures::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
-use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::{Diff, GlobalId, Row, RowArena};
 use mz_sql_server_util::cdc::{CdcEvent, Lsn, Operation as CdcOperation};
 use mz_storage_types::errors::{DataflowError, DecodeError, DecodeErrorKind};
 use mz_storage_types::sources::SqlServerSource;
@@ -144,7 +144,8 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 
                     // Try to decode a row, returning a SourceError if it fails.
                     let mut mz_row = Row::default();
-                    let message = match decoder.decode(&sql_server_row, &mut mz_row) {
+                    let arena = RowArena::default();
+                    let message = match decoder.decode(&sql_server_row, &mut mz_row, &arena) {
                         Ok(()) => Ok(SourceMessage {
                             key: Row::default(),
                             value: mz_row,
@@ -249,7 +250,8 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 
                     // Try to decode a row, returning a SourceError if it fails.
                     let mut mz_row = Row::default();
-                    let message = match decoder.decode(&sql_server_row, &mut mz_row) {
+                    let arena = RowArena::default();
+                    let message = match decoder.decode(&sql_server_row, &mut mz_row, &arena) {
                         Ok(()) => Ok(SourceMessage {
                             key: Row::default(),
                             value: mz_row,

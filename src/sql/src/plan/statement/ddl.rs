@@ -533,7 +533,12 @@ generate_extracted_config!(
     (ExcludeColumns, Vec::<UnresolvedItemName>, Default(vec![]))
 );
 
-generate_extracted_config!(SqlServerConfigOption, (Details, String));
+generate_extracted_config!(
+    SqlServerConfigOption,
+    (Details, String),
+    (TextColumns, Vec::<UnresolvedItemName>, Default(vec![])),
+    (ExcludeColumns, Vec::<UnresolvedItemName>, Default(vec![]))
+);
 
 pub fn plan_create_webhook_source(
     scx: &StatementContext,
@@ -1621,16 +1626,15 @@ pub fn plan_create_subsource(
             SourceExportStatementDetails::SqlServer {
                 table,
                 capture_instance,
-            } => {
-                SourceExportDetails::SqlServer(SqlServerSourceExportDetails {
-                    capture_instance,
-                    table,
-                    // TODO(sql_server1): Support text columns.
-                    text_columns: Vec::default(),
-                    // TODO(sql_server1): Support exclude columns.
-                    exclude_columns: Vec::default(),
-                })
-            }
+            } => SourceExportDetails::SqlServer(SqlServerSourceExportDetails {
+                capture_instance,
+                table,
+                text_columns: text_columns.into_iter().map(|c| c.into_string()).collect(),
+                exclude_columns: exclude_columns
+                    .into_iter()
+                    .map(|c| c.into_string())
+                    .collect(),
+            }),
             SourceExportStatementDetails::LoadGenerator { output } => {
                 SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails { output })
             }
@@ -1774,16 +1778,15 @@ pub fn plan_create_table_from_source(
         SourceExportStatementDetails::SqlServer {
             table,
             capture_instance,
-        } => {
-            SourceExportDetails::SqlServer(SqlServerSourceExportDetails {
-                table,
-                capture_instance,
-                // TODO(sql_server1): Support text columns.
-                text_columns: Vec::default(),
-                // TODO(sql_server1): Support exclude columns.
-                exclude_columns: Vec::default(),
-            })
-        }
+        } => SourceExportDetails::SqlServer(SqlServerSourceExportDetails {
+            table,
+            capture_instance,
+            text_columns: text_columns.into_iter().map(|c| c.into_string()).collect(),
+            exclude_columns: exclude_columns
+                .into_iter()
+                .map(|c| c.into_string())
+                .collect(),
+        }),
         SourceExportStatementDetails::LoadGenerator { output } => {
             SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails { output })
         }
