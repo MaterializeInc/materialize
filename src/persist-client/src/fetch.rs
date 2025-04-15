@@ -848,12 +848,13 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
             None
         };
 
-        let downcast_structured = |structured: ColumnarRecordsStructuredExt| {
+        let downcast_structured = |structured: ColumnarRecordsStructuredExt,
+                                   structured_only: bool| {
             let key_size_before = ArrayOrd::new(&structured.key).goodbytes();
 
             let structured = match &migration {
                 PartMigration::SameSchema { .. } => structured,
-                PartMigration::Schemaless { read } => {
+                PartMigration::Schemaless { read } if structured_only => {
                     // We don't know the source schema, but we do know the source datatype; migrate it directly.
                     let start = Instant::now();
                     let read_key = data_type::<K>(&*read.key).ok()?;
@@ -868,6 +869,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
                         .inc_by(start.elapsed().as_secs_f64());
                     ColumnarRecordsStructuredExt { key, val }
                 }
+                PartMigration::Schemaless { .. } => return None,
                 PartMigration::Either {
                     write: _,
                     read: _,
@@ -915,7 +917,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
             BlobTraceUpdates::Structured { key_values, .. } => EitherOrBoth::Right(
                 // The structured-only data format was added after schema ids were recorded everywhere,
                 // so we expect this data to be present.
-                downcast_structured(key_values).expect("valid schemas for structured data"),
+                downcast_structured(key_values, true).expect("valid schemas for structured data"),
             ),
             // If both are available, respect the specified part decode format.
             BlobTraceUpdates::Both(records, ext) => match part_decode_format {
@@ -924,11 +926,11 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
                 } => EitherOrBoth::Left(records),
                 PartDecodeFormat::Row {
                     validate_structured: true,
-                } => match downcast_structured(ext) {
+                } => match downcast_structured(ext, false) {
                     Some(decoders) => EitherOrBoth::Both(records, decoders),
                     None => EitherOrBoth::Left(records),
                 },
-                PartDecodeFormat::Arrow => match downcast_structured(ext) {
+                PartDecodeFormat::Arrow => match downcast_structured(ext, false) {
                     Some(decoders) => EitherOrBoth::Right(decoders),
                     None => EitherOrBoth::Left(records),
                 },
