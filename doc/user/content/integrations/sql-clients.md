@@ -70,10 +70,15 @@ psql \
 
 ### DataGrip
 
-{{< note >}}
-As we work on extending the coverage of `pg_catalog` in Materialize,
-some DataGrip features might not work as expected.
-{{< /note >}}
+{{< warning >}}
+
+Integration with DataGrip/WebStorm is currently limited. Certain features --
+such as the schema explorer, database introspection, and various metadata panels
+-- may not work as expected with Materialize because they rely on
+PostgreSQL-specific queries that use unsupported system functions (e.g.,
+`age()`) and system columns (e.g., `xmin`).
+
+{{< /warning >}}
 
 To connect to Materialize using [DataGrip](https://www.jetbrains.com/help/datagrip/connecting-to-a-database.html),
 follow the documentation to [create a connection](https://www.jetbrains.com/help/datagrip/connecting-to-a-database.html)
