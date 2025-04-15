@@ -32,6 +32,7 @@ import tarfile
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from enum import Enum, auto
 from functools import cache
 from pathlib import Path
@@ -1136,7 +1137,11 @@ class DependencySet:
     def check(self) -> bool:
         """Check all publishable images in this dependency set exist on Docker
         Hub. Don't try to download or build them."""
-        return all(dep.is_published_if_necessary() for dep in self)
+        with ThreadPoolExecutor(max_workers=len(list(self))) as executor:
+            results = list(
+                executor.map(lambda dep: dep.is_published_if_necessary(), list(self))
+            )
+        return all(results)
 
     def __iter__(self) -> Iterator[ResolvedImage]:
         return iter(self._dependencies.values())
