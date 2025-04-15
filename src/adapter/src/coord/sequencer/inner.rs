@@ -47,7 +47,9 @@ use mz_repr::{
     CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, RelationVersion,
     RelationVersionSelector, Row, RowArena, RowIterator, Timestamp,
 };
-use mz_sql::ast::AlterSourceAddSubsourceOption;
+use mz_sql::ast::{
+    AlterSourceAddSubsourceOption, SqlServerConfigOption, SqlServerConfigOptionName,
+};
 use mz_sql::ast::{CreateSubsourceStatement, MySqlConfigOptionName, UnresolvedItemName};
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
@@ -4141,6 +4143,72 @@ impl Coordinator {
 
                             curr_options.push(MySqlConfigOption {
                                 name: MySqlConfigOptionName::ExcludeColumns,
+                                value: Some(WithOptionValue::Sequence(new_exclude_columns)),
+                            });
+                        }
+                    }
+                    CreateSourceConnection::SqlServer {
+                        options: curr_options,
+                        ..
+                    } => {
+                        let mz_sql::plan::SqlServerConfigOptionExtracted {
+                            mut text_columns,
+                            mut exclude_columns,
+                            ..
+                        } = curr_options.clone().try_into()?;
+
+                        // Drop both ignore and text columns; we will add them back in
+                        // as appropriate below.
+                        curr_options.retain(|o| {
+                            !matches!(
+                                o.name,
+                                SqlServerConfigOptionName::TextColumns
+                                    | SqlServerConfigOptionName::ExcludeColumns
+                            )
+                        });
+
+                        // Drop all text / exclude columns that are not currently referred to.
+                        let column_referenced =
+                            |column_qualified_reference: &UnresolvedItemName| {
+                                mz_ore::soft_assert_eq_or_log!(
+                                    column_qualified_reference.0.len(),
+                                    3,
+                                    "all TEXT COLUMNS & EXCLUDE COLUMNS values must be column-qualified references"
+                                );
+                                let mut table = column_qualified_reference.clone();
+                                table.0.truncate(2);
+                                curr_references.contains(&table)
+                            };
+                        text_columns.retain(column_referenced);
+                        exclude_columns.retain(column_referenced);
+
+                        // Merge the current text / exclude columns into the new text / exclude columns.
+                        new_text_columns.extend(text_columns);
+                        new_exclude_columns.extend(exclude_columns);
+
+                        // If we have text columns, add them to the options.
+                        if !new_text_columns.is_empty() {
+                            new_text_columns.sort();
+                            let new_text_columns = new_text_columns
+                                .into_iter()
+                                .map(WithOptionValue::UnresolvedItemName)
+                                .collect();
+
+                            curr_options.push(SqlServerConfigOption {
+                                name: SqlServerConfigOptionName::TextColumns,
+                                value: Some(WithOptionValue::Sequence(new_text_columns)),
+                            });
+                        }
+                        // If we have exclude columns, add them to the options.
+                        if !new_exclude_columns.is_empty() {
+                            new_exclude_columns.sort();
+                            let new_exclude_columns = new_exclude_columns
+                                .into_iter()
+                                .map(WithOptionValue::UnresolvedItemName)
+                                .collect();
+
+                            curr_options.push(SqlServerConfigOption {
+                                name: SqlServerConfigOptionName::ExcludeColumns,
                                 value: Some(WithOptionValue::Sequence(new_exclude_columns)),
                             });
                         }

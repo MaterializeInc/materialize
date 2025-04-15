@@ -1442,6 +1442,7 @@ async fn purify_alter_source_add_subsources(
             ..
         }) => {}
         GenericSourceConnection::MySql(_) => {}
+        GenericSourceConnection::SqlServer(_) => {}
         _ => sql_bail!(
             "source {} does not support ALTER SOURCE.",
             partial_source_name
@@ -1586,6 +1587,66 @@ async fn purify_alter_source_add_subsources(
             {
                 ignore_cols_option.value =
                     Some(WithOptionValue::Sequence(normalized_exclude_columns));
+            }
+        }
+        GenericSourceConnection::SqlServer(sql_server_source) => {
+            // Open a connection to the upstream SQL Server instance.
+            let sql_server_connection = &sql_server_source.connection;
+            let config = sql_server_connection
+                .resolve_config(
+                    &storage_configuration.connection_context.secrets_reader,
+                    storage_configuration,
+                    InTask::No,
+                )
+                .await?;
+            let (mut client, conn) = mz_sql_server_util::Client::connect(config).await?;
+            // TODO(sql_server1): Move the spawning of this task into the SQL Server client.
+            mz_ore::task::spawn(|| "sql-server-connection", async move {
+                conn.await;
+            });
+
+            // Query the upstream SQL Server instance for available tables to replicate.
+            let database = sql_server_connection.database.clone().into();
+            let source_references = SourceReferenceClient::SqlServer {
+                client: &mut client,
+                database: Arc::clone(&database),
+            }
+            .get_source_references()
+            .await?;
+            let requested_references = Some(ExternalReferences::SubsetTables(external_references));
+
+            let result = sql_server::purify_source_exports(
+                &*database,
+                &mut client,
+                &source_references,
+                &requested_references,
+                &text_columns,
+                &exclude_columns,
+                &unresolved_source_name,
+                &SourceReferencePolicy::Required,
+            )
+            .await;
+            let sql_server::PurifiedSourceExports {
+                source_exports,
+                normalized_text_columns,
+                normalized_excl_columns,
+            } = result?;
+
+            // Add the new exports to our subsource map.
+            requested_subsource_map.extend(source_exports);
+
+            // Update options on the CREATE SOURCE statement with the purified details.
+            if let Some(text_cols_option) = options
+                .iter_mut()
+                .find(|option| option.name == AlterSourceAddSubsourceOptionName::TextColumns)
+            {
+                text_cols_option.value = Some(WithOptionValue::Sequence(normalized_text_columns));
+            }
+            if let Some(ignore_cols_option) = options
+                .iter_mut()
+                .find(|option| option.name == AlterSourceAddSubsourceOptionName::ExcludeColumns)
+            {
+                ignore_cols_option.value = Some(WithOptionValue::Sequence(normalized_excl_columns));
             }
         }
         _ => unreachable!(),
