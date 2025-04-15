@@ -9,6 +9,8 @@
 
 //! `EXPLAIN` support for structures defined in this crate.
 
+use std::panic::AssertUnwindSafe;
+
 use mz_expr::explain::{ExplainContext, ExplainSinglePlan};
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{Id, LocalId};
@@ -53,9 +55,16 @@ impl<'a> HirRelationExpr {
         context: &'a ExplainContext<'a>,
     ) -> Result<ExplainSinglePlan<'a, HirRelationExpr>, ExplainError> {
         // unless raw plans are explicitly requested
-        // ensure that all nested subqueries are wrapped in Let blocks
+        // ensure that all nested subqueries are wrapped in Let blocks by calling
+        // `normalize_subqueries`
         if !context.config.raw_plans {
-            normalize_subqueries(self)?;
+            mz_ore::panic::catch_unwind_str(AssertUnwindSafe(|| {
+                normalize_subqueries(self).map_err(|e| e.into())
+            }))
+            .unwrap_or_else(|panic| {
+                let msg = format!("unexpected panic during `normalize_subqueries`: {panic}");
+                Err(ExplainError::UnknownError(msg))
+            })?
         }
 
         // TODO: use config values to infer requested
