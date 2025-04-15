@@ -952,25 +952,20 @@ fn install_lifted_mfp(
                     expr.permute(&project);
                     // if column references refer to mapped expressions that have been
                     // lifted, replace the column reference with the mapped expression.
-                    #[allow(deprecated)]
-                    expr.visit_mut_pre_post(
-                        &mut |e| {
-                            // This has to be a loop! This is because it can happen that the new
-                            // expression is again a column reference, in which case the visitor
-                            // wouldn't be called on it again. (The visitation continues with the
-                            // children of the new expression, but won't visit the new expression
-                            // itself again.)
-                            while let MirScalarExpr::Column(c) = e {
-                                if *c >= mfp.input_arity {
-                                    *e = map[*c - mfp.input_arity].clone();
-                                } else {
-                                    break;
-                                }
+                    expr.visit_mut_pre(&mut |e| {
+                        // This has to be a loop! This is because it can happen that the new
+                        // expression is again a column reference, in which case the visitor
+                        // wouldn't be called on it again. (The visitation continues with the
+                        // children of the new expression, but won't visit the new expression
+                        // itself again.)
+                        while let MirScalarExpr::Column(c) = e {
+                            if *c >= mfp.input_arity {
+                                *e = map[*c - mfp.input_arity].clone();
+                            } else {
+                                break;
                             }
-                            None
-                        },
-                        &mut |_| {},
-                    )?;
+                        }
+                    })?;
                 }
             }
             // Canonicalize scalar expressions in maps and filters with respect to the join
