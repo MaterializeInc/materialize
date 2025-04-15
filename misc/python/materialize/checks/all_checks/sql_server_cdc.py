@@ -76,7 +76,7 @@ class SqlServerCdcBase:
                 $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
                 ALTER SYSTEM SET enable_sql_server_source = true;
 
-                > VALIDATE CONNECTION sql_server_password_{self.suffix};
+                > VALIDATE CONNECTION sql_server_connection_{self.suffix};
                 """,
                 f"""
                 $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
