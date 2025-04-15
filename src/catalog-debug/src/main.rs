@@ -568,7 +568,7 @@ async fn upgrade_check(
             &BootstrapArgs {
                 default_cluster_replica_size:
                     "DEFAULT CLUSTER REPLICA SIZE IS ONLY USED FOR NEW ENVIRONMENTS".into(),
-                default_cluster_replication_factor: 1,
+                default_cluster_replication_factor: 2,
                 bootstrap_role: None,
                 cluster_replica_size_map: cluster_replica_sizes.clone(),
             },

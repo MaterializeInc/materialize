@@ -96,7 +96,6 @@ const DEFAULT_USER_CLUSTER_ID: ClusterId = ClusterId::User(1);
 const DEFAULT_USER_CLUSTER_NAME: &str = "quickstart";
 
 const DEFAULT_USER_REPLICA_ID: ReplicaId = ReplicaId::User(1);
-const DEFAULT_USER_REPLICA_NAME: &str = "r1";
 
 const MATERIALIZE_DATABASE_ID_VAL: u64 = 1;
 const MATERIALIZE_DATABASE_ID: DatabaseId = DatabaseId::User(MATERIALIZE_DATABASE_ID_VAL);
@@ -260,7 +259,8 @@ pub(crate) async fn initialize(
         ),
         (
             USER_REPLICA_ID_ALLOC_KEY.to_string(),
-            DEFAULT_USER_REPLICA_ID.inner_id() + 1,
+            DEFAULT_USER_REPLICA_ID.inner_id()
+                + u64::from(options.default_cluster_replication_factor + 1),
         ),
         (
             SYSTEM_REPLICA_ID_ALLOC_KEY.to_string(),
@@ -667,35 +667,41 @@ pub(crate) async fn initialize(
         ));
     }
 
-    tx.insert_cluster_replica_with_id(
-        DEFAULT_USER_CLUSTER_ID,
-        DEFAULT_USER_REPLICA_ID,
-        DEFAULT_USER_REPLICA_NAME,
-        default_replica_config(options)?,
-        MZ_SYSTEM_ROLE_ID,
-    )?;
-    audit_events.push((
-        mz_audit_log::EventType::Create,
-        mz_audit_log::ObjectType::ClusterReplica,
-        mz_audit_log::EventDetails::CreateClusterReplicaV2(mz_audit_log::CreateClusterReplicaV2 {
-            cluster_id: DEFAULT_USER_CLUSTER_ID.to_string(),
-            cluster_name: DEFAULT_USER_CLUSTER_NAME.to_string(),
-            replica_name: DEFAULT_USER_REPLICA_NAME.to_string(),
-            replica_id: Some(DEFAULT_USER_REPLICA_ID.to_string()),
-            logical_size: options.default_cluster_replica_size.to_string(),
-            disk: {
-                let cluster_size = options.default_cluster_replica_size.to_string();
-                let cluster_allocation = options
-                    .cluster_replica_size_map
-                    .get_allocation_by_name(&cluster_size)?;
-                cluster_allocation.is_cc
-            },
-            billed_as: None,
-            internal: false,
-            reason: CreateOrDropClusterReplicaReasonV1::System,
-            scheduling_policies: None,
-        }),
-    ));
+    for i in 1..options.default_cluster_replication_factor + 1 {
+        let replica_id = ReplicaId::User(DEFAULT_USER_REPLICA_ID.inner_id() + u64::from(i));
+        let replica_name = format!("r{i}");
+        tx.insert_cluster_replica_with_id(
+            DEFAULT_USER_CLUSTER_ID,
+            replica_id,
+            &replica_name,
+            default_replica_config(options)?,
+            MZ_SYSTEM_ROLE_ID,
+        )?;
+        audit_events.push((
+            mz_audit_log::EventType::Create,
+            mz_audit_log::ObjectType::ClusterReplica,
+            mz_audit_log::EventDetails::CreateClusterReplicaV2(
+                mz_audit_log::CreateClusterReplicaV2 {
+                    cluster_id: DEFAULT_USER_CLUSTER_ID.to_string(),
+                    cluster_name: DEFAULT_USER_CLUSTER_NAME.to_string(),
+                    replica_name,
+                    replica_id: Some(replica_id.to_string()),
+                    logical_size: options.default_cluster_replica_size.to_string(),
+                    disk: {
+                        let cluster_size = options.default_cluster_replica_size.to_string();
+                        let cluster_allocation = options
+                            .cluster_replica_size_map
+                            .get_allocation_by_name(&cluster_size)?;
+                        cluster_allocation.is_cc
+                    },
+                    billed_as: None,
+                    internal: false,
+                    reason: CreateOrDropClusterReplicaReasonV1::System,
+                    scheduling_policies: None,
+                },
+            ),
+        ));
+    }
 
     let system_privileges = [MzAclItem {
         grantee: MZ_SYSTEM_ROLE_ID,

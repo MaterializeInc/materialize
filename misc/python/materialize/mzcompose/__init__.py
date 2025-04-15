@@ -81,6 +81,9 @@ def get_default_system_parameters(
         "persist_enable_arrow_lgalloc_noncc_sizes": "true",
         "persist_enable_s3_lgalloc_noncc_sizes": "true",
         # -----
+        # Exercise sources on multi-replica clusters
+        "default_cluster_replication_factor": "8",
+        # -----
         # Others (ordered by name)
         "allow_real_time_recency": "true",
         "cluster_always_use_disk": "true",

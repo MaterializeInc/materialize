@@ -1135,7 +1135,7 @@ async fn create_materialize_state(
     let bootstrap_args = BootstrapArgs {
         cluster_replica_size_map: config.materialize_cluster_replica_sizes.clone(),
         default_cluster_replica_size: "ABC".to_string(),
-        default_cluster_replication_factor: 1,
+        default_cluster_replication_factor: 2,
         bootstrap_role: None,
     };
 

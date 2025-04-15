@@ -478,6 +478,7 @@ impl SessionVars {
             // size of a cluster, what indexes are present, etc.
             &CLUSTER,
             &CLUSTER_REPLICA,
+            &DEFAULT_CLUSTER_REPLICATION_FACTOR,
             &DATABASE,
             &SEARCH_PATH,
         ]
@@ -1650,6 +1651,11 @@ impl SystemVars {
             .collect()
     }
 
+    /// Returns the value of the `default_cluster_replication_factor` configuration parameter.
+    pub fn default_cluster_replication_factor(&self) -> u32 {
+        *self.expect_value::<u32>(&DEFAULT_CLUSTER_REPLICATION_FACTOR)
+    }
+
     /// Returns the `disk_cluster_replicas_default` configuration parameter.
     pub fn disk_cluster_replicas_default(&self) -> bool {
         *self.expect_value(&DISK_CLUSTER_REPLICAS_DEFAULT)
@@ -2318,6 +2324,7 @@ static SESSION_SYSTEM_VARS: LazyLock<BTreeMap<&'static UncasedStr, &'static VarD
             &CLIENT_MIN_MESSAGES,
             &CLUSTER,
             &CLUSTER_REPLICA,
+            &DEFAULT_CLUSTER_REPLICATION_FACTOR,
             &CURRENT_OBJECT_MISSING_WARNINGS,
             &DATABASE,
             &DATE_STYLE,

@@ -311,6 +311,13 @@ pub static DATE_STYLE: VarDefinition = VarDefinition::new(
     true,
 );
 
+pub static DEFAULT_CLUSTER_REPLICATION_FACTOR: VarDefinition = VarDefinition::new(
+    "default_cluster_replication_factor",
+    value!(u32; 1),
+    "Default cluster replication factor (Materialize).",
+    true,
+);
+
 pub static EXTRA_FLOAT_DIGITS: VarDefinition = VarDefinition::new(
     "extra_float_digits",
     value!(i32; 3),
