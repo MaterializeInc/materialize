@@ -297,3 +297,21 @@ ON (NULLIF (a1.f2, a2.f2) = a1.f1 + a2.f2);
 ----
 NULL
 NULL
+
+# database-issues#9156
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_eager_delta_joins TO true;
+----
+COMPLETE 0
+
+query
+SELECT
+FROM
+    (
+      SELECT a2.f2 AS f1, a2.f1 AS f2
+      FROM t2 AS a1 JOIN pk1 AS a2 USING(f1, f2)
+      WHERE a2.f1 = (NULLIF (a1.f2, a2.f2)) AND (a1.f1 + a2.f2) = a2.f2
+    ) AS a1
+    JOIN (SELECT a2.f2 AS f1, avg(a2.f2) AS f2 FROM t1 AS a2 GROUP BY 1) AS a2 USING(f1, f2);
+----
