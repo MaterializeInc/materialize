@@ -23,7 +23,7 @@ use std::{fmt, io};
 use async_trait::async_trait;
 use tokio::fs;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::net::{self, TcpListener, TcpStream, UnixListener, UnixStream};
+use tokio::net::{self, TcpListener, TcpStream, UnixListener, UnixStream, tcp, unix};
 use tonic::transport::server::{Connected, TcpConnectInfo, UdsConnectInfo};
 use tracing::warn;
 
@@ -501,6 +501,26 @@ impl Stream {
             Stream::Turmoil(_) => panic!("Stream::unwrap_unix called on a `turmoil` stream"),
         }
     }
+
+    /// Splits a stream into a read half and a write half, which can be used to read and write the
+    /// stream concurrently.
+    pub fn split(self) -> (StreamReadHalf, StreamWriteHalf) {
+        match self {
+            Stream::Tcp(stream) => {
+                let (rx, tx) = stream.into_split();
+                (StreamReadHalf::Tcp(rx), StreamWriteHalf::Tcp(tx))
+            }
+            Stream::Unix(stream) => {
+                let (rx, tx) = stream.into_split();
+                (StreamReadHalf::Unix(rx), StreamWriteHalf::Unix(tx))
+            }
+            #[cfg(feature = "turmoil")]
+            Stream::Turmoil(stream) => {
+                let (rx, tx) = stream.into_split();
+                (StreamReadHalf::Turmoil(rx), StreamWriteHalf::Turmoil(tx))
+            }
+        }
+    }
 }
 
 impl AsyncRead for Stream {
@@ -559,6 +579,68 @@ impl Connected for Stream {
                 local_addr: stream.local_addr().ok(),
                 remote_addr: stream.peer_addr().ok(),
             }),
+        }
+    }
+}
+
+/// Read half of a [`Stream`], created by [`Stream::split`].
+#[derive(Debug)]
+pub enum StreamReadHalf {
+    Tcp(tcp::OwnedReadHalf),
+    Unix(unix::OwnedReadHalf),
+    #[cfg(feature = "turmoil")]
+    Turmoil(turmoil::net::tcp::OwnedReadHalf),
+}
+
+impl AsyncRead for StreamReadHalf {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &mut ReadBuf,
+    ) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            Self::Tcp(rx) => Pin::new(rx).poll_read(cx, buf),
+            Self::Unix(rx) => Pin::new(rx).poll_read(cx, buf),
+            #[cfg(feature = "turmoil")]
+            Self::Turmoil(rx) => Pin::new(rx).poll_read(cx, buf),
+        }
+    }
+}
+
+/// Write half of a [`Stream`], created by [`Stream::split`].
+#[derive(Debug)]
+pub enum StreamWriteHalf {
+    Tcp(tcp::OwnedWriteHalf),
+    Unix(unix::OwnedWriteHalf),
+    #[cfg(feature = "turmoil")]
+    Turmoil(turmoil::net::tcp::OwnedWriteHalf),
+}
+
+impl AsyncWrite for StreamWriteHalf {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<io::Result<usize>> {
+        match self.get_mut() {
+            Self::Tcp(tx) => Pin::new(tx).poll_write(cx, buf),
+            Self::Unix(tx) => Pin::new(tx).poll_write(cx, buf),
+            #[cfg(feature = "turmoil")]
+            Self::Turmoil(tx) => Pin::new(tx).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            Self::Tcp(tx) => Pin::new(tx).poll_flush(cx),
+            Self::Unix(tx) => Pin::new(tx).poll_flush(cx),
+            #[cfg(feature = "turmoil")]
+            Self::Turmoil(tx) => Pin::new(tx).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            Self::Tcp(tx) => Pin::new(tx).poll_shutdown(cx),
+            Self::Unix(tx) => Pin::new(tx).poll_shutdown(cx),
+            #[cfg(feature = "turmoil")]
+            Self::Turmoil(tx) => Pin::new(tx).poll_shutdown(cx),
         }
     }
 }
