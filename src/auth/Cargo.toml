@@ -21,3 +21,6 @@ openssl = { version = "0.10.71", features = ["vendored"] }
 
 [features]
 default = ["workspace-hack"]
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

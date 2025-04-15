@@ -214,6 +214,7 @@ mod tests {
     use super::*;
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
     fn test_hash_password() {
         let password = "password".to_string();
         let hashed_password = hash_password(&password.into()).expect("Failed to hash password");
@@ -223,6 +224,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
     fn test_scram256_hash() {
         let password = "password".into();
         let scram_hash = scram256_hash(&password).expect("Failed to hash password");
