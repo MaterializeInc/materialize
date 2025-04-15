@@ -245,6 +245,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     else:
         checks = list(all_subclasses(Check))
 
+    if features.sql_server_enabled():
+        c.up("sql-server")
+
     checks.sort(key=lambda ch: ch.__name__)
     checks = buildkite.shard_list(checks, lambda ch: ch.__name__)
     if buildkite.get_parallelism_index() != 0 or buildkite.get_parallelism_count() != 1:

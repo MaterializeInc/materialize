@@ -20,7 +20,7 @@ class Features:
         self.features = features
 
     def azurite_enabled(self) -> bool:
-        return self.AZURITE in self.features
+        return self.features and self.AZURITE in self.features
 
     def sql_server_enabled(self) -> bool:
-        return self.SQL_SERVER in self.features
+        return self.features and self.SQL_SERVER in self.features
