@@ -98,9 +98,7 @@ impl UpgradeFrom<v73::role_vars::Entry> for v74::role_vars::Entry {
     fn upgrade_from(value: v73::role_vars::Entry) -> Self {
         v74::role_vars::Entry {
             key: value.key,
-            val: value
-                .val
-                .map(|val| v74::role_vars::entry::Val::upgrade_from(val)),
+            val: value.val.map(v74::role_vars::entry::Val::upgrade_from),
         }
     }
 }
