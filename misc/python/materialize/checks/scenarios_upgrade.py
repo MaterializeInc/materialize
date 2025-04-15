@@ -11,6 +11,7 @@
 from materialize.checks.actions import Action, Initialize, Manipulate, Sleep, Validate
 from materialize.checks.checks import Check
 from materialize.checks.executors import Executor
+from materialize.checks.features import Features
 from materialize.checks.mzcompose_actions import (
     KillClusterdCompute,
     KillMz,
@@ -199,11 +200,11 @@ class UpgradeEntireMzFourVersions(Scenario):
         self,
         checks: list[type[Check]],
         executor: Executor,
-        azurite: bool,
+        features: Features,
         seed: str | None = None,
     ):
         self.minor_versions = get_minor_versions()
-        super().__init__(checks, executor, azurite, seed)
+        super().__init__(checks, executor, features, seed)
 
     def base_version(self) -> MzVersion:
         return self.minor_versions[3]
