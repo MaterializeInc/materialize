@@ -17,10 +17,12 @@ import random
 from materialize import MZ_ROOT
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.services.testdrive import Testdrive
 
 SERVICES = [
+    Mz(app_password=""),
     Materialized(),
     Testdrive(),
     SqlServer(),
