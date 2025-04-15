@@ -94,7 +94,7 @@ class Materialized(Service):
         metadata_store: str = METADATA_STORE,
         cluster_replica_size: dict[str, dict[str, Any]] | None = None,
         bootstrap_replica_size: str | None = None,
-        default_cluster_replicas: int = 2,
+        default_cluster_replicas: int = 8,
     ) -> None:
         if name is None:
             name = "materialized"

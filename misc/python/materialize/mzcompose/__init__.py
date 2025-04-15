@@ -83,6 +83,7 @@ def get_default_system_parameters(
         # -----
         # Exercise sources on multi-replica clusters
         "default_cluster_replication_factor": "8",
+        "max_replicas_per_cluster": "16",
         # -----
         # Others (ordered by name)
         "allow_real_time_recency": "true",
