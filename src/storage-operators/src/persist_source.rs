@@ -403,10 +403,10 @@ fn filter_result(
     let may_keep = result.may_contain(Datum::True);
     let may_skip = result.may_contain(Datum::False) || result.may_contain(Datum::Null);
     if relation_desc.len() == 0 && !may_error && !may_skip {
-        let Ok(mut key) = <RelationDesc as Schema<Row>>::encoder(relation_desc) else {
+        let Ok(mut key) = <RelationDesc as Schema<SourceData>>::encoder(relation_desc) else {
             return FilterResult::Keep;
         };
-        key.append(&Row::default());
+        key.append(&SourceData(Ok(Row::default())));
         let key = key.finish();
         let Ok(mut val) = <UnitSchema as Schema<()>>::encoder(&UnitSchema) else {
             return FilterResult::Keep;
