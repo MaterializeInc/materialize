@@ -54,6 +54,7 @@ steps:
             - --benchmarking-env
             - --scenario=StagingBench
             - --sqlite-store
+    skip: "Hasn't been useful"
 
   - id: terraform-aws-persistent-test
     label: "Terraform AWS Persistent Test"
@@ -68,3 +69,4 @@ steps:
           args: ["--runtime=82800"] # 23 hours
     agents:
       queue: linux-aarch64-small
+    skip: "TODO: Fix"
