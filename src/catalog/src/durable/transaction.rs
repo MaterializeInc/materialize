@@ -1527,10 +1527,46 @@ impl<'a> Transaction<'a> {
         }
 
         let update_role_ids: BTreeSet<_> = roles.keys().cloned().collect();
-        let kvs: Vec<_> = roles
-            .into_iter()
-            .map(|(id, role)| (RoleKey { id }, role.into_key_value().1))
-            .collect();
+        let mut kvs = Vec::with_capacity(roles.len());
+
+        for (id, role) in roles {
+            let key = RoleKey { id };
+            let auth_key = RoleAuthKey { role_id: id };
+
+            if self.roles.get(&key).is_none() {
+                let role_ids: BTreeSet<_> = self.roles.items().keys().map(|k| k.id).collect();
+                let mut unknown = update_role_ids.difference(&role_ids);
+                return Err(SqlCatalogError::UnknownRole(unknown.join(", ")).into());
+            }
+
+            // Handle authentication
+            if let Some(ref password) = role.attributes.password {
+                let hash =
+                    mz_auth::hash::scram256_hash(password).expect("password hash should be valid");
+                let value = RoleAuthValue {
+                    password_hash: Some(hash),
+                    updated_at: SYSTEM_TIME(),
+                };
+
+                if self.role_auth.get(&auth_key).is_some() {
+                    self.role_auth
+                        .update_by_key(auth_key.clone(), value, self.op_id)?;
+                } else {
+                    self.role_auth.insert(auth_key.clone(), value, self.op_id)?;
+                }
+            } else if self.role_auth.get(&auth_key).is_some() {
+                // Remove password if it's no longer present
+                let value = RoleAuthValue {
+                    password_hash: None,
+                    updated_at: SYSTEM_TIME(),
+                };
+                self.role_auth
+                    .update_by_key(auth_key.clone(), value, self.op_id)?;
+            }
+
+            kvs.push((key, role.into_key_value().1));
+        }
+
         let n = self.roles.update_by_keys(kvs, self.op_id)?;
         let n = usize::try_from(n.into_inner()).expect("Must be positive and fit in usize");
 
