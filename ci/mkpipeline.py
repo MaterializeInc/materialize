@@ -268,6 +268,9 @@ so it is executed.""",
     add_version_to_preflight_tests(pipeline)
 
     trim_builds(pipeline, args.coverage, args.sanitizer, args.bazel_remote_cache)
+    add_cargo_test_dependency(
+        pipeline, args.coverage, args.sanitizer, args.bazel_remote_cache
+    )
 
     # Remove the Materialize-specific keys from the configuration that are
     # only used to inform how to trim the pipeline and for coverage runs.
@@ -732,6 +735,34 @@ def trim_tests_pipeline(
         or ("group" in step and step["steps"])
         or step.get("id") in needed
     ]
+
+
+def add_cargo_test_dependency(
+    pipeline: Any,
+    coverage: bool,
+    sanitizer: Sanitizer,
+    bazel_remote_cache: str,
+) -> None:
+    """Cargo Test normally doesn't have to wait for the build to complete, but it requires a few images (ubuntu-base, postgres), which are rarely changed. So only add a dependency when those images are not on Dockerhub yet."""
+    repo = mzbuild.Repository(
+        Path("."),
+        arch=Arch.X86_64,
+        coverage=coverage,
+        sanitizer=sanitizer,
+        bazel=True,
+        bazel_remote_cache=bazel_remote_cache,
+    )
+    composition = Composition(repo, name="cargo-test")
+    deps = composition.dependencies
+    if deps.check():
+        # We already have the dependencies available, no need to add a build dependency
+        return
+
+    for step in steps(pipeline):
+        if step.get("id") == "cargo-test":
+            step["depends_on"] = "build-x86_64"
+        if step.get("id") == "miri-test":
+            step["depends_on"] = "build-aarch64"
 
 
 def trim_builds(
