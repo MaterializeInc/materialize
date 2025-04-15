@@ -949,7 +949,8 @@ steps:
           queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/cloudtest:
-              args: [-m=long, test/cloudtest/test_upgrade.py]
+              # Uses .td-file based parallelism instead
+              args: [-m=long, test/cloudtest/test_upgrade.py, --no-test-parallelism]
         sanitizer: skip
 
   - group: "K8s node recovery cloudtest"
