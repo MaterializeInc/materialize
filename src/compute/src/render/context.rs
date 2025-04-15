@@ -754,10 +754,8 @@ where
         Collection<S, mz_repr::Row, Diff>,
         Collection<S, DataflowError, Diff>,
     ) {
-        let max_demand = mfp.demand().iter().max().map(|x| *x + 1).unwrap_or(0);
-        mfp.permute_fn(|c| c, max_demand);
         mfp.optimize();
-        let mfp_plan = mfp.into_plan().unwrap();
+        let mfp_plan = mfp.clone().into_plan().unwrap();
 
         // If the MFP is trivial, we can just call `as_collection`.
         // In the case that we weren't going to apply the `key_val` optimization,
@@ -774,44 +772,49 @@ where
             let key = key_val.map(|(k, _v)| k);
             return self.as_specific_collection(key.as_deref(), config_set);
         }
-        let (stream, errors) = self.flat_map(key_val, max_demand, {
-            let mut datum_vec = DatumVec::new();
-            // Wrap in an `Rc` so that lifetimes work out.
-            let until = std::rc::Rc::new(until);
-            move |row_datums, time, diff| {
-                let binding = SharedRow::get();
-                let mut row_builder = binding.borrow_mut();
-                let until = std::rc::Rc::clone(&until);
-                let temp_storage = RowArena::new();
-                let row_iter = row_datums.iter();
-                let mut datums_local = datum_vec.borrow();
-                datums_local.extend(row_iter);
-                let time = time.clone();
-                let event_time = time.event_time();
-                mfp_plan
-                    .evaluate(
-                        &mut datums_local,
-                        &temp_storage,
-                        event_time,
-                        diff.clone(),
-                        move |time| !until.less_equal(time),
-                        &mut row_builder,
-                    )
-                    .map(move |x| match x {
-                        Ok((row, event_time, diff)) => {
-                            // Copy the whole time, and re-populate event time.
-                            let mut time: S::Timestamp = time.clone();
-                            *time.event_time_mut() = event_time;
-                            (Ok(row), time, diff)
-                        }
-                        Err((e, event_time, diff)) => {
-                            // Copy the whole time, and re-populate event time.
-                            let mut time: S::Timestamp = time.clone();
-                            *time.event_time_mut() = event_time;
-                            (Err(e), time, diff)
-                        }
-                    })
-            }
+
+        let max_demand = mfp.demand().iter().max().map(|x| *x + 1).unwrap_or(0);
+        mfp.permute_fn(|c| c, max_demand);
+        mfp.optimize();
+        let mfp_plan = mfp.into_plan().unwrap();
+
+        let mut datum_vec = DatumVec::new();
+        // Wrap in an `Rc` so that lifetimes work out.
+        let until = std::rc::Rc::new(until);
+
+        let (stream, errors) = self.flat_map(key_val, max_demand, move |row_datums, time, diff| {
+            let binding = SharedRow::get();
+            let mut row_builder = binding.borrow_mut();
+            let until = std::rc::Rc::clone(&until);
+            let temp_storage = RowArena::new();
+            let row_iter = row_datums.iter();
+            let mut datums_local = datum_vec.borrow();
+            datums_local.extend(row_iter);
+            let time = time.clone();
+            let event_time = time.event_time();
+            mfp_plan
+                .evaluate(
+                    &mut datums_local,
+                    &temp_storage,
+                    event_time,
+                    diff.clone(),
+                    move |time| !until.less_equal(time),
+                    &mut row_builder,
+                )
+                .map(move |x| match x {
+                    Ok((row, event_time, diff)) => {
+                        // Copy the whole time, and re-populate event time.
+                        let mut time: S::Timestamp = time.clone();
+                        *time.event_time_mut() = event_time;
+                        (Ok(row), time, diff)
+                    }
+                    Err((e, event_time, diff)) => {
+                        // Copy the whole time, and re-populate event time.
+                        let mut time: S::Timestamp = time.clone();
+                        *time.event_time_mut() = event_time;
+                        (Err(e), time, diff)
+                    }
+                })
         });
 
         use differential_dataflow::AsCollection;
