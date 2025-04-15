@@ -1126,7 +1126,7 @@ fn remove_invalid_config_param_role_defaults_migration(
         .map(|role| (role.id, role))
         .collect();
 
-    txn.update_roles(roles_to_migrate)?;
+    txn.update_roles_without_auth(roles_to_migrate)?;
 
     Ok(())
 }
