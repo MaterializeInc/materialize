@@ -61,7 +61,6 @@ pub mod subscribe;
 pub mod view;
 
 use std::fmt::Debug;
-use std::panic::AssertUnwindSafe;
 
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::PERSIST_FAST_PATH_ORDER;
@@ -77,7 +76,7 @@ use mz_repr::{CatalogItemId, GlobalId};
 use mz_sql::names::{FullItemName, QualifiedItemName};
 use mz_sql::plan::PlanError;
 use mz_sql::session::vars::SystemVars;
-use mz_transform::{TransformCtx, TransformError};
+use mz_transform::{MaybeShouldPanic, TransformCtx, TransformError};
 
 // Alias types
 // -----------
@@ -121,21 +120,12 @@ where
     /// Like [`Self::optimize`], but additionally ensures that panics occurring
     /// in the [`Self::optimize`] call are caught and demoted to an
     /// [`OptimizerError::Internal`] error.
+    ///
+    /// Additionally, if the result of the optimization is an error (not a panic) that indicates we
+    /// should panic, then panic.
     #[mz_ore::instrument(target = "optimizer", level = "debug", name = "optimize")]
     fn catch_unwind_optimize(&mut self, plan: From) -> Result<Self::To, OptimizerError> {
-        match mz_ore::panic::catch_unwind_str(AssertUnwindSafe(|| self.optimize(plan))) {
-            Ok(Err(OptimizerError::TransformError(TransformError::CallerShouldPanic(msg)))) => {
-                // Promote a `CallerShouldPanic` error from the result to a proper panic. This is
-                // needed in order to ensure that `mz_unsafe.mz_panic('forced panic')` calls still
-                // panic the caller.
-                panic!("{msg}");
-            }
-            Ok(result) => result,
-            Err(panic) => {
-                let msg = format!("unexpected panic during query optimization: {panic}");
-                Err(OptimizerError::Internal(msg))
-            }
-        }
+        mz_transform::catch_unwind_optimize(|| self.optimize(plan))
     }
 
     /// Execute the optimization stage and panic if an error occurs.
@@ -338,6 +328,17 @@ impl From<TimestampError> for OptimizerError {
 impl From<anyhow::Error> for OptimizerError {
     fn from(value: anyhow::Error) -> Self {
         OptimizerError::Internal(value.to_string())
+    }
+}
+
+impl MaybeShouldPanic for OptimizerError {
+    fn should_panic(&self) -> Option<String> {
+        match self {
+            OptimizerError::TransformError(TransformError::CallerShouldPanic(msg)) => {
+                Some(msg.to_string())
+            }
+            _ => None,
+        }
     }
 }
 

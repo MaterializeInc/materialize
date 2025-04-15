@@ -23,6 +23,7 @@
 
 use std::collections::BTreeMap;
 use std::error::Error;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::{fmt, iter};
 
@@ -291,6 +292,46 @@ impl Error for TransformError {}
 impl From<RecursionLimitError> for TransformError {
     fn from(error: RecursionLimitError) -> Self {
         TransformError::Internal(error.to_string())
+    }
+}
+
+/// Implemented by error types that sometimes want to indicate that an error should cause a panic
+/// even in a `catch_unwind` context. Useful for implementing `mz_unsafe.mz_panic('forced panic')`.
+pub trait MaybeShouldPanic {
+    /// Whether the error means that we want a panic. If yes, then returns the error msg.
+    fn should_panic(&self) -> Option<String>;
+}
+
+impl MaybeShouldPanic for TransformError {
+    fn should_panic(&self) -> Option<String> {
+        match self {
+            TransformError::CallerShouldPanic(msg) => Some(msg.to_string()),
+            _ => None,
+        }
+    }
+}
+
+/// Catch panics in the given optimization, and demote them to [`TransformError::Internal`] error.
+///
+/// Additionally, if the result of the optimization is an error (not a panic) that indicates we
+/// should panic, then panic.
+pub fn catch_unwind_optimize<Opt, To, E>(optimization: Opt) -> Result<To, E>
+where
+    Opt: FnOnce() -> Result<To, E>,
+    E: From<TransformError> + MaybeShouldPanic,
+{
+    match mz_ore::panic::catch_unwind_str(AssertUnwindSafe(optimization)) {
+        Ok(Err(e)) if e.should_panic().is_some() => {
+            // Promote a `CallerShouldPanic` error from the result to a proper panic. This is
+            // needed in order to ensure that `mz_unsafe.mz_panic('forced panic')` calls still
+            // panic the caller.
+            panic!("{}", e.should_panic().expect("checked above"));
+        }
+        Ok(result) => result.map_err(|e| e),
+        Err(panic) => {
+            let msg = format!("unexpected panic during query optimization: {panic}");
+            Err(TransformError::Internal(msg).into())
+        }
     }
 }
 
