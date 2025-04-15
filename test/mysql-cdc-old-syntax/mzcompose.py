@@ -62,6 +62,7 @@ SERVICES = [
         additional_system_parameter_defaults={
             "log_filter": "mz_storage::source::mysql=trace,info"
         },
+        default_replication_factor=2,
     ),
     create_mysql(MySql.DEFAULT_VERSION),
     create_mysql_replica(MySql.DEFAULT_VERSION),
@@ -328,6 +329,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
             additional_system_parameter_defaults={
                 "log_filter": "mz_storage::source::mysql=trace,info"
             },
+            default_replication_factor=2,
         )
 
         mz_new = Materialized(
@@ -339,6 +341,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
                 "log_filter": "mz_storage::source::mysql=trace,info",
                 "force_source_table_syntax": "true",
             },
+            default_replication_factor=2,
         )
 
         with c.override(mz_old, create_mysql(mysql_version)):

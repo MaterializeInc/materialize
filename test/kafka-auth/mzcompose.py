@@ -159,6 +159,7 @@ SERVICES = [
     ),
     Materialized(
         volumes_extra=["secrets:/share/secrets"],
+        default_replication_factor=2,
     ),
     Testdrive(
         volumes_extra=["secrets:/share/secrets"],

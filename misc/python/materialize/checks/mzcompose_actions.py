@@ -87,6 +87,7 @@ class StartMz(MzcomposeAction):
             force_migrations=self.force_migrations,
             publish=self.publish,
             metadata_store="cockroach",
+            default_replication_factor=2,
         )
 
         # Don't fail since we are careful to explicitly kill and collect logs

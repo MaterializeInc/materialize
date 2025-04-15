@@ -116,7 +116,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     else:
         dependencies += ["zookeeper", "kafka", "schema-registry"]
 
-    additional_system_parameter_defaults = {}
+    additional_system_parameter_defaults = {"default_cluster_replication_factor": "1"}
     for val in args.system_param or []:
         x = val[0].split("=", maxsplit=1)
         assert len(x) == 2, f"--system-param '{val}' should be the format <key>=<val>"
@@ -127,6 +127,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         external_blob_store=True,
         blob_store_is_azure=args.azurite,
         additional_system_parameter_defaults=additional_system_parameter_defaults,
+        default_replication_factor=1,
     )
 
     testdrive = Testdrive(

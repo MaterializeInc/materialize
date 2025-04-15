@@ -224,7 +224,12 @@ impl Coordinator {
                 }
                 match &options.replication_factor {
                     Set(rf) => *replication_factor = *rf,
-                    Reset => *replication_factor = 1,
+                    Reset => {
+                        *replication_factor = self
+                            .catalog
+                            .system_config()
+                            .default_cluster_replication_factor()
+                    }
                     Unchanged => {}
                 }
                 match &options.schedule {
