@@ -346,6 +346,8 @@ mod bytes_container {
 
     /// A slice container with four bytes overhead per slice.
     pub struct BytesContainer {
+        /// Total length of `batches`, maintained because recomputation is expensive.
+        length: usize,
         batches: Vec<BytesBatch>,
     }
 
@@ -371,6 +373,7 @@ mod bytes_container {
 
         fn with_capacity(size: usize) -> Self {
             Self {
+                length: 0,
                 batches: vec![BytesBatch::with_capacities(size, size)],
             }
         }
@@ -387,6 +390,7 @@ mod bytes_container {
                 byte_cap += batch.storage.len();
             }
             Self {
+                length: 0,
                 batches: vec![BytesBatch::with_capacities(item_cap, byte_cap)],
             }
         }
@@ -405,17 +409,15 @@ mod bytes_container {
             panic!("Index out of bounds");
         }
 
+        #[inline(always)]
         fn len(&self) -> usize {
-            let mut result = 0;
-            for batch in self.batches.iter() {
-                result += batch.len();
-            }
-            result
+            self.length
         }
     }
 
     impl PushInto<&[u8]> for BytesContainer {
         fn push_into(&mut self, item: &[u8]) {
+            self.length += 1;
             if let Some(batch) = self.batches.last_mut() {
                 let success = batch.try_push(item);
                 if !success {
