@@ -36,8 +36,9 @@ use mz_dyncfg::ConfigSet;
 use mz_ore::soft_panic_or_log;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_types::{Codec64, Opaque, ShardId};
+use mz_repr::adt::interval::Interval;
 use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::{Diff, GlobalId, RelationDesc, RelationVersion, Row};
+use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationVersion, Row};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{CollectionMetadata, StorageError};
@@ -872,6 +873,69 @@ impl<T> MonotonicAppender<T> {
             .map_err(|_| StorageError::ShuttingDown("collection manager"))?;
 
         result
+    }
+}
+
+/// A wallclock lag measurement.
+///
+/// The enum representation reflects the fact that wallclock lag is undefined for unreadable
+/// collections, i.e. collections that contain no readable times.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum WallclockLag {
+    /// Lag value in seconds, for readable collections.
+    Seconds(u64),
+    /// Undefined lag, for unreadable collections.
+    Undefined,
+}
+
+impl WallclockLag {
+    /// The smallest possible wallclock lag measurement.
+    pub const MIN: Self = Self::Seconds(0);
+
+    /// Return the maximum of two lag values.
+    ///
+    /// We treat `Undefined` lags as greater than `Seconds`, to ensure we never report low lag
+    /// values when a collection was actually unreadable for some amount of time.
+    pub fn max(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Seconds(a), Self::Seconds(b)) => Self::Seconds(a.max(b)),
+            (Self::Undefined, _) | (_, Self::Undefined) => Self::Undefined,
+        }
+    }
+
+    /// Return the wrapped seconds value, or a default if the lag is `Undefined`.
+    pub fn unwrap_seconds_or(self, default: u64) -> u64 {
+        match self {
+            Self::Seconds(s) => s,
+            Self::Undefined => default,
+        }
+    }
+
+    /// Create a new `WallclockLag` by transforming the wrapped seconds value.
+    pub fn map_seconds(self, f: impl FnOnce(u64) -> u64) -> Self {
+        match self {
+            Self::Seconds(s) => Self::Seconds(f(s)),
+            Self::Undefined => Self::Undefined,
+        }
+    }
+
+    /// Convert this lag value into a [`Datum::Interval`] or [`Datum::Null`].
+    pub fn into_interval_datum(self) -> Datum<'static> {
+        match self {
+            Self::Seconds(secs) => {
+                let micros = i64::try_from(secs * 1_000_000).expect("must fit");
+                Datum::Interval(Interval::new(0, 0, micros))
+            }
+            Self::Undefined => Datum::Null,
+        }
+    }
+
+    /// Convert this lag value into a [`Datum::UInt64`] or [`Datum::Null`].
+    pub fn into_uint64_datum(self) -> Datum<'static> {
+        match self {
+            Self::Seconds(secs) => Datum::UInt64(secs),
+            Self::Undefined => Datum::Null,
+        }
     }
 }
 

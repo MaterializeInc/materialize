@@ -9,8 +9,7 @@
 
 //! Metrics shared by both compute and storage.
 
-use std::time::Duration;
-
+use mz_ore::cast::CastLossy;
 use mz_ore::metric;
 use mz_ore::metrics::{
     CounterVec, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVec, IntCounterVec, MetricsRegistry,
@@ -116,8 +115,8 @@ pub struct WallclockLagMetrics {
 
 impl WallclockLagMetrics {
     /// Observe a new wallclock lag measurement.
-    pub fn observe(&mut self, lag: Duration) {
-        let lag_secs = lag.as_secs_f32();
+    pub fn observe(&mut self, lag_secs: u64) {
+        let lag_secs = f32::cast_lossy(lag_secs);
 
         self.wallclock_lag_minmax.add_sample(lag_secs);
 

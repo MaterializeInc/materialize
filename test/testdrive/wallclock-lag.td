@@ -178,7 +178,7 @@ $ postgres-execute connection=mz_system
 ALTER SYSTEM SET wallclock_lag_histogram_period_interval = '1d'
 
 > CREATE TABLE tbl_1day (x int)
-> CREATE INDEX idx_1day ON tbl_1day (x)
+> CREATE INDEX idx_1day IN CLUSTER compute ON tbl_1day (x)
 > SELECT DISTINCT
     o.name,
     l.period_end - l.period_start,
@@ -194,7 +194,7 @@ $ postgres-execute connection=mz_system
 ALTER SYSTEM SET wallclock_lag_histogram_period_interval = '1h'
 
 > CREATE TABLE tbl_1hour (x int)
-> CREATE INDEX idx_1hour ON tbl_1day (x)
+> CREATE INDEX idx_1hour IN CLUSTER compute ON tbl_1day (x)
 > SELECT DISTINCT
     o.name,
     l.period_end - l.period_start,
@@ -205,3 +205,43 @@ ALTER SYSTEM SET wallclock_lag_histogram_period_interval = '1h'
   WHERE o.name LIKE '%_1hour'
 idx_1hour 01:00:00 true true
 tbl_1hour 01:00:00 true true
+
+# Test that lags of unreadable collections are NULL.
+
+> DROP CLUSTER storage CASCADE
+> DROP CLUSTER compute CASCADE
+> CREATE CLUSTER storage SIZE '1', REPLICATION FACTOR 0
+> CREATE CLUSTER compute SIZE '1'
+
+> CREATE SOURCE src IN CLUSTER storage FROM LOAD GENERATOR counter (UP TO 100)
+> CREATE INDEX idx IN CLUSTER compute ON src (counter)
+> CREATE MATERIALIZED VIEW mv IN CLUSTER compute AS SELECT * FROM src
+> CREATE SINK snk
+  IN CLUSTER storage
+  FROM mv
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink1-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
+
+> SELECT DISTINCT o.name, r.name, l.lag
+  FROM mz_internal.mz_wallclock_lag_history l
+  JOIN mz_objects o ON o.id = l.object_id
+  LEFT JOIN mz_cluster_replicas r ON r.id = l.replica_id
+  WHERE l.object_id LIKE 'u%' AND o.cluster_id IS NOT NULL
+idx           r1      <null>
+mv            r1      <null>
+mv            <null>  <null>
+snk           <null>  <null>
+src           <null>  <null>
+
+> SELECT DISTINCT o.name, l.lag_seconds
+  FROM mz_internal.mz_wallclock_global_lag_histogram l
+  JOIN mz_objects o ON o.id = l.object_id
+  WHERE l.object_id LIKE 'u%' AND o.cluster_id IS NOT NULL
+idx  <null>
+mv   <null>
+snk  <null>
+src  <null>
+
+> DROP CLUSTER storage CASCADE
+> DROP CLUSTER compute CASCADE

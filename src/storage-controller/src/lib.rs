@@ -47,7 +47,6 @@ use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
 use mz_persist_types::Codec64;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_proto::RustType;
-use mz_repr::adt::interval::Interval;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationVersion, Row, TimestampManipulation};
 use mz_storage_client::client::{
@@ -58,7 +57,7 @@ use mz_storage_client::client::{
 use mz_storage_client::controller::{
     BoxFuture, CollectionDescription, DataSource, ExportDescription, ExportState,
     IntrospectionType, MonotonicAppender, PersistEpoch, Response, StorageController,
-    StorageMetadata, StorageTxn, StorageWriteOp, WallclockLagHistogramPeriod,
+    StorageMetadata, StorageTxn, StorageWriteOp, WallclockLag, WallclockLagHistogramPeriod,
 };
 use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC,
@@ -3499,12 +3498,22 @@ where
 
     /// Refresh the wallclock lag introspection and metrics with the current lag values.
     ///
-    /// We measure the lag of write frontiers behind the wallclock time every second and track the
-    /// maximum over 60 measurements (i.e., one minute). Every minute, we emit a new lag event to
-    /// the `WallclockLagHistory` introspection with the current maximum.
+    /// This method produces wallclock lag metrics of two different shapes:
     ///
-    /// This method is invoked by `ComputeController::maintain`, which we expect to be called once
-    /// per second during normal operation.
+    /// * Histories: For each replica and each collection, we measure the lag of the write frontier
+    ///   behind the wallclock time every second. Every minute we emit the maximum lag observed
+    ///   over the last minute, together with the current time.
+    /// * Histograms: For each collection, we measure the lag of the write frontier behind
+    ///   wallclock time every second. Every minute we emit all lags observed over the last minute,
+    ///   together with the current histogram period.
+    ///
+    /// Histories are emitted to both Mz introspection and Prometheus, histograms only to
+    /// introspection. We treat lags of unreadable collections (i.e. collections that contain no
+    /// readable times) as undefined and set them to NULL in introspection and `u64::MAX` in
+    /// Prometheus.
+    ///
+    /// This method is invoked by `Controller::maintain`, which we expect to be called once per
+    /// second during normal operation.
     fn refresh_wallclock_lag(&mut self) {
         // Record lags to persist, if it's time.
         self.maybe_record_wallclock_lag();
@@ -3524,16 +3533,28 @@ where
                 continue;
             };
 
-            let lag = frontier_lag(&frontiers.write_frontier);
-            collection.wallclock_lag_max = std::cmp::max(collection.wallclock_lag_max, lag);
-            collection.wallclock_lag_metrics.observe(lag);
+            let collection_unreadable =
+                PartialOrder::less_equal(&frontiers.write_frontier, &frontiers.read_capabilities);
+            let lag = if collection_unreadable {
+                WallclockLag::Undefined
+            } else {
+                let lag = frontier_lag(&frontiers.write_frontier);
+                WallclockLag::Seconds(lag.as_secs())
+            };
+
+            collection.wallclock_lag_max = collection.wallclock_lag_max.max(lag);
+
+            // No way to specify values as undefined in Prometheus metrics, so we use the
+            // maximum value instead.
+            let secs = lag.unwrap_seconds_or(u64::MAX);
+            collection.wallclock_lag_metrics.observe(secs);
 
             if !ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION.get(self.config.config_set()) {
                 continue;
             }
 
             if let Some(stash) = &mut collection.wallclock_lag_histogram_stash {
-                let bucket = lag.as_secs().next_power_of_two();
+                let bucket = lag.map_seconds(|secs| secs.next_power_of_two());
 
                 let instance_id = match &collection.extra_state {
                     CollectionStateExtra::Ingestion(i) => Some(i.instance_id),
@@ -3593,12 +3614,11 @@ where
                 continue;
             };
 
-            let max_lag = std::mem::take(&mut collection.wallclock_lag_max);
-            let max_lag_us = i64::try_from(max_lag.as_micros()).expect("must fit");
+            let max_lag = std::mem::replace(&mut collection.wallclock_lag_max, WallclockLag::MIN);
             let row = Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::Null,
-                Datum::Interval(Interval::new(0, 0, max_lag_us)),
+                max_lag.into_interval_datum(),
                 Datum::TimestampTz(now_ts),
             ]);
             history_updates.push((row, Diff::ONE));
@@ -3613,7 +3633,7 @@ where
                     Datum::TimestampTz(period.start),
                     Datum::TimestampTz(period.end),
                     Datum::String(&id.to_string()),
-                    Datum::UInt64(lag),
+                    lag.into_uint64_datum(),
                 ]);
                 let labels = labels.iter().map(|(k, v)| (*k, Datum::String(v)));
                 packer.push_dict(labels);
@@ -3759,7 +3779,7 @@ struct CollectionState<T: TimelyTimestamp> {
     pub extra_state: CollectionStateExtra<T>,
 
     /// Maximum frontier wallclock lag since the last `WallclockLagHistory` introspection update.
-    wallclock_lag_max: Duration,
+    wallclock_lag_max: WallclockLag,
     /// Frontier wallclock lag measurements stashed until the next `WallclockLagHistogram`
     /// introspection update.
     ///
@@ -3770,7 +3790,7 @@ struct CollectionState<T: TimelyTimestamp> {
         BTreeMap<
             (
                 WallclockLagHistogramPeriod,
-                u64,
+                WallclockLag,
                 BTreeMap<&'static str, String>,
             ),
             Diff,
@@ -3799,7 +3819,7 @@ impl<T: TimelyTimestamp> CollectionState<T> {
             data_source,
             collection_metadata,
             extra_state,
-            wallclock_lag_max: Default::default(),
+            wallclock_lag_max: WallclockLag::MIN,
             wallclock_lag_histogram_stash,
             wallclock_lag_metrics,
         }
