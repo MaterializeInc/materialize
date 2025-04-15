@@ -82,7 +82,7 @@ class SqlServerCdcBase:
                 $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
                 ALTER SYSTEM SET enable_sql_server_source = true;
 
-                > DROP CONNECTION sql_server_password_{self.suffix};
+                > DROP CONNECTION sql_server_connection_{self.suffix};
                 > CREATE CONNECTION sql_server_connection2_{self.suffix} TO SQL SERVER (
                     HOST 'sql-server',
                     DATABASE test,
