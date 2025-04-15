@@ -438,6 +438,7 @@ mod bytes_container {
     pub struct BytesBatch {
         offsets: crate::row_spine::OffsetOptimized,
         storage: Region<u8>,
+        len: usize,
     }
 
     impl BytesBatch {
@@ -447,6 +448,7 @@ mod bytes_container {
             if self.storage.len() + slice.len() <= self.storage.capacity() {
                 self.storage.extend_from_slice(slice);
                 self.offsets.push(self.storage.len());
+                self.len += 1;
                 true
             } else {
                 false
@@ -457,8 +459,10 @@ mod bytes_container {
             let upper = self.offsets.index(index + 1);
             &self.storage[lower..upper]
         }
+        #[inline(always)]
         fn len(&self) -> usize {
-            self.offsets.len() - 1
+            debug_assert_eq!(self.len, self.offsets.len() - 1);
+            self.len
         }
 
         fn with_capacities(item_cap: usize, byte_cap: usize) -> Self {
@@ -468,6 +472,7 @@ mod bytes_container {
             Self {
                 offsets,
                 storage: Region::new_auto(byte_cap.next_power_of_two()),
+                len: 0,
             }
         }
     }
