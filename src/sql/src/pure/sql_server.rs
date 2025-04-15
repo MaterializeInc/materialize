@@ -98,6 +98,8 @@ pub(super) async fn purify_source_exports(
         }
     };
 
+    // TODO(sql_server2): Should we check if these have overlapping columns?
+    // What do our other sources do?
     let text_cols_map = map_column_refs(text_columns, SqlServerConfigOptionName::TextColumns)?;
     let excl_cols_map = map_column_refs(excl_columns, SqlServerConfigOptionName::ExcludeColumns)?;
 
@@ -144,6 +146,8 @@ pub(super) async fn purify_source_exports(
             if let Some(text_cols) = maybe_text_cols {
                 table.apply_text_columns(text_cols);
             }
+            // TODO(sql_server2): Should we prevent excluding all columns? What do our other
+            // sources do?
             if let Some(excl_cols) = maybe_excl_cols {
                 table.apply_excl_columns(excl_cols);
             }

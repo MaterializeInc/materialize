@@ -202,7 +202,7 @@ impl SqlServerColumnDesc {
         }
     }
 
-    /// Returns if this column can be replicated into Materialize.
+    /// Returns true if this column can be replicated into Materialize.
     pub fn is_supported(&self) -> bool {
         !matches!(
             self.decode_type,
