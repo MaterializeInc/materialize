@@ -17,7 +17,7 @@ use anyhow::{Error, anyhow};
 use async_trait::async_trait;
 use differential_dataflow::trace::ExertionLogic;
 use futures::future;
-use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
+use mz_cluster_client::client::{TimelyConfig, TryIntoTimelyConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::halt;
 use mz_service::client::{GenericClient, Partitionable, Partitioned};
@@ -105,11 +105,7 @@ where
         }
     }
 
-    async fn build(
-        &mut self,
-        mut config: TimelyConfig,
-        epoch: ClusterStartupEpoch,
-    ) -> Result<(), Error> {
+    async fn build(&mut self, config: TimelyConfig) -> Result<(), Error> {
         let workers = config.workers;
 
         // Check if we can reuse the existing timely instance.
@@ -121,10 +117,6 @@ where
         let mut timely_container = self.timely_container.lock().await;
         match &*timely_container {
             Some(existing) => {
-                // Ignore changes to `enable_create_sockets_v2`. Once the Timely processes are
-                // connected, we don't care which connection protocol was used.
-                config.enable_create_sockets_v2 = existing.config.enable_create_sockets_v2;
-
                 if config != existing.config {
                     info!(new = ?config, old = ?existing.config, "TimelyConfig mismatch");
                     halt!("new timely configuration does not match existing timely configuration");
@@ -134,7 +126,7 @@ where
             None => {
                 let timely = self
                     .cluster_spec
-                    .build_cluster(config, epoch, self.tokio_handle.clone())
+                    .build_cluster(config, self.tokio_handle.clone())
                     .await
                     .inspect_err(|e| {
                         warn!("timely initialization failed: {}", e.display_with_causes())
@@ -191,7 +183,7 @@ where
         // Changing this debug statement requires changing the replica-isolation test
         tracing::debug!("ClusterClient send={:?}", &cmd);
         match cmd.try_into_timely_config() {
-            Ok((config, epoch)) => self.build(config, epoch).await,
+            Ok((config, _epoch)) => self.build(config).await,
             Err(cmd) => self.inner.as_mut().expect("initialized").send(cmd).await,
         }
     }
@@ -236,7 +228,6 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
     async fn build_cluster(
         &self,
         config: TimelyConfig,
-        epoch: ClusterStartupEpoch,
         tokio_executor: Handle,
     ) -> Result<TimelyContainer<Self>, Error> {
         info!("Building timely container with config {config:?}");
@@ -263,10 +254,8 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
                 config.workers,
                 config.process,
                 config.addresses.clone(),
-                epoch,
                 refill,
                 GenericBuilder::ZeroCopyBinary,
-                config.enable_create_sockets_v2,
             )
             .await?
         } else {
@@ -274,10 +263,8 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
                 config.workers,
                 config.process,
                 config.addresses.clone(),
-                epoch,
                 refill,
                 GenericBuilder::ZeroCopy,
-                config.enable_create_sockets_v2,
             )
             .await?
         };
