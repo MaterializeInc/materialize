@@ -48,7 +48,8 @@ impl DatumVec {
     }
 
     /// Borrow an instance with a specific lifetime, and pre-populate with a `Row` with up to
-    /// `limit` elements.
+    /// `limit` elements. If `limit` is greater than the number of elements in `row`, the borrow
+    /// will contain all elements of `row`.
     pub fn borrow_with_limit<'a>(
         &'a mut self,
         row: &'a RowRef,

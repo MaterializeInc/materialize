@@ -367,6 +367,10 @@ where
     /// If `key` is set, this is a promise that `logic` will produce no results on
     /// records for which the key does not evaluate to the value. This is used to
     /// leap directly to exactly those records.
+    ///
+    /// The `max_demand` parameter limits the number of columns decoded from the
+    /// input. Only the first `max_demand` columns are decoded. Pass `usize::MAX` to
+    /// decode all columns.
     pub fn flat_map<D, I, L>(
         &self,
         key: Option<Row>,
@@ -597,6 +601,7 @@ where
                     panic!("The collection arranged by {:?} doesn't exist.", key)
                 });
                 if ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION.get(config_set) {
+                    // Decode all columns, pass max_demand as usize::MAX.
                     let (ok, err) = arranged.flat_map(None, usize::MAX, |borrow, t, r| {
                         Some((SharedRow::pack(borrow.iter()), t, r))
                     });
@@ -611,9 +616,8 @@ where
 
     /// Constructs and applies logic to elements of a collection and returns the results.
     ///
-    /// `constructor` takes a permutation and produces the logic to apply on elements. The logic
-    /// conceptually receives `(&Row, &Row)` pairs in the form of a slice. Only after borrowing
-    /// the elements and applying the permutation the datums will be in the expected order.
+    /// The function applies `logic` on elements. The logic conceptually receives
+    /// `(&Row, &Row)` pairs in the form of a datum vec in the expected order.
     ///
     /// If `key_val` is set, this is a promise that `logic` will produce no results on
     /// records for which the key does not evaluate to the value. This is used when we
@@ -621,6 +625,10 @@ where
     /// It is important that `logic` still guard against data that does not satisfy
     /// this constraint, as this method does not statically know that it will have
     /// that arrangement.
+    ///
+    /// The `max_demand` parameter limits the number of columns decoded from the
+    /// input. Only the first `max_demand` columns are decoded. Pass `usize::MAX` to
+    /// decode all columns.
     pub fn flat_map<D, I, L>(
         &self,
         key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,

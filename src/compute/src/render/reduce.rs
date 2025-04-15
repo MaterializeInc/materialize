@@ -90,12 +90,14 @@ where
             } = key_val_plan;
             let key_arity = key_plan.projection.len();
             let mut datums = DatumVec::new();
+
             // Determine the columns we'll need from the row.
             let mut demand = Vec::new();
             demand.extend(key_plan.demand());
             demand.extend(val_plan.demand());
             demand.sort();
             demand.dedup();
+
             // remap column references to the subset we use.
             let mut demand_map = BTreeMap::new();
             for column in demand.iter() {
@@ -106,57 +108,49 @@ where
             val_plan.permute_fn(|c| demand_map[&c], demand_map_len);
             let max_demand = demand.iter().max().map(|x| *x + 1).unwrap_or(0);
             let skips = mz_compute_types::plan::reduce::convert_indexes_to_skips(demand);
-            let (key_val_input, err_input): (
-                timely::dataflow::Stream<_, (Result<(Row, Row), DataflowError>, _, _)>,
-                _,
-            ) = input
-                .enter_region(inner)
-                .flat_map(input_key.map(|k| (k, None)), max_demand, {
-                    move |row_datums, time, diff| {
-                        let binding = SharedRow::get();
-                        let mut row_builder = binding.borrow_mut();
-                        let temp_storage = RowArena::new();
 
-                        let mut row_iter = row_datums.drain(..);
-                        let mut datums_local = datums.borrow();
-                        // Unpack only the demanded columns.
-                        for skip in skips.iter() {
-                            datums_local.push(row_iter.nth(*skip).unwrap());
-                        }
+            let (key_val_input, err_input) = input.enter_region(inner).flat_map(
+                input_key.map(|k| (k, None)),
+                max_demand,
+                move |row_datums, time, diff| {
+                    let binding = SharedRow::get();
+                    let mut row_builder = binding.borrow_mut();
+                    let temp_storage = RowArena::new();
 
-                        // Evaluate the key expressions.
-                        let key = match key_plan.evaluate_into(
-                            &mut datums_local,
-                            &temp_storage,
-                            &mut row_builder,
-                        ) {
-                            Err(e) => {
-                                return Some((
-                                    Err(DataflowError::from(e)),
-                                    time.clone(),
-                                    diff.clone(),
-                                ));
-                            }
-                            Ok(key) => key.expect("Row expected as no predicate was used").clone(),
-                        };
-                        // Evaluate the value expressions.
-                        // The prior evaluation may have left additional columns we should delete.
-                        datums_local.truncate(skips.len());
-                        let val = match val_plan.evaluate_iter(&mut datums_local, &temp_storage) {
-                            Err(e) => {
-                                return Some((
-                                    Err(DataflowError::from(e)),
-                                    time.clone(),
-                                    diff.clone(),
-                                ));
-                            }
-                            Ok(val) => val.expect("Row expected as no predicate was used"),
-                        };
-                        row_builder.packer().extend(val);
-                        let row = row_builder.clone();
-                        Some((Ok((key, row)), time.clone(), diff.clone()))
+                    let mut row_iter = row_datums.drain(..);
+                    let mut datums_local = datums.borrow();
+                    // Unpack only the demanded columns.
+                    for skip in skips.iter() {
+                        datums_local.push(row_iter.nth(*skip).unwrap());
                     }
-                });
+
+                    // Evaluate the key expressions.
+                    let key =
+                        key_plan.evaluate_into(&mut datums_local, &temp_storage, &mut row_builder);
+                    let key = match key {
+                        Err(e) => {
+                            return Some((Err(DataflowError::from(e)), time.clone(), diff.clone()));
+                        }
+                        Ok(Some(key)) => key.clone(),
+                        Ok(None) => panic!("Row expected as no predicate was used"),
+                    };
+
+                    // Evaluate the value expressions.
+                    // The prior evaluation may have left additional columns we should delete.
+                    datums_local.truncate(skips.len());
+                    let val =
+                        val_plan.evaluate_into(&mut datums_local, &temp_storage, &mut row_builder);
+                    let val = match val {
+                        Err(e) => {
+                            return Some((Err(DataflowError::from(e)), time.clone(), diff.clone()));
+                        }
+                        Ok(Some(val)) => val.clone(),
+                        Ok(None) => panic!("Row expected as no predicate was used"),
+                    };
+
+                    Some((Ok((key, val)), time.clone(), diff.clone()))
+                },
+            );
 
             // Demux out the potential errors from key and value selector evaluation.
             type CB<T> = ConsolidatingContainerBuilder<T>;
