@@ -59,7 +59,7 @@ if find cores -name 'core.*' | grep -q .; then
 fi
 
 echo "Downing docker containers"
-run down --volumes
+run down --volumes || true  # Ignore failures, we still want the rest of the cleanup
 
 echo "Finding core files"
 find cores -name 'core.*' | while read -r core; do
