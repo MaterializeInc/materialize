@@ -54,8 +54,6 @@ name                         type
 ---------------------------------------
 sql_server_test_connection   sql-server
 
-> SHOW CONNECTIONS;
-sql_server_test_connection sql-server ""
 
 # Create a SQL Server Source.
 

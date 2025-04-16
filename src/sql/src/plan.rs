@@ -117,7 +117,7 @@ pub use scope::Scope;
 pub use side_effecting_func::SideEffectingFunc;
 pub use statement::ddl::{
     AlterSourceAddSubsourceOptionExtracted, MySqlConfigOptionExtracted, PgConfigOptionExtracted,
-    PlannedAlterRoleOption, PlannedRoleVariable,
+    PlannedAlterRoleOption, PlannedRoleVariable, SqlServerConfigOptionExtracted,
 };
 pub use statement::{
     StatementClassification, StatementContext, StatementDesc, describe, plan, plan_copy_from,
