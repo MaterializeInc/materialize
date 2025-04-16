@@ -440,8 +440,6 @@ For more details, see [the Kafka documentation](https://kafka.apache.org/documen
 
 ### Partitioning
 
-{{< private-preview />}}
-
 By default, Materialize assigns a partition to each message using the following
 strategy:
 
