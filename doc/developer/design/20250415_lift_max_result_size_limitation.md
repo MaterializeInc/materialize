@@ -17,21 +17,26 @@ In practice the above make it so we currently limit the size of results using a
 `max_result_size` parameter, and some larger customers are chafing against
 that.
 
-The overall goal of this design is to lift this limitation, but there is
-nuance, especially when it comes to different query modifiers. For example,
-queries with a ORDER BY and/or LIMIT clause require results from the cluster to
-be combined somewhere, to impose the required order. Currently, this is
-happening in `environmentd`, but could happen on the cluster side. We think it
-is easier to lift result-size limitations for queries that don't require
-post-processing. We should be able to just "stream them through", without
-materializing in `environmentd`.
+Currently, we always materialize the results of a query in `environmentd`
+memory before sending them on to the client. This is not required for all kinds
+of queries, though: only queries that require _post processing_ need
+materialization while queries that don't need post processing could be streamed
+through to the client. Today, queries that need an ordering established on the
+whole result require post processing, which are queries that have at least one
+of ORDER BY, LIMIT, or OFFSET. This is handled by `RowSetFinishing` in the
+code.
 
-Below, we will refer to _streamable queries_ and _non-streamable queries_ to
-distinguish the cases mentioned above.
+Below, we will use _streamable queries_ for queries that don't require post
+processing, and _non-streamable queries_ for those that do require it.
+
+We think it is easier to lift the result size limitation for streamable
+queries, so want to approach that first, but there are ways we can lift the
+limitation for non-streamable queries as well, for example by moving the post
+processing to the cluster side.
 
 ## Technical Context
 
-There are currently two ways of getting a query result and sending it from the
+There are currently two ways of getting query results and sending them from the
 cluster back to `environmentd`:
 
 1. Extracting from an arrangement (the data structure backing indexes)
@@ -90,13 +95,13 @@ The non-goals from above:
 - Lift result-size limitation for non-streamable queries.
 - Change how results are extracted from "the dataflows" on the cluster side.
 
-These will require changing where and how we apply, among other things, ORDER
-BY and LIMIT clauses. Initially, I would think we want to apply them on the
-cluster side but that requires changing how we extract results. That is, we
-shouldn't extract results from an index anymore but instead install a dataflow
-fragment that does the extraction and applies the ORDER BY, for example by
-shipping all results to one worker before shipping results back to
-`environmentd`, possible also via the persist blob store.
+These will require changing where and how we apply post processing. We would
+want to apply it on the cluster side but that requires changing how we extract
+results. That is, we shouldn't extract results from an index anymore but
+instead install a dataflow fragment that does the extraction and applies the
+post processing, for example by shipping all results to one worker before
+shipping results back to `environmentd`, possible also via the persist blob
+store.
 
 ## Alternatives
 
