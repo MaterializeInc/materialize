@@ -11,12 +11,20 @@ rows:
     - Defaults to using Materialize Operator v25.1.7 (via
     `terraform-helm-materialize` v0.1.12).
 
-      Versions v0.3.0 defaulted to Materialize Operator v25.1.6 which
+      Versions v0.3.0-v0.3.3 defaulted to Materialize Operator v25.1.6 which
       used an incorrect version of the `orchestratord`).
 
 - "Terraform version": |
-    [v0.3.0](https://github.com/MaterializeInc/terraform-google-materialize/releases/tag/v0.3.0)
+    [v0.3.1](https://github.com/MaterializeInc/terraform-google-materialize/releases/tag/v0.3.1)
 
+  "Notable changes": |
+    - Added configuration options ([`storage_bucket_versioning`](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#input_storage_bucket_versioning) and
+    [`storage_bucket_version_ttl`](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#input_storage_bucket_version_ttl))
+    for storage bucket versioning. By default, versioning is disabled (i.e.,
+    `storage_bucket_versioning` is set to `false`).
+
+- "Terraform version": |
+    [v0.3.0](https://github.com/MaterializeInc/terraform-google-materialize/releases/tag/v0.3.0)
   "Notable changes": |
 
     - By default, deploys [`cert-manager`](https://cert-manager.io/docs/) and a
