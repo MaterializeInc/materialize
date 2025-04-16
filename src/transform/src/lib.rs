@@ -329,6 +329,10 @@ where
         }
         Ok(result) => result.map_err(|e| e),
         Err(panic) => {
+            // A panic during optimization is always a bug; log an error so we learn about it.
+            // TODO(teskje): collect and log a backtrace from the panic site
+            tracing::error!("caught a panic during query optimization: {panic}");
+
             let msg = format!("unexpected panic during query optimization: {panic}");
             Err(TransformError::Internal(msg).into())
         }
