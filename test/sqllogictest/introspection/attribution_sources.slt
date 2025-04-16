@@ -204,7 +204,7 @@ SELECT mlm.global_id AS global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 
              mlm.operator_id_start <= megsa.region_id AND megsa.region_id < mlm.operator_id_end)
 ORDER BY mlm.global_id, lir_id DESC;
 ----
-u7  2  NULL  TopK::Basic␠1  8  7  3584  15.000
+u7  2  NULL  TopK::Basic␠1  8  7  3808  15.000
 u7  1  2  ␠␠Get::PassArrangements␠u6  NULL  NULL  NULL  NULL
 u8  4  NULL  Arrange␠3  NULL  NULL  NULL  NULL
 u8  3  4  ␠␠Get::PassArrangements␠u7  NULL  NULL  NULL  NULL
