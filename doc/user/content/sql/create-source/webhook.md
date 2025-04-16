@@ -16,11 +16,23 @@ Webhook sources expose a [public URL](#webhook-url) that allows your application
 
 ## Syntax
 
-{{< diagram "create-source-webhook.svg" >}}
+```mzsql
+CREATE SOURCE [IF NOT EXISTS] <src_name>
+[ IN CLUSTER <cluster_name> ]
+FROM WEBHOOK
+  BODY FORMAT <TEXT | JSON [ARRAY] | BYTES>
+  [ INCLUDE HEADER <header_name> AS <column_alias> [BYTES]  |
+    INCLUDE HEADERS [ ( [NOT] <header_name> [, [NOT] <header_name> ... ] ) ]
+  ][...]
+  [ CHECK (
+      [ WITH ( <BODY|HEADERS|SECRET <secret_name>> [AS <alias>] [BYTES] [, ...])]
+      <check_expression>
+    )
+  ]
+```
+
 
 ### `webhook_check_option`
-
-{{< diagram "webhook-check-option.svg" >}}
 
 Field                            | Use
 ---------------------------------|--------------------------

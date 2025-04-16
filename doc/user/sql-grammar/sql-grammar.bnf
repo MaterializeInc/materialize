@@ -238,24 +238,6 @@ create_source_mysql ::=
   )
   ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
   with_options?
-create_source_webhook ::=
-  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
-  'IN CLUSTER' cluster_name
-  'FROM' 'WEBHOOK'
-  'BODY FORMAT' ('TEXT' | 'JSON' ('ARRAY')? | 'BYTES')
-  (
-    ('INCLUDE HEADER'  header_name 'AS' column_alias ('BYTES')? )? |
-    ('INCLUDE HEADERS' ( '(' ('NOT')? header_name ( ',' ('NOT')? header_name )* ')' )?)?
-  )*
-  ('CHECK'
-    '('
-      ('WITH' '(' ( (webhook_check_option) ( ( ',' webhook_check_option ) )* )? ')' )?
-      check_expression
-    ')'
-  )?
-webhook_body_format ::= 'TEXT' | 'JSON' | 'BYTES'
-webhook_check_option ::=
-  ('BODY' | 'HEADERS' | 'SECRET' secret_name) ('AS' alias)? ('BYTES')?
 create_type ::=
     'CREATE' 'TYPE' type_name 'AS' '(' ((field_name field_type) (',' field_name field_type)*) ')' |
     'CREATE' 'TYPE' type_name 'AS' ( 'LIST' | 'MAP' ) '(' ( property '=' val ) ( ( ',' property '=' val ) )* ')'
