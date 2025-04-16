@@ -29,7 +29,7 @@ use mz_ore::assert_none;
 use mz_ore::{id_gen::IdGen, stack::RecursionLimitError};
 use mz_repr::optimize::OptimizerFeatures;
 
-use crate::TransformCtx;
+use crate::{TransformCtx, catch_unwind_optimize};
 
 pub use renumbering::renumber_bindings;
 
@@ -38,7 +38,7 @@ pub fn normalize_lets(
     expr: &mut MirRelationExpr,
     features: &OptimizerFeatures,
 ) -> Result<(), crate::TransformError> {
-    NormalizeLets::new(false).action(expr, features)
+    catch_unwind_optimize(|| NormalizeLets::new(false).action(expr, features))
 }
 
 /// Install replace certain `Get` operators with their `Let` value.
