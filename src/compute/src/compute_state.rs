@@ -180,6 +180,8 @@ pub struct ComputeState {
     /// replica can drop diffs associated with timestamps beyond the replica expiration.
     /// The replica will panic if such dataflows are not dropped before the replica has expired.
     pub replica_expiration: Antichain<Timestamp>,
+
+    last_command: Option<ComputeCommand>,
 }
 
 impl ComputeState {
@@ -224,6 +226,7 @@ impl ComputeState {
             server_maintenance_interval: Duration::ZERO,
             init_system_time: mz_ore::now::SYSTEM_TIME(),
             replica_expiration: Antichain::default(),
+            last_command: None,
         }
     }
 
@@ -396,6 +399,22 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         let cmd2 = mz_ore::panic::catch_unwind_str(|| cmd.clone()).unwrap_or_else(|panic| {
             error!("allocation error cloning compute command: {panic}");
+
+            let bytes = unsafe {
+                let ptr = &cmd as *const _ as *const u8;
+                std::slice::from_raw_parts(ptr, std::mem::size_of_val(&cmd))
+            };
+            error!("  cmd[raw]={bytes:02x?}");
+
+            if let Some(last) = self.compute_state.last_command.take() {
+                error!("  last={last:?}");
+                let bytes = unsafe {
+                    let ptr = &last as *const _ as *const u8;
+                    std::slice::from_raw_parts(ptr, std::mem::size_of_val(&last))
+                };
+                error!("  last[raw]={bytes:02x?}");
+            }
+
             match &cmd {
                 CreateTimely { config, epoch } => {
                     error!("  type=CreateTimely");
@@ -498,6 +517,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             .handle_command_duration_seconds
             .for_command(&cmd)
             .start_timer();
+
+        self.compute_state.last_command = Some(cmd.clone());
 
         match cmd {
             CreateTimely { .. } => panic!("CreateTimely must be captured before"),
