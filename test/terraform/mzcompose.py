@@ -35,6 +35,10 @@ SERVICES = [
     Testdrive(),  # overridden below
 ]
 
+TD_CMD = [
+    "--var=default-replica-size=25cc",
+    "--var=default-storage-size=25cc",
+]
 
 COMPATIBLE_TESTDRIVE_FILES = [
     "array.td",
@@ -80,6 +84,7 @@ COMPATIBLE_TESTDRIVE_FILES = [
     "joins.td",
     "jsonb.td",
     "list.td",
+    "load-generator-key-value.td",
     "logging.td",
     "map.td",
     "multijoins.td",
@@ -88,6 +93,7 @@ COMPATIBLE_TESTDRIVE_FILES = [
     "oid.td",
     "orms.td",
     "pg-catalog.td",
+    "quickstart.td",
     "runtime-errors.td",
     "search_path.td",
     "self-test.td",
@@ -95,8 +101,10 @@ COMPATIBLE_TESTDRIVE_FILES = [
     "subquery-scalar-errors.td",
     "system-functions.td",
     "test-skip-if.td",
+    "tpch.td",
     "type_char_quoted.td",
     "version.td",
+    "webhook.td",
 ]
 
 
@@ -116,7 +124,7 @@ def testdrive(no_reset: bool) -> Testdrive:
     return Testdrive(
         materialize_url="postgres://materialize@127.0.0.1:6875/materialize",
         materialize_url_internal="postgres://mz_system:materialize@127.0.0.1:6877/materialize",
-        materialize_use_https=True,
+        materialize_use_https=False,
         no_consistency_checks=True,
         network_mode="host",
         volume_workdir="../testdrive:/workdir",
@@ -684,7 +692,7 @@ def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                     ), f"Actual version: {version}, expected to contain {helm_chart_version}"
 
             if args.run_testdrive_files:
-                c.run_testdrive_files(*args.files)
+                c.run_testdrive_files(*TD_CMD, *args.files)
     finally:
         aws.cleanup()
 
@@ -757,7 +765,7 @@ def workflow_aws_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None
                         f", helm chart: {helm_chart_version})"
                     ), f"Actual version: {version}, expected to contain {helm_chart_version}"
 
-            c.run_testdrive_files(*args.files)
+            c.run_testdrive_files(*TD_CMD, *args.files)
     finally:
         aws.cleanup()
 
@@ -1283,7 +1291,7 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
             Testdrive(
                 materialize_url="postgres://materialize@127.0.0.1:6875/materialize",
                 materialize_url_internal="postgres://mz_system:materialize@127.0.0.1:6877/materialize",
-                materialize_use_https=True,
+                materialize_use_https=False,
                 no_consistency_checks=True,
                 network_mode="host",
                 volume_workdir="../testdrive:/workdir",
@@ -1323,7 +1331,7 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                     ), f"Actual version: {version}, expected to contain {helm_chart_version}"
 
             if args.run_testdrive_files:
-                c.run_testdrive_files(*args.files)
+                c.run_testdrive_files(*TD_CMD, *args.files)
     finally:
         if environmentd_port_forward_process:
             os.killpg(os.getpgid(environmentd_port_forward_process.pid), signal.SIGTERM)
@@ -1782,7 +1790,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
             Testdrive(
                 materialize_url="postgres://materialize@127.0.0.1:6875/materialize",
                 materialize_url_internal="postgres://mz_system:materialize@127.0.0.1:6877/materialize",
-                materialize_use_https=True,
+                materialize_use_https=False,
                 no_consistency_checks=True,
                 network_mode="host",
                 volume_workdir="../testdrive:/workdir",
@@ -1822,7 +1830,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                     ), f"Actual version: {version}, expected to contain {helm_chart_version}"
 
             if args.run_testdrive_files:
-                c.run_testdrive_files(*args.files)
+                c.run_testdrive_files(*TD_CMD, *args.files)
     finally:
         if environmentd_port_forward_process:
             os.killpg(os.getpgid(environmentd_port_forward_process.pid), signal.SIGTERM)
