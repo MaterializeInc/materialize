@@ -1517,11 +1517,17 @@ impl<'a> Transaction<'a> {
     /// Updates all [`Role`]s with ids matching the keys of `roles` in the transaction, to the
     /// corresponding value in `roles`.
     ///
+    /// This function does *not* write role_authentication information to the catalog.
+    /// It is purely for updating the role itself.
+    ///
     /// Returns an error if any id in `roles` is not found.
     ///
     /// NOTE: On error, there still may be some roles updated in the transaction. It is
     /// up to the caller to either abort the transaction or commit.
-    pub fn update_roles(&mut self, roles: BTreeMap<RoleId, Role>) -> Result<(), CatalogError> {
+    pub fn update_roles_without_auth(
+        &mut self,
+        roles: BTreeMap<RoleId, Role>,
+    ) -> Result<(), CatalogError> {
         if roles.is_empty() {
             return Ok(());
         }
