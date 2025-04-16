@@ -23,7 +23,9 @@ use mz_repr::{Diff, GlobalId, Row, RowArena};
 use mz_sql_server_util::cdc::{CdcEvent, Lsn, Operation as CdcOperation};
 use mz_storage_types::errors::{DataflowError, DecodeError, DecodeErrorKind};
 use mz_storage_types::sources::SqlServerSource;
-use mz_storage_types::sources::sql_server::{CDC_POLL_INTERVAL, SNAPSHOT_MAX_LSN_WAIT};
+use mz_storage_types::sources::sql_server::{
+    CDC_POLL_INTERVAL, SNAPSHOT_MAX_LSN_WAIT, SNAPSHOT_STATS_GRANULARITY,
+};
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
@@ -38,7 +40,9 @@ use crate::source::RawSourceCreationConfig;
 use crate::source::sql_server::{
     DefiniteError, ReplicationError, SourceOutputInfo, TransientError,
 };
-use crate::source::types::{SignaledFuture, SourceMessage, StackedCollection};
+use crate::source::types::{
+    ProgressStatisticsUpdate, SignaledFuture, SourceMessage, StackedCollection,
+};
 
 /// Used as a partition ID to determine the worker that is responsible for
 /// reading data from SQL Server.
@@ -56,6 +60,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
     StackedCollection<G, (u64, Result<SourceMessage, DataflowError>)>,
     TimelyStream<G, Infallible>,
     TimelyStream<G, ReplicationError>,
+    TimelyStream<G, ProgressStatisticsUpdate>,
     PressOnDropButton,
 ) {
     let op_name = format!("SqlServerReplicationReader({})", config.id);
@@ -63,6 +68,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 
     let (data_output, data_stream) = builder.new_output::<AccountedStackBuilder<_>>();
     let (_upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (stats_output, stats_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     // Captures DefiniteErrors that affect the entire source, including all outputs
     let (definite_error_handle, definite_errors) =
@@ -71,8 +77,12 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
     let (button, transient_errors) = builder.build_fallible(move |caps| {
         let busy_signal = Arc::clone(&config.busy_signal);
         Box::pin(SignaledFuture::new(busy_signal, async move {
-            let [data_cap_set, upper_cap_set, definite_error_cap_set]: &mut [_; 3] =
-                caps.try_into().unwrap();
+            let [
+                data_cap_set,
+                upper_cap_set,
+                stats_cap,
+                definite_error_cap_set,
+            ]: &mut [_; 4] = caps.try_into().unwrap();
 
             // TODO(sql_server1): Run ingestions across multiple workers.
             if !config.responsible_for(REPL_READER) {
@@ -125,14 +135,44 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 
             // Snapshot any instances that require it.
             let snapshot_lsn = {
-                tracing::info!(?needs_snapshot, "starting snapshot");
-                let (snapshot_lsn, snapshot_streams) =
+                // Small helper closure.
+                let emit_stats = |cap, known: usize, total: usize| {
+                    let update = ProgressStatisticsUpdate::Snapshot {
+                        records_known: u64::cast_from(known),
+                        records_staged: u64::cast_from(total),
+                    };
+                    tracing::debug!(?config.id, %known, %total, "snapshot progress");
+                    stats_output.give(cap, update);
+                };
+
+                tracing::debug!(?config.id, ?needs_snapshot, "starting snapshot");
+                // Eagerly emit an event if we have tables to snapshot.
+                if !needs_snapshot.is_empty() {
+                    emit_stats(&stats_cap[0], 0, 0);
+                }
+
+                let (snapshot_lsn, snapshot_stats, snapshot_streams) =
                     cdc_handle.snapshot(Some(needs_snapshot)).await?;
                 let snapshot_cap = data_cap_set.delayed(&snapshot_lsn);
 
+                // As we stream rows for the snapshot we'll track the total we've seen.
+                let mut records_total: usize = 0;
+                let records_known = snapshot_stats.values().sum();
+                let update_granularity =
+                    SNAPSHOT_STATS_GRANULARITY.handle(config.config.config_set());
+                if !snapshot_stats.is_empty() {
+                    emit_stats(&stats_cap[0], records_known, 0);
+                }
+
+                // Begin streaming our snapshots!
                 let mut snapshot_streams = std::pin::pin!(snapshot_streams);
                 while let Some((capture_instance, data)) = snapshot_streams.next().await {
                     let sql_server_row = data.map_err(TransientError::from)?;
+                    records_total = records_total.saturating_add(1);
+
+                    if records_total % update_granularity.get() == 0 {
+                        emit_stats(&stats_cap[0], records_known, records_total);
+                    }
 
                     // Decode the SQL Server row into an MZ one.
                     let (partition_idx, decoder) =
@@ -169,6 +209,13 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                         .await;
                 }
 
+                mz_ore::soft_assert_eq_or_log!(
+                    records_known,
+                    records_total,
+                    "snapshot size did not match total records received",
+                );
+                emit_stats(&stats_cap[0], records_known, records_total);
+
                 snapshot_lsn
             };
 
@@ -198,15 +245,18 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                 .into_stream();
             let mut cdc_stream = std::pin::pin!(cdc_stream);
 
+            // TODO(sql_server2): We should emit `ProgressStatisticsUpdate::SteadyState` messages
+            // here, when we receive progress events. What stops us from doing this now is our
+            // 10-byte LSN doesn't fit into the 8-byte integer that the progress event uses.
             while let Some(event) = cdc_stream.next().await {
                 let event = event.map_err(TransientError::from)?;
-                tracing::debug!(?event, "got replication event");
+                tracing::trace!(?config.id, ?event, "got replication event");
 
                 let (capture_instance, commit_lsn, changes) = match event {
                     // We've received all of the changes up-to this LSN, so
                     // downgrade our capability.
                     CdcEvent::Progress { next_lsn } => {
-                        tracing::debug!(?next_lsn, "got a closed lsn");
+                        tracing::debug!(?config.id, ?next_lsn, "got a closed lsn");
                         data_cap_set.downgrade(Antichain::from_elem(next_lsn));
                         upper_cap_set.downgrade(Antichain::from_elem(next_lsn));
                         continue;
@@ -279,12 +329,13 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
         }))
     });
 
-    let errors = definite_errors.concat(&transient_errors.map(ReplicationError::Transient));
+    let error_stream = definite_errors.concat(&transient_errors.map(ReplicationError::Transient));
 
     (
         data_stream.as_collection(),
         upper_stream,
-        errors,
+        error_stream,
+        stats_stream,
         button.press_on_drop(),
     )
 }

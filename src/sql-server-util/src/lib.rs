@@ -568,9 +568,7 @@ impl Connection {
 
                 let mut results = result.into_results().await.context("into results")?;
                 if results.is_empty() {
-                    Err(SqlServerError::InvariantViolated(
-                        "got empty response".into(),
-                    ))
+                    Ok((Response::Rows(smallvec![]), None))
                 } else if results.len() == 1 {
                     // TODO(sql_server3): Don't use `into_results()` above, instead directly
                     // push onto a SmallVec to avoid the heap allocations.

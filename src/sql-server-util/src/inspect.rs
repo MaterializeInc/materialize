@@ -11,6 +11,7 @@
 
 use futures::Stream;
 use itertools::Itertools;
+use mz_ore::cast::CastFrom;
 use smallvec::SmallVec;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -108,6 +109,99 @@ pub fn get_changes_asc(
             &end_lsn.as_bytes().as_slice(),
         ],
     )
+}
+
+/// Cleans up the change table associated with the specified `capture_instance` by
+/// deleting all entries with a `start_lsn` less than `low_water_mark`.
+///
+/// See: <https://learn.microsoft.com/en-us/sql/relational-databases/system-stored-procedures/sys-sp-cdc-cleanup-change-table-transact-sql?view=sql-server-ver16>.
+pub async fn cleanup_change_table(
+    client: &mut Client,
+    capture_instance: &str,
+    low_water_mark: &Lsn,
+    max_deletes: u32,
+) -> Result<(), SqlServerError> {
+    static GET_LSN_QUERY: &str =
+        "SELECT MAX(start_lsn) FROM cdc.lsn_time_mapping WHERE start_lsn <= @P1";
+    static CLEANUP_QUERY: &str = "
+DECLARE @mz_cleanup_status_bit BIT;
+SET @mz_cleanup_status_bit = 0;
+EXEC sys.sp_cdc_cleanup_change_table
+    @capture_instance = @P1,
+    @low_water_mark = @P2,
+    @threshold = @P3,
+    @fCleanupFailed = @mz_cleanup_status_bit OUTPUT;
+SELECT @mz_cleanup_status_bit;
+    ";
+
+    let max_deletes = i64::cast_from(max_deletes);
+
+    // First we need to get a valid LSN as our low watermark. If we try to cleanup
+    // a change table with an LSN that doesn't exist in the `cdc.lsn_time_mapping`
+    // table we'll get an error code `22964`.
+    let result = client
+        .query(GET_LSN_QUERY, &[&low_water_mark.as_bytes().as_slice()])
+        .await?;
+    let low_water_mark_to_use = match &result[..] {
+        [row] => row
+            .try_get::<&[u8], _>(0)?
+            .ok_or_else(|| SqlServerError::InvalidData {
+                column_name: "mz_cleanup_status_bit".to_string(),
+                error: "expected a bool, found NULL".to_string(),
+            })?,
+        other => Err(SqlServerError::ProgrammingError(format!(
+            "expected one row for low water mark, found {other:?}"
+        )))?,
+    };
+
+    // Once we get a valid LSN that is less than or equal to the provided watermark
+    // we can clean up the specified change table!
+    let result = client
+        .query(
+            CLEANUP_QUERY,
+            &[&capture_instance, &low_water_mark_to_use, &max_deletes],
+        )
+        .await;
+
+    let rows = match result {
+        Ok(rows) => rows,
+        Err(SqlServerError::SqlServer(e)) => {
+            // See these remarks from the SQL Server Documentation.
+            //
+            // <https://learn.microsoft.com/en-us/sql/relational-databases/system-stored-procedures/sys-sp-cdc-cleanup-change-table-transact-sql?view=sql-server-ver16#remarks>.
+            let already_cleaned_up = e.code().map(|code| code == 22957).unwrap_or(false);
+
+            if already_cleaned_up {
+                return Ok(());
+            } else {
+                return Err(SqlServerError::SqlServer(e));
+            }
+        }
+        Err(other) => return Err(other),
+    };
+
+    match &rows[..] {
+        [row] => {
+            let failure =
+                row.try_get::<bool, _>(0)?
+                    .ok_or_else(|| SqlServerError::InvalidData {
+                        column_name: "mz_cleanup_status_bit".to_string(),
+                        error: "expected a bool, found NULL".to_string(),
+                    })?;
+
+            if failure {
+                Err(super::cdc::CdcError::CleanupFailed {
+                    capture_instance: capture_instance.to_string(),
+                    low_water_mark: *low_water_mark,
+                })?
+            } else {
+                Ok(())
+            }
+        }
+        other => Err(SqlServerError::ProgrammingError(format!(
+            "expected one status row, found {other:?}"
+        ))),
+    }
 }
 
 /// Returns the `(capture_instance, schema_name, table_name)` for the tables
@@ -268,6 +362,43 @@ JOIN cdc.change_tables ch ON t.object_id = ch.source_object_id
         .collect::<Result<_, _>>()?;
 
     Ok(tables)
+}
+
+/// Return a [`Stream`] that is the entire snapshot of the specified table.
+pub fn snapshot(
+    client: &mut Client,
+    schema: &str,
+    table: &str,
+) -> impl Stream<Item = Result<tiberius::Row, SqlServerError>> {
+    let query = format!("SELECT * FROM {schema}.{table};");
+    client.query_streaming(query, &[])
+}
+
+/// Returns the total number of rows present in the specified table.
+pub async fn snapshot_size(
+    client: &mut Client,
+    schema: &str,
+    table: &str,
+) -> Result<usize, SqlServerError> {
+    let query = format!("SELECT COUNT(*) FROM {schema}.{table};");
+    let result = client.query(query, &[]).await?;
+
+    match &result[..] {
+        [row] => match row.try_get::<i32, _>(0)? {
+            Some(count @ 0..) => Ok(usize::try_from(count).expect("known to fit")),
+            Some(negative) => Err(SqlServerError::InvalidData {
+                column_name: "count".to_string(),
+                error: format!("found negative count: {negative}"),
+            }),
+            None => Err(SqlServerError::InvalidData {
+                column_name: "count".to_string(),
+                error: "expected a value found NULL".to_string(),
+            }),
+        },
+        other => Err(SqlServerError::InvariantViolated(format!(
+            "expected one row, got {other:?}"
+        ))),
+    }
 }
 
 /// Helper function to parse an expected result from a "system" query.

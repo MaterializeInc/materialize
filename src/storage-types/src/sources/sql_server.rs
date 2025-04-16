@@ -41,10 +41,39 @@ pub const SNAPSHOT_MAX_LSN_WAIT: Config<Duration> = Config::new(
     CDC to be fully enabled) before taking an initial snapshot.",
 );
 
+pub const SNAPSHOT_STATS_GRANULARITY: Config<usize> = Config::new(
+    "sql_server_snapshot_stats_granularity",
+    1000,
+    "Emit a progress update every X events when snapshotting.",
+);
+
 pub const CDC_POLL_INTERVAL: Config<Duration> = Config::new(
     "sql_server_cdc_poll_interval",
     Duration::from_millis(500),
     "Interval at which we'll poll the upstream SQL Server instance to discover new changes.",
+);
+
+pub const CDC_CLEANUP_CHANGE_TABLE: Config<bool> = Config::new(
+    "sql_server_cdc_cleanup_change_table",
+    true,
+    "When enabled we'll notify SQL Server that it can cleanup the change tables \
+    as the source makes progress and commits data.",
+);
+
+/// Maximum number of deletes that we'll make from a single SQL Server change table.
+///
+/// See: <https://learn.microsoft.com/en-us/sql/relational-databases/system-stored-procedures/sys-sp-cdc-cleanup-change-table-transact-sql?view=sql-server-ver16>.
+pub const CDC_CLEANUP_CHANGE_TABLE_MAX_DELETES: Config<u32> = Config::new(
+    "sql_server_cdc_cleanup_change_table_max_deletes",
+    // This is the default documented by SQL Server.
+    5000,
+    "Maximum number of entries that can be deleted by using a single statement.",
+);
+
+pub const OFFSET_KNOWN_INTERVAL: Config<Duration> = Config::new(
+    "sql_server_offset_known_interval",
+    Duration::from_secs(10),
+    "Interval to fetch `offset_known`, from `sys.fn_cdc_get_max_lsn()`",
 );
 
 pub static SQL_SERVER_PROGRESS_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
