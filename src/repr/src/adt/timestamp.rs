@@ -1129,7 +1129,8 @@ mod test {
 
     #[mz_ore::test]
     fn test_precision_edge_cases() {
-        let result = mz_ore::panic::catch_unwind(|| {
+        #[allow(clippy::disallowed_methods)] // not using enhanced panic handler in tests
+        let result = std::panic::catch_unwind(|| {
             let date = CheckedTimestamp::try_from(
                 DateTime::from_timestamp_micros(123456).unwrap().naive_utc(),
             )

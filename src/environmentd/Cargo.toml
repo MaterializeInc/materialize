@@ -60,7 +60,7 @@ mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes" }
 mz-orchestrator-process = { path = "../orchestrator-process" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-orchestratord = { path = "../orchestratord", default-features = false }
-mz-ore = { path = "../ore", features = ["async", "process", "tracing"] }
+mz-ore = { path = "../ore", features = ["async", "panic", "process", "tracing"] }
 mz-persist-client = { path = "../persist-client" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-pgwire = { path = "../pgwire" }
@@ -95,7 +95,6 @@ regex = { version = "1.10.6", optional = true }
 reqwest = { version = "0.11.13", features = ["json"] }
 rlimit = "0.8.3"
 semver = "1.0.26"
-sentry = { version = "0.37.0", optional = true }
 sentry-tracing = "0.37.0"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.127"

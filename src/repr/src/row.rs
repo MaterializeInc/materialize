@@ -2886,7 +2886,7 @@ impl std::ops::Deref for SharedRow {
 #[cfg(test)]
 mod tests {
     use chrono::{DateTime, NaiveDate};
-    use mz_ore::assert_none;
+    use mz_ore::{assert_err, assert_none};
 
     use crate::ScalarType;
 
@@ -3311,9 +3311,9 @@ mod tests {
             vec![vec![Datum::Null], vec![Datum::Int32(2)]],
             vec![vec![Datum::Int32(1)], vec![Datum::Null]],
         ] {
-            assert!(
-                mz_ore::panic::catch_unwind(|| test_range_errors_inner(panicking_case)).is_err()
-            );
+            #[allow(clippy::disallowed_methods)] // not using enhanced panic handler in tests
+            let result = std::panic::catch_unwind(|| test_range_errors_inner(panicking_case));
+            assert_err!(result);
         }
 
         let e = test_range_errors_inner(vec![vec![Datum::Int32(2)], vec![Datum::Int32(1)]]);
