@@ -168,6 +168,7 @@ class PgConnInfo:
             password=self.password,
             dbname=self.database,
             sslmode="require" if self.ssl else None,
+            connect_timeout=600,
         )
         if self.autocommit:
             conn.autocommit = True
