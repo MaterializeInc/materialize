@@ -163,8 +163,7 @@ use crate::plan::{
 };
 use crate::session::vars::{
     self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
-    ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_SINK_HEADERS, ENABLE_KAFKA_SINK_PARTITION_BY,
-    ENABLE_REFRESH_EVERY_MVS,
+    ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_SINK_HEADERS, ENABLE_REFRESH_EVERY_MVS,
 };
 use crate::{names, parse};
 
@@ -3808,8 +3807,6 @@ fn kafka_sink_builder(
 
     let partition_by = match &partition_by {
         Some(partition_by) => {
-            scx.require_feature_flag(&ENABLE_KAFKA_SINK_PARTITION_BY)?;
-
             let mut scope = Scope::from_source(None, value_desc.iter_names());
 
             match envelope {

@@ -1062,8 +1062,8 @@ impl WithOptionName for KafkaSinkConfigOptionName {
             | KafkaSinkConfigOptionName::LegacyIds
             | KafkaSinkConfigOptionName::TopicConfig
             | KafkaSinkConfigOptionName::TopicPartitionCount
-            | KafkaSinkConfigOptionName::TopicReplicationFactor => false,
-            KafkaSinkConfigOptionName::PartitionBy => true,
+            | KafkaSinkConfigOptionName::TopicReplicationFactor
+            | KafkaSinkConfigOptionName::PartitionBy => false,
         }
     }
 }
