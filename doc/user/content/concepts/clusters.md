@@ -35,15 +35,6 @@ a given workload has access only to the CPU, memory, and scratch disk of the
 cluster that it is running on. All workloads on a given cluster compete for
 access to that cluster's compute resources.
 
-### Best practices
-
-- Use clusters to isolate different classes of workloads. For example, you could
-  place your development workloads in a cluster named `dev` and your production
-  workloads in a cluster named `prod`.
-
-- Use different clusters to separate sources from sinks. That is, avoid placing
-  sources and sinks in the same cluster.
-
 ## Fault tolerance
 
 The [replication factor](/sql/create-cluster/#replication-factor) of a cluster
@@ -111,9 +102,55 @@ To gauge the performance and utilization of your clusters, use the
 
 {{< /tip >}}
 
+## Best practices
+
+The following provides some general guidelines for clusters. See also
+[Operational guidelines](/manage/operational-guidelines/).
+
+### Three-tier architecture in production
+
+{{% best-practices/architecture/three-tier %}}
+
+#### Upsert source consideration
+
+{{% best-practices/architecture/upsert-source %}}
+
+#### Alternatives
+
+Alternatively, if a three-tier architecture is not feasible or unnecessary due
+to low volume or a non-production setup, a two cluster or a single cluster
+architecture may suffice.
+
+{{<tabs>}}
+{{< tab "Two cluster architecture" >}}
+
+{{< best-practices/architecture/two-cluster >}}
+
+{{</ tab >}}
+
+{{< tab "Single cluster architecture" >}}
+
+{{< best-practices/architecture/one-cluster >}}
+
+{{</ tab >}}
+
+{{</ tabs >}}
+
+### Use production clusters for production workloads only
+
+Use production cluster(s) for production workloads only. That is, avoid using
+production cluster(s) to run development workloads or non-production tasks.
+
+### Consider hydration requirements
+
+During hydration, materialized views require memory proportional to both the
+input and output. When estimating required resources, consider both the
+hydration cost and the steady-state cost.
+
 ## Related pages
 
 - [`CREATE CLUSTER`](/sql/create-cluster)
 - [`ALTER CLUSTER`](/sql/alter-cluster)
 - [System clusters](/sql/system-clusters)
 - [Usage & billing](/administration/billing/)
+- [Operational guidelines](/manage/operational-guidelines/)

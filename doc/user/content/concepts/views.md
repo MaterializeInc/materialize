@@ -104,6 +104,11 @@ See also:
 - [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view) for complete
   syntax information
 
+### Hydration and materialized views
+
+During hydration, materialized views require memory proportional to both
+the input and output.
+
 ### Indexes on materialized views
 
 In Materalize, materialized views can be indexed.

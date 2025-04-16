@@ -153,8 +153,7 @@ guidelines for upsert sources.
 
 ### Scheduling
 
-If possible, schedule creating new sources during off-peak hours to mitigate the
-impact of snapshotting on both the upstream system and the Materialize cluster.
+{{% best-practices/ingest-data/scheduling %}}
 
 ### Dedicate a cluster for the sources
 
