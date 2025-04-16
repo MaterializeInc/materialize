@@ -376,6 +376,13 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  table_name  text
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sql_server_source_tables' ORDER BY position
+----
+1  id  text
+2  schema_name  text
+3  table_name  text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_kafka_source_tables' ORDER BY position
 ----
 1  id  text
@@ -767,6 +774,7 @@ mz_source_statistics_raw
 mz_source_statistics_with_history
 mz_source_status_history
 mz_source_statuses
+mz_sql_server_source_tables
 mz_sql_text
 mz_sql_text_redacted
 mz_statement_execution_history

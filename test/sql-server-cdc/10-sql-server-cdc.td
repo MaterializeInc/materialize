@@ -67,6 +67,10 @@ t1_pk_sql_server sql-server quickstart ""
 t1_pk_sql_server_progress progress <null> ""
 t3_text subsource quickstart ""
 
+> SELECT schema_name, table_name FROM mz_internal.mz_sql_server_source_tables;
+dbo t1_pk
+dbo t3_text
+
 > SELECT * FROM t1_pk;
 a "hello world"
 b "foobar"
